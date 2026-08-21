@@ -5,7 +5,7 @@ import json
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_EXCEPTION, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -224,14 +224,19 @@ class ProductionOrchestrator:
         *,
         max_parallel_agents: int = 5,
         retry_attempts: int = 3,
+        cancellation_wait_seconds: float = 30,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
-        if max_parallel_agents <= 0 or retry_attempts <= 0:
-            raise RuntimeFailure("invalid_orchestrator_settings", "Concurrency and retries must be positive.")
+        if max_parallel_agents <= 0 or retry_attempts <= 0 or cancellation_wait_seconds < 0:
+            raise RuntimeFailure(
+                "invalid_orchestrator_settings",
+                "Concurrency and retries must be positive and cancellation wait must be non-negative.",
+            )
         self._hooks = hooks
         self._receipt_path = receipt_path
         self._parallel = max_parallel_agents
         self._attempts = retry_attempts
+        self._cancellation_wait = cancellation_wait_seconds
         self._sleep = sleep
         self._write_lock = threading.RLock()
         self._cancelled = threading.Event()
@@ -245,11 +250,15 @@ class ProductionOrchestrator:
 
     def _retry(self, operation: Callable[[], Mapping[str, Any]]) -> Mapping[str, Any]:
         for attempt in range(1, self._attempts + 1):
+            if self._cancelled.is_set():
+                raise RuntimeFailure("run_cancelled", "Runtime cancellation was requested.")
             try:
                 return operation()
             except RuntimeFailure as error:
                 if not error.transient or attempt == self._attempts:
                     raise
+                if self._cancelled.is_set():
+                    raise RuntimeFailure("run_cancelled", "Runtime cancellation was requested.")
                 self._sleep(min(2 ** (attempt - 1), 8))
         raise AssertionError("unreachable")
 
@@ -271,6 +280,8 @@ class ProductionOrchestrator:
             except RuntimeFailure as error:
                 error.details.setdefault("phase", phase)
                 raise
+            if self._cancelled.is_set():
+                raise RuntimeFailure("run_cancelled", "Runtime cancellation was requested.")
             if _opaque(value) != checkpoint:
                 raise RuntimeFailure(
                     "checkpoint_drift",
@@ -283,6 +294,8 @@ class ProductionOrchestrator:
             error.details.setdefault("phase", phase)
             raise
         with self._write_lock:
+            if self._cancelled.is_set():
+                raise RuntimeFailure("run_cancelled", "Runtime cancellation was requested.")
             existing = state.checkpoints.get(key)
             reference = _opaque(value)
             if existing is not None and existing != reference:
@@ -336,7 +349,18 @@ class ProductionOrchestrator:
                 ),
             )
 
+    def _cancel_plan(self, plan: PlanInput) -> list[str]:
+        failures: list[str] = []
+        for versions in plan.agents.values():
+            for work in versions:
+                try:
+                    self._hooks.cancel(work)
+                except RuntimeFailure as error:
+                    failures.append(error.code)
+        return sorted(failures)
+
     def run(self, plan: PlanInput, *, resume: bool = False, dry_run: bool = False) -> RunState:
+        cancellation_sent = False
         if resume:
             state = RunState.from_receipt(
                 read_receipt(self._receipt_path),
@@ -368,13 +392,41 @@ class ProductionOrchestrator:
             )
             state.status = "running"
             self._save(state)
-            with ThreadPoolExecutor(max_workers=min(self._parallel, max(1, len(plan.agents)))) as pool:
-                futures = [
-                    pool.submit(self._run_agent, state, versions)
-                    for versions in plan.agents.values()
-                ]
-                for future in as_completed(futures):
+            pool = ThreadPoolExecutor(max_workers=min(self._parallel, max(1, len(plan.agents))))
+            futures: list[Future[None]] = [
+                pool.submit(self._run_agent, state, versions)
+                for versions in plan.agents.values()
+            ]
+            done, pending = wait(futures, return_when=FIRST_EXCEPTION)
+            failure: RuntimeFailure | None = None
+            for future in done:
+                try:
                     future.result()
+                except RuntimeFailure as error:
+                    failure = error
+                    break
+                except Exception as error:
+                    failure = RuntimeFailure(
+                        "unexpected_runtime_failure",
+                        "A runtime hook raised an unexpected exception.",
+                    )
+                    failure.__cause__ = error
+                    break
+            if failure is not None:
+                self._cancelled.set()
+                cancellation_failures = self._cancel_plan(plan)
+                cancellation_sent = True
+                if cancellation_failures:
+                    failure.details["cancellation_failures"] = cancellation_failures
+                running: list[Future[None]] = []
+                for future in pending:
+                    if not future.cancel():
+                        running.append(future)
+                pool.shutdown(wait=False, cancel_futures=True)
+                if running:
+                    wait(running, timeout=self._cancellation_wait)
+                raise failure
+            pool.shutdown(wait=True)
             state.status = "succeeded"
             state.phase = "complete"
             state.failed_phase = None
@@ -383,15 +435,10 @@ class ProductionOrchestrator:
             return state
         except RuntimeFailure as failure:
             self._cancelled.set()
-            cancellation_failures: list[str] = []
-            for versions in plan.agents.values():
-                for work in versions:
-                    try:
-                        self._hooks.cancel(work)
-                    except RuntimeFailure as cancel_error:
-                        cancellation_failures.append(cancel_error.code)
-            if cancellation_failures:
-                failure.details["cancellation_failures"] = sorted(cancellation_failures)
+            if not cancellation_sent:
+                cancellation_failures = self._cancel_plan(plan)
+                if cancellation_failures:
+                    failure.details["cancellation_failures"] = cancellation_failures
             state.status = "inconclusive"
             state.failed_phase = str(failure.details.get("phase") or state.phase)
             state.failure = {

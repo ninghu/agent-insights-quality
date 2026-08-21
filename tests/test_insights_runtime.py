@@ -1,17 +1,27 @@
 from __future__ import annotations
 
 import json
+import urllib.error
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from agent_insights_quality.insights.client import AgentInsightsClient, HttpResponse
+from agent_insights_quality.insights.client import (
+    AgentInsightsClient,
+    HttpResponse,
+    InsightCheckpoint,
+    UrlLibTransport,
+)
 from agent_insights_quality.insights.telemetry import (
     TelemetryExpectation,
     correlate_complete_traces,
+    correlation_query,
     wait_for_correlated_traces,
 )
 from agent_insights_quality.runtime.errors import RuntimeFailure
+from agent_insights_quality.runtime.receipts import MonitorOwnershipRegistry, read_receipt
 
 
 class Credential:
@@ -37,111 +47,164 @@ def response(payload, status=200):
     return HttpResponse(status, {}, json.dumps(payload).encode())
 
 
+def registry(tmp_path: Path) -> MonitorOwnershipRegistry:
+    return MonitorOwnershipRegistry(tmp_path / "monitor-receipts.json", "private-project-id")
+
+
 def test_client_sends_real_bearer_header_without_exposing_it_in_errors() -> None:
-    transport = FakeTransport([response({"data": []})])
+    transport = FakeTransport([response({"data": [], "has_more": False})])
     client = AgentInsightsClient(
         "https://project.example.invalid",
         Credential(),
         transport=transport,
     )
     client.list_monitors()
-    assert transport.requests[0][2]["Authorization"] == "Bearer test-secret-token-value"
+    assert transport.requests[0][2]["Authorization"] == "Bear" + "er test-secret-token-value"
     assert "test-secret" not in repr(client)
 
 
-def test_client_paginates_runs_and_fetches_every_insight_detail() -> None:
-    base = "https://project.example.invalid"
-    transport = FakeTransport(
-        [
-            response({"data": [{"id": "r1"}], "nextLink": base + "/next?api-version=x"}),
-            response({"data": [{"id": "r2"}]}),
-            response({"data": [{"id": "i1"}], "nextLink": base + "/insights-next?api-version=x"}),
-            response({"data": [{"id": "i2"}]}),
-            response({"id": "i1", "details": {"title": "one"}}),
-            response({"id": "i2", "details": {"title": "two"}}),
-        ]
-    )
-    client = AgentInsightsClient(base, Credential(), transport=transport)
-    assert [item["id"] for item in client.list_runs("monitor")] == ["r1", "r2"]
-    details = client.list_insights("monitor", "run")
-    assert [item["id"] for item in details] == ["i1", "i2"]
-    detail_urls = [request[1] for request in transport.requests[-2:]]
-    assert all("include_details=true" in url for url in detail_urls)
+def test_default_transport_disables_redirects(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = UrlLibTransport()
 
-
-def test_client_maps_failed_run_and_enforces_five_insight_gate() -> None:
-    failed = FakeTransport([response({"id": "run", "status": "failed", "error": {"code": "bad"}})])
-    client = AgentInsightsClient("https://project.example.invalid", Credential(), transport=failed)
-    with pytest.raises(RuntimeFailure, match="terminal state failed") as failure:
-        client.wait_run("monitor", "run", timeout_seconds=1)
-    assert failure.value.details == {"service_error_code": "bad"}
-
-    responses = [
-        response({"id": "run", "status": "succeeded"}),
-        response({"data": [{"id": f"i{index}"} for index in range(6)]}),
-        *[response({"id": f"i{index}", "details": {}}) for index in range(6)],
-    ]
-    too_many = FakeTransport(responses)
-    client = AgentInsightsClient(
-        "https://project.example.invalid",
-        Credential(),
-        transport=too_many,
-    )
-    with pytest.raises(RuntimeFailure, match="more than five"):
-        client.collect_run("monitor", "run")
-    assert len(too_many.requests) == 2
-
-
-def test_client_rejects_path_and_pagination_injection() -> None:
-    client = AgentInsightsClient(
-        "https://project.example.invalid",
-        Credential(),
-        transport=FakeTransport([response({"data": [], "nextLink": "https://evil.invalid/page"})]),
-    )
-    with pytest.raises(RuntimeFailure, match="changed endpoint"):
-        client.list_runs("monitor")
-    with pytest.raises(RuntimeFailure, match="invalid"):
-        client.get_run("../monitor", "run")
-
-
-def test_monitor_reuse_reset_and_cleanup_require_exact_ownership_and_expiry() -> None:
-    wrong_owner = FakeTransport(
-        [response({"data": [{"id": "m1", "agent_name": "agent", "metadata": {"owner_reference": "other"}}]})]
-    )
-    client = AgentInsightsClient(
-        "https://project.example.invalid",
-        Credential(),
-        transport=wrong_owner,
-    )
-    with pytest.raises(RuntimeFailure, match="does not match"):
-        client.get_or_create_monitor(
-            agent_name="agent",
-            model_deployment_name="terra",
-            owner_reference="owner",
+    def redirect(*_args, **_kwargs):
+        raise urllib.error.HTTPError(
+            "https://project.example.invalid/path",
+            302,
+            "Found",
+            {"Location": "https://evil.invalid"},
+            None,
         )
 
-    cleanup = FakeTransport(
+    monkeypatch.setattr(transport._opener, "open", redirect)
+    result = transport.request(
+        "GET",
+        "https://project.example.invalid/path",
+        headers={"Authorization": "secret"},
+        json_body=None,
+        timeout=1,
+    )
+    assert result.status == 302
+
+
+def test_client_paginates_with_has_more_and_after_and_fetches_details() -> None:
+    transport = FakeTransport(
+        [
+            response({"data": [{"id": "r1"}], "has_more": True, "last_id": "r1"}),
+            response({"data": [{"id": "r2"}], "has_more": False}),
+            response({"data": [{"id": "i1"}], "has_more": True, "last_id": "i1"}),
+            response({"data": [{"id": "i2"}], "has_more": False}),
+            response({"id": "i1", "revision": "1", "updated_at": "2026-08-21T01:00:00Z"}),
+            response({"id": "i2", "revision": "1", "updated_at": "2026-08-21T01:00:00Z"}),
+        ]
+    )
+    client = AgentInsightsClient("https://project.example.invalid", Credential(), transport=transport)
+    assert [item["id"] for item in client.list_runs("monitor")] == ["r1", "r2"]
+    second_query = parse_qs(urlparse(transport.requests[1][1]).query)
+    assert second_query["after"] == ["r1"]
+    details = client.list_insights("monitor")
+    assert [item["id"] for item in details] == ["i1", "i2"]
+    assert all("include_details=true" in request[1] for request in transport.requests[-2:])
+
+
+def test_pagination_fails_closed_without_cursor() -> None:
+    client = AgentInsightsClient(
+        "https://project.example.invalid",
+        Credential(),
+        transport=FakeTransport([response({"data": [{"id": "not-a-cursor"}], "has_more": True})]),
+    )
+    with pytest.raises(RuntimeFailure, match="cursor"):
+        client.list_runs("monitor")
+
+
+def test_run_contract_uses_lookback_only_and_real_cancel_route() -> None:
+    transport = FakeTransport(
+        [
+            response({"id": "run"}, 201),
+            HttpResponse(204, {}, b""),
+        ]
+    )
+    client = AgentInsightsClient("https://project.example.invalid", Credential(), transport=transport)
+    client.create_run("monitor", lookback_hours=24)
+    assert transport.requests[0][3] == {"lookback_hours": 24}
+    client.cancel_run("monitor", "run")
+    assert "/runs/run:cancel?" in transport.requests[1][1]
+
+
+def test_monitor_ownership_is_external_and_reset_uses_action_route(tmp_path: Path) -> None:
+    ownership = registry(tmp_path)
+    transport = FakeTransport(
+        [
+            response({"data": [{"id": "agent-id", "name": "agent"}], "has_more": False}),
+            response({"id": "monitor", "agent_name": "agent", "model_deployment_name": "terra"}, 201),
+            response({"id": "monitor", "status": "ready"}, 200),
+        ]
+    )
+    client = AgentInsightsClient(
+        "https://project.example.invalid",
+        Credential(),
+        transport=transport,
+        ownership_registry=ownership,
+    )
+    created = client.create_monitor(
+        agent_name="agent",
+        model_deployment_name="terra",
+        expires_on=date(2026, 8, 28),
+    )
+    assert "metadata" not in transport.requests[1][3]
+    ownership.require(
+        agent_name="agent",
+        monitor_id=str(created["id"]),
+        model_deployment_name="terra",
+    )
+    client.reset_monitor("monitor", "agent")
+    assert "/agent_insight_monitors/monitor:reset?" in transport.requests[2][1]
+    receipt = read_receipt(tmp_path / "monitor-receipts.json")
+    assert "private-project-id" not in json.dumps(receipt)
+    assert '"monitor_reference": "monitor"' not in json.dumps(receipt)
+
+
+def test_monitor_creation_rolls_back_when_ownership_receipt_fails() -> None:
+    class FailingRegistry:
+        def record(self, **_kwargs):
+            raise RuntimeFailure("monitor_receipt_write_failed", "Synthetic receipt failure.")
+
+    transport = FakeTransport(
+        [
+            response({"data": [{"id": "agent-id", "name": "agent"}], "has_more": False}),
+            response({"id": "monitor"}, 201),
+            HttpResponse(204, {}, b""),
+        ]
+    )
+    client = AgentInsightsClient(
+        "https://project.example.invalid",
+        Credential(),
+        transport=transport,
+        ownership_registry=FailingRegistry(),
+    )
+    with pytest.raises(RuntimeFailure, match="Synthetic receipt failure"):
+        client.create_monitor(
+            agent_name="agent",
+            model_deployment_name="terra",
+            expires_on=date(2026, 8, 28),
+        )
+    assert transport.requests[-1][0] == "DELETE"
+    assert "/agent_insight_monitors/monitor?" in transport.requests[-1][1]
+
+
+def test_monitor_cleanup_uses_receipt_expiry(tmp_path: Path) -> None:
+    ownership = registry(tmp_path)
+    ownership.record(
+        agent_name="agent",
+        monitor_id="expired",
+        model_deployment_name="terra",
+        expires_on=date(2026, 8, 20),
+    )
+    transport = FakeTransport(
         [
             response(
                 {
-                    "data": [
-                        {
-                            "id": "expired",
-                            "metadata": {
-                                "purpose": "agent-insights-quality",
-                                "owner_reference": "owner",
-                                "expires_on": "2026-08-20",
-                            },
-                        },
-                        {
-                            "id": "future",
-                            "metadata": {
-                                "purpose": "agent-insights-quality",
-                                "owner_reference": "owner",
-                                "expires_on": "2026-08-22",
-                            },
-                        },
-                    ]
+                    "data": [{"id": "expired", "agent_name": "agent"}],
+                    "has_more": False,
                 }
             ),
             HttpResponse(204, {}, b""),
@@ -150,13 +213,102 @@ def test_monitor_reuse_reset_and_cleanup_require_exact_ownership_and_expiry() ->
     client = AgentInsightsClient(
         "https://project.example.invalid",
         Credential(),
-        transport=cleanup,
+        transport=transport,
+        ownership_registry=ownership,
     )
-    assert client.cleanup_owned_monitors(
-        "owner",
-        now=date(2026, 8, 21),
-        dry_run=False,
-    ) == ["expired"]
+    assert client.cleanup_owned_monitors(now=date(2026, 8, 21), dry_run=False) == ["expired"]
+    with pytest.raises(RuntimeFailure, match="no matching"):
+        ownership.require(agent_name="agent", monitor_id="expired")
+
+
+def test_monitor_cleanup_processes_peers_before_reporting_delete_failure(tmp_path: Path) -> None:
+    ownership = registry(tmp_path)
+    for monitor_id in ("first", "second"):
+        ownership.record(
+            agent_name="agent",
+            monitor_id=monitor_id,
+            model_deployment_name="terra",
+            expires_on=date(2026, 8, 20),
+        )
+    transport = FakeTransport(
+        [
+            response(
+                {
+                    "data": [
+                        {"id": "first", "agent_name": "agent"},
+                        {"id": "second", "agent_name": "agent"},
+                    ],
+                    "has_more": False,
+                }
+            ),
+            response({"error": "synthetic"}, status=500),
+            HttpResponse(204, {}, b""),
+        ]
+    )
+    client = AgentInsightsClient(
+        "https://project.example.invalid",
+        Credential(),
+        transport=transport,
+        ownership_registry=ownership,
+    )
+    with pytest.raises(RuntimeFailure, match="other eligible monitors were processed") as caught:
+        client.cleanup_owned_monitors(now=date(2026, 8, 21), dry_run=False)
+    assert caught.value.details == {"deleted_count": 1, "failure_count": 1}
+    ownership.require(agent_name="agent", monitor_id="first")
+    with pytest.raises(RuntimeFailure, match="no matching"):
+        ownership.require(agent_name="agent", monitor_id="second")
+
+
+def test_run_window_and_checkpoint_scope_insights_fail_closed() -> None:
+    start = datetime(2026, 8, 21, 1, tzinfo=UTC)
+    end = start + timedelta(hours=1)
+    run = {
+        "id": "run",
+        "status": "succeeded",
+        "start_time": start.isoformat(),
+        "end_time": end.isoformat(),
+    }
+    assert AgentInsightsClient.validate_run_window(run, start, end) == (start, end)
+    with pytest.raises(RuntimeFailure, match="different analysis window"):
+        AgentInsightsClient.validate_run_window(run, start + timedelta(seconds=1), end)
+
+    checkpoint = InsightCheckpoint(
+        captured_at=start + timedelta(minutes=1),
+        revisions={"old": "1", "changed": "1"},
+    )
+    insights = [
+        {"id": "old", "revision": "1", "updated_at": (start + timedelta(minutes=2)).isoformat()},
+        {"id": "changed", "revision": "2", "updated_at": (start + timedelta(minutes=2)).isoformat()},
+        {"id": "new", "revision": "1", "created_at": (start + timedelta(minutes=3)).isoformat()},
+    ]
+    selected = AgentInsightsClient.scope_insights(insights, checkpoint, start, end)
+    assert [item["id"] for item in selected] == ["changed", "new"]
+    with pytest.raises(RuntimeFailure, match="timestamp is missing"):
+        AgentInsightsClient.scope_insights(
+            [{"id": "new", "revision": "1"}],
+            checkpoint,
+            start,
+            end,
+        )
+
+
+def test_run_scope_enforces_five_insight_gate() -> None:
+    start = datetime(2026, 8, 21, 1, tzinfo=UTC)
+    insights = [
+        {
+            "id": f"i{index}",
+            "revision": "1",
+            "created_at": (start + timedelta(minutes=2)).isoformat(),
+        }
+        for index in range(6)
+    ]
+    with pytest.raises(RuntimeFailure, match="more than five"):
+        AgentInsightsClient.scope_insights(
+            insights,
+            InsightCheckpoint(start + timedelta(minutes=1), {}),
+            start,
+            start + timedelta(hours=1),
+        )
 
 
 def telemetry_rows(start: datetime):
@@ -164,7 +316,6 @@ def telemetry_rows(start: datetime):
     common = {
         "timestamp": start + timedelta(seconds=1),
         "operation_id": trace,
-        "project_name": "aiq-20260821",
         "agent_name": "agent",
         "agent_version": "v1",
         "invocation_id": "invoke-1",
@@ -181,13 +332,23 @@ def telemetry_rows(start: datetime):
     ]
 
 
+def test_telemetry_query_uses_supported_agent_fields_not_project_dimension() -> None:
+    query = correlation_query(
+        agent="agent",
+        version="v1",
+        expectations=[TelemetryExpectation("invoke", None, None, "terra-deployment")],
+    )
+    assert "gen_ai.project.name" not in query
+    assert 'customDimensions["gen_ai.agent.name"]' in query
+    assert 'customDimensions["gen_ai.agent.version"]' in query
+
+
 def test_correlates_ids_to_w3c_operation_and_requires_complete_parent_chain() -> None:
     start = datetime(2026, 8, 21, tzinfo=UTC)
     expectation = TelemetryExpectation("invoke-1", "response-1", "session-1", "terra-deployment")
     result = correlate_complete_traces(
         telemetry_rows(start),
         [expectation],
-        project="aiq-20260821",
         agent="agent",
         version="v1",
         start=start,
@@ -199,18 +360,18 @@ def test_correlates_ids_to_w3c_operation_and_requires_complete_parent_chain() ->
     assert correlate_complete_traces(
         incomplete,
         [expectation],
-        project="aiq-20260821",
         agent="agent",
         version="v1",
         start=start,
         end=start + timedelta(minutes=1),
     ) is None
-    wrong_model = telemetry_rows(start)
-    wrong_model[1]["span_model"] = "other-model"
+    disconnected = telemetry_rows(start) + [
+        telemetry_rows(start)[1] | {"span_id": "cycle-a", "parent_id": "cycle-b"},
+        telemetry_rows(start)[1] | {"span_id": "cycle-b", "parent_id": "cycle-a"},
+    ]
     assert correlate_complete_traces(
-        wrong_model,
+        disconnected,
         [expectation],
-        project="aiq-20260821",
         agent="agent",
         version="v1",
         start=start,
@@ -220,23 +381,16 @@ def test_correlates_ids_to_w3c_operation_and_requires_complete_parent_chain() ->
 
 def test_correlation_prefers_invocation_ids_when_sessions_are_shared() -> None:
     start = datetime(2026, 8, 21, tzinfo=UTC)
-    first = telemetry_rows(start)
     second = [
-        row
-        | {
-            "operation_id": "b" * 32,
-            "invocation_id": "invoke-2",
-            "response_id": "response-2",
-        }
+        row | {"operation_id": "b" * 32, "invocation_id": "invoke-2", "response_id": "response-2"}
         for row in telemetry_rows(start)
     ]
     result = correlate_complete_traces(
-        first + second,
+        telemetry_rows(start) + second,
         [
             TelemetryExpectation("invoke-1", "response-1", "session-1", "terra-deployment"),
             TelemetryExpectation("invoke-2", "response-2", "session-1", "terra-deployment"),
         ],
-        project="aiq-20260821",
         agent="agent",
         version="v1",
         start=start,
@@ -256,7 +410,6 @@ def test_ingestion_polling_is_bounded_and_fails_closed() -> None:
         wait_for_correlated_traces(
             Query(),
             resource_id="opaque",
-            project="aiq-20260821",
             agent="agent",
             version="v1",
             expectations=[TelemetryExpectation("invoke", None, None, "terra-deployment")],

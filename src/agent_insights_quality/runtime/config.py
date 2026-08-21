@@ -84,6 +84,7 @@ class RuntimeConfig:
     ado: AdoRuntimeConfig
     artifacts: ArtifactRuntimeConfig
     automation_owner: str
+    monitor_ownership_receipt: str
     adapter: str | None
 
     @classmethod
@@ -202,6 +203,7 @@ class RuntimeConfig:
                 container=container,
             ),
             automation_owner=owner,
+            monitor_ownership_receipt=_required(env, "AIQ_MONITOR_OWNERSHIP_RECEIPT"),
             adapter=env.get("AIQ_RUNTIME_ADAPTER", "").strip() or None,
         )
 
@@ -217,6 +219,7 @@ class RuntimeConfig:
             "user": self.azure.expected_user_object_id or "validated-current-user",
             "ado": f"{self.ado.organization_url}/{self.ado.project}",
             "artifact_location": self.artifacts.location,
+            "monitor_ownership_receipt": self.monitor_ownership_receipt,
         }
         return {
             key: "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()

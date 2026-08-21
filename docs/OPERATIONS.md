@@ -16,8 +16,8 @@ python -m pytest
 `config/runtime-readiness.yaml` records every mandatory runtime workstream. The healthy-agent
 deployment and traffic contracts plus generic production infrastructure and orchestration boundaries
 are implemented. Their readiness flags stay false until live telemetry qualification proves the
-expected agent, model, and tool spans, the required Azure permissions are demonstrated, and a reviewed
-adapter binds these boundaries without changing their contracts.
+expected agent, model, and tool spans, required Azure permissions including `roleAssignments/write`
+are demonstrated, and a reviewed adapter binds these boundaries without changing their contracts.
 `check-runtime-readiness` and `run-daily` fail closed with an actionable `INCONCLUSIVE` result until
 every component is implemented, tested, and enabled through a human-reviewed source change. A
 readiness failure prohibits all operational phases but still requires the minimal report/email
@@ -36,6 +36,10 @@ Both modes resolve the Terra traffic and insights deployment names plus the revi
 from protected `AIQ_TERRA_*` variables. Optional protected tenant and user-object IDs tighten identity
 selection further; when omitted, preflight still requires an interactive Azure user and verifies that
 identity's access to every selected resource.
+
+Set `AIQ_MONITOR_OWNERSHIP_RECEIPT` to a protected private-state path. Monitor ownership is recorded
+there as project-, agent-, monitor-, and model-scoped opaque hashes because the service monitor API
+does not expose a metadata field.
 
 ```powershell
 python -m agent_insights_quality preflight --discover-project

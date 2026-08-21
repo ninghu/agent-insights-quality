@@ -19,6 +19,8 @@ _PROJECT_NAME = re.compile(r"^aiq-[0-9]{8}(?:-r[0-9]{2})?$")
 _PROJECT_TYPE = "microsoft.cognitiveservices/accounts/projects"
 _PURPOSE_TAG = "agent-insights-quality"
 _QUALIFICATION_TAG = "true"
+_MONITORING_READER_ROLE = "43d0d8ad-25c7-4714-9337-8ba259a9fe05"
+_MODEL_INFERENCE_ROLE = "5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,15 +102,50 @@ class AzureCli:
         except json.JSONDecodeError as error:
             raise RuntimeFailure("invalid_azure_response", "Azure CLI returned invalid JSON.") from error
 
-    def rest(self, method: str, url: str, body: Mapping[str, Any] | None = None) -> Any:
+    def rest(
+        self,
+        method: str,
+        url: str,
+        body: Mapping[str, Any] | None = None,
+        *,
+        headers: Mapping[str, str] | None = None,
+    ) -> Any:
         if method.casefold() not in {"get", "put", "patch", "delete"}:
             raise RuntimeFailure("invalid_azure_method", "Unsupported Azure REST method.")
         arguments = ["rest", "--method", method, "--url", url]
         if body is not None:
             arguments.extend(["--body", json.dumps(body, separators=(",", ":"))])
+        if headers:
+            arguments.append("--headers")
+            arguments.extend(f"{key}={value}" for key, value in headers.items())
         return self.json(
             arguments,
             allow_empty=method.casefold() == "delete",
+        )
+
+    def put_if_absent(self, url: str, body: Mapping[str, Any]) -> bool:
+        arguments = [
+            "rest",
+            "--method",
+            "put",
+            "--url",
+            url,
+            "--headers",
+            "If-None-Match=*",
+            "--body",
+            json.dumps(body, separators=(",", ":")),
+            "--output",
+            "json",
+        ]
+        result = self.run(arguments, allow_failure=True)
+        if result.returncode == 0:
+            return True
+        if re.search(r"\b(?:409|412)\b", result.stderr):
+            return False
+        raise RuntimeFailure(
+            "azure_project_create_blocked",
+            "Conditional project creation failed. Verify project write permission on the exact "
+            "Foundry account; the runtime will not overwrite an existing project.",
         )
 
     @staticmethod
@@ -166,6 +203,7 @@ class ProjectResources:
     resource_group: str
     project_endpoint: str
     application_insights_resource_id: str
+    principal_id: str
     managed: bool
     tags: Mapping[str, str]
 
@@ -257,7 +295,7 @@ class AzureProjectManager:
     def _projects(self) -> list[Mapping[str, Any]]:
         query = (
             "Resources | where type =~ 'microsoft.cognitiveservices/accounts/projects' "
-            "| project id,name,type,location,tags,properties"
+            "| project id,name,type,location,tags,identity,properties"
         )
         results: list[Mapping[str, Any]] = []
         skip_token = ""
@@ -310,12 +348,17 @@ class AzureProjectManager:
             )
         return self._validate_project(matches[0], managed=False)
 
-    def qualified_projects(self) -> list[ProjectResources]:
-        return [
-            self._validate_project(item, managed=False)
-            for item in self._projects()
-            if self._owned(item)
-        ]
+    def qualified_projects(self, failures: list[str]) -> list[ProjectResources]:
+        selected: list[ProjectResources] = []
+        for item in self._projects():
+            if not self._owned(item):
+                continue
+            try:
+                selected.append(self._validate_project(item, managed=False))
+            except RuntimeFailure as error:
+                failures.append(error.code)
+                continue
+        return selected
 
     def _validate_project(self, item: Mapping[str, Any], *, managed: bool) -> ProjectResources:
         project_id = str(item.get("id") or "")
@@ -345,6 +388,15 @@ class AzureProjectManager:
             )
         properties = item.get("properties")
         properties = properties if isinstance(properties, Mapping) else {}
+        identity = item.get("identity")
+        identity = identity if isinstance(identity, Mapping) else {}
+        principal_id = str(identity.get("principalId") or "")
+        if not principal_id:
+            raise RuntimeFailure(
+                "project_identity_unavailable",
+                "Project managed identity is not ready.",
+                transient=True,
+            )
         account_properties = account_resource.get("properties")
         account_properties = account_properties if isinstance(account_properties, Mapping) else {}
         account_endpoints = account_properties.get("endpoints")
@@ -388,6 +440,11 @@ class AzureProjectManager:
         if self._config.account_name and account != self._config.account_name:
             raise RuntimeFailure("project_selection_mismatch", "Discovered Foundry account differs from configuration.")
         self._validate_terra(account, group)
+        self._validate_project_roles(
+            principal_id=principal_id,
+            account_id=account_id,
+            application_insights_id=app_insights,
+        )
         self._cli.json(["resource", "show", "--ids", project_id])
         tags = item.get("tags")
         return ProjectResources(
@@ -397,9 +454,54 @@ class AzureProjectManager:
             resource_group=group,
             project_endpoint=endpoint.rstrip("/"),
             application_insights_resource_id=app_insights,
+            principal_id=principal_id,
             managed=managed,
             tags={str(key): str(value) for key, value in tags.items()} if isinstance(tags, Mapping) else {},
         )
+
+    def _validate_project_roles(
+        self,
+        *,
+        principal_id: str,
+        account_id: str,
+        application_insights_id: str,
+    ) -> None:
+        required = {
+            (application_insights_id.casefold(), _MONITORING_READER_ROLE),
+            (account_id.casefold(), _MODEL_INFERENCE_ROLE),
+        }
+        observed: set[tuple[str, str]] = set()
+        for scope, _ in required:
+            assignments = _items(
+                self._cli.json(
+                    [
+                        "role",
+                        "assignment",
+                        "list",
+                        "--assignee-object-id",
+                        principal_id,
+                        "--scope",
+                        scope,
+                        "--include-inherited",
+                    ]
+                )
+            )
+            for assignment in assignments:
+                role_id = str(assignment.get("roleDefinitionId") or "").rsplit("/", 1)[-1]
+                assignment_scope = str(assignment.get("scope") or scope).casefold()
+                observed.add((assignment_scope, role_id.casefold()))
+        missing = [
+            role
+            for scope, role in required
+            if not any(observed_role == role and scope.startswith(observed_scope) for observed_scope, observed_role in observed)
+        ]
+        if missing:
+            raise RuntimeFailure(
+                "project_role_assignments_missing",
+                "Project identity lacks required App Insights read or model inference roles. "
+                "Grant the exact roles or run deployment with roleAssignments/write permission.",
+                {"missing_role_count": len(missing)},
+            )
 
     def _owned_tags(self, value: Any) -> bool:
         return (
@@ -559,19 +661,19 @@ class AzureProjectManager:
         *,
         allow_fallback: bool = False,
     ) -> ProjectResources:
-        projects = self._projects()
         if allow_fallback and self._config.fallback_project_name:
             return self.discover_qualified()
         if not self._config.resource_group or not self._config.account_name:
             return self.discover_qualified()
         base = f"aiq-{report_date:%Y%m%d}"
-        selected_name = ""
         for suffix in range(100):
             name = base if suffix == 0 else f"{base}-r{suffix:02d}"
-            existing = [item for item in projects if item.get("name") == name]
-            if not existing:
-                selected_name = name
-                break
+            projects = self._projects()
+            existing = [
+                item
+                for item in projects
+                if item.get("name") == name and self._under_configured_parent(item)
+            ]
             if len(existing) == 1 and self._owned(existing[0]):
                 tags = existing[0].get("tags")
                 if (
@@ -580,30 +682,102 @@ class AzureProjectManager:
                     and tags.get("catalogVersion") == catalog_hash
                 ):
                     return self._validate_project(existing[0], managed=True)
-        if not selected_name:
-            raise RuntimeFailure("project_name_exhausted", "No date-stamped project name is available.")
-        expires = report_date + timedelta(days=7)
-        project_id = (
+            if existing:
+                continue
+            expires = report_date + timedelta(days=7)
+            project_id = (
+                f"/subscriptions/{self._context.subscription_id}/resourceGroups/{self._config.resource_group}"
+                f"/providers/Microsoft.CognitiveServices/accounts/{self._config.account_name}/projects/{name}"
+            )
+            body = {
+                "location": "westus2",
+                "identity": {"type": "SystemAssigned"},
+                "tags": {
+                    "purpose": _PURPOSE_TAG,
+                    "agentInsightsQualityQualification": _QUALIFICATION_TAG,
+                    "reportDate": report_date.isoformat(),
+                    "expiresOn": expires.isoformat(),
+                    "automationOwner": self._owner,
+                    "catalogVersion": catalog_hash,
+                },
+                "properties": {},
+            }
+            if not self._cli.put_if_absent(
+                f"{project_id}?api-version=2025-06-01",
+                body,
+            ):
+                continue
+            item = self._wait_ready_item(project_id)
+            self._verify_created_project(item, report_date, catalog_hash)
+            self._ensure_application_insights_connection(project_id, body["tags"])
+            self._ensure_project_roles(item, project_id)
+            return self._validate_project(item, managed=True)
+        raise RuntimeFailure("project_name_exhausted", "No date-stamped project name is available.")
+
+    def _under_configured_parent(self, item: Mapping[str, Any]) -> bool:
+        project_id = str(item.get("id") or "")
+        expected = (
             f"/subscriptions/{self._context.subscription_id}/resourceGroups/{self._config.resource_group}"
-            f"/providers/Microsoft.CognitiveServices/accounts/{self._config.account_name}/projects/{selected_name}"
+            f"/providers/Microsoft.CognitiveServices/accounts/{self._config.account_name}/projects/"
         )
-        body = {
-            "location": "westus2",
-            "identity": {"type": "SystemAssigned"},
-            "tags": {
-                "purpose": _PURPOSE_TAG,
-                "agentInsightsQualityQualification": _QUALIFICATION_TAG,
-                "reportDate": report_date.isoformat(),
-                "expiresOn": expires.isoformat(),
-                "automationOwner": self._owner,
-                "catalogVersion": catalog_hash,
-            },
-            "properties": {},
-        }
-        self._cli.rest("put", f"{project_id}?api-version=2025-06-01", body)
-        item = self._wait_ready_item(project_id)
-        self._ensure_application_insights_connection(project_id, body["tags"])
-        return self._validate_project(item, managed=True)
+        return project_id.casefold().startswith(expected.casefold())
+
+    def _verify_created_project(
+        self,
+        item: Mapping[str, Any],
+        report_date: date,
+        catalog_hash: str,
+    ) -> None:
+        tags = item.get("tags")
+        if (
+            not self._owned(item)
+            or not isinstance(tags, Mapping)
+            or tags.get("reportDate") != report_date.isoformat()
+            or tags.get("catalogVersion") != catalog_hash
+            or not self._under_configured_parent(item)
+        ):
+            raise RuntimeFailure(
+                "project_create_race",
+                "Post-create verification did not match exact ownership, parent, date, and catalog.",
+            )
+
+    def _ensure_project_roles(self, item: Mapping[str, Any], project_id: str) -> None:
+        identity = item.get("identity")
+        identity = identity if isinstance(identity, Mapping) else {}
+        principal_id = str(identity.get("principalId") or "")
+        target = self._config.application_insights_resource_id
+        if not principal_id or not target:
+            raise RuntimeFailure(
+                "project_identity_unavailable",
+                "Project identity or App Insights target is unavailable for role assignment.",
+            )
+        account_id = project_id.rsplit("/projects/", 1)[0]
+        for scope, role in (
+            (target, _MONITORING_READER_ROLE),
+            (account_id, _MODEL_INFERENCE_ROLE),
+        ):
+            result = self._cli.run(
+                [
+                    "role",
+                    "assignment",
+                    "create",
+                    "--assignee-object-id",
+                    principal_id,
+                    "--assignee-principal-type",
+                    "ServicePrincipal",
+                    "--role",
+                    role,
+                    "--scope",
+                    scope,
+                ],
+                allow_failure=True,
+            )
+            if result.returncode:
+                raise RuntimeFailure(
+                    "role_assignment_permission_blocked",
+                    "Project was created but required roles could not be assigned. "
+                    "Grant roleAssignments/write on the exact App Insights component and Foundry account.",
+                )
 
     def _ensure_application_insights_connection(
         self,
@@ -681,6 +855,7 @@ class AzureProjectManager:
     def cleanup_expired(self, *, now: date | None = None, dry_run: bool = True) -> list[str]:
         today = now or datetime.now(UTC).date()
         selected: list[str] = []
+        failures = 0
         for item in self._projects():
             tags = item.get("tags")
             name = str(item.get("name") or "")
@@ -697,11 +872,24 @@ class AzureProjectManager:
                 continue
             if not expired:
                 continue
-            self._validate_cleanup_parent(item)
+            try:
+                self._validate_cleanup_parent(item)
+            except RuntimeFailure:
+                continue
             project_id = str(item.get("id") or "")
-            selected.append(name)
             if not dry_run:
-                self._cli.rest("delete", f"{project_id}?api-version=2025-06-01")
+                try:
+                    self._cli.rest("delete", f"{project_id}?api-version=2025-06-01")
+                except RuntimeFailure:
+                    failures += 1
+                    continue
+            selected.append(name)
+        if failures:
+            raise RuntimeFailure(
+                "cleanup_partial_failure",
+                "One or more owned projects could not be deleted; other eligible projects were processed.",
+                {"deleted_count": len(selected), "failure_count": failures},
+            )
         return selected
 
     def cleanup_owned_connections(
@@ -711,15 +899,24 @@ class AzureProjectManager:
         dry_run: bool = True,
     ) -> list[str]:
         selected: list[str] = []
+        failures = 0
         today = datetime.now(UTC).date()
         for project in self._projects():
             if not self._owned(project):
                 continue
             if project.get("name") == self._config.fallback_project_name:
                 continue
-            self._validate_cleanup_parent(project)
+            try:
+                self._validate_cleanup_parent(project)
+            except RuntimeFailure:
+                continue
             project_id = str(project.get("id") or "")
-            for connection in self._connections(project_id):
+            try:
+                connections = self._connections(project_id)
+            except RuntimeFailure:
+                failures += 1
+                continue
+            for connection in connections:
                 properties = connection.get("properties")
                 metadata = properties.get("metadata") if isinstance(properties, Mapping) else None
                 if (
@@ -737,7 +934,18 @@ class AzureProjectManager:
                 connection_id = str(connection.get("id") or "")
                 if not connection_id.startswith(project_id + "/connections/"):
                     continue
-                selected.append(str(connection.get("name") or ""))
                 if not dry_run:
-                    self._cli.rest("delete", f"{connection_id}?api-version=2025-06-01")
+                    try:
+                        self._cli.rest("delete", f"{connection_id}?api-version=2025-06-01")
+                    except RuntimeFailure:
+                        failures += 1
+                        continue
+                selected.append(str(connection.get("name") or ""))
+        if failures:
+            raise RuntimeFailure(
+                "cleanup_partial_failure",
+                "One or more owned project connections could not be processed; other eligible "
+                "connections were processed.",
+                {"processed_count": len(selected), "failure_count": failures},
+            )
         return sorted(selected)

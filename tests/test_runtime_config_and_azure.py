@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
 
+import agent_insights_quality.cli as cli_module
 from agent_insights_quality.runtime.azure import (
     AzureCli,
     AzureContext,
@@ -30,6 +32,7 @@ def environment(*, discovery: bool = False) -> dict[str, str]:
         "AIQ_ARTIFACT_BACKEND": "local",
         "AIQ_ARTIFACT_LOCATION": "private-artifacts",
         "AIQ_AUTOMATION_OWNER": "ninghu",
+        "AIQ_MONITOR_OWNERSHIP_RECEIPT": "private-state/monitors.json",
     }
     if not discovery:
         result |= {
@@ -73,13 +76,23 @@ def test_runtime_config_rejects_partial_coordinates_and_dual_subscription_select
 
 
 class FakeAzureCli:
-    def __init__(self, projects: list[dict] | None = None) -> None:
+    def __init__(
+        self,
+        projects: list[dict] | None = None,
+        *,
+        roles: bool = True,
+        role_create_failure: bool = False,
+    ) -> None:
         self.projects = projects or []
         self.deleted: list[str] = []
         self.commands: list[list[str]] = []
+        self.roles = roles
+        self.role_create_failure = role_create_failure
 
     def run(self, arguments, **_kwargs):
         self.commands.append(list(arguments))
+        if arguments[:3] == ["role", "assignment", "create"] and self.role_create_failure:
+            return CommandResult(1, "", "forbidden")
         return CommandResult(0, "", "")
 
     def json(self, arguments, **_kwargs):
@@ -98,6 +111,16 @@ class FakeAzureCli:
             return {"id": "user-object"}
         if arguments[:2] == ["graph", "query"]:
             return {"data": self.projects}
+        if arguments[:3] == ["role", "assignment", "list"]:
+            if not self.roles:
+                return []
+            scope = arguments[arguments.index("--scope") + 1]
+            role = (
+                "43d0d8ad-25c7-4714-9337-8ba259a9fe05"
+                if "microsoft.insights/components" in scope.casefold()
+                else "5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"
+            )
+            return [{"scope": scope, "roleDefinitionId": "/providers/Microsoft.Authorization/roleDefinitions/" + role}]
         if arguments[:4] == ["cognitiveservices", "account", "deployment", "show"]:
             return {
                 "properties": {
@@ -140,6 +163,8 @@ class FakeAzureCli:
         if method == "delete":
             self.deleted.append(url)
             return None
+        if method == "put" and "/connections/" in url:
+            return body
         if method == "get" and "/connections?" in url:
             return {
                 "value": [
@@ -163,6 +188,13 @@ class FakeAzureCli:
                 ]
             }
         raise AssertionError((method, url, body))
+
+    def put_if_absent(self, url, body):
+        name = url.split("/projects/", 1)[1].split("?", 1)[0]
+        created = project(name)
+        created["tags"] = dict(body["tags"])
+        self.projects.append(created)
+        return True
 
 
 def project(name: str = "aiq-20260820", *, owner: str = "ninghu", expired: str = "2026-08-19") -> dict:
@@ -191,6 +223,7 @@ def project(name: str = "aiq-20260820", *, owner: str = "ninghu", expired: str =
                 "Microsoft.Insights/components/quality"
             ),
         },
+        "identity": {"type": "SystemAssigned", "principalId": "project-principal"},
     }
 
 
@@ -260,6 +293,24 @@ def test_project_cleanup_deletes_only_exact_owned_expired_projects() -> None:
     assert len(cli.deleted) == 1
 
 
+def test_project_cleanup_continues_after_an_individual_delete_failure() -> None:
+    class PartiallyFailingAzureCli(FakeAzureCli):
+        def rest(self, method, url, body=None):
+            if method == "delete" and "/aiq-20260819?" in url:
+                raise RuntimeFailure("delete_failed", "Synthetic delete failure.")
+            return super().rest(method, url, body)
+
+    cli = PartiallyFailingAzureCli(
+        [project("aiq-20260819"), project("aiq-20260820")]
+    )
+    config = RuntimeConfig.from_env(environment(discovery=True)).azure
+    manager = AzureProjectManager(cli, AzureContext(SUBSCRIPTION, "tenant", "user"), config, "ninghu")
+    with pytest.raises(RuntimeFailure, match="other eligible projects were processed") as caught:
+        manager.cleanup_expired(now=date(2026, 8, 21), dry_run=False)
+    assert caught.value.details == {"deleted_count": 1, "failure_count": 1}
+    assert len(cli.deleted) == 1
+
+
 def test_project_reuse_requires_exact_date_catalog_and_ownership() -> None:
     config = RuntimeConfig.from_env(environment()).azure
     existing = project()
@@ -267,6 +318,49 @@ def test_project_reuse_requires_exact_date_catalog_and_ownership() -> None:
     manager = AzureProjectManager(cli, AzureContext(SUBSCRIPTION, "tenant", "user"), config, "ninghu")
     selected = manager.select_or_create(date(2026, 8, 20), "sha256:catalog")
     assert selected.project_name == "aiq-20260820"
+
+
+def test_project_preflight_requires_exact_managed_identity_roles() -> None:
+    config = RuntimeConfig.from_env(environment(discovery=True)).azure
+    manager = AzureProjectManager(
+        FakeAzureCli([project()], roles=False),
+        AzureContext(SUBSCRIPTION, "tenant", "user"),
+        config,
+        "ninghu",
+    )
+    with pytest.raises(RuntimeFailure, match="lacks required"):
+        manager.discover_qualified()
+
+
+def test_project_creation_is_conditional_and_skips_a_raced_name() -> None:
+    class RacingAzureCli(FakeAzureCli):
+        def __init__(self):
+            super().__init__([])
+            self.attempts: list[str] = []
+
+        def put_if_absent(self, url, body):
+            name = url.split("/projects/", 1)[1].split("?", 1)[0]
+            self.attempts.append(name)
+            if name == "aiq-20260820":
+                self.projects.append(project(name, owner="other"))
+                return False
+            return super().put_if_absent(url, body)
+
+    cli = RacingAzureCli()
+    config = RuntimeConfig.from_env(environment()).azure
+    manager = AzureProjectManager(cli, AzureContext(SUBSCRIPTION, "tenant", "user"), config, "ninghu")
+    selected = manager.select_or_create(date(2026, 8, 20), "sha256:catalog")
+    assert selected.project_name == "aiq-20260820-r01"
+    assert cli.attempts == ["aiq-20260820", "aiq-20260820-r01"]
+
+
+def test_project_creation_reports_role_assignment_permission_blocker() -> None:
+    cli = FakeAzureCli([], role_create_failure=True)
+    config = RuntimeConfig.from_env(environment()).azure
+    manager = AzureProjectManager(cli, AzureContext(SUBSCRIPTION, "tenant", "user"), config, "ninghu")
+    with pytest.raises(RuntimeFailure, match="roleAssignments/write") as caught:
+        manager.select_or_create(date(2026, 8, 20), "sha256:catalog")
+    assert caught.value.code == "role_assignment_permission_blocked"
 
 
 def test_azure_cli_rejects_argument_injection_without_invoking_executor() -> None:
@@ -280,3 +374,39 @@ def test_azure_cli_rejects_argument_injection_without_invoking_executor() -> Non
     with pytest.raises(RuntimeFailure, match="null byte"):
         AzureCli(executor).run(["resource", "show", "--ids", "bad\x00value"])
     assert invoked is False
+
+
+def test_cleanup_cli_processes_every_resource_class_before_reporting_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class Projects:
+        def qualified_projects(self, failures):
+            calls.append("monitors")
+            failures.append("partial_project")
+            return []
+
+        def cleanup_owned_connections(self, *_args, **_kwargs):
+            calls.append("connections")
+            raise RuntimeFailure("connection_cleanup_failed", "Synthetic failure.")
+
+        def cleanup_expired(self, **_kwargs):
+            calls.append("projects")
+            return []
+
+    class Artifacts:
+        def cleanup_expired(self, *_args, **_kwargs):
+            calls.append("artifacts")
+            raise RuntimeFailure("artifact_cleanup_failed", "Synthetic failure.")
+
+    config = SimpleNamespace(
+        artifacts=SimpleNamespace(backend="local", location="private", container=None),
+        automation_owner="ninghu",
+        monitor_ownership_receipt="private/monitors.json",
+    )
+    monkeypatch.setattr(cli_module.RuntimeConfig, "from_env", lambda: config)
+    monkeypatch.setattr(cli_module, "_runtime_context", lambda _config: (object(), Projects()))
+    monkeypatch.setattr(cli_module, "LocalArtifactStore", lambda _path: Artifacts())
+    assert cli_module.main(["cleanup"]) == 1
+    assert calls == ["monitors", "connections", "artifacts", "projects"]

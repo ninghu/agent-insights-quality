@@ -83,7 +83,6 @@ class AzureTelemetryQuery:
 
 def correlation_query(
     *,
-    project: str,
     agent: str,
     version: str,
     expectations: Sequence[TelemetryExpectation],
@@ -96,14 +95,12 @@ def correlation_query(
 let roots = materialize(
     union isfuzzy=true requests, dependencies
     | extend operation_id=tolower(tostring(operation_Id))
-    | extend project_name=tostring(customDimensions["gen_ai.project.name"])
     | extend agent_name=tostring(customDimensions["gen_ai.agent.name"])
     | extend agent_version=tostring(customDimensions["gen_ai.agent.version"])
     | extend invocation_id=tostring(customDimensions["gen_ai.invocation.id"])
     | extend response_id=tostring(customDimensions["gen_ai.response.id"])
     | extend hosted_response_id=tostring(customDimensions["azure.ai.agentserver.response_id"])
     | extend session_id=tostring(customDimensions["azure.ai.agentserver.session_id"])
-    | where project_name == '{_kql(project)}'
     | where agent_name == '{_kql(agent)}' and agent_version == '{_kql(version)}'
     | where invocation_id in ({literals}) or response_id in ({literals})
         or hosted_response_id in ({literals}) or session_id in ({literals})
@@ -111,7 +108,7 @@ let roots = materialize(
         response_ids=make_set(response_id, 100),
         hosted_response_ids=make_set(hosted_response_id, 100),
         session_ids=make_set(session_id, 100)
-      by operation_id, project_name, agent_name, agent_version
+      by operation_id, agent_name, agent_version
 );
 union isfuzzy=true requests, dependencies
 | extend operation_id=tolower(tostring(operation_Id))
@@ -126,7 +123,7 @@ union isfuzzy=true requests, dependencies
 | where operation_id in (roots | project operation_id)
 | join kind=inner roots on operation_id
 | project timestamp, operation_id, span_id, parent_id, span_name, span_agent_name,
-    span_agent_version, span_model, project_name, agent_name,
+    span_agent_version, span_model, agent_name,
     agent_version, invocation_id=invocation_ids, response_id=response_ids,
     hosted_response_id=hosted_response_ids, session_id=session_ids
 """.strip()
@@ -156,7 +153,6 @@ def correlate_complete_traces(
     rows: Sequence[Mapping[str, Any]],
     expectations: Sequence[TelemetryExpectation],
     *,
-    project: str,
     agent: str,
     version: str,
     start: datetime,
@@ -165,13 +161,12 @@ def correlate_complete_traces(
     operations: dict[str, list[Mapping[str, Any]]] = {}
     for row in rows:
         if (
-            row.get("project_name") != project
-            or row.get("agent_name") != agent
+            row.get("agent_name") != agent
             or row.get("agent_version") != version
         ):
             raise RuntimeFailure(
                 "telemetry_provenance_mismatch",
-                "Telemetry did not match the exact project, agent, and version.",
+                "Telemetry did not match the exact agent and version selected in the telemetry resource.",
             )
         operation_id = str(row.get("operation_id") or "").casefold()
         if not _W3C_TRACE_ID.fullmatch(operation_id):
@@ -214,9 +209,26 @@ def correlate_complete_traces(
                 "Multiple invocations correlated to the same operation ID.",
             )
         spans = operations[operation_id]
-        span_ids = {str(row.get("span_id") or "") for row in spans if row.get("span_id")}
+        span_id_list = [str(row.get("span_id") or "") for row in spans if row.get("span_id")]
+        span_ids = set(span_id_list)
         parents = [str(row.get("parent_id") or "") for row in spans]
         roots = sum(not parent for parent in parents)
+        root_ids = {
+            str(row.get("span_id") or "")
+            for row in spans
+            if row.get("span_id") and not row.get("parent_id")
+        }
+        reachable = set(root_ids)
+        while True:
+            children = {
+                str(row.get("span_id") or "")
+                for row in spans
+                if row.get("span_id") and str(row.get("parent_id") or "") in reachable
+            }
+            expanded = reachable | children
+            if expanded == reachable:
+                break
+            reachable = expanded
         operations_present = {str(row.get("span_name") or "") for row in spans}
         required_spans = [
             row for row in spans if str(row.get("span_name") or "") in expectation.required_operations
@@ -225,14 +237,16 @@ def correlate_complete_traces(
             row.get("span_agent_name") == agent and row.get("span_agent_version") == version
             for row in required_spans
         )
-        model_valid = any(
-            row.get("span_name") == "chat"
-            and row.get("span_model") == expectation.model_deployment
-            for row in required_spans
+        chat_spans = [row for row in required_spans if row.get("span_name") == "chat"]
+        model_valid = bool(chat_spans) and all(
+            row.get("span_model") == expectation.model_deployment for row in chat_spans
         )
         if (
             roots != 1
+            or len(span_id_list) != len(spans)
+            or len(span_ids) != len(span_id_list)
             or any(parent and parent not in span_ids for parent in parents)
+            or reachable != span_ids
             or not expectation.required_operations.issubset(operations_present)
             or not required_provenance_valid
             or not model_valid
@@ -247,7 +261,6 @@ def wait_for_correlated_traces(
     query_client: TelemetryQuery,
     *,
     resource_id: str,
-    project: str,
     agent: str,
     version: str,
     expectations: Sequence[TelemetryExpectation],
@@ -261,7 +274,6 @@ def wait_for_correlated_traces(
     if timeout_seconds <= 0 or start.tzinfo is None or end.tzinfo is None or start >= end:
         raise RuntimeFailure("invalid_telemetry_window", "Telemetry polling bounds are invalid.")
     query = correlation_query(
-        project=project,
         agent=agent,
         version=version,
         expectations=expectations,
@@ -277,7 +289,6 @@ def wait_for_correlated_traces(
         correlated = correlate_complete_traces(
             rows,
             expectations,
-            project=project,
             agent=agent,
             version=version,
             start=start,
