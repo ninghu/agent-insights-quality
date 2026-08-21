@@ -30,6 +30,7 @@ def test_runtime_readiness_keeps_daily_disabled_until_every_component_is_ready()
     assert set(readiness["mandatory_components"]) == MANDATORY_RUNTIME_COMPONENTS
     assert readiness["mandatory_components"]["scenario_catalog"] is True
     assert readiness["mandatory_components"]["healthy_agents"] is False
+    assert readiness["mandatory_components"]["live_qualification"] is False
     assert sum(readiness["mandatory_components"].values()) == 1
 
 

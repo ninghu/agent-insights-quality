@@ -75,6 +75,13 @@ the returned `agent_session_id` to Responses, and delete that exact endpoint ses
 Receipts retain protocol response/invocation/session IDs plus transport request IDs for later
 read-only correlation. None of these IDs are trace IDs.
 
+Live qualification accepts only the exact active deployment and invocation receipts for one run and
+a timezone-aware UTC window no longer than one hour. Read-only Application Insights evidence must
+fall inside that half-open window, use valid 32-hex `operation_Id` and 16-hex span IDs, match every
+response/session/version receipt, and form one rooted agent span tree with model and exact tool
+name/argument/result spans for every prompt and hosted fixture. Stale, unrelated, duplicate, or
+malformed evidence fails closed and cannot enable readiness.
+
 The ticket image is published only for a push of the exact trusted `main` SHA, when the repository
 variable `AIQ_GHCR_PUBLISH_ENABLED` is `true`, through the `ghcr-publish` environment. Before
 enabling that variable, a repository administrator must protect the environment with required
