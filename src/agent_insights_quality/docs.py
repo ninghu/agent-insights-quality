@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from collections import Counter
 
 from agent_insights_quality.contracts import (
     ContractError,
@@ -44,6 +45,10 @@ def _agent_doc(agents: list[dict[str, Any]]) -> str:
 
 
 def _scenario_doc(catalog: dict[str, Any]) -> str:
+    active = [scenario for scenario in catalog["scenarios"] if scenario["status"] == "active"]
+    families = Counter(scenario["family"] for scenario in active)
+    categories = Counter(scenario["expected"]["category"] for scenario in active)
+    severities = Counter(scenario["expected"]["severity"] for scenario in active)
     lines = [
         "# Scenario Catalog",
         "",
@@ -51,23 +56,41 @@ def _scenario_doc(catalog: dict[str, Any]) -> str:
         "",
         f"Catalog version: `{catalog['catalog_version']}`",
         "",
-        "| Scenario | Version | Status | Priority | Category | Severity | Compatible types | Conflicts |",
+        (
+            f"Active scenarios: **{len(active)}**; families: **{len(families)}**; "
+            f"healthy controls: **{categories['none']}**."
+        ),
+        "",
+        "Category coverage: "
+        + ", ".join(f"`{name}` ({count})" for name, count in sorted(categories.items())),
+        "",
+        "Severity coverage: "
+        + ", ".join(f"`{name}` ({count})" for name, count in sorted(severities.items())),
+        "",
+        "## Scenarios",
+        "",
+        "| Scenario | Version | Family | Priority | Category | Severity | Mutation / traffic recipe | Compatible types |",
         "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for scenario in catalog["scenarios"]:
         types = ", ".join(f"`{value}`" for value in scenario["compatibility"]["agent_types"])
-        conflicts = ", ".join(f"`{value}`" for value in scenario["conflict_tags"]) or "None"
+        mutation = scenario["mutation"]["recipe_id"] or "none"
         lines.append(
             f"| `{scenario['id']}` - {scenario['title']} | `{scenario['version']}` | "
-            f"{scenario['status']} | {scenario['priority']} | `{scenario['expected']['category']}` | "
-            f"`{scenario['expected']['severity']}` | {types} | {conflicts} |"
+            f"`{scenario['family']}` | {scenario['priority']} | "
+            f"`{scenario['expected']['category']}` | `{scenario['expected']['severity']}` | "
+            f"`{mutation}` / `{scenario['traffic']['recipe_id']}` | {types} |"
         )
+    lines.extend(["", "## Family coverage", "", "| Family | Active scenarios |", "| --- | ---: |"])
+    for family, count in sorted(families.items()):
+        lines.append(f"| `{family}` | {count} |")
     lines.extend(
         [
             "",
             "Each source entry fixes its mutation delta, deterministic endpoint traffic recipe, expected",
-            "evidence, negative controls, category, severity, fix boundary, compatibility, conflict tags,",
-            "and version semantics. Ground-truth changes require human review.",
+            "evidence, healthy decoys, negative controls, category, severity, validation targets,",
+            "recurrence behavior, compatibility, conflict tags, and version semantics. Ground-truth",
+            "changes require human review.",
             "",
         ]
     )

@@ -16,6 +16,7 @@ from agent_insights_quality.contracts import (
     validate_canonical_report_semantics,
     validate_contracts,
     validate_instance,
+    validate_historical_report_semantics,
     validate_report_plan_binding,
     validate_reporting_config,
 )
@@ -146,8 +147,11 @@ def _scorecard(*, complete: bool, completed: int) -> dict[str, object]:
 def _report_fixture(*, completed: bool) -> tuple[dict[str, object], list[dict], dict]:
     agents = load_agent_manifests()
     catalog = deepcopy(load_scenario_catalog(set(EXPECTED_AGENTS)))
-    scenario = catalog["scenarios"][1]
-    scenario["status"] = "active"
+    scenario = next(
+        item for item in catalog["scenarios"] if item["id"] == "aiq-scn-017-silent-tool-error"
+    )
+    for item in catalog["scenarios"]:
+        item["status"] = "active" if item is scenario else "retired"
     digest = "sha256:" + ("a" * 64)
     reference = "sha256:" + ("b" * 64)
     report = {
@@ -186,7 +190,7 @@ def test_at_bar_rejects_incomplete_scenario_results() -> None:
 
 def test_report_must_match_exact_plan_assignment() -> None:
     report, _, catalog = _report_fixture(completed=True)
-    scenario_id = catalog["scenarios"][1]["id"]
+    scenario_id = report["scenario_results"][0]["scenario_id"]
     report.update(
         {
             "report_id": "aiq-20260820",
@@ -213,3 +217,33 @@ def test_report_must_match_exact_plan_assignment() -> None:
     }
     with pytest.raises(ContractError, match="agent differs"):
         validate_report_plan_binding(report, plan, "report")
+
+
+def test_historical_report_uses_plan_snapshot_semantics() -> None:
+    report, _, catalog = _report_fixture(completed=True)
+    report["agents"] = [
+        agent for agent in report["agents"] if agent["id"] == "aiq-001-weather"
+    ]
+    scenario = next(
+        item for item in catalog["scenarios"] if item["status"] == "active"
+    )
+    plan = {
+        "assignments": [
+            {
+                "scenario_id": scenario["id"],
+                "agent_id": "aiq-001-weather",
+                "agent_type": "prompt",
+                "expected": {
+                    "category": scenario["expected"]["category"],
+                    "severity": scenario["expected"]["severity"],
+                    "finding_count": 1,
+                    "validation_targets": scenario["expected"]["validation_targets"],
+                },
+            }
+        ]
+    }
+    validate_historical_report_semantics(report, plan, "report")
+    invalid = deepcopy(report)
+    invalid["scorecard"]["counts"]["true_positives"] = 0
+    with pytest.raises(ContractError, match="true_positives"):
+        validate_historical_report_semantics(invalid, plan, "report")
