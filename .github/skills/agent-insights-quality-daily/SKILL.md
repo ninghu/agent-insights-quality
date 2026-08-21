@@ -12,29 +12,20 @@ content, complete prompt payloads, or real customer data.
 
 ## Runtime readiness gate
 
-Before any preflight, deployment, traffic, ADO, memory, cleanup, generated PR mutation, or email
-side effect, run:
+Enter the workflow only through:
 
 ```powershell
-python -m agent_insights_quality check-runtime-readiness
+python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD>
 ```
 
 `config/runtime-readiness.yaml` is human-reviewed authority. If any mandatory component is false,
-stop all operational phases: do not deploy Azure resources, send agent traffic, query or trigger
-Agent Insights, access ADO, transition memory, clean resources, or mutate/open a generated PR. This
-nonzero readiness result does not bypass finalization. Run:
-
-```powershell
-python -m agent_insights_quality finalize-readiness-failure --report-date <Pacific YYYY-MM-DD>
-```
-
-This minimal safe path renders a sanitized `INCONCLUSIVE` readiness-failure report, email, and
-schema-valid one-message handoff without using incomplete runtime components. Resolve the configured
-test recipient, send exactly that one rendered email through Copilot's connected Microsoft mail
-capability as the authenticated user, and record a sanitized receipt reference or delivery failure
-in the handoff with `record-email-result`. A pending handoff may be finalized only once, and the
-renderer never claims delivery. Daily automation cannot modify readiness configuration or treat
-contract scaffolding as an operational workflow.
+the wrapper stops all operational phases: it does not deploy Azure resources, send agent traffic,
+query or trigger Agent Insights, access ADO, transition memory, clean resources, or mutate/open a
+generated PR. It must still run the failure finalizer, persist the
+sanitized canonical `INCONCLUSIVE` report and explicit unsent direct-email handoff, and return
+nonzero. The automation must then submit that handoff through connected Microsoft mail and import a
+provider receipt before claiming delivery. Daily automation cannot modify readiness configuration
+or treat contract scaffolding as an operational workflow.
 
 ## Non-negotiable rules
 

@@ -1,11 +1,11 @@
 # Agent Insights Quality
 
 `agent-insights-quality` is a public, reusable qualification framework for the Agent Insights engine.
-The current `0.1.x` release is not yet a runnable daily automation runtime. It includes five reviewed
-healthy synthetic agents, Foundry deployment and endpoint-only traffic adapters, generic production
-infrastructure and orchestration boundaries, schemas, safety policy, generated-path enforcement,
-skills, and validation tooling. Scenario mutation, scoring, judging, memory, ADO, reporting, and live
-qualification workstreams remain incomplete.
+The current `0.1.x` release includes five reviewed healthy synthetic agents, Foundry deployment and
+endpoint-only traffic adapters, generic production infrastructure and orchestration boundaries,
+deterministic scoring, Copilot judgment handoffs, quality-memory reconciliation, ADO synchronization,
+reporting/email handoffs, and a fail-closed finalizer. Live qualification remains disabled, so this
+is not yet a live daily automation runtime.
 
 The quality bar is intentionally strict. A day is `AT BAR` only after its complete reviewed daily
 selection runs, healthy agents produce no insights, actual insight counts exactly match expected
@@ -73,7 +73,7 @@ Receipts and CLI output contain opaque hashes rather than private coordinates or
 `config/runtime-readiness.yaml` is the fail-closed authority. The healthy-agent contracts are
 implemented, but `healthy_agents` remains false until a live run proves the required agent, model,
 and tool spans through read-only Application Insights evidence. Therefore
-`python -m agent_insights_quality check-runtime-readiness` and `run-daily` return an actionable
+`python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD>` returns an actionable
 `INCONCLUSIVE` result without deployments, traffic, insights, ADO, memory transitions, cleanup, or
 generated PR mutation. The required minimal finalizer still renders a sanitized report and
 one-message email handoff for Copilot to send through the authenticated user's mailbox.

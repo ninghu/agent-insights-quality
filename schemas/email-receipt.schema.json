@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ninghu.github.io/agent-insights-quality/schemas/v1/email-receipt.schema.json",
+  "title": "Connected Microsoft mail delivery receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "request_hash",
+    "state",
+    "completed_at",
+    "provider_reference",
+    "error"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "request_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "state": {"enum": ["sent", "failed"]},
+    "completed_at": {"type": "string", "format": "date-time"},
+    "provider_reference": {"type": ["string", "null"], "minLength": 1, "maxLength": 500},
+    "error": {"type": ["string", "null"], "maxLength": 2000}
+  }
+}

@@ -97,16 +97,31 @@ present and filters exact framework purpose, owner, name, and expiration metadat
 Install the optional identity-backed Azure clients with `python -m pip install -e ".[azure]"` on live
 runners that query Application Insights or use the Azure Blob artifact backend.
 
+Scoring, Copilot judgment, quality memory, ADO synchronization, and reporting/email handoffs are
+implemented. `run-daily` catches readiness failure, persists the canonical `INCONCLUSIVE` report plus
+an unsent direct-email handoff, and then returns nonzero. The readiness file is protected from
+generated automation.
+
 Generated automation branches use the `aiq-daily/` prefix. CI restricts those branches to the paths
 in the **base branch's** `config/automation-policy.yaml`, using the base branch's installed validator.
 The guard validates additions, changes, deletions, and both sides of renames. A generated PR cannot
 authorize itself by modifying the allowlist, validator, reporting config, or readiness config. Source
 contracts, policies, schemas, prompts, and skills require a normal human-reviewed change.
 
+## Runtime handoff commands
+
+Use `project-evidence`, `judge-package-export`, and `judge-package-import` for the primary Copilot
+pass; use `verifier-export` and `verifier-import` for the independent blinded pass. `score` recomputes
+aggregates from plans, evidence, and judgments. `memory-reconcile`, `ado-dry-run`, `ado-apply`,
+`render-report`, `render-email`, `render-failure`, `email-receipt-import`, and `finalize` expose the
+remaining deterministic handoffs. No command calls an external model or claims mail delivery without
+an imported provider receipt.
+
 ## Reporting audience
 
-`config/reporting.yaml` is the public-safe authority. Test mode resolves only the protected
-`AIQ_TEST_REPORT_RECIPIENT` automation variable. Production mode resolves only
+`config/reporting.yaml` is the public-safe authority. Test mode uses the authenticated user's connected
+Microsoft mailbox when an address-bearing automation environment is unavailable, or resolves only the
+protected `AIQ_TEST_REPORT_RECIPIENT` variable in Actions/tests. Production mode resolves only
 `AIQ_PRODUCTION_REPORT_RECIPIENT`. Both values must use the configured allowed domain. Promotion is
 an explicit human-reviewed mode change; daily automation cannot modify configuration or promote
 itself.
@@ -123,8 +138,9 @@ hashes, counts, verdicts, and links only when the links themselves are approved 
 
 Any unavailable identity, service, quota, trace set, judge, consistency check, or delivery
 prerequisite makes the run `INCONCLUSIVE`. The finalizer preserves sanitized diagnostics, renders the
-failure report, retries direct email with bounded backoff, and surfaces delivery failure. Incomplete
-runs never advance clean streaks or create, resolve, or reopen bugs.
+failure report, and creates an explicit unsent connected-mail request with bounded retry instructions.
+Automation imports a provider receipt before claiming delivery. Incomplete runs never advance clean
+streaks or create, resolve, or reopen bugs.
 
 When readiness itself fails, the finalizer additionally prohibits Azure deployments, agent traffic,
 Agent Insights access, ADO access, memory transitions, resource cleanup, and generated PR mutation.

@@ -16,9 +16,14 @@
     "scorecard",
     "agents",
     "scenario_results",
+    "field_judgments",
+    "collection_analysis",
+    "diagnostics",
     "bug_actions",
     "memory_changes",
-    "artifact_reference"
+    "artifact_reference",
+    "failure",
+    "delivery"
   ],
   "properties": {
     "schema_version": {"const": "1.0.0"},
@@ -91,6 +96,71 @@
         }
       }
     },
+    "field_judgments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["scenario_id", "insight_reference", "attributes"],
+        "properties": {
+          "scenario_id": {
+            "type": "string",
+            "pattern": "^aiq-scn-[0-9]{3}-[a-z][a-z0-9-]*$"
+          },
+          "insight_reference": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "attributes": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "root_cause",
+              "title",
+              "description",
+              "proposed_fix",
+              "category",
+              "severity",
+              "linked_traces",
+              "meaningfulness",
+              "evidence_localization",
+              "actionability"
+            ],
+            "properties": {
+              "root_cause": {"type": "boolean"},
+              "title": {"type": "boolean"},
+              "description": {"type": "boolean"},
+              "proposed_fix": {"type": "boolean"},
+              "category": {"type": "boolean"},
+              "severity": {"type": "boolean"},
+              "linked_traces": {"type": "boolean"},
+              "meaningfulness": {"type": "boolean"},
+              "evidence_localization": {"type": "boolean"},
+              "actionability": {"type": "boolean"}
+            }
+          }
+        }
+      }
+    },
+    "collection_analysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["distinct", "duplicates", "fragments", "umbrellas", "stale_version"],
+      "properties": {
+        "distinct": {"type": "integer", "minimum": 0},
+        "duplicates": {"type": "integer", "minimum": 0},
+        "fragments": {"type": "integer", "minimum": 0},
+        "umbrellas": {"type": "integer", "minimum": 0},
+        "stale_version": {"type": "integer", "minimum": 0}
+      }
+    },
+    "diagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["engine_latency_ms", "model_calls", "tokens"],
+      "properties": {
+        "engine_latency_ms": {"type": ["integer", "null"], "minimum": 0},
+        "model_calls": {"type": ["integer", "null"], "minimum": 0},
+        "tokens": {"type": ["integer", "null"], "minimum": 0}
+      }
+    },
     "bug_actions": {
       "type": "array",
       "items": {
@@ -120,6 +190,50 @@
         }
       }
     },
-    "artifact_reference": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+    "artifact_reference": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "failure": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "failed_phase",
+            "last_confirmed_stage",
+            "reason",
+            "affected_agents",
+            "diagnostics_reference",
+            "next_action"
+          ],
+          "properties": {
+            "failed_phase": {"type": "string", "minLength": 1, "maxLength": 200},
+            "last_confirmed_stage": {"type": "string", "minLength": 1, "maxLength": 500},
+            "reason": {"type": "string", "minLength": 1, "maxLength": 2000},
+            "affected_agents": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {"type": "string", "pattern": "^aiq-[0-9]{3}-[a-z][a-z0-9-]*$"}
+            },
+            "diagnostics_reference": {
+              "type": ["string", "null"],
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "next_action": {"type": "string", "minLength": 1, "maxLength": 1000}
+          }
+        }
+      ]
+    },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "request_reference"],
+      "properties": {
+        "state": {"enum": ["unsent", "sent", "failed"]},
+        "request_reference": {
+          "type": ["string", "null"],
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    }
   }
 }

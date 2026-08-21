@@ -1183,6 +1183,7 @@ def validate_canonical_report_semantics(
         set(result_ids) == expected_ids
         and completed_count == len(expected_ids)
         and all(result["verdict"] != "inconclusive" for result in report["scenario_results"])
+        and report.get("failure") is None
     )
     fault_results = [
         result
@@ -1241,10 +1242,113 @@ def validate_canonical_report_semantics(
         ),
         "precision": ratio(true_positives, produced_insights),
     }
+    for severity in ("medium", "low"):
+        rate_name = f"{severity}_severity_recall"
+        if rate_name not in rates:
+            continue
+        expected_severity = [
+            result
+            for result in fault_results
+            if scenario_by_id[result["scenario_id"]]["expected"]["severity"] == severity
+        ]
+        expected_rates[rate_name] = ratio(
+            sum(result["verdict"] == "correct" for result in expected_severity),
+            len(expected_severity),
+        )
+    healthy_results = [
+        result
+        for result in report["scenario_results"]
+        if scenario_by_id[result["scenario_id"]]["expected"]["category"] == "none"
+    ]
+    if "healthy_noise_rate" in rates:
+        expected_rates["healthy_noise_rate"] = ratio(
+            sum(bool(result["insight_references"]) for result in healthy_results),
+            len(healthy_results),
+        )
     expected_rates["f1"] = ratio(
         2 * expected_rates["precision"] * expected_rates["overall_recall"],
         expected_rates["precision"] + expected_rates["overall_recall"],
     )
+
+    if "field_judgments" in report:
+        expected_attributes = {
+            "root_cause",
+            "title",
+            "description",
+            "proposed_fix",
+            "category",
+            "severity",
+            "linked_traces",
+            "meaningfulness",
+            "evidence_localization",
+            "actionability",
+        }
+        result_references = {
+            (result["scenario_id"], reference)
+            for result in report["scenario_results"]
+            for reference in result["insight_references"]
+        }
+        field_keys = [
+            (item["scenario_id"], item["insight_reference"])
+            for item in report["field_judgments"]
+        ]
+        if len(field_keys) != len(set(field_keys)) or not set(field_keys).issubset(
+            result_references
+        ):
+            raise ContractError(f"{label}: field judgments do not match unique insight mappings")
+        for item in report["field_judgments"]:
+            if set(item["attributes"]) != expected_attributes:
+                raise ContractError(f"{label}: field judgment attribute set is incomplete")
+        for attribute, rate_name in {
+            "category": "category_accuracy",
+            "severity": "severity_accuracy",
+            "title": "title_pass_rate",
+            "description": "description_pass_rate",
+            "proposed_fix": "proposed_fix_pass_rate",
+            "linked_traces": "linked_trace_pass_rate",
+            "evidence_localization": "evidence_localization_rate",
+            "meaningfulness": "meaningfulness_rate",
+            "actionability": "actionability_rate",
+        }.items():
+            expected_rates[rate_name] = ratio(
+                sum(item["attributes"][attribute] for item in report["field_judgments"]),
+                len(report["field_judgments"]),
+            )
+        correct_faults = {
+            result["scenario_id"]
+            for result in fault_results
+            if result["verdict"] == "correct"
+        }
+        judged_faults = {
+            item["scenario_id"]
+            for item in report["field_judgments"]
+            if all(item["attributes"].values())
+        }
+        if correct_faults != judged_faults:
+            raise ContractError(f"{label}: true positives contradict field judgments")
+
+    if "collection_analysis" in report:
+        collection = report["collection_analysis"]
+        total = (
+            collection["distinct"]
+            + collection["duplicates"]
+            + collection["fragments"]
+            + collection["umbrellas"]
+        )
+        if total > produced_insights:
+            raise ContractError(f"{label}: collection analysis exceeds produced insights")
+        expected_rates.update(
+            {
+                "distinctness_rate": ratio(collection["distinct"], produced_insights),
+                "duplication_rate": ratio(collection["duplicates"], produced_insights),
+                "fragmentation_rate": ratio(collection["fragments"], produced_insights),
+                "umbrella_rate": ratio(collection["umbrellas"], produced_insights),
+                "cross_version_stale_rate": ratio(
+                    collection["stale_version"],
+                    produced_insights,
+                ),
+            }
+        )
 
     if report["status"] != scorecard["verdict"]:
         raise ContractError(f"{label}: report status and scorecard verdict must match")
@@ -1264,9 +1368,10 @@ def validate_canonical_report_semantics(
     for key, expected in expected_counts.items():
         if counts[key] != expected:
             raise ContractError(f"{label}: scorecard {key} does not match scenario results")
-    for key, expected in expected_rates.items():
-        if not math.isclose(rates[key], expected, abs_tol=1e-9):
-            raise ContractError(f"{label}: scorecard {key} does not match scenario results")
+    if report.get("failure") is None:
+        for key, expected in expected_rates.items():
+            if not math.isclose(rates[key], expected, abs_tol=1e-9):
+                raise ContractError(f"{label}: scorecard {key} does not match scenario results")
     if scorecard["complete"] != complete:
         raise ContractError(f"{label}: scorecard completeness does not match scenario results")
 
@@ -1286,7 +1391,20 @@ def validate_canonical_report_semantics(
             "proposed_fix_pass_rate",
             "linked_trace_pass_rate",
         }
+        required_one.update(
+            key
+            for key in (
+                "evidence_localization_rate",
+                "meaningfulness_rate",
+                "actionability_rate",
+                "distinctness_rate",
+            )
+            if key in rates
+        )
         required_zero = {"duplication_rate", "umbrella_rate", "cross_version_stale_rate"}
+        required_zero.update(
+            key for key in ("healthy_noise_rate", "fragmentation_rate") if key in rates
+        )
         if (
             scorecard["violations"]
             or counts["healthy_insights"]

@@ -87,7 +87,16 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["trace_id", "span_ids", "summary", "artifact_reference"],
+        "required": [
+          "trace_id",
+          "span_ids",
+          "summary",
+          "artifact_reference",
+          "project_reference",
+          "agent_id",
+          "version_digest",
+          "observed_at"
+        ],
         "properties": {
           "trace_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
           "span_ids": {
@@ -98,7 +107,11 @@
             "items": {"type": "string", "pattern": "^[0-9a-f]{16}$"}
           },
           "summary": {"type": "string", "minLength": 1, "maxLength": 5000},
-          "artifact_reference": {"$ref": "#/$defs/sha256"}
+          "artifact_reference": {"$ref": "#/$defs/sha256"},
+          "project_reference": {"$ref": "#/$defs/sha256"},
+          "agent_id": {"type": "string", "pattern": "^aiq-[0-9]{3}-[a-z][a-z0-9-]*$"},
+          "version_digest": {"$ref": "#/$defs/sha256"},
+          "observed_at": {"type": "string", "format": "date-time"}
         }
       }
     },
@@ -116,7 +129,11 @@
           "severity",
           "trace_count",
           "trace_ids",
-          "proposed_fix"
+          "proposed_fix",
+          "fix_kind",
+          "tool_references",
+          "signature",
+          "evidence_fingerprint"
         ],
         "properties": {
           "id": {"type": "string", "minLength": 1, "maxLength": 200},
@@ -131,7 +148,18 @@
             "uniqueItems": true,
             "items": {"type": "string", "pattern": "^[0-9a-f]{32}$"}
           },
-          "proposed_fix": {"type": "string", "minLength": 1, "maxLength": 5000}
+          "proposed_fix": {"type": "string", "minLength": 1, "maxLength": 5000},
+          "fix_kind": {
+            "enum": ["prompt_patch", "code_change", "container_change", "prose", "no_fix"]
+          },
+          "tool_references": {
+            "type": "array",
+            "maxItems": 100,
+            "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1, "maxLength": 100}
+          },
+          "signature": {"$ref": "#/$defs/sha256"},
+          "evidence_fingerprint": {"$ref": "#/$defs/sha256"}
         }
       }
     },

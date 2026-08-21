@@ -6,9 +6,9 @@ mandatory_components:
   healthy_agents: false
   scenario_catalog: true
   production_orchestrator: false
-  deterministic_scoring: false
-  copilot_judging: false
-  quality_memory: false
-  ado_synchronization: false
-  reporting_and_email: false
+  deterministic_scoring: true
+  copilot_judging: true
+  quality_memory: true
+  ado_synchronization: true
+  reporting_and_email: true
   live_qualification: false
