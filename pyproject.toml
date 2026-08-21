@@ -28,6 +28,9 @@ aiq-quality = "agent_insights_quality.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+agent_insights_quality = ["prompts/*.md"]
+
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]

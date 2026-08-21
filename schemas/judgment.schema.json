@@ -9,12 +9,14 @@
     "bundle_id",
     "judge_role",
     "model",
+    "prompt_version",
     "prompt_hash",
     "evidence_schema_version",
     "mapping",
     "verdict",
     "attributes",
     "relationships",
+    "defect_fingerprint",
     "confidence",
     "reasoning",
     "output_hash"
@@ -24,6 +26,9 @@
     "bundle_id": {"type": "string", "format": "uuid"},
     "judge_role": {"enum": ["primary", "blinded_verifier"]},
     "model": {"const": "gpt-5.6-sol"},
+    "prompt_version": {
+      "enum": ["primary-v1", "blinded-verifier-v1"]
+    },
     "prompt_hash": {"$ref": "#/$defs/sha256"},
     "evidence_schema_version": {"const": "1.0.0"},
     "mapping": {
@@ -50,7 +55,9 @@
         "category",
         "severity",
         "linked_traces",
-        "meaningfulness"
+        "meaningfulness",
+        "evidence_localization",
+        "actionability"
       ],
       "properties": {
         "root_cause": {"$ref": "#/$defs/assessment"},
@@ -60,7 +67,9 @@
         "category": {"$ref": "#/$defs/assessment"},
         "severity": {"$ref": "#/$defs/assessment"},
         "linked_traces": {"$ref": "#/$defs/assessment"},
-        "meaningfulness": {"$ref": "#/$defs/assessment"}
+        "meaningfulness": {"$ref": "#/$defs/assessment"},
+        "evidence_localization": {"$ref": "#/$defs/assessment"},
+        "actionability": {"$ref": "#/$defs/assessment"}
       }
     },
     "relationships": {
@@ -72,6 +81,10 @@
         "fragmented_with": {"$ref": "#/$defs/id_list"},
         "umbrella_for": {"$ref": "#/$defs/id_list"}
       }
+    },
+    "defect_fingerprint": {
+      "type": ["string", "null"],
+      "pattern": "^sha256:[0-9a-f]{64}$"
     },
     "confidence": {"type": "number", "minimum": 0, "maximum": 1},
     "reasoning": {"type": "string", "minLength": 1, "maxLength": 2000},
