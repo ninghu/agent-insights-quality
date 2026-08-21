@@ -120,6 +120,7 @@ def _field(payload: Mapping[str, Any], *names: str) -> Any:
 class InsightCheckpoint:
     captured_at: datetime
     revisions: Mapping[str, str]
+    details: Mapping[str, Mapping[str, Any]] | None = None
 
 
 class AgentInsightsClient:
@@ -468,6 +469,7 @@ class AgentInsightsClient:
 
     def capture_insight_checkpoint(self, monitor_id: str) -> InsightCheckpoint:
         revisions: dict[str, str] = {}
+        details: dict[str, Mapping[str, Any]] = {}
         for insight in self.list_insights(monitor_id):
             insight_id = str(insight.get("id") or "")
             revision = str(_field(insight, "revision", "etag", "updated_at", "updatedAt") or "")
@@ -477,7 +479,8 @@ class AgentInsightsClient:
                     "Existing insight lacks revision evidence required for run scoping.",
                 )
             revisions[insight_id] = revision
-        return InsightCheckpoint(datetime.now(UTC), revisions)
+            details[insight_id] = dict(insight)
+        return InsightCheckpoint(datetime.now(UTC), revisions, details)
 
     @staticmethod
     def validate_run_window(

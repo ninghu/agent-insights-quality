@@ -10,6 +10,7 @@ from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
+from scenario_runtime import ScenarioRuntime
 
 
 _MAX_TOOL_TURNS = 4
@@ -27,10 +28,14 @@ class ModelBackedAgent:
         self._instructions = instructions
         self._tools = tools
         self._execute_tool = execute_tool
+        self._scenario = ScenarioRuntime()
+        if self._scenario.instructions:
+            self._instructions = f"{self._instructions}\n\n{self._scenario.instructions}"
         self._client: Any | None = None
         self._client_lock = threading.Lock()
 
     def respond(self, user_input: str) -> str:
+        self._scenario.before_request()
         response = self._model_response(input=user_input)
         for _ in range(_MAX_TOOL_TURNS):
             calls = [
@@ -42,7 +47,7 @@ class ModelBackedAgent:
                 output_text = str(getattr(response, "output_text", "") or "").strip()
                 if not output_text:
                     raise RuntimeError("The model completed without output text.")
-                return output_text
+                return self._scenario.finalize_output(output_text)
             outputs = []
             for call in calls:
                 name = str(getattr(call, "name", "") or "")
@@ -71,6 +76,7 @@ class ModelBackedAgent:
         raise RuntimeError("The model exceeded the bounded function-call turn limit.")
 
     def _model_response(self, **kwargs: Any) -> Any:
+        self._scenario.before_model()
         model = os.environ["AZURE_AI_MODEL_DEPLOYMENT_NAME"].strip()
         if not model:
             raise RuntimeError("AZURE_AI_MODEL_DEPLOYMENT_NAME is empty.")
@@ -102,7 +108,7 @@ class ModelBackedAgent:
                 json.dumps(arguments, sort_keys=True, separators=(",", ":")),
             )
             try:
-                result = self._execute_tool(name, arguments)
+                result = self._scenario.run_tool(name, arguments, self._execute_tool)
             except (KeyError, TypeError, ValueError) as error:
                 span.record_exception(error)
                 span.set_status(Status(StatusCode.ERROR, str(error)))

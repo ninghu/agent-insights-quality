@@ -35,6 +35,8 @@ class TraceCorrelation:
     operation_id: str
     span_count: int
     root_count: int
+    span_ids: tuple[str, ...] = ()
+    observed_at: datetime | None = None
 
 
 class TelemetryQuery(Protocol):
@@ -253,7 +255,23 @@ def correlate_complete_traces(
         ):
             return None
         used.add(operation_id)
-        matched.append(TraceCorrelation(operation_id, len(spans), roots))
+        observed = min(
+            (
+                datetime.fromisoformat(str(row["timestamp"]).replace("Z", "+00:00"))
+                if isinstance(row.get("timestamp"), str)
+                else row["timestamp"]
+            )
+            for row in spans
+        )
+        matched.append(
+            TraceCorrelation(
+                operation_id,
+                len(spans),
+                roots,
+                tuple(sorted(span_ids)),
+                observed.astimezone(UTC),
+            )
+        )
     return matched
 
 

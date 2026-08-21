@@ -152,6 +152,8 @@ class HealthyFixture:
     output_contains: str
     tool_outputs: Mapping[str, Mapping[str, Any]]
     expected_tool_calls: tuple[str, ...]
+    validate_output: bool = True
+    validate_tools: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -745,7 +747,7 @@ class FoundryInvocationClient:
                     _request_id(raw_response),
                     None,
                     tuple(called_tools),
-                    validate_tools=True,
+                    validate_tools=fixture.validate_tools,
                 )
             outputs = []
             for call in calls:
@@ -970,7 +972,7 @@ def _invocation_receipt(
     output_text = _response_text(response)
     if status != "completed" or not response_id:
         raise RuntimeContractError("Agent response did not complete with a response ID.")
-    if fixture.output_contains not in output_text:
+    if fixture.validate_output and fixture.output_contains not in output_text:
         raise RuntimeContractError(
             f"Healthy fixture '{fixture.id}' returned an unexpected outcome."
         )

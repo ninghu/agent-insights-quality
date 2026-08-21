@@ -49,11 +49,25 @@ class Hooks:
     def deploy(self, _work, *, idempotency_key):
         return self._value("deploy", idempotency_key)
 
-    def invoke(self, _work, _deployment, *, idempotency_key):
+    def invoke(self, work, _deployment, *, idempotency_key):
         if self.fail_once:
             self.fail_once = False
             raise RuntimeFailure("temporary", "Temporary invocation failure.", transient=True)
-        return self._value("invoke", idempotency_key)
+        value = self._value("invoke", idempotency_key)
+        if isinstance(work.window, AnalysisWindow):
+            start = work.window.start
+            end = work.window.end
+        else:
+            start = datetime(2026, 8, 21, tzinfo=UTC)
+            end = start + timedelta(minutes=5)
+        return value | {
+            "window_binding": {
+                "planned_start": "window://test/healthy/start-inclusive",
+                "planned_end": "window://test/healthy/end-exclusive",
+                "realized_start": start.isoformat(),
+                "realized_end": end.isoformat(),
+            }
+        }
 
     def wait_ingestion(self, _work, _invocation, *, idempotency_key):
         return self._value("ingestion", idempotency_key)
@@ -180,7 +194,7 @@ def test_orchestrator_sends_peer_cancellation_before_waiting(tmp_path: Path) -> 
     assert peer_released.is_set()
 
 
-def test_plan_rejects_overlapping_sequential_versions() -> None:
+def test_plan_rejects_non_symbolic_execution_windows() -> None:
     start = datetime(2026, 8, 21, tzinfo=UTC)
     payload = {
         "plan_id": "aiq-20260821",
@@ -189,21 +203,25 @@ def test_plan_rejects_overlapping_sequential_versions() -> None:
             {
                 "agent_id": "a",
                 "agent_name": "agent",
+                "agent_type": "prompt",
                 "agent_version_digest": "v1",
+                "wave": 0,
                 "window": {"start": start.isoformat(), "end": (start + timedelta(minutes=5)).isoformat()},
-            },
-            {
-                "agent_id": "a",
-                "agent_name": "agent",
-                "agent_version_digest": "v2",
-                "window": {
-                    "start": (start + timedelta(minutes=4)).isoformat(),
-                    "end": (start + timedelta(minutes=8)).isoformat(),
-                },
+                "version_sequence": [
+                    {
+                        "phase": "faulted",
+                        "version_key": "faulted",
+                        "digest": "v1",
+                        "window": {
+                            "start": start.isoformat(),
+                            "end": (start + timedelta(minutes=5)).isoformat(),
+                        },
+                    }
+                ],
             },
         ],
     }
-    with pytest.raises(RuntimeFailure, match="overlapping"):
+    with pytest.raises(RuntimeFailure, match="symbolic"):
         PlanInput.from_daily_plan(payload)
 
 

@@ -199,10 +199,12 @@ def test_ghcr_workflow_never_pushes_pull_requests() -> None:
     )
     assert "if: github.event_name == 'pull_request'" in workflow
     assert "push: false" in workflow
-    assert "github.event_name == 'push'" in workflow
+    assert "(github.event_name == 'push' || github.event_name == 'workflow_dispatch')" in workflow
     assert "github.ref == 'refs/heads/main'" in workflow
     assert "vars.AIQ_GHCR_PUBLISH_ENABLED == 'true'" in workflow
     assert "environment: ghcr-publish" in workflow
+    assert "ref: ${{ github.sha }}" in workflow
+    assert "persist-credentials: false" in workflow
     assert "packages: write" in workflow
     assert "image_digest: ${{ steps.build.outputs.digest }}" in workflow
     assert "uses: actions/checkout@v" not in workflow

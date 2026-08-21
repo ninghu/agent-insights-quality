@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import sys
+from dataclasses import replace
 from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
@@ -53,7 +54,11 @@ from agent_insights_quality.reporting import (
 from agent_insights_quality.artifact_io import content_hash, read_json_object, write_json
 from agent_insights_quality.scoring import case_to_insight_mappings, score_run
 from agent_insights_quality.security import validate_no_direct_trace_injection
-from agent_insights_quality.runtime.adapters import load_runtime_hooks
+from agent_insights_quality.runtime.adapters import (
+    ALLOWED_RUNTIME_ADAPTERS,
+    DEFAULT_RUNTIME_ADAPTER,
+    load_runtime_hooks,
+)
 from agent_insights_quality.runtime.artifacts import AzureBlobArtifactStore, LocalArtifactStore
 from agent_insights_quality.runtime.azure import AzureCli, AzureProjectManager, select_azure_context
 from agent_insights_quality.runtime.config import RuntimeConfig
@@ -133,6 +138,17 @@ def build_parser() -> argparse.ArgumentParser:
         runtime.add_argument("--state", type=Path, required=True)
         runtime.add_argument("--dry-run", action="store_true")
         runtime.add_argument("--max-parallel-agents", type=int, default=5)
+        runtime.add_argument(
+            "--adapter",
+            choices=sorted(ALLOWED_RUNTIME_ADAPTERS),
+            help="Reviewed runtime adapter; defaults to the built-in live adapter.",
+        )
+    materialize = subparsers.add_parser(
+        "materialize-execution-plan",
+        help="Validate a daily plan and render its immutable runtime work without Azure access",
+    )
+    materialize.add_argument("--plan", type=Path, required=True)
+    materialize.add_argument("--output", type=Path)
     status = subparsers.add_parser("status", help="Read a public-safe runtime receipt")
     status.add_argument("--state", type=Path, required=True)
     cleanup = subparsers.add_parser("cleanup", help="Delete only exact owned expired runtime resources")
@@ -341,8 +357,23 @@ def run(args: argparse.Namespace) -> None:
             raise RuntimeFailure("missing_project_endpoint", "Project endpoint could not be resolved.")
         AgentInsightsClient(endpoint, AzureCliCredential(cli)).probe()
         print(json.dumps(result, sort_keys=True))
+    elif args.command == "materialize-execution-plan":
+        from agent_insights_quality.live_adapter import materialize_execution_plan
+
+        result = materialize_execution_plan(_load_plan(args.plan))
+        rendered = json.dumps(result, indent=2, sort_keys=True) + "\n"
+        if args.output is None:
+            print(rendered, end="")
+        else:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(rendered, encoding="ascii", newline="\n")
+            print(f"Wrote {args.output}.")
     elif args.command in {"run", "resume"}:
         config = RuntimeConfig.from_env()
+        config = replace(
+            config,
+            adapter=args.adapter or config.adapter or DEFAULT_RUNTIME_ADAPTER,
+        )
         plan = _load_plan(args.plan)
         hooks = load_runtime_hooks(config, validation_only=args.dry_run)
         state = ProductionOrchestrator(
