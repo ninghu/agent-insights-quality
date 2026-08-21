@@ -22,6 +22,12 @@ SCORECARD_SCHEMA = SCHEMAS / "scorecard.schema.json"
 READINESS_FAILURE_SCHEMA = SCHEMAS / "readiness-failure.schema.json"
 EMAIL_HANDOFF_SCHEMA = SCHEMAS / "email-handoff.schema.json"
 SELECTION_POLICY_SCHEMA = SCHEMAS / "selection-policy.schema.json"
+TRUST_FAILURES = {
+    "structural_failure",
+    "provenance_failure",
+    "judge_schema_failure",
+    "unresolved_judgment",
+}
 
 EXPECTED_AGENTS = {
     "aiq-001-weather": "prompt",
@@ -1209,6 +1215,10 @@ def validate_canonical_report_semantics(
                 f"{label}: scenario expected_count does not match the catalog"
             )
         references = result["insight_references"]
+        if result["agent_version_digest"] != result["version_sequence"]["version_digest"]:
+            raise ContractError(
+                f"{label}: scenario result version context is inconsistent"
+            )
         if result["observed_count"] != len(references):
             raise ContractError(
                 f"{label}: scenario observed_count does not match its insight references"
@@ -1226,12 +1236,20 @@ def validate_canonical_report_semantics(
     counts = scorecard["counts"]
     rates = scorecard["rates"]
     completed_count = sum(result["completed"] for result in report["scenario_results"])
+    trust_failures = TRUST_FAILURES & set(scorecard["violations"])
     complete = (
         set(result_ids) == expected_ids
         and completed_count == len(expected_ids)
         and all(result["verdict"] != "inconclusive" for result in report["scenario_results"])
         and report.get("failure") is None
+        and not trust_failures
     )
+    if trust_failures and (
+        report["status"] != "INCONCLUSIVE" or scorecard["complete"]
+    ):
+        raise ContractError(
+            f"{label}: trust failures require INCONCLUSIVE status and incomplete scorecard"
+        )
     if scorecard["complete"] != complete:
         raise ContractError(
             f"{label}: scorecard completeness does not match scenario results"
@@ -1287,8 +1305,14 @@ def validate_canonical_report_semantics(
         for result in fault_results
     )
     false_negatives = expected_fault_count - true_positives
-    produced_insights = sum(result["observed_count"] for result in report["scenario_results"])
-    false_positives = produced_insights - true_positives
+    produced_insights = len(
+        {
+            (result["run_id"], result["agent_id"], reference)
+            for result in report["scenario_results"]
+            for reference in result["insight_references"]
+        }
+    )
+    false_positives = max(0, produced_insights - true_positives)
     healthy_insights = sum(
         result["observed_count"]
         for result in report["scenario_results"]
@@ -1491,11 +1515,23 @@ def validate_canonical_report_semantics(
     validate_bug_action_semantics(report, label)
     if scorecard["complete"]:
         required_violations = set()
-        if any(
-            result["expected_count"] != result["observed_count"]
-            for result in report["scenario_results"]
-        ):
-            required_violations.add("finding_count_mismatch")
+        grouped_expected: Counter[tuple[str, str, str]] = Counter()
+        grouped_observed: dict[tuple[str, str, str], set[str]] = defaultdict(set)
+        for result in report["scenario_results"]:
+            key = (
+                report.get("report_date", "historical"),
+                result["run_id"],
+                result["agent_id"],
+            )
+            grouped_expected[key] += result["expected_count"]
+            grouped_observed[key].update(result["insight_references"])
+        for key, expected_count in grouped_expected.items():
+            observed_count = len(grouped_observed[key])
+            if observed_count != expected_count:
+                required_violations.add("finding_count_mismatch")
+                required_violations.add(
+                    "extra_noise" if observed_count > expected_count else "missing_findings"
+                )
         if healthy_insights:
             required_violations.add("healthy_false_positive")
         if "collection_analysis" in report:
@@ -1561,6 +1597,10 @@ def validate_canonical_report_semantics(
     if report["status"] == "INCONCLUSIVE":
         if scorecard["complete"]:
             raise ContractError(f"{label}: an INCONCLUSIVE report cannot be complete")
+    elif trust_failures:
+        raise ContractError(
+            f"{label}: trust failures require INCONCLUSIVE status and incomplete scorecard"
+        )
     elif not scorecard["complete"]:
         raise ContractError(f"{label}: a conclusive verdict requires a complete scorecard")
 
@@ -1639,7 +1679,14 @@ def validate_report_plan_binding(
             raise ContractError(f"{label}: scenario result was not assigned by the daily plan")
         if result["agent_id"] != assignment["agent_id"]:
             raise ContractError(f"{label}: scenario result agent differs from the daily plan")
-        if result["agent_version_digest"] != assignment["agent_version_digest"]:
+        if result["run_id"] != assignment["run_id"]:
+            raise ContractError(f"{label}: scenario result run differs from the daily plan")
+        current = assignment["version_sequence"][-1]
+        if (
+            result["version_sequence"]["phase"] != current["phase"]
+            or result["version_sequence"]["version_digest"] != current["digest"]
+            or result["agent_version_digest"] != current["digest"]
+        ):
             raise ContractError(f"{label}: scenario result version differs from the daily plan")
 
 

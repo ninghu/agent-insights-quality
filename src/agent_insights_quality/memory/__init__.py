@@ -11,6 +11,7 @@ from agent_insights_quality.contracts import (
     MEMORY_SCHEMA,
     ROOT,
     SCHEMAS,
+    TRUST_FAILURES,
     load_agent_manifests,
     load_scenario_catalog,
     validate_canonical_report_semantics,
@@ -88,7 +89,15 @@ def reconcile_memory(
     validate_instance(plan, SCHEMAS / "daily-plan.schema.json", "daily plan")
     validate_daily_plan_semantics(plan, agents, catalog, "daily plan")
     validate_instance(report, SCHEMAS / "canonical-report.schema.json", "canonical report")
-    validate_canonical_report_semantics(report, agents, catalog, "canonical report")
+    validate_canonical_report_semantics(
+        report,
+        agents,
+        catalog,
+        "canonical report",
+        expected_scenario_ids={
+            assignment["scenario_id"] for assignment in plan["assignments"]
+        },
+    )
     validate_report_plan_binding(report, plan, "canonical report")
     report_id = report["report_id"]
     report_date = report["report_date"]
@@ -102,6 +111,7 @@ def reconcile_memory(
     complete = (
         report["scorecard"]["complete"]
         and report["status"] != "INCONCLUSIVE"
+        and not (TRUST_FAILURES & set(report["scorecard"]["violations"]))
         and report["scorecard"]["counts"]["active_scenarios"] == len(plan["assignments"])
         and report["scorecard"]["counts"]["completed_scenarios"] == len(plan["assignments"])
         and {item["scenario_id"] for item in report["scenario_results"]}

@@ -34,7 +34,9 @@ _TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
 class _AmbiguousDuplicateError(ContractError):
-    pass
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
 
 
 @dataclass(frozen=True)
@@ -273,17 +275,25 @@ def classify_duplicate(
             identifier = work_item.get("id")
             stable_id = identifier if isinstance(identifier, int) else 2**63 - 1
             matches.append((exact, active, score, stable_id, work_item))
-    active_exact = [match for match in matches if match[0] and match[1]]
-    if len(active_exact) > 1:
-        raise _AmbiguousDuplicateError(
-            "Ambiguous duplicate search found multiple active exact matches"
-        )
-    if active_exact:
-        return active_exact[0][4]
     if not matches:
         return None
-    matches.sort(key=lambda item: (-int(item[0]), -item[2], item[3]))
-    return matches[0][4]
+    exact_rank = max(int(match[0]) for match in matches)
+    exact_matches = [match for match in matches if int(match[0]) == exact_rank]
+    best_score = max(match[2] for match in exact_matches)
+    tied = [match for match in exact_matches if match[2] == best_score]
+    active_tied = [match for match in tied if match[1]]
+    if len(active_tied) > 1:
+        raise _AmbiguousDuplicateError(
+            (
+                "ambiguous_active_exact_matches"
+                if exact_rank
+                else "ambiguous_active_semantic_matches"
+            )
+        )
+    if active_tied:
+        return active_tied[0][4]
+    tied.sort(key=lambda item: item[3])
+    return tied[0][4]
 
 
 def plan_bug_action(
@@ -304,11 +314,13 @@ def plan_bug_action(
         duplicate_search_completed=mode in {"dry-run", "apply"},
     )
     ambiguous = False
+    ambiguous_reason = None
     try:
         duplicate = classify_duplicate(candidate, work_items)
-    except _AmbiguousDuplicateError:
+    except _AmbiguousDuplicateError as error:
         duplicate = None
         ambiguous = True
+        ambiguous_reason = error.reason
     if not eligible or ambiguous:
         planned_action = "candidate"
     elif duplicate is None:
@@ -341,7 +353,7 @@ def plan_bug_action(
             content_hash({"work_item_id": duplicate.get("id")}) if duplicate else None
         ),
         "reason": (
-            "ambiguous_active_exact_matches"
+            ambiguous_reason
             if ambiguous
             else (
                 "ado_auto_apply_disabled"

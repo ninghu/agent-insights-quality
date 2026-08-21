@@ -45,6 +45,14 @@ ATTRIBUTE_RATES = {
     "meaningfulness": "meaningfulness_rate",
     "actionability": "actionability_rate",
 }
+TRUST_FAILURES = {
+    "structural_failure",
+    "provenance_failure",
+    "judge_schema_failure",
+    "unresolved_judgment",
+}
+
+
 def _ratio(numerator: int | float, denominator: int | float) -> float:
     return numerator / denominator if denominator else 1.0
 
@@ -67,6 +75,30 @@ def _fix_is_compatible(bundle: dict[str, Any], insight: dict[str, Any]) -> bool:
     ).issubset(bundle["agent"]["available_tools"])
 
 
+def _run_count_mismatches(
+    plan: dict[str, Any],
+    bundles: list[dict[str, Any]],
+) -> dict[tuple[str, str, str], tuple[int, int]]:
+    expected: Counter[tuple[str, str, str]] = Counter()
+    actual: dict[tuple[str, str, str], set[str]] = defaultdict(set)
+    assignments = {item["scenario_id"]: item for item in plan["assignments"]}
+    for assignment in plan["assignments"]:
+        key = (plan["report_date"], assignment["run_id"], assignment["agent_id"])
+        expected[key] += assignment["expected"]["finding_count"]
+    for bundle in bundles:
+        scenario_id = bundle["scenario"]["id"]
+        assignment = assignments.get(scenario_id)
+        if assignment is None:
+            continue
+        key = (plan["report_date"], bundle["run"]["run_id"], bundle["agent"]["id"])
+        actual[key].update(insight["id"] for insight in bundle["insights"])
+    return {
+        key: (count, len(actual.get(key, set())))
+        for key, count in expected.items()
+        if count != len(actual.get(key, set()))
+    }
+
+
 def deterministic_violations(
     plan: dict[str, Any],
     bundles: list[dict[str, Any]],
@@ -84,8 +116,9 @@ def deterministic_violations(
     seen_ids: set[str] = set()
     seen_signatures: set[str] = set()
     seen_evidence: set[str] = set()
+    seen_run_insights: dict[tuple[str, str, str], tuple[str, str]] = {}
     bundle_scenarios: set[str] = set()
-    observed_by_scenario: dict[str, int] = {}
+    valid_bundles: list[dict[str, Any]] = []
 
     for bundle in bundles:
         try:
@@ -101,10 +134,12 @@ def deterministic_violations(
             structural_failures += 1
             continue
         bundle_scenarios.add(scenario_id)
+        valid_bundles.append(bundle)
         expected = assignment["expected"]
-        observed_by_scenario[scenario_id] = len(bundle["insights"])
         catalog_scenario = scenario_by_id.get(scenario_id)
         registered_agent = agent_by_id.get(assignment["agent_id"])
+        current_version = assignment["version_sequence"][-1]
+        version_context = bundle["version_sequence"]
         if (
             catalog_scenario is None
             or registered_agent is None
@@ -112,14 +147,17 @@ def deterministic_violations(
             or bundle["scenario"]["version"] != assignment["scenario_version"]
             or bundle["agent"]["id"] != assignment["agent_id"]
             or bundle["agent"]["name"] != assignment["agent_name"]
-            or bundle["agent"]["version_digest"] != assignment["agent_version_digest"]
+            or version_context["phase"] != current_version["phase"]
+            or version_context["version_digest"] != current_version["digest"]
+            or version_context["run_id"] != assignment["run_id"]
+            or bundle["agent"]["version_digest"] != version_context["version_digest"]
             or bundle["agent"]["type"] != registered_agent["agent_type"]
             or not set(bundle["agent"]["available_tools"]).issubset(
                 registered_agent["implementation"]["representative_tools"]
             )
             or bundle["run"]["engine_build"] != plan["engine"]["build"]
             or bundle["run"]["generator_model"] != plan["engine"]["generator_model"]
-            or bundle["run"]["run_id"] != assignment["run_id"]
+            or bundle["run"]["run_id"] != version_context["run_id"]
             or bundle["ground_truth"]["category"] != expected["category"]
             or bundle["ground_truth"]["severity"] != expected["severity"]
             or bundle["ground_truth"]["root_cause"]
@@ -132,6 +170,16 @@ def deterministic_violations(
             != catalog_scenario["expected"]["severity"]
         ):
             violations.add("provenance_failure")
+        previous = bundle["previous_insight"]
+        if len(assignment["version_sequence"]) > 1:
+            prior_versions = assignment["version_sequence"][:-1]
+            if previous is None or not any(
+                previous["phase"] == version["phase"]
+                and previous["run_id"] == assignment["run_id"]
+                and previous["version_digest"] == version["digest"]
+                for version in prior_versions
+            ):
+                violations.update({"provenance_failure", "cross_version_stale"})
         trace_ids = {trace["trace_id"] for trace in bundle["trace_evidence"]}
         window_start = _timestamp(bundle["run"]["window_start"])
         window_end = _timestamp(bundle["run"]["window_end"])
@@ -140,15 +188,19 @@ def deterministic_violations(
             if (
                 trace["project_reference"] != plan["project"]["resource_reference"]
                 or trace["agent_id"] != assignment["agent_id"]
-                or trace["version_digest"] != assignment["agent_version_digest"]
+                or trace["version_digest"] != version_context["version_digest"]
                 or observed < window_start
                 or observed >= window_end
             ):
                 violations.add("provenance_failure")
-                if trace["version_digest"] != assignment["agent_version_digest"]:
+                if trace["version_digest"] != version_context["version_digest"]:
                     violations.add("cross_version_stale")
 
+        bundle_insight_ids: set[str] = set()
         for insight in bundle["insights"]:
+            if insight["id"] in bundle_insight_ids:
+                violations.add("duplication")
+            bundle_insight_ids.add(insight["id"])
             if insight["trace_count"] != len(insight["trace_ids"]):
                 violations.add("structural_failure")
                 structural_failures += 1
@@ -157,6 +209,22 @@ def deterministic_violations(
             if not _fix_is_compatible(bundle, insight):
                 violations.add("structural_failure")
                 structural_failures += 1
+            run_identity = (
+                bundle["run"]["run_id"],
+                bundle["agent"]["id"],
+                insight["id"],
+            )
+            prior_identity = seen_run_insights.get(run_identity)
+            current_identity = (
+                insight["signature"],
+                insight["evidence_fingerprint"],
+            )
+            if prior_identity is not None:
+                if prior_identity != current_identity:
+                    violations.update({"structural_failure", "provenance_failure"})
+                    structural_failures += 1
+                continue
+            seen_run_insights[run_identity] = current_identity
             for value, violation in (
                 (insight["id"], "duplication"),
                 (insight["signature"], "duplication"),
@@ -177,14 +245,9 @@ def deterministic_violations(
 
     if bundle_scenarios != set(assignments):
         violations.add("incomplete_catalog")
-    for assignment in plan["assignments"]:
-        scenario_id = assignment["scenario_id"]
-        if (
-            scenario_id in observed_by_scenario
-            and observed_by_scenario[scenario_id]
-            != assignment["expected"]["finding_count"]
-        ):
-            violations.add("finding_count_mismatch")
+    for expected_count, observed_count in _run_count_mismatches(plan, valid_bundles).values():
+        violations.add("finding_count_mismatch")
+        violations.add("extra_noise" if observed_count > expected_count else "missing_findings")
     return violations, structural_failures
 
 
@@ -320,13 +383,27 @@ def score_run(
         for scenario_id in expected_faults
     )
     true_positives = sum(true_positive_counts.values())
-    produced = sum(len(bundle["insights"]) for bundle in valid_bundles)
-    false_positives = produced - true_positives
+    produced = len(
+        {
+            (bundle["run"]["run_id"], bundle["agent"]["id"], insight["id"])
+            for bundle in valid_bundles
+            for insight in bundle["insights"]
+        }
+    )
+    false_positives = max(0, produced - true_positives)
     false_negatives = expected_fault_count - true_positives
     partially_useful = sum(item["verdict"] == "partially_useful" for item in all_primary)
-    healthy_insights = sum(
-        len(bundles_by_scenario.get(scenario_id, {}).get("insights", []))
-        for scenario_id in healthy
+    healthy_insights = len(
+        {
+            (
+                bundles_by_scenario[scenario_id]["run"]["run_id"],
+                bundles_by_scenario[scenario_id]["agent"]["id"],
+                insight["id"],
+            )
+            for scenario_id in healthy
+            if scenario_id in bundles_by_scenario
+            for insight in bundles_by_scenario[scenario_id]["insights"]
+        }
     )
     healthy_noisy_cases = sum(
         bool(bundles_by_scenario.get(scenario_id, {}).get("insights", []))
@@ -415,22 +492,16 @@ def score_run(
     if rates["cross_version_stale_rate"]:
         violations.add("cross_version_stale")
 
+    trust_failures = TRUST_FAILURES & violations
     complete = (
         set(bundles_by_scenario) == set(assignments)
-        and structural_failures == 0
+        and not trust_failures
         and trustworthy
     )
     if not complete:
         violations.add("incomplete_catalog")
     inconclusive = not trustworthy or bool(
-        {
-            "structural_failure",
-            "provenance_failure",
-            "judge_schema_failure",
-            "unresolved_judgment",
-            "incomplete_catalog",
-        }
-        & violations
+        (TRUST_FAILURES | {"incomplete_catalog"}) & violations
     )
     verdict = "INCONCLUSIVE" if inconclusive or not complete else (
         "AT BAR" if not violations else "NOT AT BAR"
@@ -486,7 +557,9 @@ def case_to_insight_mappings(
                 {
                     "insight_reference": content_hash(
                         {
-                            "bundle_id": bundle["bundle_id"],
+                            "report_date": plan["report_date"],
+                            "run_id": assignment["run_id"],
+                            "agent_id": assignment["agent_id"],
                             "insight_id": insight["id"],
                         }
                     ),
@@ -526,6 +599,25 @@ def case_to_insight_mappings(
         mappings.append(
             {
                 "scenario_id": scenario_id,
+                "agent_id": assignment["agent_id"],
+                "run_id": assignment["run_id"],
+                "version_sequence": {
+                    "phase": (
+                        bundle["version_sequence"]["phase"]
+                        if bundle
+                        else assignment["version_sequence"][-1]["phase"]
+                    ),
+                    "version_digest": (
+                        bundle["version_sequence"]["version_digest"]
+                        if bundle
+                        else assignment["version_sequence"][-1]["digest"]
+                    ),
+                },
+                "agent_version_digest": (
+                    bundle["version_sequence"]["version_digest"]
+                    if bundle
+                    else assignment["version_sequence"][-1]["digest"]
+                ),
                 "expected_count": expected_count,
                 "observed_count": observed_count,
                 "verdict": verdict,

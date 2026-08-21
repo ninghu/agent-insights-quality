@@ -11,6 +11,7 @@ from agent_insights_quality.ado import (
     AdoRuntimeConfig,
     automatic_bug_eligible,
     build_repro_html,
+    classify_duplicate,
     plan_bug_action,
     sanitize_log,
 )
@@ -19,7 +20,7 @@ from agent_insights_quality.contracts import ContractError
 from agent_insights_quality.cli import main
 from agent_insights_quality.finalizer import build_failure_report
 from agent_insights_quality.planning import generate_daily_plan
-from datetime import date
+from datetime import date, timedelta
 
 
 SHA = "sha256:" + "a" * 64
@@ -73,12 +74,17 @@ def empty_memory() -> dict:
 def isolate_memory_catalog_semantics(monkeypatch):
     monkeypatch.setattr(
         "agent_insights_quality.memory.validate_canonical_report_semantics",
-        lambda *_args: None,
+        lambda *_args, **_kwargs: None,
     )
 
 
 def reconciliation_contract(day: int, *, complete: bool = True, rerun: int = 0):
-    report_date = f"2026-08-{day:02d}"
+    report_day = date(2026, 8, 3)
+    for _ in range(day - 1):
+        report_day += timedelta(days=1)
+        while report_day.weekday() >= 5:
+            report_day += timedelta(days=1)
+    report_date = report_day.isoformat()
     plan = generate_daily_plan(date.fromisoformat(report_date), rerun=rerun)
     failure = {
         "failed_phase": "test setup",
@@ -137,6 +143,22 @@ def test_memory_requires_three_complete_clean_runs_and_regresses() -> None:
 def test_incomplete_run_does_not_create_or_change_memory() -> None:
     memory = reconcile(empty_memory(), [finding()], 1, complete=False)
     assert memory == empty_memory()
+
+
+def test_trust_failure_does_not_advance_memory() -> None:
+    plan, report = reconciliation_contract(1)
+    report["scorecard"]["violations"] = ["structural_failure"]
+
+    updated, changes = reconcile_memory(
+        empty_memory(),
+        [finding()],
+        plan=plan,
+        report=report,
+        run_id="run-1",
+    )
+
+    assert updated == empty_memory()
+    assert changes == []
 
 
 def test_replayed_complete_report_does_not_advance_memory() -> None:
@@ -424,6 +446,99 @@ def test_multiple_active_exact_duplicates_fail_closed(
     )
     assert result["action"] == "candidate"
     assert result["planned_action"] == "candidate"
+    assert result["reason"] == "ambiguous_active_exact_matches"
+
+
+def test_semantic_duplicate_tie_prefers_active_and_closed_fallback_is_stable() -> None:
+    value = candidate()
+    fields = {
+        "System.Title": value["title"],
+        "System.Tags": "AgentInsights; Quality",
+        "System.Description": value["root_cause"],
+    }
+    closed_high = {"id": 9, "fields": fields | {"System.State": "Closed"}}
+    closed_low = {"id": 3, "fields": fields | {"System.State": "Resolved"}}
+    active = {"id": 7, "fields": fields | {"System.State": "Active"}}
+
+    assert classify_duplicate(value, [closed_low, active, closed_high])["id"] == 7
+    assert classify_duplicate(value, [closed_high, closed_low])["id"] == 3
+
+
+def test_multiple_active_tied_semantic_duplicates_fail_closed(
+    trusted_candidate,
+) -> None:
+    fields = {
+        "System.Title": trusted_candidate["title"],
+        "System.Tags": "AgentInsights; Quality",
+        "System.Description": trusted_candidate["root_cause"],
+        "System.State": "Active",
+    }
+    matches = [{"id": item_id, "fields": deepcopy(fields)} for item_id in (10, 11)]
+
+    result = plan_bug_action(
+        trusted_candidate,
+        matches,
+        mode="apply",
+        policy=enabled_ado_policy(),
+    )
+
+    assert result["planned_action"] == "candidate"
+    assert result["reason"] == "ambiguous_active_semantic_matches"
+
+
+def test_ado_apply_persists_ambiguous_candidate_without_mutation(
+    tmp_path,
+    monkeypatch,
+    trusted_candidate,
+) -> None:
+    candidate_path = tmp_path / "candidate.json"
+    output_path = tmp_path / "result.json"
+    candidate_path.write_text(json.dumps(trusted_candidate), encoding="utf-8")
+    matches = [
+        {
+            "id": item_id,
+            "fields": {"System.State": "Active", "System.Description": SHA},
+        }
+        for item_id in (1, 2)
+    ]
+    monkeypatch.setattr(AdoPolicy, "load", classmethod(lambda cls: enabled_ado_policy()))
+    monkeypatch.setattr(
+        AdoRuntimeConfig,
+        "from_env",
+        classmethod(
+            lambda cls: AdoRuntimeConfig(
+                "org", "project", "team", "template", "runtime-token"
+            )
+        ),
+    )
+    monkeypatch.setattr(AdoClient, "search_duplicates", lambda *_args: matches)
+    monkeypatch.setattr(
+        AdoClient,
+        "create_bug",
+        lambda *_args: pytest.fail("ambiguous candidate attempted mutation"),
+    )
+    monkeypatch.setattr(
+        AdoClient,
+        "update_bug",
+        lambda *_args: pytest.fail("ambiguous candidate attempted mutation"),
+    )
+    monkeypatch.setattr(
+        AdoClient,
+        "reopen",
+        lambda *_args: pytest.fail("ambiguous candidate attempted mutation"),
+    )
+
+    assert main(
+        [
+            "ado-apply",
+            "--candidate",
+            str(candidate_path),
+            "--output",
+            str(output_path),
+        ]
+    ) == 0
+    result = json.loads(output_path.read_text(encoding="utf-8"))
+    assert result["action"] == "candidate"
     assert result["reason"] == "ambiguous_active_exact_matches"
 
 

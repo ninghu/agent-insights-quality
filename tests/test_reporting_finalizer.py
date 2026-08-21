@@ -37,7 +37,7 @@ SHA = "sha256:" + "a" * 64
 def isolate_report_renderer_semantics(monkeypatch):
     monkeypatch.setattr(
         "agent_insights_quality.reporting.render.validate_canonical_report_semantics",
-        lambda *_args: None,
+        lambda *_args, **_kwargs: None,
     )
 
 
@@ -237,6 +237,8 @@ def test_email_uses_simple_expected_observed_noise_and_miss_narrative() -> None:
         {
             "scenario_id": "aiq-scn-010-test",
             "agent_id": value["agents"][0]["id"],
+            "run_id": "run-01-aiq-001-agent",
+            "version_sequence": {"phase": "faulted", "version_digest": SHA},
             "agent_version_digest": SHA,
             "completed": True,
             "expected_count": 4,
@@ -501,6 +503,8 @@ def test_human_validation_is_derived_from_judgments(mutation, reason) -> None:
         {
             "scenario_id": scenario_id,
             "agent_id": value["agents"][0]["id"],
+            "run_id": "run-01-aiq-001-agent",
+            "version_sequence": {"phase": "faulted", "version_digest": SHA},
             "agent_version_digest": SHA,
             "completed": True,
             "expected_count": 1,

@@ -134,7 +134,12 @@ def build_failure_report(
             {
                 "scenario_id": assignment["scenario_id"],
                 "agent_id": assignment["agent_id"],
-                "agent_version_digest": assignment["agent_version_digest"],
+                "run_id": assignment["run_id"],
+                "version_sequence": {
+                    "phase": assignment["version_sequence"][-1]["phase"],
+                    "version_digest": assignment["version_sequence"][-1]["digest"],
+                },
+                "agent_version_digest": assignment["version_sequence"][-1]["digest"],
                 "completed": assignment["scenario_id"] in completed_ids,
                 "expected_count": assignment["expected"]["finding_count"],
                 "observed_count": 0,
@@ -276,7 +281,15 @@ def write_daily_artifacts(
     validate_instance(plan, SCHEMAS / "daily-plan.schema.json", "daily plan")
     validate_daily_plan_semantics(plan, manifests, catalog, "daily plan")
     validate_report_consistency(report)
-    validate_canonical_report_semantics(report, manifests, catalog, "canonical report")
+    validate_canonical_report_semantics(
+        report,
+        manifests,
+        catalog,
+        "canonical report",
+        expected_scenario_ids={
+            assignment["scenario_id"] for assignment in plan["assignments"]
+        },
+    )
     validate_report_plan_binding(report, plan, "canonical report")
     if report["report_date"] != plan["report_date"] or report["plan_id"] != plan["plan_id"]:
         raise ContractError("Daily report does not match the daily plan")

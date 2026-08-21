@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import date
 
 import pytest
 
-from agent_insights_quality.contracts import ContractError
+from agent_insights_quality.contracts import (
+    ContractError,
+    load_agent_manifests,
+    load_scenario_catalog,
+)
 from agent_insights_quality.judging import (
     export_judge_package,
     import_judgment,
@@ -14,6 +19,7 @@ from agent_insights_quality.artifact_io import content_hash
 from agent_insights_quality.artifact_io import read_json_object
 from agent_insights_quality.scoring import case_to_insight_mappings, score_run
 from agent_insights_quality.scoring import deterministic_violations
+from agent_insights_quality.planning import generate_daily_plan
 
 
 SHA_A = "sha256:" + "a" * 64
@@ -32,8 +38,49 @@ def plan() -> dict:
         "created_at": "2026-08-21T07:00:00Z",
         "catalog_version": "1.0.0",
         "catalog_hash": SHA_A,
+        "policy_version": "1.0.0",
+        "policy_hash": SHA_B,
         "planner_version": "1.0.0",
         "seed": 42,
+        "selection_mode": "rotating_daily",
+        "human_daily_contract": True,
+        "selection": {
+            "cycle": {
+                "id": "cycle-1-aaaaaaaaaaaa",
+                "number": 1,
+                "business_day": 5,
+                "weekday": "Friday",
+                "length_business_days": 5,
+                "full_coverage_horizon_business_days": 5,
+            },
+            "mandatory_scenario_ids": [
+                "aiq-scn-010-fault",
+                "aiq-scn-011-healthy",
+            ],
+            "rotating_scenario_ids": [],
+            "selected_scenario_ids": [
+                "aiq-scn-010-fault",
+                "aiq-scn-011-healthy",
+            ],
+            "omitted_scenario_ids": [],
+            "selection_reasons": {
+                "aiq-scn-010-fault": "p0_fault_daily",
+                "aiq-scn-011-healthy": "healthy_control_daily",
+            },
+        },
+        "limits": {
+            "expected_insight_cap_per_agent": 4,
+            "expected_root_cap_per_run": 4,
+            "actual_insight_count_rule": "exact_expected",
+            "expected_cap_enforced": True,
+        },
+        "per_agent_expected_totals": {
+            "aiq-001-weather": 1,
+            "aiq-002-healthcare": 0,
+            "aiq-003-finance": 0,
+            "aiq-004-travel": 0,
+            "aiq-005-support": 0,
+        },
         "engine": {
             "endpoint_reference": SHA_B,
             "build": "build-1",
@@ -57,6 +104,7 @@ def plan() -> dict:
                 "scenario_id": "aiq-scn-010-fault",
                 "scenario_version": "1.0.0",
                 "family": "synthetic",
+                "selection_reason": "p0_fault_daily",
                 "conflict_tags": ["synthetic"],
                 "run_id": "run-01-aiq-001-weather",
                 "agent_id": "aiq-001-weather",
@@ -95,6 +143,7 @@ def plan() -> dict:
                 "scenario_id": "aiq-scn-011-healthy",
                 "scenario_version": "1.0.0",
                 "family": "synthetic",
+                "selection_reason": "healthy_control_daily",
                 "conflict_tags": ["healthy-control"],
                 "run_id": "run-00-aiq-001-weather",
                 "agent_id": "aiq-001-weather",
@@ -182,6 +231,15 @@ def raw_bundle(scenario_id: str, *, healthy: bool = False) -> dict:
             "window_end": window[1],
             "engine_build": "build-1",
             "generator_model": "gpt-5.6-terra",
+        },
+        "version_sequence": {
+            "phase": "healthy" if healthy else "faulted",
+            "run_id": (
+                "run-00-aiq-001-weather"
+                if healthy
+                else "run-01-aiq-001-weather"
+            ),
+            "version_digest": SHA_A,
         },
         "ground_truth": {
             "root_cause": "none" if healthy else "The agent selected an incompatible tool.",
@@ -284,6 +342,15 @@ def synthetic_catalog() -> dict:
                     "severity": "none",
                 },
             },
+            {
+                "id": "aiq-scn-012-umbrella",
+                "expected": {
+                    "root_cause": "Two independent root causes must remain distinct.",
+                    "fix": {"boundary": "Keep both independent fixes."},
+                    "category": "tool_call_failures",
+                    "severity": "high",
+                },
+            },
         ]
     }
 
@@ -384,6 +451,7 @@ def test_extra_findings_are_noise_and_explicit_not_at_bar(synthetic_contracts) -
     assert score["verdict"] == "NOT AT BAR"
     assert score["complete"] is True
     assert "finding_count_mismatch" in score["violations"]
+    assert "extra_noise" in score["violations"]
     assert score["counts"]["false_positives"] == 5
     assert "duplication" not in score["violations"]
 
@@ -400,6 +468,7 @@ def test_missing_expected_count_is_a_miss_not_inconclusive(synthetic_contracts) 
     assert score["complete"] is True
     assert score["counts"]["false_negatives"] == 1
     assert "finding_count_mismatch" in score["violations"]
+    assert "missing_findings" in score["violations"]
     outcome = case_to_insight_mappings(
         expected_plan, [fault, healthy], [judgment(fault)]
     )[0]
@@ -436,6 +505,97 @@ def test_one_expected_plus_extra_noise_is_explicit_mixed_outcome(
     assert outcome["expected_count"] == 1
     assert outcome["observed_count"] == 2
     assert outcome["verdict"] == "mixed"
+
+
+def _multi_assignment_run(
+    *,
+    first_insight_count: int,
+    umbrella_insight_count: int,
+    shared_run_view: bool = False,
+) -> tuple[dict, list[dict], list[dict]]:
+    value = plan()
+    umbrella_assignment = deepcopy(value["assignments"][0])
+    umbrella_assignment["scenario_id"] = "aiq-scn-012-umbrella"
+    umbrella_assignment["expected"]["finding_count"] = 2
+    value["assignments"].append(umbrella_assignment)
+    value["coverage"]["scenario_count"] = 3
+
+    raw_first = raw_bundle("aiq-scn-010-fault")
+    first_template = deepcopy(raw_first["insights"][0])
+    raw_first["insights"] = []
+    for index in range(first_insight_count):
+        item = deepcopy(first_template)
+        item["id"] = f"first-{index}"
+        item["signature"] = content_hash({"first-signature": index})
+        item["evidence_fingerprint"] = content_hash({"first-evidence": index})
+        raw_first["insights"].append(item)
+
+    raw_umbrella = raw_bundle("aiq-scn-012-umbrella")
+    raw_umbrella["bundle_id"] = "00000000-0000-4000-8000-000000000012"
+    raw_umbrella["ground_truth"].update(
+        {
+            "root_cause": "Two independent root causes must remain distinct.",
+            "fix_boundary": "Keep both independent fixes.",
+        }
+    )
+    umbrella_template = deepcopy(raw_umbrella["insights"][0])
+    raw_umbrella["insights"] = []
+    for index in range(umbrella_insight_count):
+        item = deepcopy(umbrella_template)
+        item["id"] = f"umbrella-{index}"
+        item["signature"] = content_hash({"umbrella-signature": index})
+        item["evidence_fingerprint"] = content_hash({"umbrella-evidence": index})
+        raw_umbrella["insights"].append(item)
+    if shared_run_view:
+        run_insights = deepcopy(raw_first["insights"] + raw_umbrella["insights"])
+        raw_first["insights"] = deepcopy(run_insights)
+        raw_umbrella["insights"] = deepcopy(run_insights)
+
+    first = project_evidence(raw_first)
+    umbrella = project_evidence(raw_umbrella)
+    healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
+    judgments = [
+        *(judgment(first, insight_id=item["id"]) for item in first["insights"]),
+        *(judgment(umbrella, insight_id=item["id"]) for item in umbrella["insights"]),
+    ]
+    return value, [first, umbrella, healthy], judgments
+
+
+def test_exact_count_aggregates_multi_assignment_run_with_umbrella_count_two(
+    synthetic_contracts,
+) -> None:
+    value, bundles, judgments = _multi_assignment_run(
+        first_insight_count=1,
+        umbrella_insight_count=2,
+        shared_run_view=True,
+    )
+
+    score = score_run(value, bundles, judgments)
+
+    assert score["verdict"] == "AT BAR"
+    assert "finding_count_mismatch" not in score["violations"]
+
+
+def test_run_count_match_preserves_mixed_per_scenario_diagnostics(
+    synthetic_contracts,
+) -> None:
+    value, bundles, judgments = _multi_assignment_run(
+        first_insight_count=2,
+        umbrella_insight_count=1,
+    )
+    judgments[1]["verdict"] = "incorrect_noise"
+    judgments[1]["output_hash"] = content_hash(
+        {key: item for key, item in judgments[1].items() if key != "output_hash"}
+    )
+
+    score = score_run(value, bundles, judgments)
+    outcomes = case_to_insight_mappings(value, bundles, judgments)
+
+    assert "finding_count_mismatch" not in score["violations"]
+    assert "extra_noise" not in score["violations"]
+    assert "missing_findings" not in score["violations"]
+    fault_outcomes = [item for item in outcomes if item["expected_count"]]
+    assert [item["verdict"] for item in fault_outcomes] == ["mixed", "mixed"]
 
 
 @pytest.mark.parametrize("mutation", ["missing_traces", "null_insights"])
@@ -639,6 +799,110 @@ def test_trace_count_and_stale_version_are_rejected() -> None:
     )
     assert failures == 1
     assert {"structural_failure", "cross_version_stale", "provenance_failure"} <= violations
+
+
+@pytest.mark.parametrize(
+    "scenario_id",
+    [
+        "aiq-scn-058-cross-version-stale-finding",
+        "aiq-scn-060-fixed-issue-recurrence",
+    ],
+)
+def test_sequential_evidence_binds_current_and_prior_phase_versions(
+    scenario_id: str,
+) -> None:
+    full_plan = generate_daily_plan(date(2026, 8, 21), full_catalog=True)
+    assignment = next(
+        item for item in full_plan["assignments"] if item["scenario_id"] == scenario_id
+    )
+    plan_subset = deepcopy(full_plan)
+    plan_subset["assignments"] = [assignment]
+    catalog = load_scenario_catalog()
+    scenario = next(item for item in catalog["scenarios"] if item["id"] == scenario_id)
+    agents = load_agent_manifests()
+    agent = next(item for item in agents if item["id"] == assignment["agent_id"])
+    current = assignment["version_sequence"][-1]
+    prior = assignment["version_sequence"][0]
+    raw = raw_bundle("aiq-scn-010-fault")
+    raw["bundle_id"] = (
+        "00000000-0000-4000-8000-000000000058"
+        if scenario_id.startswith("aiq-scn-058")
+        else "00000000-0000-4000-8000-000000000060"
+    )
+    raw["plan_id"] = full_plan["plan_id"]
+    raw["scenario"] = {"id": scenario_id, "version": assignment["scenario_version"]}
+    raw["agent"] = {
+        "id": assignment["agent_id"],
+        "name": assignment["agent_name"],
+        "type": assignment["agent_type"],
+        "version_digest": current["digest"],
+        "available_tools": agent["implementation"]["representative_tools"],
+    }
+    raw["run"]["run_id"] = assignment["run_id"]
+    raw["run"]["engine_build"] = full_plan["engine"]["build"]
+    raw["version_sequence"] = {
+        "phase": current["phase"],
+        "run_id": assignment["run_id"],
+        "version_digest": current["digest"],
+    }
+    raw["ground_truth"] = {
+        "root_cause": scenario["expected"]["root_cause"],
+        "category": scenario["expected"]["category"],
+        "severity": scenario["expected"]["severity"],
+        "fix_boundary": scenario["expected"]["fix"]["boundary"],
+    }
+    raw["trace_evidence"][0].update(
+        {
+            "project_reference": full_plan["project"]["resource_reference"],
+            "agent_id": assignment["agent_id"],
+            "version_digest": current["digest"],
+        }
+    )
+    raw["insights"][0]["fix_kind"] = "code_change"
+    raw["insights"][0]["tool_references"] = []
+    raw["previous_insight"] = {
+        "id": "prior-insight",
+        "fingerprint": SHA_B,
+        "phase": prior["phase"],
+        "run_id": assignment["run_id"],
+        "version_digest": prior["digest"],
+    }
+    bundle = project_evidence(raw)
+
+    violations, _ = deterministic_violations(
+        plan_subset,
+        [bundle],
+        catalog,
+        agents,
+    )
+    assert "provenance_failure" not in violations
+    assert "cross_version_stale" not in violations
+
+    stale_current = deepcopy(bundle)
+    stale_current["trace_evidence"][0]["version_digest"] = prior["digest"]
+    stale_current["bundle_hash"] = content_hash(
+        {key: item for key, item in stale_current.items() if key != "bundle_hash"}
+    )
+    violations, _ = deterministic_violations(
+        plan_subset,
+        [stale_current],
+        catalog,
+        agents,
+    )
+    assert {"provenance_failure", "cross_version_stale"} <= violations
+
+    stale_prior = deepcopy(bundle)
+    stale_prior["previous_insight"]["version_digest"] = current["digest"]
+    stale_prior["bundle_hash"] = content_hash(
+        {key: item for key, item in stale_prior.items() if key != "bundle_hash"}
+    )
+    violations, _ = deterministic_violations(
+        plan_subset,
+        [stale_prior],
+        catalog,
+        agents,
+    )
+    assert {"provenance_failure", "cross_version_stale"} <= violations
 
 
 def test_engine_and_agent_capabilities_are_provenance_bound() -> None:
