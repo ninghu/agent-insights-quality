@@ -211,7 +211,12 @@ def raw_bundle(scenario_id: str, *, healthy: bool = False) -> dict:
     }
 
 
-def judgment(bundle: dict, *, valid: bool = True) -> dict:
+def judgment(
+    bundle: dict,
+    *,
+    valid: bool = True,
+    insight_id: str | None = "insight-1",
+) -> dict:
     package = export_judge_package(bundle, "primary")
     value = {
         "schema_version": "1.0.0",
@@ -225,7 +230,7 @@ def judgment(bundle: dict, *, valid: bool = True) -> dict:
         "evidence_schema_version": "1.0.0",
         "mapping": {
             "scenario_id": bundle["scenario"]["id"],
-            "insight_id": "insight-1",
+            "insight_id": insight_id,
         },
         "verdict": "correct",
         "attributes": {
@@ -328,6 +333,57 @@ def test_missing_judgment_is_inconclusive(synthetic_contracts) -> None:
     score = score_run(plan(), [fault, healthy], [])
     assert score["verdict"] == "INCONCLUSIVE"
     assert "unresolved_judgment" in score["violations"]
+
+
+def test_zero_insight_judgment_accepts_null_mapping(synthetic_contracts) -> None:
+    fault = project_evidence(raw_bundle("aiq-scn-010-fault"))
+    healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
+
+    score = score_run(
+        plan(),
+        [fault, healthy],
+        [judgment(fault), judgment(healthy, insight_id=None)],
+    )
+
+    assert score["verdict"] == "AT BAR"
+    assert "judge_schema_failure" not in score["violations"]
+
+
+def test_null_mapping_cannot_replace_produced_insight_coverage(
+    synthetic_contracts,
+) -> None:
+    fault = project_evidence(raw_bundle("aiq-scn-010-fault"))
+    healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
+
+    score = score_run(plan(), [fault, healthy], [judgment(fault, insight_id=None)])
+
+    assert score["verdict"] == "INCONCLUSIVE"
+    assert "judge_schema_failure" in score["violations"]
+    assert "unresolved_judgment" in score["violations"]
+
+
+def test_over_five_insights_is_explicit_not_at_bar(synthetic_contracts) -> None:
+    raw = raw_bundle("aiq-scn-010-fault")
+    template = raw["insights"][0]
+    raw["insights"] = []
+    for index in range(6):
+        insight = deepcopy(template)
+        insight["id"] = f"insight-{index}"
+        insight["signature"] = content_hash({"signature": index})
+        insight["evidence_fingerprint"] = content_hash({"evidence": index})
+        raw["insights"].append(insight)
+    fault = project_evidence(raw)
+    healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
+    judgments = [
+        judgment(fault, insight_id=f"insight-{index}")
+        for index in range(6)
+    ]
+
+    score = score_run(plan(), [fault, healthy], judgments)
+
+    assert score["verdict"] == "NOT AT BAR"
+    assert score["complete"] is True
+    assert "over_five_insights" in score["violations"]
 
 
 @pytest.mark.parametrize("mutation", ["missing_traces", "null_insights"])
@@ -440,14 +496,18 @@ def test_scoring_enforces_semantic_and_collection_gates(
     assert violation in score["violations"]
 
 
-def test_evidence_projection_enforces_five_insight_limit() -> None:
+def test_evidence_projection_preserves_over_five_insights_for_scoring() -> None:
     value = raw_bundle("aiq-scn-010-fault")
     value["insights"] = [
-        {**deepcopy(value["insights"][0]), "id": f"insight-{index}"}
+        {
+            **deepcopy(value["insights"][0]),
+            "id": f"insight-{index}",
+            "signature": content_hash({"signature": index}),
+            "evidence_fingerprint": content_hash({"evidence": index}),
+        }
         for index in range(6)
     ]
-    with pytest.raises(ContractError, match="too long"):
-        project_evidence(value)
+    assert len(project_evidence(value)["insights"]) == 6
 
 
 def test_judge_export_rejects_pii_shaped_evidence() -> None:

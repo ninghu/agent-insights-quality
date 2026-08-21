@@ -184,7 +184,7 @@ def deterministic_violations(
 def _validate_judgments(
     bundles: list[dict[str, Any]],
     judgments: list[dict[str, Any]],
-) -> tuple[dict[tuple[str, str], dict[str, Any]], set[str], bool]:
+) -> tuple[dict[tuple[str, str | None], dict[str, Any]], set[str], bool]:
     bundle_by_id = {bundle.get("bundle_id"): bundle for bundle in bundles}
     by_mapping: dict[tuple[str, str], dict[str, Any]] = {}
     violations: set[str] = set()
@@ -206,9 +206,13 @@ def _validate_judgments(
                 raise ContractError("judgment evidence version mismatch")
             scenario_id = judgment["mapping"]["scenario_id"]
             insight_id = judgment["mapping"]["insight_id"]
-            if scenario_id != bundle["scenario"]["id"] or insight_id not in {
-                insight["id"] for insight in bundle["insights"]
-            }:
+            insight_ids = {insight["id"] for insight in bundle["insights"]}
+            valid_mapping = (
+                insight_id in insight_ids
+                if insight_ids
+                else insight_id is None
+            )
+            if scenario_id != bundle["scenario"]["id"] or not valid_mapping:
                 raise ContractError("judgment mapping does not exist")
             if judgment["judge_role"] != "primary":
                 continue

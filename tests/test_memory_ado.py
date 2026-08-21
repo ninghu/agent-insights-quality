@@ -132,6 +132,30 @@ def test_replayed_complete_report_does_not_advance_memory() -> None:
     assert len(memory["processed_runs"]) == 1
 
 
+def test_published_report_with_memory_changes_replays_as_noop() -> None:
+    plan, draft = reconciliation_contract(1)
+    memory, changes = reconcile_memory(
+        empty_memory(),
+        [finding()],
+        plan=plan,
+        report=draft,
+        run_id="run-1",
+    )
+    published = deepcopy(draft)
+    published["memory_changes"] = changes
+
+    replayed, replay_changes = reconcile_memory(
+        memory,
+        [finding()],
+        plan=plan,
+        report=published,
+        run_id="run-1",
+    )
+
+    assert replayed == memory
+    assert replay_changes == []
+
+
 def test_report_and_run_ids_are_immutable() -> None:
     memory = reconcile(empty_memory(), [finding()], 1)
     plan, report = reconciliation_contract(1)
@@ -270,6 +294,18 @@ def test_auto_bug_rejects_noncanonical_agent_insights_link(
     trusted_candidate,
 ) -> None:
     trusted_candidate["insights_url"] = "https://example.test/insights"
+    assert not automatic_bug_eligible(
+        trusted_candidate, duplicate_search_completed=True
+    )
+
+
+def test_auto_bug_rejects_canonical_link_for_different_agent(
+    trusted_candidate,
+) -> None:
+    trusted_candidate["insights_url"] = (
+        "https://ai.azure.com/nextgen/r/sub,rg,,account,project/"
+        "build/agents/aiq-002-support-v1/monitor/insights"
+    )
     assert not automatic_bug_eligible(
         trusted_candidate, duplicate_search_completed=True
     )

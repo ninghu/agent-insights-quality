@@ -37,6 +37,7 @@ from agent_insights_quality.judging import (
 )
 from agent_insights_quality.memory import reconcile_memory, render_memory_markdown
 from agent_insights_quality.public_safety import validate_public_repository_content
+from agent_insights_quality.privacy import require_privacy_safe
 from agent_insights_quality.reporting import finalize_readiness_failure, record_email_delivery
 from agent_insights_quality.readiness import require_daily_runtime
 from agent_insights_quality.reporting import (
@@ -524,9 +525,9 @@ def run(args: argparse.Namespace) -> None:
         write_json(Path(args.output), result)
         print(result["action"])
     elif args.command == "render-report":
-        markdown = render_report_markdown(
-            read_json_object(Path(args.report), "canonical report")
-        )
+        report = read_json_object(Path(args.report), "canonical report")
+        require_privacy_safe(report, "Canonical report")
+        markdown = render_report_markdown(report)
         Path(args.output).write_bytes(markdown.encode("ascii"))
         print("Detailed report rendered.")
     elif args.command == "render-email":

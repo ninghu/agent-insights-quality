@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 
 import pytest
 
 from agent_insights_quality.contracts import ContractError
+from agent_insights_quality.cli import main
 from agent_insights_quality.finalizer import (
     build_failure_report,
     build_preflight_plan,
@@ -536,6 +538,25 @@ def test_report_contradiction_is_rejected() -> None:
     value["status"] = "NOT AT BAR"
     with pytest.raises(ContractError, match="contradicts"):
         validate_report_consistency(value)
+
+
+def test_render_report_cli_rejects_sensitive_payload(tmp_path) -> None:
+    value = report()
+    value["summary"] = "Synthetic payment card 4111 1111 1111 1111"
+    report_path = tmp_path / "report.json"
+    output_path = tmp_path / "report.md"
+    report_path.write_text(json.dumps(value), encoding="ascii")
+
+    assert main(
+        [
+            "render-report",
+            "--report",
+            str(report_path),
+            "--output",
+            str(output_path),
+        ]
+    ) == 1
+    assert not output_path.exists()
 
 
 def test_public_artifact_writer_rejects_private_link(tmp_path) -> None:
