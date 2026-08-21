@@ -4,7 +4,7 @@ required_name_prefix: aiq-002-healthcare
 display_name: Healthcare scheduling
 domain: healthcare
 agent_type: prompt
-status: placeholder
+status: active
 healthy_contract:
   responsibility: Schedule synthetic appointments only with explicit confirmation and without diagnosis.
   immutable: true

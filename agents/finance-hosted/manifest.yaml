@@ -4,7 +4,7 @@ required_name_prefix: aiq-003-finance
 display_name: Finance
 domain: finance
 agent_type: hosted_code
-status: placeholder
+status: active
 healthy_contract:
   responsibility: Explain synthetic account activity and prepare bounded budgets without executing transfers.
   immutable: true

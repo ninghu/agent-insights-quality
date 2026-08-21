@@ -1255,10 +1255,12 @@ def validate_report_artifacts(
 
 def validate_contracts() -> None:
     from agent_insights_quality.readiness import validate_runtime_readiness
+    from agent_insights_quality.healthy_agents import load_healthy_agents
 
     validate_structured_file_syntax()
     validate_schemas()
     agents = load_agent_manifests()
+    load_healthy_agents()
     catalog = load_scenario_catalog({agent["id"] for agent in agents})
     validate_supporting_manifests(catalog)
     validate_instance(

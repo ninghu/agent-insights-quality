@@ -1,0 +1,933 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import zipfile
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from io import BytesIO
+from pathlib import Path
+from typing import Any, Protocol
+
+from agent_insights_quality.contracts import ContractError
+
+
+API_VERSION = "v1"
+HOSTED_FEATURES = "HostedAgents=V1Preview"
+OWNER_KEY = "agent_insights_quality_owner"
+RUN_KEY = "agent_insights_quality_run_id"
+DIGEST_KEY = "agent_insights_quality_artifact_digest"
+SOURCE_DIGEST_KEY = "agent_insights_quality_source_digest"
+IMAGE_DIGEST_KEY = "agent_insights_quality_image_digest"
+OWNER_VALUE = "agent-insights-quality"
+TERMINAL_FAILURE_STATES = frozenset({"failed", "deleted", "deleting"})
+FORBIDDEN_INGESTION_HOSTS = frozenset(
+    {
+        "monitor.azure.com",
+        "applicationinsights.azure.com",
+        "dc.applicationinsights.azure.com",
+    }
+)
+_AGENT_NAME = re.compile(r"^aiq-[0-9]{3}-[a-z][a-z0-9-]*(?:-[a-z0-9]+)*$")
+_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+class RuntimeContractError(ContractError):
+    """Raised when deployment or endpoint traffic violates the runtime contract."""
+
+
+@dataclass(frozen=True, slots=True)
+class HttpResponse:
+    status_code: int
+    headers: Mapping[str, str]
+    body: bytes
+
+    def json(self) -> Mapping[str, Any]:
+        try:
+            value = json.loads(self.body)
+        except json.JSONDecodeError as error:
+            raise RuntimeContractError("Foundry returned invalid JSON.") from error
+        if not isinstance(value, Mapping):
+            raise RuntimeContractError("Foundry returned a non-object JSON response.")
+        return value
+
+
+class HttpTransport(Protocol):
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        body: bytes | None,
+        timeout_seconds: float,
+    ) -> HttpResponse: ...
+
+
+class UrllibTransport:
+    """Small synchronous transport with bounded calls and no credential logging."""
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        body: bytes | None,
+        timeout_seconds: float,
+    ) -> HttpResponse:
+        request = urllib.request.Request(url, data=body, headers=dict(headers), method=method)
+        try:
+            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+                return HttpResponse(
+                    status_code=response.status,
+                    headers=dict(response.headers.items()),
+                    body=response.read(),
+                )
+        except urllib.error.HTTPError as error:
+            return HttpResponse(
+                status_code=error.code,
+                headers=dict(error.headers.items()) if error.headers else {},
+                body=error.read(),
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class DeploymentReceipt:
+    agent_name: str
+    agent_version: str
+    agent_type: str
+    artifact_digest: str
+    run_id: str
+    status: str
+    source_digest: str | None = None
+    image_digest: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class InvocationReceipt:
+    fixture_id: str
+    agent_name: str
+    agent_version: str
+    response_id: str
+    invocation_id: str | None
+    session_id: str | None
+    output_text: str
+    called_tools: tuple[str, ...]
+
+    @property
+    def trace_id(self) -> None:
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class HealthyFixture:
+    id: str
+    input: str
+    output_contains: str
+    tool_outputs: Mapping[str, Mapping[str, Any]]
+    expected_tool_calls: tuple[str, ...]
+
+
+def sha256_digest(content: bytes) -> str:
+    return f"sha256:{hashlib.sha256(content).hexdigest()}"
+
+
+def canonical_json_digest(value: Mapping[str, Any]) -> str:
+    content = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii")
+    return sha256_digest(content)
+
+
+def deterministic_zip(source: Path) -> tuple[bytes, str]:
+    if not source.is_dir():
+        raise RuntimeContractError(f"Hosted source directory does not exist: {source}")
+    paths = sorted(
+        path
+        for path in source.rglob("*")
+        if path.is_file()
+        and not path.relative_to(source).as_posix().startswith(".")
+        and "__pycache__" not in path.parts
+        and path.suffix != ".pyc"
+    )
+    if not paths:
+        raise RuntimeContractError("Hosted source directory is empty.")
+    output = BytesIO()
+    with zipfile.ZipFile(
+        output,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=9,
+    ) as archive:
+        for path in paths:
+            relative = path.relative_to(source).as_posix()
+            info = zipfile.ZipInfo(relative, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            archive.writestr(info, path.read_bytes())
+    content = output.getvalue()
+    return content, sha256_digest(content)
+
+
+def load_fixtures(path: Path) -> tuple[HealthyFixture, ...]:
+    try:
+        value = json.loads(path.read_text(encoding="ascii"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeContractError(f"Invalid healthy traffic fixture: {path}") from error
+    if not isinstance(value, list) or len(value) < 3:
+        raise RuntimeContractError("Each healthy traffic fixture must contain at least three tasks.")
+    fixtures: list[HealthyFixture] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise RuntimeContractError("Healthy traffic tasks must be objects.")
+        required = {
+            "id",
+            "input",
+            "output_contains",
+            "tool_outputs",
+            "expected_tool_calls",
+        }
+        if set(item) != required:
+            raise RuntimeContractError(
+                f"Healthy traffic task fields must be exactly {sorted(required)}."
+            )
+        tool_outputs = item["tool_outputs"]
+        expected_calls = item["expected_tool_calls"]
+        if (
+            not isinstance(tool_outputs, Mapping)
+            or not all(isinstance(result, Mapping) for result in tool_outputs.values())
+            or not isinstance(expected_calls, list)
+            or not all(isinstance(name, str) and name for name in expected_calls)
+            or set(expected_calls) != set(tool_outputs)
+        ):
+            raise RuntimeContractError("Healthy traffic tool contracts are invalid.")
+        fixtures.append(
+            HealthyFixture(
+                id=str(item["id"]),
+                input=str(item["input"]),
+                output_contains=str(item["output_contains"]),
+                tool_outputs={str(name): dict(result) for name, result in tool_outputs.items()},
+                expected_tool_calls=tuple(str(name) for name in expected_calls),
+            )
+        )
+    ids = [fixture.id for fixture in fixtures]
+    if len(ids) != len(set(ids)):
+        raise RuntimeContractError("Healthy traffic fixture IDs must be unique.")
+    return tuple(fixtures)
+
+
+def validate_image_reference(image: str) -> str:
+    prefix = "ghcr.io/ninghu/agent-insights-quality-ticket@"
+    if not image.startswith(prefix) or not _DIGEST.fullmatch(image.removeprefix(prefix)):
+        raise RuntimeContractError(
+            "Ticket image must be the public GHCR repository pinned by sha256 digest."
+        )
+    return image
+
+
+def _json_bytes(value: Mapping[str, Any]) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii")
+
+
+def _multipart_body(
+    metadata: Mapping[str, Any],
+    archive_name: str,
+    archive: bytes,
+    artifact_digest: str,
+) -> tuple[str, bytes]:
+    boundary = "aiq-" + artifact_digest.removeprefix("sha256:")[:24]
+    chunks = [
+        f"--{boundary}\r\n".encode(),
+        b'Content-Disposition: form-data; name="metadata"\r\n',
+        b"Content-Type: application/json\r\n\r\n",
+        _json_bytes(metadata),
+        b"\r\n",
+        f"--{boundary}\r\n".encode(),
+        (
+            f'Content-Disposition: form-data; name="code"; filename="{archive_name}"\r\n'
+        ).encode(),
+        b"Content-Type: application/zip\r\n\r\n",
+        archive,
+        b"\r\n",
+        f"--{boundary}--\r\n".encode(),
+    ]
+    return boundary, b"".join(chunks)
+
+
+class FoundryDeploymentClient:
+    def __init__(
+        self,
+        project_endpoint: str,
+        token_provider: Callable[[], str],
+        *,
+        transport: HttpTransport | None = None,
+        request_timeout_seconds: float = 60,
+        poll_timeout_seconds: float = 1800,
+        poll_interval_seconds: float = 5,
+        sleeper: Callable[[float], None] = time.sleep,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._endpoint = _validate_project_endpoint(project_endpoint)
+        self._token_provider = token_provider
+        self._transport = transport or UrllibTransport()
+        self._request_timeout = request_timeout_seconds
+        self._poll_timeout = poll_timeout_seconds
+        self._poll_interval = poll_interval_seconds
+        self._sleep = sleeper
+        self._monotonic = monotonic
+
+    def deploy_prompt(
+        self,
+        *,
+        agent_name: str,
+        definition: Mapping[str, Any],
+        run_id: str,
+        create_agent: bool = True,
+    ) -> DeploymentReceipt:
+        _validate_agent_name(agent_name)
+        artifact_digest = canonical_json_digest(definition)
+        body: dict[str, Any] = {
+            "definition": definition,
+            "metadata": _ownership_metadata(run_id, artifact_digest),
+        }
+        if create_agent:
+            body["name"] = agent_name
+        return self._deploy_json(
+            agent_name,
+            "prompt",
+            body,
+            run_id,
+            artifact_digest,
+            hosted=False,
+            create_agent=create_agent,
+        )
+
+    def deploy_hosted_source(
+        self,
+        *,
+        agent_name: str,
+        definition: Mapping[str, Any],
+        source: Path,
+        run_id: str,
+        create_agent: bool = True,
+    ) -> DeploymentReceipt:
+        _validate_agent_name(agent_name)
+        archive, source_digest = deterministic_zip(source)
+        artifact_digest = canonical_json_digest(
+            {"definition": definition, "source_digest": source_digest}
+        )
+        metadata = {
+            "definition": definition,
+            "metadata": _ownership_metadata(
+                run_id,
+                artifact_digest,
+                source_digest=source_digest,
+            ),
+        }
+        boundary, body = _multipart_body(
+            metadata, f"{agent_name}.zip", archive, source_digest
+        )
+        path = "/agents" if create_agent else f"/agents/{_quote(agent_name)}/versions"
+        headers = {
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "x-ms-code-zip-sha256": source_digest.removeprefix("sha256:"),
+            "Foundry-Features": HOSTED_FEATURES,
+        }
+        if create_agent:
+            headers["x-ms-agent-name"] = agent_name
+        response = self._request(
+            "POST",
+            path,
+            headers=headers,
+            body=body,
+        )
+        version = _version_from_response(response)
+        return self._poll(
+            agent_name,
+            version,
+            "hosted_code",
+            run_id,
+            artifact_digest,
+            source_digest=source_digest,
+        )
+
+    def deploy_hosted_container(
+        self,
+        *,
+        agent_name: str,
+        definition: Mapping[str, Any],
+        image: str,
+        run_id: str,
+        create_agent: bool = True,
+    ) -> DeploymentReceipt:
+        _validate_agent_name(agent_name)
+        pinned_image = validate_image_reference(image)
+        resolved = json.loads(json.dumps(definition))
+        container = resolved.get("container_configuration")
+        if not isinstance(container, dict):
+            raise RuntimeContractError("Container definition has no container_configuration.")
+        container["image"] = pinned_image
+        image_digest = pinned_image.partition("@")[2]
+        artifact_digest = canonical_json_digest(resolved)
+        body: dict[str, Any] = {
+            "definition": resolved,
+            "metadata": _ownership_metadata(
+                run_id,
+                artifact_digest,
+                image_digest=image_digest,
+            ),
+        }
+        if create_agent:
+            body["name"] = agent_name
+        return self._deploy_json(
+            agent_name,
+            "hosted_custom_container",
+            body,
+            run_id,
+            artifact_digest,
+            hosted=True,
+            create_agent=create_agent,
+            image_digest=image_digest,
+        )
+
+    def cleanup_version(self, receipt: DeploymentReceipt) -> None:
+        current = self._request_json(
+            "GET",
+            f"/agents/{_quote(receipt.agent_name)}/versions/{_quote(receipt.agent_version)}",
+            hosted=receipt.agent_type != "prompt",
+        )
+        metadata = current.get("metadata")
+        expected = _ownership_metadata(
+            receipt.run_id,
+            receipt.artifact_digest,
+            source_digest=receipt.source_digest,
+            image_digest=receipt.image_digest,
+        )
+        if not isinstance(metadata, Mapping) or any(
+            metadata.get(key) != value for key, value in expected.items()
+        ):
+            raise RuntimeContractError(
+                "Cleanup refused because the deployed version ownership does not match."
+            )
+        self._request(
+            "DELETE",
+            f"/agents/{_quote(receipt.agent_name)}/versions/{_quote(receipt.agent_version)}",
+            headers=(
+                {"Foundry-Features": HOSTED_FEATURES}
+                if receipt.agent_type != "prompt"
+                else {}
+            ),
+            body=None,
+            expected_statuses={200, 202, 204},
+        )
+
+    def _deploy_json(
+        self,
+        agent_name: str,
+        agent_type: str,
+        body: Mapping[str, Any],
+        run_id: str,
+        artifact_digest: str,
+        *,
+        hosted: bool,
+        create_agent: bool,
+        source_digest: str | None = None,
+        image_digest: str | None = None,
+    ) -> DeploymentReceipt:
+        path = "/agents" if create_agent else f"/agents/{_quote(agent_name)}/versions"
+        response = self._request_json("POST", path, json_body=body, hosted=hosted)
+        version = _version_from_mapping(response)
+        return self._poll(
+            agent_name,
+            version,
+            agent_type,
+            run_id,
+            artifact_digest,
+            source_digest=source_digest,
+            image_digest=image_digest,
+        )
+
+    def _poll(
+        self,
+        agent_name: str,
+        version: str,
+        agent_type: str,
+        run_id: str,
+        artifact_digest: str,
+        *,
+        source_digest: str | None = None,
+        image_digest: str | None = None,
+    ) -> DeploymentReceipt:
+        deadline = self._monotonic() + self._poll_timeout
+        while True:
+            response = self._request_json(
+                "GET",
+                f"/agents/{_quote(agent_name)}/versions/{_quote(version)}",
+                hosted=agent_type != "prompt",
+            )
+            status = str(response.get("status") or "").casefold()
+            if status == "active":
+                metadata = response.get("metadata")
+                expected = _ownership_metadata(
+                    run_id,
+                    artifact_digest,
+                    source_digest=source_digest,
+                    image_digest=image_digest,
+                )
+                if not isinstance(metadata, Mapping) or any(
+                    metadata.get(key) != value for key, value in expected.items()
+                ):
+                    raise RuntimeContractError(
+                        "Active agent version does not preserve immutable ownership metadata."
+                    )
+                return DeploymentReceipt(
+                    agent_name=agent_name,
+                    agent_version=version,
+                    agent_type=agent_type,
+                    artifact_digest=artifact_digest,
+                    run_id=run_id,
+                    status=status,
+                    source_digest=source_digest,
+                    image_digest=image_digest,
+                )
+            if status in TERMINAL_FAILURE_STATES:
+                error = response.get("error")
+                detail = str(error.get("code") if isinstance(error, Mapping) else status)
+                raise RuntimeContractError(
+                    f"Agent version reached terminal state '{status}' ({detail})."
+                )
+            if self._monotonic() >= deadline:
+                raise RuntimeContractError("Agent version did not become active before timeout.")
+            self._sleep(self._poll_interval)
+
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: Mapping[str, Any] | None = None,
+        hosted: bool = False,
+    ) -> Mapping[str, Any]:
+        headers = {"Content-Type": "application/json"} if json_body is not None else {}
+        if hosted:
+            headers["Foundry-Features"] = HOSTED_FEATURES
+        return self._request(
+            method,
+            path,
+            headers=headers,
+            body=_json_bytes(json_body) if json_body is not None else None,
+        ).json()
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        headers: Mapping[str, str],
+        body: bytes | None,
+        expected_statuses: set[int] | None = None,
+    ) -> HttpResponse:
+        token = self._token_provider().strip()
+        if not token or token == "******":
+            raise RuntimeContractError("Token provider returned no usable access token.")
+        request_headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {token}",
+            **headers,
+        }
+        separator = "&" if "?" in path else "?"
+        response = self._transport.request(
+            method,
+            f"{self._endpoint}{path}{separator}api-version={API_VERSION}",
+            headers=request_headers,
+            body=body,
+            timeout_seconds=self._request_timeout,
+        )
+        allowed = expected_statuses or {200, 201, 202}
+        if response.status_code not in allowed:
+            raise RuntimeContractError(
+                f"Foundry request failed with HTTP {response.status_code}."
+            )
+        return response
+
+
+class FoundryInvocationClient:
+    def __init__(
+        self,
+        project_endpoint: str,
+        token_provider: Callable[[], str],
+        *,
+        transport: HttpTransport | None = None,
+        request_timeout_seconds: float = 120,
+        max_tool_turns: int = 4,
+    ) -> None:
+        self._endpoint = _validate_project_endpoint(project_endpoint)
+        self._token_provider = token_provider
+        self._transport = transport or UrllibTransport()
+        self._request_timeout = request_timeout_seconds
+        self._max_tool_turns = max_tool_turns
+
+    def invoke_prompt(
+        self,
+        receipt: DeploymentReceipt,
+        fixture: HealthyFixture,
+    ) -> InvocationReceipt:
+        if receipt.agent_type != "prompt":
+            raise RuntimeContractError("Prompt invocation requires a prompt deployment.")
+        reference = {
+            "type": "agent_reference",
+            "name": receipt.agent_name,
+            "version": receipt.agent_version,
+        }
+        raw_response = self._post_response(
+            "/openai/v1/responses",
+            {"input": fixture.input, "store": True, "agent_reference": reference},
+        )
+        response = raw_response.json()
+        called_tools: list[str] = []
+        for _ in range(self._max_tool_turns):
+            calls = [
+                item
+                for item in response.get("output", [])
+                if isinstance(item, Mapping) and item.get("type") == "function_call"
+            ]
+            if not calls:
+                return _invocation_receipt(
+                    receipt,
+                    fixture,
+                    response,
+                    _invocation_id(raw_response, response),
+                    None,
+                    tuple(called_tools),
+                )
+            outputs = []
+            for call in calls:
+                name = str(call.get("name") or "")
+                call_id = str(call.get("call_id") or "")
+                raw_arguments = str(call.get("arguments") or "")
+                if not name or not call_id or not raw_arguments:
+                    raise RuntimeContractError("Prompt agent returned an incomplete tool call.")
+                try:
+                    arguments = json.loads(raw_arguments)
+                except json.JSONDecodeError as error:
+                    raise RuntimeContractError(
+                        "Prompt agent returned invalid tool arguments."
+                    ) from error
+                configured = fixture.tool_outputs.get(name)
+                if configured is None:
+                    raise RuntimeContractError(
+                        f"Prompt agent called unexpected tool '{name}'."
+                    )
+                expected_arguments = configured.get("arguments")
+                if arguments != expected_arguments:
+                    raise RuntimeContractError(
+                        f"Prompt agent used unexpected arguments for '{name}'."
+                    )
+                outputs.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": json.dumps(
+                            configured.get("result"),
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                    }
+                )
+                called_tools.append(name)
+            response_id = str(response.get("id") or "")
+            if not response_id:
+                raise RuntimeContractError("Prompt response omitted its response ID.")
+            raw_response = self._post_response(
+                "/openai/v1/responses",
+                {
+                    "input": outputs,
+                    "previous_response_id": response_id,
+                    "store": True,
+                    "agent_reference": reference,
+                },
+            )
+            response = raw_response.json()
+        raise RuntimeContractError("Prompt agent exceeded the bounded tool turn limit.")
+
+    def invoke_hosted(
+        self,
+        receipt: DeploymentReceipt,
+        fixture: HealthyFixture,
+    ) -> InvocationReceipt:
+        if receipt.agent_type not in {"hosted_code", "hosted_custom_container"}:
+            raise RuntimeContractError("Hosted invocation requires a hosted deployment.")
+        session = self._post(
+            f"/agents/{_quote(receipt.agent_name)}/sessions",
+            {"version_indicator": {"agent_version": receipt.agent_version}},
+            hosted=True,
+        )
+        session_id = _first_text(session, "agent_session_id", "session_id", "id")
+        indicator = session.get("version_indicator")
+        resolved = (
+            str(indicator.get("agent_version") or "")
+            if isinstance(indicator, Mapping)
+            else ""
+        )
+        if not session_id:
+            raise RuntimeContractError(
+                "Hosted session did not bind to the exact deployed version."
+            )
+        try:
+            if resolved != receipt.agent_version:
+                raise RuntimeContractError(
+                    "Hosted session did not bind to the exact deployed version."
+                )
+            raw_response = self._post_response(
+                (
+                    f"/agents/{_quote(receipt.agent_name)}"
+                    "/endpoint/protocols/openai/responses"
+                ),
+                {"input": fixture.input, "store": False, "session_id": session_id},
+                hosted=True,
+            )
+            response = raw_response.json()
+            return _invocation_receipt(
+                receipt,
+                fixture,
+                response,
+                _invocation_id(raw_response, response),
+                session_id,
+                (),
+            )
+        finally:
+            self._delete_session(receipt.agent_name, session_id)
+
+    def _delete_session(self, agent_name: str, session_id: str) -> None:
+        self._request(
+            "DELETE",
+            f"/agents/{_quote(agent_name)}/sessions/{_quote(session_id)}",
+            body=None,
+            hosted=True,
+            expected_statuses={200, 202, 204, 404},
+        )
+
+    def _post(
+        self,
+        path: str,
+        body: Mapping[str, Any],
+        *,
+        hosted: bool = False,
+    ) -> Mapping[str, Any]:
+        return self._post_response(path, body, hosted=hosted).json()
+
+    def _post_response(
+        self,
+        path: str,
+        body: Mapping[str, Any],
+        *,
+        hosted: bool = False,
+    ) -> HttpResponse:
+        return self._request(
+            "POST",
+            path,
+            body=_json_bytes(body),
+            hosted=hosted,
+            include_api_version=not path.startswith("/openai/v1/"),
+        )
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: bytes | None,
+        hosted: bool,
+        expected_statuses: set[int] | None = None,
+        include_api_version: bool = True,
+    ) -> HttpResponse:
+        token = self._token_provider().strip()
+        if not token or token == "******":
+            raise RuntimeContractError("Token provider returned no usable access token.")
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {token}",
+        }
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        if hosted:
+            headers["Foundry-Features"] = HOSTED_FEATURES
+        separator = "&" if "?" in path else "?"
+        request_path = (
+            f"{path}{separator}api-version={API_VERSION}" if include_api_version else path
+        )
+        response = self._transport.request(
+            method,
+            f"{self._endpoint}{request_path}",
+            headers=headers,
+            body=body,
+            timeout_seconds=self._request_timeout,
+        )
+        allowed = expected_statuses or {200, 201, 202}
+        if response.status_code not in allowed:
+            raise RuntimeContractError(
+                f"Agent endpoint request failed with HTTP {response.status_code}."
+            )
+        return response
+
+
+def run_healthy_traffic(
+    client: FoundryInvocationClient,
+    receipt: DeploymentReceipt,
+    fixtures: Sequence[HealthyFixture],
+    *,
+    max_workers: int,
+) -> tuple[InvocationReceipt, ...]:
+    if max_workers < 1 or max_workers > 8:
+        raise RuntimeContractError("Healthy traffic concurrency must be between 1 and 8.")
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    invoke = client.invoke_prompt if receipt.agent_type == "prompt" else client.invoke_hosted
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_by_id = {
+            executor.submit(invoke, receipt, fixture): fixture.id for fixture in fixtures
+        }
+        completed = {future_by_id[future]: future.result() for future in as_completed(future_by_id)}
+    if set(completed) != {fixture.id for fixture in fixtures}:
+        raise RuntimeContractError("Healthy traffic did not complete every fixture.")
+    return tuple(completed[fixture.id] for fixture in fixtures)
+
+
+def _invocation_receipt(
+    deployment: DeploymentReceipt,
+    fixture: HealthyFixture,
+    response: Mapping[str, Any],
+    invocation_id: str | None,
+    session_id: str | None,
+    called_tools: tuple[str, ...],
+) -> InvocationReceipt:
+    status = str(response.get("status") or "").casefold()
+    response_id = str(response.get("id") or "")
+    output_text = _response_text(response)
+    if status != "completed" or not response_id:
+        raise RuntimeContractError("Agent response did not complete with a response ID.")
+    if fixture.output_contains not in output_text:
+        raise RuntimeContractError(
+            f"Healthy fixture '{fixture.id}' returned an unexpected outcome."
+        )
+    if called_tools != fixture.expected_tool_calls:
+        raise RuntimeContractError(
+            f"Healthy fixture '{fixture.id}' used an unexpected tool sequence."
+        )
+    return InvocationReceipt(
+        fixture_id=fixture.id,
+        agent_name=deployment.agent_name,
+        agent_version=deployment.agent_version,
+        response_id=response_id,
+        invocation_id=invocation_id,
+        session_id=session_id,
+        output_text=output_text,
+        called_tools=called_tools,
+    )
+
+
+def _response_text(response: Mapping[str, Any]) -> str:
+    direct = response.get("output_text")
+    if isinstance(direct, str):
+        return direct
+    parts = []
+    for item in response.get("output", []):
+        if not isinstance(item, Mapping):
+            continue
+        for content in item.get("content", []):
+            if isinstance(content, Mapping) and isinstance(content.get("text"), str):
+                parts.append(content["text"])
+    return "\n".join(parts)
+
+
+def _version_from_response(response: HttpResponse) -> str:
+    return _version_from_mapping(response.json())
+
+
+def _version_from_mapping(response: Mapping[str, Any]) -> str:
+    version = str(response.get("version") or "")
+    if not version:
+        versions = response.get("versions")
+        latest = versions.get("latest") if isinstance(versions, Mapping) else None
+        if isinstance(latest, Mapping):
+            version = str(latest.get("version") or "")
+    if not version:
+        raise RuntimeContractError("Foundry create response omitted the agent version.")
+    return version
+
+
+def _ownership_metadata(
+    run_id: str,
+    artifact_digest: str,
+    *,
+    source_digest: str | None = None,
+    image_digest: str | None = None,
+) -> dict[str, str]:
+    if not run_id or len(run_id) > 64:
+        raise RuntimeContractError("Run ID must be non-empty and at most 64 characters.")
+    if not _DIGEST.fullmatch(artifact_digest):
+        raise RuntimeContractError("Artifact digest must be sha256-prefixed lowercase hex.")
+    metadata = {
+        OWNER_KEY: OWNER_VALUE,
+        RUN_KEY: run_id,
+        DIGEST_KEY: artifact_digest,
+    }
+    for key, digest in (
+        (SOURCE_DIGEST_KEY, source_digest),
+        (IMAGE_DIGEST_KEY, image_digest),
+    ):
+        if digest is not None:
+            if not _DIGEST.fullmatch(digest):
+                raise RuntimeContractError(f"{key} must be sha256-prefixed lowercase hex.")
+            metadata[key] = digest
+    return metadata
+
+
+def _invocation_id(
+    response: HttpResponse,
+    body: Mapping[str, Any],
+) -> str | None:
+    value = body.get("invocation_id")
+    if value:
+        return str(value)
+    for key, header_value in response.headers.items():
+        if key.casefold() in {"x-ms-request-id", "x-request-id"} and header_value:
+            return str(header_value)
+    return None
+
+
+def _first_text(value: Mapping[str, Any], *keys: str) -> str:
+    for key in keys:
+        item = value.get(key)
+        if item:
+            return str(item).strip()
+    return ""
+
+
+def _validate_project_endpoint(endpoint: str) -> str:
+    value = endpoint.rstrip("/")
+    parsed = urllib.parse.urlparse(value)
+    hostname = (parsed.hostname or "").casefold()
+    if (
+        parsed.scheme != "https"
+        or not hostname.endswith(".services.ai.azure.com")
+        or hostname in FORBIDDEN_INGESTION_HOSTS
+        or "/api/projects/" not in parsed.path
+    ):
+        raise RuntimeContractError(
+            "Foundry project endpoint must be an HTTPS services.ai.azure.com project URL."
+        )
+    return value
+
+
+def _validate_agent_name(name: str) -> None:
+    if len(name) > 63 or not _AGENT_NAME.fullmatch(name):
+        raise RuntimeContractError("Agent name must preserve an exact stable aiq-NNN prefix.")
+
+
+def _quote(value: str) -> str:
+    return urllib.parse.quote(value, safe="")

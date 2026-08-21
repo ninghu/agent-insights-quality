@@ -1,0 +1,12 @@
+{
+  "kind": "hosted",
+  "protocol_versions": [
+    {"protocol": "responses", "version": "1.0.0"}
+  ],
+  "cpu": "1",
+  "memory": "2Gi",
+  "container_configuration": {
+    "image": "${AIQ_TICKET_IMAGE_URI}"
+  },
+  "environment_variables": {}
+}

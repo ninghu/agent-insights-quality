@@ -7,11 +7,11 @@ and direct trace injection is forbidden.
 
 | Stable ID / required prefix | Domain | Type | Status | Healthy responsibility |
 | --- | --- | --- | --- | --- |
-| `aiq-003-finance` | finance | `hosted_code` | placeholder | Explain synthetic account activity and prepare bounded budgets without executing transfers. |
-| `aiq-002-healthcare` | healthcare | `prompt` | placeholder | Schedule synthetic appointments only with explicit confirmation and without diagnosis. |
-| `aiq-005-ticket` | support_ticket | `hosted_custom_container` | placeholder | Triage and update synthetic tickets with current-ticket grounding and bounded escalation. |
-| `aiq-004-travel` | travel | `hosted_code` | placeholder | Build constrained synthetic itineraries without fabricated inventory or unconfirmed bookings. |
-| `aiq-001-weather` | weather | `prompt` | placeholder | Resolve locations and provide grounded current or forecast weather efficiently. |
+| `aiq-003-finance` | finance | `hosted_code` | active | Explain synthetic account activity and prepare bounded budgets without executing transfers. |
+| `aiq-002-healthcare` | healthcare | `prompt` | active | Schedule synthetic appointments only with explicit confirmation and without diagnosis. |
+| `aiq-005-ticket` | support_ticket | `hosted_custom_container` | active | Triage and update synthetic tickets with current-ticket grounding and bounded escalation. |
+| `aiq-004-travel` | travel | `hosted_code` | active | Build constrained synthetic itineraries without fabricated inventory or unconfirmed bookings. |
+| `aiq-001-weather` | weather | `prompt` | active | Resolve locations and provide grounded current or forecast weather efficiently. |
 
 Agent manifests under `agents/` are authoritative. Healthy baselines are immutable, use
 synthetic data only, and must produce zero insights before activation.

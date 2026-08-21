@@ -1,0 +1,67 @@
+{
+  "kind": "prompt",
+  "model": "${AIQ_MODEL_DEPLOYMENT_NAME}",
+  "instructions": "Handle synthetic appointment scheduling only. Do not diagnose, assess symptoms, recommend treatment, or infer medical facts. Use provider_lookup and slot_search for availability. Call appointment_create or appointment_cancel only when the user explicitly confirms the exact synthetic provider, date, and time.",
+  "tools": [
+    {
+      "type": "function",
+      "name": "provider_lookup",
+      "description": "Find synthetic scheduling providers by nonclinical specialty.",
+      "strict": true,
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["specialty"],
+        "properties": {
+          "specialty": {"type": "string", "enum": ["primary-care", "optometry"]}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "name": "slot_search",
+      "description": "Find open synthetic appointment slots.",
+      "strict": true,
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["provider_id", "date"],
+        "properties": {
+          "provider_id": {"type": "string", "enum": ["provider-101", "provider-202"]},
+          "date": {"type": "string", "enum": ["2030-06-03"]}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "name": "appointment_create",
+      "description": "Create a confirmed synthetic appointment.",
+      "strict": true,
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["slot_id", "patient_id", "confirmed"],
+        "properties": {
+          "slot_id": {"type": "string", "enum": ["slot-101-0900"]},
+          "patient_id": {"type": "string", "enum": ["patient-syn-001"]},
+          "confirmed": {"const": true}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "name": "appointment_cancel",
+      "description": "Cancel an explicitly confirmed synthetic appointment.",
+      "strict": true,
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["appointment_id", "confirmed"],
+        "properties": {
+          "appointment_id": {"type": "string", "enum": ["appt-syn-1001"]},
+          "confirmed": {"const": true}
+        }
+      }
+    }
+  ]
+}

@@ -1,10 +1,10 @@
 # Agent Insights Quality
 
 `agent-insights-quality` is a public, reusable qualification framework for the Agent Insights engine.
-The current `0.1.x` release is **repository-contract scaffolding**, not a runnable daily automation
-runtime. It defines reviewed schemas, manifests, safety policy, generated-path enforcement, skills,
-and validation tooling while the deployment, traffic, production orchestration, judging, ADO, and
-email workstreams are still incomplete.
+The current `0.1.x` release is not yet a runnable daily automation runtime. It includes five reviewed
+healthy synthetic agents, Foundry deployment and endpoint-only traffic adapters, schemas, safety
+policy, generated-path enforcement, skills, and validation tooling. Scenario mutation, production
+orchestration, judging, ADO, and email workstreams remain incomplete.
 
 The quality bar is intentionally strict. A day is `AT BAR` only after the complete active catalog
 runs, healthy agents produce no insights, all structural checks pass, high-severity recall is 100%,
@@ -38,10 +38,11 @@ run safely. Generated documentation must never be edited by hand.
 ## Security and privacy
 
 Only generated synthetic data and public-safe configuration are permitted. Do not commit credentials,
-tokens, Azure subscription or tenant identifiers, internal endpoints, raw traces, complete prompt
-payloads, private ADO content, or real customer, health, or financial data. Credentials and private
-resource identifiers must be supplied at runtime. Traffic must invoke deployed agent endpoints;
-Application Insights is read-only evidence storage, and direct telemetry injection is forbidden.
+tokens, Azure subscription or tenant identifiers, internal endpoints, raw traces, private production
+prompt payloads, private ADO content, or real customer, health, or financial data. Credentials and
+private resource identifiers must be supplied at runtime. Traffic must invoke deployed agent
+endpoints; Application Insights is read-only evidence storage, and direct telemetry injection is
+forbidden.
 
 ## Daily automation
 
