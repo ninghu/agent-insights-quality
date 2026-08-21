@@ -18,6 +18,8 @@ AGENT_SCHEMA = SCHEMAS / "agent-manifest.schema.json"
 SCENARIO_SCHEMA = SCHEMAS / "scenario-manifest.schema.json"
 MEMORY_SCHEMA = SCHEMAS / "quality-memory.schema.json"
 SCORECARD_SCHEMA = SCHEMAS / "scorecard.schema.json"
+READINESS_FAILURE_SCHEMA = SCHEMAS / "readiness-failure.schema.json"
+EMAIL_HANDOFF_SCHEMA = SCHEMAS / "email-handoff.schema.json"
 
 EXPECTED_AGENTS = {
     "aiq-001-weather": "prompt",
@@ -568,7 +570,8 @@ def validate_report_layout() -> None:
     allowed_root = {"latest.json", "latest.md", "trend.json"}
     daily_pattern = re.compile(
         r"^daily/([0-9]{4})/([0-9]{2})/([0-9]{2})/"
-        r"(plan\.json|plan\.md|report\.json|report\.md|failure-email\.html)$"
+        r"(plan\.json|plan\.md|report\.json|report\.md|failure-email\.html|"
+        r"readiness-failure\.json|readiness-failure\.md|email-handoff\.json)$"
     )
     files_by_day: dict[str, set[str]] = {}
     for path in sorted(reports_root.rglob("*")):
@@ -586,9 +589,21 @@ def validate_report_layout() -> None:
         except ValueError as error:
             raise ContractError(f"reports/{relative}: invalid report date path") from error
         files_by_day.setdefault(f"{year}/{month}/{day}", set()).add(filename)
-    required = {"plan.json", "plan.md", "report.json", "report.md"}
+    complete_report = {"plan.json", "plan.md", "report.json", "report.md"}
+    readiness_failure = {
+        "readiness-failure.json",
+        "readiness-failure.md",
+        "failure-email.html",
+        "email-handoff.json",
+    }
     for report_day, filenames in files_by_day.items():
-        if not required.issubset(filenames):
+        if readiness_failure.issubset(filenames):
+            if filenames != readiness_failure:
+                raise ContractError(
+                    f"reports/daily/{report_day}: readiness failure artifacts cannot mix "
+                    "with operational report artifacts"
+                )
+        elif not complete_report.issubset(filenames):
             raise ContractError(f"reports/daily/{report_day}: incomplete daily report artifact set")
 
 
@@ -599,6 +614,27 @@ def validate_report_artifacts(
     validate_report_layout()
     plan_schema = SCHEMAS / "daily-plan.schema.json"
     report_schema = SCHEMAS / "canonical-report.schema.json"
+    for path in sorted((ROOT / "reports" / "daily").glob("*/*/*/readiness-failure.json")):
+        label = str(path.relative_to(ROOT))
+        report = load_data(path)
+        validate_instance(report, READINESS_FAILURE_SCHEMA, label)
+        markdown = path.with_name("readiness-failure.md").read_text(encoding="ascii")
+        email = path.with_name("failure-email.html").read_text(encoding="ascii")
+        handoff = load_data(path.with_name("email-handoff.json"))
+        validate_instance(handoff, EMAIL_HANDOFF_SCHEMA, f"{label}.email_handoff")
+        if (
+            report["report_id"] not in markdown
+            or report["report_date"] not in markdown
+            or report["status"] not in markdown
+        ):
+            raise ContractError(f"{label}: readiness-failure.md omits canonical identity")
+        if "INCONCLUSIVE" not in email:
+            raise ContractError(f"{label}: failure email must state INCONCLUSIVE")
+        if handoff["report_id"] != report["report_id"] or handoff["report_date"] != report["report_date"]:
+            raise ContractError(f"{label}: email handoff identity does not match failure report")
+        from agent_insights_quality.reporting import validate_email_handoff
+
+        validate_email_handoff(handoff, f"{label}.email_handoff")
     for path in sorted((ROOT / "reports" / "daily").glob("*/*/*/plan.json")):
         label = str(path.relative_to(ROOT))
         plan = load_data(path)

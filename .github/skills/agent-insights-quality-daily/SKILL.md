@@ -12,16 +12,29 @@ content, complete prompt payloads, or real customer data.
 
 ## Runtime readiness gate
 
-Before any preflight, deployment, traffic, ADO, repository mutation, or email side effect, run:
+Before any preflight, deployment, traffic, ADO, memory, cleanup, generated PR mutation, or email
+side effect, run:
 
 ```powershell
 python -m agent_insights_quality check-runtime-readiness
 ```
 
 `config/runtime-readiness.yaml` is human-reviewed authority. If any mandatory component is false,
-stop immediately and report the command's actionable `INCONCLUSIVE` readiness result. Do not run the
-failure email finalizer because the daily runtime has not been enabled. Daily automation cannot
-modify readiness configuration or treat contract scaffolding as an operational workflow.
+stop all operational phases: do not deploy Azure resources, send agent traffic, query or trigger
+Agent Insights, access ADO, transition memory, clean resources, or mutate/open a generated PR. This
+nonzero readiness result does not bypass finalization. Run:
+
+```powershell
+python -m agent_insights_quality finalize-readiness-failure --report-date <Pacific YYYY-MM-DD>
+```
+
+This minimal safe path renders a sanitized `INCONCLUSIVE` readiness-failure report, email, and
+schema-valid one-message handoff without using incomplete runtime components. Resolve the configured
+test recipient, send exactly that one rendered email through Copilot's connected Microsoft mail
+capability as the authenticated user, and record a sanitized receipt reference or delivery failure
+in the handoff with `record-email-result`. A pending handoff may be finalized only once, and the
+renderer never claims delivery. Daily automation cannot modify readiness configuration or treat
+contract scaffolding as an operational workflow.
 
 ## Non-negotiable rules
 
@@ -205,14 +218,16 @@ standalone-tab flight is on and `/monitor/insights` when it is off. Trace links 
 
 ## Failure finalizer
 
-The finalizer always runs. On any failure:
+The finalizer always runs, including when the initial readiness command exits nonzero. On any
+failure:
 
 1. Set status to `INCONCLUSIVE`; record failed phase, last confirmed stage, plain-language reason,
    affected agents, sanitized diagnostics link, and safe next action.
-2. Do not advance clean streaks, resolve memory, or create/update/reopen bugs.
+2. Do not advance clean streaks, resolve memory, create/update/reopen bugs, clean resources, or mutate
+   a generated PR when readiness failed.
 3. Render and persist the sanitized failure report and email in the daily report directory.
-4. Attempt direct email to the configured recipient. Retry transient mail failure with bounded
-   backoff.
+4. Attempt exactly one logical direct email to the configured recipient. Transient retries with
+   bounded backoff are retries of that one message, not additional report emails.
 5. If mail remains unavailable, record delivery failure, fail the automation visibly, and preserve
    the rendered email. Never claim it was sent.
 

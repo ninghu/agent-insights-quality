@@ -8,7 +8,10 @@ allowed_paths:
   - reports/daily/*/*/*/plan.md
   - reports/daily/*/*/*/report.json
   - reports/daily/*/*/*/report.md
+  - reports/daily/*/*/*/readiness-failure.json
+  - reports/daily/*/*/*/readiness-failure.md
   - reports/daily/*/*/*/failure-email.html
+  - reports/daily/*/*/*/email-handoff.json
   - state/quality-memory.json
   - state/QUALITY_MEMORY.md
 protected_paths:
