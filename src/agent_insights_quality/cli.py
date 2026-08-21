@@ -35,6 +35,7 @@ from agent_insights_quality.judging import (
     project_evidence,
     validate_judge_package,
 )
+from agent_insights_quality.links import RuntimeLinkContext
 from agent_insights_quality.memory import reconcile_memory, render_memory_markdown
 from agent_insights_quality.public_safety import (
     require_public_artifact_safe,
@@ -209,6 +210,7 @@ def build_parser() -> argparse.ArgumentParser:
     email.add_argument("--report", required=True)
     email.add_argument("--trend", required=True)
     email.add_argument("--agent-links", required=True)
+    email.add_argument("--runtime-link-context", required=True)
     email.add_argument("--output", required=True)
     email.add_argument("--request-output", required=True)
     receipt = subparsers.add_parser(
@@ -235,6 +237,7 @@ def build_parser() -> argparse.ArgumentParser:
     finalization.add_argument("--report", required=True)
     finalization.add_argument("--prior-report", action="append", default=[])
     finalization.add_argument("--agent-links", required=True)
+    finalization.add_argument("--runtime-link-context", required=True)
     finalization.add_argument("--output-root", default=str(ROOT))
     finalization.add_argument("--request-output", required=True)
     return parser
@@ -510,23 +513,40 @@ def run(args: argparse.Namespace) -> None:
                 ),
                 None,
             )
-            if result["action"] == "created":
+            if result["planned_action"] == "created":
                 applied = client.create_bug(candidate, client.fetch_template())
-            elif result["action"] == "reopened" and matched:
+            elif result["planned_action"] == "reopened" and matched:
                 applied = client.reopen(
                     int(matched["id"]),
                     candidate,
                     client.fetch_template(),
                 )
-            elif result["action"] == "updated" and matched:
+            elif result["planned_action"] == "updated" and matched:
                 applied = client.update_bug(int(matched["id"]), candidate)
             else:
-                raise ContractError(f"Unhandled eligible ADO action: {result['action']}")
+                raise ContractError(
+                    f"Unhandled eligible ADO action: {result['planned_action']}"
+                )
             if not isinstance(applied.get("id"), int):
                 raise ContractError("ADO apply did not confirm the work-item ID")
-            result["confirmed_reference"] = content_hash(
+            confirmed_reference = content_hash(
                 {"work_item_id": applied["id"]}
             )
+            result["confirmed_reference"] = confirmed_reference
+            result["work_item_reference"] = confirmed_reference
+            result["action"] = result["planned_action"]
+            result["candidate_reported"] = False
+            result["apply_receipt"] = {
+                "confirmed": True,
+                "operation_reference": content_hash(
+                    {
+                        "action": result["action"],
+                        "fingerprint": result["fingerprint"],
+                        "work_item_reference": confirmed_reference,
+                    }
+                ),
+                "work_item_reference": confirmed_reference,
+            }
             result["applied"] = True
         write_json(Path(args.output), result)
         print(result["action"])
@@ -541,16 +561,19 @@ def run(args: argparse.Namespace) -> None:
         report = read_json_object(Path(args.report), "canonical report")
         trend = read_json_object(Path(args.trend), "trend")
         links = read_json_object(Path(args.agent_links), "runtime agent links")
+        link_context = RuntimeLinkContext.from_mapping(
+            read_json_object(Path(args.runtime_link_context), "runtime link context")
+        )
         reporting = load_data(ROOT / "config" / "reporting.yaml")
         recipient = resolve_recipient(reporting)
-        subject, body = render_email_html(report, trend, links)
+        subject, body = render_email_html(report, trend, links, link_context)
         _require_private_runtime_output(Path(args.output))
         _require_private_runtime_output(Path(args.request_output))
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)
         Path(args.output).write_bytes(body.encode("ascii"))
         write_json(
             Path(args.request_output),
-            create_email_send_request(report, trend, links, recipient),
+            create_email_send_request(report, trend, links, link_context, recipient),
         )
         print(subject)
     elif args.command == "email-receipt-import":
@@ -587,9 +610,12 @@ def run(args: argparse.Namespace) -> None:
             for path in args.prior_report
         ]
         links = read_json_object(Path(args.agent_links), "runtime agent links")
+        link_context = RuntimeLinkContext.from_mapping(
+            read_json_object(Path(args.runtime_link_context), "runtime link context")
+        )
         recipient = resolve_recipient(load_data(ROOT / "config" / "reporting.yaml"))
         _require_private_runtime_output(Path(args.request_output))
-        result = finalize_success(report, prior, links, recipient)
+        result = finalize_success(report, prior, links, link_context, recipient)
         write_daily_artifacts(Path(args.output_root), plan, result["report"])
         validate_generated_paths(["reports/trend.json"])
         write_json(Path(args.output_root) / "reports" / "trend.json", result["trend"])

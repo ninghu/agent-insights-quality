@@ -1117,6 +1117,37 @@ def validate_daily_plan_semantics(
         raise ContractError(f"{label}: declared coverage does not match assignments")
 
 
+def validate_bug_action_semantics(report: dict[str, Any], label: str) -> None:
+    mutation_actions = {"created", "updated", "reopened", "commented"}
+    for action in report.get("bug_actions", []):
+        mutation = action["action"] in mutation_actions
+        policy_enabled = action["policy_snapshot"]["auto_apply_enabled"]
+        receipt = action["apply_receipt"]
+        if not policy_enabled and action["action"] not in {"candidate", "none"}:
+            raise ContractError(
+                f"{label}: disabled ADO policy can report only candidate or none"
+            )
+        if mutation:
+            if report["status"] == "INCONCLUSIVE":
+                raise ContractError(
+                    f"{label}: INCONCLUSIVE report cannot claim an ADO mutation"
+                )
+            if (
+                not policy_enabled
+                or receipt is None
+                or receipt["confirmed"] is not True
+                or action["work_item_reference"] is None
+                or receipt["work_item_reference"] != action["work_item_reference"]
+            ):
+                raise ContractError(
+                    f"{label}: ADO mutation requires enabled policy and a matching confirmed receipt"
+                )
+        elif receipt is not None:
+            raise ContractError(
+                f"{label}: candidate or none ADO action cannot contain an apply receipt"
+            )
+
+
 def validate_canonical_report_semantics(
     report: dict[str, Any],
     agents: list[dict[str, Any]],
@@ -1173,13 +1204,23 @@ def validate_canonical_report_semantics(
         ):
             raise ContractError(f"{label}: scenario result uses an incompatible agent")
         expected_count = expected_finding_count(scenario)
+        if result["expected_count"] != expected_count:
+            raise ContractError(
+                f"{label}: scenario expected_count does not match the catalog"
+            )
         references = result["insight_references"]
-        if result["verdict"] == "correct" and len(references) != expected_count:
-            raise ContractError(f"{label}: correct result has an inconsistent insight reference count")
-        if result["verdict"] in {"partially_useful", "incorrect_noise"} and not references:
+        if result["observed_count"] != len(references):
+            raise ContractError(
+                f"{label}: scenario observed_count does not match its insight references"
+            )
+        if not result["completed"] and result["verdict"] != "inconclusive":
+            raise ContractError(f"{label}: incomplete scenario result must be inconclusive")
+        if result["verdict"] in {"partially_useful", "incorrect_noise", "mixed"} and not references:
             raise ContractError(f"{label}: produced insight verdict requires an opaque reference")
-        if result["verdict"] in {"missed", "inconclusive"} and references:
-            raise ContractError(f"{label}: missing/inconclusive result cannot reference an insight")
+        if result["verdict"] == "missed" and (
+            references or expected_count == 0
+        ):
+            raise ContractError(f"{label}: missed result must have expected but no observed insights")
 
     scorecard = report["scorecard"]
     counts = scorecard["counts"]
@@ -1246,12 +1287,10 @@ def validate_canonical_report_semantics(
         for result in fault_results
     )
     false_negatives = expected_fault_count - true_positives
-    produced_insights = sum(
-        len(result["insight_references"]) for result in report["scenario_results"]
-    )
+    produced_insights = sum(result["observed_count"] for result in report["scenario_results"])
     false_positives = produced_insights - true_positives
     healthy_insights = sum(
-        len(result["insight_references"])
+        result["observed_count"]
         for result in report["scenario_results"]
         if scenario_by_id[result["scenario_id"]]["expected"]["category"] == "none"
     )
@@ -1379,18 +1418,46 @@ def validate_canonical_report_semantics(
                 sum(item["attributes"][attribute] for item in mapped_expected),
                 len(mapped_expected),
             )
-        correct_faults = {
-            result["scenario_id"]
-            for result in fault_results
-            if result["verdict"] == "correct"
+        judgments_by_scenario: dict[str, list[dict[str, Any]]] = {
+            result["scenario_id"]: [] for result in report["scenario_results"]
         }
-        judged_faults = {
-            item["scenario_id"]
-            for item in report["field_judgments"]
-            if item["verdict"] == "correct" and all(item["attributes"].values())
-        }
-        if correct_faults != judged_faults:
-            raise ContractError(f"{label}: true positives contradict field judgments")
+        for item in field_judgments:
+            judgments_by_scenario[item["scenario_id"]].append(item)
+        for result in report["scenario_results"]:
+            judgments_for_result = judgments_by_scenario[result["scenario_id"]]
+            if not result["completed"]:
+                expected_verdict = "inconclusive"
+            elif result["expected_count"] == 0:
+                expected_verdict = (
+                    "correct" if result["observed_count"] == 0 else "incorrect_noise"
+                )
+            elif result["observed_count"] == 0:
+                expected_verdict = "missed"
+            else:
+                trusted = [
+                    item
+                    for item in judgments_for_result
+                    if item["verdict"] == "correct"
+                    and item["confidence"] >= 0.80
+                    and all(item["attributes"].values())
+                ]
+                verdicts = {item["verdict"] for item in judgments_for_result}
+                if (
+                    len(trusted) == result["expected_count"]
+                    and result["observed_count"] == result["expected_count"]
+                    and verdicts == {"correct"}
+                ):
+                    expected_verdict = "correct"
+                elif not trusted and verdicts == {"incorrect_noise"}:
+                    expected_verdict = "incorrect_noise"
+                elif not trusted and verdicts == {"partially_useful"}:
+                    expected_verdict = "partially_useful"
+                else:
+                    expected_verdict = "mixed"
+            if result["verdict"] != expected_verdict:
+                raise ContractError(
+                    f"{label}: scenario verdict contradicts its counts or field judgments"
+                )
 
     if "collection_analysis" in report:
         collection = report["collection_analysis"]
@@ -1421,6 +1488,56 @@ def validate_canonical_report_semantics(
 
     if report["status"] != scorecard["verdict"]:
         raise ContractError(f"{label}: report status and scorecard verdict must match")
+    validate_bug_action_semantics(report, label)
+    if scorecard["complete"]:
+        required_violations = set()
+        if any(
+            result["expected_count"] != result["observed_count"]
+            for result in report["scenario_results"]
+        ):
+            required_violations.add("finding_count_mismatch")
+        if healthy_insights:
+            required_violations.add("healthy_false_positive")
+        if "collection_analysis" in report:
+            for count_key, violation in (
+                ("duplicates", "duplication"),
+                ("fragments", "fragmentation"),
+                ("umbrellas", "umbrella"),
+                ("stale_version", "cross_version_stale"),
+            ):
+                if report["collection_analysis"][count_key]:
+                    required_violations.add(violation)
+        if rates["high_severity_recall"] != 1:
+            required_violations.add("high_severity_recall")
+        if rates["overall_recall"] < 0.90:
+            required_violations.add("overall_recall")
+        if rates["precision"] < 0.95:
+            required_violations.add("precision")
+        if (
+            any(
+                rates[name] != 1
+                for name in (
+                    "category_accuracy",
+                    "severity_accuracy",
+                    "title_pass_rate",
+                    "description_pass_rate",
+                    "proposed_fix_pass_rate",
+                    "linked_trace_pass_rate",
+                    "evidence_localization_rate",
+                    "meaningfulness_rate",
+                    "actionability_rate",
+                )
+                if name in rates
+            )
+            or rates.get("distinctness_rate", 1) != 1
+        ):
+            required_violations.add("attribute_correctness")
+        missing_violations = required_violations - set(scorecard["violations"])
+        if missing_violations:
+            raise ContractError(
+                f"{label}: scorecard omits derived gate violations: "
+                + ", ".join(sorted(missing_violations))
+            )
     if counts["active_scenarios"] != len(expected_ids):
         raise ContractError(
             f"{label}: scorecard active scenario count does not match the selected plan"

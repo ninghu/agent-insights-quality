@@ -190,8 +190,10 @@ def _report_fixture(*, completed: bool) -> tuple[dict[str, object], list[dict], 
                 "agent_id": "aiq-001-weather",
                 "agent_version_digest": digest,
                 "completed": completed,
-                "verdict": "correct",
-                "insight_references": [reference],
+                "expected_count": 1,
+                "observed_count": int(completed),
+                "verdict": "correct" if completed else "inconclusive",
+                "insight_references": [reference] if completed else [],
             }
         ],
         "scorecard": _scorecard(complete=True, completed=int(completed)),
@@ -307,6 +309,18 @@ def test_report_requires_judgment_for_every_produced_insight() -> None:
     }
     report["failure"] = None
     with pytest.raises(ContractError, match="field judgments"):
+        validate_canonical_report_semantics(report, agents, catalog, "report")
+
+
+def test_scenario_counts_bind_to_catalog_and_insight_references() -> None:
+    report, agents, catalog = _report_fixture(completed=True)
+    report["scenario_results"][0]["expected_count"] = 2
+    with pytest.raises(ContractError, match="expected_count"):
+        validate_canonical_report_semantics(report, agents, catalog, "report")
+
+    report["scenario_results"][0]["expected_count"] = 1
+    report["scenario_results"][0]["observed_count"] = 0
+    with pytest.raises(ContractError, match="observed_count"):
         validate_canonical_report_semantics(report, agents, catalog, "report")
 
 

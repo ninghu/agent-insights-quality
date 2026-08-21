@@ -12,7 +12,7 @@ from agent_insights_quality.judging import (
 )
 from agent_insights_quality.artifact_io import content_hash
 from agent_insights_quality.artifact_io import read_json_object
-from agent_insights_quality.scoring import score_run
+from agent_insights_quality.scoring import case_to_insight_mappings, score_run
 from agent_insights_quality.scoring import deterministic_violations
 
 
@@ -400,6 +400,42 @@ def test_missing_expected_count_is_a_miss_not_inconclusive(synthetic_contracts) 
     assert score["complete"] is True
     assert score["counts"]["false_negatives"] == 1
     assert "finding_count_mismatch" in score["violations"]
+    outcome = case_to_insight_mappings(
+        expected_plan, [fault, healthy], [judgment(fault)]
+    )[0]
+    assert outcome["expected_count"] == 2
+    assert outcome["observed_count"] == 1
+    assert outcome["verdict"] == "mixed"
+
+
+def test_one_expected_plus_extra_noise_is_explicit_mixed_outcome(
+    synthetic_contracts,
+) -> None:
+    raw = raw_bundle("aiq-scn-010-fault")
+    extra = deepcopy(raw["insights"][0])
+    extra["id"] = "insight-noise"
+    extra["signature"] = content_hash({"signature": "noise"})
+    extra["evidence_fingerprint"] = content_hash({"evidence": "noise"})
+    raw["insights"].append(extra)
+    fault = project_evidence(raw)
+    healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
+    correct = judgment(fault)
+    noise = judgment(fault, insight_id="insight-noise")
+    noise["verdict"] = "incorrect_noise"
+    noise["output_hash"] = content_hash(
+        {key: value for key, value in noise.items() if key != "output_hash"}
+    )
+
+    score = score_run(plan(), [fault, healthy], [correct, noise])
+    outcome = case_to_insight_mappings(
+        plan(), [fault, healthy], [correct, noise]
+    )[0]
+
+    assert score["verdict"] == "NOT AT BAR"
+    assert score["counts"]["false_positives"] == 1
+    assert outcome["expected_count"] == 1
+    assert outcome["observed_count"] == 2
+    assert outcome["verdict"] == "mixed"
 
 
 @pytest.mark.parametrize("mutation", ["missing_traces", "null_insights"])
