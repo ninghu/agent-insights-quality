@@ -20,6 +20,7 @@ from agent_insights_quality.contracts import (
 )
 from agent_insights_quality.generated_paths import validate_generated_paths
 from agent_insights_quality.planning import generate_daily_plan
+from agent_insights_quality.privacy import require_privacy_safe
 from agent_insights_quality.public_safety import PUBLIC_FORBIDDEN_PATTERNS
 from agent_insights_quality.reporting import (
     build_email_send_request,
@@ -254,9 +255,8 @@ def write_daily_artifacts(
     validate_report_plan_binding(report, plan, "canonical report")
     if report["report_date"] != plan["report_date"] or report["plan_id"] != plan["plan_id"]:
         raise ContractError("Daily report does not match the daily plan")
-    year, month, day = report["report_date"].split("-")
-    target = root / "reports" / "daily" / year / month / day
-    relative_root = f"reports/daily/{year}/{month}/{day}"
+    relative_root = plan["artifact_directory"]
+    target = root / Path(relative_root)
     generated = [
         f"{relative_root}/plan.json",
         f"{relative_root}/plan.md",
@@ -275,6 +275,9 @@ def write_daily_artifacts(
         f"- Assignments: {len(plan['assignments'])}\n"
     )
     report_markdown = render_report_markdown(report)
+    require_privacy_safe(report, "Canonical public report")
+    if failure_email is not None:
+        require_privacy_safe(failure_email, "Public failure email")
     for label, text in (
         ("plan.md", plan_markdown),
         ("report.md", report_markdown),

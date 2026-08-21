@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Literal
@@ -80,6 +81,14 @@ def project_evidence(raw: dict[str, Any]) -> dict[str, Any]:
     missing = sorted(required - set(raw))
     if missing:
         raise ContractError(f"evidence projection: missing fields: {', '.join(missing)}")
+    if not isinstance(raw["trace_evidence"], list) or not raw["trace_evidence"]:
+        raise ContractError("evidence projection: trace_evidence must be a non-empty array")
+    if not isinstance(raw["insights"], list):
+        raise ContractError("evidence projection: insights must be an array")
+    if not all(isinstance(item, Mapping) for item in raw["trace_evidence"]):
+        raise ContractError("evidence projection: trace entries must be objects")
+    if not all(isinstance(item, Mapping) for item in raw["insights"]):
+        raise ContractError("evidence projection: insight entries must be objects")
     projected = {
         "schema_version": EVIDENCE_SCHEMA_VERSION,
         "bundle_id": raw["bundle_id"],
@@ -126,6 +135,8 @@ def project_evidence(raw: dict[str, Any]) -> dict[str, Any]:
 def validate_evidence_bundle(bundle: dict[str, Any]) -> None:
     validate_instance(bundle, SCHEMAS / "evidence-bundle.schema.json", "evidence bundle")
     verified_hash(bundle, "bundle_hash", "evidence bundle")
+    if not bundle["trace_evidence"]:
+        raise ContractError("evidence bundle must include trace evidence")
 
 
 def _prompt(role: Literal["primary", "blinded_verifier"]) -> tuple[str, str, str]:

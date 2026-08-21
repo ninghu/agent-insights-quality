@@ -330,6 +330,36 @@ def test_missing_judgment_is_inconclusive(synthetic_contracts) -> None:
     assert "unresolved_judgment" in score["violations"]
 
 
+@pytest.mark.parametrize("mutation", ["missing_traces", "null_insights"])
+def test_invalid_or_evidence_incomplete_bundle_is_inconclusive(
+    synthetic_contracts,
+    mutation,
+) -> None:
+    fault = project_evidence(raw_bundle("aiq-scn-010-fault"))
+    healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
+    if mutation == "missing_traces":
+        fault["trace_evidence"] = []
+    else:
+        fault["insights"] = None
+    fault["bundle_hash"] = content_hash(
+        {key: value for key, value in fault.items() if key != "bundle_hash"}
+    )
+
+    score = score_run(plan(), [fault, healthy], [])
+
+    assert score["verdict"] == "INCONCLUSIVE"
+    assert score["complete"] is False
+    assert "structural_failure" in score["violations"]
+    assert score["counts"]["completed_scenarios"] == 1
+
+
+def test_evidence_projection_rejects_empty_traces() -> None:
+    raw = raw_bundle("aiq-scn-010-fault")
+    raw["trace_evidence"] = []
+    with pytest.raises(ContractError, match="non-empty"):
+        project_evidence(raw)
+
+
 def test_low_confidence_primary_judgment_is_inconclusive(
     synthetic_contracts,
 ) -> None:

@@ -21,6 +21,8 @@ from agent_insights_quality.reporting import (
     validate_report_consistency,
 )
 from agent_insights_quality.artifact_io import content_hash
+from agent_insights_quality.planning import generate_daily_plan
+from datetime import date
 
 
 SHA = "sha256:" + "a" * 64
@@ -173,11 +175,21 @@ def field_judgment(scenario_id: str, reference: str) -> dict:
     }
 
 
+def runtime_agent_links(value: dict) -> dict[str, str]:
+    return {
+        agent["id"]: (
+            "https://ai.azure.com/nextgen/r/sub,rg,,account,project/"
+            f"build/agents/{agent['name']}/monitor/insights"
+        )
+        for agent in value["agents"]
+    }
+
+
 def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> None:
     value = report()
     value["summary"] = "Quality met bar <without injection>."
     trend = render_trend([value])
-    links = {agent["id"]: f"https://example.test/{agent['id']}" for agent in value["agents"]}
+    links = runtime_agent_links(value)
     subject, body = render_email_html(value, trend, links)
     assert subject.startswith("[Agent Insights Quality] AT BAR")
     assert body.count("<h2>") == 4
@@ -216,7 +228,7 @@ def test_email_rejects_current_trend_entry_that_contradicts_report() -> None:
     value = report()
     trend = render_trend([value])
     trend["days"][0]["status"] = "NOT AT BAR"
-    links = {agent["id"]: f"https://example.test/{agent['id']}" for agent in value["agents"]}
+    links = runtime_agent_links(value)
     with pytest.raises(ContractError, match="trend entry contradicts"):
         render_email_html(value, trend, links)
     trend = render_trend([value])
@@ -284,7 +296,7 @@ def test_recipient_supports_authenticated_user_and_guards_domain() -> None:
 def test_send_request_remains_unsent_until_matching_provider_receipt() -> None:
     value = report()
     trend = render_trend([value])
-    links = {agent["id"]: f"https://example.test/{agent['id']}" for agent in value["agents"]}
+    links = runtime_agent_links(value)
     request = create_email_send_request(
         value,
         trend,
@@ -361,7 +373,7 @@ def test_local_outlook_fallback_requires_order_and_sent_items_verification() -> 
     request = create_email_send_request(
         value,
         render_trend([value]),
-        {agent["id"]: f"https://example.test/{agent['id']}" for agent in value["agents"]},
+        runtime_agent_links(value),
         {
             "mode": "authenticated_user",
             "address": None,
@@ -399,10 +411,7 @@ def test_local_outlook_fallback_requires_order_and_sent_items_verification() -> 
 
 def test_authenticated_user_handoff_rejects_literal_or_uncanonical_mailbox() -> None:
     value = report()
-    links = {
-        agent["id"]: f"https://example.test/{agent['id']}"
-        for agent in value["agents"]
-    }
+    links = runtime_agent_links(value)
     with pytest.raises(ContractError, match="connected_microsoft_mailbox"):
         create_email_send_request(
             value,
@@ -421,7 +430,7 @@ def test_receipt_rejects_duplicate_send_after_success() -> None:
     request = create_email_send_request(
         value,
         render_trend([value]),
-        {agent["id"]: f"https://example.test/{agent['id']}" for agent in value["agents"]},
+        runtime_agent_links(value),
         {
             "mode": "authenticated_user",
             "address": None,
@@ -461,7 +470,7 @@ def test_receipt_rejects_changed_content_digest_and_unauthorized_graph() -> None
     request = create_email_send_request(
         value,
         render_trend([value]),
-        {agent["id"]: f"https://example.test/{agent['id']}" for agent in value["agents"]},
+        runtime_agent_links(value),
         {
             "mode": "authenticated_user",
             "address": None,
@@ -564,3 +573,57 @@ def test_public_artifact_writer_rejects_agent_insights_deep_link(tmp_path) -> No
     value["summary"] = "See http://" + "ai.azure.com/resource/deep-link"
     with pytest.raises(ContractError, match="private runtime URL"):
         write_daily_artifacts(tmp_path, plan, value)
+
+
+def test_public_artifact_writer_rejects_comprehensive_pii(tmp_path) -> None:
+    plan = build_preflight_plan("2026-08-21", "2026-08-21T08:00:00Z")
+    failure = {
+        "failed_phase": "runtime readiness",
+        "last_confirmed_stage": "contracts",
+        "reason": "Not ready.",
+        "affected_agents": [],
+        "diagnostics_reference": SHA,
+        "next_action": "Complete readiness.",
+        "completed_scenarios": [],
+    }
+    value = build_failure_report(plan, failure, generated_at="2026-08-21T08:00:00Z")
+    value["summary"] = "Synthetic SSN 123-45-6789"
+    with pytest.raises(ContractError, match="secret or PII"):
+        write_daily_artifacts(tmp_path, plan, value)
+
+
+def test_rerun_artifacts_and_trend_preserve_plan_identity(tmp_path) -> None:
+    plan = generate_daily_plan(date(2026, 8, 21), rerun=1)
+    failure = {
+        "failed_phase": "runtime readiness",
+        "last_confirmed_stage": "contracts",
+        "reason": "Not ready.",
+        "affected_agents": [],
+        "diagnostics_reference": SHA,
+        "next_action": "Complete readiness.",
+        "completed_scenarios": [],
+    }
+    value = build_failure_report(plan, failure, generated_at="2026-08-21T08:00:00Z")
+
+    target = write_daily_artifacts(tmp_path, plan, value)
+    trend = render_trend([value])
+
+    assert target == tmp_path / plan["artifact_directory"]
+    assert target.name == "aiq-20260821-r01"
+    assert trend["days"][0]["report_path"] == (
+        "reports/daily/2026/08/21/aiq-20260821-r01/report.md"
+    )
+
+
+def test_email_rejects_arbitrary_or_mismatched_agent_insights_links() -> None:
+    value = report()
+    trend = render_trend([value])
+    links = runtime_agent_links(value)
+    links[value["agents"][0]["id"]] = "https://example.test/insights"
+    with pytest.raises(ContractError, match="approved runtime route"):
+        render_email_html(value, trend, links)
+
+    links = runtime_agent_links(value)
+    links[value["agents"][0]["id"]] = links[value["agents"][1]["id"]]
+    with pytest.raises(ContractError, match="corresponding report agent"):
+        render_email_html(value, trend, links)

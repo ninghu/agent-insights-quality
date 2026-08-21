@@ -6,8 +6,6 @@ import re
 from copy import deepcopy
 from datetime import date
 from typing import Any, Mapping
-from urllib.parse import urlparse
-
 from agent_insights_quality.contracts import (
     ContractError,
     SCHEMAS,
@@ -17,6 +15,7 @@ from agent_insights_quality.contracts import (
     validate_canonical_report_semantics,
     validate_instance,
 )
+from agent_insights_quality.links import validate_agent_insights_url
 from agent_insights_quality.artifact_io import content_hash, verified_hash
 from agent_insights_quality.judging import AUTO_BUG_CONFIDENCE
 
@@ -251,6 +250,12 @@ def render_trend(reports: list[dict[str, Any]], *, limit: int = 14) -> dict[str,
                 "report_path": (
                     "reports/daily/"
                     + report["report_date"].replace("-", "/")
+                    + (
+                        f"/{report['report_id']}"
+                        if report["report_id"]
+                        != f"aiq-{report['report_date'].replace('-', '')}"
+                        else ""
+                    )
                     + "/report.md"
                 ),
             }
@@ -325,6 +330,11 @@ def render_email_html(
     expected_path = (
         "reports/daily/"
         + report["report_date"].replace("-", "/")
+        + (
+            f"/{report['report_id']}"
+            if report["report_id"] != f"aiq-{report['report_date'].replace('-', '')}"
+            else ""
+        )
         + "/report.md"
     )
     if (
@@ -337,10 +347,8 @@ def render_email_html(
     expected_agents = {agent["id"] for agent in report["agents"]}
     if set(agent_links) != expected_agents:
         raise ContractError("Direct email must contain a runtime Agent Insights link for every agent")
-    for link in agent_links.values():
-        parsed = urlparse(link)
-        if parsed.scheme != "https" or not parsed.netloc:
-            raise ContractError("Direct email Agent Insights links must use HTTPS")
+    for agent in report["agents"]:
+        validate_agent_insights_url(agent_links[agent["id"]], agent["name"])
     score = report["scorecard"]
     counts = score["counts"]
     signal = (

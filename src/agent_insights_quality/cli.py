@@ -174,12 +174,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     memory.add_argument("--memory", required=True)
     memory.add_argument("--findings", required=True)
-    memory.add_argument("--report-id", required=True)
+    memory.add_argument("--plan", required=True)
+    memory.add_argument("--report", required=True)
     memory.add_argument("--run-id", required=True)
-    memory.add_argument("--report-date", required=True)
-    memory.add_argument("--report-path", required=True)
-    memory.add_argument("--generated-at", required=True)
-    memory.add_argument("--complete", action="store_true")
     memory.add_argument("--output", required=True)
     memory.add_argument("--markdown-output")
 
@@ -472,12 +469,9 @@ def run(args: argparse.Namespace) -> None:
         updated, changes = reconcile_memory(
             read_json_object(Path(args.memory), "quality memory"),
             findings,
-            report_id=args.report_id,
+            plan=read_json_object(Path(args.plan), "daily plan"),
+            report=read_json_object(Path(args.report), "canonical report"),
             run_id=args.run_id,
-            report_date=args.report_date,
-            report_path=args.report_path,
-            generated_at=args.generated_at,
-            complete=args.complete,
         )
         write_json(Path(args.output), updated)
         if args.markdown_output:

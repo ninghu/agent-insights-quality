@@ -14,6 +14,9 @@ from agent_insights_quality.ado import (
 )
 from agent_insights_quality.memory import issue_fingerprint, reconcile_memory
 from agent_insights_quality.contracts import ContractError
+from agent_insights_quality.finalizer import build_failure_report
+from agent_insights_quality.planning import generate_daily_plan
+from datetime import date
 
 
 SHA = "sha256:" + "a" * 64
@@ -51,17 +54,52 @@ def empty_memory() -> dict:
     }
 
 
-def reconcile(memory: dict, findings: list[dict], day: int, complete: bool = True):
+@pytest.fixture(autouse=True)
+def isolate_memory_catalog_semantics(monkeypatch):
+    monkeypatch.setattr(
+        "agent_insights_quality.memory.validate_canonical_report_semantics",
+        lambda *_args: None,
+    )
+
+
+def reconciliation_contract(day: int, *, complete: bool = True, rerun: int = 0):
     report_date = f"2026-08-{day:02d}"
+    plan = generate_daily_plan(date.fromisoformat(report_date), rerun=rerun)
+    failure = {
+        "failed_phase": "test setup",
+        "last_confirmed_stage": "plan",
+        "reason": "Synthetic incomplete run.",
+        "affected_agents": [],
+        "diagnostics_reference": SHA,
+        "next_action": "Retry.",
+        "completed_scenarios": [],
+    }
+    report = build_failure_report(
+        plan,
+        failure,
+        generated_at=f"{report_date}T08:{rerun:02d}:00Z",
+    )
+    if complete:
+        report["status"] = "NOT AT BAR"
+        report["scorecard"]["verdict"] = "NOT AT BAR"
+        report["scorecard"]["complete"] = True
+        report["scorecard"]["counts"]["completed_scenarios"] = len(plan["assignments"])
+        report["scorecard"]["violations"] = ["overall_recall"]
+        report["failure"] = None
+        for result in report["scenario_results"]:
+            result["completed"] = True
+            result["verdict"] = "missed"
+    return plan, report
+
+
+def reconcile(memory: dict, findings: list[dict], day: int, complete: bool = True):
+    plan, report = reconciliation_contract(day, complete=complete)
     return reconcile_memory(
         memory,
         findings,
-        report_id=f"aiq-202608{day:02d}",
+        plan=plan,
+        report=report,
         run_id=f"run-{day}",
-        report_date=report_date,
-        report_path=f"reports/daily/2026/08/{day:02d}/report.md",
-        generated_at=f"{report_date}T08:00:00Z",
-        complete=complete,
     )[0]
 
 
@@ -96,17 +134,28 @@ def test_replayed_complete_report_does_not_advance_memory() -> None:
 
 def test_report_and_run_ids_are_immutable() -> None:
     memory = reconcile(empty_memory(), [finding()], 1)
+    plan, report = reconciliation_contract(1)
     with pytest.raises(ContractError, match="immutable"):
         reconcile_memory(
             memory,
             [],
-            report_id="aiq-20260801",
+            plan=plan,
+            report=report,
             run_id="different-run",
-            report_date="2026-08-01",
-            report_path="reports/daily/2026/08/01/report.md",
-            generated_at="2026-08-01T09:00:00Z",
-            complete=True,
         )
+
+
+def test_out_of_order_complete_report_cannot_advance_memory() -> None:
+    memory = reconcile(empty_memory(), [finding()], 3)
+    with pytest.raises(ContractError, match="chronological|backward"):
+        reconcile(memory, [], 2)
+
+
+def test_memory_rejects_sensitive_content_in_any_record() -> None:
+    value = finding()
+    value["description"] = "Synthetic SSN 123-45-6789"
+    with pytest.raises(ContractError, match="secret or PII"):
+        reconcile(empty_memory(), [value], 1)
 
 
 def candidate() -> dict:
@@ -270,6 +319,28 @@ def test_wiql_search_has_no_state_filter_and_uses_root_cause() -> None:
     assert "[System.State]" not in query
     assert "CONTAINS WORDS" in query
     assert "root" in query.casefold()
+
+
+def test_duplicate_detail_fetch_batches_all_wiql_ids() -> None:
+    calls = []
+
+    class RecordingClient(AdoClient):
+        def _request(self, method, route, *, body=None, content_type="application/json"):
+            calls.append((method, route))
+            if method == "POST":
+                return {"workItems": [{"id": value} for value in range(1, 452)]}
+            ids = route.split("ids=", 1)[1].split("&", 1)[0].split(",")
+            return {"value": [{"id": int(value)} for value in ids]}
+
+    client = RecordingClient(
+        AdoRuntimeConfig("org", "project", "team", "template", "runtime-token")
+    )
+    results = client.search_duplicates(candidate())
+
+    detail_calls = [route for method, route in calls if method == "GET"]
+    assert len(detail_calls) == 3
+    assert all(len(route.split("ids=", 1)[1].split("&", 1)[0].split(",")) <= 200 for route in detail_calls)
+    assert [item["id"] for item in results] == list(range(1, 452))
 
 
 def test_reopen_uses_runtime_template_state_reason_and_tags() -> None:
