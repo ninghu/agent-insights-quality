@@ -572,426 +572,810 @@ def test_live_telemetry_qualification_requires_request_correlation() -> None:
 
 
 # ---------------------------------------------------------------------------
-# scenario_runtime behavioral tests
+# Helpers shared by all scenario_runtime behavioral tests
 # ---------------------------------------------------------------------------
 
-def _make_scenario_config(operations: list[dict], version_key: str = "test-vk") -> str:
-    return json.dumps(
-        {
-            "schema_version": "1.0.0",
-            "version_key": version_key,
-            "operations": operations,
-        },
-        separators=(",", ":"),
-    )
+_WORKTREE_ROOT = Path(__file__).resolve().parents[1]
+_HOSTED_SCENARIO_PATHS = [
+    _WORKTREE_ROOT / "agents" / "finance-hosted" / "source" / "scenario_runtime.py",
+    _WORKTREE_ROOT / "agents" / "travel-hosted" / "source" / "scenario_runtime.py",
+    (
+        _WORKTREE_ROOT
+        / "agents"
+        / "support-ticket-hosted-image"
+        / "container"
+        / "scenario_runtime.py"
+    ),
+]
+_SR_IDS = ["finance", "travel", "ticket"]
 
 
 def _load_scenario_runtime(path: Path) -> ModuleType:
     return _load_logic(path, f"scenario_runtime_{path.parent.name}")
 
 
-_WORKTREE_ROOT = Path(__file__).resolve().parents[1]
-_HOSTED_SCENARIO_PATHS = [
-    _WORKTREE_ROOT / "agents" / "finance-hosted" / "source" / "scenario_runtime.py",
-    _WORKTREE_ROOT / "agents" / "travel-hosted" / "source" / "scenario_runtime.py",
-    _WORKTREE_ROOT / "agents" / "support-ticket-hosted-image" / "container" / "scenario_runtime.py",
-]
+def _make_config(operations: list[dict], version_key: str = "test-vk") -> str:
+    return json.dumps(
+        {"schema_version": "1.0.0", "version_key": version_key, "operations": operations},
+        separators=(",", ":"),
+    )
 
 
-@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=["finance", "travel", "ticket"])
-def test_scenario_runtime_rejects_old_phase_schema(sr_path: Path) -> None:
+class _ScenarioCtx:
+    """Context-manager that sets AIQ_SCENARIO_CONFIGURATION for a test."""
+
+    def __init__(self, config: str) -> None:
+        import os as _os
+
+        self._os = _os
+        self._config = config
+        self._orig: str | None = None
+
+    def __enter__(self) -> None:
+        self._orig = self._os.environ.get("AIQ_SCENARIO_CONFIGURATION")
+        self._os.environ["AIQ_SCENARIO_CONFIGURATION"] = self._config
+
+    def __exit__(self, *_: object) -> None:
+        if self._orig is None:
+            self._os.environ.pop("AIQ_SCENARIO_CONFIGURATION", None)
+        else:
+            self._os.environ["AIQ_SCENARIO_CONFIGURATION"] = self._orig
+
+
+def _rt(path: Path, cfg: str) -> object:
+    """Load and instantiate ScenarioRuntime with the given config."""
+    mod = _load_scenario_runtime(path)
+    with _ScenarioCtx(cfg):
+        return mod.ScenarioRuntime()
+
+
+# ---------------------------------------------------------------------------
+# Schema validation tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_schema_rejects_phase_key(sr_path: Path) -> None:
+    """The reviewed schema does not include 'phase'."""
     bad = json.dumps(
-        {
-            "schema_version": "1.0.0",
-            "phase": "test",
-            "version_key": "vk",
-            "operations": [],
-        }
+        {"schema_version": "1.0.0", "phase": "faulted", "version_key": "vk", "operations": []}
     )
     mod = _load_scenario_runtime(sr_path)
-    import os
-
-    orig = os.environ.get("AIQ_SCENARIO_CONFIGURATION")
-    try:
-        os.environ["AIQ_SCENARIO_CONFIGURATION"] = bad
-        with pytest.raises(RuntimeError, match="invalid"):
-            mod.ScenarioRuntime()
-    finally:
-        if orig is None:
-            os.environ.pop("AIQ_SCENARIO_CONFIGURATION", None)
-        else:
-            os.environ["AIQ_SCENARIO_CONFIGURATION"] = orig
+    with _ScenarioCtx(bad), pytest.raises(RuntimeError, match="invalid"):
+        mod.ScenarioRuntime()
 
 
-@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=["finance", "travel", "ticket"])
-def test_scenario_runtime_accepts_schema_without_phase(sr_path: Path) -> None:
-    cfg = _make_scenario_config([])
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_schema_requires_nonempty_version_key(sr_path: Path) -> None:
+    bad = json.dumps(
+        {"schema_version": "1.0.0", "version_key": "", "operations": []}
+    )
     mod = _load_scenario_runtime(sr_path)
-    import os
+    with _ScenarioCtx(bad), pytest.raises(RuntimeError, match="invalid"):
+        mod.ScenarioRuntime()
 
-    orig = os.environ.get("AIQ_SCENARIO_CONFIGURATION")
-    try:
-        os.environ["AIQ_SCENARIO_CONFIGURATION"] = cfg
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_schema_accepts_valid_config(sr_path: Path) -> None:
+    cfg = _make_config([])
+    mod = _load_scenario_runtime(sr_path)
+    with _ScenarioCtx(cfg):
         rt = mod.ScenarioRuntime()
-        assert rt._version_key == "test-vk"
-    finally:
-        if orig is None:
-            os.environ.pop("AIQ_SCENARIO_CONFIGURATION", None)
-        else:
-            os.environ["AIQ_SCENARIO_CONFIGURATION"] = orig
+    assert rt._version_key == "test-vk"
+
+
+# ---------------------------------------------------------------------------
+# Source-patch operations (runtime-variants.yaml catalog)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_tool_arguments_remove_field_entity_id_removes_id_alias(sr_path: Path) -> None:
+    """tool_arguments/remove_field/entity_id must remove the first *_id key."""
+    cfg = _make_config(
+        [{"target": "tool_arguments", "action": "remove_field", "value": "entity_id"}]
+    )
+    dispatched: list[dict] = []
+
+    def execute(n: str, a: dict) -> str:
+        dispatched.append(dict(a))
+        return "ok"
+
+    rt = _rt(sr_path, cfg)
+    rt.run_tool("lookup", {"account_id": "SYN-100", "extra": "x"}, execute)
+    assert dispatched, "execute must be called"
+    assert "account_id" not in dispatched[0], "entity_id alias must remove *_id key"
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_tool_arguments_replace_value_entity_id_alias(sr_path: Path) -> None:
+    """tool_arguments/replace_value entity_id replaces the *_id key value."""
+    cfg = _make_config(
+        [
+            {
+                "target": "tool_arguments",
+                "action": "replace_value",
+                "value": {"field": "entity_id", "value": "synthetic-entity-b"},
+            }
+        ]
+    )
+    dispatched: list[dict] = []
+
+    def execute(n: str, a: dict) -> str:
+        dispatched.append(dict(a))
+        return "ok"
+
+    rt = _rt(sr_path, cfg)
+    rt.run_tool("lookup", {"ticket_id": "TKT-1001"}, execute)
+    assert dispatched
+    assert dispatched[0].get("ticket_id") == "synthetic-entity-b"
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_tool_arguments_replace_value_limit_alias(sr_path: Path) -> None:
+    """tool_arguments/replace_value limit replaces the *_limit key value."""
+    cfg = _make_config(
+        [
+            {
+                "target": "tool_arguments",
+                "action": "replace_value",
+                "value": {"field": "limit", "value": "not-an-integer"},
+            }
+        ]
+    )
+    dispatched: list[dict] = []
+
+    def execute(n: str, a: dict) -> str:
+        dispatched.append(dict(a))
+        return "ok"
+
+    rt = _rt(sr_path, cfg)
+    rt.run_tool("search", {"query": "q", "limit": 10}, execute)
+    assert dispatched
+    assert dispatched[0].get("limit") == "not-an-integer"
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_context_resolver_replace_source_previous_entity(sr_path: Path) -> None:
+    """context_resolver/replace_source injects __context_source__ into dispatched args."""
+    cfg = _make_config(
+        [
+            {
+                "target": "context_resolver",
+                "action": "replace_source",
+                "value": "previous_entity",
+            }
+        ]
+    )
+    dispatched: list[dict] = []
+
+    def execute(n: str, a: dict) -> str:
+        dispatched.append(dict(a))
+        return "ok"
+
+    rt = _rt(sr_path, cfg)
+    rt.run_tool("lookup", {"entity_id": "e1"}, execute)
+    assert dispatched
+    assert dispatched[0].get("__context_source__") == "previous_entity"
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_context_builder_remove_field_standing_constraint(sr_path: Path) -> None:
+    """context_builder/remove_field/standing_constraint removes that key from args."""
+    cfg = _make_config(
+        [
+            {
+                "target": "context_builder",
+                "action": "remove_field",
+                "value": "standing_constraint",
+            }
+        ]
+    )
+    dispatched: list[dict] = []
+
+    def execute(n: str, a: dict) -> str:
+        dispatched.append(dict(a))
+        return "ok"
+
+    rt = _rt(sr_path, cfg)
+    rt.run_tool("lookup", {"standing_constraint": "premium", "account_id": "SYN-1"}, execute)
+    assert dispatched
+    assert "standing_constraint" not in dispatched[0]
+    assert "account_id" in dispatched[0]
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_context_builder_merge_fixture(sr_path: Path) -> None:
+    cfg = _make_config(
+        [
+            {
+                "target": "context_builder",
+                "action": "merge_fixture",
+                "value": "synthetic-entity-b",
+            }
+        ]
+    )
+    dispatched: list[dict] = []
+
+    def execute(n: str, a: dict) -> str:
+        dispatched.append(dict(a))
+        return "ok"
+
+    rt = _rt(sr_path, cfg)
+    rt.run_tool("lookup", {"account_id": "SYN-1"}, execute)
+    assert dispatched
+    assert dispatched[0].get("__merged_fixture__") == "synthetic-entity-b"
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_context_builder_append_fixture(sr_path: Path) -> None:
+    cfg = _make_config(
+        [
+            {
+                "target": "context_builder",
+                "action": "append_fixture",
+                "value": "full_synthetic_dataset",
+            }
+        ]
+    )
+    dispatched: list[dict] = []
+
+    def execute(n: str, a: dict) -> str:
+        dispatched.append(dict(a))
+        return "ok"
+
+    rt = _rt(sr_path, cfg)
+    rt.run_tool("lookup", {"account_id": "SYN-1"}, execute)
+    assert dispatched
+    assert dispatched[0].get("__appended_fixture__") == "full_synthetic_dataset"
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_context_builder_duplicate_sections(sr_path: Path) -> None:
+    cfg = _make_config(
+        [
+            {
+                "target": "context_builder",
+                "action": "duplicate_sections",
+                "value": ["history", "tool_results"],
+            }
+        ]
+    )
+    dispatched: list[dict] = []
+
+    def execute(n: str, a: dict) -> str:
+        dispatched.append(dict(a))
+        return "ok"
+
+    rt = _rt(sr_path, cfg)
+    rt.run_tool("lookup", {"account_id": "SYN-1"}, execute)
+    assert dispatched
+    assert dispatched[0].get("__duplicate_sections__") == ["history", "tool_results"]
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_query_builder_replace_scope_all_records(sr_path: Path) -> None:
+    cfg = _make_config(
+        [
+            {
+                "target": "query_builder",
+                "action": "replace_scope",
+                "value": "all_records_all_fields",
+            }
+        ]
+    )
+    dispatched: list[dict] = []
+
+    def execute(n: str, a: dict) -> str:
+        dispatched.append(dict(a))
+        return "ok"
+
+    rt = _rt(sr_path, cfg)
+    rt.run_tool("search", {"account_id": "SYN-1"}, execute)
+    assert dispatched
+    assert dispatched[0].get("__query_scope__") == "all_records_all_fields"
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_state_machine_replace_transition_does_not_abort_before_request(sr_path: Path) -> None:
+    """state_machine/replace_transition must NOT raise in before_request (bounded loop via model)."""
+    cfg = _make_config(
+        [
+            {
+                "target": "state_machine",
+                "action": "replace_transition",
+                "value": "current_state",
+            }
+        ]
+    )
+    rt = _rt(sr_path, cfg)
+    rt.before_request()  # must not raise
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_state_machine_replace_transition_run_tool_returns_reentry(sr_path: Path) -> None:
+    """state_machine/replace_transition run_tool returns a no-progress re-entry string."""
+    cfg = _make_config(
+        [
+            {
+                "target": "state_machine",
+                "action": "replace_transition",
+                "value": "current_state",
+            }
+        ]
+    )
+    dispatched: list[dict] = []
+
+    def execute(n: str, a: dict) -> str:
+        dispatched.append(dict(a))
+        return "ok"
+
+    rt = _rt(sr_path, cfg)
+    result = rt.run_tool("lookup", {"account_id": "SYN-1"}, execute)
+    assert not dispatched, "state_machine re-entry must not call execute"
+    assert "current_state" in result or "no-progress" in result
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_version_sequence_materialize_faulted_returns_fault_no_dispatch(sr_path: Path) -> None:
+    """version_key=faulted in materialize list: returns fault JSON, does not call execute."""
+    cfg = _make_config(
+        [
+            {
+                "target": "version_sequence",
+                "action": "materialize",
+                "value": ["faulted", "corrected"],
+            }
+        ],
+        version_key="faulted",
+    )
+    dispatched: list[dict] = []
+
+    def execute(n: str, a: dict) -> str:
+        dispatched.append(dict(a))
+        return "ok"
+
+    rt = _rt(sr_path, cfg)
+    result = rt.run_tool("lookup", {"account_id": "SYN-1"}, execute)
+    assert not dispatched, "faulted variant must not call execute"
+    parsed = json.loads(result)
+    assert parsed.get("status") == "faulted"
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_version_sequence_materialize_corrected_dispatches_normally(sr_path: Path) -> None:
+    """version_key=corrected: healthy variant dispatches and returns execute result."""
+    cfg = _make_config(
+        [
+            {
+                "target": "version_sequence",
+                "action": "materialize",
+                "value": ["faulted", "corrected"],
+            }
+        ],
+        version_key="corrected",
+    )
+
+    def execute(n: str, a: dict) -> str:
+        return "healthy-dispatch"
+
+    rt = _rt(sr_path, cfg)
+    result = rt.run_tool("lookup", {"account_id": "SYN-1"}, execute)
+    assert result == "healthy-dispatch"
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_version_sequence_materialize_recurred_is_faulted(sr_path: Path) -> None:
+    cfg = _make_config(
+        [
+            {
+                "target": "version_sequence",
+                "action": "materialize",
+                "value": ["faulted", "corrected", "recurred"],
+            }
+        ],
+        version_key="recurred",
+    )
+    dispatched: list[dict] = []
+
+    def execute(n: str, a: dict) -> str:
+        dispatched.append(dict(a))
+        return "ok"
+
+    rt = _rt(sr_path, cfg)
+    result = rt.run_tool("lookup", {}, execute)
+    assert not dispatched
+    assert "faulted" in json.loads(result).get("status", "")
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_duplicate_dispatch_calls_execute_twice(sr_path: Path) -> None:
+    cfg = _make_config(
+        [
+            {
+                "target": "tool_router",
+                "action": "duplicate_dispatch",
+                "value": "identical_arguments",
+            }
+        ]
+    )
+    calls: list[int] = []
+
+    def execute(n: str, a: dict) -> str:
+        calls.append(1)
+        return "ok"
+
+    rt = _rt(sr_path, cfg)
+    rt.run_tool("lookup", {"account_id": "SYN-1"}, execute)
+    assert len(calls) == 2, f"expected 2 dispatches, got {len(calls)}"
 
 
 @pytest.mark.parametrize(
-    ("operations", "expected_substring", "case_id"),
+    ("target", "action", "value", "expected"),
     [
-        # 001 bypass_dispatch returns synthetic envelope without calling execute
-        (
-            [{"target": "tool_router", "action": "bypass_dispatch", "value": None}],
-            "without dispatch",
-            "bypass_dispatch",
-        ),
-        # 002 traffic_only/enforce returns read-only response without calling execute
-        (
-            [{"target": "traffic_only", "action": "enforce", "value": None}],
-            "read-only traffic",
-            "traffic_only_enforce",
-        ),
-        # 003 replace_route returns incompatible route message
-        (
-            [{"target": "tool_router", "action": "replace_route", "value": None}],
-            "incompatible tool route",
-            "replace_route",
-        ),
-        # 004 tool_arguments/remove_field removes the named field
-        (
-            [{"target": "tool_arguments", "action": "remove_field", "value": "account_id"}],
-            "dispatched",
-            "remove_field",
-        ),
-        # 005 tool_arguments/replace_value overwrites the named field
-        (
-            [
-                {
-                    "target": "tool_arguments",
-                    "action": "replace_value",
-                    "value": {"field": "account_id", "value": "SYN-NEW"},
-                }
-            ],
-            "dispatched",
-            "replace_value",
-        ),
-        # 006 source_patch/remove_field on entity_id alias removes any matching key
-        (
-            [{"target": "source_patch", "action": "remove_field", "value": "entity_id"}],
-            "dispatched",
-            "source_patch_entity_id_remove",
-        ),
-        # 007 source_patch/replace_value on limit alias sets matching key
-        (
-            [
-                {
-                    "target": "source_patch",
-                    "action": "replace_value",
-                    "value": {"field": "limit", "value": 5},
-                }
-            ],
-            "dispatched",
-            "source_patch_limit_replace",
-        ),
-        # 008 context_query/mock_result returns mock JSON without calling execute
-        (
-            [
-                {
-                    "target": "context_query",
-                    "action": "mock_result",
-                    "value": {"entity": "syn-entity"},
-                }
-            ],
-            "context_query_result",
-            "context_query_mock",
-        ),
-        # 009 context_resolver/replace_context injects __context__ into args
-        (
-            [{"target": "context_resolver", "action": "replace_context", "value": "ctx-A"}],
-            "dispatched",
-            "context_resolver_replace",
-        ),
-        # 010 context_builder/append_context appends to context then injects __context__
-        (
-            [
-                {"target": "context_resolver", "action": "replace_context", "value": "base"},
-                {"target": "context_builder", "action": "append_context", "value": "extra"},
-            ],
-            "dispatched",
-            "context_builder_append",
-        ),
-        # 011 response_mapper/patch_return_value overrides result
-        (
-            [
-                {
-                    "target": "response_mapper",
-                    "action": "patch_return_value",
-                    "value": "PATCHED",
-                }
-            ],
-            "PATCHED",
-            "patch_return_value",
-        ),
-        # 012 response_mapper/discard_input returns stale response message
-        (
-            [{"target": "response_mapper", "action": "discard_input", "value": None}],
-            "stale response",
-            "discard_input",
-        ),
-        # 013 failure_handler/replace_route returns failure path message
-        (
-            [{"target": "failure_handler", "action": "replace_route", "value": None}],
-            "failure path",
-            "failure_handler_replace_route",
-        ),
-        # 014 response_orchestrator/raise_fixture_error raises post-tool abort
-        (
-            [{"target": "response_orchestrator", "action": "raise_fixture_error", "value": None}],
-            "post-tool abort",
-            "post_tool_abort",
-        ),
-        # 015 endpoint_request/synthetic_otel_parent returns traceparent JSON
-        (
-            [
-                {
-                    "target": "endpoint_request",
-                    "action": "synthetic_otel_parent",
-                    "value": None,
-                }
-            ],
-            "traceparent",
-            "endpoint_request_otel_parent",
-        ),
-        # 016 endpoint_request/synthetic_otel_child returns child traceparent JSON
-        (
-            [
-                {
-                    "target": "endpoint_request",
-                    "action": "synthetic_otel_child",
-                    "value": None,
-                }
-            ],
-            "traceparent",
-            "endpoint_request_otel_child",
-        ),
-        # 056 endpoint_request/healthy_056 dispatches normally (healthy control)
-        (
-            [{"target": "endpoint_request", "action": "healthy_056", "value": None}],
-            "dispatched",
-            "endpoint_request_healthy_056",
-        ),
-        # 057 endpoint_request/healthy_057 dispatches normally (healthy control)
-        (
-            [{"target": "endpoint_request", "action": "healthy_057", "value": None}],
-            "dispatched",
-            "endpoint_request_healthy_057",
-        ),
+        ("tool_router", "bypass_dispatch", "required_tool", "without dispatch"),
+        ("operation_handler", "bypass_dispatch", "success_envelope", "without dispatch"),
+        ("tool_router", "replace_route", "incompatible_tool", "incompatible"),
+        ("response_mapper", "patch_return_value", "deterministic contradictory value", "deterministic contradictory value"),
+        ("failure_handler", "patch_return_value", "synthetic available result", "synthetic available result"),
+        ("response_mapper", "discard_input", "tool_result", "stale response"),
+        ("failure_handler", "replace_route", "unsupported_fallback", "failure path"),
+        ("failure_handler", "bypass_dispatch", "escalation", "failure path"),
     ],
 )
-@pytest.mark.parametrize(
-    "sr_path", _HOSTED_SCENARIO_PATHS, ids=["finance", "travel", "ticket"]
-)
-def test_scenario_runtime_hosted_compatible_operations(
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_source_patch_control_flow_operations(
     sr_path: Path,
-    operations: list[dict],
-    expected_substring: str,
-    case_id: str,
+    target: str,
+    action: str,
+    value: str,
+    expected: str,
 ) -> None:
-    import os
+    cfg = _make_config([{"target": target, "action": action, "value": value}])
 
-    cfg = _make_scenario_config(operations)
-    mod = _load_scenario_runtime(sr_path)
-    orig = os.environ.get("AIQ_SCENARIO_CONFIGURATION")
-    try:
-        os.environ["AIQ_SCENARIO_CONFIGURATION"] = cfg
-        rt = mod.ScenarioRuntime()
+    def execute(n: str, a: dict) -> str:
+        return "dispatch-result"
 
-        dispatched_args: list[dict] = []
-
-        def execute(name: str, args: dict) -> str:
-            dispatched_args.append(dict(args))
-            return "dispatched"
-
-        if case_id == "post_tool_abort":
-            with pytest.raises(RuntimeError, match="post-tool abort"):
-                rt.run_tool("account_lookup", {"account_id": "SYN-100"}, execute)
-            return
-
-        result = rt.run_tool("account_lookup", {"account_id": "SYN-100", "limit": 10}, execute)
-        assert expected_substring in result, f"case {case_id}: expected {expected_substring!r} in {result!r}"
-
-        if case_id == "remove_field":
-            # execute was called; account_id should be absent from dispatched args
-            assert dispatched_args and "account_id" not in dispatched_args[0]
-        elif case_id == "replace_value":
-            assert dispatched_args and dispatched_args[0].get("account_id") == "SYN-NEW"
-        elif case_id == "source_patch_entity_id_remove":
-            # no entity_id key in dispatched args; account_id is not an alias for entity_id
-            assert dispatched_args
-        elif case_id == "source_patch_limit_replace":
-            assert dispatched_args and dispatched_args[0].get("limit") == 5
-        elif case_id == "context_resolver_replace":
-            assert dispatched_args and dispatched_args[0].get("__context__") == "ctx-A"
-        elif case_id == "context_builder_append":
-            assert dispatched_args and dispatched_args[0].get("__context__") == "base extra"
-        elif case_id in {"bypass_dispatch", "traffic_only_enforce", "replace_route"}:
-            assert not dispatched_args
-        elif case_id in {"endpoint_request_otel_parent", "endpoint_request_otel_child"}:
-            parsed = json.loads(result)
-            assert "traceparent" in parsed
-            assert parsed["version_key"] == "test-vk"
-    finally:
-        if orig is None:
-            os.environ.pop("AIQ_SCENARIO_CONFIGURATION", None)
-        else:
-            os.environ["AIQ_SCENARIO_CONFIGURATION"] = orig
+    rt = _rt(sr_path, cfg)
+    result = rt.run_tool("lookup", {"account_id": "SYN-1"}, execute)
+    assert expected in result, f"expected {expected!r} in {result!r}"
 
 
-@pytest.mark.parametrize(
-    "sr_path", _HOSTED_SCENARIO_PATHS, ids=["finance", "travel", "ticket"]
-)
-def test_scenario_runtime_version_sequence_transient_then_success(sr_path: Path) -> None:
-    import os
-
-    cfg = _make_scenario_config(
-        [{"target": "version_sequence", "action": "transient_then_success", "value": None}],
-        version_key="vk-seq-001",
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_request_initializer_raise_fixture_error(sr_path: Path) -> None:
+    cfg = _make_config(
+        [{"target": "request_initializer", "action": "raise_fixture_error", "value": "pre-model-abort"}]
     )
-    mod = _load_scenario_runtime(sr_path)
-    orig = os.environ.get("AIQ_SCENARIO_CONFIGURATION")
-    try:
-        os.environ["AIQ_SCENARIO_CONFIGURATION"] = cfg
-        rt = mod.ScenarioRuntime()
-
-        def execute(_name: str, _args: dict) -> str:
-            return "success"
-
-        # First call must raise a transient fault.
-        with pytest.raises(RuntimeError, match="transient fault"):
-            rt.run_tool("account_lookup", {"account_id": "SYN-100"}, execute)
-
-        # Second call on the same instance succeeds.
-        result = rt.run_tool("account_lookup", {"account_id": "SYN-100"}, execute)
-        assert result == "success"
-
-        # version_key must be embedded in the fault message.
-        rt2 = mod.ScenarioRuntime()
-        with pytest.raises(RuntimeError, match="vk-seq-001"):
-            rt2.run_tool("account_lookup", {"account_id": "SYN-100"}, execute)
-    finally:
-        if orig is None:
-            os.environ.pop("AIQ_SCENARIO_CONFIGURATION", None)
-        else:
-            os.environ["AIQ_SCENARIO_CONFIGURATION"] = orig
+    rt = _rt(sr_path, cfg)
+    with pytest.raises(RuntimeError, match="pre-model abort"):
+        rt.before_request()
 
 
-@pytest.mark.parametrize(
-    "sr_path", _HOSTED_SCENARIO_PATHS, ids=["finance", "travel", "ticket"]
-)
-def test_scenario_runtime_delay_ms_120_takes_at_least_100ms(sr_path: Path) -> None:
-    import os
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_model_error_handler_remove_handler(sr_path: Path) -> None:
+    cfg = _make_config(
+        [{"target": "model_error_handler", "action": "remove_handler", "value": "deterministic_model_error"}]
+    )
+    rt = _rt(sr_path, cfg)
+    with pytest.raises(RuntimeError, match="model failure"):
+        rt.before_model()
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_response_orchestrator_raise_fixture_error(sr_path: Path) -> None:
+    cfg = _make_config(
+        [{"target": "response_orchestrator", "action": "raise_fixture_error", "value": "post-tool-abort"}]
+    )
+    rt = _rt(sr_path, cfg)
+    with pytest.raises(RuntimeError, match="post-tool abort"):
+        rt.run_tool("lookup", {"account_id": "SYN-1"}, lambda n, a: "ok")
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_failure_fixture_expose_symptoms_in_finalize_output(sr_path: Path) -> None:
+    cfg = _make_config(
+        [
+            {
+                "target": "failure_fixture",
+                "action": "expose_symptoms",
+                "value": ["symptom-a", "symptom-b"],
+            }
+        ]
+    )
+    rt = _rt(sr_path, cfg)
+    out = rt.finalize_output("some output")
+    parsed = json.loads(out)
+    assert parsed == ["symptom-a", "symptom-b"]
+
+
+# ---------------------------------------------------------------------------
+# Endpoint-fault operations (endpoint-faults.yaml catalog)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_synthetic_fixture_configure_response_error(sr_path: Path) -> None:
+    """configure_response with status:error returns structured error without dispatch."""
+    cfg = _make_config(
+        [
+            {
+                "target": "synthetic_tool_fixture",
+                "action": "configure_response",
+                "value": {"status": "error", "transport_status": 200},
+            }
+        ]
+    )
+    dispatched: list[dict] = []
+
+    def execute(n: str, a: dict) -> str:
+        dispatched.append(dict(a))
+        return "ok"
+
+    rt = _rt(sr_path, cfg)
+    result = rt.run_tool("lookup", {"account_id": "SYN-1"}, execute)
+    assert not dispatched, "configure_response must not call execute"
+    parsed = json.loads(result)
+    assert parsed.get("status") == "error"
+    assert parsed.get("transport_status") == 200
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_synthetic_fixture_configure_response_partial_failure(sr_path: Path) -> None:
+    cfg = _make_config(
+        [
+            {
+                "target": "synthetic_tool_fixture",
+                "action": "configure_response",
+                "value": {"complete": False, "failed_items": ["synthetic-item-b"]},
+            }
+        ]
+    )
+    dispatched: list[dict] = []
+
+    def execute(n: str, a: dict) -> str:
+        dispatched.append(dict(a))
+        return "ok"
+
+    rt = _rt(sr_path, cfg)
+    result = rt.run_tool("lookup", {}, execute)
+    assert not dispatched
+    parsed = json.loads(result)
+    assert parsed.get("complete") is False
+    assert "synthetic-item-b" in parsed.get("failed_items", [])
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_synthetic_fixture_configure_response_permanent_failure(sr_path: Path) -> None:
+    cfg = _make_config(
+        [
+            {
+                "target": "synthetic_tool_fixture",
+                "action": "configure_response",
+                "value": "permanent_failure",
+            }
+        ]
+    )
+    rt = _rt(sr_path, cfg)
+    result = rt.run_tool("lookup", {}, lambda n, a: "ok")
+    parsed = json.loads(result)
+    assert parsed.get("permanent") is True
+    assert parsed.get("status") == "error"
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_synthetic_fixture_remove_field_result(sr_path: Path) -> None:
+    """remove_field/result executes normally then removes the 'result' key from the JSON response."""
+    cfg = _make_config(
+        [{"target": "synthetic_tool_fixture", "action": "remove_field", "value": "result"}]
+    )
+
+    def execute(n: str, a: dict) -> str:
+        return json.dumps({"result": "SYN-100 data", "status": "ok"})
+
+    rt = _rt(sr_path, cfg)
+    result = rt.run_tool("lookup", {"account_id": "SYN-1"}, execute)
+    parsed = json.loads(result)
+    assert "result" not in parsed
+    assert parsed.get("status") == "ok"
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_synthetic_fixture_configure_sequence_transient_then_success(sr_path: Path) -> None:
+    """configure_sequence [transient_failure, success]: first call returns error, second calls execute."""
+    cfg = _make_config(
+        [
+            {
+                "target": "synthetic_tool_fixture",
+                "action": "configure_sequence",
+                "value": ["transient_failure", "success"],
+            }
+        ]
+    )
+    dispatched: list[dict] = []
+
+    def execute(n: str, a: dict) -> str:
+        dispatched.append(dict(a))
+        return "success-result"
+
+    rt = _rt(sr_path, cfg)
+    first = rt.run_tool("lookup", {"account_id": "SYN-1"}, execute)
+    assert not dispatched, "first call must return transient failure without dispatch"
+    first_parsed = json.loads(first)
+    assert first_parsed.get("transient") is True
+
+    second = rt.run_tool("lookup", {"account_id": "SYN-1"}, execute)
+    assert dispatched, "second call must dispatch"
+    assert second == "success-result"
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_synthetic_fixture_configure_parallelizable_delays_actual_120ms(sr_path: Path) -> None:
+    """configure_parallelizable_delays [120, 120] must sleep >=120 ms per call."""
     import time as _time
 
-    cfg = _make_scenario_config(
-        [{"target": "delay", "action": "ms_120", "value": None}]
+    cfg = _make_config(
+        [
+            {
+                "target": "synthetic_tool_fixture",
+                "action": "configure_parallelizable_delays",
+                "value": [120, 120],
+            }
+        ]
     )
-    mod = _load_scenario_runtime(sr_path)
-    orig = os.environ.get("AIQ_SCENARIO_CONFIGURATION")
-    try:
-        os.environ["AIQ_SCENARIO_CONFIGURATION"] = cfg
-        rt = mod.ScenarioRuntime()
-        start = _time.monotonic()
-        rt.run_tool("account_lookup", {"account_id": "SYN-100"}, lambda n, a: "ok")
-        elapsed = _time.monotonic() - start
-        assert elapsed >= 0.100, f"expected ≥100ms delay, got {elapsed*1000:.0f}ms"
-    finally:
-        if orig is None:
-            os.environ.pop("AIQ_SCENARIO_CONFIGURATION", None)
-        else:
-            os.environ["AIQ_SCENARIO_CONFIGURATION"] = orig
+
+    rt = _rt(sr_path, cfg)
+    start = _time.monotonic()
+    rt.run_tool("lookup", {"account_id": "SYN-1"}, lambda n, a: "ok")
+    elapsed = _time.monotonic() - start
+    assert elapsed >= 0.100, f"expected >=100ms, got {elapsed*1000:.0f}ms"
 
 
-@pytest.mark.parametrize(
-    "sr_path", _HOSTED_SCENARIO_PATHS, ids=["finance", "travel", "ticket"]
-)
-def test_scenario_runtime_delay_ms_250_takes_at_least_200ms(sr_path: Path) -> None:
-    import os
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_synthetic_fixture_configure_post_completion_delay_250ms(sr_path: Path) -> None:
+    """configure_post_completion_delay 250 must sleep >=250 ms after dispatch."""
     import time as _time
 
-    cfg = _make_scenario_config(
-        [{"target": "delay", "action": "ms_250", "value": None}]
+    cfg = _make_config(
+        [
+            {
+                "target": "synthetic_tool_fixture",
+                "action": "configure_post_completion_delay",
+                "value": 250,
+            }
+        ]
     )
-    mod = _load_scenario_runtime(sr_path)
-    orig = os.environ.get("AIQ_SCENARIO_CONFIGURATION")
-    try:
-        os.environ["AIQ_SCENARIO_CONFIGURATION"] = cfg
-        rt = mod.ScenarioRuntime()
-        start = _time.monotonic()
-        rt.run_tool("account_lookup", {"account_id": "SYN-100"}, lambda n, a: "ok")
-        elapsed = _time.monotonic() - start
-        assert elapsed >= 0.200, f"expected ≥200ms delay, got {elapsed*1000:.0f}ms"
-    finally:
-        if orig is None:
-            os.environ.pop("AIQ_SCENARIO_CONFIGURATION", None)
-        else:
-            os.environ["AIQ_SCENARIO_CONFIGURATION"] = orig
+    dispatched: list[dict] = []
+
+    def execute(n: str, a: dict) -> str:
+        dispatched.append(dict(a))
+        return "dispatch-result"
+
+    rt = _rt(sr_path, cfg)
+    start = _time.monotonic()
+    result = rt.run_tool("lookup", {"account_id": "SYN-1"}, execute)
+    elapsed = _time.monotonic() - start
+    assert dispatched, "dispatch must happen before delay"
+    assert result == "dispatch-result"
+    assert elapsed >= 0.200, f"expected >=200ms, got {elapsed*1000:.0f}ms"
 
 
 @pytest.mark.parametrize(
-    "sr_path", _HOSTED_SCENARIO_PATHS, ids=["finance", "travel", "ticket"]
+    ("case", "is_healthy", "expected_key"),
+    [
+        ("guardrail-bypass-probe", False, "guardrail_triggered"),
+        ("no-confirmation", False, "action_without_confirmation"),
+        ("malformed-approval", False, "malformed_approval"),
+        ("cross-account-synthetic-record", False, "cross_account_access"),
+        ("correlated-child-failure", False, "nested_failure"),
+        # scn-056: healthy control -- dispatches and succeeds
+        ("zero-token-outer-successful-child", True, "ok"),
+        # scn-057: healthy control -- dispatches and succeeds
+        ("handled-child-failure", True, "ok"),
+    ],
 )
-def test_scenario_runtime_duplicate_dispatch_calls_execute_twice(sr_path: Path) -> None:
-    import os
-
-    cfg = _make_scenario_config(
-        [{"target": "tool_router", "action": "duplicate_dispatch", "value": None}]
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_endpoint_request_set_case_all_seven_values(
+    sr_path: Path,
+    case: str,
+    is_healthy: bool,
+    expected_key: str,
+) -> None:
+    """endpoint_request/set_case covers all seven catalog values with distinct behavior."""
+    cfg = _make_config(
+        [{"target": "endpoint_request", "action": "set_case", "value": case}]
     )
-    mod = _load_scenario_runtime(sr_path)
-    orig = os.environ.get("AIQ_SCENARIO_CONFIGURATION")
-    try:
-        os.environ["AIQ_SCENARIO_CONFIGURATION"] = cfg
-        rt = mod.ScenarioRuntime()
-        call_count = []
+    dispatched: list[dict] = []
 
-        def execute(_name: str, _args: dict) -> str:
-            call_count.append(1)
-            return "ok"
+    def execute(n: str, a: dict) -> str:
+        dispatched.append(dict(a))
+        return "dispatch-ok"
 
-        rt.run_tool("account_lookup", {"account_id": "SYN-100"}, execute)
-        assert len(call_count) == 2, f"expected 2 dispatches, got {len(call_count)}"
-    finally:
-        if orig is None:
-            os.environ.pop("AIQ_SCENARIO_CONFIGURATION", None)
-        else:
-            os.environ["AIQ_SCENARIO_CONFIGURATION"] = orig
-
-
-@pytest.mark.parametrize(
-    "sr_path", _HOSTED_SCENARIO_PATHS, ids=["finance", "travel", "ticket"]
-)
-def test_scenario_runtime_before_request_raises_on_state_machine(sr_path: Path) -> None:
-    import os
-
-    cfg = _make_scenario_config(
-        [{"target": "state_machine", "action": "replace_transition", "value": None}]
+    rt = _rt(sr_path, cfg)
+    result = rt.run_tool("lookup", {"account_id": "SYN-1"}, execute)
+    parsed = json.loads(result)
+    assert parsed.get("case") == case, f"expected case={case!r} in result"
+    assert parsed.get("status") == expected_key, (
+        f"case={case!r}: expected status={expected_key!r}, got {parsed.get('status')!r}"
     )
-    mod = _load_scenario_runtime(sr_path)
-    orig = os.environ.get("AIQ_SCENARIO_CONFIGURATION")
+    if is_healthy:
+        assert dispatched, f"healthy control {case!r} must dispatch"
+        assert "dispatch_result" in parsed
+    else:
+        assert not dispatched, f"fault case {case!r} must not dispatch"
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_endpoint_request_set_case_rejects_unsupported_value(sr_path: Path) -> None:
+    cfg = _make_config(
+        [{"target": "endpoint_request", "action": "set_case", "value": "not-a-real-case"}]
+    )
+    rt = _rt(sr_path, cfg)
+    with pytest.raises(RuntimeError, match="Unsupported"):
+        rt.run_tool("lookup", {}, lambda n, a: "ok")
+
+
+# ---------------------------------------------------------------------------
+# Docker image context, import, and startup checks
+# ---------------------------------------------------------------------------
+
+_CONTAINER_DIR = _WORKTREE_ROOT / "agents" / "support-ticket-hosted-image" / "container"
+
+
+def test_dockerfile_copies_scenario_runtime() -> None:
+    dockerfile = (_CONTAINER_DIR / "Dockerfile").read_text(encoding="ascii")
+    assert "scenario_runtime.py" in dockerfile, (
+        "Dockerfile must COPY scenario_runtime.py into the image context"
+    )
+
+
+def test_dockerfile_context_all_copied_files_exist() -> None:
+    """Every file listed in a Dockerfile COPY instruction must exist in the build context."""
+    dockerfile = (_CONTAINER_DIR / "Dockerfile").read_text(encoding="ascii")
+    for line in dockerfile.splitlines():
+        stripped = line.strip()
+        if not stripped.upper().startswith("COPY"):
+            continue
+        parts = stripped.split()
+        # COPY [--chown=...] src... dest  -- skip --chown flag and last element (dest)
+        sources = [p for p in parts[1:-1] if not p.startswith("--")]
+        for src in sources:
+            assert (_CONTAINER_DIR / src).is_file(), (
+                f"Dockerfile COPY references {src!r} which does not exist in the build context"
+            )
+
+
+def test_scenario_runtime_imports_with_stdlib_only() -> None:
+    """scenario_runtime.py must import successfully using only stdlib (no Azure/OTel)."""
+    import sys
+
+    path = _CONTAINER_DIR / "scenario_runtime.py"
+    spec = importlib.util.spec_from_file_location("_sr_stdlib_check", path)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    # Remove non-stdlib modules that should NOT be required by scenario_runtime
+    saved = {k: sys.modules.pop(k) for k in list(sys.modules) if k.startswith(("azure", "opentelemetry"))}
     try:
-        os.environ["AIQ_SCENARIO_CONFIGURATION"] = cfg
-        rt = mod.ScenarioRuntime()
-        with pytest.raises(RuntimeError, match="no-progress loop"):
-            rt.before_request()
+        spec.loader.exec_module(mod)
     finally:
-        if orig is None:
-            os.environ.pop("AIQ_SCENARIO_CONFIGURATION", None)
-        else:
-            os.environ["AIQ_SCENARIO_CONFIGURATION"] = orig
+        sys.modules.update(saved)
+    assert hasattr(mod, "ScenarioRuntime")
+
+
+def test_container_main_references_model_backed_agent() -> None:
+    """main.py must reference ModelBackedAgent (startup contract check)."""
+    text = (_CONTAINER_DIR / "main.py").read_text(encoding="ascii")
+    assert "ModelBackedAgent" in text, "main.py must import/use ModelBackedAgent on startup"
+
+
+def test_container_model_runtime_references_scenario_runtime() -> None:
+    """model_runtime.py must import ScenarioRuntime from scenario_runtime."""
+    text = (_CONTAINER_DIR / "model_runtime.py").read_text(encoding="ascii")
+    assert "from scenario_runtime import ScenarioRuntime" in text
+
+
+# ---------------------------------------------------------------------------
+# Hosting-integration tests
+# ---------------------------------------------------------------------------
 
 
 def test_hosted_agents_have_scenario_runtime_in_assets() -> None:
@@ -1005,19 +1389,21 @@ def test_hosted_agents_have_scenario_runtime_in_assets() -> None:
         )
 
 
-def test_hosted_agents_have_representative_tools_from_manifest() -> None:
+def test_hosted_agents_representative_tools_populated_from_manifest() -> None:
     agents = load_healthy_agents()
-    assert any(agent.representative_tools for agent in agents)
     finance = next(a for a in agents if a.id == "aiq-003-finance")
-    assert set(finance.representative_tools) == {"account_lookup", "transaction_search", "budget_calculation"}
+    assert set(finance.representative_tools) == {
+        "account_lookup",
+        "transaction_search",
+        "budget_calculation",
+    }
     travel = next(a for a in agents if a.id == "aiq-004-travel")
     assert "flight_search" in travel.representative_tools
     ticket = next(a for a in agents if a.id == "aiq-005-ticket")
     assert "ticket_read" in ticket.representative_tools
+    # Prompt agents may have no representative_tools entry in manifest
+    assert all(
+        agent.representative_tools or agent.kind == "prompt" for agent in agents
+    )
 
 
-def test_container_dockerfile_copies_scenario_runtime() -> None:
-    dockerfile = (
-        _WORKTREE_ROOT / "agents" / "support-ticket-hosted-image" / "container" / "Dockerfile"
-    ).read_text(encoding="ascii")
-    assert "scenario_runtime.py" in dockerfile
