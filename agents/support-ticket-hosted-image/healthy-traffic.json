@@ -3,21 +3,40 @@
     "id": "ticket-current-read",
     "input": "read-ticket ticket=TKT-1001",
     "output_contains": "revision 4",
-    "tool_outputs": {},
-    "expected_tool_calls": []
+    "tool_outputs": {
+      "ticket_read": {
+        "arguments": {"ticket_id": "TKT-1001"},
+        "result": "TKT-1001 revision 4 is open: Synthetic export job remains queued."
+      }
+    },
+    "expected_tool_calls": ["ticket_read"]
   },
   {
     "id": "ticket-current-triage",
     "input": "triage-ticket ticket=TKT-1002",
     "output_contains": "normal priority",
-    "tool_outputs": {},
-    "expected_tool_calls": []
+    "tool_outputs": {
+      "customer_context": {
+        "arguments": {"ticket_id": "TKT-1002"},
+        "result": "TKT-1002 has normal priority and no escalation condition."
+      }
+    },
+    "expected_tool_calls": ["customer_context"]
   },
   {
     "id": "ticket-safe-update",
     "input": "update-ticket ticket=TKT-1001 status=investigating expected_revision=4",
-    "output_contains": "revision 5",
-    "tool_outputs": {},
-    "expected_tool_calls": []
+    "output_contains": "Dry-run update preview",
+    "tool_outputs": {
+      "ticket_update": {
+        "arguments": {
+          "ticket_id": "TKT-1001",
+          "status": "investigating",
+          "expected_revision": 4
+        },
+        "result": "Dry-run update preview for TKT-1001: investigating, prospective revision 5. No state was persisted; current revision remains 4."
+      }
+    },
+    "expected_tool_calls": ["ticket_update"]
   }
 ]

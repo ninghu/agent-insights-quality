@@ -41,6 +41,14 @@ class RuntimeContractError(ContractError):
     """Raised when deployment or endpoint traffic violates the runtime contract."""
 
 
+class DeploymentPollError(RuntimeContractError):
+    """Raised after creation when a concrete version fails to become usable."""
+
+    def __init__(self, message: str, receipt: DeploymentReceipt) -> None:
+        super().__init__(message)
+        self.receipt = receipt
+
+
 @dataclass(frozen=True, slots=True)
 class HttpResponse:
     status_code: int
@@ -110,12 +118,21 @@ class DeploymentReceipt:
 
 
 @dataclass(frozen=True, slots=True)
+class CleanupReceipt:
+    agent_name: str
+    agent_version: str
+    run_id: str
+    deleted: bool
+
+
+@dataclass(frozen=True, slots=True)
 class InvocationReceipt:
     fixture_id: str
     agent_name: str
     agent_version: str
     response_id: str
     invocation_id: str | None
+    request_id: str | None
     session_id: str | None
     output_text: str
     called_tools: tuple[str, ...]
@@ -132,6 +149,20 @@ class HealthyFixture:
     output_contains: str
     tool_outputs: Mapping[str, Mapping[str, Any]]
     expected_tool_calls: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class LiveTelemetryEvidence:
+    agent_id: str
+    agent_name: str
+    agent_version: str
+    fixture_id: str
+    response_id: str
+    operation_id: str
+    span_kinds: frozenset[str]
+    tool_names: tuple[str, ...]
+    tool_arguments: tuple[Mapping[str, Any], ...]
+    tool_results: tuple[Any, ...]
 
 
 def sha256_digest(content: bytes) -> str:
@@ -157,16 +188,12 @@ def deterministic_zip(source: Path) -> tuple[bytes, str]:
     if not paths:
         raise RuntimeContractError("Hosted source directory is empty.")
     output = BytesIO()
-    with zipfile.ZipFile(
-        output,
-        "w",
-        compression=zipfile.ZIP_DEFLATED,
-        compresslevel=9,
-    ) as archive:
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_STORED) as archive:
         for path in paths:
             relative = path.relative_to(source).as_posix()
             info = zipfile.ZipInfo(relative, date_time=(1980, 1, 1, 0, 0, 0))
-            info.compress_type = zipfile.ZIP_DEFLATED
+            info.create_system = 3
+            info.compress_type = zipfile.ZIP_STORED
             info.external_attr = 0o644 << 16
             archive.writestr(info, path.read_bytes())
     content = output.getvalue()
@@ -394,7 +421,7 @@ class FoundryDeploymentClient:
             image_digest=image_digest,
         )
 
-    def cleanup_version(self, receipt: DeploymentReceipt) -> None:
+    def cleanup_version(self, receipt: DeploymentReceipt) -> CleanupReceipt:
         current = self._request_json(
             "GET",
             f"/agents/{_quote(receipt.agent_name)}/versions/{_quote(receipt.agent_version)}",
@@ -413,7 +440,7 @@ class FoundryDeploymentClient:
             raise RuntimeContractError(
                 "Cleanup refused because the deployed version ownership does not match."
             )
-        self._request(
+        response = self._request(
             "DELETE",
             f"/agents/{_quote(receipt.agent_name)}/versions/{_quote(receipt.agent_version)}",
             headers=(
@@ -422,7 +449,22 @@ class FoundryDeploymentClient:
                 else {}
             ),
             body=None,
-            expected_statuses={200, 202, 204},
+            expected_statuses={200},
+        )
+        result = response.json()
+        if (
+            str(result.get("name") or "") != receipt.agent_name
+            or str(result.get("version") or "") != receipt.agent_version
+            or result.get("deleted") is not True
+        ):
+            raise RuntimeContractError(
+                "Foundry did not confirm deletion of the exact owned agent version."
+            )
+        return CleanupReceipt(
+            agent_name=receipt.agent_name,
+            agent_version=receipt.agent_version,
+            run_id=receipt.run_id,
+            deleted=True,
         )
 
     def _deploy_json(
@@ -463,12 +505,30 @@ class FoundryDeploymentClient:
         image_digest: str | None = None,
     ) -> DeploymentReceipt:
         deadline = self._monotonic() + self._poll_timeout
-        while True:
-            response = self._request_json(
-                "GET",
-                f"/agents/{_quote(agent_name)}/versions/{_quote(version)}",
-                hosted=agent_type != "prompt",
+        def provisional(status: str) -> DeploymentReceipt:
+            return DeploymentReceipt(
+                agent_name=agent_name,
+                agent_version=version,
+                agent_type=agent_type,
+                artifact_digest=artifact_digest,
+                run_id=run_id,
+                status=status,
+                source_digest=source_digest,
+                image_digest=image_digest,
             )
+
+        while True:
+            try:
+                response = self._request_json(
+                    "GET",
+                    f"/agents/{_quote(agent_name)}/versions/{_quote(version)}",
+                    hosted=agent_type != "prompt",
+                )
+            except RuntimeContractError as error:
+                raise DeploymentPollError(
+                    "Agent version status polling failed after creation.",
+                    provisional("poll_error"),
+                ) from error
             status = str(response.get("status") or "").casefold()
             if status == "active":
                 metadata = response.get("metadata")
@@ -481,27 +541,23 @@ class FoundryDeploymentClient:
                 if not isinstance(metadata, Mapping) or any(
                     metadata.get(key) != value for key, value in expected.items()
                 ):
-                    raise RuntimeContractError(
-                        "Active agent version does not preserve immutable ownership metadata."
+                    raise DeploymentPollError(
+                        "Active agent version does not preserve immutable ownership metadata.",
+                        provisional("active_unverified"),
                     )
-                return DeploymentReceipt(
-                    agent_name=agent_name,
-                    agent_version=version,
-                    agent_type=agent_type,
-                    artifact_digest=artifact_digest,
-                    run_id=run_id,
-                    status=status,
-                    source_digest=source_digest,
-                    image_digest=image_digest,
-                )
+                return provisional(status)
             if status in TERMINAL_FAILURE_STATES:
                 error = response.get("error")
                 detail = str(error.get("code") if isinstance(error, Mapping) else status)
-                raise RuntimeContractError(
-                    f"Agent version reached terminal state '{status}' ({detail})."
+                raise DeploymentPollError(
+                    f"Agent version reached terminal state '{status}' ({detail}).",
+                    provisional(status),
                 )
             if self._monotonic() >= deadline:
-                raise RuntimeContractError("Agent version did not become active before timeout.")
+                raise DeploymentPollError(
+                    "Agent version did not become active before timeout.",
+                    provisional("timeout"),
+                )
             self._sleep(self._poll_interval)
 
     def _request_json(
@@ -600,9 +656,11 @@ class FoundryInvocationClient:
                     receipt,
                     fixture,
                     response,
-                    _invocation_id(raw_response, response),
+                    _invocation_id(response),
+                    _request_id(raw_response),
                     None,
                     tuple(called_tools),
+                    validate_tools=True,
                 )
             outputs = []
             for call in calls:
@@ -662,8 +720,13 @@ class FoundryInvocationClient:
         if receipt.agent_type not in {"hosted_code", "hosted_custom_container"}:
             raise RuntimeContractError("Hosted invocation requires a hosted deployment.")
         session = self._post(
-            f"/agents/{_quote(receipt.agent_name)}/sessions",
-            {"version_indicator": {"agent_version": receipt.agent_version}},
+            f"/agents/{_quote(receipt.agent_name)}/endpoint/sessions",
+            {
+                "version_indicator": {
+                    "type": "version_ref",
+                    "agent_version": receipt.agent_version,
+                }
+            },
             hosted=True,
         )
         session_id = _first_text(session, "agent_session_id", "session_id", "id")
@@ -673,12 +736,15 @@ class FoundryInvocationClient:
             if isinstance(indicator, Mapping)
             else ""
         )
+        indicator_type = (
+            str(indicator.get("type") or "") if isinstance(indicator, Mapping) else ""
+        )
         if not session_id:
             raise RuntimeContractError(
                 "Hosted session did not bind to the exact deployed version."
             )
         try:
-            if resolved != receipt.agent_version:
+            if indicator_type != "version_ref" or resolved != receipt.agent_version:
                 raise RuntimeContractError(
                     "Hosted session did not bind to the exact deployed version."
                 )
@@ -687,7 +753,11 @@ class FoundryInvocationClient:
                     f"/agents/{_quote(receipt.agent_name)}"
                     "/endpoint/protocols/openai/responses"
                 ),
-                {"input": fixture.input, "store": False, "session_id": session_id},
+                {
+                    "input": fixture.input,
+                    "store": False,
+                    "agent_session_id": session_id,
+                },
                 hosted=True,
             )
             response = raw_response.json()
@@ -695,9 +765,11 @@ class FoundryInvocationClient:
                 receipt,
                 fixture,
                 response,
-                _invocation_id(raw_response, response),
+                _invocation_id(response),
+                _request_id(raw_response),
                 session_id,
                 (),
+                validate_tools=False,
             )
         finally:
             self._delete_session(receipt.agent_name, session_id)
@@ -705,7 +777,7 @@ class FoundryInvocationClient:
     def _delete_session(self, agent_name: str, session_id: str) -> None:
         self._request(
             "DELETE",
-            f"/agents/{_quote(agent_name)}/sessions/{_quote(session_id)}",
+            f"/agents/{_quote(agent_name)}/endpoint/sessions/{_quote(session_id)}",
             body=None,
             hosted=True,
             expected_statuses={200, 202, 204, 404},
@@ -802,8 +874,11 @@ def _invocation_receipt(
     fixture: HealthyFixture,
     response: Mapping[str, Any],
     invocation_id: str | None,
+    request_id: str | None,
     session_id: str | None,
     called_tools: tuple[str, ...],
+    *,
+    validate_tools: bool,
 ) -> InvocationReceipt:
     status = str(response.get("status") or "").casefold()
     response_id = str(response.get("id") or "")
@@ -814,7 +889,7 @@ def _invocation_receipt(
         raise RuntimeContractError(
             f"Healthy fixture '{fixture.id}' returned an unexpected outcome."
         )
-    if called_tools != fixture.expected_tool_calls:
+    if validate_tools and called_tools != fixture.expected_tool_calls:
         raise RuntimeContractError(
             f"Healthy fixture '{fixture.id}' used an unexpected tool sequence."
         )
@@ -824,6 +899,7 @@ def _invocation_receipt(
         agent_version=deployment.agent_version,
         response_id=response_id,
         invocation_id=invocation_id,
+        request_id=request_id,
         session_id=session_id,
         output_text=output_text,
         called_tools=called_tools,
@@ -888,12 +964,13 @@ def _ownership_metadata(
 
 
 def _invocation_id(
-    response: HttpResponse,
     body: Mapping[str, Any],
 ) -> str | None:
     value = body.get("invocation_id")
-    if value:
-        return str(value)
+    return str(value) if value else None
+
+
+def _request_id(response: HttpResponse) -> str | None:
     for key, header_value in response.headers.items():
         if key.casefold() in {"x-ms-request-id", "x-request-id"} and header_value:
             return str(header_value)

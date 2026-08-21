@@ -13,12 +13,15 @@ python -m pytest
 
 ## Runtime readiness
 
-This release is contract scaffolding. `config/runtime-readiness.yaml` records every mandatory runtime
-workstream, and all are initially false. `check-runtime-readiness` and `run-daily` fail closed with an
-actionable `INCONCLUSIVE` result until every component is implemented, tested, and enabled through a
-human-reviewed source change. A readiness failure prohibits all operational phases but still requires
-the minimal report/email finalizer and its one-message Copilot mail handoff. The readiness file is
-protected from generated automation.
+`config/runtime-readiness.yaml` records every mandatory runtime workstream. The healthy-agent
+deployment and traffic contracts are implemented, but readiness stays false until live telemetry
+qualification proves the expected agent, model, and tool spans. All remaining components also stay
+false.
+`check-runtime-readiness` and `run-daily` fail closed with an actionable `INCONCLUSIVE` result until
+every component is implemented, tested, and enabled through a human-reviewed source change. A
+readiness failure prohibits all operational phases but still requires the minimal report/email
+finalizer and its one-message Copilot mail handoff. The readiness file is protected from generated
+automation.
 
 Generated automation branches use the `aiq-daily/` prefix. CI restricts those branches to the paths
 in the **base branch's** `config/automation-policy.yaml`, using the base branch's installed validator.
@@ -67,14 +70,19 @@ Every hosted version is polled to `active`, and cleanup deletes only the exact v
 run ID, and artifact digest match its receipt.
 
 `FoundryInvocationClient` calls only the deployed Foundry endpoint. Prompt calls bind an exact
-`agent_reference`; hosted calls first create a session bound to the exact agent version. Receipts
-retain response, invocation, fixture, and session IDs for later read-only correlation. None of these
-IDs are trace IDs.
+`agent_reference`; hosted calls create `/agents/{name}/endpoint/sessions` with a `version_ref`, pass
+the returned `agent_session_id` to Responses, and delete that exact endpoint session afterward.
+Receipts retain protocol response/invocation/session IDs plus transport request IDs for later
+read-only correlation. None of these IDs are trace IDs.
 
-The ticket image is published only from trusted `main` or manual workflow runs. Pull requests build
-without pushing. Before deployment, configure the GHCR package for anonymous pull access and pass
-the resulting `ghcr.io/ninghu/agent-insights-quality-ticket@sha256:<digest>` reference at runtime.
-No Azure endpoint, credential, or registry secret belongs in the image or repository.
+The ticket image is published only for a push of the exact trusted `main` SHA, when the repository
+variable `AIQ_GHCR_PUBLISH_ENABLED` is `true`, through the `ghcr-publish` environment. Before
+enabling that variable, a repository administrator must protect the environment with required
+reviewers and restrict it to `main`; the missing variable otherwise keeps publication disabled.
+Pull requests and manual workflow runs build without pushing. Before deployment, configure the GHCR
+package for anonymous pull access and pass the resulting
+`ghcr.io/ninghu/agent-insights-quality-ticket@sha256:<digest>` reference at runtime. No Azure
+endpoint, credential, or registry secret belongs in the image or repository.
 
 ## Runtime link contract
 

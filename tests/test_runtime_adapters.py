@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import threading
+import zipfile
 from collections.abc import Mapping
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,7 @@ from agent_insights_quality.runtime import (
     RUN_KEY,
     SOURCE_DIGEST_KEY,
     DeploymentReceipt,
+    DeploymentPollError,
     FoundryDeploymentClient,
     FoundryInvocationClient,
     HealthyFixture,
@@ -80,13 +83,15 @@ def test_definition_and_source_hashes_are_deterministic(tmp_path: Path) -> None:
     )
     source = tmp_path / "source"
     source.mkdir()
-    (source / "main.py").write_text("print('healthy')\n", encoding="ascii")
-    (source / "requirements.txt").write_text("example==1.0\n", encoding="ascii")
+    (source / "main.py").write_bytes(b"print('healthy')\n")
+    (source / "requirements.txt").write_bytes(b"example==1.0\n")
     first, first_digest = deterministic_zip(source)
     second, second_digest = deterministic_zip(source)
     assert first == second
     assert first_digest == second_digest
-    assert first_digest.startswith("sha256:")
+    assert first_digest == "sha256:c047775d84ad57a04b790b7c1b26208196e1a6bc76a4fe558cd0ad94351359c4"
+    with zipfile.ZipFile(BytesIO(first)) as archive:
+        assert all(info.create_system == 3 for info in archive.infolist())
 
 
 def test_prompt_deployment_sends_real_token_and_polls_owned_version() -> None:
@@ -222,13 +227,24 @@ def test_cleanup_deletes_only_the_exact_owned_version() -> None:
     transport = QueueTransport(
         [
             _response(200, {"metadata": _metadata("run-clean", digest)}),
-            _response(204),
+            _response(
+                200,
+                {
+                    "name": receipt.agent_name,
+                    "version": receipt.agent_version,
+                    "deleted": True,
+                },
+            ),
         ]
     )
     client = FoundryDeploymentClient(
         PROJECT_ENDPOINT, lambda: "token", transport=transport
     )
-    client.cleanup_version(receipt)
+    cleanup = client.cleanup_version(receipt)
+    assert cleanup.agent_name == receipt.agent_name
+    assert cleanup.agent_version == receipt.agent_version
+    assert cleanup.run_id == receipt.run_id
+    assert cleanup.deleted is True
     assert transport.calls[-1]["method"] == "DELETE"
     assert "/versions/9?" in transport.calls[-1]["url"]
 
@@ -239,6 +255,25 @@ def test_cleanup_deletes_only_the_exact_owned_version() -> None:
     with pytest.raises(RuntimeContractError, match="ownership"):
         guarded.cleanup_version(receipt)
     assert len(mismatch.calls) == 1
+
+    unconfirmed = QueueTransport(
+        [
+            _response(200, {"metadata": _metadata("run-clean", digest)}),
+            _response(
+                200,
+                {
+                    "name": receipt.agent_name,
+                    "version": receipt.agent_version,
+                    "deleted": False,
+                },
+            ),
+        ]
+    )
+    unchecked = FoundryDeploymentClient(
+        PROJECT_ENDPOINT, lambda: "token", transport=unconfirmed
+    )
+    with pytest.raises(RuntimeContractError, match="did not confirm deletion"):
+        unchecked.cleanup_version(receipt)
 
 
 def test_prompt_invocation_binds_exact_version_and_returns_non_trace_receipt() -> None:
@@ -275,6 +310,7 @@ def test_prompt_invocation_binds_exact_version_and_returns_non_trace_receipt() -
                 200,
                 {
                     "id": "resp-2",
+                    "invocation_id": "protocol-invocation-prompt-2",
                     "status": "completed",
                     "output_text": "The evidence says partly cloudy.",
                 },
@@ -297,7 +333,8 @@ def test_prompt_invocation_binds_exact_version_and_returns_non_trace_receipt() -
     assert transport.calls[0]["url"].endswith("/openai/v1/responses")
     assert second["previous_response_id"] == "resp-1"
     assert receipt.response_id == "resp-2"
-    assert receipt.invocation_id == "invocation-prompt-2"
+    assert receipt.invocation_id == "protocol-invocation-prompt-2"
+    assert receipt.request_id == "invocation-prompt-2"
     assert receipt.called_tools == ("current_weather",)
     assert receipt.trace_id is None
     assert all(
@@ -320,13 +357,17 @@ def test_hosted_invocation_routes_to_endpoint_with_exact_session_binding() -> No
                 201,
                 {
                     "agent_session_id": "session-8",
-                    "version_indicator": {"agent_version": "8"},
+                    "version_indicator": {
+                        "type": "version_ref",
+                        "agent_version": "8",
+                    },
                 },
             ),
             _response(
                 200,
                 {
                     "id": "response-8",
+                    "invocation_id": "protocol-invocation-hosted-8",
                     "status": "completed",
                     "output_text": "No transfer was attempted.",
                 },
@@ -349,16 +390,25 @@ def test_hosted_invocation_routes_to_endpoint_with_exact_session_binding() -> No
         ),
         fixture,
     )
+    assert transport.calls[0]["url"].endswith(
+        "/agents/aiq-003-finance/endpoint/sessions?api-version=v1"
+    )
     assert json.loads(transport.calls[0]["body"])["version_indicator"] == {
-        "agent_version": "8"
+        "type": "version_ref",
+        "agent_version": "8",
     }
     assert "/endpoint/protocols/openai/responses?api-version=v1" in transport.calls[1][
         "url"
     ]
     assert receipt.session_id == "session-8"
     assert receipt.response_id == "response-8"
-    assert receipt.invocation_id == "invocation-hosted-8"
+    assert receipt.invocation_id == "protocol-invocation-hosted-8"
+    assert receipt.request_id == "invocation-hosted-8"
+    assert json.loads(transport.calls[1]["body"])["agent_session_id"] == "session-8"
     assert transport.calls[2]["method"] == "DELETE"
+    assert transport.calls[2]["url"].endswith(
+        "/agents/aiq-003-finance/endpoint/sessions/session-8?api-version=v1"
+    )
     assert all(
         call["headers"]["Foundry-Features"] == HOSTED_FEATURES
         for call in transport.calls
@@ -379,7 +429,10 @@ def test_hosted_session_version_mismatch_is_cleaned_up() -> None:
                 201,
                 {
                     "agent_session_id": "wrong-session",
-                    "version_indicator": {"agent_version": "previous"},
+                    "version_indicator": {
+                        "type": "version_ref",
+                        "agent_version": "previous",
+                    },
                 },
             ),
             _response(204),
@@ -399,7 +452,7 @@ def test_hosted_session_version_mismatch_is_cleaned_up() -> None:
     with pytest.raises(RuntimeContractError, match="exact deployed version"):
         client.invoke_hosted(deployment, fixture)
     assert transport.calls[-1]["method"] == "DELETE"
-    assert "/sessions/wrong-session?" in transport.calls[-1]["url"]
+    assert "/endpoint/sessions/wrong-session?" in transport.calls[-1]["url"]
 
 
 def test_deployment_poll_fails_on_terminal_state_and_timeout() -> None:
@@ -416,10 +469,12 @@ def test_deployment_poll_fails_on_terminal_state_and_timeout() -> None:
         transport=failed_transport,
         sleeper=lambda _seconds: None,
     )
-    with pytest.raises(RuntimeContractError, match="CodeError"):
+    with pytest.raises(DeploymentPollError, match="CodeError") as failed_error:
         failed.deploy_prompt(
             agent_name="aiq-001-weather", definition=definition, run_id="failed"
         )
+    assert failed_error.value.receipt.agent_version == "1"
+    assert failed_error.value.receipt.status == "failed"
 
     ticks = iter((0.0, 1.0, 2.0))
     timeout_transport = QueueTransport(
@@ -436,10 +491,31 @@ def test_deployment_poll_fails_on_terminal_state_and_timeout() -> None:
         sleeper=lambda _seconds: None,
         monotonic=lambda: next(ticks),
     )
-    with pytest.raises(RuntimeContractError, match="before timeout"):
+    with pytest.raises(DeploymentPollError, match="before timeout") as timeout_error:
         timed.deploy_prompt(
             agent_name="aiq-001-weather", definition=definition, run_id="timed"
         )
+    assert timeout_error.value.receipt.agent_version == "2"
+    assert timeout_error.value.receipt.status == "timeout"
+
+    polling_transport = QueueTransport(
+        [
+            _response(201, {"version": "3"}),
+            _response(503, {"error": {"code": "Unavailable"}}),
+        ]
+    )
+    polling = FoundryDeploymentClient(
+        PROJECT_ENDPOINT,
+        lambda: "token",
+        transport=polling_transport,
+        sleeper=lambda _seconds: None,
+    )
+    with pytest.raises(DeploymentPollError, match="polling failed") as polling_error:
+        polling.deploy_prompt(
+            agent_name="aiq-001-weather", definition=definition, run_id="poll-error"
+        )
+    assert polling_error.value.receipt.agent_version == "3"
+    assert polling_error.value.receipt.status == "poll_error"
 
 
 def test_healthy_traffic_concurrency_has_stable_receipt_order() -> None:

@@ -46,11 +46,13 @@ forbidden.
 
 ## Daily automation
 
-`config/runtime-readiness.yaml` is the fail-closed authority. Today all mandatory runtime phases are
-false, so `python -m agent_insights_quality check-runtime-readiness` and `run-daily` return an
-actionable `INCONCLUSIVE` result without deployments, traffic, insights, ADO, memory transitions,
-cleanup, or generated PR mutation. The required minimal finalizer still renders a sanitized report
-and one-message email handoff for Copilot to send through the authenticated user's mailbox.
+`config/runtime-readiness.yaml` is the fail-closed authority. The healthy-agent contracts are
+implemented, but `healthy_agents` remains false until a live run proves the required agent, model,
+and tool spans through read-only Application Insights evidence. Therefore
+`python -m agent_insights_quality check-runtime-readiness` and `run-daily` return an actionable
+`INCONCLUSIVE` result without deployments, traffic, insights, ADO, memory transitions, cleanup, or
+generated PR mutation. The required minimal finalizer still renders a sanitized report and
+one-message email handoff for Copilot to send through the authenticated user's mailbox.
 
 After every mandatory component is implemented, validated, and human-reviewed, the scheduled Copilot
 automation will follow `.github/skills/agent-insights-quality-daily/SKILL.md`. Qualification uses the

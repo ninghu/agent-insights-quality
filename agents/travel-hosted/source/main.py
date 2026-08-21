@@ -9,10 +9,16 @@ from azure.ai.agentserver.responses import (
     TextResponse,
 )
 
-from logic import handle
+from logic import INSTRUCTIONS, TOOLS, execute_tool
+from model_runtime import ModelBackedAgent
 
 
 app = ResponsesAgentServerHost()
+agent = ModelBackedAgent(
+    instructions=INSTRUCTIONS,
+    tools=TOOLS,
+    execute_tool=execute_tool,
+)
 
 
 @app.response_handler
@@ -22,7 +28,8 @@ async def handler(
     _cancellation_signal: asyncio.Event,
 ):
     user_input = (await context.get_input_text()) or ""
-    return TextResponse(context, request, text=handle(user_input.strip()))
+    output = await asyncio.to_thread(agent.respond, user_input.strip())
+    return TextResponse(context, request, text=output)
 
 
 if __name__ == "__main__":

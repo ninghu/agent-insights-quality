@@ -10,5 +10,8 @@
     "entry_point": ["python", "main.py"],
     "dependency_resolution": "remote_build"
   },
-  "environment_variables": {}
+  "environment_variables": {
+    "AZURE_AI_MODEL_DEPLOYMENT_NAME": "${AIQ_MODEL_DEPLOYMENT_NAME}",
+    "AZURE_AI_PROJECT_ENDPOINT": "${AIQ_PROJECT_ENDPOINT}"
+  }
 }
