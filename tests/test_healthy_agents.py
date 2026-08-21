@@ -15,7 +15,7 @@ from agent_insights_quality.healthy_agents import (
     load_healthy_agents,
     require_live_telemetry_qualification,
 )
-from agent_insights_quality.runtime import (
+from agent_insights_quality.agent_runtime import (
     DeploymentReceipt,
     InvocationReceipt,
     LiveSpanEvidence,

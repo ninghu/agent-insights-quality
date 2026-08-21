@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from agent_insights_quality.contracts import ROOT
-from agent_insights_quality.runtime import (
+from agent_insights_quality.agent_runtime import (
     DIGEST_KEY,
     HOSTED_FEATURES,
     IMAGE_DIGEST_KEY,

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from agent_insights_quality.contracts import EXPECTED_AGENTS, ROOT
-from agent_insights_quality.runtime import (
+from agent_insights_quality.agent_runtime import (
     DeploymentReceipt,
     HealthyFixture,
     InvocationReceipt,
