@@ -1,0 +1,23 @@
+[
+  {
+    "id": "ticket-current-read",
+    "input": "read-ticket ticket=TKT-1001",
+    "output_contains": "revision 4",
+    "tool_outputs": {},
+    "expected_tool_calls": []
+  },
+  {
+    "id": "ticket-current-triage",
+    "input": "triage-ticket ticket=TKT-1002",
+    "output_contains": "normal priority",
+    "tool_outputs": {},
+    "expected_tool_calls": []
+  },
+  {
+    "id": "ticket-safe-update",
+    "input": "update-ticket ticket=TKT-1001 status=investigating expected_revision=4",
+    "output_contains": "revision 5",
+    "tool_outputs": {},
+    "expected_tool_calls": []
+  }
+]

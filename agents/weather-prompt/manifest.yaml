@@ -4,7 +4,7 @@ required_name_prefix: aiq-001-weather
 display_name: Weather
 domain: weather
 agent_type: prompt
-status: placeholder
+status: active
 healthy_contract:
   responsibility: Resolve locations and provide grounded current or forecast weather efficiently.
   immutable: true

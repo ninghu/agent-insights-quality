@@ -1,0 +1,48 @@
+[
+  {
+    "id": "healthcare-provider-search",
+    "input": "Find a synthetic primary-care scheduling provider. Do not provide medical advice.",
+    "output_contains": "Provider Cedar",
+    "tool_outputs": {
+      "provider_lookup": {
+        "arguments": {"specialty": "primary-care"},
+        "result": {
+          "providers": [{"provider_id": "provider-101", "display_name": "Provider Cedar"}]
+        }
+      }
+    },
+    "expected_tool_calls": ["provider_lookup"]
+  },
+  {
+    "id": "healthcare-slot-search",
+    "input": "Find an open slot for provider-101 on 2030-06-03.",
+    "output_contains": "09:00",
+    "tool_outputs": {
+      "slot_search": {
+        "arguments": {"provider_id": "provider-101", "date": "2030-06-03"},
+        "result": {
+          "slots": [
+            {"slot_id": "slot-101-0900", "starts_at": "2030-06-03T09:00:00-07:00"}
+          ]
+        }
+      }
+    },
+    "expected_tool_calls": ["slot_search"]
+  },
+  {
+    "id": "healthcare-confirmed-create",
+    "input": "I explicitly confirm booking patient-syn-001 into slot-101-0900.",
+    "output_contains": "appt-syn-1001",
+    "tool_outputs": {
+      "appointment_create": {
+        "arguments": {
+          "slot_id": "slot-101-0900",
+          "patient_id": "patient-syn-001",
+          "confirmed": true
+        },
+        "result": {"appointment_id": "appt-syn-1001", "status": "scheduled"}
+      }
+    },
+    "expected_tool_calls": ["appointment_create"]
+  }
+]

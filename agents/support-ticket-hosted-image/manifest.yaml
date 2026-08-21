@@ -4,7 +4,7 @@ required_name_prefix: aiq-005-ticket
 display_name: Support ticket
 domain: support_ticket
 agent_type: hosted_custom_container
-status: placeholder
+status: active
 healthy_contract:
   responsibility: Triage and update synthetic tickets with current-ticket grounding and bounded escalation.
   immutable: true

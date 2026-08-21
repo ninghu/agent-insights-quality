@@ -1,0 +1,50 @@
+{
+  "kind": "prompt",
+  "model": "${AIQ_MODEL_DEPLOYMENT_NAME}",
+  "instructions": "Use the synthetic weather tools for every weather fact. Resolve an unknown place before requesting conditions. Never infer, interpolate, or replace missing tool evidence. State the synthetic observation time or forecast date in the answer.",
+  "tools": [
+    {
+      "type": "function",
+      "name": "geocode",
+      "description": "Resolve a supported synthetic place to its stable location identifier.",
+      "strict": true,
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["place"],
+        "properties": {
+          "place": {"type": "string", "enum": ["Seattle", "Portland"]}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "name": "current_weather",
+      "description": "Read current synthetic conditions for a resolved location.",
+      "strict": true,
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["location_id"],
+        "properties": {
+          "location_id": {"type": "string", "enum": ["loc-sea", "loc-pdx"]}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "name": "forecast",
+      "description": "Read a dated synthetic forecast for a resolved location.",
+      "strict": true,
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["location_id", "date"],
+        "properties": {
+          "location_id": {"type": "string", "enum": ["loc-sea", "loc-pdx"]},
+          "date": {"type": "string", "enum": ["2030-05-10"]}
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+[
+  {
+    "id": "finance-account-summary",
+    "input": "account-summary account=SYN-100 currency=USD",
+    "output_contains": "SYN-100 balance is USD 2450.00",
+    "tool_outputs": {},
+    "expected_tool_calls": []
+  },
+  {
+    "id": "finance-transaction-search",
+    "input": "transactions account=SYN-100 category=groceries",
+    "output_contains": "TXN-003 groceries USD -54.25",
+    "tool_outputs": {},
+    "expected_tool_calls": []
+  },
+  {
+    "id": "finance-budget",
+    "input": "prepare-budget account=SYN-100 monthly_limit=1200",
+    "output_contains": "No transfer was attempted",
+    "tool_outputs": {},
+    "expected_tool_calls": []
+  }
+]

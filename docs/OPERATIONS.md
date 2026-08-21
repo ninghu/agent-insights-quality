@@ -38,9 +38,9 @@ itself.
 
 This public repository contains synthetic data and public-safe contracts only. Supply tenant,
 subscription, resource, endpoint, ADO, and mail capability details through the authorized private
-runtime. Never commit credentials, internal identifiers, raw traces, complete prompt payloads,
-private work-item content, or real customer data. Sanitized reports may contain public-safe hashes,
-counts, verdicts, and links only when the links themselves are approved for publication.
+runtime. Never commit credentials, internal identifiers, raw traces, private production prompt
+payloads, private work-item content, or real customer data. Sanitized reports may contain public-safe
+hashes, counts, verdicts, and links only when the links themselves are approved for publication.
 
 ## Failure behavior
 
@@ -56,6 +56,25 @@ through connected Microsoft mail and records a sanitized receipt reference or fa
 
 Cleanup resolves exact private runtime resource IDs and deletes only framework-tagged resources past
 their retention date. It never guesses names or deletes unrelated resources.
+
+## Healthy agent deployment and traffic
+
+The active definitions under `agents/` are deterministic and synthetic. Runtime code supplies a
+short-lived `https://ai.azure.com/.default` token through a token provider and a private Foundry
+project endpoint. `FoundryDeploymentClient` creates prompt versions with JSON, hosted-code versions
+with deterministic multipart ZIPs, and the ticket version with a digest-pinned public GHCR image.
+Every hosted version is polled to `active`, and cleanup deletes only the exact version whose owner,
+run ID, and artifact digest match its receipt.
+
+`FoundryInvocationClient` calls only the deployed Foundry endpoint. Prompt calls bind an exact
+`agent_reference`; hosted calls first create a session bound to the exact agent version. Receipts
+retain response, invocation, fixture, and session IDs for later read-only correlation. None of these
+IDs are trace IDs.
+
+The ticket image is published only from trusted `main` or manual workflow runs. Pull requests build
+without pushing. Before deployment, configure the GHCR package for anonymous pull access and pass
+the resulting `ghcr.io/ninghu/agent-insights-quality-ticket@sha256:<digest>` reference at runtime.
+No Azure endpoint, credential, or registry secret belongs in the image or repository.
 
 ## Runtime link contract
 

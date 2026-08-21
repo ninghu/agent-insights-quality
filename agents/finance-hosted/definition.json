@@ -1,0 +1,14 @@
+{
+  "kind": "hosted",
+  "protocol_versions": [
+    {"protocol": "responses", "version": "1.0.0"}
+  ],
+  "cpu": "1",
+  "memory": "2Gi",
+  "code_configuration": {
+    "runtime": "python_3_13",
+    "entry_point": ["python", "main.py"],
+    "dependency_resolution": "remote_build"
+  },
+  "environment_variables": {}
+}

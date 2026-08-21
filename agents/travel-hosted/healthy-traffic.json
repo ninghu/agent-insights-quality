@@ -1,0 +1,23 @@
+[
+  {
+    "id": "travel-flight-search",
+    "input": "search-trip origin=SEA destination=PDX date=2030-05-10",
+    "output_contains": "FL-SEA-PDX-101",
+    "tool_outputs": {},
+    "expected_tool_calls": []
+  },
+  {
+    "id": "travel-itinerary",
+    "input": "plan-itinerary itinerary=TRIP-001",
+    "output_contains": "Hotel Rose",
+    "tool_outputs": {},
+    "expected_tool_calls": []
+  },
+  {
+    "id": "travel-unconfirmed-booking",
+    "input": "request-booking inventory=FL-SEA-PDX-101 confirmed=false",
+    "output_contains": "No booking was made",
+    "tool_outputs": {},
+    "expected_tool_calls": []
+  }
+]

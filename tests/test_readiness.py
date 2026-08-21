@@ -23,12 +23,13 @@ from agent_insights_quality.reporting import (
 )
 
 
-def test_runtime_readiness_is_explicitly_disabled() -> None:
+def test_runtime_readiness_keeps_daily_disabled_until_every_component_is_ready() -> None:
     readiness = load_data(ROOT / "config" / "runtime-readiness.yaml")
     validate_runtime_readiness(readiness)
     assert readiness["daily_workflow_enabled"] is False
     assert set(readiness["mandatory_components"]) == MANDATORY_RUNTIME_COMPONENTS
     assert readiness["mandatory_components"]["scenario_catalog"] is True
+    assert readiness["mandatory_components"]["healthy_agents"] is False
     assert sum(readiness["mandatory_components"].values()) == 1
 
 
