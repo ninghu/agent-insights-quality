@@ -1,5 +1,5 @@
 """Immutable agent deployment (implemented in a later phase)."""
-from agent_insights_quality.runtime import (
+from agent_insights_quality.agent_runtime import (
     DeploymentReceipt,
     FoundryDeploymentClient,
     deterministic_zip,
