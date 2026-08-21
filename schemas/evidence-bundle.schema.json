@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://microsoft.github.io/agent-insights-quality/schemas/v1/evidence-bundle.schema.json",
+  "$id": "https://ninghu.github.io/agent-insights-quality/schemas/v1/evidence-bundle.schema.json",
   "title": "Bounded semantic evidence bundle",
   "type": "object",
   "additionalProperties": false,

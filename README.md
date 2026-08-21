@@ -1,8 +1,10 @@
 # Agent Insights Quality
 
-`agent-insights-quality` is a public, reusable daily qualification platform for the Agent Insights
-engine. It exercises controlled synthetic Foundry agents through their deployed endpoints, validates
-the resulting insights against reviewed contracts, and preserves a sanitized quality history.
+`agent-insights-quality` is a public, reusable qualification framework for the Agent Insights engine.
+The current `0.1.x` release is **repository-contract scaffolding**, not a runnable daily automation
+runtime. It defines reviewed schemas, manifests, safety policy, generated-path enforcement, skills,
+and validation tooling while the deployment, traffic, production orchestration, judging, ADO, and
+email workstreams are still incomplete.
 
 The quality bar is intentionally strict. A day is `AT BAR` only after the complete active catalog
 runs, healthy agents produce no insights, all structural checks pass, high-severity recall is 100%,
@@ -43,9 +45,11 @@ Application Insights is read-only evidence storage, and direct telemetry injecti
 
 ## Daily automation
 
-The scheduled Copilot automation follows
-`.github/skills/agent-insights-quality-daily/SKILL.md`. It creates a reproducible plan, runs healthy
-and faulted traffic, invokes the production engine, applies deterministic and Copilot judgments,
-reconciles quality memory and ADO bugs, commits only allowlisted generated paths, and sends the final
-email. Qualification uses the protected test-recipient variable; promotion to the protected
-production-recipient variable requires a human-reviewed configuration change.
+`config/runtime-readiness.yaml` is the fail-closed authority. Today all mandatory runtime phases are
+false, so `python -m agent_insights_quality check-runtime-readiness` and `run-daily` return an
+actionable `INCONCLUSIVE` result without deploying, sending traffic, modifying ADO, or sending mail.
+
+After every mandatory component is implemented, validated, and human-reviewed, the scheduled Copilot
+automation will follow `.github/skills/agent-insights-quality-daily/SKILL.md`. Qualification uses the
+protected test-recipient variable; promotion to the protected production-recipient variable requires
+a separate human-reviewed configuration change.

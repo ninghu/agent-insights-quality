@@ -1,0 +1,14 @@
+schema_version: "1.0.0"
+status: contract_scaffolding
+daily_workflow_enabled: false
+mandatory_components:
+  infrastructure: false
+  healthy_agents: false
+  scenario_catalog: false
+  production_orchestrator: false
+  deterministic_scoring: false
+  copilot_judging: false
+  quality_memory: false
+  ado_synchronization: false
+  reporting_and_email: false
+  live_qualification: false

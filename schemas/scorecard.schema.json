@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://microsoft.github.io/agent-insights-quality/schemas/v1/scorecard.schema.json",
+  "$id": "https://ninghu.github.io/agent-insights-quality/schemas/v1/scorecard.schema.json",
   "title": "Strict Agent Insights quality scorecard",
   "type": "object",
   "additionalProperties": false,

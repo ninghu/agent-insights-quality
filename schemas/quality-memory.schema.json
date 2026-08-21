@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://microsoft.github.io/agent-insights-quality/schemas/v1/quality-memory.schema.json",
+  "$id": "https://ninghu.github.io/agent-insights-quality/schemas/v1/quality-memory.schema.json",
   "title": "Durable Agent Insights quality memory",
   "type": "object",
   "additionalProperties": false,

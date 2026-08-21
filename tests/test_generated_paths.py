@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_insights_quality.contracts import ContractError
+from agent_insights_quality.contracts import ContractError, ROOT
 from agent_insights_quality.generated_paths import (
     normalize_repo_path,
     path_is_allowed,
@@ -10,7 +10,11 @@ from agent_insights_quality.generated_paths import (
 )
 
 
-ALLOWED = ["reports/daily/**", "reports/latest.json", "state/quality-memory.json"]
+ALLOWED = [
+    "reports/daily/*/*/*/plan.json",
+    "reports/latest.json",
+    "state/quality-memory.json",
+]
 
 
 @pytest.mark.parametrize(
@@ -43,3 +47,37 @@ def test_generated_path_allowlist_rejects_contract_changes(path: str) -> None:
 def test_generated_path_rejects_traversal() -> None:
     with pytest.raises(ContractError, match="Unsafe repository path"):
         normalize_repo_path("../config/reporting.yaml")
+
+
+def test_generated_path_pattern_does_not_match_malformed_daily_layout() -> None:
+    assert not path_is_allowed("reports/daily/2026/08/20/nested/plan.json", ALLOWED)
+
+
+def test_generated_change_cannot_modify_its_own_authority() -> None:
+    protected_authority = [
+        "config/automation-policy.yaml",
+        "config/reporting.yaml",
+        "config/runtime-readiness.yaml",
+        "src/agent_insights_quality/generated_paths.py",
+        ".github/workflows/validate-generated-change.yml",
+    ]
+    with pytest.raises(ContractError, match="protected paths"):
+        validate_generated_paths(protected_authority)
+
+
+def test_workflow_uses_base_branch_validator_and_policy() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "validate-generated-change.yml").read_text(
+        encoding="ascii"
+    )
+    assert "pull_request_target:" in workflow
+    assert "pull_request:" not in workflow
+    guard = workflow.split("- name: Enforce paths with trusted base code and policy", 1)[1]
+    assert 'git worktree add --detach "${base_dir}" "${BASE_SHA}"' in guard
+    assert '"${base_venv}/bin/python" -m pip install -e "${base_dir}"' in guard
+    assert 'cd "${base_dir}"' in guard
+    assert "validate-generated-paths" in guard
+    assert '"--path=${first_path}"' in guard
+    assert "--diff-filter=ACMRTD" in guard
+    assert "actions/checkout@v4" in workflow
+    assert "ref: ${{ github.event.pull_request.base.sha }}" in workflow
+    assert "pip install -e ." not in guard

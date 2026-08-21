@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import fnmatch
+import re
 import subprocess
 from pathlib import Path, PurePosixPath
 from typing import Iterable
@@ -18,7 +18,13 @@ def normalize_repo_path(path: str) -> str:
 
 def path_is_allowed(path: str, allowed_patterns: Iterable[str]) -> bool:
     normalized = normalize_repo_path(path)
-    return any(fnmatch.fnmatchcase(normalized, pattern) for pattern in allowed_patterns)
+    for pattern in allowed_patterns:
+        escaped = re.escape(pattern)
+        expression = escaped.replace(r"\*\*", "\0").replace(r"\*", "[^/]*")
+        expression = expression.replace(r"\?", "[^/]").replace("\0", ".*")
+        if re.fullmatch(expression, normalized):
+            return True
+    return False
 
 
 def validate_generated_paths(paths: Iterable[str]) -> None:

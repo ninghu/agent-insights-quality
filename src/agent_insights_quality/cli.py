@@ -4,10 +4,11 @@ import argparse
 import sys
 from collections.abc import Sequence
 
-from agent_insights_quality.contracts import ContractError, validate_contracts
+from agent_insights_quality.contracts import ContractError, ROOT, load_data, validate_contracts
 from agent_insights_quality.docs import generate_documents
 from agent_insights_quality.generated_paths import changed_paths, validate_generated_paths
 from agent_insights_quality.public_safety import validate_public_repository_content
+from agent_insights_quality.readiness import require_daily_runtime
 from agent_insights_quality.security import validate_no_direct_trace_injection
 
 
@@ -23,6 +24,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     path_parser.add_argument("--base-ref", help="Git ref used to discover changed paths")
     path_parser.add_argument("--path", action="append", default=[], help="Explicit changed path")
+    subparsers.add_parser(
+        "check-runtime-readiness",
+        help="Fail closed with INCONCLUSIVE until every daily runtime component is ready",
+    )
+    subparsers.add_parser(
+        "run-daily",
+        help="Start the daily workflow only after the reviewed runtime readiness gate passes",
+    )
     return parser
 
 
@@ -44,6 +53,13 @@ def run(args: argparse.Namespace) -> None:
             raise ContractError("No changed paths supplied")
         validate_generated_paths(paths)
         print("Generated change paths are allowed.")
+    elif args.command in {"check-runtime-readiness", "run-daily"}:
+        require_daily_runtime(load_data(ROOT / "config" / "runtime-readiness.yaml"))
+        if args.command == "run-daily":
+            raise ContractError(
+                "INCONCLUSIVE: readiness is enabled but the runtime entry point is not installed."
+            )
+        print("Daily runtime is ready.")
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -11,9 +11,18 @@ python -m agent_insights_quality validate
 python -m pytest
 ```
 
+## Runtime readiness
+
+This release is contract scaffolding. `config/runtime-readiness.yaml` records every mandatory runtime
+workstream, and all are initially false. `check-runtime-readiness` and `run-daily` fail closed with an
+actionable `INCONCLUSIVE` result until every component is implemented, tested, and enabled through a
+human-reviewed source change. The readiness file is protected from generated automation.
+
 Generated automation branches use the `aiq-daily/` prefix. CI restricts those branches to the paths
-in `config/automation-policy.yaml`. Source contracts, policies, schemas, prompts, skills, and
-reporting configuration require a normal human-reviewed change.
+in the **base branch's** `config/automation-policy.yaml`, using the base branch's installed validator.
+The guard validates additions, changes, deletions, and both sides of renames. A generated PR cannot
+authorize itself by modifying the allowlist, validator, reporting config, or readiness config. Source
+contracts, policies, schemas, prompts, and skills require a normal human-reviewed change.
 
 ## Reporting audience
 
@@ -58,3 +67,7 @@ Endpoint invocation and response IDs are not trace IDs. Correlate them through r
 Insights data to the trace `operation_Id` before creating a trace link. Runtime links may appear in
 direct email and private ADO actions but must never be persisted in this public repository; committed
 artifacts use opaque SHA-256 references.
+
+Static source scanning enforces known direct-ingestion sinks while allowing legitimate read-only
+Application Insights queries. Runtime egress and endpoint-only integration tests are the required
+second layer when traffic implementations are added.

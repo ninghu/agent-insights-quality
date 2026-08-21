@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://microsoft.github.io/agent-insights-quality/schemas/v1/scenario-manifest.schema.json",
+  "$id": "https://ninghu.github.io/agent-insights-quality/schemas/v1/scenario-manifest.schema.json",
   "title": "Agent Insights Quality scenario catalog",
   "type": "object",
   "additionalProperties": false,

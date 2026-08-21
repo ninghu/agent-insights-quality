@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://microsoft.github.io/agent-insights-quality/schemas/v1/daily-plan.schema.json",
+  "$id": "https://ninghu.github.io/agent-insights-quality/schemas/v1/daily-plan.schema.json",
   "title": "Agent Insights Quality daily plan",
   "type": "object",
   "additionalProperties": false,

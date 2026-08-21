@@ -10,6 +10,19 @@ repository is public: commit only synthetic data and public-safe, sanitized outp
 credentials, private Azure/ADO identifiers, internal endpoints, raw traces, private work-item
 content, complete prompt payloads, or real customer data.
 
+## Runtime readiness gate
+
+Before any preflight, deployment, traffic, ADO, repository mutation, or email side effect, run:
+
+```powershell
+python -m agent_insights_quality check-runtime-readiness
+```
+
+`config/runtime-readiness.yaml` is human-reviewed authority. If any mandatory component is false,
+stop immediately and report the command's actionable `INCONCLUSIVE` readiness result. Do not run the
+failure email finalizer because the daily runtime has not been enabled. Daily automation cannot
+modify readiness configuration or treat contract scaffolding as an operational workflow.
+
 ## Non-negotiable rules
 
 1. Treat source agent and scenario manifests as immutable reviewed ground truth.

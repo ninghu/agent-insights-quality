@@ -34,6 +34,17 @@ def test_generated_documents_are_current() -> None:
     generate_documents(check=True)
 
 
+def test_schema_ids_use_public_owner_namespace() -> None:
+    forbidden = "microsoft." + "github.io/agent-insights-quality"
+    for path in (ROOT / "schemas").glob("*.schema.json"):
+        schema = load_data(path)
+        assert schema["$id"] == (
+            "https://ninghu.github.io/agent-insights-quality/schemas/v1/"
+            f"{path.name}"
+        )
+        assert forbidden not in path.read_text(encoding="ascii")
+
+
 def test_initial_agent_registry_is_exact_and_stable() -> None:
     manifests = load_agent_manifests()
     assert {item["id"]: item["agent_type"] for item in manifests} == EXPECTED_AGENTS

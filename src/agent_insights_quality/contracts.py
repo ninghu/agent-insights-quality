@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
 from datetime import date
-import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -69,8 +69,14 @@ def validate_schemas() -> None:
         if schema.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
             raise ContractError(f"{path.relative_to(ROOT)}: must use JSON Schema draft 2020-12")
         schema_id = schema.get("$id", "")
-        if f"/schemas/v1/{path.name}" not in schema_id:
-            raise ContractError(f"{path.relative_to(ROOT)}: $id must be stable and versioned under /schemas/v1/")
+        expected_id = (
+            "https://ninghu.github.io/agent-insights-quality/schemas/v1/"
+            f"{path.name}"
+        )
+        if schema_id != expected_id:
+            raise ContractError(
+                f"{path.relative_to(ROOT)}: $id must be {expected_id}"
+            )
 
 
 def validate_structured_file_syntax() -> None:
@@ -220,8 +226,16 @@ def validate_automation_policy(data: dict[str, Any]) -> None:
         raise ContractError("config/automation-policy.yaml: unsupported schema_version")
     if data["generated_branch_prefix"] != "aiq-daily/":
         raise ContractError("config/automation-policy.yaml: generated branch prefix must be aiq-daily/")
-    if "config/**" not in data["protected_paths"]:
-        raise ContractError("config/automation-policy.yaml: config must remain protected")
+    mandatory_protected = {
+        "config/**",
+        "agents/**",
+        "scenarios/**",
+        "schemas/**",
+        "src/**",
+        ".github/**",
+    }
+    if not mandatory_protected.issubset(set(data["protected_paths"])):
+        raise ContractError("config/automation-policy.yaml: mandatory protected paths are missing")
     if any(path.startswith("config/") for path in data["allowed_paths"]):
         raise ContractError("config/automation-policy.yaml: generated automation cannot modify config")
 
@@ -239,6 +253,12 @@ def validate_security_policy(data: dict[str, Any]) -> None:
     )
     if data["schema_version"] != "1.0.0" or not data["forbidden_patterns"]:
         raise ContractError("config/security-policy.yaml: invalid security policy")
+    mandatory_roots = {"agents", "infra", "scenarios", "src"}
+    mandatory_extensions = {".py", ".ps1", ".sh", ".bicep", ".yaml", ".yml", ".json"}
+    if not mandatory_roots.issubset(set(data["scan_roots"])):
+        raise ContractError("config/security-policy.yaml: mandatory scan roots are missing")
+    if not mandatory_extensions.issubset(set(data["source_extensions"])):
+        raise ContractError("config/security-policy.yaml: mandatory source extensions are missing")
 
 
 def validate_traffic_policy(data: dict[str, Any]) -> None:
@@ -644,6 +664,8 @@ def validate_report_artifacts(
 
 
 def validate_contracts() -> None:
+    from agent_insights_quality.readiness import validate_runtime_readiness
+
     validate_structured_file_syntax()
     validate_schemas()
     agents = load_agent_manifests()
@@ -660,4 +682,5 @@ def validate_contracts() -> None:
     validate_security_policy(load_data(ROOT / "config" / "security-policy.yaml"))
     validate_traffic_policy(load_data(ROOT / "config" / "traffic-policy.yaml"))
     validate_link_policy(load_data(ROOT / "config" / "link-policy.yaml"))
+    validate_runtime_readiness(load_data(ROOT / "config" / "runtime-readiness.yaml"))
     validate_report_artifacts(agents, catalog)

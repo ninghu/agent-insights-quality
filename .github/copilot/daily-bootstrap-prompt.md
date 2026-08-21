@@ -1,4 +1,5 @@
 Run today's Agent Insights quality workflow in ninghu/agent-insights-quality.
-Follow `.github/skills/agent-insights-quality-daily/SKILL.md` exactly, using the `ninghu`
-identity and GPT-5.6 Sol. Always send the final email to the repository-configured recipient; if the
-workflow fails, send an INCONCLUSIVE email explaining the failure and retained diagnostics.
+First run `python -m agent_insights_quality check-runtime-readiness`. If it is not ready, stop without
+side effects and report its actionable INCONCLUSIVE result. Otherwise follow
+`.github/skills/agent-insights-quality-daily/SKILL.md` exactly, using the `ninghu` identity and
+GPT-5.6 Sol, including its final email and failure-finalizer rules.

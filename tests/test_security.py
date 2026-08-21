@@ -4,7 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from agent_insights_quality.contracts import ROOT, load_data
+from copy import deepcopy
+
+from agent_insights_quality.contracts import (
+    ContractError,
+    ROOT,
+    load_data,
+    validate_security_policy,
+)
 from agent_insights_quality.public_safety import PUBLIC_FORBIDDEN_PATTERNS
 from agent_insights_quality.security import scan_text
 
@@ -56,3 +63,19 @@ def test_public_safety_patterns_reject_private_identifiers(unsafe: str) -> None:
 )
 def test_public_safety_patterns_reject_credentials(unsafe: str) -> None:
     assert any(pattern.search(unsafe) for pattern in PUBLIC_FORBIDDEN_PATTERNS.values())
+
+
+@pytest.mark.parametrize(
+    ("field", "removed"),
+    [
+        ("scan_roots", "src"),
+        ("scan_roots", "agents"),
+        ("source_extensions", ".py"),
+        ("source_extensions", ".yaml"),
+    ],
+)
+def test_security_policy_rejects_reduced_scan_coverage(field: str, removed: str) -> None:
+    policy = deepcopy(load_data(ROOT / "config" / "security-policy.yaml"))
+    policy[field].remove(removed)
+    with pytest.raises(ContractError, match="mandatory"):
+        validate_security_policy(policy)
