@@ -9,9 +9,10 @@ from agent_insights_quality.contracts import ContractError, ROOT, load_data
 
 
 def normalize_repo_path(path: str) -> str:
-    normalized = path.replace("\\", "/")
-    candidate = PurePosixPath(normalized)
-    if candidate.is_absolute() or ".." in candidate.parts or normalized.startswith("./"):
+    if "\\" in path:
+        raise ContractError(f"Unsafe repository path: {path}")
+    candidate = PurePosixPath(path)
+    if candidate.is_absolute() or ".." in candidate.parts or path.startswith("./"):
         raise ContractError(f"Unsafe repository path: {path}")
     return candidate.as_posix()
 

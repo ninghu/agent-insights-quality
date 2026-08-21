@@ -49,6 +49,14 @@ def test_generated_path_rejects_traversal() -> None:
         normalize_repo_path("../config/reporting.yaml")
 
 
+def test_generated_path_rejects_literal_backslash_filename() -> None:
+    disguised = "reports\\daily\\2026\\08\\20\\plan.json"
+    with pytest.raises(ContractError, match="Unsafe repository path"):
+        normalize_repo_path(disguised)
+    with pytest.raises(ContractError, match="Unsafe repository path"):
+        validate_generated_paths([disguised])
+
+
 def test_generated_path_pattern_does_not_match_malformed_daily_layout() -> None:
     assert not path_is_allowed("reports/daily/2026/08/20/nested/plan.json", ALLOWED)
 
