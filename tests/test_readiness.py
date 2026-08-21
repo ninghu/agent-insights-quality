@@ -201,10 +201,47 @@ def test_content_digest_binds_email_subject(tmp_path: Path) -> None:
         validate_stored_bundle_content(handoff_path, handoff)
 
 
-def test_email_handoff_supports_configured_production_recipient(tmp_path: Path) -> None:
-    reporting = deepcopy(load_data(ROOT / "config" / "reporting.yaml"))
-    reporting["mode"] = "production"
-    reporting["recipient_variable"] = "AIQ_PRODUCTION_REPORT_RECIPIENT"
+def test_historical_test_handoff_survives_production_promotion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_reporting = load_data(ROOT / "config" / "reporting.yaml")
+    test_handoff_path = finalize_readiness_failure(
+        load_data(ROOT / "config" / "runtime-readiness.yaml"),
+        test_reporting,
+        "2026-08-21",
+        output_root=tmp_path / "reports",
+        generated_at="2026-08-21T08:00:00Z",
+    )
+    production_reporting = deepcopy(test_reporting)
+    production_reporting["mode"] = "production"
+    production_reporting["recipient_variable"] = "AIQ_PRODUCTION_REPORT_RECIPIENT"
+
+    test_handoff = json.loads(test_handoff_path.read_text(encoding="ascii"))
+    validate_email_handoff(test_handoff, "historical handoff", production_reporting)
+    monkeypatch.setattr(contracts, "ROOT", tmp_path)
+    contracts.validate_report_artifacts([], {}, production_reporting)
+
+    production_handoff_path = finalize_readiness_failure(
+        load_data(ROOT / "config" / "runtime-readiness.yaml"),
+        production_reporting,
+        "2026-08-22",
+        output_root=tmp_path / "reports",
+        generated_at="2026-08-22T08:00:00Z",
+    )
+    production_handoff = json.loads(production_handoff_path.read_text(encoding="ascii"))
+    validate_email_handoff(
+        production_handoff,
+        "new production handoff",
+        production_reporting,
+        require_current_selection=True,
+    )
+    assert production_handoff["reporting_mode"] == "production"
+    assert production_handoff["recipient_variable"] == "AIQ_PRODUCTION_REPORT_RECIPIENT"
+
+
+def test_handoff_recipient_must_match_its_recorded_mode(tmp_path: Path) -> None:
+    reporting = load_data(ROOT / "config" / "reporting.yaml")
     handoff_path = finalize_readiness_failure(
         load_data(ROOT / "config" / "runtime-readiness.yaml"),
         reporting,
@@ -213,13 +250,9 @@ def test_email_handoff_supports_configured_production_recipient(tmp_path: Path) 
         generated_at="2026-08-21T08:00:00Z",
     )
     handoff = json.loads(handoff_path.read_text(encoding="ascii"))
-    validate_email_handoff(handoff, "handoff", reporting)
-    assert handoff["reporting_mode"] == "production"
-    assert handoff["recipient_variable"] == "AIQ_PRODUCTION_REPORT_RECIPIENT"
-
-    test_reporting = load_data(ROOT / "config" / "reporting.yaml")
-    with pytest.raises(ContractError, match="reporting mode does not match"):
-        validate_email_handoff(handoff, "handoff", test_reporting)
+    handoff["recipient_variable"] = "AIQ_PRODUCTION_REPORT_RECIPIENT"
+    with pytest.raises(ContractError, match="recorded reporting mode"):
+        validate_email_handoff(handoff, "handoff", reporting)
 
 
 def test_failed_email_delivery_requires_sanitized_error_code(tmp_path: Path) -> None:
