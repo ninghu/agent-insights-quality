@@ -1661,4 +1661,3 @@ def test_handled_child_failure_emits_nested_spans_and_dispatches(sr_path: Path) 
     assert parent.status.status_code == StatusCode.OK, "parent span must be OK (recovered)"
     assert parent.attributes.get("endpoint.parent.status") == "recovered"
     assert parent.attributes.get("endpoint.case") == "handled-child-failure"
-
