@@ -1407,3 +1407,114 @@ def test_hosted_agents_representative_tools_populated_from_manifest() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Nested OTel span-processor tests for endpoint_request cases 055, 056, 057
+# ---------------------------------------------------------------------------
+
+
+def _make_span_harness():
+    """Return (tracer, exporter) backed by an isolated in-memory TracerProvider."""
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return provider.get_tracer("test"), exporter
+
+
+def _rt_with_spans(path: Path, cfg: str, tracer: object) -> object:
+    """Instantiate ScenarioRuntime with an injected tracer for span capture."""
+    mod = _load_scenario_runtime(path)
+    with _ScenarioCtx(cfg):
+        return mod.ScenarioRuntime(_tracer=tracer)
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_correlated_child_failure_emits_nested_spans(sr_path: Path) -> None:
+    """scn-055: endpoint.request (OK) wraps endpoint.child_request (ERROR); no dispatch."""
+    from opentelemetry.trace import StatusCode
+    tracer, exporter = _make_span_harness()
+    cfg = _make_config(
+        [{"target": "endpoint_request", "action": "set_case", "value": "correlated-child-failure"}]
+    )
+    rt = _rt_with_spans(sr_path, cfg, tracer)
+    dispatched: list[int] = []
+    rt.run_tool("lookup", {"account_id": "SYN-1"}, lambda n, a: dispatched.append(1) or "ok")
+    assert not dispatched, "correlated-child-failure must not dispatch"
+
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    assert "endpoint.request" in by_name, "parent span endpoint.request must be emitted"
+    assert "endpoint.child_request" in by_name, "child span endpoint.child_request must be emitted"
+
+    parent = by_name["endpoint.request"]
+    child = by_name["endpoint.child_request"]
+    assert child.parent is not None, "child span must have a parent context"
+    assert child.parent.span_id == parent.context.span_id, "child must be nested inside parent"
+    assert child.status.status_code == StatusCode.ERROR, "child span must be ERROR"
+    assert parent.status.status_code == StatusCode.OK, "parent span must be OK"
+    assert parent.attributes.get("endpoint.case") == "correlated-child-failure"
+    assert parent.attributes.get("endpoint.nested_failure") is True
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_zero_token_outer_emits_parent_span_with_zero_token_attributes(sr_path: Path) -> None:
+    """scn-056: endpoint.request (OK, tokens=0) wraps a successful child dispatch."""
+    from opentelemetry.trace import StatusCode
+    tracer, exporter = _make_span_harness()
+    cfg = _make_config(
+        [{"target": "endpoint_request", "action": "set_case", "value": "zero-token-outer-successful-child"}]
+    )
+    rt = _rt_with_spans(sr_path, cfg, tracer)
+    dispatched: list[int] = []
+
+    def _execute(n: str, a: dict) -> str:
+        dispatched.append(1)
+        return "child-ok"
+
+    result = rt.run_tool("lookup", {"account_id": "SYN-1"}, _execute)
+    assert dispatched, "zero-token-outer-successful-child must dispatch (healthy control)"
+    assert json.loads(result).get("dispatch_result") == "child-ok"
+
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    assert "endpoint.request" in by_name, "parent span endpoint.request must be emitted"
+    parent = by_name["endpoint.request"]
+    assert parent.status.status_code == StatusCode.OK, "parent span must be OK"
+    assert parent.attributes.get("gen_ai.usage.input_tokens") == 0
+    assert parent.attributes.get("gen_ai.usage.output_tokens") == 0
+    assert parent.attributes.get("endpoint.case") == "zero-token-outer-successful-child"
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_handled_child_failure_emits_nested_spans_and_dispatches(sr_path: Path) -> None:
+    """scn-057: endpoint.child_request (ERROR) + recovery dispatch; parent OK, recovered."""
+    from opentelemetry.trace import StatusCode
+    tracer, exporter = _make_span_harness()
+    cfg = _make_config(
+        [{"target": "endpoint_request", "action": "set_case", "value": "handled-child-failure"}]
+    )
+    rt = _rt_with_spans(sr_path, cfg, tracer)
+    dispatched: list[int] = []
+
+    def _execute(n: str, a: dict) -> str:
+        dispatched.append(1)
+        return "recovery-ok"
+
+    result = rt.run_tool("lookup", {"account_id": "SYN-1"}, _execute)
+    assert dispatched, "handled-child-failure must dispatch (recovery path)"
+    assert json.loads(result).get("dispatch_result") == "recovery-ok"
+
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    assert "endpoint.request" in by_name, "parent span must be emitted"
+    assert "endpoint.child_request" in by_name, "synthetic failing child span must be emitted"
+
+    parent = by_name["endpoint.request"]
+    child = by_name["endpoint.child_request"]
+    assert child.parent is not None, "child span must have a parent context"
+    assert child.parent.span_id == parent.context.span_id, "child must be nested inside parent"
+    assert child.status.status_code == StatusCode.ERROR, "child span must be ERROR"
+    assert parent.status.status_code == StatusCode.OK, "parent span must be OK (recovered)"
+    assert parent.attributes.get("endpoint.parent.status") == "recovered"
+    assert parent.attributes.get("endpoint.case") == "handled-child-failure"
+
+

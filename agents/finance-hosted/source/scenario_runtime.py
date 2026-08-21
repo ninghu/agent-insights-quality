@@ -45,7 +45,8 @@ _ENDPOINT_CASES: dict[str, dict[str, Any]] = {
         "status": "ok",
     },
 }
-# Healthy controls dispatch the tool normally and embed the response.
+# Healthy controls (scn-056, scn-057) dispatch the tool normally and embed the response.
+# Documented here for reference; the branching logic in _apply_endpoint_case is per-case.
 _ENDPOINT_HEALTHY_CASES = frozenset(
     {"zero-token-outer-successful-child", "handled-child-failure"}
 )
@@ -58,7 +59,9 @@ def _canonical(obj: Any) -> str:
 class ScenarioRuntime:
     """Bounded interpreter for adapter-supplied synthetic scenario configuration."""
 
-    def __init__(self) -> None:
+    def __init__(self, _tracer: object = None) -> None:
+        # _tracer: injected for tests; None = lazy OTel import in _span_tracer().
+        self._tracer = _tracer
         raw = os.environ.get("AIQ_SCENARIO_CONFIGURATION", "")
         if not raw:
             self._operations: tuple[dict[str, Any], ...] = ()
@@ -336,6 +339,13 @@ class ScenarioRuntime:
 
         return _canonical({"fixture": action, "value": value})
 
+    def _span_tracer(self) -> object:
+        # Lazy OTel import so module remains importable with stdlib only.
+        if self._tracer is not None:
+            return self._tracer
+        from opentelemetry import trace
+        return trace.get_tracer(__name__)
+
     def _apply_endpoint_case(
         self,
         case: str,
@@ -349,7 +359,53 @@ class ScenarioRuntime:
                 f"Unsupported endpoint_request/set_case value: {case!r}. "
                 f"Must be one of: {sorted(_ENDPOINT_CASES)}."
             )
-        if case in _ENDPOINT_HEALTHY_CASES:
-            dispatch_result = execute(name, dict(arguments))
+
+        if case in {"correlated-child-failure", "zero-token-outer-successful-child", "handled-child-failure"}:
+            from opentelemetry.trace import SpanKind, Status, StatusCode
+            tracer = self._span_tracer()
+
+            if case == "correlated-child-failure":
+                # scn-055: synthetic child span ERROR, parent span OK, no actual dispatch.
+                with tracer.start_as_current_span(
+                    "endpoint.request", kind=SpanKind.CLIENT
+                ) as parent_span:
+                    parent_span.set_attribute("endpoint.case", case)
+                    with tracer.start_as_current_span(
+                        "endpoint.child_request", kind=SpanKind.CLIENT
+                    ) as child_span:
+                        child_span.set_attribute("endpoint.case", case)
+                        child_span.set_status(Status(StatusCode.ERROR, "correlated child failed"))
+                    parent_span.set_attribute("endpoint.nested_failure", True)
+                    parent_span.set_status(Status(StatusCode.OK))
+                return _canonical(_ENDPOINT_CASES[case])
+
+            if case == "zero-token-outer-successful-child":
+                # scn-056: healthy control -- parent carries zero-token attributes; child dispatch succeeds.
+                with tracer.start_as_current_span(
+                    "endpoint.request", kind=SpanKind.CLIENT
+                ) as parent_span:
+                    parent_span.set_attribute("endpoint.case", case)
+                    parent_span.set_attribute("gen_ai.usage.input_tokens", 0)
+                    parent_span.set_attribute("gen_ai.usage.output_tokens", 0)
+                    dispatch_result = execute(name, dict(arguments))
+                    parent_span.set_status(Status(StatusCode.OK))
+                return _canonical({"dispatch_result": dispatch_result, **_ENDPOINT_CASES[case]})
+
+            # case == "handled-child-failure":
+            # scn-057: healthy control -- synthetic child ERROR, recovery dispatch, parent recovered OK.
+            with tracer.start_as_current_span(
+                "endpoint.request", kind=SpanKind.CLIENT
+            ) as parent_span:
+                parent_span.set_attribute("endpoint.case", case)
+                with tracer.start_as_current_span(
+                    "endpoint.child_request", kind=SpanKind.CLIENT
+                ) as child_span:
+                    child_span.set_attribute("endpoint.case", case)
+                    child_span.set_status(Status(StatusCode.ERROR, "child failed before recovery"))
+                dispatch_result = execute(name, dict(arguments))
+                parent_span.set_attribute("endpoint.parent.status", "recovered")
+                parent_span.set_status(Status(StatusCode.OK))
             return _canonical({"dispatch_result": dispatch_result, **_ENDPOINT_CASES[case]})
+
+        # Remaining fault cases: no dispatch, no spans.
         return _canonical(_ENDPOINT_CASES[case])
