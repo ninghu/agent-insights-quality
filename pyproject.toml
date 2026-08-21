@@ -17,6 +17,10 @@ dependencies = [
 dev = [
   "pytest>=8.3,<9",
 ]
+azure = [
+  "azure-monitor-query>=1.4,<2",
+  "azure-storage-blob>=12.26,<13",
+]
 
 [project.scripts]
 aiq-quality = "agent_insights_quality.cli:main"

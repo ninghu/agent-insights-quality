@@ -2,9 +2,10 @@
 
 `agent-insights-quality` is a public, reusable qualification framework for the Agent Insights engine.
 The current `0.1.x` release is not yet a runnable daily automation runtime. It includes five reviewed
-healthy synthetic agents, Foundry deployment and endpoint-only traffic adapters, schemas, safety
-policy, generated-path enforcement, skills, and validation tooling. Scenario mutation, production
-orchestration, judging, ADO, and email workstreams remain incomplete.
+healthy synthetic agents, Foundry deployment and endpoint-only traffic adapters, generic production
+infrastructure and orchestration boundaries, schemas, safety policy, generated-path enforcement,
+skills, and validation tooling. Scenario mutation, scoring, judging, memory, ADO, reporting, and live
+qualification workstreams remain incomplete.
 
 The quality bar is intentionally strict. A day is `AT BAR` only after the complete active catalog
 runs, healthy agents produce no insights, all structural checks pass, high-severity recall is 100%,
@@ -43,6 +44,21 @@ prompt payloads, private ADO content, or real customer, health, or financial dat
 private resource identifiers must be supplied at runtime. Traffic must invoke deployed agent
 endpoints; Application Insights is read-only evidence storage, and direct telemetry injection is
 forbidden.
+
+## Production runtime
+
+Runtime coordinates are accepted only through protected environment variables. Azure selection
+supports either `AIQ_AZURE_SUBSCRIPTION_ID` or an exact `AIQ_AZURE_SUBSCRIPTION_NAME`. The runtime can
+also discover exactly one project tagged `agentInsightsQualityQualification=true` and with the
+configured `automationOwner`, avoiding persisted resource identifiers in scheduled Copilot sessions.
+Use `python -m agent_insights_quality preflight --discover-project` to validate identity, AzureCloud,
+the exact subscription, project/account shape, App Insights connection, Terra deployments, and Agent
+Insights authorization without printing private values.
+
+The generic CLI exposes `run`, `resume`, `status`, and dry-run `cleanup`; destructive cleanup requires
+`cleanup --execute`. Production `run` and `resume` load a reviewed adapter named by
+`AIQ_RUNTIME_ADAPTER`, and fail closed when the deployment/traffic workstream is not installed.
+Receipts and CLI output contain opaque hashes rather than private coordinates or URLs.
 
 ## Daily automation
 

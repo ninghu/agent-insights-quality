@@ -14,14 +14,46 @@ python -m pytest
 ## Runtime readiness
 
 `config/runtime-readiness.yaml` records every mandatory runtime workstream. The healthy-agent
-deployment and traffic contracts are implemented, but readiness stays false until live telemetry
-qualification proves the expected agent, model, and tool spans. All remaining components also stay
-false.
+deployment and traffic contracts plus generic production infrastructure and orchestration boundaries
+are implemented. Their readiness flags stay false until live telemetry qualification proves the
+expected agent, model, and tool spans, the required Azure permissions are demonstrated, and a reviewed
+adapter binds these boundaries without changing their contracts.
 `check-runtime-readiness` and `run-daily` fail closed with an actionable `INCONCLUSIVE` result until
 every component is implemented, tested, and enabled through a human-reviewed source change. A
 readiness failure prohibits all operational phases but still requires the minimal report/email
 finalizer and its one-message Copilot mail handoff. The readiness file is protected from generated
 automation.
+
+## Runtime commands
+
+Supply private values only through the authorized runtime environment. Select Azure with exactly one
+of `AIQ_AZURE_SUBSCRIPTION_ID` or `AIQ_AZURE_SUBSCRIPTION_NAME`. Explicit GitHub Actions execution can
+also supply the resource group, Foundry account, project name, project endpoint, and Application
+Insights resource ID. Scheduled Copilot execution can omit those coordinates and discover exactly one qualification
+project by its reviewed ownership tags.
+
+Both modes resolve the Terra traffic and insights deployment names plus the reviewed model version
+from protected `AIQ_TERRA_*` variables. Optional protected tenant and user-object IDs tighten identity
+selection further; when omitted, preflight still requires an interactive Azure user and verifies that
+identity's access to every selected resource.
+
+```powershell
+python -m agent_insights_quality preflight --discover-project
+python -m agent_insights_quality run --plan <plan.json> --state <private-state.json> --dry-run
+python -m agent_insights_quality run --plan <plan.json> --state <private-state.json>
+python -m agent_insights_quality resume --plan <plan.json> --state <private-state.json>
+python -m agent_insights_quality status --state <private-state.json>
+python -m agent_insights_quality cleanup
+python -m agent_insights_quality cleanup --execute
+```
+
+`run` and `resume` require a reviewed adapter module through `AIQ_RUNTIME_ADAPTER`. Independent agents
+run concurrently while versions of one agent remain sequential. Resume replays completed operations
+with their idempotency keys and rejects checkpoint drift. Cleanup is a dry run unless `--execute` is
+present and filters exact framework purpose, owner, name, and expiration metadata.
+
+Install the optional identity-backed Azure clients with `python -m pip install -e ".[azure]"` on live
+runners that query Application Insights or use the Azure Blob artifact backend.
 
 Generated automation branches use the `aiq-daily/` prefix. CI restricts those branches to the paths
 in the **base branch's** `config/automation-policy.yaml`, using the base branch's installed validator.
