@@ -43,12 +43,41 @@ def test_direct_trace_injection_patterns_are_rejected(unsafe: str) -> None:
     "unsafe",
     [
         "owner@" + "microsoft.com",
-        "https://" + "example." + "visualstudio.com/Project/_workitems/edit/1",
+        "https://" + "example." + "visualstudio." + "com/Project/_workitems/edit/1",
         "/subscriptions/" + "01234567-89ab-cdef-0123-456789abcdef" + "/resourceGroups/private",
     ],
 )
 def test_public_safety_patterns_reject_private_identifiers(unsafe: str) -> None:
     assert any(pattern.search(unsafe) for pattern in PUBLIC_FORBIDDEN_PATTERNS.values())
+
+
+@pytest.mark.parametrize(
+    "unsafe",
+    [
+        "http://" + "dev." + "azure.com/org/project",
+        "//" + "dev." + "azure.com/org/project",
+        "http://" + "example." + "visualstudio." + "com/Project",
+        "//" + "example." + "visualstudio." + "com/Project",
+        "dev." + "azure.com/org/project",
+    ],
+)
+def test_public_safety_rejects_ado_hosts_independent_of_scheme(unsafe: str) -> None:
+    pattern = PUBLIC_FORBIDDEN_PATTERNS["private Azure DevOps endpoint"]
+    assert pattern.search(unsafe)
+
+
+@pytest.mark.parametrize(
+    "safe",
+    [
+        "https://dev." + "azure.com.example.test/docs",
+        "https://not" + "visualstudio." + "com/docs",
+        "The phrase dev azure com is not a URL.",
+        "https://example.test/path/dev." + "azure.com-guide",
+    ],
+)
+def test_public_safety_ado_host_pattern_avoids_near_matches(safe: str) -> None:
+    pattern = PUBLIC_FORBIDDEN_PATTERNS["private Azure DevOps endpoint"]
+    assert pattern.search(safe) is None
 
 
 @pytest.mark.parametrize(

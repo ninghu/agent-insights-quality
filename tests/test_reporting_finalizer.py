@@ -610,7 +610,7 @@ def test_public_artifact_writer_rejects_private_link(tmp_path) -> None:
         "completed_scenarios": [],
     }
     value = build_failure_report(plan, failure, generated_at="2026-08-21T08:00:00Z")
-    value["summary"] = "See https://" + "dev.azure.com/private"
+    value["summary"] = "See https://" + "dev." + "azure.com/private"
     with pytest.raises(ContractError, match="private Azure DevOps"):
         write_daily_artifacts(tmp_path, plan, value)
 

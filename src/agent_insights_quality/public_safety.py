@@ -16,7 +16,12 @@ PUBLIC_FORBIDDEN_PATTERNS = {
         r"(?i)/subscriptions/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
         r"[0-9a-f]{4}-[0-9a-f]{12}(?:/|$)"
     ),
-    "private Azure DevOps endpoint": re.compile(r"(?i)https://[^\s)`]*?(?:visualstudio\.com|dev\.azure\.com)"),
+    "private Azure DevOps endpoint": re.compile(
+        r"(?i)(?<![A-Za-z0-9.-])"
+        r"(?:(?:https?:)?//)?"
+        r"(?:[A-Za-z0-9-]+\.)*(?:dev\.azure\.com|visualstudio\.com)"
+        r"(?::[0-9]+)?/[A-Za-z0-9][A-Za-z0-9._~-]*"
+    ),
     "private key": re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     "GitHub token": re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}\b"),
     "bearer token": re.compile(r"(?i)\bauthorization\s*:\s*bearer\s+[A-Za-z0-9._~+/=-]{16,}"),
