@@ -209,8 +209,7 @@ def deterministic_violations(
             if not set(insight["trace_ids"]).issubset(trace_ids):
                 violations.add("provenance_failure")
             if not _fix_is_compatible(bundle, insight):
-                violations.add("structural_failure")
-                structural_failures += 1
+                violations.add("capability_fix_mismatch")
             run_identity = (
                 bundle["run"]["run_id"],
                 bundle["agent"]["id"],

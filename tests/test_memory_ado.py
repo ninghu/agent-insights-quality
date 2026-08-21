@@ -41,7 +41,7 @@ def enabled_ado_policy() -> AdoPolicy:
 def finding() -> dict:
     root = "Insight combines two independent fixes"
     surface = "collection grouping"
-    target = "aiq-scn-010-duplicate"
+    target = "aiq-scn-041-guardrail-bypass"
     return {
         "fingerprint": issue_fingerprint(root, surface, target),
         "root_cause": root,
@@ -138,6 +138,26 @@ def test_memory_requires_three_complete_clean_runs_and_regresses() -> None:
     memory = reconcile(memory, [finding()], 6)
     assert memory["issues"][0]["state"] == "regressed"
     assert memory["issues"][0]["consecutive_clean_complete_runs"] == 0
+
+
+def test_omitted_rotating_scenario_does_not_advance_clean_streak() -> None:
+    memory = reconcile(empty_memory(), [finding()], 1)
+    plan, report = reconciliation_contract(2)
+    omitted = plan["selection"]["omitted_scenario_ids"][0]
+    memory["issues"][0]["affected_scenarios"] = [omitted]
+
+    updated, changes = reconcile_memory(
+        memory,
+        [],
+        plan=plan,
+        report=report,
+        run_id="run-2",
+    )
+
+    assert updated["issues"][0]["state"] == "new"
+    assert updated["issues"][0]["consecutive_clean_complete_runs"] == 0
+    assert updated["issues"][0]["resolution_evidence"] == []
+    assert changes == []
 
 
 def test_incomplete_run_does_not_create_or_change_memory() -> None:
