@@ -586,6 +586,45 @@ def test_exact_count_aggregates_multi_assignment_run_with_umbrella_count_two(
     assert len(references) == len(set(references)) == 3
 
 
+def test_shared_run_mapping_ignores_unowned_insight_attributes(
+    synthetic_contracts,
+) -> None:
+    value, bundles, judgments = _multi_assignment_run(
+        first_insight_count=1,
+        umbrella_insight_count=2,
+        shared_run_view=True,
+    )
+    umbrella_unowned = next(
+        item
+        for item in judgments
+        if item["mapping"]
+        == {
+            "scenario_id": "aiq-scn-012-umbrella",
+            "insight_id": "first-0",
+        }
+    )
+    umbrella_unowned["attributes"]["actionability"]["passes"] = False
+    umbrella_unowned["output_hash"] = content_hash(
+        {
+            key: item
+            for key, item in umbrella_unowned.items()
+            if key != "output_hash"
+        }
+    )
+
+    score = score_run(value, bundles, judgments)
+    outcomes = case_to_insight_mappings(value, bundles, judgments)
+    umbrella = next(
+        item
+        for item in outcomes
+        if item["scenario_id"] == "aiq-scn-012-umbrella"
+    )
+
+    assert score["verdict"] == "AT BAR"
+    assert umbrella["observed_count"] == 2
+    assert umbrella["verdict"] == "correct"
+
+
 def test_run_count_match_preserves_mixed_per_scenario_diagnostics(
     synthetic_contracts,
 ) -> None:

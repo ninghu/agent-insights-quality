@@ -660,6 +660,7 @@ def case_to_insight_mappings(
         scenario_id = assignment["scenario_id"]
         bundle = bundle_by_scenario.get(scenario_id)
         items = []
+        trusted_count = 0
         for insight in bundle["insights"] if bundle else []:
             physical_key = (
                 bundle["run"]["run_id"],
@@ -669,6 +670,15 @@ def case_to_insight_mappings(
             if owners.get(physical_key) != scenario_id:
                 continue
             judgment = primary.get((scenario_id, insight["id"]))
+            if (
+                judgment is not None
+                and judgment["verdict"] == "correct"
+                and all(
+                    judgment["attributes"][name]["passes"]
+                    for name in PASS_ATTRIBUTES
+                )
+            ):
+                trusted_count += 1
             items.append(
                 {
                     "insight_reference": content_hash(
@@ -684,15 +694,6 @@ def case_to_insight_mappings(
             )
         expected_count = assignment["expected"]["finding_count"]
         observed_count = len(items)
-        trusted_count = sum(
-            item["verdict"] == "correct"
-            and all(
-                primary[(scenario_id, insight["id"])]["attributes"][name]["passes"]
-                for name in PASS_ATTRIBUTES
-            )
-            for item, insight in zip(items, bundle["insights"] if bundle else [])
-            if primary.get((scenario_id, insight["id"])) is not None
-        )
         verdicts = {item["verdict"] for item in items}
         if bundle is None or "inconclusive" in verdicts:
             verdict = "inconclusive"
