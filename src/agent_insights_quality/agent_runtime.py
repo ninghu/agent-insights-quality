@@ -167,6 +167,22 @@ class InvocationReceipt:
 
 
 @dataclass(frozen=True, slots=True)
+class SyntheticToolOperation:
+    """One ordered tool-call step for prompt-agent synthetic traffic scenarios.
+
+    When a :class:`HealthyFixture` carries ``scenario_operations``, each tool
+    call the agent makes consumes the next operation in sequence: the declared
+    ``result`` is returned verbatim, ``delay_seconds`` is slept before the
+    response is handed back, and the tool name is verified against the agent's
+    actual call so deviations fail immediately.
+    """
+
+    tool_name: str
+    result: Mapping[str, Any]
+    delay_seconds: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
 class HealthyFixture:
     id: str
     input: str
@@ -175,6 +191,7 @@ class HealthyFixture:
     expected_tool_calls: tuple[str, ...]
     validate_output: bool = True
     validate_tools: bool = True
+    scenario_operations: tuple[SyntheticToolOperation, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -728,12 +745,14 @@ class FoundryInvocationClient:
         transport: HttpTransport | None = None,
         request_timeout_seconds: float = 120,
         max_tool_turns: int = 4,
+        sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
         self._endpoint = _validate_project_endpoint(project_endpoint)
         self._token_provider = token_provider
         self._transport = transport or UrllibTransport()
         self._request_timeout = request_timeout_seconds
         self._max_tool_turns = max_tool_turns
+        self._sleep = sleeper
 
     def invoke_prompt(
         self,
@@ -753,6 +772,7 @@ class FoundryInvocationClient:
         )
         response = raw_response.json()
         called_tools: list[str] = []
+        op_index = 0
         for _ in range(self._max_tool_turns):
             calls = [
                 item
@@ -760,6 +780,12 @@ class FoundryInvocationClient:
                 if isinstance(item, Mapping) and item.get("type") == "function_call"
             ]
             if not calls:
+                if fixture.scenario_operations is not None and op_index != len(
+                    fixture.scenario_operations
+                ):
+                    raise RuntimeContractError(
+                        "Prompt agent returned fewer tool calls than configured operations."
+                    )
                 return _invocation_receipt(
                     receipt,
                     fixture,
@@ -774,34 +800,55 @@ class FoundryInvocationClient:
             for call in calls:
                 name = str(call.get("name") or "")
                 call_id = str(call.get("call_id") or "")
-                raw_arguments = str(call.get("arguments") or "")
-                if not name or not call_id or not raw_arguments:
+                if not name or not call_id:
                     raise RuntimeContractError("Prompt agent returned an incomplete tool call.")
-                try:
-                    arguments = json.loads(raw_arguments)
-                except json.JSONDecodeError as error:
-                    raise RuntimeContractError(
-                        "Prompt agent returned invalid tool arguments."
-                    ) from error
-                configured = fixture.tool_outputs.get(name)
-                if configured is None:
-                    raise RuntimeContractError(
-                        f"Prompt agent called unexpected tool '{name}'."
+                if fixture.scenario_operations is not None:
+                    if op_index >= len(fixture.scenario_operations):
+                        raise RuntimeContractError(
+                            "Prompt agent made more tool calls than configured operations."
+                        )
+                    operation = fixture.scenario_operations[op_index]
+                    op_index += 1
+                    if name != operation.tool_name:
+                        raise RuntimeContractError(
+                            f"Tool sequence mismatch at position {op_index - 1}: "
+                            f"expected '{operation.tool_name}', agent called '{name}'."
+                        )
+                    if operation.delay_seconds > 0:
+                        self._sleep(operation.delay_seconds)
+                    result_output = json.dumps(
+                        dict(operation.result), sort_keys=True, separators=(",", ":")
                     )
-                expected_arguments = configured.get("arguments")
-                if arguments != expected_arguments:
-                    raise RuntimeContractError(
-                        f"Prompt agent used unexpected arguments for '{name}'."
+                else:
+                    raw_arguments = str(call.get("arguments") or "")
+                    if not raw_arguments:
+                        raise RuntimeContractError("Prompt agent returned an incomplete tool call.")
+                    try:
+                        arguments = json.loads(raw_arguments)
+                    except json.JSONDecodeError as error:
+                        raise RuntimeContractError(
+                            "Prompt agent returned invalid tool arguments."
+                        ) from error
+                    configured = fixture.tool_outputs.get(name)
+                    if configured is None:
+                        raise RuntimeContractError(
+                            f"Prompt agent called unexpected tool '{name}'."
+                        )
+                    expected_arguments = configured.get("arguments")
+                    if arguments != expected_arguments:
+                        raise RuntimeContractError(
+                            f"Prompt agent used unexpected arguments for '{name}'."
+                        )
+                    result_output = json.dumps(
+                        configured.get("result"),
+                        sort_keys=True,
+                        separators=(",", ":"),
                     )
                 outputs.append(
                     {
                         "type": "function_call_output",
                         "call_id": call_id,
-                        "output": json.dumps(
-                            configured.get("result"),
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        ),
+                        "output": result_output,
                     }
                 )
                 called_tools.append(name)

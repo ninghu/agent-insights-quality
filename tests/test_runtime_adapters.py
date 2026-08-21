@@ -28,6 +28,7 @@ from agent_insights_quality.agent_runtime import (
     InvocationEndpointError,
     InvocationFailureReceipt,
     RuntimeContractError,
+    SyntheticToolOperation,
     canonical_json_digest,
     deterministic_zip,
     load_fixtures,
@@ -670,3 +671,202 @@ def test_version_deployment_uses_version_route_without_create_name() -> None:
 def test_endpoint_adapter_rejects_non_foundry_or_ingestion_routes(endpoint: str) -> None:
     with pytest.raises(RuntimeContractError, match="Foundry project endpoint"):
         FoundryInvocationClient(endpoint, lambda: "token", transport=QueueTransport([]))
+
+
+def _prompt_receipt(version: str = "42") -> DeploymentReceipt:
+    return DeploymentReceipt(
+        "aiq-007-scenario",
+        version,
+        "prompt",
+        "sha256:" + ("7" * 64),
+        "run-sc",
+        "active",
+    )
+
+
+def test_scenario_operations_uses_ordered_results_sleeps_delays_and_records_calls() -> None:
+    """Happy path: two ops across two tool turns; configured results returned in order; delays slept."""
+    slept: list[float] = []
+    ops = (
+        SyntheticToolOperation(tool_name="search", result={"hits": 3}, delay_seconds=0.05),
+        SyntheticToolOperation(tool_name="fetch", result={"body": "hello"}, delay_seconds=0.0),
+    )
+    fixture = HealthyFixture(
+        id="sc-happy",
+        input="go",
+        output_contains="done",
+        tool_outputs={},
+        expected_tool_calls=("search", "fetch"),
+        scenario_operations=ops,
+    )
+    transport = QueueTransport(
+        [
+            # Turn 1: agent calls "search"
+            _response(
+                200,
+                {
+                    "id": "r1",
+                    "status": "in_progress",
+                    "output": [
+                        {"type": "function_call", "call_id": "c1", "name": "search", "arguments": "{}"}
+                    ],
+                },
+            ),
+            # Turn 2: agent calls "fetch"
+            _response(
+                200,
+                {
+                    "id": "r2",
+                    "status": "in_progress",
+                    "output": [
+                        {"type": "function_call", "call_id": "c2", "name": "fetch", "arguments": "{}"}
+                    ],
+                },
+            ),
+            # Final: no more tool calls
+            _response(
+                200,
+                {
+                    "id": "r3",
+                    "invocation_id": "inv-sc",
+                    "status": "completed",
+                    "output_text": "done",
+                },
+                headers={"x-ms-request-id": "req-sc"},
+            ),
+        ]
+    )
+    client = FoundryInvocationClient(
+        PROJECT_ENDPOINT,
+        lambda: "token",
+        transport=transport,
+        sleeper=slept.append,
+    )
+    receipt = client.invoke_prompt(_prompt_receipt(), fixture)
+
+    assert receipt.called_tools == ("search", "fetch")
+    assert receipt.response_id == "r3"
+    assert receipt.invocation_id == "inv-sc"
+    assert receipt.request_id == "req-sc"
+    # Only the operation with delay_seconds > 0 should have triggered a sleep
+    assert slept == [0.05]
+    # Verify outputs sent back to the agent carried the configured results
+    turn1_body = json.loads(transport.calls[1]["body"])
+    assert turn1_body["input"][0]["output"] == '{"hits":3}'
+    turn2_body = json.loads(transport.calls[2]["body"])
+    assert turn2_body["input"][0]["output"] == '{"body":"hello"}'
+
+
+def test_scenario_operations_fails_on_wrong_tool_name() -> None:
+    """Agent calling a different tool than the configured operation is a contract error."""
+    ops = (SyntheticToolOperation(tool_name="expected_tool", result={}),)
+    fixture = HealthyFixture(
+        id="sc-wrong-name",
+        input="go",
+        output_contains="unused",
+        tool_outputs={},
+        expected_tool_calls=("expected_tool",),
+        scenario_operations=ops,
+    )
+    transport = QueueTransport(
+        [
+            _response(
+                200,
+                {
+                    "id": "r1",
+                    "status": "in_progress",
+                    "output": [
+                        {"type": "function_call", "call_id": "c1", "name": "wrong_tool", "arguments": "{}"}
+                    ],
+                },
+            ),
+        ]
+    )
+    client = FoundryInvocationClient(PROJECT_ENDPOINT, lambda: "token", transport=transport)
+    with pytest.raises(RuntimeContractError, match="sequence mismatch"):
+        client.invoke_prompt(_prompt_receipt(), fixture)
+
+
+def test_scenario_operations_fails_when_agent_makes_extra_tool_calls() -> None:
+    """Agent calling more tools than configured operations is a contract error."""
+    ops = (SyntheticToolOperation(tool_name="tool_a", result={"v": 1}),)
+    fixture = HealthyFixture(
+        id="sc-extra",
+        input="go",
+        output_contains="unused",
+        tool_outputs={},
+        expected_tool_calls=("tool_a",),
+        scenario_operations=ops,
+    )
+    transport = QueueTransport(
+        [
+            # Turn 1: agent calls tool_a (consumes op 0)
+            _response(
+                200,
+                {
+                    "id": "r1",
+                    "status": "in_progress",
+                    "output": [
+                        {"type": "function_call", "call_id": "c1", "name": "tool_a", "arguments": "{}"}
+                    ],
+                },
+            ),
+            # Turn 2: agent calls another tool but no operations left
+            _response(
+                200,
+                {
+                    "id": "r2",
+                    "status": "in_progress",
+                    "output": [
+                        {"type": "function_call", "call_id": "c2", "name": "tool_b", "arguments": "{}"}
+                    ],
+                },
+            ),
+        ]
+    )
+    client = FoundryInvocationClient(PROJECT_ENDPOINT, lambda: "token", transport=transport)
+    with pytest.raises(RuntimeContractError, match="more tool calls than configured"):
+        client.invoke_prompt(_prompt_receipt(), fixture)
+
+
+def test_scenario_operations_fails_when_not_all_operations_consumed() -> None:
+    """Agent finishing with unconsumed operations remaining is a contract error."""
+    ops = (
+        SyntheticToolOperation(tool_name="step_1", result={"ok": True}),
+        SyntheticToolOperation(tool_name="step_2", result={"ok": True}),
+    )
+    fixture = HealthyFixture(
+        id="sc-partial",
+        input="go",
+        output_contains="partial",
+        tool_outputs={},
+        expected_tool_calls=("step_1", "step_2"),
+        scenario_operations=ops,
+    )
+    transport = QueueTransport(
+        [
+            # Turn 1: agent calls step_1 (consumes op 0)
+            _response(
+                200,
+                {
+                    "id": "r1",
+                    "status": "in_progress",
+                    "output": [
+                        {"type": "function_call", "call_id": "c1", "name": "step_1", "arguments": "{}"}
+                    ],
+                },
+            ),
+            # Agent finishes without calling step_2
+            _response(
+                200,
+                {
+                    "id": "r2",
+                    "status": "completed",
+                    "output_text": "partial",
+                },
+            ),
+        ]
+    )
+    client = FoundryInvocationClient(PROJECT_ENDPOINT, lambda: "token", transport=transport)
+    with pytest.raises(RuntimeContractError, match="fewer tool calls than configured"):
+        client.invoke_prompt(_prompt_receipt(), fixture)
