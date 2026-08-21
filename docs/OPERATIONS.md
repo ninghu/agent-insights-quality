@@ -51,6 +51,29 @@ python -m agent_insights_quality cleanup
 python -m agent_insights_quality cleanup --execute
 ```
 
+## Daily issue assignment
+
+`scenarios/catalog.yaml` remains the predefined, human-reviewed issue library; a scenario omitted
+from one daily plan remains active and returns in its deterministic rotation. The default
+`rotating_daily` plan always includes all six zero-insight controls and all ten P0 faults, then adds
+one partition of the 47 P1/P2 faults. `config/selection-policy.yaml` defines a six-day
+`8/8/8/8/8/7` partition horizon. Six days are required because the mandatory P0 set represents 11
+expected roots (the umbrella scenario represents two), leaving at most nine rotating roots under
+the five-agent expected cap of four each.
+
+The catalog hash, policy hash, cycle number, and report date determine selection and assignment;
+there is no mutable selection state. Priority, category coverage, and deterministic recency order
+drive partitioning. Every daily plan records selected and omitted IDs, selection reasons, cycle
+identity/day, full-coverage horizon, and per-agent expected totals. The planner fails rather than
+dropping an incompatible or over-cap selection.
+
+Use `python -m agent_insights_quality plan --report-date YYYY-MM-DD` for normal human-reviewable
+daily qualification. `--full-catalog` is an explicit special-release mode, is labeled
+non-human-daily, and is never used by scheduled automation. The expected cap is four roots per
+agent across all versions in a daily project and four roots per run. There is no generic actual
+insight cap: actual insights must equal the selected expected count exactly. Any extra insight is
+noise and any missing insight is a miss, making a complete run `NOT AT BAR`.
+
 `run` and `resume` require a reviewed adapter module through `AIQ_RUNTIME_ADAPTER`. Independent agents
 run concurrently while versions of one agent remain sequential. Resume replays completed operations
 with their idempotency keys and rejects checkpoint drift. Cleanup is a dry run unless `--execute` is

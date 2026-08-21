@@ -21,6 +21,7 @@ MEMORY_SCHEMA = SCHEMAS / "quality-memory.schema.json"
 SCORECARD_SCHEMA = SCHEMAS / "scorecard.schema.json"
 READINESS_FAILURE_SCHEMA = SCHEMAS / "readiness-failure.schema.json"
 EMAIL_HANDOFF_SCHEMA = SCHEMAS / "email-handoff.schema.json"
+SELECTION_POLICY_SCHEMA = SCHEMAS / "selection-policy.schema.json"
 
 EXPECTED_AGENTS = {
     "aiq-001-weather": "prompt",
@@ -606,28 +607,112 @@ def _catalog_hash() -> str:
     return catalog_bundle_hash()
 
 
+def selection_policy_hash(policy: dict[str, Any] | None = None) -> str:
+    data = policy or load_data(ROOT / "config" / "selection-policy.yaml")
+    return "sha256:" + hashlib.sha256(_canonical_bytes(data)).hexdigest()
+
+
+def validate_selection_policy(
+    data: dict[str, Any],
+    catalog: dict[str, Any] | None = None,
+) -> None:
+    validate_instance(data, SELECTION_POLICY_SCHEMA, "config/selection-policy.yaml")
+    cycle = data["cycle"]
+    if sum(cycle["partition_scenario_counts"]) != 47:
+        raise ContractError(
+            "config/selection-policy.yaml: rotating partitions must cover 47 scenarios"
+        )
+    if set(data["selection"]["mandatory_fault_priorities"]) & set(
+        data["selection"]["rotating_fault_priorities"]
+    ):
+        raise ContractError(
+            "config/selection-policy.yaml: mandatory and rotating priorities must be disjoint"
+        )
+    if set(data["selection"]["required_fault_categories"]) != REQUIRED_CATEGORIES - {"none"}:
+        raise ContractError(
+            "config/selection-policy.yaml: required categories must match the fault taxonomy"
+        )
+    if catalog is None:
+        return
+    active = [scenario for scenario in catalog["scenarios"] if scenario["status"] == "active"]
+    controls = [
+        scenario for scenario in active if scenario["expected"]["category"] == "none"
+    ]
+    mandatory = [
+        scenario
+        for scenario in active
+        if scenario["expected"]["category"] != "none"
+        and scenario["priority"] in data["selection"]["mandatory_fault_priorities"]
+    ]
+    rotating = [
+        scenario
+        for scenario in active
+        if scenario["expected"]["category"] != "none"
+        and scenario["priority"] in data["selection"]["rotating_fault_priorities"]
+    ]
+    classified = {scenario["id"] for scenario in controls + mandatory + rotating}
+    if classified != {scenario["id"] for scenario in active}:
+        raise ContractError(
+            "config/selection-policy.yaml: every active scenario must be classified"
+        )
+    if len(controls) != 6 or len(mandatory) != 10 or len(rotating) != 47:
+        raise ContractError(
+            "config/selection-policy.yaml: expected 6 controls, 10 mandatory faults, and 47 rotating faults"
+        )
+    mandatory_roots = sum(expected_finding_count(scenario) for scenario in mandatory)
+    daily_capacity = len(EXPECTED_AGENTS) * data["limits"][
+        "expected_insight_cap_per_agent"
+    ]
+    if mandatory_roots != 11 or mandatory_roots + max(
+        cycle["partition_scenario_counts"]
+    ) > daily_capacity:
+        raise ContractError(
+            "config/selection-policy.yaml: six-day rotation exceeds the reviewed daily root capacity"
+        )
+
+
+def load_selection_policy(catalog: dict[str, Any] | None = None) -> dict[str, Any]:
+    policy = load_data(ROOT / "config" / "selection-policy.yaml")
+    validate_selection_policy(policy, catalog)
+    return policy
+
+
 def validate_daily_plan_semantics(
     plan: dict[str, Any],
     agents: list[dict[str, Any]],
     catalog: dict[str, Any],
     label: str,
     expected_catalog_hash: str | None = None,
+    expected_policy: dict[str, Any] | None = None,
     allow_historical: bool = False,
 ) -> None:
+    policy = expected_policy or load_selection_policy(catalog)
+    policy_digest = selection_policy_hash(policy)
     agent_by_id = {agent["id"]: agent for agent in agents}
     scenario_by_id = {scenario["id"]: scenario for scenario in catalog["scenarios"]}
     active_ids = {
         scenario["id"] for scenario in catalog["scenarios"] if scenario["status"] == "active"
     }
     assignment_ids = [assignment["scenario_id"] for assignment in plan["assignments"]]
-    historical = plan["catalog_version"] != catalog["catalog_version"]
+    catalog_historical = plan["catalog_version"] != catalog["catalog_version"]
+    policy_historical = (
+        plan["policy_version"] != policy["policy_version"]
+        or plan["policy_hash"] != policy_digest
+    )
+    historical = catalog_historical or policy_historical
     if historical and not allow_historical:
-        raise ContractError(f"{label}: catalog_version does not match scenarios/catalog.yaml")
-    if not historical and plan["catalog_hash"] != (expected_catalog_hash or _catalog_hash()):
+        raise ContractError(
+            f"{label}: catalog_version or selection policy does not match current contracts"
+        )
+    if not catalog_historical and plan["catalog_hash"] != (
+        expected_catalog_hash or _catalog_hash()
+    ):
         raise ContractError(f"{label}: catalog_hash does not match scenarios/catalog.yaml")
     expected_seed = int(
         hashlib.sha256(
-            f"{plan['report_date']}:{plan['catalog_hash']}".encode("ascii")
+            (
+                f"{plan['report_date']}:{plan['catalog_hash']}:{plan['policy_hash']}"
+            ).encode("ascii")
         ).hexdigest()[:16],
         16,
     )
@@ -668,8 +753,77 @@ def validate_daily_plan_semantics(
         raise ContractError(f"{label}: plan_digest is not canonical")
     if len(assignment_ids) != len(set(assignment_ids)):
         raise ContractError(f"{label}: each scenario may be assigned only once")
-    if not historical and set(assignment_ids) != active_ids:
-        raise ContractError(f"{label}: assignments must cover every active scenario exactly once")
+    selection = plan["selection"]
+    selected_ids = selection["selected_scenario_ids"]
+    omitted_ids = selection["omitted_scenario_ids"]
+    if assignment_ids != selected_ids:
+        raise ContractError(f"{label}: assignment order must match selected scenario order")
+    if len(selected_ids) != len(set(selected_ids)) or len(omitted_ids) != len(set(omitted_ids)):
+        raise ContractError(f"{label}: selected and omitted scenario IDs must be unique")
+    if set(selected_ids) & set(omitted_ids):
+        raise ContractError(f"{label}: selected and omitted scenarios overlap")
+    if not historical and set(selected_ids) | set(omitted_ids) != active_ids:
+        raise ContractError(f"{label}: selected and omitted scenarios must partition the active catalog")
+    if set(selection["selection_reasons"]) != set(selected_ids):
+        raise ContractError(f"{label}: every selected scenario needs one selection reason")
+    report_day = date.fromisoformat(plan["report_date"])
+    epoch = date.fromisoformat(policy["cycle"]["epoch"])
+    elapsed = (report_day - epoch).days
+    expected_cycle_number, expected_cycle_index = divmod(elapsed, policy["cycle"]["days"])
+    expected_cycle_id = (
+        f"cycle-{expected_cycle_number}-"
+        + hashlib.sha256(
+            f"{plan['catalog_hash']}:{plan['policy_hash']}:{expected_cycle_number}".encode(
+                "ascii"
+            )
+        ).hexdigest()[:12]
+    )
+    cycle = selection["cycle"]
+    if not policy_historical and (
+        cycle["id"] != expected_cycle_id
+        or cycle["number"] != expected_cycle_number
+        or cycle["day"] != expected_cycle_index + 1
+        or cycle["length_days"] != policy["cycle"]["days"]
+        or cycle["full_coverage_horizon_days"] != policy["cycle"]["days"]
+    ):
+        raise ContractError(f"{label}: selection cycle metadata is not deterministic")
+    mandatory_ids = {
+        scenario["id"]
+        for scenario in catalog["scenarios"]
+        if scenario["status"] == "active"
+        and (
+            scenario["expected"]["category"] == "none"
+            or scenario["priority"] in policy["selection"]["mandatory_fault_priorities"]
+        )
+    }
+    rotating_ids = {
+        scenario["id"]
+        for scenario in catalog["scenarios"]
+        if scenario["status"] == "active"
+        and scenario["expected"]["category"] != "none"
+        and scenario["priority"] in policy["selection"]["rotating_fault_priorities"]
+    }
+    if not policy_historical and plan["selection_mode"] == "rotating_daily":
+        expected_rotating_count = policy["cycle"]["partition_scenario_counts"][
+            expected_cycle_index
+        ]
+        if not plan["human_daily_contract"] or not plan["limits"]["expected_cap_enforced"]:
+            raise ContractError(f"{label}: rotating daily plans must claim the expected-cap contract")
+        if set(selection["mandatory_scenario_ids"]) != mandatory_ids:
+            raise ContractError(f"{label}: rotating plan is missing a mandatory daily scenario")
+        if len(selection["rotating_scenario_ids"]) != expected_rotating_count:
+            raise ContractError(f"{label}: rotating partition has the wrong scenario count")
+        if not set(selection["rotating_scenario_ids"]).issubset(rotating_ids):
+            raise ContractError(f"{label}: rotating partition contains a non-rotating scenario")
+        if set(selected_ids) != mandatory_ids | set(selection["rotating_scenario_ids"]):
+            raise ContractError(f"{label}: selected scenarios do not match mandatory plus rotating")
+    elif not policy_historical and plan["selection_mode"] == "full_catalog":
+        if plan["human_daily_contract"] or plan["limits"]["expected_cap_enforced"]:
+            raise ContractError(f"{label}: full catalog cannot claim the human daily cap")
+        if set(selected_ids) != active_ids or omitted_ids:
+            raise ContractError(f"{label}: full catalog mode must select every active scenario")
+    elif not policy_historical:
+        raise ContractError(f"{label}: unknown selection mode")
     if historical and len(assignment_ids) != plan["coverage"]["scenario_count"]:
         raise ContractError(f"{label}: historical assignment count contradicts coverage")
 
@@ -687,6 +841,10 @@ def validate_daily_plan_semantics(
                 raise ContractError(f"{label}: scenario version does not match the catalog")
             if assignment["family"] != scenario["family"]:
                 raise ContractError(f"{label}: scenario family does not match the catalog")
+            if assignment["selection_reason"] != selection["selection_reasons"][
+                assignment["scenario_id"]
+            ]:
+                raise ContractError(f"{label}: assignment selection reason does not match")
             if assignment["conflict_tags"] != scenario["conflict_tags"]:
                 raise ContractError(f"{label}: conflict tags do not match the catalog")
             if not assignment["agent_name"].startswith(agent["required_name_prefix"]):
@@ -702,7 +860,7 @@ def validate_daily_plan_semantics(
                 raise ContractError(f"{label}: assignment agent type does not match its manifest")
             if assignment["traffic_recipe_id"] != scenario["traffic"]["recipe_id"]:
                 raise ContractError(f"{label}: traffic recipe does not match the scenario")
-            if (
+            if not policy_historical and (
                 assignment["traffic_seed_namespace"]
                 != scenario["traffic"]["seed_namespace"]
             ):
@@ -814,36 +972,63 @@ def validate_daily_plan_semantics(
         ) and len(assignments) != 1:
             raise ContractError(f"{label}: sequential lifecycle runs must be isolated")
 
-    if historical:
-        expected_coverage = {
-            "scenario_count": len(plan["assignments"]),
-            "healthy_control_count": sum(
-                assignment["expected"]["finding_count"] == 0
-                for assignment in plan["assignments"]
-            ),
-            "families": sorted({assignment["family"] for assignment in plan["assignments"]}),
-            "categories": sorted(
-                {assignment["expected"]["category"] for assignment in plan["assignments"]}
-            ),
-            "severities": sorted(
-                {assignment["expected"]["severity"] for assignment in plan["assignments"]}
-            ),
-            "agent_types": sorted(
-                {assignment["agent_type"] for assignment in plan["assignments"]}
-            ),
-        }
-    else:
-        active = [scenario_by_id[scenario_id] for scenario_id in active_ids]
-        expected_coverage = {
-            "scenario_count": len(active),
-            "healthy_control_count": sum(
-                scenario["expected"]["category"] == "none" for scenario in active
-            ),
-            "families": sorted({scenario["family"] for scenario in active}),
-            "categories": sorted({scenario["expected"]["category"] for scenario in active}),
-            "severities": sorted({scenario["expected"]["severity"] for scenario in active}),
-            "agent_types": sorted({agent["agent_type"] for agent in agents}),
-        }
+    per_agent_expected = {
+        agent_id: sum(
+            assignment["expected"]["finding_count"]
+            for assignment in plan["assignments"]
+            if assignment["agent_id"] == agent_id
+        )
+        for agent_id in sorted(agent_by_id)
+    }
+    if plan["per_agent_expected_totals"] != per_agent_expected:
+        raise ContractError(f"{label}: per-agent expected totals do not match assignments")
+    limits = plan["limits"]
+    if (
+        limits["expected_insight_cap_per_agent"]
+        != policy["limits"]["expected_insight_cap_per_agent"]
+        or limits["expected_root_cap_per_run"]
+        != policy["limits"]["expected_root_cap_per_run"]
+        or limits["actual_insight_count_rule"]
+        != policy["limits"]["actual_insight_count_rule"]
+    ):
+        raise ContractError(f"{label}: plan limits do not match selection policy")
+    fault_assignments = [
+        assignment
+        for assignment in plan["assignments"]
+        if assignment["expected"]["finding_count"] > 0
+    ]
+    if not policy_historical and plan["selection_mode"] == "rotating_daily":
+        if len(fault_assignments) > policy["limits"]["daily_fault_scenario_count"]:
+            raise ContractError(f"{label}: daily fault scenario budget exceeded")
+        if sum(item["expected"]["finding_count"] for item in fault_assignments) > policy[
+            "limits"
+        ]["daily_expected_root_count"]:
+            raise ContractError(f"{label}: daily expected root budget exceeded")
+        if max(per_agent_expected.values()) > limits["expected_insight_cap_per_agent"]:
+            raise ContractError(f"{label}: agent exceeds four expected root causes")
+
+    selected_scenarios = [
+        scenario_by_id[scenario_id]
+        for scenario_id in selected_ids
+        if scenario_id in scenario_by_id
+    ]
+    expected_coverage = {
+        "scenario_count": len(plan["assignments"]),
+        "healthy_control_count": sum(
+            assignment["expected"]["finding_count"] == 0
+            for assignment in plan["assignments"]
+        ),
+        "families": sorted({scenario["family"] for scenario in selected_scenarios}),
+        "categories": sorted(
+            {scenario["expected"]["category"] for scenario in selected_scenarios}
+        ),
+        "severities": sorted(
+            {scenario["expected"]["severity"] for scenario in selected_scenarios}
+        ),
+        "agent_types": sorted(
+            {assignment["agent_type"] for assignment in plan["assignments"]}
+        ),
+    }
     if plan["coverage"] != expected_coverage:
         raise ContractError(f"{label}: declared coverage does not match assignments")
 
@@ -1013,6 +1198,8 @@ def validate_canonical_report_semantics(
         if (
             scorecard["violations"]
             or counts["healthy_insights"]
+            or counts["false_positives"]
+            or counts["false_negatives"]
             or counts["structural_failures"]
             or rates["overall_recall"] < 0.90
             or rates["precision"] < 0.95
@@ -1263,6 +1450,7 @@ def validate_contracts() -> None:
     load_healthy_agents()
     catalog = load_scenario_catalog({agent["id"] for agent in agents})
     validate_supporting_manifests(catalog)
+    load_selection_policy(catalog)
     validate_instance(
         load_data(ROOT / "state" / "quality-memory.json"),
         MEMORY_SCHEMA,

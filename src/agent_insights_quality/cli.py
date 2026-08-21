@@ -43,6 +43,11 @@ def build_parser() -> argparse.ArgumentParser:
     plan_parser.add_argument("--report-date", required=True, type=date.fromisoformat)
     plan_parser.add_argument("--output-dir", type=Path)
     plan_parser.add_argument("--rerun", type=int, default=0)
+    plan_parser.add_argument(
+        "--full-catalog",
+        action="store_true",
+        help="Run the non-human-daily full catalog for special release qualification",
+    )
     docs_parser = subparsers.add_parser("generate-docs", help="Render manifest-backed documentation")
     docs_parser.add_argument("--check", action="store_true", help="Fail instead of writing stale docs")
     path_parser = subparsers.add_parser(
@@ -141,6 +146,7 @@ def run(args: argparse.Namespace) -> None:
             args.report_date,
             args.output_dir,
             rerun=args.rerun,
+            full_catalog=args.full_catalog,
         )
         print(f"Wrote {json_path} and {markdown_path}.")
     elif args.command == "generate-docs":

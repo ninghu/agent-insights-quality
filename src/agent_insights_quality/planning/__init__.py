@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import random
 from collections import defaultdict
 from datetime import date, timedelta
 from pathlib import Path
@@ -15,13 +14,15 @@ from agent_insights_quality.contracts import (
     expected_finding_count,
     load_agent_manifests,
     load_scenario_catalog,
+    load_selection_policy,
+    selection_policy_hash,
     validate_daily_plan_semantics,
     validate_instance,
     validate_supporting_manifests,
 )
 
 
-PLANNER_VERSION = "1.0.0"
+PLANNER_VERSION = "2.0.0"
 ENGINE_BUILD = "public-agent-insights-daily"
 GENERATOR_MODEL = "gpt-5.6-terra"
 
@@ -62,28 +63,318 @@ def _assign_agents(
     scenarios: list[dict[str, Any]],
     agents: list[dict[str, Any]],
     seed: int,
+    *,
+    expected_cap: int | None,
 ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    ordered = list(scenarios)
-    random.Random(seed).shuffle(ordered)
-    ordered.sort(key=lambda scenario: len(_eligible_agents(scenario, agents)))
-    loads = {agent["id"]: 0 for agent in agents}
-    assignments = []
-    for scenario in ordered:
-        eligible = _eligible_agents(scenario, agents)
-        agent = min(
-            eligible,
-            key=lambda item: (
-                loads[item["id"]],
-                _sha256(f"{seed}:{scenario['id']}:{item['id']}"),
+    agent_order = sorted(agents, key=lambda item: item["id"])
+    priority = {"P0": 0, "P1": 1, "P2": 2}
+    ordered = sorted(
+        scenarios,
+        key=lambda scenario: (
+            expected_finding_count(scenario) == 0,
+            len(_eligible_agents(scenario, agent_order)),
+            -expected_finding_count(scenario),
+            priority[scenario["priority"]],
+            _sha256(f"{seed}:assignment-order:{scenario['id']}"),
+        ),
+    )
+    total = len(ordered)
+    maximum_count = (total + len(agent_order) - 1) // len(agent_order)
+    minimum_count = total // len(agent_order)
+    roots = [0] * len(agent_order)
+    counts = [0] * len(agent_order)
+    selected: list[int] = []
+    failed: set[tuple[int, tuple[int, ...], tuple[int, ...]]] = set()
+    indexes = {agent["id"]: index for index, agent in enumerate(agent_order)}
+
+    def search(index: int) -> bool:
+        if index == total:
+            return min(counts) >= minimum_count and max(counts) <= maximum_count
+        state = (index, tuple(roots), tuple(counts))
+        if state in failed:
+            return False
+        remaining = total - index
+        if sum(max(0, minimum_count - count) for count in counts) > remaining:
+            failed.add(state)
+            return False
+        scenario = ordered[index]
+        weight = expected_finding_count(scenario)
+        eligible = [indexes[agent["id"]] for agent in _eligible_agents(scenario, agent_order)]
+        eligible.sort(
+            key=lambda agent_index: (
+                roots[agent_index],
+                counts[agent_index],
+                _sha256(
+                    f"{seed}:{scenario['id']}:{agent_order[agent_index]['id']}"
+                ),
+            )
+        )
+        for agent_index in eligible:
+            if counts[agent_index] >= maximum_count:
+                continue
+            if expected_cap is not None and roots[agent_index] + weight > expected_cap:
+                continue
+            roots[agent_index] += weight
+            counts[agent_index] += 1
+            selected.append(agent_index)
+            if search(index + 1):
+                return True
+            selected.pop()
+            counts[agent_index] -= 1
+            roots[agent_index] -= weight
+        failed.add(state)
+        return False
+
+    if not search(0):
+        raise ContractError(
+            "Selected scenarios cannot fit compatible agents within the reviewed expected cap"
+        )
+    return [
+        (scenario, agent_order[agent_index])
+        for scenario, agent_index in zip(ordered, selected, strict=True)
+    ]
+
+
+def _cycle_metadata(
+    report_date: date,
+    policy: dict[str, Any],
+    catalog_digest: str,
+    policy_digest: str,
+) -> tuple[dict[str, Any], int]:
+    epoch = date.fromisoformat(policy["cycle"]["epoch"])
+    cycle_number, cycle_index = divmod(
+        (report_date - epoch).days,
+        policy["cycle"]["days"],
+    )
+    cycle_id = (
+        f"cycle-{cycle_number}-"
+        + hashlib.sha256(
+            f"{catalog_digest}:{policy_digest}:{cycle_number}".encode("ascii")
+        ).hexdigest()[:12]
+    )
+    return (
+        {
+            "id": cycle_id,
+            "number": cycle_number,
+            "day": cycle_index + 1,
+            "length_days": policy["cycle"]["days"],
+            "full_coverage_horizon_days": policy["cycle"]["days"],
+        },
+        cycle_index,
+    )
+
+
+def _partition_candidate(
+    rotating: list[dict[str, Any]],
+    sizes: list[int],
+    *,
+    catalog_digest: str,
+    policy_digest: str,
+    cycle_number: int,
+    nonce: int,
+    rotating_root_cap: int,
+) -> list[list[dict[str, Any]]] | None:
+    partitions: list[list[dict[str, Any]]] = [[] for _ in sizes]
+    roots = [0] * len(sizes)
+    categories: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for scenario in rotating:
+        categories[scenario["expected"]["category"]].append(scenario)
+    priority = {"P0": 0, "P1": 1, "P2": 2}
+    category_order = sorted(categories, key=lambda name: (len(categories[name]), name))
+    for category in category_order:
+        ordered = sorted(
+            categories[category],
+            key=lambda scenario: (
+                priority[scenario["priority"]],
+                _sha256(
+                    f"{catalog_digest}:{policy_digest}:{cycle_number}:{nonce}:"
+                    f"{scenario['id']}"
+                ),
             ),
         )
-        loads[agent["id"]] += 1
-        assignments.append((scenario, agent))
-    return assignments
+        for scenario in ordered:
+            weight = expected_finding_count(scenario)
+            eligible_days = [
+                day
+                for day, capacity in enumerate(sizes)
+                if len(partitions[day]) < capacity
+                and roots[day] + weight <= rotating_root_cap
+            ]
+            if not eligible_days:
+                return None
+            eligible_days.sort(
+                key=lambda day: (
+                    any(
+                        item["expected"]["category"] == category
+                        for item in partitions[day]
+                    ),
+                    len(partitions[day]) / sizes[day],
+                    roots[day],
+                    _sha256(
+                        f"{catalog_digest}:{cycle_number}:{nonce}:{scenario['id']}:{day}"
+                    ),
+                )
+            )
+            day = eligible_days[0]
+            partitions[day].append(scenario)
+            roots[day] += weight
+    if [len(partition) for partition in partitions] != sizes:
+        return None
+    return partitions
+
+
+def rotating_cycle_partitions(
+    catalog: dict[str, Any],
+    agents: list[dict[str, Any]],
+    policy: dict[str, Any],
+    catalog_digest: str,
+    policy_digest: str,
+    cycle_number: int,
+) -> list[list[dict[str, Any]]]:
+    active = [scenario for scenario in catalog["scenarios"] if scenario["status"] == "active"]
+    mandatory = [
+        scenario
+        for scenario in active
+        if scenario["expected"]["category"] == "none"
+        or scenario["priority"] in policy["selection"]["mandatory_fault_priorities"]
+    ]
+    rotating = [
+        scenario
+        for scenario in active
+        if scenario["expected"]["category"] != "none"
+        and scenario["priority"] in policy["selection"]["rotating_fault_priorities"]
+    ]
+    sizes = policy["cycle"]["partition_scenario_counts"]
+    mandatory_roots = sum(expected_finding_count(scenario) for scenario in mandatory)
+    rotating_root_cap = (
+        policy["limits"]["daily_expected_root_count"] - mandatory_roots
+    )
+    best: tuple[tuple[int, int], list[list[dict[str, Any]]]] | None = None
+    required_categories = set(policy["selection"]["required_fault_categories"])
+    for nonce in range(256):
+        partitions = _partition_candidate(
+            rotating,
+            sizes,
+            catalog_digest=catalog_digest,
+            policy_digest=policy_digest,
+            cycle_number=cycle_number,
+            nonce=nonce,
+            rotating_root_cap=rotating_root_cap,
+        )
+        if partitions is None:
+            continue
+        try:
+            for day, partition in enumerate(partitions):
+                _assign_agents(
+                    mandatory + partition,
+                    agents,
+                    int(
+                        hashlib.sha256(
+                            f"{catalog_digest}:{policy_digest}:{cycle_number}:{day}".encode(
+                                "ascii"
+                            )
+                        ).hexdigest()[:16],
+                        16,
+                    ),
+                    expected_cap=policy["limits"]["expected_insight_cap_per_agent"],
+                )
+        except ContractError:
+            continue
+        coverage = [
+            len(
+                {
+                    scenario["expected"]["category"]
+                    for scenario in mandatory + partition
+                    if scenario["expected"]["category"] in required_categories
+                }
+            )
+            for partition in partitions
+        ]
+        score = (min(coverage), sum(coverage))
+        if best is None or score > best[0]:
+            best = (score, partitions)
+    if best is None:
+        raise ContractError(
+            "The rotating catalog cannot be partitioned into six assignable daily selections"
+        )
+    return best[1]
+
+
+def _select_scenarios(
+    report_date: date,
+    catalog: dict[str, Any],
+    agents: list[dict[str, Any]],
+    policy: dict[str, Any],
+    catalog_digest: str,
+    policy_digest: str,
+    *,
+    full_catalog: bool,
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, str]]:
+    active = [scenario for scenario in catalog["scenarios"] if scenario["status"] == "active"]
+    cycle, cycle_index = _cycle_metadata(
+        report_date,
+        policy,
+        catalog_digest,
+        policy_digest,
+    )
+    if full_catalog:
+        reasons = {
+            scenario["id"]: "full_catalog_release"
+            for scenario in active
+        }
+        selection = {
+            "cycle": cycle,
+            "mandatory_scenario_ids": [],
+            "rotating_scenario_ids": [],
+            "selected_scenario_ids": [],
+            "omitted_scenario_ids": [],
+            "selection_reasons": reasons,
+        }
+        return active, selection, reasons
+    mandatory = [
+        scenario
+        for scenario in active
+        if scenario["expected"]["category"] == "none"
+        or scenario["priority"] in policy["selection"]["mandatory_fault_priorities"]
+    ]
+    partitions = rotating_cycle_partitions(
+        catalog,
+        agents,
+        policy,
+        catalog_digest,
+        policy_digest,
+        cycle["number"],
+    )
+    rotating = partitions[cycle_index]
+    selected = mandatory + rotating
+    reasons = {
+        scenario["id"]: (
+            "healthy_control_daily"
+            if scenario["expected"]["category"] == "none"
+            else "p0_fault_daily"
+        )
+        for scenario in mandatory
+    }
+    reasons.update(
+        {scenario["id"]: "rotating_priority_fairness" for scenario in rotating}
+    )
+    selection = {
+        "cycle": cycle,
+        "mandatory_scenario_ids": [],
+        "rotating_scenario_ids": [],
+        "selected_scenario_ids": [],
+        "omitted_scenario_ids": sorted(
+            {scenario["id"] for scenario in active}
+            - {scenario["id"] for scenario in selected}
+        ),
+        "selection_reasons": reasons,
+    }
+    return selected, selection, reasons
 
 
 def _group_runs(
     assigned: list[tuple[dict[str, Any], dict[str, Any]]],
+    root_cap: int,
 ) -> list[dict[str, Any]]:
     per_agent: dict[str, list[tuple[dict[str, Any], dict[str, Any]]]] = defaultdict(list)
     for scenario, agent in assigned:
@@ -92,7 +383,14 @@ def _group_runs(
     runs = []
     for agent_id in sorted(per_agent):
         buckets: list[dict[str, Any]] = []
-        for scenario, agent in per_agent[agent_id]:
+        ordered = sorted(
+            per_agent[agent_id],
+            key=lambda item: (
+                item[0]["expected"]["category"] != "none",
+                item[0]["id"],
+            ),
+        )
+        for scenario, agent in ordered:
             sequential = (
                 scenario["version_semantics"]["applies_to"]
                 == "sequential_faulted_and_corrected_versions"
@@ -108,7 +406,7 @@ def _group_runs(
                     if (
                         not bucket["exclusive"]
                         and bucket["phase"] == scenario["version_semantics"]["phases"][0]
-                        and fault_count + expected_finding_count(scenario) <= 4
+                        and fault_count + expected_finding_count(scenario) <= root_cap
                         and conflicts.isdisjoint(bucket["conflict_tags"])
                     ):
                         selected = bucket
@@ -169,8 +467,10 @@ def generate_daily_plan(
     *,
     catalog: dict[str, Any] | None = None,
     agents: list[dict[str, Any]] | None = None,
+    policy: dict[str, Any] | None = None,
     catalog_digest: str | None = None,
     rerun: int = 0,
+    full_catalog: bool = False,
 ) -> dict[str, Any]:
     if rerun < 0 or rerun > 99:
         raise ValueError("rerun must be between 0 and 99")
@@ -180,18 +480,35 @@ def generate_daily_plan(
         if catalog is not None
         else load_scenario_catalog({agent["id"] for agent in agents})
     )
+    policy = policy if policy is not None else load_selection_policy(catalog)
     validate_supporting_manifests(catalog)
     computed_digest = catalog_bundle_hash(catalog=catalog, agents=agents)
     if catalog_digest is not None and catalog_digest != computed_digest:
         raise ContractError("catalog_digest does not match the supplied planning bundle")
     digest = computed_digest
+    policy_digest = selection_policy_hash(policy)
     seed = int(
-        hashlib.sha256(f"{report_date.isoformat()}:{digest}".encode("ascii")).hexdigest()[:16],
+        hashlib.sha256(
+            f"{report_date.isoformat()}:{digest}:{policy_digest}".encode("ascii")
+        ).hexdigest()[:16],
         16,
     )
-    active = [scenario for scenario in catalog["scenarios"] if scenario["status"] == "active"]
-    assigned = _assign_agents(active, agents, seed)
-    runs = _group_runs(assigned)
+    selected, selection, reasons = _select_scenarios(
+        report_date,
+        catalog,
+        agents,
+        policy,
+        digest,
+        policy_digest,
+        full_catalog=full_catalog,
+    )
+    expected_cap = (
+        None
+        if full_catalog
+        else policy["limits"]["expected_insight_cap_per_agent"]
+    )
+    assigned = _assign_agents(selected, agents, seed, expected_cap=expected_cap)
+    runs = _group_runs(assigned, policy["limits"]["expected_root_cap_per_run"])
 
     assignments = []
     for run in runs:
@@ -208,6 +525,7 @@ def generate_daily_plan(
                     "scenario_id": scenario["id"],
                     "scenario_version": scenario["version"],
                     "family": scenario["family"],
+                    "selection_reason": reasons[scenario["id"]],
                     "conflict_tags": scenario["conflict_tags"],
                     "run_id": run["run_id"],
                     "agent_id": agent["id"],
@@ -239,11 +557,32 @@ def generate_daily_plan(
                 }
             )
     assignments.sort(key=lambda item: (item["wave"], item["agent_id"], item["scenario_id"]))
+    selected_ids = [assignment["scenario_id"] for assignment in assignments]
+    selection["selected_scenario_ids"] = selected_ids
+    selection["mandatory_scenario_ids"] = [
+        scenario_id
+        for scenario_id in selected_ids
+        if reasons[scenario_id] in {"healthy_control_daily", "p0_fault_daily"}
+    ]
+    selection["rotating_scenario_ids"] = [
+        scenario_id
+        for scenario_id in selected_ids
+        if reasons[scenario_id] == "rotating_priority_fairness"
+    ]
     plan_id = f"aiq-{report_date:%Y%m%d}" + (f"-r{rerun:02d}" if rerun else "")
     artifact_directory = (
         f"reports/daily/{report_date:%Y/%m/%d}"
         + (f"/{plan_id}" if rerun else "")
     )
+    selected_by_id = {scenario["id"]: scenario for scenario in selected}
+    per_agent_expected = {
+        agent["id"]: sum(
+            assignment["expected"]["finding_count"]
+            for assignment in assignments
+            if assignment["agent_id"] == agent["id"]
+        )
+        for agent in sorted(agents, key=lambda item: item["id"])
+    }
     plan = {
         "schema_version": "1.0.0",
         "plan_id": plan_id,
@@ -253,8 +592,24 @@ def generate_daily_plan(
         "created_at": f"{report_date.isoformat()}T00:00:00Z",
         "catalog_version": catalog["catalog_version"],
         "catalog_hash": digest,
+        "policy_version": policy["policy_version"],
+        "policy_hash": policy_digest,
         "planner_version": PLANNER_VERSION,
         "seed": seed,
+        "selection_mode": "full_catalog" if full_catalog else "rotating_daily",
+        "human_daily_contract": not full_catalog,
+        "selection": selection,
+        "limits": {
+            "expected_insight_cap_per_agent": policy["limits"][
+                "expected_insight_cap_per_agent"
+            ],
+            "expected_root_cap_per_run": policy["limits"]["expected_root_cap_per_run"],
+            "actual_insight_count_rule": policy["limits"][
+                "actual_insight_count_rule"
+            ],
+            "expected_cap_enforced": not full_catalog,
+        },
+        "per_agent_expected_totals": per_agent_expected,
         "engine": {
             "endpoint_reference": _sha256("runtime:agent-insights-endpoint"),
             "build": ENGINE_BUILD,
@@ -270,9 +625,21 @@ def generate_daily_plan(
             "healthy_control_count": sum(
                 item["expected"]["finding_count"] == 0 for item in assignments
             ),
-            "families": sorted({scenario["family"] for scenario in active}),
-            "categories": sorted({scenario["expected"]["category"] for scenario in active}),
-            "severities": sorted({scenario["expected"]["severity"] for scenario in active}),
+            "families": sorted(
+                {selected_by_id[scenario_id]["family"] for scenario_id in selected_ids}
+            ),
+            "categories": sorted(
+                {
+                    selected_by_id[scenario_id]["expected"]["category"]
+                    for scenario_id in selected_ids
+                }
+            ),
+            "severities": sorted(
+                {
+                    selected_by_id[scenario_id]["expected"]["severity"]
+                    for scenario_id in selected_ids
+                }
+            ),
             "agent_types": sorted({item["agent_type"] for item in assignments}),
         },
         "assignments": assignments,
@@ -285,6 +652,7 @@ def generate_daily_plan(
         catalog,
         "generated plan",
         expected_catalog_hash=digest,
+        expected_policy=policy,
     )
     return plan
 
@@ -298,6 +666,7 @@ def render_plan_markdown(
     catalog: dict[str, Any],
 ) -> str:
     scenarios = {scenario["id"]: scenario for scenario in catalog["scenarios"]}
+    cycle = plan["selection"]["cycle"]
     lines = [
         "# Daily Agent Insights Quality Plan",
         "",
@@ -308,19 +677,56 @@ def render_plan_markdown(
         f"- Artifact directory: `{plan['artifact_directory']}`",
         f"- Report date: `{plan['report_date']}`",
         f"- Catalog: `{plan['catalog_version']}` (`{plan['catalog_hash']}`)",
+        f"- Selection policy: `{plan['policy_version']}` (`{plan['policy_hash']}`)",
+        f"- Selection mode: `{plan['selection_mode']}`",
+        f"- Human daily contract: `{str(plan['human_daily_contract']).lower()}`",
+        f"- Cycle: `{cycle['id']}`, day {cycle['day']} of {cycle['length_days']}",
+        f"- Full-coverage horizon: {cycle['full_coverage_horizon_days']} days",
         f"- Deterministic seed: `{plan['seed']}`",
         "",
-        "## Assignments",
+        "## Selection",
         "",
-        "| Wave | Run | Agent | Type | Scenario | Version | Requests | Lifecycle |",
-        "| ---: | --- | --- | --- | --- | --- | ---: | --- |",
+        f"- Mandatory scenarios: {len(plan['selection']['mandatory_scenario_ids'])}",
+        f"- Rotating scenarios: {len(plan['selection']['rotating_scenario_ids'])}",
+        f"- Selected scenarios: {len(plan['selection']['selected_scenario_ids'])}",
+        f"- Omitted scenarios: {len(plan['selection']['omitted_scenario_ids'])}",
+        "",
+        "Selected: "
+        + ", ".join(f"`{value}`" for value in plan["selection"]["selected_scenario_ids"]),
+        "",
+        "Omitted: "
+        + (
+            ", ".join(f"`{value}`" for value in plan["selection"]["omitted_scenario_ids"])
+            or "none"
+        ),
+        "",
+        "## Per-agent expected totals",
+        "",
+        "| Agent | Expected roots | Expected cap | Actual count rule |",
+        "| --- | ---: | ---: | --- |",
     ]
+    for agent_id, total in plan["per_agent_expected_totals"].items():
+        lines.append(
+            f"| `{agent_id}` | {total} | "
+            f"{plan['limits']['expected_insight_cap_per_agent']} | "
+            f"`{plan['limits']['actual_insight_count_rule']}` |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Assignments",
+            "",
+            "| Wave | Run | Agent | Type | Scenario | Reason | Version | Requests | Lifecycle |",
+            "| ---: | --- | --- | --- | --- | --- | --- | ---: | --- |",
+        ]
+    )
     for item in plan["assignments"]:
         scenario = scenarios[item["scenario_id"]]
         lines.append(
             f"| {item['wave']} | `{item['run_id']}` | `{item['agent_id']}` | "
             f"`{item['agent_type']}` | `{item['scenario_id']}` - {scenario['title']} | "
-            f"`{item['scenario_version']}` | {item['traffic_requests']} | `{item['lifecycle']}` |"
+            f"`{item['selection_reason']}` | `{item['scenario_version']}` | "
+            f"{item['traffic_requests']} | `{item['lifecycle']}` |"
         )
 
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -388,10 +794,17 @@ def write_daily_plan(
     output_dir: Path | None = None,
     *,
     rerun: int = 0,
+    full_catalog: bool = False,
 ) -> tuple[Path, Path]:
     agents = load_agent_manifests()
     catalog = load_scenario_catalog({agent["id"] for agent in agents})
-    plan = generate_daily_plan(report_date, catalog=catalog, agents=agents, rerun=rerun)
+    plan = generate_daily_plan(
+        report_date,
+        catalog=catalog,
+        agents=agents,
+        rerun=rerun,
+        full_catalog=full_catalog,
+    )
     if output_dir is None:
         destination = ROOT / Path(plan["artifact_directory"])
     else:

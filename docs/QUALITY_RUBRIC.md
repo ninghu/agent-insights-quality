@@ -2,8 +2,9 @@
 
 The daily verdict is strict and fail-closed.
 
-`AT BAR` requires a complete full-catalog run, zero healthy-baseline insights, no run with more than
-five insights, 100% high-severity recall, at least 90% overall recall, at least 95% precision, and
+`AT BAR` requires a complete reviewed daily selection, zero healthy-baseline insights, exact actual
+insight counts for the selected expected roots, 100% high-severity recall, at least 90% overall
+recall, at least 95% precision, and
 100% category, severity, title, description, proposed-fix, and linked-trace correctness among
 accepted true positives. Duplication, umbrella, and cross-version stale-evidence rates must all be
 zero. Structural, provenance, secret/PII, judge-schema, or unresolved-classification failures are

@@ -350,14 +350,17 @@ failed run.
 
 ## 9. Daily test-plan generation
 
-The planner runs the full catalog every day but randomizes assignment so coverage is not tied to one
-domain or implementation:
+The planner treats the full catalog as a predefined reviewed issue library. Each daily plan includes
+all six healthy controls, all ten P0 faults, and one deterministic partition of the 47 P1/P2 faults.
+The six-day `8/8/8/8/8/7` horizon is required because the mandatory P0 set represents 11 expected
+roots, leaving nine rotating root slots under the expected cap of four per agent:
 
-1. Compute a reproducible seed from `report date + catalog hash`.
-2. Assign every active scenario exactly once to a compatible agent and version wave.
+1. Compute a reproducible seed from `report date + catalog hash + selection-policy hash`.
+2. Assign every selected scenario exactly once to a compatible agent and version wave; fail rather
+   than silently dropping a scenario.
 3. Balance scenarios across the five domains and three implementation types.
-4. Put no more than four distinct injected root causes in one insight run. This leaves room below the
-   hard five-insight customer cap and makes a fifth unrelated insight clearly suspicious.
+4. Put no more than four expected root causes on an agent across all daily versions and in one insight
+   run.
 5. Never co-locate conflict-tagged scenarios whose traces would make ground truth ambiguous.
 6. Ensure every engine category, severity, agent type, and lifecycle case is represented.
 7. Create additional immutable versions when an agent cannot safely hold all assigned scenarios in
@@ -471,7 +474,8 @@ For every insight:
 - Proposed-fix kind and artifact shape are valid for prompt, hosted-code, or prose fallback.
 - Proposed changes never reference a tool/capability absent from the deployed agent.
 - Text contains no credentials, secrets, or synthetic PII values.
-- No run publishes more than five insights.
+- Actual insight count exactly matches the selected expected count; extras are noise and missing
+  insights are misses.
 - Exact IDs/signatures/evidence fingerprints do not duplicate another insight.
 
 For the collection:
@@ -543,9 +547,9 @@ least 0.95.
 
 `AT BAR` requires all of the following:
 
-- The full active catalog completed.
+- The complete reviewed daily selection completed.
 - Every healthy baseline run produced zero insights.
-- Every run produced at most five insights.
+- Every run and agent/day produced exactly its selected expected insight count.
 - High-severity detection recall is 100%.
 - Overall scenario recall is at least 90%.
 - Insight precision is at least 95%.

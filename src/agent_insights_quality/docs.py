@@ -61,6 +61,10 @@ def _scenario_doc(catalog: dict[str, Any]) -> str:
             f"healthy controls: **{categories['none']}**."
         ),
         "",
+        "This is the predefined, human-reviewed issue library. The default daily plan runs all",
+        "healthy controls and P0 faults plus one deterministic six-day rotating partition of P1/P2",
+        "faults; it does not run the full library every day.",
+        "",
         "Category coverage: "
         + ", ".join(f"`{name}` ({count})" for name, count in sorted(categories.items())),
         "",
@@ -94,6 +98,48 @@ def _scenario_doc(catalog: dict[str, Any]) -> str:
             "",
         ]
     )
+    return "\n".join(lines)
+
+
+def _issue_library_doc(catalog: dict[str, Any]) -> str:
+    active = [scenario for scenario in catalog["scenarios"] if scenario["status"] == "active"]
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for scenario in active:
+        grouped.setdefault(scenario["expected"]["category"], []).append(scenario)
+    lines = [
+        "# Issue Library",
+        "",
+        GENERATED_NOTICE,
+        "",
+        "This file lists every predefined, reviewed scenario contract. Daily assignment is a",
+        "deterministic subset governed by `config/selection-policy.yaml`; omission from one day is",
+        "rotation, not retirement or a change to ground truth.",
+        "",
+        f"Active contracts: **{len(active)}** across **{len(grouped)}** categories.",
+        "",
+        "| Category | Contracts |",
+        "| --- | ---: |",
+    ]
+    for category, scenarios in sorted(grouped.items()):
+        lines.append(f"| `{category}` | {len(scenarios)} |")
+    for category, scenarios in sorted(grouped.items()):
+        lines.extend(
+            [
+                "",
+                f"## {category}",
+                "",
+                "| Scenario | Priority | Expected roots | Root-cause contract | Fix boundary |",
+                "| --- | --- | ---: | --- | --- |",
+            ]
+        )
+        for scenario in sorted(scenarios, key=lambda item: item["id"]):
+            expected = scenario["expected"]
+            lines.append(
+                f"| `{scenario['id']}` - {scenario['title']} | {scenario['priority']} | "
+                f"{expected.get('finding_count', int(category != 'none'))} | "
+                f"{expected['root_cause']} | {expected['fix']['boundary']} |"
+            )
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -133,6 +179,7 @@ def generated_documents() -> dict[Path, str]:
     return {
         ROOT / "docs" / "TEST_AGENTS.md": _agent_doc(agents),
         ROOT / "docs" / "SCENARIO_CATALOG.md": _scenario_doc(catalog),
+        ROOT / "docs" / "ISSUE_LIBRARY.md": _issue_library_doc(catalog),
         ROOT / "state" / "QUALITY_MEMORY.md": _memory_doc(memory),
     }
 

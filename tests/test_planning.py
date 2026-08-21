@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from copy import deepcopy
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -17,6 +17,8 @@ from agent_insights_quality.contracts import (
     catalog_bundle_hash,
     load_agent_manifests,
     load_scenario_catalog,
+    load_selection_policy,
+    selection_policy_hash,
     validate_daily_plan_semantics,
     validate_instance,
     validate_scenario_catalog_semantics,
@@ -116,6 +118,8 @@ def test_same_inputs_produce_byte_equivalent_plan() -> None:
     second = generate_daily_plan(REPORT_DATE, agents=agents, catalog=catalog)
     assert serialize_plan(first) == serialize_plan(second)
     assert first["plan_digest"] == canonical_plan_digest(first)
+    assert first["selection_mode"] == "rotating_daily"
+    assert first["policy_hash"] == selection_policy_hash()
     assert first["project"]["name"] == first["plan_id"]
     assert first["project"]["expires_on"] == "2026-08-28"
 
@@ -143,6 +147,30 @@ def test_catalog_content_change_changes_hash_seed_and_plan(tmp_path) -> None:
             catalog=changed_catalog,
             catalog_digest=original_digest,
         )
+
+
+def test_policy_content_change_changes_hash_seed_selection_and_plan() -> None:
+    agents, catalog = _inputs()
+    policy = load_selection_policy(catalog)
+    changed_policy = deepcopy(policy)
+    changed_policy["policy_version"] = "1.0.1"
+    changed_policy["cycle"]["epoch"] = "2026-01-02"
+    original = generate_daily_plan(
+        REPORT_DATE,
+        agents=agents,
+        catalog=catalog,
+        policy=policy,
+    )
+    changed = generate_daily_plan(
+        REPORT_DATE,
+        agents=agents,
+        catalog=catalog,
+        policy=changed_policy,
+    )
+    assert original["policy_hash"] != changed["policy_hash"]
+    assert original["seed"] != changed["seed"]
+    assert original["selection"]["cycle"] != changed["selection"]["cycle"]
+    assert original["plan_digest"] != changed["plan_digest"]
 
 
 def test_catalog_bundle_hash_changes_with_recipe_or_agent_input(
@@ -175,17 +203,129 @@ def test_planner_rejects_recipe_bound_to_wrong_registry() -> None:
         generate_daily_plan(REPORT_DATE, agents=agents, catalog=invalid)
 
 
-def test_plan_covers_each_active_scenario_once_and_is_schema_valid() -> None:
+def test_daily_plan_covers_mandatory_and_one_rotating_partition() -> None:
     agents, catalog = _inputs()
     plan = generate_daily_plan(REPORT_DATE, agents=agents, catalog=catalog)
-    active_ids = {
-        scenario["id"] for scenario in catalog["scenarios"] if scenario["status"] == "active"
+    active = [scenario for scenario in catalog["scenarios"] if scenario["status"] == "active"]
+    mandatory_ids = {
+        scenario["id"]
+        for scenario in active
+        if scenario["expected"]["category"] == "none" or scenario["priority"] == "P0"
     }
     assignment_ids = [assignment["scenario_id"] for assignment in plan["assignments"]]
     assert len(assignment_ids) == len(set(assignment_ids))
-    assert set(assignment_ids) == active_ids
+    assert mandatory_ids.issubset(assignment_ids)
+    assert len(plan["selection"]["mandatory_scenario_ids"]) == 16
+    assert len(plan["selection"]["rotating_scenario_ids"]) in {7, 8}
+    assert set(plan["selection"]["omitted_scenario_ids"]) == {
+        scenario["id"] for scenario in active
+    } - set(assignment_ids)
     validate_instance(plan, ROOT / "schemas" / "daily-plan.schema.json", "plan")
     validate_daily_plan_semantics(plan, agents, catalog, "plan")
+
+
+def test_six_day_cycle_covers_every_rotating_fault_exactly_once() -> None:
+    agents, catalog = _inputs()
+    policy = load_selection_policy(catalog)
+    cycle_start = REPORT_DATE - timedelta(
+        days=generate_daily_plan(REPORT_DATE)["selection"]["cycle"]["day"] - 1
+    )
+    plans = [
+        generate_daily_plan(cycle_start + timedelta(days=offset))
+        for offset in range(policy["cycle"]["days"])
+    ]
+    rotating_ids = [
+        scenario_id
+        for plan in plans
+        for scenario_id in plan["selection"]["rotating_scenario_ids"]
+    ]
+    expected = {
+        scenario["id"]
+        for scenario in catalog["scenarios"]
+        if scenario["status"] == "active"
+        and scenario["expected"]["category"] != "none"
+        and scenario["priority"] in {"P1", "P2"}
+    }
+    assert [len(plan["selection"]["rotating_scenario_ids"]) for plan in plans] == [
+        8,
+        8,
+        8,
+        8,
+        8,
+        7,
+    ]
+    assert len(rotating_ids) == len(set(rotating_ids)) == 47
+    assert set(rotating_ids) == expected
+
+
+def test_rotation_maximizes_daily_category_coverage_when_inventory_exists() -> None:
+    _, catalog = _inputs()
+    cycle_start = REPORT_DATE - timedelta(
+        days=generate_daily_plan(REPORT_DATE)["selection"]["cycle"]["day"] - 1
+    )
+    plans = [generate_daily_plan(cycle_start + timedelta(days=offset)) for offset in range(6)]
+    rotating = [
+        scenario
+        for scenario in catalog["scenarios"]
+        if scenario["status"] == "active" and scenario["priority"] in {"P1", "P2"}
+    ]
+    missing_categories = {
+        "tool_call_failures",
+        "latency",
+        "cost_tokens",
+        "hallucinations",
+        "output_quality",
+    }
+    for category in missing_categories:
+        available = sum(
+            scenario["expected"]["category"] == category for scenario in rotating
+        )
+        covered_days = sum(category in plan["coverage"]["categories"] for plan in plans)
+        assert covered_days == min(6, available)
+
+
+def test_every_daily_plan_respects_expected_agent_and_fault_budgets() -> None:
+    cycle_start = REPORT_DATE - timedelta(
+        days=generate_daily_plan(REPORT_DATE)["selection"]["cycle"]["day"] - 1
+    )
+    for offset in range(6):
+        plan = generate_daily_plan(cycle_start + timedelta(days=offset))
+        assert max(plan["per_agent_expected_totals"].values()) <= 4
+        assert sum(plan["per_agent_expected_totals"].values()) <= 20
+        assert sum(
+            assignment["expected"]["finding_count"] > 0
+            for assignment in plan["assignments"]
+        ) <= 20
+
+
+def test_planner_fails_closed_when_mandatory_faults_cannot_fit() -> None:
+    agents, catalog = _inputs()
+    impossible = deepcopy(catalog)
+    for scenario in impossible["scenarios"]:
+        if scenario["status"] == "active" and scenario["priority"] == "P0":
+            scenario["compatibility"]["domains"] = ["finance"]
+            scenario["compatibility"]["agent_types"] = ["hosted_code"]
+            scenario["compatibility"]["agent_ids"] = ["aiq-003-finance"]
+    with pytest.raises(ContractError, match="cannot be partitioned"):
+        generate_daily_plan(REPORT_DATE, agents=agents, catalog=impossible)
+
+
+def test_full_catalog_mode_is_explicit_and_non_human_daily() -> None:
+    agents, catalog = _inputs()
+    plan = generate_daily_plan(
+        REPORT_DATE,
+        agents=agents,
+        catalog=catalog,
+        full_catalog=True,
+    )
+    active_ids = {
+        scenario["id"] for scenario in catalog["scenarios"] if scenario["status"] == "active"
+    }
+    assert plan["selection_mode"] == "full_catalog"
+    assert plan["human_daily_contract"] is False
+    assert plan["limits"]["expected_cap_enforced"] is False
+    assert set(plan["selection"]["selected_scenario_ids"]) == active_ids
+    assert plan["selection"]["omitted_scenario_ids"] == []
 
 
 def test_plan_validation_rejects_recomputed_digest_with_tampered_traffic_seed() -> None:
@@ -248,7 +388,7 @@ def test_runs_enforce_root_cause_limit_and_conflict_separation() -> None:
 
 
 def test_sequential_lifecycle_gets_isolated_ordered_versions() -> None:
-    plan = generate_daily_plan(REPORT_DATE)
+    plan = generate_daily_plan(REPORT_DATE, full_catalog=True)
     sequential = [
         assignment
         for assignment in plan["assignments"]
@@ -338,6 +478,25 @@ def test_historical_plan_remains_internally_valid_after_catalog_version_change()
         agents,
         future_catalog,
         "plan",
+        allow_historical=True,
+    )
+
+    future_policy = deepcopy(load_selection_policy(catalog))
+    future_policy["policy_version"] = "2.0.0"
+    with pytest.raises(ContractError, match="selection policy"):
+        validate_daily_plan_semantics(
+            plan,
+            agents,
+            catalog,
+            "plan",
+            expected_policy=future_policy,
+        )
+    validate_daily_plan_semantics(
+        plan,
+        agents,
+        catalog,
+        "plan",
+        expected_policy=future_policy,
         allow_historical=True,
     )
 

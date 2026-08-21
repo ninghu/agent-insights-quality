@@ -43,7 +43,8 @@ contract scaffolding as an operational workflow.
    rows or traces in Application Insights. Application Insights access is read-only.
 3. Use only generated synthetic identities and records.
 4. Use short-lived user-authorized credentials supplied by the runtime. Never persist them.
-5. Use the full active catalog. Do not remove, rewrite, or weaken a failed scenario.
+5. Use the reviewed daily selection from `config/selection-policy.yaml`. Do not remove, rewrite,
+   weaken, or silently drop a selected scenario. Never use `--full-catalog` in scheduled automation.
 6. Use GPT-5.6 Terra for test-agent traffic and production insight generation and GPT-5.6 Sol for
    Copilot judgment.
 7. Fail closed. Missing identity, quota, evidence, trace ingestion, service access, valid judgment,
@@ -63,11 +64,13 @@ contract scaffolding as an operational workflow.
    artifact storage, Agent Insights, GitHub, ADO, and connected Microsoft mail.
 3. Verify GPT-5.6 Terra deployments, quota, production API availability, reporting recipient
    allowlist, and 90-day artifact retention.
-4. Hash the catalog and compute the reproducible seed from `report date + catalog hash`.
-5. Assign every active scenario exactly once to a compatible agent and version wave. Balance domains
-   and agent types. Put at most four distinct injected root causes in a run. Never co-locate
-   conflict-tagged scenarios. Use additional immutable versions when needed.
-6. Ensure category, severity, agent-type, lifecycle, and healthy-control coverage.
+4. Hash the catalog and selection policy and compute the reproducible seed from report date plus
+   both hashes.
+5. Select all six healthy controls, all ten P0 faults, and the current deterministic six-day P1/P2
+   partition. The 8/8/8/8/8/7 partitions cover all 47 rotating faults exactly once per cycle.
+6. Assign every selected scenario exactly once to a compatible agent and version wave. Put at most
+   four expected root causes on an agent across every version in the daily project and at most four
+   in a run. Never co-locate conflict-tagged scenarios. Fail rather than dropping a selection.
 7. Record exact public-safe build/model labels, catalog and prompt hashes, immutable source/image
    digests, traffic seeds, half-open windows, expected evidence, expected findings, and controls.
 8. Validate the plan against `schemas/daily-plan.schema.json` before deployment.
@@ -102,7 +105,8 @@ For each planned wave:
 4. Poll for complete natural traces and verify project, agent, version, trace hierarchy, and exact
    half-open window provenance.
 5. Trigger a GPT-5.6 Terra production Agent Insights run and poll to a terminal state.
-6. Retrieve full insight details. Reject more than five insights.
+6. Retrieve full insight details. Require the actual insight count to equal the selected expected
+   root-cause count exactly; extras are noise and missing insights are misses.
 7. Build a bounded, sanitized evidence bundle using `schemas/evidence-bundle.schema.json`.
 8. For sequential versions, use non-overlapping windows and preserve prior-insight metadata so stale
    evidence, deduplication, resolution, and recurrence behavior can be tested.
@@ -126,7 +130,7 @@ For each collection validate:
 - distinct causes are not merged into umbrella cards;
 - one cause is not fragmented into multiple cards;
 - later versions do not cite stale evidence; and
-- no run contains more than five insights.
+- every run and agent/day has exactly its selected expected insight count.
 
 Any structural, provenance, secret/PII, or schema failure blocks automatic bug action.
 
@@ -153,8 +157,8 @@ Invalid or unavailable judgment is `INCONCLUSIVE` when it prevents trustworthy c
 
 Calculate the schema-validated scorecard and canonical report. `AT BAR` requires:
 
-- complete full active catalog;
-- zero healthy insights and no run over five insights;
+- complete reviewed daily selection;
+- zero healthy insights and exact expected insight counts;
 - 100% high-severity recall;
 - at least 90% overall recall and 95% precision;
 - 100% category, severity, title, description, proposed-fix, and linked-trace correctness among
@@ -168,9 +172,10 @@ Efficiency metrics are diagnostics and cannot improve the quality verdict.
 ## Phase G: memory and ADO
 
 1. Reconcile findings by stable root-cause/surface/validation-target fingerprint.
-2. New confirmed gaps become `new`; repeats become `known`; complete clean full-catalog runs advance
-   the clean streak; three consecutive clean runs resolve; recurrence becomes `regressed` and resets
-   the streak. Incomplete runs never change clean streaks or resolution state.
+2. New confirmed gaps become `new`; repeats become `known`; complete clean observations advance the
+   clean streak only for scenarios selected that day. Three selected clean observations resolve;
+   recurrence becomes `regressed` and resets the streak. Omitted scenarios and incomplete runs never
+   change clean streaks or resolution state.
 3. Never delete history or rewrite a fingerprint. Newly observed possible ground truth becomes a
    review candidate, not an automatic scenario.
 4. Before ADO action, fetch the privately configured bug template at runtime. Honor its priority,
