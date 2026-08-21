@@ -30,7 +30,7 @@ from agent_insights_quality.runtime.azure import AzureCli, AzureProjectManager, 
 from agent_insights_quality.runtime.config import RuntimeConfig
 from agent_insights_quality.runtime.errors import RuntimeFailure
 from agent_insights_quality.runtime.orchestrator import PlanInput, ProductionOrchestrator
-from agent_insights_quality.runtime.receipts import read_receipt
+from agent_insights_quality.runtime.receipts import MonitorOwnershipRegistry, read_receipt
 from agent_insights_quality.insights.client import AgentInsightsClient
 from agent_insights_quality.runtime.azure import AzureCliCredential
 
@@ -225,28 +225,58 @@ def run(args: argparse.Namespace) -> None:
         result: dict[str, object] = {
             "dry_run": dry_run,
         }
+        cleanup_failures: list[str] = []
         selected_monitors: list[str] = []
         credential = AzureCliCredential(cli)
-        for project in projects.qualified_projects():
-            monitor_ids = AgentInsightsClient(
-                project.project_endpoint,
-                credential,
-            ).cleanup_owned_monitors(
-                config.automation_owner,
-                dry_run=dry_run,
+        for project in projects.qualified_projects(cleanup_failures):
+            ownership = MonitorOwnershipRegistry(
+                Path(config.monitor_ownership_receipt),
+                project.project_id,
             )
+            try:
+                monitor_ids = AgentInsightsClient(
+                    project.project_endpoint,
+                    credential,
+                    ownership_registry=ownership,
+                ).cleanup_owned_monitors(
+                    dry_run=dry_run,
+                )
+            except RuntimeFailure as error:
+                cleanup_failures.append(error.code)
+                continue
             selected_monitors.extend(
                 f"{project.project_name}:{monitor_id}" for monitor_id in monitor_ids
             )
-        selected_connections = projects.cleanup_owned_connections(
-            config.automation_owner,
-            dry_run=dry_run,
-        )
-        selected_artifacts = artifacts.cleanup_expired(
-            config.automation_owner,
-            dry_run=dry_run,
-        )
-        selected_projects = projects.cleanup_expired(dry_run=dry_run)
+        try:
+            selected_connections = projects.cleanup_owned_connections(
+                config.automation_owner,
+                dry_run=dry_run,
+            )
+        except RuntimeFailure as error:
+            cleanup_failures.append(error.code)
+            selected_connections = []
+        try:
+            selected_artifacts = artifacts.cleanup_expired(
+                config.automation_owner,
+                dry_run=dry_run,
+            )
+        except RuntimeFailure as error:
+            cleanup_failures.append(error.code)
+            selected_artifacts = []
+        try:
+            selected_projects = projects.cleanup_expired(dry_run=dry_run)
+        except RuntimeFailure as error:
+            cleanup_failures.append(error.code)
+            selected_projects = []
+        if cleanup_failures:
+            raise RuntimeFailure(
+                "cleanup_partial_failure",
+                "Cleanup processed every resource class but one or more owned resources failed.",
+                {
+                    "failure_count": len(cleanup_failures),
+                    "failure_codes": sorted(set(cleanup_failures)),
+                },
+            )
         result["project_references"] = _public_references(selected_projects)
         result["connection_references"] = _public_references(selected_connections)
         result["monitor_references"] = _public_references(selected_monitors)

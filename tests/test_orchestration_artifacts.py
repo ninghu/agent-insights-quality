@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+import json
 from pathlib import Path
+import threading
+from types import SimpleNamespace
 
 import pytest
 
-from agent_insights_quality.runtime.artifacts import LocalArtifactStore
+from agent_insights_quality.runtime import artifacts
+from agent_insights_quality.runtime.artifacts import AzureBlobArtifactStore, LocalArtifactStore
 from agent_insights_quality.runtime.errors import RuntimeFailure
 from agent_insights_quality.runtime.orchestrator import (
     AnalysisWindow,
@@ -109,6 +113,73 @@ def test_orchestrator_finalizes_failure_without_success_shaped_state(tmp_path: P
     assert hooks.finalized == 1
 
 
+def test_orchestrator_cancels_queued_agents_after_first_failure(tmp_path: Path) -> None:
+    class FailingFirstHooks(Hooks):
+        def deploy(self, current, *, idempotency_key):
+            self.calls.append("attempt:" + current.agent_id)
+            if current.agent_id == "a":
+                raise RuntimeFailure("deployment_failed", "Deployment failed.")
+            return super().deploy(current, idempotency_key=idempotency_key)
+
+    start = datetime(2026, 8, 21, tzinfo=UTC)
+    plan = PlanInput(
+        "aiq-20260821",
+        "aiq-20260821",
+        {
+            "a": (work("a", "v1", start),),
+            "b": (work("b", "v1", start),),
+        },
+    )
+    hooks = FailingFirstHooks()
+    with pytest.raises(RuntimeFailure, match="Deployment failed"):
+        ProductionOrchestrator(
+            hooks,
+            tmp_path / "state.json",
+            max_parallel_agents=1,
+        ).run(plan)
+    assert "attempt:b" not in hooks.calls
+    assert hooks.calls.count("cancel") == 2
+
+
+def test_orchestrator_sends_peer_cancellation_before_waiting(tmp_path: Path) -> None:
+    peer_started = threading.Event()
+    peer_released = threading.Event()
+
+    class ParallelHooks(Hooks):
+        def deploy(self, current, *, idempotency_key):
+            if current.agent_id == "b":
+                peer_started.set()
+                if not peer_released.wait(timeout=2):
+                    raise RuntimeFailure("peer_not_cancelled", "Peer was not cancelled promptly.")
+                return self._value("deploy", idempotency_key)
+            assert peer_started.wait(timeout=2)
+            raise RuntimeFailure("deployment_failed", "Deployment failed.")
+
+        def cancel(self, current):
+            super().cancel(current)
+            if current.agent_id == "b":
+                peer_released.set()
+
+    start = datetime(2026, 8, 21, tzinfo=UTC)
+    plan = PlanInput(
+        "aiq-20260821",
+        "aiq-20260821",
+        {
+            "b": (work("b", "v1", start),),
+            "a": (work("a", "v1", start),),
+        },
+    )
+    hooks = ParallelHooks()
+    with pytest.raises(RuntimeFailure, match="Deployment failed"):
+        ProductionOrchestrator(
+            hooks,
+            tmp_path / "state.json",
+            max_parallel_agents=2,
+            cancellation_wait_seconds=2,
+        ).run(plan)
+    assert peer_released.is_set()
+
+
 def test_plan_rejects_overlapping_sequential_versions() -> None:
     start = datetime(2026, 8, 21, tzinfo=UTC)
     payload = {
@@ -159,3 +230,110 @@ def test_receipts_and_artifacts_reject_private_values_and_path_traversal(tmp_pat
         ensure_public_safe({"reference": "https://" + "private.example.invalid"})
     with pytest.raises(RuntimeFailure, match="safe relative path"):
         LocalArtifactStore(tmp_path).put("../escape", b"x", "owner")
+
+
+def test_local_artifact_read_rejects_payload_manifest_mismatch(tmp_path: Path) -> None:
+    store = LocalArtifactStore(tmp_path)
+    store.put("run/evidence.json", b"expected", "owner")
+    (tmp_path / "run" / "evidence.json").write_bytes(b"tampered")
+    with pytest.raises(RuntimeFailure, match="incomplete or mismatched"):
+        store.get("run/evidence.json")
+
+
+def test_pending_artifact_is_recoverable_by_owner_scoped_orphan_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = artifacts._write_json_atomic
+    calls = 0
+
+    def interrupt_commit(path, payload):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("synthetic interruption")
+        original(path, payload)
+
+    monkeypatch.setattr(artifacts, "_write_json_atomic", interrupt_commit)
+    store = LocalArtifactStore(tmp_path)
+    with pytest.raises(RuntimeFailure, match="payload or committed manifest"):
+        store.put("run/orphan.json", b"orphan", "owner-a")
+    metadata = json.loads(
+        (tmp_path / "run" / "orphan.json.metadata.json").read_text(encoding="utf-8")
+    )
+    assert metadata["state"] == "pending"
+    assert (tmp_path / "run" / "orphan.json").exists()
+    assert store.cleanup_expired(
+        "owner-b",
+        now=datetime.now(UTC) + timedelta(days=91),
+        dry_run=False,
+    ) == []
+    assert store.cleanup_expired(
+        "owner-a",
+        now=datetime.now(UTC) + timedelta(days=91),
+        dry_run=False,
+    ) == ["run/orphan.json"]
+    assert not (tmp_path / "run" / "orphan.json").exists()
+
+
+def test_blob_artifacts_validate_content_hash_and_exact_owner_cleanup() -> None:
+    class Download:
+        def __init__(self, content):
+            self._content = content
+
+        def readall(self):
+            return self._content
+
+    class Blob:
+        def __init__(self, container, name):
+            self._container = container
+            self._name = name
+
+        def get_blob_properties(self):
+            return SimpleNamespace(metadata=self._container.values[self._name][1])
+
+    class Container:
+        def __init__(self):
+            self.values = {}
+
+        def upload_blob(self, name, content, *, overwrite, metadata):
+            assert overwrite is False
+            self.values[name] = (content, metadata)
+
+        def download_blob(self, name):
+            return Download(self.values[name][0])
+
+        def get_blob_client(self, name):
+            return Blob(self, name)
+
+        def list_blobs(self, *, include):
+            assert include == ["metadata"]
+            return [
+                SimpleNamespace(name=name, metadata=metadata)
+                for name, (_content, metadata) in self.values.items()
+            ]
+
+        def delete_blob(self, name):
+            del self.values[name]
+
+    container = Container()
+    store = AzureBlobArtifactStore(container)
+    record = store.put("run/evidence.json", b"expected", "owner-a")
+    ensure_public_safe(record.public_dict())
+    assert store.get("run/evidence.json") == b"expected"
+    container.values["run/evidence.json"] = (
+        b"tampered",
+        container.values["run/evidence.json"][1],
+    )
+    with pytest.raises(RuntimeFailure, match="incomplete or mismatched"):
+        store.get("run/evidence.json")
+    assert store.cleanup_expired(
+        "owner-b",
+        now=datetime.now(UTC) + timedelta(days=91),
+        dry_run=False,
+    ) == []
+    assert store.cleanup_expired(
+        "owner-a",
+        now=datetime.now(UTC) + timedelta(days=91),
+        dry_run=False,
+    ) == ["run/evidence.json"]

@@ -11,6 +11,7 @@ from datetime import UTC, date, datetime
 from typing import Any, Protocol
 
 from agent_insights_quality.runtime.errors import RuntimeFailure
+from agent_insights_quality.runtime.receipts import MonitorOwnershipRegistry
 
 _API_VERSION = "2025-05-15-preview"
 _TERMINAL = {"succeeded", "failed", "cancelled", "canceled"}
@@ -45,6 +46,13 @@ class Transport(Protocol):
 
 
 class UrlLibTransport:
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+    def __init__(self) -> None:
+        self._opener = urllib.request.build_opener(self._NoRedirect())
+
     def request(
         self,
         method: str,
@@ -57,7 +65,7 @@ class UrlLibTransport:
         data = json.dumps(json_body).encode("utf-8") if json_body is not None else None
         request = urllib.request.Request(url, data=data, headers=dict(headers), method=method)
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with self._opener.open(request, timeout=timeout) as response:
                 return HttpResponse(response.status, dict(response.headers), response.read())
         except urllib.error.HTTPError as error:
             return HttpResponse(error.code, dict(error.headers), error.read())
@@ -86,6 +94,34 @@ def _items(payload: Any, label: str) -> list[Mapping[str, Any]]:
     return list(data)
 
 
+def _timestamp(value: Any, label: str) -> datetime:
+    if not isinstance(value, str):
+        raise RuntimeFailure("invalid_agent_insights_response", f"{label} timestamp is missing.")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise RuntimeFailure(
+            "invalid_agent_insights_response",
+            f"{label} timestamp is invalid.",
+        ) from error
+    if parsed.tzinfo is None:
+        raise RuntimeFailure("invalid_agent_insights_response", f"{label} timestamp has no timezone.")
+    return parsed.astimezone(UTC)
+
+
+def _field(payload: Mapping[str, Any], *names: str) -> Any:
+    for name in names:
+        if name in payload:
+            return payload[name]
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class InsightCheckpoint:
+    captured_at: datetime
+    revisions: Mapping[str, str]
+
+
 class AgentInsightsClient:
     def __init__(
         self,
@@ -93,6 +129,7 @@ class AgentInsightsClient:
         credential: TokenCredential,
         *,
         transport: Transport | None = None,
+        ownership_registry: MonitorOwnershipRegistry | None = None,
         timeout_seconds: float = 60,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
@@ -104,6 +141,7 @@ class AgentInsightsClient:
         self._origin = f"{parsed.scheme}://{parsed.netloc}"
         self._credential = credential
         self._transport = transport or UrlLibTransport()
+        self._ownership = ownership_registry
         self._timeout = timeout_seconds
         self._sleep = sleep
         self._monotonic = monotonic
@@ -121,9 +159,8 @@ class AgentInsightsClient:
         json_body: Mapping[str, Any] | None = None,
         params: Mapping[str, Any] | None = None,
         expected: set[int] | None = None,
-        absolute_url: str | None = None,
     ) -> tuple[int, Any]:
-        url = absolute_url or self._url(path, params)
+        url = self._url(path, params)
         parsed = urllib.parse.urlparse(url)
         if (
             f"{parsed.scheme}://{parsed.netloc}" != self._origin
@@ -163,25 +200,29 @@ class AgentInsightsClient:
 
     def _paged(self, path: str, params: Mapping[str, Any] | None = None) -> list[Mapping[str, Any]]:
         results: list[Mapping[str, Any]] = []
-        next_url: str | None = None
-        visited: set[str] = set()
-        first = True
-        while first or next_url:
-            first = False
-            _, payload = self._request(
-                "GET",
-                path,
-                params=params if next_url is None else None,
-                absolute_url=next_url,
-            )
-            results.extend(_items(payload, path))
-            raw_next = payload.get("next_link") or payload.get("nextLink") if isinstance(payload, Mapping) else None
-            next_url = urllib.parse.urljoin(self._base + "/", str(raw_next)) if raw_next else None
-            if next_url and next_url in visited:
-                raise RuntimeFailure("invalid_pagination_link", "Pagination link formed a cycle.")
-            if next_url:
-                visited.add(next_url)
-        return results
+        query = dict(params or {})
+        seen_cursors: set[str] = set()
+        while True:
+            _, payload = self._request("GET", path, params=query)
+            page = _items(payload, path)
+            results.extend(page)
+            has_more = payload.get("has_more") if isinstance(payload, Mapping) else None
+            if has_more is False:
+                return results
+            if has_more is not True:
+                raise RuntimeFailure(
+                    "invalid_agent_insights_response",
+                    f"{path} response did not declare has_more.",
+                )
+            raw_cursor = payload.get("last_id") if isinstance(payload, Mapping) else None
+            cursor = str(raw_cursor or "")
+            if not cursor or cursor in seen_cursors:
+                raise RuntimeFailure(
+                    "invalid_agent_insights_response",
+                    f"{path} pagination cursor is missing or repeated.",
+                )
+            seen_cursors.add(cursor)
+            query["after"] = cursor
 
     def probe(self) -> None:
         self._request("GET", "/agent_insight_monitors", params={"limit": 1})
@@ -216,10 +257,14 @@ class AgentInsightsClient:
         *,
         agent_name: str,
         model_deployment_name: str,
-        owner_reference: str,
-        expires_on: date | None = None,
+        expires_on: date,
         run_interval_hours: float = 24,
     ) -> Mapping[str, Any]:
+        if self._ownership is None:
+            raise RuntimeFailure(
+                "monitor_receipt_unavailable",
+                "Monitor creation requires a public-safe ownership registry.",
+            )
         self.find_agent(agent_name)
         _, payload = self._request(
             "POST",
@@ -229,16 +274,29 @@ class AgentInsightsClient:
                 "enabled": False,
                 "run_interval_hours": run_interval_hours,
                 "model_deployment_name": model_deployment_name,
-                "metadata": {
-                    "purpose": "agent-insights-quality",
-                    "owner_reference": owner_reference,
-                    "expires_on": expires_on.isoformat() if expires_on else "",
-                },
             },
             expected={200, 201},
         )
         if not isinstance(payload, Mapping) or not payload.get("id"):
             raise RuntimeFailure("invalid_monitor", "Created monitor response was invalid.")
+        monitor_id = str(payload["id"])
+        try:
+            self._ownership.record(
+                agent_name=agent_name,
+                monitor_id=monitor_id,
+                model_deployment_name=model_deployment_name,
+                expires_on=expires_on,
+            )
+        except RuntimeFailure as receipt_error:
+            try:
+                self._request(
+                    "DELETE",
+                    f"/agent_insight_monitors/{_segment(monitor_id, 'monitor ID')}",
+                    expected={200, 204},
+                )
+            except RuntimeFailure:
+                receipt_error.details["monitor_rollback_failed"] = True
+            raise receipt_error
         return payload
 
     def get_or_create_monitor(
@@ -246,32 +304,25 @@ class AgentInsightsClient:
         *,
         agent_name: str,
         model_deployment_name: str,
-        owner_reference: str,
-        expires_on: date | None = None,
+        expires_on: date,
     ) -> tuple[Mapping[str, Any], bool]:
         existing = self.find_monitor(agent_name)
         if existing is not None:
-            metadata = existing.get("metadata")
-            if (
-                not isinstance(metadata, Mapping)
-                or metadata.get("purpose") != "agent-insights-quality"
-                or metadata.get("owner_reference") != owner_reference
-                or str(existing.get("model_deployment_name") or "") != model_deployment_name
-                or (
-                    expires_on is not None
-                    and metadata.get("expires_on") != expires_on.isoformat()
-                )
-            ):
+            if self._ownership is None:
                 raise RuntimeFailure(
-                    "ownership_mismatch",
-                    "Existing exact monitor does not match runtime ownership and configuration.",
+                    "monitor_receipt_unavailable",
+                    "Monitor reuse requires a public-safe ownership registry.",
                 )
+            self._ownership.require(
+                agent_name=agent_name,
+                monitor_id=str(existing.get("id") or ""),
+                model_deployment_name=model_deployment_name,
+            )
             return existing, False
         return (
             self.create_monitor(
                 agent_name=agent_name,
                 model_deployment_name=model_deployment_name,
-                owner_reference=owner_reference,
                 expires_on=expires_on,
             ),
             True,
@@ -296,46 +347,42 @@ class AgentInsightsClient:
             raise RuntimeFailure("invalid_monitor", "Monitor response was invalid.")
         return payload
 
-    def reset_monitor(self, monitor_id: str, owner_reference: str) -> Mapping[str, Any]:
-        monitor = self.get_monitor(monitor_id)
-        metadata = monitor.get("metadata")
-        if not isinstance(metadata, Mapping) or metadata.get("owner_reference") != owner_reference:
-            raise RuntimeFailure("ownership_mismatch", "Monitor reset requires exact ownership.")
-        return self.update_monitor(monitor_id, {"enabled": False})
+    def reset_monitor(self, monitor_id: str, agent_name: str) -> Mapping[str, Any]:
+        if self._ownership is None:
+            raise RuntimeFailure("monitor_receipt_unavailable", "Monitor reset requires ownership receipts.")
+        self._ownership.require(agent_name=agent_name, monitor_id=monitor_id)
+        _, payload = self._request(
+            "POST",
+            f"/agent_insight_monitors/{_segment(monitor_id, 'monitor ID')}:reset",
+            expected={200, 202},
+        )
+        if not isinstance(payload, Mapping):
+            raise RuntimeFailure("invalid_monitor", "Monitor reset response was invalid.")
+        return payload
 
-    def delete_monitor(self, monitor_id: str) -> None:
+    def delete_monitor(self, monitor_id: str, agent_name: str) -> None:
+        if self._ownership is None:
+            raise RuntimeFailure("monitor_receipt_unavailable", "Monitor deletion requires ownership receipts.")
+        self._ownership.require(agent_name=agent_name, monitor_id=monitor_id)
         self._request(
             "DELETE",
             f"/agent_insight_monitors/{_segment(monitor_id, 'monitor ID')}",
             expected={200, 204},
         )
+        self._ownership.remove(agent_name=agent_name, monitor_id=monitor_id)
 
     def create_run(
         self,
         monitor_id: str,
         *,
-        lookback_hours: int | None = None,
-        start: datetime | None = None,
-        end: datetime | None = None,
+        lookback_hours: int,
     ) -> Mapping[str, Any]:
-        has_window = start is not None or end is not None
-        if has_window:
-            if start is None or end is None or start.tzinfo is None or end.tzinfo is None or start >= end:
-                raise RuntimeFailure("invalid_run_window", "Run window must be a valid half-open UTC interval.")
-            if lookback_hours is not None:
-                raise RuntimeFailure("invalid_run_window", "Specify either lookback or an exact window.")
-            body: dict[str, Any] = {
-                "start_time": start.astimezone(UTC).isoformat().replace("+00:00", "Z"),
-                "end_time": end.astimezone(UTC).isoformat().replace("+00:00", "Z"),
-            }
-        else:
-            if lookback_hours is None or lookback_hours <= 0:
-                raise RuntimeFailure("invalid_run_window", "Positive lookback_hours is required.")
-            body = {"lookback_hours": lookback_hours}
+        if lookback_hours <= 0:
+            raise RuntimeFailure("invalid_run_window", "Positive lookback_hours is required.")
         _, payload = self._request(
             "POST",
             f"/agent_insight_monitors/{_segment(monitor_id, 'monitor ID')}/runs",
-            json_body=body,
+            json_body={"lookback_hours": lookback_hours},
             expected={200, 201, 202},
         )
         if not isinstance(payload, Mapping) or not payload.get("id"):
@@ -394,23 +441,16 @@ class AgentInsightsClient:
         self._request(
             "POST",
             f"/agent_insight_monitors/{_segment(monitor_id, 'monitor ID')}/runs/"
-            f"{_segment(run_id, 'run ID')}/cancel",
+            f"{_segment(run_id, 'run ID')}:cancel",
             expected={200, 202, 204},
         )
 
     def list_insights(
         self,
         monitor_id: str,
-        run_id: str | None = None,
     ) -> list[Mapping[str, Any]]:
         path = f"/agent_insight_monitors/{_segment(monitor_id, 'monitor ID')}/insights"
-        summaries = self._paged(path, {"limit": 100, "order": "desc", "run_id": run_id})
-        if len(summaries) > 5:
-            raise RuntimeFailure(
-                "insight_limit_exceeded",
-                "Agent Insights returned more than five insights.",
-                {"insight_count": len(summaries)},
-            )
+        summaries = self._paged(path, {"limit": 100, "order": "desc"})
         details: list[Mapping[str, Any]] = []
         for summary in summaries:
             insight_id = str(summary.get("id") or "")
@@ -423,53 +463,131 @@ class AgentInsightsClient:
             )
             if not isinstance(payload, Mapping):
                 raise RuntimeFailure("invalid_insight", "Insight detail response was invalid.")
-            detail_run = str(payload.get("run_id") or payload.get("runId") or "")
-            if run_id and detail_run and detail_run != run_id:
-                raise RuntimeFailure(
-                    "run_identity_mismatch",
-                    "Insight detail belonged to a different run.",
-                )
             details.append(payload)
         return details
+
+    def capture_insight_checkpoint(self, monitor_id: str) -> InsightCheckpoint:
+        revisions: dict[str, str] = {}
+        for insight in self.list_insights(monitor_id):
+            insight_id = str(insight.get("id") or "")
+            revision = str(_field(insight, "revision", "etag", "updated_at", "updatedAt") or "")
+            if not insight_id or not revision:
+                raise RuntimeFailure(
+                    "insight_checkpoint_unavailable",
+                    "Existing insight lacks revision evidence required for run scoping.",
+                )
+            revisions[insight_id] = revision
+        return InsightCheckpoint(datetime.now(UTC), revisions)
+
+    @staticmethod
+    def validate_run_window(
+        run: Mapping[str, Any],
+        expected_start: datetime,
+        expected_end: datetime,
+    ) -> tuple[datetime, datetime]:
+        actual_start = _timestamp(_field(run, "start_time", "startTime", "window_start"), "run start")
+        actual_end = _timestamp(_field(run, "end_time", "endTime", "window_end"), "run end")
+        if expected_start.tzinfo is None or expected_end.tzinfo is None:
+            raise RuntimeFailure("invalid_run_window", "Expected run window must be timezone-aware.")
+        if (
+            actual_start != expected_start.astimezone(UTC)
+            or actual_end != expected_end.astimezone(UTC)
+            or actual_start >= actual_end
+        ):
+            raise RuntimeFailure(
+                "run_window_mismatch",
+                "Agent Insights returned a different analysis window.",
+            )
+        return actual_start, actual_end
+
+    @staticmethod
+    def scope_insights(
+        insights: Sequence[Mapping[str, Any]],
+        checkpoint: InsightCheckpoint,
+        run_start: datetime,
+        run_end: datetime,
+    ) -> list[Mapping[str, Any]]:
+        selected: list[Mapping[str, Any]] = []
+        for insight in insights:
+            insight_id = str(insight.get("id") or "")
+            revision = str(_field(insight, "revision", "etag", "updated_at", "updatedAt") or "")
+            if not insight_id or not revision:
+                raise RuntimeFailure(
+                    "insight_scope_unproven",
+                    "Insight lacks ID or revision evidence required for run scoping.",
+                )
+            if checkpoint.revisions.get(insight_id) == revision:
+                continue
+            observed = _timestamp(
+                _field(insight, "updated_at", "updatedAt", "created_at", "createdAt"),
+                "insight evidence",
+            )
+            if not (run_start <= observed < run_end) or observed < checkpoint.captured_at:
+                raise RuntimeFailure(
+                    "insight_scope_unproven",
+                    "Changed insight cannot be proven to belong to the completed run.",
+                )
+            selected.append(insight)
+        if len(selected) > 5:
+            raise RuntimeFailure(
+                "insight_limit_exceeded",
+                "Agent Insights returned more than five run-scoped insights.",
+                {"insight_count": len(selected)},
+            )
+        return selected
 
     def collect_run(
         self,
         monitor_id: str,
         run_id: str,
         *,
+        checkpoint: InsightCheckpoint,
+        expected_start: datetime,
+        expected_end: datetime,
         timeout_seconds: float = 21600,
     ) -> tuple[Mapping[str, Any], list[Mapping[str, Any]]]:
         run = self.wait_run(monitor_id, run_id, timeout_seconds=timeout_seconds)
-        insights = self.list_insights(monitor_id, run_id)
+        run_start, run_end = self.validate_run_window(run, expected_start, expected_end)
+        insights = self.scope_insights(
+            self.list_insights(monitor_id),
+            checkpoint,
+            run_start,
+            run_end,
+        )
         return run, insights
 
     def cleanup_owned_monitors(
         self,
-        owner_reference: str,
         *,
         now: date | None = None,
         dry_run: bool = True,
     ) -> list[str]:
         selected: list[str] = []
+        failures = 0
         today = now or datetime.now(UTC).date()
         for monitor in self.list_monitors():
-            metadata = monitor.get("metadata")
-            if (
-                not isinstance(metadata, Mapping)
-                or metadata.get("purpose") != "agent-insights-quality"
-                or metadata.get("owner_reference") != owner_reference
-            ):
+            monitor_id = str(monitor.get("id") or "")
+            agent_name = str(monitor.get("agent_name") or "")
+            if not monitor_id or not agent_name or self._ownership is None:
                 continue
             try:
-                expired = date.fromisoformat(str(metadata.get("expires_on") or "")) < today
-            except ValueError:
+                ownership = self._ownership.require(agent_name=agent_name, monitor_id=monitor_id)
+                expired = date.fromisoformat(ownership.expires_on) < today
+            except (RuntimeFailure, ValueError):
                 continue
             if not expired:
                 continue
-            monitor_id = str(monitor.get("id") or "")
-            if not monitor_id:
-                continue
-            selected.append(monitor_id)
             if not dry_run:
-                self.delete_monitor(monitor_id)
+                try:
+                    self.delete_monitor(monitor_id, agent_name)
+                except RuntimeFailure:
+                    failures += 1
+                    continue
+            selected.append(monitor_id)
+        if failures:
+            raise RuntimeFailure(
+                "cleanup_partial_failure",
+                "One or more owned monitors could not be deleted; other eligible monitors were processed.",
+                {"deleted_count": len(selected), "failure_count": failures},
+            )
         return selected
