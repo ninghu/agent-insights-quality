@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from agent_insights_quality.cleanup.runtime import cleanup_owned_resources
 from agent_insights_quality.insights.client import (
     AgentInsightsClient,
     HttpResponse,
@@ -257,6 +258,58 @@ def test_monitor_cleanup_processes_peers_before_reporting_delete_failure(tmp_pat
     ownership.require(agent_name="agent", monitor_id="first")
     with pytest.raises(RuntimeFailure, match="no matching"):
         ownership.require(agent_name="agent", monitor_id="second")
+
+
+def test_cleanup_coordinator_accepts_concrete_monitor_client_signature(
+    tmp_path: Path,
+) -> None:
+    ownership = registry(tmp_path)
+    ownership.record(
+        agent_name="agent",
+        monitor_id="expired",
+        model_deployment_name="terra",
+        expires_on=date(2000, 1, 1),
+    )
+    client = AgentInsightsClient(
+        "https://project.example.invalid",
+        Credential(),
+        transport=FakeTransport(
+            [
+                response(
+                    {
+                        "data": [{"id": "expired", "agent_name": "agent"}],
+                        "has_more": False,
+                    }
+                ),
+                HttpResponse(204, {}, b""),
+            ]
+        ),
+        ownership_registry=ownership,
+    )
+
+    class Projects:
+        def cleanup_expired(self, *, now=None, dry_run=True):
+            return ["project"]
+
+    class Connections:
+        def cleanup_owned_connections(self, owner_reference, *, dry_run=True):
+            assert owner_reference == "owner"
+            return ["connection"]
+
+    class Artifacts:
+        def cleanup_expired(self, owner_reference, *, dry_run=True):
+            assert owner_reference == "owner"
+            return ["artifact"]
+
+    result = cleanup_owned_resources(
+        owner_reference="owner",
+        projects=Projects(),
+        connections=Connections(),
+        monitors=client,
+        artifacts=Artifacts(),
+        dry_run=False,
+    )
+    assert result.monitors == ("expired",)
 
 
 def test_run_window_and_checkpoint_scope_insights_fail_closed() -> None:

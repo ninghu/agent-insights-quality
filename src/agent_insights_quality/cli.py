@@ -184,16 +184,12 @@ def run(args: argparse.Namespace) -> None:
         config = RuntimeConfig.from_env()
         cli, projects = _runtime_context(config)
         result: dict[str, object] = {"status": "ready", "configuration": config.public_summary()}
-        if (
-            args.discover_project
-            or config.azure.resource_group is None
-            or config.azure.project_name is not None
-        ):
+        if args.discover_project or config.azure.resource_group is None:
             project = projects.discover_qualified()
-            result["project_reference"] = _public_reference(project.project_id)
-            endpoint = project.project_endpoint
         else:
-            endpoint = config.azure.project_endpoint
+            project = projects.validate_explicit_project()
+        result["project_reference"] = _public_reference(project.project_id)
+        endpoint = project.project_endpoint
         if endpoint is None:
             raise RuntimeFailure("missing_project_endpoint", "Project endpoint could not be resolved.")
         AgentInsightsClient(endpoint, AzureCliCredential(cli)).probe()

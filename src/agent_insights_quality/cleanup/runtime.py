@@ -23,7 +23,12 @@ class ConnectionCleaner(Protocol):
 
 
 class MonitorCleaner(Protocol):
-    def cleanup_owned_monitors(self, owner_reference: str, *, dry_run: bool = True) -> list[str]: ...
+    def cleanup_owned_monitors(
+        self,
+        *,
+        now: date | None = None,
+        dry_run: bool = True,
+    ) -> list[str]: ...
 
 
 class ArtifactCleaner(Protocol):
@@ -47,7 +52,7 @@ def cleanup_owned_resources(
             else ()
         ),
         monitors=tuple(
-            monitors.cleanup_owned_monitors(owner_reference, dry_run=dry_run) if monitors else ()
+            monitors.cleanup_owned_monitors(dry_run=dry_run) if monitors else ()
         ),
         artifacts=tuple(artifacts.cleanup_expired(owner_reference, dry_run=dry_run)),
         dry_run=dry_run,
