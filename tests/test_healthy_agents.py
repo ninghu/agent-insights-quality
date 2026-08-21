@@ -717,6 +717,25 @@ def test_select_scenario_is_noop_when_no_config_loaded(sr_path: Path) -> None:
     assert dispatched, "no-config runtime must dispatch normally"
 
 
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_scenario_routing_configured_reflects_loaded_config(sr_path: Path) -> None:
+    """scenario_routing_configured is False with no config and True when scenarios are loaded."""
+    mod = _load_scenario_runtime(sr_path)
+
+    with _ScenarioCtx(""):
+        rt_empty = mod.ScenarioRuntime()
+    assert not rt_empty.scenario_routing_configured, (
+        "no-config runtime must report routing not configured"
+    )
+
+    cfg = _make_config([])
+    with _ScenarioCtx(cfg):
+        rt_configured = mod.ScenarioRuntime()
+    assert rt_configured.scenario_routing_configured, (
+        "runtime with scenarios config must report routing configured"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Source-patch operations (runtime-variants.yaml catalog)
 # ---------------------------------------------------------------------------

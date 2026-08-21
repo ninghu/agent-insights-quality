@@ -114,6 +114,11 @@ class ScenarioRuntime:
         # state_machine/replace_transition causes a bounded loop through model
         # calls, not an immediate abort here.
 
+    @property
+    def scenario_routing_configured(self) -> bool:
+        """True when the configuration contains a scenarios map to route against."""
+        return bool(self._scenarios)
+
     def select_scenario(self, scenario_id: str) -> None:
         """Activate operations for scenario_id. Fails closed on unknown IDs.
 
