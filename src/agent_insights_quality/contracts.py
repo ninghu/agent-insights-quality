@@ -1231,6 +1231,15 @@ def validate_canonical_report_semantics(
             references or expected_count == 0
         ):
             raise ContractError(f"{label}: missed result must have expected but no observed insights")
+    physical_references = [
+        (result["run_id"], result["agent_id"], reference)
+        for result in report["scenario_results"]
+        for reference in result["insight_references"]
+    ]
+    if len(physical_references) != len(set(physical_references)):
+        raise ContractError(
+            f"{label}: one physical run insight cannot belong to multiple scenarios"
+        )
 
     scorecard = report["scorecard"]
     counts = scorecard["counts"]
@@ -1313,10 +1322,13 @@ def validate_canonical_report_semantics(
         }
     )
     false_positives = max(0, produced_insights - true_positives)
-    healthy_insights = sum(
-        result["observed_count"]
-        for result in report["scenario_results"]
-        if scenario_by_id[result["scenario_id"]]["expected"]["category"] == "none"
+    healthy_insights = len(
+        {
+            (result["run_id"], result["agent_id"], reference)
+            for result in report["scenario_results"]
+            if scenario_by_id[result["scenario_id"]]["expected"]["category"] == "none"
+            for reference in result["insight_references"]
+        }
     )
     if report.get("failure") is not None and not field_judgments:
         true_positives = 0
@@ -1412,9 +1424,13 @@ def validate_canonical_report_semantics(
             (item["scenario_id"], item["insight_reference"])
             for item in report["field_judgments"]
         ]
+        physical_field_references = [
+            item["insight_reference"] for item in report["field_judgments"]
+        ]
         expected_field_keys = result_references
         if (
             len(field_keys) != len(set(field_keys))
+            or len(physical_field_references) != len(set(physical_field_references))
             or set(field_keys) != expected_field_keys
         ):
             raise ContractError(f"{label}: field judgments do not match unique insight mappings")

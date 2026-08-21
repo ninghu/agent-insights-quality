@@ -301,6 +301,113 @@ def _validate_judgments(
     return by_mapping, violations, trustworthy
 
 
+def _allocate_run_insights(
+    plan: dict[str, Any],
+    bundles_by_scenario: dict[str, dict[str, Any]],
+    primary: dict[tuple[str, str | None], dict[str, Any]],
+) -> tuple[
+    dict[tuple[str, str, str], str],
+    set[tuple[str, str, str]],
+    dict[tuple[str, str, str], dict[str, Any]],
+]:
+    """Assign each physical run insight to at most one scenario.
+
+    Agent Insights returns one run-level collection. Multiple scenario bundles for that run may
+    therefore contain the same cards. The allocation first computes a maximum matching between
+    trustworthy cards and expected scenario slots, then deterministically assigns any remaining
+    noise/partial cards to one scenario for diagnostics.
+    """
+
+    assignment_order = {
+        assignment["scenario_id"]: index
+        for index, assignment in enumerate(plan["assignments"])
+    }
+    candidates: dict[
+        tuple[str, str, str],
+        dict[str, dict[str, Any]],
+    ] = defaultdict(dict)
+    for scenario_id, bundle in bundles_by_scenario.items():
+        for insight in bundle["insights"]:
+            judgment = primary.get((scenario_id, insight["id"]))
+            if judgment is None:
+                continue
+            key = (bundle["run"]["run_id"], bundle["agent"]["id"], insight["id"])
+            candidates[key][scenario_id] = judgment
+
+    def is_true_positive(judgment: dict[str, Any]) -> bool:
+        return judgment["verdict"] == "correct" and all(
+            judgment["attributes"][name]["passes"] for name in PASS_ATTRIBUTES
+        )
+
+    slots: list[tuple[str, int]] = []
+    slot_candidates: dict[tuple[str, int], tuple[tuple[str, str, str], ...]] = {}
+    for assignment in plan["assignments"]:
+        scenario_id = assignment["scenario_id"]
+        expected_count = assignment["expected"]["finding_count"]
+        for slot_index in range(expected_count):
+            slot = (scenario_id, slot_index)
+            slots.append(slot)
+            slot_candidates[slot] = tuple(
+                sorted(
+                    key
+                    for key, judgments in candidates.items()
+                    if scenario_id in judgments
+                    and is_true_positive(judgments[scenario_id])
+                )
+            )
+    slots.sort(
+        key=lambda slot: (
+            len(slot_candidates[slot]),
+            assignment_order[slot[0]],
+            slot[1],
+        )
+    )
+
+    insight_to_slot: dict[tuple[str, str, str], tuple[str, int]] = {}
+
+    def match(slot: tuple[str, int], seen: set[tuple[str, str, str]]) -> bool:
+        for key in slot_candidates[slot]:
+            if key in seen:
+                continue
+            seen.add(key)
+            prior = insight_to_slot.get(key)
+            if prior is None or match(prior, seen):
+                insight_to_slot[key] = slot
+                return True
+        return False
+
+    for slot in slots:
+        match(slot, set())
+
+    owners = {key: slot[0] for key, slot in insight_to_slot.items()}
+    matched = set(owners)
+    owner_counts = Counter(owners.values())
+    verdict_rank = {
+        "partially_useful": 0,
+        "incorrect_noise": 1,
+        "correct": 2,
+    }
+    for key, judgments in sorted(candidates.items()):
+        if key in owners:
+            continue
+        owner = min(
+            judgments,
+            key=lambda scenario_id: (
+                verdict_rank.get(judgments[scenario_id]["verdict"], 3),
+                owner_counts[scenario_id],
+                assignment_order[scenario_id],
+            ),
+        )
+        owners[key] = owner
+        owner_counts[owner] += 1
+
+    representatives = {
+        key: candidates[key][owner]
+        for key, owner in owners.items()
+    }
+    return owners, matched, representatives
+
+
 def score_run(
     plan: dict[str, Any],
     bundles: list[dict[str, Any]],
@@ -335,8 +442,6 @@ def score_run(
         if item["scenario"]["id"] in assignments
     }
 
-    classifications: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    all_primary: list[dict[str, Any]] = []
     unresolved = False
     for scenario_id, bundle in bundles_by_scenario.items():
         if scenario_id not in assignments or "insights" not in bundle:
@@ -345,9 +450,6 @@ def score_run(
             judgment = primary.get((scenario_id, insight["id"]))
             if judgment is None:
                 unresolved = True
-                continue
-            classifications[scenario_id].append(judgment)
-            all_primary.append(judgment)
     if unresolved:
         violations.add("unresolved_judgment")
         trustworthy = False
@@ -363,27 +465,28 @@ def score_run(
         if assignment["expected"]["finding_count"] == 0
     ]
 
-    def is_true_positive(judgment: dict[str, Any]) -> bool:
-        return judgment["verdict"] == "correct" and all(
-            judgment["attributes"][name]["passes"] for name in PASS_ATTRIBUTES
-        )
-
-    true_positive_by_scenario = {
-        scenario_id: [item for item in classifications[scenario_id] if is_true_positive(item)]
-        for scenario_id in expected_faults
-    }
-    true_positive_counts = {
-        scenario_id: min(
-            len(items),
-            assignments[scenario_id]["expected"]["finding_count"],
-        )
-        for scenario_id, items in true_positive_by_scenario.items()
-    }
+    owners, matched_physical, representative_by_physical = _allocate_run_insights(
+        plan,
+        bundles_by_scenario,
+        primary,
+    )
+    all_primary = list(representative_by_physical.values())
+    true_positive_counts = Counter(
+        owners[key]
+        for key in matched_physical
+        if owners[key] in expected_faults
+    )
     expected_fault_count = sum(
         assignments[scenario_id]["expected"]["finding_count"]
         for scenario_id in expected_faults
     )
-    true_positives = sum(true_positive_counts.values())
+    true_positives = len(
+        [
+            key
+            for key in matched_physical
+            if owners[key] in expected_faults
+        ]
+    )
     produced = len(
         {
             (bundle["run"]["run_id"], bundle["agent"]["id"], insight["id"])
@@ -424,7 +527,7 @@ def score_run(
             if assignments[scenario_id]["expected"]["severity"] == severity
         ]
         return _ratio(
-            sum(true_positive_counts[scenario_id] for scenario_id in relevant),
+            sum(true_positive_counts.get(scenario_id, 0) for scenario_id in relevant),
             sum(
                 assignments[scenario_id]["expected"]["finding_count"]
                 for scenario_id in relevant
@@ -432,10 +535,10 @@ def score_run(
         )
 
     mapped_expected = [
-        item
-        for scenario_id in expected_faults
-        for item in classifications[scenario_id]
-        if item["verdict"] != "incorrect_noise"
+        judgment
+        for key, judgment in representative_by_physical.items()
+        if owners[key] in expected_faults
+        and judgment["verdict"] != "incorrect_noise"
     ]
 
     def attribute_rate(name: str) -> float:
@@ -547,12 +650,24 @@ def case_to_insight_mappings(
         for bundle in bundles
         if "scenario" in bundle
     }
+    owners, _matched, _representatives = _allocate_run_insights(
+        plan,
+        bundle_by_scenario,
+        primary,
+    )
     mappings = []
     for assignment in plan["assignments"]:
         scenario_id = assignment["scenario_id"]
         bundle = bundle_by_scenario.get(scenario_id)
         items = []
         for insight in bundle["insights"] if bundle else []:
+            physical_key = (
+                bundle["run"]["run_id"],
+                bundle["agent"]["id"],
+                insight["id"],
+            )
+            if owners.get(physical_key) != scenario_id:
+                continue
             judgment = primary.get((scenario_id, insight["id"]))
             items.append(
                 {

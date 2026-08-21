@@ -571,9 +571,19 @@ def test_exact_count_aggregates_multi_assignment_run_with_umbrella_count_two(
     )
 
     score = score_run(value, bundles, judgments)
+    outcomes = case_to_insight_mappings(value, bundles, judgments)
 
     assert score["verdict"] == "AT BAR"
     assert "finding_count_mismatch" not in score["violations"]
+    assert score["counts"]["true_positives"] == 3
+    assert score["counts"]["false_positives"] == 0
+    assert score["rates"]["precision"] == 1
+    references = [
+        item["insight_reference"]
+        for outcome in outcomes
+        for item in outcome["insights"]
+    ]
+    assert len(references) == len(set(references)) == 3
 
 
 def test_run_count_match_preserves_mixed_per_scenario_diagnostics(
