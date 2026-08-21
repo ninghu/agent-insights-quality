@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from agent_insights_quality.contracts import ContractError
 
@@ -51,3 +51,20 @@ def trace_url(context: RuntimeLinkContext, agent_name: str, operation_id: str) -
         f"{context.resource_route()}/build/agents/{quote(agent_name, safe='')}"
         f"/traces/{operation_id}"
     )
+
+
+def validate_agent_insights_url(value: str) -> None:
+    parsed = urlparse(value)
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc.casefold() != "ai.azure.com"
+        or parsed.query
+        or parsed.fragment
+        or not re.fullmatch(
+            r"/nextgen/r/[^/,]+,[^/,]+,,[^/,]+,[^/,]+/"
+            r"build/agents/aiq-[0-9]{3}-[A-Za-z0-9._-]+/"
+            r"(?:monitor/)?insights",
+            parsed.path,
+        )
+    ):
+        raise ContractError("Agent Insights URL does not match the approved runtime route")

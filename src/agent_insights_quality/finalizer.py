@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import hashlib
+import re
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -28,6 +29,13 @@ from agent_insights_quality.reporting import (
     validate_report_consistency,
 )
 from agent_insights_quality.runtime import canonical_json, content_hash, write_json
+
+
+_PRIVATE_RUNTIME_URL = re.compile(
+    r"(?i)https?://[^\s<>'\"]*?(?:ai\.azure\.com|portal\.azure\.com|"
+    r"[a-z0-9.-]+\.(?:services\.ai\.azure\.com|openai\.azure\.com|"
+    r"azurewebsites\.net))"
+)
 
 
 def build_preflight_plan(report_date: str, generated_at: str) -> dict[str, Any]:
@@ -303,6 +311,8 @@ def _assert_public_safe_text(label: str, value: str) -> None:
     for pattern_label, pattern in PUBLIC_FORBIDDEN_PATTERNS.items():
         if pattern.search(value):
             raise ContractError(f"{label}: public artifact contains {pattern_label}")
+    if _PRIVATE_RUNTIME_URL.search(value):
+        raise ContractError(f"{label}: public artifact contains private runtime URL")
 
 
 def write_daily_artifacts(

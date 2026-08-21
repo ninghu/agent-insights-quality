@@ -282,6 +282,111 @@ def test_at_bar_rejects_incomplete_scenario_results() -> None:
         validate_canonical_report_semantics(report, agents, catalog, "report")
 
 
+def test_report_requires_judgment_for_every_produced_insight() -> None:
+    report, agents, catalog = _report_fixture(completed=True)
+    report["field_judgments"] = []
+    report["collection_analysis"] = {
+        "distinct": 0,
+        "duplicates": 0,
+        "fragments": 0,
+        "umbrellas": 0,
+        "stale_version": 0,
+    }
+    report["failure"] = None
+    with pytest.raises(ContractError, match="field judgments"):
+        validate_canonical_report_semantics(report, agents, catalog, "report")
+
+
+def test_report_cannot_treat_low_confidence_judgment_as_at_bar() -> None:
+    report, agents, catalog = _report_fixture(completed=True)
+    result = report["scenario_results"][0]
+    report["field_judgments"] = [
+        {
+            "scenario_id": result["scenario_id"],
+            "insight_reference": result["insight_references"][0],
+            "verdict": "correct",
+            "confidence": 0.10,
+            "attributes": {
+                key: True
+                for key in (
+                    "root_cause",
+                    "title",
+                    "description",
+                    "proposed_fix",
+                    "category",
+                    "severity",
+                    "linked_traces",
+                    "meaningfulness",
+                    "evidence_localization",
+                    "actionability",
+                )
+            },
+            "relationships": {
+                "duplicate": False,
+                "fragment": False,
+                "umbrella": False,
+            },
+            "stale_version": False,
+        }
+    ]
+    report["collection_analysis"] = {
+        "distinct": 1,
+        "duplicates": 0,
+        "fragments": 0,
+        "umbrellas": 0,
+        "stale_version": 0,
+    }
+    report["failure"] = None
+    with pytest.raises(ContractError, match="low-confidence"):
+        validate_canonical_report_semantics(report, agents, catalog, "report")
+
+
+def test_failure_report_rejects_unmapped_field_judgment() -> None:
+    report, agents, catalog = _report_fixture(completed=False)
+    report["status"] = "INCONCLUSIVE"
+    report["scorecard"]["verdict"] = "INCONCLUSIVE"
+    report["scorecard"]["complete"] = False
+    report["failure"] = {"reason": "synthetic"}
+    report["field_judgments"] = [
+        {
+            "scenario_id": report["scenario_results"][0]["scenario_id"],
+            "insight_reference": "sha256:" + ("c" * 64),
+            "verdict": "correct",
+            "confidence": 0.99,
+            "attributes": {
+                key: True
+                for key in (
+                    "root_cause",
+                    "title",
+                    "description",
+                    "proposed_fix",
+                    "category",
+                    "severity",
+                    "linked_traces",
+                    "meaningfulness",
+                    "evidence_localization",
+                    "actionability",
+                )
+            },
+            "relationships": {
+                "duplicate": False,
+                "fragment": False,
+                "umbrella": False,
+            },
+            "stale_version": False,
+        }
+    ]
+    report["collection_analysis"] = {
+        "distinct": 1,
+        "duplicates": 0,
+        "fragments": 0,
+        "umbrellas": 0,
+        "stale_version": 0,
+    }
+    with pytest.raises(ContractError, match="field judgments"):
+        validate_canonical_report_semantics(report, agents, catalog, "report")
+
+
 def test_report_must_match_exact_plan_assignment() -> None:
     report, _, catalog = _report_fixture(completed=True)
     scenario_id = report["scenario_results"][0]["scenario_id"]

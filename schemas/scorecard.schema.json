@@ -109,6 +109,7 @@
           "cross_version_stale",
           "structural_failure",
           "provenance_failure",
+          "capability_fix_mismatch",
           "secret_or_pii",
           "judge_schema_failure",
           "unresolved_judgment"

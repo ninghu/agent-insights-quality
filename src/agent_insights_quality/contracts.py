@@ -1185,24 +1185,51 @@ def validate_canonical_report_semantics(
         and all(result["verdict"] != "inconclusive" for result in report["scenario_results"])
         and report.get("failure") is None
     )
+    if scorecard["complete"] != complete:
+        raise ContractError(
+            f"{label}: scorecard completeness does not match scenario results"
+        )
     fault_results = [
         result
         for result in report["scenario_results"]
         if scenario_by_id[result["scenario_id"]]["expected"]["category"] != "none"
     ]
+    field_judgments = report.get("field_judgments", [])
+    fault_ids = {result["scenario_id"] for result in fault_results}
+    low_confidence = any(item["confidence"] < 0.80 for item in field_judgments)
+    if low_confidence and (
+        report["status"] != "INCONCLUSIVE"
+        or "unresolved_judgment" not in scorecard["violations"]
+    ):
+        raise ContractError(
+            f"{label}: low-confidence judgment requires an INCONCLUSIVE report"
+        )
+    trusted_findings_by_scenario = {
+        scenario_id: [
+            item
+            for item in field_judgments
+            if item["scenario_id"] == scenario_id
+            and item["verdict"] == "correct"
+            and item["confidence"] >= 0.80
+            and all(item["attributes"].values())
+        ]
+        for scenario_id in fault_ids
+    }
     true_positives = sum(
-        expected_finding_count(scenario_by_id[result["scenario_id"]])
-        for result in fault_results
-        if result["verdict"] == "correct"
+        min(
+            len(trusted_findings_by_scenario[scenario_id]),
+            expected_finding_count(scenario_by_id[scenario_id]),
+        )
+        for scenario_id in fault_ids
     )
     partially_useful = sum(
-        result["verdict"] == "partially_useful" for result in report["scenario_results"]
+        item["verdict"] == "partially_useful" for item in field_judgments
     )
-    false_negatives = sum(
+    expected_fault_count = sum(
         expected_finding_count(scenario_by_id[result["scenario_id"]])
         for result in fault_results
-        if result["verdict"] != "correct"
     )
+    false_negatives = expected_fault_count - true_positives
     produced_insights = sum(
         len(result["insight_references"]) for result in report["scenario_results"]
     )
@@ -1212,6 +1239,12 @@ def validate_canonical_report_semantics(
         for result in report["scenario_results"]
         if scenario_by_id[result["scenario_id"]]["expected"]["category"] == "none"
     )
+    if report.get("failure") is not None and not field_judgments:
+        true_positives = 0
+        partially_useful = 0
+        false_positives = 0
+        false_negatives = 0
+        healthy_insights = 0
     expected_high = [
         result
         for result in fault_results
@@ -1224,9 +1257,11 @@ def validate_canonical_report_semantics(
     expected_rates = {
         "high_severity_recall": ratio(
             sum(
-                expected_finding_count(scenario_by_id[result["scenario_id"]])
+                min(
+                    len(trusted_findings_by_scenario[result["scenario_id"]]),
+                    expected_finding_count(scenario_by_id[result["scenario_id"]]),
+                )
                 for result in expected_high
-                if result["verdict"] == "correct"
             ),
             sum(
                 expected_finding_count(scenario_by_id[result["scenario_id"]])
@@ -1235,10 +1270,7 @@ def validate_canonical_report_semantics(
         ),
         "overall_recall": ratio(
             true_positives,
-            sum(
-                expected_finding_count(scenario_by_id[result["scenario_id"]])
-                for result in fault_results
-            ),
+            expected_fault_count,
         ),
         "precision": ratio(true_positives, produced_insights),
     }
@@ -1252,8 +1284,17 @@ def validate_canonical_report_semantics(
             if scenario_by_id[result["scenario_id"]]["expected"]["severity"] == severity
         ]
         expected_rates[rate_name] = ratio(
-            sum(result["verdict"] == "correct" for result in expected_severity),
-            len(expected_severity),
+            sum(
+                min(
+                    len(trusted_findings_by_scenario[result["scenario_id"]]),
+                    expected_finding_count(scenario_by_id[result["scenario_id"]]),
+                )
+                for result in expected_severity
+            ),
+            sum(
+                expected_finding_count(scenario_by_id[result["scenario_id"]])
+                for result in expected_severity
+            ),
         )
     healthy_results = [
         result
@@ -1292,8 +1333,10 @@ def validate_canonical_report_semantics(
             (item["scenario_id"], item["insight_reference"])
             for item in report["field_judgments"]
         ]
-        if len(field_keys) != len(set(field_keys)) or not set(field_keys).issubset(
-            result_references
+        expected_field_keys = result_references
+        if (
+            len(field_keys) != len(set(field_keys))
+            or set(field_keys) != expected_field_keys
         ):
             raise ContractError(f"{label}: field judgments do not match unique insight mappings")
         for item in report["field_judgments"]:
@@ -1310,9 +1353,15 @@ def validate_canonical_report_semantics(
             "meaningfulness": "meaningfulness_rate",
             "actionability": "actionability_rate",
         }.items():
+            mapped_expected = [
+                item
+                for item in report["field_judgments"]
+                if item["scenario_id"] in fault_ids
+                and item["verdict"] != "incorrect_noise"
+            ]
             expected_rates[rate_name] = ratio(
-                sum(item["attributes"][attribute] for item in report["field_judgments"]),
-                len(report["field_judgments"]),
+                sum(item["attributes"][attribute] for item in mapped_expected),
+                len(mapped_expected),
             )
         correct_faults = {
             result["scenario_id"]
@@ -1322,21 +1371,25 @@ def validate_canonical_report_semantics(
         judged_faults = {
             item["scenario_id"]
             for item in report["field_judgments"]
-            if all(item["attributes"].values())
+            if item["verdict"] == "correct" and all(item["attributes"].values())
         }
         if correct_faults != judged_faults:
             raise ContractError(f"{label}: true positives contradict field judgments")
 
     if "collection_analysis" in report:
         collection = report["collection_analysis"]
-        total = (
-            collection["distinct"]
-            + collection["duplicates"]
-            + collection["fragments"]
-            + collection["umbrellas"]
-        )
-        if total > produced_insights:
-            raise ContractError(f"{label}: collection analysis exceeds produced insights")
+        judgments = report.get("field_judgments", [])
+        expected_collection = {
+            "distinct": sum(not any(item["relationships"].values()) for item in judgments),
+            "duplicates": sum(item["relationships"]["duplicate"] for item in judgments),
+            "fragments": sum(item["relationships"]["fragment"] for item in judgments),
+            "umbrellas": sum(item["relationships"]["umbrella"] for item in judgments),
+            "stale_version": int(any(item["stale_version"] for item in judgments)),
+        }
+        if collection != expected_collection:
+            raise ContractError(
+                f"{label}: collection analysis does not match field judgments"
+            )
         expected_rates.update(
             {
                 "distinctness_rate": ratio(collection["distinct"], produced_insights),
@@ -1345,7 +1398,7 @@ def validate_canonical_report_semantics(
                 "umbrella_rate": ratio(collection["umbrellas"], produced_insights),
                 "cross_version_stale_rate": ratio(
                     collection["stale_version"],
-                    produced_insights,
+                    len(report["scenario_results"]),
                 ),
             }
         )
@@ -1372,9 +1425,6 @@ def validate_canonical_report_semantics(
         for key, expected in expected_rates.items():
             if not math.isclose(rates[key], expected, abs_tol=1e-9):
                 raise ContractError(f"{label}: scorecard {key} does not match scenario results")
-    if scorecard["complete"] != complete:
-        raise ContractError(f"{label}: scorecard completeness does not match scenario results")
-
     if report["status"] == "INCONCLUSIVE":
         if scorecard["complete"]:
             raise ContractError(f"{label}: an INCONCLUSIVE report cannot be complete")

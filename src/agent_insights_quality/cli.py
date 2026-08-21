@@ -174,6 +174,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     memory.add_argument("--memory", required=True)
     memory.add_argument("--findings", required=True)
+    memory.add_argument("--report-id", required=True)
+    memory.add_argument("--run-id", required=True)
     memory.add_argument("--report-date", required=True)
     memory.add_argument("--report-path", required=True)
     memory.add_argument("--generated-at", required=True)
@@ -470,6 +472,8 @@ def run(args: argparse.Namespace) -> None:
         updated, changes = reconcile_memory(
             read_json_object(Path(args.memory), "quality memory"),
             findings,
+            report_id=args.report_id,
+            run_id=args.run_id,
             report_date=args.report_date,
             report_path=args.report_path,
             generated_at=args.generated_at,
@@ -518,8 +522,10 @@ def run(args: argparse.Namespace) -> None:
                 applied = client.update_bug(int(matched["id"]), candidate)
             else:
                 raise ContractError(f"Unhandled eligible ADO action: {result['action']}")
-            result["confirmed_reference"] = (
-                content_hash({"work_item_id": applied.get("id")}) if applied.get("id") else None
+            if not isinstance(applied.get("id"), int):
+                raise ContractError("ADO apply did not confirm the work-item ID")
+            result["confirmed_reference"] = content_hash(
+                {"work_item_id": applied["id"]}
             )
         write_json(Path(args.output), result)
         print(result["action"])
