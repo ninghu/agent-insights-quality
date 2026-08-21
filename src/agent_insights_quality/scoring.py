@@ -242,10 +242,23 @@ def score_run(
     violations, structural_failures = deterministic_violations(
         plan, bundles, catalog, agents
     )
-    primary, judgment_violations, trustworthy = _validate_judgments(bundles, judgments)
+    valid_bundles: list[dict[str, Any]] = []
+    for bundle in bundles:
+        try:
+            validate_evidence_bundle(bundle)
+        except (ContractError, KeyError, TypeError):
+            continue
+        valid_bundles.append(bundle)
+    primary, judgment_violations, trustworthy = _validate_judgments(
+        valid_bundles, judgments
+    )
     violations.update(judgment_violations)
     assignments = {item["scenario_id"]: item for item in plan["assignments"]}
-    bundles_by_scenario = {item.get("scenario", {}).get("id"): item for item in bundles}
+    bundles_by_scenario = {
+        item["scenario"]["id"]: item
+        for item in valid_bundles
+        if item["scenario"]["id"] in assignments
+    }
 
     classifications: dict[str, list[dict[str, Any]]] = defaultdict(list)
     all_primary: list[dict[str, Any]] = []
@@ -301,7 +314,7 @@ def score_run(
         for scenario_id in expected_faults
     )
     true_positives = sum(true_positive_counts.values())
-    produced = sum(len(bundle.get("insights", [])) for bundle in bundles)
+    produced = sum(len(bundle["insights"]) for bundle in valid_bundles)
     false_positives = produced - true_positives
     false_negatives = expected_fault_count - true_positives
     partially_useful = sum(item["verdict"] == "partially_useful" for item in all_primary)
@@ -380,7 +393,7 @@ def score_run(
         "duplication_rate": _ratio(duplicate_count, relationship_denominator),
         "fragmentation_rate": _ratio(fragmented_count, relationship_denominator),
         "umbrella_rate": _ratio(umbrella_count, relationship_denominator),
-        "cross_version_stale_rate": _ratio(stale_count, len(bundles)),
+        "cross_version_stale_rate": _ratio(stale_count, len(valid_bundles)),
     }
 
     if rates["high_severity_recall"] != 1:
@@ -396,11 +409,22 @@ def score_run(
     if rates["cross_version_stale_rate"]:
         violations.add("cross_version_stale")
 
-    complete = set(bundles_by_scenario) == set(assignments) and trustworthy
+    complete = (
+        set(bundles_by_scenario) == set(assignments)
+        and structural_failures == 0
+        and trustworthy
+    )
     if not complete:
         violations.add("incomplete_catalog")
     inconclusive = not trustworthy or bool(
-        {"provenance_failure", "judge_schema_failure", "unresolved_judgment"} & violations
+        {
+            "structural_failure",
+            "provenance_failure",
+            "judge_schema_failure",
+            "unresolved_judgment",
+            "incomplete_catalog",
+        }
+        & violations
     )
     verdict = "INCONCLUSIVE" if inconclusive or not complete else (
         "AT BAR" if not violations else "NOT AT BAR"

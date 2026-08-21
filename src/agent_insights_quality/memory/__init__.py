@@ -3,16 +3,29 @@ from __future__ import annotations
 
 import re
 from copy import deepcopy
+from datetime import date, datetime
 from typing import Any
 
-from agent_insights_quality.contracts import ContractError, MEMORY_SCHEMA, validate_instance
+from agent_insights_quality.contracts import (
+    ContractError,
+    MEMORY_SCHEMA,
+    ROOT,
+    SCHEMAS,
+    load_agent_manifests,
+    load_scenario_catalog,
+    validate_canonical_report_semantics,
+    validate_daily_plan_semantics,
+    validate_instance,
+    validate_report_plan_binding,
+)
 from agent_insights_quality.artifact_io import content_hash
+from agent_insights_quality.privacy import require_privacy_safe
 
 
 _REPORT_PATH = re.compile(
-    r"^reports/daily/[0-9]{4}/[0-9]{2}/[0-9]{2}/report\.md$"
+    r"^reports/daily/[0-9]{4}/[0-9]{2}/[0-9]{2}"
+    r"(?:/aiq-[0-9]{8}-r[0-9]{2})?/report\.md$"
 )
-_PRIVATE_TEXT = re.compile(r"(?i)(?:https?://|\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b)")
 
 
 def issue_fingerprint(root_cause: str, engine_surface: str, validation_target: str) -> str:
@@ -63,29 +76,46 @@ def reconcile_memory(
     memory: dict[str, Any],
     findings: list[dict[str, Any]],
     *,
-    report_id: str,
+    plan: dict[str, Any],
+    report: dict[str, Any],
     run_id: str,
-    report_date: str,
-    report_path: str,
-    generated_at: str,
-    complete: bool,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Reconcile confirmed findings while preserving immutable fingerprints and history."""
     validate_instance(memory, MEMORY_SCHEMA, "quality memory")
+    require_privacy_safe(memory, "Quality memory")
+    agents = load_agent_manifests()
+    catalog = load_scenario_catalog({agent["id"] for agent in agents})
+    validate_instance(plan, SCHEMAS / "daily-plan.schema.json", "daily plan")
+    validate_daily_plan_semantics(plan, agents, catalog, "daily plan")
+    validate_instance(report, SCHEMAS / "canonical-report.schema.json", "canonical report")
+    validate_canonical_report_semantics(report, agents, catalog, "canonical report")
+    validate_report_plan_binding(report, plan, "canonical report")
+    report_id = report["report_id"]
+    report_date = report["report_date"]
+    generated_at = report["generated_at"]
+    report_path = f"{plan['artifact_directory']}/report.md"
     if not _REPORT_PATH.fullmatch(report_path):
         raise ContractError("Quality memory report path must be a public daily report path")
-    if not complete:
-        return deepcopy(memory), []
-    result = deepcopy(memory)
+    require_privacy_safe(report, "Canonical report for quality memory")
+    for finding in findings:
+        require_privacy_safe(finding, "Quality memory finding")
+    complete = (
+        report["scorecard"]["complete"]
+        and report["status"] != "INCONCLUSIVE"
+        and report["scorecard"]["counts"]["active_scenarios"] == len(plan["assignments"])
+        and report["scorecard"]["counts"]["completed_scenarios"] == len(plan["assignments"])
+        and {item["scenario_id"] for item in report["scenario_results"]}
+        == {item["scenario_id"] for item in plan["assignments"]}
+        and all(item["completed"] for item in report["scenario_results"])
+    )
     report_reference = content_hash(
         {
-            "report_id": report_id,
             "run_id": run_id,
-            "report_path": report_path,
-            "report_date": report_date,
-            "findings": findings,
+            "plan": plan,
+            "report": report,
         }
     )
+    result = deepcopy(memory)
     matching = [
         item
         for item in result["processed_runs"]
@@ -94,21 +124,35 @@ def reconcile_memory(
     expected_run = {
         "report_id": report_id,
         "run_id": run_id,
+        "report_date": report_date,
+        "generated_at": generated_at,
         "report_reference": report_reference,
     }
     if matching:
         if len(matching) == 1 and matching[0] == expected_run:
             return result, []
         raise ContractError("report_id and run_id are immutable and cannot be reused")
+    if not complete:
+        return result, []
+    if result["updated_at"] is not None and datetime.fromisoformat(
+        generated_at.replace("Z", "+00:00")
+    ) <= datetime.fromisoformat(result["updated_at"].replace("Z", "+00:00")):
+        raise ContractError("Complete quality-memory runs must be processed in chronological order")
+    latest_report_date = max(
+        (date.fromisoformat(item["report_date"]) for item in result["processed_runs"]),
+        default=None,
+    )
+    if latest_report_date is not None and date.fromisoformat(report_date) < latest_report_date:
+        raise ContractError("Complete quality-memory report dates cannot move backward")
     result["processed_runs"].append(expected_run)
-    result["processed_runs"].sort(key=lambda item: (item["report_id"], item["run_id"]))
+    result["processed_runs"].sort(
+        key=lambda item: (item["generated_at"], item["report_id"], item["run_id"])
+    )
     by_fingerprint = {item["fingerprint"]: item for item in result["issues"]}
     seen: set[str] = set()
     changes: list[dict[str, Any]] = []
 
     for finding in findings:
-        if _PRIVATE_TEXT.search(finding["title"]) or _PRIVATE_TEXT.search(finding["description"]):
-            raise ContractError("Quality memory text must not contain email addresses or URLs")
         expected = issue_fingerprint(
             finding["root_cause"],
             finding["engine_surface"],
@@ -185,12 +229,18 @@ def reconcile_memory(
 
     result["updated_at"] = generated_at
     result["issues"].sort(key=lambda item: item["fingerprint"])
+    for record in result["processed_runs"]:
+        require_privacy_safe(record, "Quality memory processed-run record")
+    for issue in result["issues"]:
+        require_privacy_safe(issue, "Quality memory issue record")
+    require_privacy_safe(result, "Quality memory")
     validate_instance(result, MEMORY_SCHEMA, "quality memory")
     return result, changes
 
 
 def render_memory_markdown(memory: dict[str, Any]) -> str:
     validate_instance(memory, MEMORY_SCHEMA, "quality memory")
+    require_privacy_safe(memory, "Quality memory")
     lines = [
         "# Quality Memory",
         "",

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 from agent_insights_quality.contracts import ContractError
 
@@ -53,18 +53,28 @@ def trace_url(context: RuntimeLinkContext, agent_name: str, operation_id: str) -
     )
 
 
-def validate_agent_insights_url(value: str) -> None:
+def validate_agent_insights_url(value: str, expected_agent_name: str | None = None) -> None:
     parsed = urlparse(value)
+    match = re.fullmatch(
+        r"/nextgen/r/[^/,]+,[^/,]+,,[^/,]+,[^/,]+/"
+        r"build/agents/(?P<agent>[^/]+)/(?:(?:monitor/)?insights)",
+        parsed.path,
+    )
     if (
         parsed.scheme != "https"
         or parsed.netloc.casefold() != "ai.azure.com"
         or parsed.query
         or parsed.fragment
-        or not re.fullmatch(
-            r"/nextgen/r/[^/,]+,[^/,]+,,[^/,]+,[^/,]+/"
-            r"build/agents/aiq-[0-9]{3}-[A-Za-z0-9._-]+/"
-            r"(?:monitor/)?insights",
-            parsed.path,
-        )
+        or match is None
     ):
         raise ContractError("Agent Insights URL does not match the approved runtime route")
+    encoded_agent = match.group("agent")
+    decoded_agent = unquote(encoded_agent)
+    if (
+        not _AGENT_NAME.fullmatch(decoded_agent)
+        or quote(decoded_agent, safe="") != encoded_agent
+        or (expected_agent_name is not None and decoded_agent != expected_agent_name)
+    ):
+        raise ContractError(
+            "Agent Insights URL agent segment does not match the corresponding report agent"
+        )

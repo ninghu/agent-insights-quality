@@ -385,12 +385,18 @@ class AdoClient:
         ids = [item["id"] for item in result.get("workItems", [])]
         if not ids:
             return []
-        return self._request(
-            "GET",
-            "_apis/wit/workitems?ids="
-            + ",".join(str(value) for value in ids)
-            + "&$expand=fields&api-version=7.1",
-        ).get("value", [])
+        details: list[dict[str, Any]] = []
+        for offset in range(0, len(ids), 200):
+            batch = ids[offset : offset + 200]
+            details.extend(
+                self._request(
+                    "GET",
+                    "_apis/wit/workitems?ids="
+                    + ",".join(str(value) for value in batch)
+                    + "&$expand=fields&api-version=7.1",
+                ).get("value", [])
+            )
+        return details
 
     def create_bug(
         self,

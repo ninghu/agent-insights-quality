@@ -117,6 +117,10 @@ aggregates from plans, evidence, and judgments. `memory-reconcile`, `ado-dry-run
 remaining deterministic handoffs. No command calls an external model or claims mail delivery without
 an imported provider receipt.
 
+`memory-reconcile` requires the validated daily plan and canonical report. Only a full-catalog,
+evidence-complete report can advance issue state, and complete reports must be processed
+chronologically.
+
 The email request carries one immutable `content_digest` and an ordered, no-duplicate transport
 policy. Automation tries connected Copilot mail first, Graph `/me/sendMail` only when `Mail.Send` is
 confirmed, and local Outlook COM only on `hostId=local` for the verified authenticated-user test
