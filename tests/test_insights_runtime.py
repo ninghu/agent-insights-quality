@@ -321,9 +321,26 @@ def test_run_window_and_checkpoint_scope_insights_fail_closed() -> None:
         "start_time": start.isoformat(),
         "end_time": end.isoformat(),
     }
-    assert AgentInsightsClient.validate_run_window(run, start, end) == (start, end)
+    # Exact match still accepted as enclosing window
+    assert AgentInsightsClient.validate_run_window(run, start, end, lookback_hours=1) == (start, end)
+    # Service window starts after expected_start — rejected
     with pytest.raises(RuntimeFailure, match="different analysis window"):
-        AgentInsightsClient.validate_run_window(run, start + timedelta(seconds=1), end)
+        AgentInsightsClient.validate_run_window(run, start - timedelta(seconds=1), end, lookback_hours=1)
+    # Service window ends before expected_end — rejected
+    with pytest.raises(RuntimeFailure, match="different analysis window"):
+        AgentInsightsClient.validate_run_window(run, start, end + timedelta(seconds=1), lookback_hours=1)
+    # Duration inconsistent with lookback — rejected
+    with pytest.raises(RuntimeFailure, match="duration is inconsistent"):
+        AgentInsightsClient.validate_run_window(run, start, end, lookback_hours=24)
+    # Slight timestamp shift is fine as long as window still encloses and duration matches
+    run_shifted = {
+        "id": "run",
+        "status": "succeeded",
+        "start_time": (start - timedelta(minutes=1)).isoformat(),
+        "end_time": (end + timedelta(minutes=1)).isoformat(),
+    }
+    result = AgentInsightsClient.validate_run_window(run_shifted, start, end, lookback_hours=1)
+    assert result[0] < start and result[1] > end
 
     checkpoint = InsightCheckpoint(
         captured_at=start + timedelta(minutes=1),
@@ -334,24 +351,34 @@ def test_run_window_and_checkpoint_scope_insights_fail_closed() -> None:
         {"id": "changed", "revision": "2", "updated_at": (start + timedelta(minutes=2)).isoformat()},
         {"id": "new", "revision": "1", "created_at": (start + timedelta(minutes=3)).isoformat()},
     ]
-    selected = AgentInsightsClient.scope_insights(insights, checkpoint, start, end)
+    op_ids = frozenset(["aa" * 16, "bb" * 16])
+    insights_with_trace = [
+        {**i, "trace_ids": ["aa" * 16]} for i in insights
+    ]
+    selected = AgentInsightsClient.scope_insights(
+        insights_with_trace, checkpoint, start, end,
+        operation_ids=op_ids,
+    )
     assert [item["id"] for item in selected] == ["changed", "new"]
     with pytest.raises(RuntimeFailure, match="timestamp is missing"):
         AgentInsightsClient.scope_insights(
-            [{"id": "new", "revision": "1"}],
+            [{"id": "new", "revision": "1", "trace_ids": ["aa" * 16]}],
             checkpoint,
             start,
             end,
+            operation_ids=op_ids,
         )
 
 
 def test_run_scope_uses_structural_bound_not_quality_gate() -> None:
     start = datetime(2026, 8, 21, 1, tzinfo=UTC)
+    op_id = "a" * 32
     insights = [
         {
             "id": f"i{index}",
             "revision": "1",
             "created_at": (start + timedelta(minutes=2)).isoformat(),
+            "trace_ids": [op_id],
         }
         for index in range(6)
     ]
@@ -361,6 +388,7 @@ def test_run_scope_uses_structural_bound_not_quality_gate() -> None:
             InsightCheckpoint(start + timedelta(minutes=1), {}),
             start,
             start + timedelta(hours=1),
+            operation_ids=frozenset([op_id]),
         )
     ) == 6
 
@@ -490,3 +518,173 @@ def test_ingestion_polling_is_bounded_and_fails_closed() -> None:
             sleep=lambda _seconds: None,
             monotonic=lambda: next(ticks),
         )
+
+
+# ── new focused tests ─────────────────────────────────────────────────────────
+
+
+def test_scope_insights_filters_by_exact_agent_name_and_version() -> None:
+    start = datetime(2026, 8, 21, 1, tzinfo=UTC)
+    op_id = "c" * 32
+    base = {
+        "revision": "2",
+        "created_at": (start + timedelta(minutes=2)).isoformat(),
+        "trace_ids": [op_id],
+    }
+    matching = {"id": "ok", **base, "agent_name": "aiq-001-agent", "agent_version": "v2"}
+    wrong_agent = {"id": "bad-agent", **base, "agent_name": "other-agent"}
+    wrong_version = {"id": "bad-ver", **base, "agent_name": "aiq-001-agent", "agent_version": "v9"}
+    checkpoint = InsightCheckpoint(captured_at=start + timedelta(minutes=1), revisions={})
+    op = frozenset([op_id])
+
+    selected = AgentInsightsClient.scope_insights(
+        [matching], checkpoint, start, start + timedelta(hours=1),
+        agent_name="aiq-001-agent", agent_version="v2", operation_ids=op,
+    )
+    assert [i["id"] for i in selected] == ["ok"]
+
+    with pytest.raises(RuntimeFailure, match="agent name"):
+        AgentInsightsClient.scope_insights(
+            [wrong_agent], checkpoint, start, start + timedelta(hours=1),
+            agent_name="aiq-001-agent", operation_ids=op,
+        )
+
+    with pytest.raises(RuntimeFailure, match="agent version"):
+        AgentInsightsClient.scope_insights(
+            [wrong_version], checkpoint, start, start + timedelta(hours=1),
+            agent_name="aiq-001-agent", agent_version="v2", operation_ids=op,
+        )
+
+
+def test_scope_insights_requires_nonempty_trace_ids_in_operation_set() -> None:
+    start = datetime(2026, 8, 21, 1, tzinfo=UTC)
+    op_id = "d" * 32
+    checkpoint = InsightCheckpoint(captured_at=start + timedelta(minutes=1), revisions={})
+    base_time = (start + timedelta(minutes=2)).isoformat()
+
+    # No trace_ids field — rejected when operation_ids is provided
+    with pytest.raises(RuntimeFailure, match="no trace IDs"):
+        AgentInsightsClient.scope_insights(
+            [{"id": "x", "revision": "1", "created_at": base_time}],
+            checkpoint, start, start + timedelta(hours=1),
+            operation_ids=frozenset([op_id]),
+        )
+
+    # trace_id not in operation_ids — rejected
+    with pytest.raises(RuntimeFailure, match="do not all belong"):
+        AgentInsightsClient.scope_insights(
+            [{"id": "x", "revision": "1", "created_at": base_time, "trace_ids": ["ff" * 16]}],
+            checkpoint, start, start + timedelta(hours=1),
+            operation_ids=frozenset([op_id]),
+        )
+
+    # trace_id in operation_ids — accepted
+    selected = AgentInsightsClient.scope_insights(
+        [{"id": "x", "revision": "1", "created_at": base_time, "trace_ids": [op_id]}],
+        checkpoint, start, start + timedelta(hours=1),
+        operation_ids=frozenset([op_id]),
+    )
+    assert [i["id"] for i in selected] == ["x"]
+
+
+def test_validate_run_window_accepts_enclosing_window_without_equality() -> None:
+    start = datetime(2026, 8, 21, 1, tzinfo=UTC)
+    end = start + timedelta(hours=1)
+    # Service returned slightly wider window — still valid
+    run = {
+        "start_time": (start - timedelta(minutes=2)).isoformat(),
+        "end_time": (end + timedelta(minutes=2)).isoformat(),
+    }
+    actual_start, actual_end = AgentInsightsClient.validate_run_window(run, start, end, lookback_hours=1)
+    assert actual_start < start and actual_end > end
+
+    # Exact match also valid
+    run_exact = {"start_time": start.isoformat(), "end_time": end.isoformat()}
+    assert AgentInsightsClient.validate_run_window(run_exact, start, end, lookback_hours=1) == (start, end)
+
+    # Window too short (4 min) for 1-hour lookback — rejected
+    run_short = {
+        "start_time": start.isoformat(),
+        "end_time": (start + timedelta(minutes=4)).isoformat(),
+    }
+    with pytest.raises(RuntimeFailure, match="duration is inconsistent"):
+        AgentInsightsClient.validate_run_window(run_short, start, start + timedelta(minutes=4), lookback_hours=1)
+
+
+def test_telemetry_correlation_without_chat_span_succeeds_when_not_required() -> None:
+    start = datetime(2026, 8, 21, tzinfo=UTC)
+    trace = "e" * 32
+    rows = [
+        {
+            "timestamp": start + timedelta(seconds=1),
+            "operation_id": trace,
+            "agent_name": "agent",
+            "agent_version": "v1",
+            "span_id": "rootid0000000001",
+            "parent_id": "",
+            "span_name": "invoke_agent",
+            "invocation_id": ["invoke-x"],
+            "response_id": [],
+            "hosted_response_id": [],
+            "session_id": [],
+            "span_agent_name": "agent",
+            "span_agent_version": "v1",
+            "span_model": "",
+        }
+    ]
+    expectation = TelemetryExpectation(
+        invocation_id="invoke-x",
+        response_id=None,
+        session_id=None,
+        model_deployment="terra",
+        required_operations=frozenset({"invoke_agent"}),
+    )
+    result = correlate_complete_traces(
+        rows,
+        [expectation],
+        agent="agent",
+        version="v1",
+        start=start,
+        end=start + timedelta(minutes=1),
+    )
+    assert result is not None and result[0].operation_id == trace
+
+
+def test_telemetry_correlation_with_only_session_id_for_failed_request() -> None:
+    """Failed invocations may only carry a session_id — correlation must still work."""
+    start = datetime(2026, 8, 21, tzinfo=UTC)
+    trace = "f" * 32
+    rows = [
+        {
+            "timestamp": start + timedelta(seconds=2),
+            "operation_id": trace,
+            "agent_name": "agent",
+            "agent_version": "v1",
+            "span_id": "rootid0000000002",
+            "parent_id": "",
+            "span_name": "invoke_agent",
+            "invocation_id": [],
+            "response_id": [],
+            "hosted_response_id": [],
+            "session_id": ["sess-abc"],
+            "span_agent_name": "agent",
+            "span_agent_version": "v1",
+            "span_model": "",
+        }
+    ]
+    expectation = TelemetryExpectation(
+        invocation_id=None,
+        response_id=None,
+        session_id="sess-abc",
+        model_deployment="terra",
+        required_operations=frozenset({"invoke_agent"}),
+    )
+    result = correlate_complete_traces(
+        rows,
+        [expectation],
+        agent="agent",
+        version="v1",
+        start=start,
+        end=start + timedelta(minutes=1),
+    )
+    assert result is not None and result[0].operation_id == trace

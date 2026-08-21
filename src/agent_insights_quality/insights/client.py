@@ -467,11 +467,25 @@ class AgentInsightsClient:
             details.append(payload)
         return details
 
-    def capture_insight_checkpoint(self, monitor_id: str) -> InsightCheckpoint:
+    def capture_insight_checkpoint(
+        self,
+        monitor_id: str,
+        *,
+        agent_name: str | None = None,
+        agent_version: str | None = None,
+    ) -> InsightCheckpoint:
         revisions: dict[str, str] = {}
         details: dict[str, Mapping[str, Any]] = {}
         for insight in self.list_insights(monitor_id):
             insight_id = str(insight.get("id") or "")
+            if agent_name is not None:
+                ia = insight.get("agent_name")
+                if ia is not None and str(ia) != agent_name:
+                    continue
+            if agent_version is not None:
+                iv = insight.get("agent_version")
+                if iv is not None and str(iv) != agent_version:
+                    continue
             revision = str(_field(insight, "revision", "etag", "updated_at", "updatedAt") or "")
             if not insight_id or not revision:
                 raise RuntimeFailure(
@@ -487,19 +501,29 @@ class AgentInsightsClient:
         run: Mapping[str, Any],
         expected_start: datetime,
         expected_end: datetime,
+        lookback_hours: int,
+        *,
+        tolerance_seconds: float = 600.0,
     ) -> tuple[datetime, datetime]:
         actual_start = _timestamp(_field(run, "start_time", "startTime", "window_start"), "run start")
         actual_end = _timestamp(_field(run, "end_time", "endTime", "window_end"), "run end")
         if expected_start.tzinfo is None or expected_end.tzinfo is None:
             raise RuntimeFailure("invalid_run_window", "Expected run window must be timezone-aware.")
-        if (
-            actual_start != expected_start.astimezone(UTC)
-            or actual_end != expected_end.astimezone(UTC)
-            or actual_start >= actual_end
-        ):
+        expected_start_utc = expected_start.astimezone(UTC)
+        expected_end_utc = expected_end.astimezone(UTC)
+        if actual_start >= actual_end:
+            raise RuntimeFailure("run_window_mismatch", "Agent Insights returned a degenerate analysis window.")
+        if actual_start > expected_start_utc or actual_end < expected_end_utc:
             raise RuntimeFailure(
                 "run_window_mismatch",
                 "Agent Insights returned a different analysis window.",
+            )
+        actual_duration = (actual_end - actual_start).total_seconds()
+        expected_duration = lookback_hours * 3600.0
+        if abs(actual_duration - expected_duration) > tolerance_seconds:
+            raise RuntimeFailure(
+                "run_window_mismatch",
+                "Agent Insights run window duration is inconsistent with requested lookback.",
             )
         return actual_start, actual_end
 
@@ -509,6 +533,10 @@ class AgentInsightsClient:
         checkpoint: InsightCheckpoint,
         run_start: datetime,
         run_end: datetime,
+        *,
+        agent_name: str | None = None,
+        agent_version: str | None = None,
+        operation_ids: frozenset[str] | None = None,
     ) -> list[Mapping[str, Any]]:
         selected: list[Mapping[str, Any]] = []
         for insight in insights:
@@ -521,6 +549,38 @@ class AgentInsightsClient:
                 )
             if checkpoint.revisions.get(insight_id) == revision:
                 continue
+            if agent_name is not None:
+                ia = insight.get("agent_name")
+                if ia is not None and str(ia) != agent_name:
+                    raise RuntimeFailure(
+                        "insight_scope_unproven",
+                        "Insight agent name does not match the expected agent.",
+                    )
+            if agent_version is not None:
+                iv = insight.get("agent_version")
+                if iv is not None and str(iv) != agent_version:
+                    raise RuntimeFailure(
+                        "insight_scope_unproven",
+                        "Insight agent version does not match the expected version.",
+                    )
+            if operation_ids is not None:
+                raw_ids = insight.get("trace_ids") or insight.get("operation_ids") or []
+                if isinstance(raw_ids, str):
+                    try:
+                        raw_ids = json.loads(raw_ids)
+                    except json.JSONDecodeError:
+                        raw_ids = [raw_ids] if raw_ids else []
+                trace_ids = {str(t) for t in raw_ids if t}
+                if not trace_ids:
+                    raise RuntimeFailure(
+                        "insight_scope_unproven",
+                        "Insight has no trace IDs linking it to correlated operations.",
+                    )
+                if not trace_ids.issubset(operation_ids):
+                    raise RuntimeFailure(
+                        "insight_scope_unproven",
+                        "Insight trace IDs do not all belong to the correlated operation-ID set.",
+                    )
             observed = _timestamp(
                 _field(insight, "updated_at", "updatedAt", "created_at", "createdAt"),
                 "insight evidence",
@@ -547,15 +607,22 @@ class AgentInsightsClient:
         checkpoint: InsightCheckpoint,
         expected_start: datetime,
         expected_end: datetime,
+        lookback_hours: int,
         timeout_seconds: float = 21600,
+        agent_name: str | None = None,
+        agent_version: str | None = None,
+        operation_ids: frozenset[str] | None = None,
     ) -> tuple[Mapping[str, Any], list[Mapping[str, Any]]]:
         run = self.wait_run(monitor_id, run_id, timeout_seconds=timeout_seconds)
-        run_start, run_end = self.validate_run_window(run, expected_start, expected_end)
+        run_start, run_end = self.validate_run_window(run, expected_start, expected_end, lookback_hours)
         insights = self.scope_insights(
             self.list_insights(monitor_id),
             checkpoint,
             run_start,
             run_end,
+            agent_name=agent_name,
+            agent_version=agent_version,
+            operation_ids=operation_ids,
         )
         return run, insights
 

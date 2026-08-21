@@ -25,6 +25,8 @@ from agent_insights_quality.agent_runtime import (
     FoundryInvocationClient,
     HealthyFixture,
     HttpResponse,
+    InvocationEndpointError,
+    InvocationFailureReceipt,
     RuntimeContractError,
     canonical_json_digest,
     deterministic_zip,
@@ -453,6 +455,93 @@ def test_hosted_session_version_mismatch_is_cleaned_up() -> None:
         client.invoke_hosted(deployment, fixture)
     assert transport.calls[-1]["method"] == "DELETE"
     assert "/endpoint/sessions/wrong-session?" in transport.calls[-1]["url"]
+
+
+def test_hosted_endpoint_failure_raises_invocation_endpoint_error_and_still_deletes_session() -> None:
+    """HTTP 5xx from the endpoint after exact-version session creation → InvocationEndpointError."""
+    fixture = HealthyFixture(
+        id="hosted-fail",
+        input="do-work",
+        output_contains="unused",
+        tool_outputs={},
+        expected_tool_calls=(),
+    )
+    transport = QueueTransport(
+        [
+            _response(
+                201,
+                {
+                    "agent_session_id": "sess-fail-1",
+                    "version_indicator": {"type": "version_ref", "agent_version": "v5"},
+                },
+            ),
+            # Endpoint call returns 503 with partial body
+            HttpResponse(
+                status_code=503,
+                headers={"x-request-id": "req-fail-42"},
+                body=json.dumps({"id": "partial-resp-id"}).encode(),
+            ),
+            _response(204),  # session deletion
+        ]
+    )
+    client = FoundryInvocationClient(PROJECT_ENDPOINT, lambda: "token", transport=transport)
+    deployment = DeploymentReceipt(
+        "aiq-005-hosted",
+        "v5",
+        "hosted_code",
+        "sha256:" + ("b" * 64),
+        "run",
+        "active",
+    )
+    with pytest.raises(InvocationEndpointError) as exc_info:
+        client.invoke_hosted(deployment, fixture)
+
+    err = exc_info.value
+    assert isinstance(err.receipt, InvocationFailureReceipt)
+    assert err.receipt.http_status == 503
+    assert err.receipt.agent_name == "aiq-005-hosted"
+    assert err.receipt.agent_version == "v5"
+    assert err.receipt.session_id == "sess-fail-1"
+    assert err.receipt.request_id == "req-fail-42"
+    assert err.receipt.response_id == "partial-resp-id"
+    # Session must still have been deleted
+    assert transport.calls[-1]["method"] == "DELETE"
+    assert "/endpoint/sessions/sess-fail-1?" in transport.calls[-1]["url"]
+
+
+def test_hosted_endpoint_contract_error_is_not_wrapped_in_invocation_endpoint_error() -> None:
+    """A RuntimeContractError from inside the try-block (version mismatch) stays distinct."""
+    fixture = HealthyFixture(
+        id="contract-check",
+        input="x",
+        output_contains="unused",
+        tool_outputs={},
+        expected_tool_calls=(),
+    )
+    transport = QueueTransport(
+        [
+            _response(
+                201,
+                {
+                    "agent_session_id": "sess-v6",
+                    "version_indicator": {"type": "version_ref", "agent_version": "v-wrong"},
+                },
+            ),
+            _response(204),
+        ]
+    )
+    client = FoundryInvocationClient(PROJECT_ENDPOINT, lambda: "token", transport=transport)
+    deployment = DeploymentReceipt(
+        "aiq-006-hosted",
+        "v6",
+        "hosted_code",
+        "sha256:" + ("c" * 64),
+        "run",
+        "active",
+    )
+    with pytest.raises(RuntimeContractError) as exc_info:
+        client.invoke_hosted(deployment, fixture)
+    assert not isinstance(exc_info.value, InvocationEndpointError)
 
 
 def test_deployment_poll_fails_on_terminal_state_and_timeout() -> None:

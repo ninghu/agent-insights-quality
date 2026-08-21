@@ -53,6 +53,27 @@ class DeploymentPollError(RuntimeContractError):
 
 
 @dataclass(frozen=True, slots=True)
+class InvocationFailureReceipt:
+    """Preserves whatever IDs are available when a hosted endpoint call fails."""
+
+    agent_name: str
+    agent_version: str
+    http_status: int
+    response_id: str | None = None
+    invocation_id: str | None = None
+    request_id: str | None = None
+    session_id: str | None = None
+
+
+class InvocationEndpointError(RuntimeContractError):
+    """Raised when the hosted endpoint returns a non-success HTTP status after exact-version session creation."""
+
+    def __init__(self, message: str, receipt: InvocationFailureReceipt) -> None:
+        super().__init__(message)
+        self.receipt = receipt
+
+
+@dataclass(frozen=True, slots=True)
 class HttpResponse:
     status_code: int
     headers: Mapping[str, str]
@@ -835,18 +856,47 @@ class FoundryInvocationClient:
                 raise RuntimeContractError(
                     "Hosted session did not bind to the exact deployed version."
                 )
-            raw_response = self._post_response(
+            raw_response = self._call(
+                "POST",
                 (
                     f"/agents/{_quote(receipt.agent_name)}"
                     "/endpoint/protocols/openai/responses"
                 ),
-                {
-                    "input": fixture.input,
-                    "store": False,
-                    "agent_session_id": session_id,
-                },
+                body=_json_bytes(
+                    {
+                        "input": fixture.input,
+                        "store": False,
+                        "agent_session_id": session_id,
+                    }
+                ),
                 hosted=True,
+                include_api_version=True,
             )
+            if raw_response.status_code not in {200, 201, 202}:
+                request_id = _request_id(raw_response)
+                body_payload: Mapping[str, Any] | None = None
+                try:
+                    body_payload = raw_response.json()
+                except RuntimeContractError:
+                    pass
+                resp_id = (
+                    str(body_payload.get("id") or "") or None
+                    if isinstance(body_payload, Mapping)
+                    else None
+                )
+                inv_id = _invocation_id(body_payload) if isinstance(body_payload, Mapping) else None
+                raise InvocationEndpointError(
+                    f"Hosted endpoint returned HTTP {raw_response.status_code}.",
+                    InvocationFailureReceipt(
+                        agent_name=receipt.agent_name,
+                        agent_version=receipt.agent_version,
+                        http_status=raw_response.status_code,
+                        response_id=resp_id,
+                        invocation_id=inv_id,
+                        request_id=request_id,
+                        session_id=session_id,
+                    ),
+                )
             response = raw_response.json()
             return _invocation_receipt(
                 receipt,
@@ -894,20 +944,20 @@ class FoundryInvocationClient:
             include_api_version=not path.startswith("/openai/v1/"),
         )
 
-    def _request(
+    def _call(
         self,
         method: str,
         path: str,
         *,
         body: bytes | None,
         hosted: bool,
-        expected_statuses: set[int] | None = None,
         include_api_version: bool = True,
     ) -> HttpResponse:
+        """Send the request and return the raw response without status checking."""
         token = self._token_provider().strip()
         if not token or token == "******":
             raise RuntimeContractError("Token provider returned no usable access token.")
-        headers = {
+        headers: dict[str, str] = {
             "Accept": "application/json",
             "Authorization": f"Bearer {token}",
         }
@@ -919,12 +969,26 @@ class FoundryInvocationClient:
         request_path = (
             f"{path}{separator}api-version={API_VERSION}" if include_api_version else path
         )
-        response = self._transport.request(
+        return self._transport.request(
             method,
             f"{self._endpoint}{request_path}",
             headers=headers,
             body=body,
             timeout_seconds=self._request_timeout,
+        )
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: bytes | None,
+        hosted: bool,
+        expected_statuses: set[int] | None = None,
+        include_api_version: bool = True,
+    ) -> HttpResponse:
+        response = self._call(
+            method, path, body=body, hosted=hosted, include_api_version=include_api_version
         )
         allowed = expected_statuses or {200, 201, 202}
         if response.status_code not in allowed:
@@ -932,7 +996,6 @@ class FoundryInvocationClient:
                 f"Agent endpoint request failed with HTTP {response.status_code}."
             )
         return response
-
 
 def run_healthy_traffic(
     client: FoundryInvocationClient,

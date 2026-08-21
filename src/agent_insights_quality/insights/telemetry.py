@@ -239,10 +239,13 @@ def correlate_complete_traces(
             row.get("span_agent_name") == agent and row.get("span_agent_version") == version
             for row in required_spans
         )
-        chat_spans = [row for row in required_spans if row.get("span_name") == "chat"]
-        model_valid = bool(chat_spans) and all(
-            row.get("span_model") == expectation.model_deployment for row in chat_spans
-        )
+        if "chat" in expectation.required_operations:
+            chat_spans = [row for row in required_spans if row.get("span_name") == "chat"]
+            model_valid = bool(chat_spans) and all(
+                row.get("span_model") == expectation.model_deployment for row in chat_spans
+            )
+        else:
+            model_valid = True
         if (
             roots != 1
             or len(span_id_list) != len(spans)
