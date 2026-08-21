@@ -1,0 +1,9 @@
+schema_version: "1.0.0"
+mode: test
+recipient_variable: AIQ_TEST_REPORT_RECIPIENT
+recipient_variables:
+  test: AIQ_TEST_REPORT_RECIPIENT
+  production: AIQ_PRODUCTION_REPORT_RECIPIENT
+allowed_domain: microsoft.com
+promotion_requires_human_review: true
+automation_can_promote: false

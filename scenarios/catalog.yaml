@@ -1,0 +1,111 @@
+schema_version: "1.0.0"
+catalog_version: "0.1.0"
+scenarios:
+  - id: aiq-scn-001-healthy-control
+    version: "1.0.0"
+    status: reviewed_placeholder
+    title: Healthy endpoint control
+    priority: P0
+    customer_impact: Prevent healthy synthetic behavior from producing customer-visible noise.
+    tags: [healthy, control]
+    compatibility:
+      domains: [weather, healthcare, finance, travel, support_ticket]
+      agent_types: [prompt, hosted_code, hosted_custom_container]
+      agent_ids: []
+    conflict_tags: [healthy-only]
+    mutation:
+      kind: none
+      manifest: null
+      healthy_to_fault_delta: No mutation; invoke the immutable healthy deployment.
+    traffic:
+      recipe: scenarios/traffic/healthy-control.yaml
+      seed_namespace: healthy-control-v1
+      minimum_requests: 3
+    evidence:
+      expected_spans: [agent, model]
+      expected_tool_calls: []
+      minimum_evidence_count: 3
+      negative_controls: [normal model latency, ordinary token use]
+    expected:
+      root_cause: none
+      category: none
+      severity: none
+      fix:
+        kind: no_fix
+        boundary: No product change is expected.
+    version_semantics:
+      applies_to: current_immutable_version
+      prior_insight_behavior: No active insight may be emitted or reused.
+    retirement: null
+  - id: aiq-scn-002-wrong-tool
+    version: "1.0.0"
+    status: reviewed_placeholder
+    title: Wrong tool selected
+    priority: P1
+    customer_impact: Detect an agent choosing a tool that cannot satisfy the synthetic request.
+    tags: [tools, prompt, hosted_code]
+    compatibility:
+      domains: [weather, healthcare, finance, travel, support_ticket]
+      agent_types: [prompt, hosted_code, hosted_custom_container]
+      agent_ids: []
+    conflict_tags: [tool-selection-root-cause]
+    mutation:
+      kind: prompt_delta
+      manifest: scenarios/mutations/wrong-tool.yaml
+      healthy_to_fault_delta: Bias selection toward a known incompatible tool while retaining the healthy tool set.
+    traffic:
+      recipe: scenarios/traffic/wrong-tool.yaml
+      seed_namespace: wrong-tool-v1
+      minimum_requests: 5
+    evidence:
+      expected_spans: [agent, model, tool]
+      expected_tool_calls: [incompatible_tool]
+      minimum_evidence_count: 3
+      negative_controls: [handled transient tool failure]
+    expected:
+      root_cause: The agent selects an incompatible tool before task completion.
+      category: tool_call_failures
+      severity: medium
+      fix:
+        kind: prompt_patch
+        boundary: Constrain tool-selection instructions without inventing unavailable capabilities.
+    version_semantics:
+      applies_to: injected_immutable_version
+      prior_insight_behavior: Findings must link only to the injected version and non-overlapping window.
+    retirement: null
+  - id: aiq-scn-003-stale-version-evidence
+    version: "1.0.0"
+    status: reviewed_placeholder
+    title: Cross-version stale evidence
+    priority: P1
+    customer_impact: Prevent a current insight from citing traces that belong to an earlier agent version.
+    tags: [lifecycle, versioning, evidence]
+    compatibility:
+      domains: [finance, travel, support_ticket]
+      agent_types: [hosted_code, hosted_custom_container]
+      agent_ids: []
+    conflict_tags: [single-version-only, overlapping-window]
+    mutation:
+      kind: source_patch
+      manifest: scenarios/mutations/stale-version-evidence.yaml
+      healthy_to_fault_delta: Deploy a corrected successor after a faulted version and preserve disjoint analysis windows.
+    traffic:
+      recipe: scenarios/traffic/stale-version-evidence.yaml
+      seed_namespace: stale-version-v1
+      minimum_requests: 6
+    evidence:
+      expected_spans: [agent, model, tool]
+      expected_tool_calls: []
+      minimum_evidence_count: 4
+      negative_controls: [prior-version trace IDs]
+    expected:
+      root_cause: Agent Insights attributes prior-version evidence to the current immutable version.
+      category: reliability_errors
+      severity: high
+      fix:
+        kind: code_change
+        boundary: Scope evidence and finding identity to immutable agent version and half-open run window.
+    version_semantics:
+      applies_to: sequential_faulted_and_corrected_versions
+      prior_insight_behavior: Prior evidence may inform deduplication but must not be linked as current evidence.
+    retirement: null

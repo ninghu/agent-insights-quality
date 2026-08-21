@@ -1,0 +1,4 @@
+schema_version: "1.0.0"
+scenario_id: aiq-scn-003-stale-version-evidence
+status: placeholder
+description: Phase 4 will define the reviewed source mutation and corrected successor.

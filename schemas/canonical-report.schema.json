@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://microsoft.github.io/agent-insights-quality/schemas/v1/canonical-report.schema.json",
+  "title": "Canonical Agent Insights daily report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "report_id",
+    "report_date",
+    "generated_at",
+    "plan_id",
+    "status",
+    "summary",
+    "engine",
+    "scorecard",
+    "agents",
+    "scenario_results",
+    "bug_actions",
+    "memory_changes",
+    "artifact_reference"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "report_id": {"type": "string", "pattern": "^aiq-[0-9]{8}(?:-r[0-9]{2})?$"},
+    "report_date": {"type": "string", "format": "date"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "plan_id": {"type": "string", "pattern": "^aiq-[0-9]{8}(?:-r[0-9]{2})?$"},
+    "status": {"enum": ["AT BAR", "NOT AT BAR", "INCONCLUSIVE"]},
+    "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["build", "generator_model", "endpoint_reference"],
+      "properties": {
+        "build": {"type": "string", "minLength": 1, "maxLength": 200},
+        "generator_model": {"const": "gpt-5.6-terra"},
+        "endpoint_reference": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "scorecard": {
+      "type": "object",
+      "description": "A value validated independently against scorecard.schema.json."
+    },
+    "agents": {
+      "type": "array",
+      "minItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "type", "version_digest", "insights_reference", "human_validation"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^aiq-[0-9]{3}-[a-z][a-z0-9-]*$"},
+          "name": {"type": "string", "pattern": "^aiq-[0-9]{3}-[a-z][a-z0-9-]*.*$"},
+          "type": {"enum": ["prompt", "hosted_code", "hosted_custom_container"]},
+          "version_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "insights_reference": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "human_validation": {"type": "string", "minLength": 1, "maxLength": 500}
+        }
+      }
+    },
+    "scenario_results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scenario_id",
+          "agent_id",
+          "agent_version_digest",
+          "completed",
+          "verdict",
+          "insight_references"
+        ],
+        "properties": {
+          "scenario_id": {
+            "type": "string",
+            "pattern": "^aiq-scn-[0-9]{3}-[a-z][a-z0-9-]*$"
+          },
+          "agent_id": {"type": "string", "pattern": "^aiq-[0-9]{3}-[a-z][a-z0-9-]*$"},
+          "agent_version_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "completed": {"type": "boolean"},
+          "verdict": {
+            "enum": ["correct", "partially_useful", "incorrect_noise", "missed", "inconclusive"]
+          },
+          "insight_references": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+          }
+        }
+      }
+    },
+    "bug_actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["fingerprint", "action", "work_item_reference"],
+        "properties": {
+          "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "action": {"enum": ["candidate", "created", "updated", "reopened", "none"]},
+          "work_item_reference": {
+            "type": ["string", "null"],
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "memory_changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["fingerprint", "from", "to"],
+        "properties": {
+          "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "from": {"type": ["string", "null"], "enum": [null, "new", "known", "improving", "resolved", "regressed"]},
+          "to": {"enum": ["new", "known", "improving", "resolved", "regressed"]}
+        }
+      }
+    },
+    "artifact_reference": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

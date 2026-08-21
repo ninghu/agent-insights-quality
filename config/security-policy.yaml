@@ -1,0 +1,24 @@
+schema_version: "1.0.0"
+scan_roots:
+  - agents
+  - infra
+  - scenarios
+  - src
+source_extensions:
+  - .py
+  - .ps1
+  - .sh
+  - .bicep
+  - .yaml
+  - .yml
+  - .json
+forbidden_patterns:
+  - '(?i)\bLogsIngestionClient\b'
+  - '(?i)\bupload_logs\s*\('
+  - '(?i)(application.?insights|app.?insights).{0,80}\b(write|inject|post)\s*\('
+  - '(?i)\btraces?[_\. -]?ingest(?:ion)?\s*\('
+  - '(?i)\bazure\.monitor\.ingestion\b'
+  - '(?i)(?:monitor\.azure\.com|applicationinsights\.azure\.com|dc\.applicationinsights\.azure\.com)[^\r\n]{0,200}(?:/v1/logs|api/logs)'
+  - '(?i)\b(?:requests|httpx)\.(?:post|put)\s*\([\s\S]{0,300}(?:monitor\.azure\.com|applicationinsights\.azure\.com|/v1/logs)'
+  - '(?i)\b(?:urllib\.request\.)?urlopen\s*\([\s\S]{0,300}(?:monitor\.azure\.com|applicationinsights\.azure\.com|/v1/logs)'
+  - '(?i)\bcurl\b[^\r\n]*(?:monitor\.azure\.com|applicationinsights\.azure\.com|/v1/logs)'

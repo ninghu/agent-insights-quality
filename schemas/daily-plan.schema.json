@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://microsoft.github.io/agent-insights-quality/schemas/v1/daily-plan.schema.json",
+  "title": "Agent Insights Quality daily plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "plan_id",
+    "report_date",
+    "created_at",
+    "catalog_version",
+    "catalog_hash",
+    "planner_version",
+    "seed",
+    "engine",
+    "project",
+    "assignments"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "plan_id": {"type": "string", "pattern": "^aiq-[0-9]{8}(?:-r[0-9]{2})?$"},
+    "report_date": {"type": "string", "format": "date"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "catalog_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "catalog_hash": {"$ref": "#/$defs/sha256"},
+    "planner_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "seed": {"type": "integer", "minimum": 0},
+    "engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["endpoint_reference", "build", "generator_model"],
+      "properties": {
+        "endpoint_reference": {"$ref": "#/$defs/sha256"},
+        "build": {"type": "string", "minLength": 1, "maxLength": 200},
+        "generator_model": {"const": "gpt-5.6-terra"}
+      }
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "resource_reference", "expires_on"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^aiq-[0-9]{8}(?:-r[0-9]{2})?$"},
+        "resource_reference": {"$ref": "#/$defs/sha256"},
+        "expires_on": {"type": "string", "format": "date"}
+      }
+    },
+    "assignments": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scenario_id",
+          "scenario_version",
+          "agent_id",
+          "agent_name",
+          "agent_version_digest",
+          "wave",
+          "traffic_seed",
+          "window",
+          "expected"
+        ],
+        "properties": {
+          "scenario_id": {
+            "type": "string",
+            "pattern": "^aiq-scn-[0-9]{3}-[a-z][a-z0-9-]*$"
+          },
+          "scenario_version": {
+            "type": "string",
+            "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+          },
+          "agent_id": {"type": "string", "pattern": "^aiq-[0-9]{3}-[a-z][a-z0-9-]*$"},
+          "agent_name": {"type": "string", "pattern": "^aiq-[0-9]{3}-[a-z][a-z0-9-]*.*$"},
+          "agent_version_digest": {"$ref": "#/$defs/sha256"},
+          "wave": {"type": "integer", "minimum": 0},
+          "traffic_seed": {"type": "integer", "minimum": 0},
+          "window": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["start", "end"],
+            "properties": {
+              "start": {"type": "string", "format": "date-time"},
+              "end": {"type": "string", "format": "date-time"}
+            }
+          },
+          "expected": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["category", "severity", "finding_count"],
+            "properties": {
+              "category": {
+                "enum": [
+                  "tool_call_failures",
+                  "latency",
+                  "cost_tokens",
+                  "reliability_errors",
+                  "hallucinations",
+                  "output_quality",
+                  "context_memory",
+                  "safety_guardrails",
+                  "none"
+                ]
+              },
+              "severity": {"enum": ["high", "medium", "low", "none"]},
+              "finding_count": {"type": "integer", "minimum": 0, "maximum": 1}
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

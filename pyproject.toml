@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-insights-quality"
+version = "0.1.0"
+description = "Repository contracts and automation for daily Agent Insights quality qualification"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "jsonschema[format]>=4.23,<5",
+  "PyYAML>=6.0,<7",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9",
+]
+
+[project.scripts]
+aiq-quality = "agent_insights_quality.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]

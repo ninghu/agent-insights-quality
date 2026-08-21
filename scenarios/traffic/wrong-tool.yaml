@@ -1,0 +1,5 @@
+schema_version: "1.0.0"
+scenario_id: aiq-scn-002-wrong-tool
+status: placeholder
+endpoint_only: true
+description: Phase 4 will add deterministic endpoint requests that require the healthy tool.

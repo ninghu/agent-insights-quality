@@ -1,0 +1,33 @@
+schema_version: "1.0.0"
+id: aiq-002-healthcare
+required_name_prefix: aiq-002-healthcare
+display_name: Healthcare scheduling
+domain: healthcare
+agent_type: prompt
+status: placeholder
+healthy_contract:
+  responsibility: Schedule synthetic appointments only with explicit confirmation and without diagnosis.
+  immutable: true
+  synthetic_data_only: true
+  expected_baseline_insights: 0
+implementation:
+  source_path: agents/healthcare-scheduling-prompt
+  version_strategy: immutable_digest
+  deployment_protocol: foundry_prompt_version_rest
+  representative_tools:
+    - provider_lookup
+    - slot_search
+    - appointment_create
+    - appointment_cancel
+endpoint_traffic:
+  invoke_deployed_endpoint: true
+  application_insights_access: read_only
+  direct_trace_injection: forbidden
+correlation:
+  invocation_response_ids_are_trace_ids: false
+  trace_correlation_source: application_insights_operation_id
+compatible_scenario_tags:
+  - prompt
+  - authorization
+  - context
+  - tools

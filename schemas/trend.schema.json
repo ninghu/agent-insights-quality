@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://microsoft.github.io/agent-insights-quality/schemas/v1/trend.schema.json",
+  "title": "Agent Insights quality trend",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "days"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "days": {
+      "type": "array",
+      "maxItems": 90,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["report_date", "status", "trusted_insight_rate", "report_path"],
+        "properties": {
+          "report_date": {"type": "string", "format": "date"},
+          "status": {"enum": ["AT BAR", "NOT AT BAR", "INCONCLUSIVE"]},
+          "trusted_insight_rate": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+          "report_path": {
+            "type": "string",
+            "pattern": "^reports/daily/[0-9]{4}/[0-9]{2}/[0-9]{2}/report\\.md$"
+          }
+        }
+      }
+    }
+  }
+}

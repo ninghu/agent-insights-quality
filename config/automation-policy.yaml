@@ -1,0 +1,22 @@
+schema_version: "1.0.0"
+generated_branch_prefix: "aiq-daily/"
+allowed_paths:
+  - reports/latest.json
+  - reports/latest.md
+  - reports/trend.json
+  - reports/daily/*/*/*/plan.json
+  - reports/daily/*/*/*/plan.md
+  - reports/daily/*/*/*/report.json
+  - reports/daily/*/*/*/report.md
+  - reports/daily/*/*/*/failure-email.html
+  - state/quality-memory.json
+  - state/QUALITY_MEMORY.md
+protected_paths:
+  - config/**
+  - agents/**
+  - scenarios/**
+  - schemas/**
+  - src/**
+  - docs/QUALITY_RUBRIC.md
+  - docs/OPERATIONS.md
+  - .github/**

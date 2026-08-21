@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://microsoft.github.io/agent-insights-quality/schemas/v1/quality-memory.schema.json",
+  "title": "Durable Agent Insights quality memory",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "updated_at", "issues"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "updated_at": {"type": ["string", "null"], "format": "date-time"},
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "fingerprint",
+          "title",
+          "description",
+          "state",
+          "first_seen",
+          "last_seen",
+          "occurrence_count",
+          "consecutive_clean_complete_runs",
+          "affected_scenarios",
+          "affected_domains",
+          "affected_agent_types",
+          "engine_builds",
+          "generator_models",
+          "judge_prompt_versions",
+          "last_primary_confidence",
+          "last_verifier_confidence",
+          "evidence_references",
+          "ado",
+          "resolution_evidence",
+          "regression_history"
+        ],
+        "properties": {
+          "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "title": {"type": "string", "minLength": 1, "maxLength": 300},
+          "description": {"type": "string", "minLength": 1, "maxLength": 2000},
+          "state": {"enum": ["new", "known", "improving", "resolved", "regressed"]},
+          "first_seen": {"type": "string", "format": "date"},
+          "last_seen": {"type": "string", "format": "date"},
+          "occurrence_count": {"type": "integer", "minimum": 1},
+          "consecutive_clean_complete_runs": {"type": "integer", "minimum": 0},
+          "affected_scenarios": {"$ref": "#/$defs/string_set"},
+          "affected_domains": {"$ref": "#/$defs/string_set"},
+          "affected_agent_types": {"$ref": "#/$defs/string_set"},
+          "engine_builds": {"$ref": "#/$defs/string_set"},
+          "generator_models": {"$ref": "#/$defs/string_set"},
+          "judge_prompt_versions": {"$ref": "#/$defs/string_set"},
+          "last_primary_confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+          "last_verifier_confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+          "evidence_references": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+          },
+          "ado": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["work_item_reference", "state", "last_sync"],
+            "properties": {
+              "work_item_reference": {
+                "type": ["string", "null"],
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "state": {"type": ["string", "null"], "maxLength": 100},
+              "last_sync": {"type": ["string", "null"], "format": "date-time"}
+            }
+          },
+          "resolution_evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["report_date", "report_path"],
+              "properties": {
+                "report_date": {"type": "string", "format": "date"},
+                "report_path": {
+                  "type": "string",
+                  "pattern": "^reports/daily/[0-9]{4}/[0-9]{2}/[0-9]{2}/report\\.md$"
+                }
+              }
+            }
+          },
+          "regression_history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["report_date", "report_path"],
+              "properties": {
+                "report_date": {"type": "string", "format": "date"},
+                "report_path": {
+                  "type": "string",
+                  "pattern": "^reports/daily/[0-9]{4}/[0-9]{2}/[0-9]{2}/report\\.md$"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "string_set": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 300}
+    }
+  }
+}

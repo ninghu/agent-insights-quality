@@ -1,0 +1,5 @@
+schema_version: "1.0.0"
+scenario_id: aiq-scn-001-healthy-control
+status: placeholder
+endpoint_only: true
+description: Phase 3 will add deterministic healthy endpoint requests.

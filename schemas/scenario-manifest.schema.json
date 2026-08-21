@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://microsoft.github.io/agent-insights-quality/schemas/v1/scenario-manifest.schema.json",
+  "title": "Agent Insights Quality scenario catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "catalog_version", "scenarios"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "catalog_version": {"$ref": "#/$defs/semver"},
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/scenario"}
+    }
+  },
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "status",
+        "title",
+        "priority",
+        "customer_impact",
+        "tags",
+        "compatibility",
+        "conflict_tags",
+        "mutation",
+        "traffic",
+        "evidence",
+        "expected",
+        "version_semantics",
+        "retirement"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^aiq-scn-[0-9]{3}-[a-z][a-z0-9-]*$"
+        },
+        "version": {"$ref": "#/$defs/semver"},
+        "status": {"enum": ["reviewed_placeholder", "active", "retired"]},
+        "title": {"type": "string", "minLength": 3, "maxLength": 120},
+        "priority": {"enum": ["P0", "P1", "P2", "P3"]},
+        "customer_impact": {"type": "string", "minLength": 20, "maxLength": 500},
+        "tags": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"}
+        },
+        "compatibility": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["domains", "agent_types", "agent_ids"],
+          "properties": {
+            "domains": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "enum": ["weather", "healthcare", "finance", "travel", "support_ticket"]
+              }
+            },
+            "agent_types": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "enum": ["prompt", "hosted_code", "hosted_custom_container"]
+              }
+            },
+            "agent_ids": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^aiq-[0-9]{3}-[a-z][a-z0-9-]*$"
+              }
+            }
+          }
+        },
+        "conflict_tags": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"}
+        },
+        "mutation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "manifest", "healthy_to_fault_delta"],
+          "properties": {
+            "kind": {
+              "enum": [
+                "none",
+                "prompt_delta",
+                "source_patch",
+                "container_variant",
+                "traffic_only"
+              ]
+            },
+            "manifest": {
+              "type": ["string", "null"],
+              "pattern": "^scenarios/mutations/[a-z0-9-]+\\.yaml$"
+            },
+            "healthy_to_fault_delta": {
+              "type": "string",
+              "minLength": 10,
+              "maxLength": 1000
+            }
+          }
+        },
+        "traffic": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["recipe", "seed_namespace", "minimum_requests"],
+          "properties": {
+            "recipe": {
+              "type": "string",
+              "pattern": "^scenarios/traffic/[a-z0-9-]+\\.yaml$"
+            },
+            "seed_namespace": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]*-v[0-9]+$"
+            },
+            "minimum_requests": {"type": "integer", "minimum": 1, "maximum": 1000}
+          }
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "expected_spans",
+            "expected_tool_calls",
+            "minimum_evidence_count",
+            "negative_controls"
+          ],
+          "properties": {
+            "expected_spans": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {"enum": ["agent", "model", "tool", "handoff"]}
+            },
+            "expected_tool_calls": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1, "maxLength": 100}
+            },
+            "minimum_evidence_count": {"type": "integer", "minimum": 1},
+            "negative_controls": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 3, "maxLength": 200}
+            }
+          }
+        },
+        "expected": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["root_cause", "category", "severity", "fix"],
+          "properties": {
+            "root_cause": {"type": "string", "minLength": 3, "maxLength": 1000},
+            "category": {
+              "enum": [
+                "tool_call_failures",
+                "latency",
+                "cost_tokens",
+                "reliability_errors",
+                "hallucinations",
+                "output_quality",
+                "context_memory",
+                "safety_guardrails",
+                "none"
+              ]
+            },
+            "severity": {"enum": ["high", "medium", "low", "none"]},
+            "fix": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "boundary"],
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "prompt_patch",
+                    "code_change",
+                    "container_change",
+                    "prose",
+                    "no_fix"
+                  ]
+                },
+                "boundary": {"type": "string", "minLength": 10, "maxLength": 500}
+              }
+            }
+          }
+        },
+        "version_semantics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["applies_to", "prior_insight_behavior"],
+          "properties": {
+            "applies_to": {
+              "enum": [
+                "current_immutable_version",
+                "injected_immutable_version",
+                "sequential_faulted_and_corrected_versions"
+              ]
+            },
+            "prior_insight_behavior": {
+              "type": "string",
+              "minLength": 10,
+              "maxLength": 500
+            }
+          }
+        },
+        "retirement": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reason", "replacement_id"],
+              "properties": {
+                "reason": {"type": "string", "minLength": 10, "maxLength": 500},
+                "replacement_id": {
+                  "type": ["string", "null"],
+                  "pattern": "^aiq-scn-[0-9]{3}-[a-z][a-z0-9-]*$"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

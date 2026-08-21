@@ -1,0 +1,11 @@
+schema_version: "1.0.0"
+deployed_endpoint_variable: AIQ_DEPLOYED_AGENT_ENDPOINT
+endpoint_invocation_required: true
+application_insights_access: read_only
+direct_trace_injection: forbidden
+invocation_response_ids_are_trace_ids: false
+trace_correlation_source: application_insights_operation_id
+forbidden_ingestion_hosts:
+  - monitor.azure.com
+  - applicationinsights.azure.com
+  - dc.applicationinsights.azure.com

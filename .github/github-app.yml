@@ -1,0 +1,17 @@
+instructions: |
+  This is a public repository. Use only synthetic data and public-safe configuration.
+  Never commit credentials, private Azure or ADO identifiers, internal endpoints, raw traces,
+  complete prompt payloads, private work-item content, or real customer data.
+  Test traffic must invoke deployed agent endpoints; Application Insights is read-only and direct
+  trace injection is forbidden.
+  Treat agent/scenario manifests and reporting promotion as human-reviewed contracts.
+
+scripts:
+  - name: Validate repository contracts
+    command: python -m agent_insights_quality validate
+  - name: Run contract tests
+    command: python -m pytest
+
+automation:
+  auto_issue_session: true
+  remote_control: false

@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://microsoft.github.io/agent-insights-quality/schemas/v1/scorecard.schema.json",
+  "title": "Strict Agent Insights quality scorecard",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "verdict", "complete", "counts", "rates", "violations"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "verdict": {"enum": ["AT BAR", "NOT AT BAR", "INCONCLUSIVE"]},
+    "complete": {"type": "boolean"},
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active_scenarios",
+        "completed_scenarios",
+        "true_positives",
+        "partially_useful",
+        "false_positives",
+        "false_negatives",
+        "healthy_insights",
+        "structural_failures",
+        "new_issues",
+        "known_issues",
+        "resolved_issues",
+        "regressed_issues"
+      ],
+      "properties": {
+        "active_scenarios": {"type": "integer", "minimum": 0},
+        "completed_scenarios": {"type": "integer", "minimum": 0},
+        "true_positives": {"type": "integer", "minimum": 0},
+        "partially_useful": {"type": "integer", "minimum": 0},
+        "false_positives": {"type": "integer", "minimum": 0},
+        "false_negatives": {"type": "integer", "minimum": 0},
+        "healthy_insights": {"type": "integer", "minimum": 0},
+        "structural_failures": {"type": "integer", "minimum": 0},
+        "new_issues": {"type": "integer", "minimum": 0},
+        "known_issues": {"type": "integer", "minimum": 0},
+        "resolved_issues": {"type": "integer", "minimum": 0},
+        "regressed_issues": {"type": "integer", "minimum": 0}
+      }
+    },
+    "rates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "high_severity_recall",
+        "overall_recall",
+        "precision",
+        "f1",
+        "category_accuracy",
+        "severity_accuracy",
+        "title_pass_rate",
+        "description_pass_rate",
+        "proposed_fix_pass_rate",
+        "linked_trace_pass_rate",
+        "duplication_rate",
+        "umbrella_rate",
+        "cross_version_stale_rate"
+      ],
+      "properties": {
+        "high_severity_recall": {"$ref": "#/$defs/rate"},
+        "overall_recall": {"$ref": "#/$defs/rate"},
+        "precision": {"$ref": "#/$defs/rate"},
+        "f1": {"$ref": "#/$defs/rate"},
+        "category_accuracy": {"$ref": "#/$defs/rate"},
+        "severity_accuracy": {"$ref": "#/$defs/rate"},
+        "title_pass_rate": {"$ref": "#/$defs/rate"},
+        "description_pass_rate": {"$ref": "#/$defs/rate"},
+        "proposed_fix_pass_rate": {"$ref": "#/$defs/rate"},
+        "linked_trace_pass_rate": {"$ref": "#/$defs/rate"},
+        "duplication_rate": {"$ref": "#/$defs/rate"},
+        "umbrella_rate": {"$ref": "#/$defs/rate"},
+        "cross_version_stale_rate": {"$ref": "#/$defs/rate"}
+      }
+    },
+    "violations": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "incomplete_catalog",
+          "healthy_false_positive",
+          "over_five_insights",
+          "high_severity_recall",
+          "overall_recall",
+          "precision",
+          "attribute_correctness",
+          "duplication",
+          "umbrella",
+          "cross_version_stale",
+          "structural_failure",
+          "provenance_failure",
+          "secret_or_pii",
+          "judge_schema_failure",
+          "unresolved_judgment"
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "rate": {"type": "number", "minimum": 0, "maximum": 1}
+  }
+}
