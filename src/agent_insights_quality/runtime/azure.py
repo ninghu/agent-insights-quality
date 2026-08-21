@@ -466,10 +466,30 @@ class AzureProjectManager:
         account_id: str,
         application_insights_id: str,
     ) -> None:
-        required = {
-            (application_insights_id.casefold(), _MONITORING_READER_ROLE),
-            (account_id.casefold(), _MODEL_INFERENCE_ROLE),
-        }
+        missing = self._missing_project_roles(
+            principal_id=principal_id,
+            account_id=account_id,
+            application_insights_id=application_insights_id,
+        )
+        if missing:
+            raise RuntimeFailure(
+                "project_role_assignments_missing",
+                "Project identity lacks required App Insights read or model inference roles. "
+                "Grant the exact roles or run deployment with roleAssignments/write permission.",
+                {"missing_role_count": len(missing)},
+            )
+
+    def _missing_project_roles(
+        self,
+        *,
+        principal_id: str,
+        account_id: str,
+        application_insights_id: str,
+    ) -> list[tuple[str, str]]:
+        required = (
+            (application_insights_id, _MONITORING_READER_ROLE),
+            (account_id, _MODEL_INFERENCE_ROLE),
+        )
         observed: set[tuple[str, str]] = set()
         for scope, _ in required:
             assignments = _items(
@@ -490,18 +510,15 @@ class AzureProjectManager:
                 role_id = str(assignment.get("roleDefinitionId") or "").rsplit("/", 1)[-1]
                 assignment_scope = str(assignment.get("scope") or scope).casefold()
                 observed.add((assignment_scope, role_id.casefold()))
-        missing = [
-            role
+        return [
+            (scope, role)
             for scope, role in required
-            if not any(observed_role == role and scope.startswith(observed_scope) for observed_scope, observed_role in observed)
-        ]
-        if missing:
-            raise RuntimeFailure(
-                "project_role_assignments_missing",
-                "Project identity lacks required App Insights read or model inference roles. "
-                "Grant the exact roles or run deployment with roleAssignments/write permission.",
-                {"missing_role_count": len(missing)},
+            if not any(
+                observed_role == role
+                and scope.casefold().startswith(observed_scope)
+                for observed_scope, observed_role in observed
             )
+        ]
 
     def _owned_tags(self, value: Any) -> bool:
         return (
@@ -681,7 +698,10 @@ class AzureProjectManager:
                     and tags.get("reportDate") == report_date.isoformat()
                     and tags.get("catalogVersion") == catalog_hash
                 ):
-                    return self._validate_project(existing[0], managed=True)
+                    project_id = str(existing[0].get("id") or "")
+                    item = self._wait_ready_item(project_id)
+                    self._verify_created_project(item, report_date, catalog_hash)
+                    return self._reconcile_project(item, project_id)
             if existing:
                 continue
             expires = report_date + timedelta(days=7)
@@ -709,9 +729,7 @@ class AzureProjectManager:
                 continue
             item = self._wait_ready_item(project_id)
             self._verify_created_project(item, report_date, catalog_hash)
-            self._ensure_application_insights_connection(project_id, body["tags"])
-            self._ensure_project_roles(item, project_id)
-            return self._validate_project(item, managed=True)
+            return self._reconcile_project(item, project_id)
         raise RuntimeFailure("project_name_exhausted", "No date-stamped project name is available.")
 
     def _under_configured_parent(self, item: Mapping[str, Any]) -> bool:
@@ -741,6 +759,18 @@ class AzureProjectManager:
                 "Post-create verification did not match exact ownership, parent, date, and catalog.",
             )
 
+    def _reconcile_project(
+        self,
+        item: Mapping[str, Any],
+        project_id: str,
+    ) -> ProjectResources:
+        tags = item.get("tags")
+        if not isinstance(tags, Mapping):
+            raise RuntimeFailure("ownership_mismatch", "Project ownership tags are unavailable.")
+        self._ensure_application_insights_connection(project_id, tags)
+        self._ensure_project_roles(item, project_id)
+        return self._validate_project(item, managed=True)
+
     def _ensure_project_roles(self, item: Mapping[str, Any], project_id: str) -> None:
         identity = item.get("identity")
         identity = identity if isinstance(identity, Mapping) else {}
@@ -752,10 +782,12 @@ class AzureProjectManager:
                 "Project identity or App Insights target is unavailable for role assignment.",
             )
         account_id = project_id.rsplit("/projects/", 1)[0]
-        for scope, role in (
-            (target, _MONITORING_READER_ROLE),
-            (account_id, _MODEL_INFERENCE_ROLE),
-        ):
+        missing = self._missing_project_roles(
+            principal_id=principal_id,
+            account_id=account_id,
+            application_insights_id=target,
+        )
+        for scope, role in missing:
             result = self._cli.run(
                 [
                     "role",
@@ -791,6 +823,59 @@ class AzureProjectManager:
                 "Project creation requires an explicit Application Insights resource ID.",
             )
         connection_id = f"{project_id}/connections/application-insights"
+        connections = self._connections(project_id)
+        reserved = [
+            connection
+            for connection in connections
+            if str(connection.get("id") or "").casefold() == connection_id.casefold()
+            or str(connection.get("name") or "") == "application-insights"
+        ]
+        exact = [
+            connection
+            for connection in reserved
+            if str(connection.get("id") or "").casefold() == connection_id.casefold()
+            and str(connection.get("name") or "") == "application-insights"
+        ]
+        app_insights = []
+        for connection in connections:
+            properties = connection.get("properties")
+            category = (
+                str(properties.get("category") or properties.get("connectionType") or "").casefold()
+                if isinstance(properties, Mapping)
+                else ""
+            )
+            if category in {"appinsights", "applicationinsights"}:
+                app_insights.append(connection)
+        if reserved:
+            if len(reserved) != 1 or len(exact) != 1 or len(app_insights) != 1:
+                raise RuntimeFailure(
+                    "project_connection_conflict",
+                    "Existing project connections cannot be safely reconciled.",
+                )
+            properties = exact[0].get("properties")
+            metadata = properties.get("metadata") if isinstance(properties, Mapping) else None
+            if (
+                not isinstance(properties, Mapping)
+                or str(properties.get("category") or properties.get("connectionType") or "").casefold()
+                not in {"appinsights", "applicationinsights"}
+                or str(properties.get("target") or properties.get("targetResourceId") or "").casefold()
+                != target.casefold()
+                or str(properties.get("authType") or "").casefold() != "aad"
+                or not isinstance(metadata, Mapping)
+                or metadata.get("purpose") != _PURPOSE_TAG
+                or metadata.get("owner_reference") != self._owner
+            ):
+                raise RuntimeFailure(
+                    "project_connection_conflict",
+                    "Existing Application Insights connection is not exactly owned by this project.",
+                )
+            if metadata.get("expires_on") == project_tags["expiresOn"]:
+                return
+        if app_insights and not exact:
+            raise RuntimeFailure(
+                "project_connection_conflict",
+                "A differently named Application Insights connection already exists.",
+            )
         self._cli.rest(
             "put",
             f"{connection_id}?api-version=2025-06-01",

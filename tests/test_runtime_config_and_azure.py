@@ -173,6 +173,7 @@ class FakeAzureCli:
                         "name": "application-insights",
                         "properties": {
                             "category": "AppInsights",
+                            "authType": "AAD",
                             "target": (
                                 "/subscriptions/" + SUBSCRIPTION
                                 + "/resourceGroups/quality-rg/providers/"
@@ -355,12 +356,95 @@ def test_project_creation_is_conditional_and_skips_a_raced_name() -> None:
 
 
 def test_project_creation_reports_role_assignment_permission_blocker() -> None:
-    cli = FakeAzureCli([], role_create_failure=True)
+    cli = FakeAzureCli([], roles=False, role_create_failure=True)
     config = RuntimeConfig.from_env(environment()).azure
     manager = AzureProjectManager(cli, AzureContext(SUBSCRIPTION, "tenant", "user"), config, "ninghu")
     with pytest.raises(RuntimeFailure, match="roleAssignments/write") as caught:
         manager.select_or_create(date(2026, 8, 20), "sha256:catalog")
     assert caught.value.code == "role_assignment_permission_blocked"
+
+
+def test_partial_project_reconciles_after_role_permission_is_restored() -> None:
+    class RecoveringAzureCli(FakeAzureCli):
+        def __init__(self):
+            super().__init__([], roles=False, role_create_failure=True)
+            self.connection: dict | None = None
+            self.assignments: list[dict] = []
+            self.project_creates = 0
+            self.connection_puts = 0
+            self.role_create_attempts = 0
+
+        def put_if_absent(self, url, body):
+            self.project_creates += 1
+            return super().put_if_absent(url, body)
+
+        def json(self, arguments, **kwargs):
+            arguments = list(arguments)
+            if arguments[:3] == ["role", "assignment", "list"]:
+                scope = arguments[arguments.index("--scope") + 1]
+                return [
+                    assignment
+                    for assignment in self.assignments
+                    if assignment["scope"].casefold() == scope.casefold()
+                ]
+            return super().json(arguments, **kwargs)
+
+        def run(self, arguments, **kwargs):
+            arguments = list(arguments)
+            if arguments[:3] == ["role", "assignment", "create"]:
+                self.role_create_attempts += 1
+                self.commands.append(arguments)
+                if self.role_create_failure:
+                    return CommandResult(1, "", "forbidden")
+                scope = arguments[arguments.index("--scope") + 1]
+                role = arguments[arguments.index("--role") + 1]
+                self.assignments.append(
+                    {
+                        "scope": scope,
+                        "roleDefinitionId": (
+                            "/providers/Microsoft.Authorization/roleDefinitions/" + role
+                        ),
+                    }
+                )
+                return CommandResult(0, "", "")
+            return super().run(arguments, **kwargs)
+
+        def rest(self, method, url, body=None):
+            if method == "get" and "/connections?" in url:
+                return {"value": [self.connection] if self.connection else []}
+            if method == "put" and "/connections/application-insights?" in url:
+                self.connection_puts += 1
+                self.connection = {
+                    "id": url.split("?", 1)[0],
+                    "name": "application-insights",
+                    "properties": dict(body["properties"]),
+                }
+                return body
+            return super().rest(method, url, body)
+
+    cli = RecoveringAzureCli()
+    config = RuntimeConfig.from_env(environment()).azure
+    manager = AzureProjectManager(
+        cli,
+        AzureContext(SUBSCRIPTION, "tenant", "user"),
+        config,
+        "ninghu",
+    )
+
+    with pytest.raises(RuntimeFailure) as blocked:
+        manager.select_or_create(date(2026, 8, 20), "sha256:catalog")
+    assert blocked.value.code == "role_assignment_permission_blocked"
+    assert cli.project_creates == 1
+    assert cli.connection_puts == 1
+
+    cli.role_create_failure = False
+    selected = manager.select_or_create(date(2026, 8, 20), "sha256:catalog")
+
+    assert selected.project_name == "aiq-20260820"
+    assert cli.project_creates == 1
+    assert cli.connection_puts == 1
+    assert cli.role_create_attempts == 3
+    assert len(cli.assignments) == 2
 
 
 def test_azure_cli_rejects_argument_injection_without_invoking_executor() -> None:
