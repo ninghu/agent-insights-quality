@@ -97,48 +97,37 @@ class ModelBackedAgent:
             return response
 
     def _run_tool(self, name: str, arguments: dict[str, Any]) -> str:
-        with _TRACER.start_as_current_span(
-            f"tool.{name}",
-            kind=SpanKind.INTERNAL,
-        ) as span:
-            span.set_attribute("tool.name", name)
-            span.set_attribute("gen_ai.tool.name", name)
-            span.set_attribute(
-                "tool.arguments",
-                json.dumps(arguments, sort_keys=True, separators=(",", ":")),
-            )
-            try:
-                result = self._scenario.run_tool(
-                    name, arguments, self._make_dispatch(name)
-                )
-            except (KeyError, TypeError, ValueError) as error:
-                span.record_exception(error)
-                span.set_status(Status(StatusCode.ERROR, str(error)))
-                raise
-            span.set_attribute("tool.result", result)
-            span.set_status(Status(StatusCode.OK))
-            return result
+        # Each actual dispatch creates its own tool.<effective-name> span.
+        # There is no outer pre-mutation span - spans are per-dispatch only.
+        result = self._scenario.run_tool(name, arguments, self._make_dispatch())
+        return result
 
-    def _make_dispatch(self, effective_name: str) -> Callable[[str, dict[str, Any]], str]:
-        """Return a callable that wraps each actual tool dispatch in its own span."""
+    def _make_dispatch(self) -> Callable[[str, dict[str, Any]], str]:
+        """Return a callable that wraps each actual tool dispatch in its own span.
+
+        The span name is ``tool.<dispatch_name>`` using the effective (possibly
+        mutated) tool name, populated with the mutated arguments and result.
+        Duplicate dispatch produces two separate spans without recursion.
+        """
 
         def _dispatch(dispatch_name: str, dispatch_args: dict[str, Any]) -> str:
-            span_name = f"tool.dispatch.{dispatch_name}"
-            with _TRACER.start_as_current_span(span_name, kind=SpanKind.INTERNAL) as dspan:
-                dspan.set_attribute("tool.name", dispatch_name)
-                dspan.set_attribute("gen_ai.tool.name", dispatch_name)
-                dspan.set_attribute(
+            with _TRACER.start_as_current_span(
+                f"tool.{dispatch_name}", kind=SpanKind.INTERNAL
+            ) as span:
+                span.set_attribute("tool.name", dispatch_name)
+                span.set_attribute("gen_ai.tool.name", dispatch_name)
+                span.set_attribute(
                     "tool.arguments",
                     json.dumps(dispatch_args, sort_keys=True, separators=(",", ":")),
                 )
                 try:
                     dispatch_result = self._execute_tool(dispatch_name, dispatch_args)
-                except Exception as error:
-                    dspan.record_exception(error)
-                    dspan.set_status(Status(StatusCode.ERROR, str(error)))
+                except (KeyError, TypeError, ValueError) as error:
+                    span.record_exception(error)
+                    span.set_status(Status(StatusCode.ERROR, str(error)))
                     raise
-                dspan.set_attribute("tool.result", dispatch_result)
-                dspan.set_status(Status(StatusCode.OK))
+                span.set_attribute("tool.result", dispatch_result)
+                span.set_status(Status(StatusCode.OK))
                 return dispatch_result
 
         return _dispatch
