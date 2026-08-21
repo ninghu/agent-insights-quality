@@ -29,6 +29,8 @@ from agent_insights_quality.agent_runtime import (
     InvocationFailureReceipt,
     RuntimeContractError,
     SyntheticToolOperation,
+    _ENDPOINT_CASES,
+    _ENDPOINT_HEALTHY_CASES,
     canonical_json_digest,
     deterministic_zip,
     load_fixtures,
@@ -869,4 +871,186 @@ def test_scenario_operations_fails_when_not_all_operations_consumed() -> None:
     )
     client = FoundryInvocationClient(PROJECT_ENDPOINT, lambda: "token", transport=transport)
     with pytest.raises(RuntimeContractError, match="fewer tool calls than configured"):
+        client.invoke_prompt(_prompt_receipt(), fixture)
+
+
+# ---------------------------------------------------------------------------
+# endpoint_request / set_case mutation semantics
+# ---------------------------------------------------------------------------
+
+
+def test_unhealthy_endpoint_case_embeds_case_result_in_request_body_and_ignores_result_field() -> None:
+    """Unhealthy cases produce the catalog definition in the function_call_output body."""
+    case = "guardrail-bypass-probe"
+    expected_case_def = _ENDPOINT_CASES[case]
+    assert case not in _ENDPOINT_HEALTHY_CASES
+
+    ops = (SyntheticToolOperation(tool_name="check", result={"ignored": True}, endpoint_case=case),)
+    fixture = HealthyFixture(
+        id="ec-unhealthy",
+        input="probe",
+        output_contains="guardrail",
+        tool_outputs={},
+        expected_tool_calls=("check",),
+        scenario_operations=ops,
+        expected_final_status="guardrail_triggered",
+        validate_output=False,
+    )
+    transport = QueueTransport(
+        [
+            _response(
+                200,
+                {
+                    "id": "r1",
+                    "status": "in_progress",
+                    "output": [
+                        {"type": "function_call", "call_id": "c1", "name": "check", "arguments": "{}"}
+                    ],
+                },
+            ),
+            # Model returns the case status as the final response status
+            _response(
+                200,
+                {
+                    "id": "r2",
+                    "invocation_id": "inv-ec",
+                    "status": "guardrail_triggered",
+                    "output_text": "",
+                },
+            ),
+        ]
+    )
+    client = FoundryInvocationClient(PROJECT_ENDPOINT, lambda: "token", transport=transport)
+    receipt = client.invoke_prompt(_prompt_receipt(), fixture)
+
+    # The function_call_output sent to the model must carry the case definition
+    second_body = json.loads(transport.calls[1]["body"])
+    embedded_output = json.loads(second_body["input"][0]["output"])
+    assert embedded_output == expected_case_def
+
+    # result field ("ignored": True) must NOT appear in the embedded output
+    assert "ignored" not in embedded_output
+
+    assert receipt.called_tools == ("check",)
+    assert receipt.invocation_id == "inv-ec"
+
+
+def test_healthy_endpoint_case_wraps_dispatch_result_with_case_metadata() -> None:
+    """Healthy cases wrap the configured result with case metadata in the request body."""
+    case = "handled-child-failure"
+    assert case in _ENDPOINT_HEALTHY_CASES
+
+    dispatch_result = {"balance": 500}
+    ops = (SyntheticToolOperation(tool_name="get_balance", result=dispatch_result, endpoint_case=case),)
+    fixture = HealthyFixture(
+        id="ec-healthy",
+        input="check-balance",
+        output_contains="done",
+        tool_outputs={},
+        expected_tool_calls=("get_balance",),
+        scenario_operations=ops,
+    )
+    transport = QueueTransport(
+        [
+            _response(
+                200,
+                {
+                    "id": "r1",
+                    "status": "in_progress",
+                    "output": [
+                        {"type": "function_call", "call_id": "c1", "name": "get_balance", "arguments": "{}"}
+                    ],
+                },
+            ),
+            _response(
+                200,
+                {
+                    "id": "r2",
+                    "status": "completed",
+                    "output_text": "done",
+                },
+            ),
+        ]
+    )
+    client = FoundryInvocationClient(PROJECT_ENDPOINT, lambda: "token", transport=transport)
+    receipt = client.invoke_prompt(_prompt_receipt(), fixture)
+
+    second_body = json.loads(transport.calls[1]["body"])
+    embedded_output = json.loads(second_body["input"][0]["output"])
+
+    # Must contain the case metadata fields
+    case_def = _ENDPOINT_CASES[case]
+    for key, value in case_def.items():
+        assert embedded_output[key] == value
+
+    # Must ALSO contain a dispatch_result key wrapping the configured result
+    assert "dispatch_result" in embedded_output
+    assert json.loads(embedded_output["dispatch_result"]) == dispatch_result
+
+    assert receipt.called_tools == ("get_balance",)
+
+
+def test_endpoint_case_with_non_default_expected_final_status_does_not_raise() -> None:
+    """expected_final_status lets fixtures declare non-completed terminal status without error."""
+    ops = (
+        SyntheticToolOperation(
+            tool_name="tx",
+            result={},
+            endpoint_case="no-confirmation",
+        ),
+    )
+    fixture = HealthyFixture(
+        id="ec-status",
+        input="go",
+        output_contains="",
+        tool_outputs={},
+        expected_tool_calls=("tx",),
+        scenario_operations=ops,
+        expected_final_status="action_without_confirmation",
+        validate_output=False,
+    )
+    transport = QueueTransport(
+        [
+            _response(
+                200,
+                {
+                    "id": "r1",
+                    "status": "in_progress",
+                    "output": [{"type": "function_call", "call_id": "c1", "name": "tx", "arguments": "{}"}],
+                },
+            ),
+            _response(200, {"id": "r2", "status": "action_without_confirmation", "output_text": ""}),
+        ]
+    )
+    client = FoundryInvocationClient(PROJECT_ENDPOINT, lambda: "token", transport=transport)
+    # Must NOT raise; status matches expected_final_status
+    receipt = client.invoke_prompt(_prompt_receipt(), fixture)
+    assert receipt.response_id == "r2"
+
+
+def test_unknown_endpoint_case_raises_contract_error() -> None:
+    """Supplying an unreviewed endpoint_case value is a contract error."""
+    ops = (SyntheticToolOperation(tool_name="t", result={}, endpoint_case="not-a-real-case"),)
+    fixture = HealthyFixture(
+        id="ec-unknown",
+        input="go",
+        output_contains="unused",
+        tool_outputs={},
+        expected_tool_calls=("t",),
+        scenario_operations=ops,
+    )
+    transport = QueueTransport(
+        [
+            _response(
+                200,
+                {
+                    "id": "r1",
+                    "status": "in_progress",
+                    "output": [{"type": "function_call", "call_id": "c1", "name": "t", "arguments": "{}"}],
+                },
+            ),
+        ]
+    )
+    client = FoundryInvocationClient(PROJECT_ENDPOINT, lambda: "token", transport=transport)
+    with pytest.raises(RuntimeContractError, match="Unknown endpoint_case"):
         client.invoke_prompt(_prompt_receipt(), fixture)

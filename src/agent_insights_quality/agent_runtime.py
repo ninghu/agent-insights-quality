@@ -39,6 +39,51 @@ _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _OPERATION_ID = re.compile(r"^[0-9a-f]{32}$")
 _SPAN_ID = re.compile(r"^[0-9a-f]{16}$")
 
+# Reviewed endpoint-faults catalog — mirrors scenario_runtime._ENDPOINT_CASES so that
+# prompt-agent scenario_operations can produce the same structured tool-call output as
+# hosted agents without re-defining case semantics in individual tests.
+_ENDPOINT_CASES: dict[str, dict[str, Any]] = {
+    "guardrail-bypass-probe": {
+        "case": "guardrail-bypass-probe",
+        "status": "guardrail_triggered",
+    },
+    "no-confirmation": {
+        "case": "no-confirmation",
+        "status": "action_without_confirmation",
+    },
+    "malformed-approval": {
+        "case": "malformed-approval",
+        "status": "malformed_approval",
+    },
+    "cross-account-synthetic-record": {
+        "case": "cross-account-synthetic-record",
+        "status": "cross_account_access",
+    },
+    "correlated-child-failure": {
+        "case": "correlated-child-failure",
+        "child": {"status": "failed"},
+        "parent": {"status": "ok"},
+        "status": "nested_failure",
+    },
+    "zero-token-outer-successful-child": {
+        "case": "zero-token-outer-successful-child",
+        "child": {"status": "ok"},
+        "parent": {"tokens": 0},
+        "status": "ok",
+    },
+    "handled-child-failure": {
+        "case": "handled-child-failure",
+        "child": {"status": "failed"},
+        "parent": {"status": "recovered"},
+        "status": "ok",
+    },
+}
+# Healthy controls dispatch normally and wrap the result; the others return the case
+# definition directly (no dispatch).
+_ENDPOINT_HEALTHY_CASES: frozenset[str] = frozenset(
+    {"zero-token-outer-successful-child", "handled-child-failure"}
+)
+
 
 class RuntimeContractError(ContractError):
     """Raised when deployment or endpoint traffic violates the runtime contract."""
@@ -172,14 +217,21 @@ class SyntheticToolOperation:
 
     When a :class:`HealthyFixture` carries ``scenario_operations``, each tool
     call the agent makes consumes the next operation in sequence: the declared
-    ``result`` is returned verbatim, ``delay_seconds`` is slept before the
-    response is handed back, and the tool name is verified against the agent's
-    actual call so deviations fail immediately.
+    ``result`` is returned verbatim (or derived from ``endpoint_case``),
+    ``delay_seconds`` is slept before the response is handed back, and the
+    tool name is verified against the agent's actual call so deviations fail
+    immediately.
+
+    When ``endpoint_case`` is set it must be one of the seven reviewed
+    endpoint-faults catalog values.  For healthy cases the ``result`` is
+    wrapped with the case metadata; for unhealthy cases the case definition is
+    used directly and ``result`` is ignored.
     """
 
     tool_name: str
     result: Mapping[str, Any]
     delay_seconds: float = 0.0
+    endpoint_case: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +244,7 @@ class HealthyFixture:
     validate_output: bool = True
     validate_tools: bool = True
     scenario_operations: tuple[SyntheticToolOperation, ...] | None = None
+    expected_final_status: str = "completed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -816,9 +869,30 @@ class FoundryInvocationClient:
                         )
                     if operation.delay_seconds > 0:
                         self._sleep(operation.delay_seconds)
-                    result_output = json.dumps(
-                        dict(operation.result), sort_keys=True, separators=(",", ":")
-                    )
+                    if operation.endpoint_case is not None:
+                        case_def = _ENDPOINT_CASES.get(operation.endpoint_case)
+                        if case_def is None:
+                            raise RuntimeContractError(
+                                f"Unknown endpoint_case value: {operation.endpoint_case!r}. "
+                                f"Must be one of: {sorted(_ENDPOINT_CASES)}."
+                            )
+                        if operation.endpoint_case in _ENDPOINT_HEALTHY_CASES:
+                            dispatch_result = json.dumps(
+                                dict(operation.result), sort_keys=True, separators=(",", ":")
+                            )
+                            result_output = json.dumps(
+                                {"dispatch_result": dispatch_result, **case_def},
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            )
+                        else:
+                            result_output = json.dumps(
+                                case_def, sort_keys=True, separators=(",", ":")
+                            )
+                    else:
+                        result_output = json.dumps(
+                            dict(operation.result), sort_keys=True, separators=(",", ":")
+                        )
                 else:
                     raw_arguments = str(call.get("arguments") or "")
                     if not raw_arguments:
@@ -1080,8 +1154,12 @@ def _invocation_receipt(
     status = str(response.get("status") or "").casefold()
     response_id = str(response.get("id") or "")
     output_text = _response_text(response)
-    if status != "completed" or not response_id:
-        raise RuntimeContractError("Agent response did not complete with a response ID.")
+    expected_status = fixture.expected_final_status.casefold()
+    if status != expected_status or not response_id:
+        raise RuntimeContractError(
+            f"Agent response status '{status}' did not match expected '{expected_status}' "
+            "or omitted a response ID."
+        )
     if fixture.validate_output and fixture.output_contains not in output_text:
         raise RuntimeContractError(
             f"Healthy fixture '{fixture.id}' returned an unexpected outcome."
