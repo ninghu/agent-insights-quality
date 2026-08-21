@@ -64,6 +64,37 @@ def test_runtime_config_supports_explicit_and_discovery_modes_without_repr_leaks
     })
 
 
+def test_runtime_config_accepts_azure_subscription_display_name_with_ampersand() -> None:
+    source = environment(discovery=True)
+    source["AIQ_AZURE_SUBSCRIPTION_NAME"] = "AML - Experiences R&D"
+    assert RuntimeConfig.from_env(source).azure.subscription_name == "AML - Experiences R&D"
+
+
+@pytest.mark.parametrize(
+    "subscription_name",
+    [
+        " AML - Experiences R&D",
+        "AML - Experiences R&D ",
+        "AML\nExperiences",
+        "AML\tExperiences",
+        "AML/Experiences",
+        r"AML\Experiences",
+        "https://example.invalid",
+        "AML?environment=prod",
+        "AML#fragment",
+        "AML&environment=prod",
+        "A" * 128,
+    ],
+)
+def test_runtime_config_rejects_unsafe_azure_subscription_display_names(
+    subscription_name: str,
+) -> None:
+    source = environment(discovery=True)
+    source["AIQ_AZURE_SUBSCRIPTION_NAME"] = subscription_name
+    with pytest.raises(RuntimeFailure, match="subscription display name"):
+        RuntimeConfig.from_env(source)
+
+
 def test_runtime_config_rejects_partial_coordinates_and_dual_subscription_selector() -> None:
     partial = environment(discovery=True)
     partial["AIQ_AZURE_RESOURCE_GROUP"] = "quality-rg"
