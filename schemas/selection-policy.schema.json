@@ -21,14 +21,32 @@
     "cycle": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["epoch", "days", "partition_scenario_counts"],
+      "required": [
+        "epoch_monday",
+        "business_days",
+        "weekdays",
+        "partition_scenario_counts"
+      ],
       "properties": {
-        "epoch": {"type": "string", "format": "date"},
-        "days": {"const": 6},
+        "epoch_monday": {"type": "string", "format": "date"},
+        "business_days": {"const": 5},
+        "weekdays": {
+          "type": "array",
+          "prefixItems": [
+            {"const": "Monday"},
+            {"const": "Tuesday"},
+            {"const": "Wednesday"},
+            {"const": "Thursday"},
+            {"const": "Friday"}
+          ],
+          "items": false,
+          "minItems": 5,
+          "maxItems": 5
+        },
         "partition_scenario_counts": {
           "type": "array",
-          "minItems": 6,
-          "maxItems": 6,
+          "minItems": 5,
+          "maxItems": 5,
           "items": {"type": "integer", "minimum": 1}
         }
       }
@@ -39,6 +57,7 @@
       "required": [
         "healthy_controls_daily",
         "mandatory_fault_priorities",
+        "scenario_cadence",
         "rotating_fault_priorities",
         "priority_order",
         "required_fault_categories"
@@ -50,6 +69,24 @@
           "minItems": 1,
           "uniqueItems": true,
           "items": {"enum": ["P0", "P1", "P2"]}
+        },
+        "scenario_cadence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["aiq-scn-062-umbrella-insight"],
+          "properties": {
+            "aiq-scn-062-umbrella-insight": {
+              "type": "array",
+              "prefixItems": [
+                {"const": "Monday"},
+                {"const": "Wednesday"},
+                {"const": "Friday"}
+              ],
+              "items": false,
+              "minItems": 3,
+              "maxItems": 3
+            }
+          }
         },
         "rotating_fault_priorities": {
           "type": "array",
@@ -114,8 +151,21 @@
     "scheduled_automation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["full_catalog"],
+      "required": ["weekdays", "full_catalog"],
       "properties": {
+        "weekdays": {
+          "type": "array",
+          "prefixItems": [
+            {"const": "Monday"},
+            {"const": "Tuesday"},
+            {"const": "Wednesday"},
+            {"const": "Thursday"},
+            {"const": "Friday"}
+          ],
+          "items": false,
+          "minItems": 5,
+          "maxItems": 5
+        },
         "full_catalog": {"const": false}
       }
     }

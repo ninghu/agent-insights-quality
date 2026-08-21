@@ -1,13 +1,16 @@
 schema_version: "1.0.0"
-policy_version: "1.0.0"
+policy_version: "1.1.0"
 default_mode: rotating_daily
 cycle:
-  epoch: "2026-01-01"
-  days: 6
-  partition_scenario_counts: [8, 8, 8, 8, 8, 7]
+  epoch_monday: "2026-01-05"
+  business_days: 5
+  weekdays: [Monday, Tuesday, Wednesday, Thursday, Friday]
+  partition_scenario_counts: [9, 10, 9, 10, 9]
 selection:
   healthy_controls_daily: true
   mandatory_fault_priorities: [P0]
+  scenario_cadence:
+    aiq-scn-062-umbrella-insight: [Monday, Wednesday, Friday]
   rotating_fault_priorities: [P1, P2]
   priority_order: [P0, P1, P2]
   required_fault_categories:
@@ -29,4 +32,5 @@ full_catalog:
   explicit_only: true
   human_daily_contract: false
 scheduled_automation:
+  weekdays: [Monday, Tuesday, Wednesday, Thursday, Friday]
   full_catalog: false

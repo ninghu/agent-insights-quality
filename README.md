@@ -37,9 +37,10 @@ python -m agent_insights_quality validate
 Use the repository skills under `.github/skills/` to onboard an agent or scenario and to replay a
 run safely. Generated documentation must never be edited by hand.
 
-`scenarios/catalog.yaml` is the predefined reviewed issue library. The default planner runs all six
-healthy controls and all ten P0 fault scenarios every day, plus one deterministic partition of the
-47 P1/P2 faults. Six consecutive cycle days cover every rotating fault exactly once. Use
+`scenarios/catalog.yaml` is the predefined reviewed issue library. The default weekday planner runs
+all six healthy controls and nine single-root P0 faults, plus the two-root umbrella P0 collection
+probe on Monday/Wednesday/Friday and one deterministic partition of the 47 P1/P2 faults. One
+Monday-Friday cycle covers every rotating fault exactly once; weekends are not scheduled. Use
 `--full-catalog` only for explicit release qualification; that mode is marked non-human-daily and
 does not claim the per-agent expected-review cap.
 

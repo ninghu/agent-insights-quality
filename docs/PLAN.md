@@ -350,10 +350,11 @@ failed run.
 
 ## 9. Daily test-plan generation
 
-The planner treats the full catalog as a predefined reviewed issue library. Each daily plan includes
-all six healthy controls, all ten P0 faults, and one deterministic partition of the 47 P1/P2 faults.
-The six-day `8/8/8/8/8/7` horizon is required because the mandatory P0 set represents 11 expected
-roots, leaving nine rotating root slots under the expected cap of four per agent:
+The planner treats the full catalog as a predefined reviewed issue library. Each weekday plan
+includes all six healthy controls, nine single-root P0 faults, the two-root umbrella P0 collection
+probe on Monday/Wednesday/Friday, and one deterministic partition of the 47 P1/P2 faults. The
+Monday-Friday `9/10/9/10/9` horizon yields expected totals of `20/19/20/19/20` under the expected
+cap of four per agent:
 
 1. Compute a reproducible seed from `report date + catalog hash + selection-policy hash`.
 2. Assign every selected scenario exactly once to a compatible agent and version wave; fail rather
@@ -362,7 +363,9 @@ roots, leaving nine rotating root slots under the expected cap of four per agent
 4. Put no more than four expected root causes on an agent across all daily versions and in one insight
    run.
 5. Never co-locate conflict-tagged scenarios whose traces would make ground truth ambiguous.
-6. Ensure every engine category, severity, agent type, and lifecycle case is represented.
+6. Maximize daily engine-category coverage without repeating a rotating scenario. P0 supplies
+   context, reliability, and safety daily; rotating inventory supports tool/output on five days,
+   cost/hallucinations on four, and latency on three.
 7. Create additional immutable versions when an agent cannot safely hold all assigned scenarios in
    one version.
 8. Write `daily-plan.json` before deployment, including every assignment, version digest, traffic

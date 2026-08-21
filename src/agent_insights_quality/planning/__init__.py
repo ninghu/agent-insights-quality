@@ -15,6 +15,7 @@ from agent_insights_quality.contracts import (
     load_agent_manifests,
     load_scenario_catalog,
     load_selection_policy,
+    mandatory_scenarios_for_weekday,
     selection_policy_hash,
     validate_daily_plan_semantics,
     validate_instance,
@@ -141,11 +142,10 @@ def _cycle_metadata(
     catalog_digest: str,
     policy_digest: str,
 ) -> tuple[dict[str, Any], int]:
-    epoch = date.fromisoformat(policy["cycle"]["epoch"])
-    cycle_number, cycle_index = divmod(
-        (report_date - epoch).days,
-        policy["cycle"]["days"],
-    )
+    epoch = date.fromisoformat(policy["cycle"]["epoch_monday"])
+    cycle_number = (report_date - epoch).days // 7
+    weekday_index = report_date.weekday()
+    cycle_index = weekday_index if weekday_index < 5 else -1
     cycle_id = (
         f"cycle-{cycle_number}-"
         + hashlib.sha256(
@@ -156,9 +156,16 @@ def _cycle_metadata(
         {
             "id": cycle_id,
             "number": cycle_number,
-            "day": cycle_index + 1,
-            "length_days": policy["cycle"]["days"],
-            "full_coverage_horizon_days": policy["cycle"]["days"],
+            "business_day": cycle_index + 1 if cycle_index >= 0 else None,
+            "weekday": (
+                policy["cycle"]["weekdays"][cycle_index]
+                if cycle_index >= 0
+                else "non_scheduled"
+            ),
+            "length_business_days": policy["cycle"]["business_days"],
+            "full_coverage_horizon_business_days": policy["cycle"][
+                "business_days"
+            ],
         },
         cycle_index,
     )
@@ -172,7 +179,7 @@ def _partition_candidate(
     policy_digest: str,
     cycle_number: int,
     nonce: int,
-    rotating_root_cap: int,
+    rotating_root_caps: list[int],
 ) -> list[list[dict[str, Any]]] | None:
     partitions: list[list[dict[str, Any]]] = [[] for _ in sizes]
     roots = [0] * len(sizes)
@@ -198,7 +205,7 @@ def _partition_candidate(
                 day
                 for day, capacity in enumerate(sizes)
                 if len(partitions[day]) < capacity
-                and roots[day] + weight <= rotating_root_cap
+                and roots[day] + weight <= rotating_root_caps[day]
             ]
             if not eligible_days:
                 return None
@@ -232,11 +239,9 @@ def rotating_cycle_partitions(
     cycle_number: int,
 ) -> list[list[dict[str, Any]]]:
     active = [scenario for scenario in catalog["scenarios"] if scenario["status"] == "active"]
-    mandatory = [
-        scenario
-        for scenario in active
-        if scenario["expected"]["category"] == "none"
-        or scenario["priority"] in policy["selection"]["mandatory_fault_priorities"]
+    daily_mandatory = [
+        mandatory_scenarios_for_weekday(active, policy, weekday)
+        for weekday in policy["cycle"]["weekdays"]
     ]
     rotating = [
         scenario
@@ -245,10 +250,11 @@ def rotating_cycle_partitions(
         and scenario["priority"] in policy["selection"]["rotating_fault_priorities"]
     ]
     sizes = policy["cycle"]["partition_scenario_counts"]
-    mandatory_roots = sum(expected_finding_count(scenario) for scenario in mandatory)
-    rotating_root_cap = (
-        policy["limits"]["daily_expected_root_count"] - mandatory_roots
-    )
+    rotating_root_caps = [
+        policy["limits"]["daily_expected_root_count"]
+        - sum(expected_finding_count(scenario) for scenario in mandatory)
+        for mandatory in daily_mandatory
+    ]
     best: tuple[tuple[int, int], list[list[dict[str, Any]]]] | None = None
     required_categories = set(policy["selection"]["required_fault_categories"])
     for nonce in range(256):
@@ -259,14 +265,14 @@ def rotating_cycle_partitions(
             policy_digest=policy_digest,
             cycle_number=cycle_number,
             nonce=nonce,
-            rotating_root_cap=rotating_root_cap,
+            rotating_root_caps=rotating_root_caps,
         )
         if partitions is None:
             continue
         try:
             for day, partition in enumerate(partitions):
                 _assign_agents(
-                    mandatory + partition,
+                    daily_mandatory[day] + partition,
                     agents,
                     int(
                         hashlib.sha256(
@@ -284,18 +290,18 @@ def rotating_cycle_partitions(
             len(
                 {
                     scenario["expected"]["category"]
-                    for scenario in mandatory + partition
+                    for scenario in daily_mandatory[day] + partition
                     if scenario["expected"]["category"] in required_categories
                 }
             )
-            for partition in partitions
+            for day, partition in enumerate(partitions)
         ]
         score = (min(coverage), sum(coverage))
         if best is None or score > best[0]:
             best = (score, partitions)
     if best is None:
         raise ContractError(
-            "The rotating catalog cannot be partitioned into six assignable daily selections"
+            "The rotating catalog cannot be partitioned into five assignable weekday selections"
         )
     return best[1]
 
@@ -331,12 +337,13 @@ def _select_scenarios(
             "selection_reasons": reasons,
         }
         return active, selection, reasons
-    mandatory = [
-        scenario
-        for scenario in active
-        if scenario["expected"]["category"] == "none"
-        or scenario["priority"] in policy["selection"]["mandatory_fault_priorities"]
-    ]
+    if cycle_index < 0:
+        raise ContractError(
+            "Rotating daily plans are scheduled Monday through Friday; "
+            "use --full-catalog only for explicit release qualification."
+        )
+    weekday = policy["cycle"]["weekdays"][cycle_index]
+    mandatory = mandatory_scenarios_for_weekday(active, policy, weekday)
     partitions = rotating_cycle_partitions(
         catalog,
         agents,
@@ -351,7 +358,11 @@ def _select_scenarios(
         scenario["id"]: (
             "healthy_control_daily"
             if scenario["expected"]["category"] == "none"
-            else "p0_fault_daily"
+            else (
+                "p0_collection_probe_cadence"
+                if scenario["id"] in policy["selection"]["scenario_cadence"]
+                else "p0_fault_daily"
+            )
         )
         for scenario in mandatory
     }
@@ -562,7 +573,12 @@ def generate_daily_plan(
     selection["mandatory_scenario_ids"] = [
         scenario_id
         for scenario_id in selected_ids
-        if reasons[scenario_id] in {"healthy_control_daily", "p0_fault_daily"}
+        if reasons[scenario_id]
+        in {
+            "healthy_control_daily",
+            "p0_fault_daily",
+            "p0_collection_probe_cadence",
+        }
     ]
     selection["rotating_scenario_ids"] = [
         scenario_id
@@ -680,8 +696,10 @@ def render_plan_markdown(
         f"- Selection policy: `{plan['policy_version']}` (`{plan['policy_hash']}`)",
         f"- Selection mode: `{plan['selection_mode']}`",
         f"- Human daily contract: `{str(plan['human_daily_contract']).lower()}`",
-        f"- Cycle: `{cycle['id']}`, day {cycle['day']} of {cycle['length_days']}",
-        f"- Full-coverage horizon: {cycle['full_coverage_horizon_days']} days",
+        f"- Cycle: `{cycle['id']}`, {cycle['weekday']} "
+        f"(business day {cycle['business_day'] or 'N/A'} of {cycle['length_business_days']})",
+        "- Full-coverage horizon: "
+        f"{cycle['full_coverage_horizon_business_days']} business days",
         f"- Deterministic seed: `{plan['seed']}`",
         "",
         "## Selection",

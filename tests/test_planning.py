@@ -37,6 +37,10 @@ from agent_insights_quality.planning import (
 REPORT_DATE = date(2026, 8, 21)
 
 
+def _cycle_monday(day: date = REPORT_DATE) -> date:
+    return day - timedelta(days=day.weekday())
+
+
 def _inputs() -> tuple[list[dict], dict]:
     agents = load_agent_manifests()
     catalog = load_scenario_catalog(set(EXPECTED_AGENTS))
@@ -153,8 +157,8 @@ def test_policy_content_change_changes_hash_seed_selection_and_plan() -> None:
     agents, catalog = _inputs()
     policy = load_selection_policy(catalog)
     changed_policy = deepcopy(policy)
-    changed_policy["policy_version"] = "1.0.1"
-    changed_policy["cycle"]["epoch"] = "2026-01-02"
+    changed_policy["policy_version"] = "1.1.1"
+    changed_policy["cycle"]["epoch_monday"] = "2026-01-12"
     original = generate_daily_plan(
         REPORT_DATE,
         agents=agents,
@@ -216,7 +220,7 @@ def test_daily_plan_covers_mandatory_and_one_rotating_partition() -> None:
     assert len(assignment_ids) == len(set(assignment_ids))
     assert mandatory_ids.issubset(assignment_ids)
     assert len(plan["selection"]["mandatory_scenario_ids"]) == 16
-    assert len(plan["selection"]["rotating_scenario_ids"]) in {7, 8}
+    assert len(plan["selection"]["rotating_scenario_ids"]) == 9
     assert set(plan["selection"]["omitted_scenario_ids"]) == {
         scenario["id"] for scenario in active
     } - set(assignment_ids)
@@ -224,15 +228,13 @@ def test_daily_plan_covers_mandatory_and_one_rotating_partition() -> None:
     validate_daily_plan_semantics(plan, agents, catalog, "plan")
 
 
-def test_six_day_cycle_covers_every_rotating_fault_exactly_once() -> None:
+def test_five_business_day_cycle_covers_every_rotating_fault_exactly_once() -> None:
     agents, catalog = _inputs()
     policy = load_selection_policy(catalog)
-    cycle_start = REPORT_DATE - timedelta(
-        days=generate_daily_plan(REPORT_DATE)["selection"]["cycle"]["day"] - 1
-    )
+    cycle_start = _cycle_monday()
     plans = [
         generate_daily_plan(cycle_start + timedelta(days=offset))
-        for offset in range(policy["cycle"]["days"])
+        for offset in range(policy["cycle"]["business_days"])
     ]
     rotating_ids = [
         scenario_id
@@ -246,24 +248,41 @@ def test_six_day_cycle_covers_every_rotating_fault_exactly_once() -> None:
         and scenario["expected"]["category"] != "none"
         and scenario["priority"] in {"P1", "P2"}
     }
+    controls = {
+        scenario["id"]
+        for scenario in catalog["scenarios"]
+        if scenario["status"] == "active"
+        and scenario["expected"]["category"] == "none"
+    }
+    ordinary_p0 = {
+        scenario["id"]
+        for scenario in catalog["scenarios"]
+        if scenario["status"] == "active"
+        and scenario["priority"] == "P0"
+        and scenario["expected"]["category"] != "none"
+        and scenario["id"] != "aiq-scn-062-umbrella-insight"
+    }
     assert [len(plan["selection"]["rotating_scenario_ids"]) for plan in plans] == [
-        8,
-        8,
-        8,
-        8,
-        8,
-        7,
+        9,
+        10,
+        9,
+        10,
+        9,
     ]
     assert len(rotating_ids) == len(set(rotating_ids)) == 47
     assert set(rotating_ids) == expected
+    assert len(controls) == 6
+    assert len(ordinary_p0) == 9
+    for plan in plans:
+        assert controls | ordinary_p0 <= set(
+            plan["selection"]["mandatory_scenario_ids"]
+        )
 
 
 def test_rotation_maximizes_daily_category_coverage_when_inventory_exists() -> None:
     _, catalog = _inputs()
-    cycle_start = REPORT_DATE - timedelta(
-        days=generate_daily_plan(REPORT_DATE)["selection"]["cycle"]["day"] - 1
-    )
-    plans = [generate_daily_plan(cycle_start + timedelta(days=offset)) for offset in range(6)]
+    cycle_start = _cycle_monday()
+    plans = [generate_daily_plan(cycle_start + timedelta(days=offset)) for offset in range(5)]
     rotating = [
         scenario
         for scenario in catalog["scenarios"]
@@ -281,21 +300,61 @@ def test_rotation_maximizes_daily_category_coverage_when_inventory_exists() -> N
             scenario["expected"]["category"] == category for scenario in rotating
         )
         covered_days = sum(category in plan["coverage"]["categories"] for plan in plans)
-        assert covered_days == min(6, available)
+        assert covered_days == min(5, available)
 
 
 def test_every_daily_plan_respects_expected_agent_and_fault_budgets() -> None:
-    cycle_start = REPORT_DATE - timedelta(
-        days=generate_daily_plan(REPORT_DATE)["selection"]["cycle"]["day"] - 1
-    )
-    for offset in range(6):
+    cycle_start = _cycle_monday()
+    expected_totals = [20, 19, 20, 19, 20]
+    for offset, expected_total in enumerate(expected_totals):
         plan = generate_daily_plan(cycle_start + timedelta(days=offset))
         assert max(plan["per_agent_expected_totals"].values()) <= 4
-        assert sum(plan["per_agent_expected_totals"].values()) <= 20
+        assert sum(plan["per_agent_expected_totals"].values()) == expected_total
         assert sum(
             assignment["expected"]["finding_count"] > 0
             for assignment in plan["assignments"]
         ) <= 20
+
+
+def test_umbrella_collection_probe_runs_monday_wednesday_friday_only() -> None:
+    plans = [
+        generate_daily_plan(_cycle_monday() + timedelta(days=offset))
+        for offset in range(5)
+    ]
+    selected = [
+        "aiq-scn-062-umbrella-insight"
+        in plan["selection"]["selected_scenario_ids"]
+        for plan in plans
+    ]
+    assert selected == [True, False, True, False, True]
+    for plan in plans[::2]:
+        assert (
+            plan["selection"]["selection_reasons"][
+                "aiq-scn-062-umbrella-insight"
+            ]
+            == "p0_collection_probe_cadence"
+        )
+
+
+def test_weekends_reject_rotating_plan_but_allow_explicit_full_catalog() -> None:
+    saturday = _cycle_monday() + timedelta(days=5)
+    sunday = _cycle_monday() + timedelta(days=6)
+    for weekend in (saturday, sunday):
+        with pytest.raises(ContractError, match="Monday through Friday"):
+            generate_daily_plan(weekend)
+        full = generate_daily_plan(weekend, full_catalog=True)
+        assert full["selection_mode"] == "full_catalog"
+        assert full["selection"]["cycle"]["business_day"] is None
+        assert full["selection"]["cycle"]["weekday"] == "non_scheduled"
+
+
+def test_friday_to_monday_starts_next_deterministic_cycle() -> None:
+    friday = generate_daily_plan(_cycle_monday() + timedelta(days=4))
+    monday = generate_daily_plan(_cycle_monday() + timedelta(days=7))
+    assert friday["selection"]["cycle"]["business_day"] == 5
+    assert monday["selection"]["cycle"]["business_day"] == 1
+    assert monday["selection"]["cycle"]["number"] == friday["selection"]["cycle"]["number"] + 1
+    assert monday["selection"]["cycle"]["id"] != friday["selection"]["cycle"]["id"]
 
 
 def test_planner_fails_closed_when_mandatory_faults_cannot_fit() -> None:

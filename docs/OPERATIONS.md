@@ -54,21 +54,29 @@ python -m agent_insights_quality cleanup --execute
 ## Daily issue assignment
 
 `scenarios/catalog.yaml` remains the predefined, human-reviewed issue library; a scenario omitted
-from one daily plan remains active and returns in its deterministic rotation. The default
-`rotating_daily` plan always includes all six zero-insight controls and all ten P0 faults, then adds
-one partition of the 47 P1/P2 faults. `config/selection-policy.yaml` defines a six-day
-`8/8/8/8/8/7` partition horizon. Six days are required because the mandatory P0 set represents 11
-expected roots (the umbrella scenario represents two), leaving at most nine rotating roots under
-the five-agent expected cap of four each.
+from one weekday plan remains active and returns on its reviewed cadence or deterministic rotation.
+The default `rotating_daily` plan always includes all six zero-insight controls and nine single-root
+P0 faults. The two-root `aiq-scn-062-umbrella-insight` collection-quality probe runs only on Monday,
+Wednesday, and Friday because it is not a customer-safety probe. `config/selection-policy.yaml`
+defines a Monday-Friday `9/10/9/10/9` rotating partition horizon that covers all 47 P1/P2 faults
+exactly once. Expected root totals are `20/19/20/19/20`, so every agent stays at or below four.
+The weekly capacity is 100 expected roots and the selection uses 98, leaving two review slots spare.
 
 The catalog hash, policy hash, cycle number, and report date determine selection and assignment;
-there is no mutable selection state. Priority, category coverage, and deterministic recency order
-drive partitioning. Every daily plan records selected and omitted IDs, selection reasons, cycle
-identity/day, full-coverage horizon, and per-agent expected totals. The planner fails rather than
-dropping an incompatible or over-cap selection.
+there is no mutable selection state. Friday advances to a new cycle on the next Monday; Saturday
+and Sunday default plans fail closed. Priority, category coverage, and deterministic recency order
+drive partitioning. Every plan records selected and omitted IDs, selection reasons, business-day
+cycle identity/day, full-coverage horizon, and per-agent expected totals. The planner fails rather
+than dropping an incompatible or over-cap selection.
+
+The catalog cannot literally cover all eight fault categories every weekday while also selecting
+each rotating scenario exactly once: the rotating library contains only three latency, four cost,
+and four hallucination scenarios, and no P0 scenario in those categories. The deterministic
+partition therefore maximizes coverage: tool and output appear all five days, latency three days,
+and cost and hallucination four days; P0 supplies context, reliability, and safety every weekday.
 
 Use `python -m agent_insights_quality plan --report-date YYYY-MM-DD` for normal human-reviewable
-daily qualification. `--full-catalog` is an explicit special-release mode, is labeled
+weekday qualification. A weekend date is rejected. `--full-catalog` is an explicit special-release mode, is labeled
 non-human-daily, and is never used by scheduled automation. The expected cap is four roots per
 agent across all versions in a daily project and four roots per run. There is no generic actual
 insight cap: actual insights must equal the selected expected count exactly. Any extra insight is
