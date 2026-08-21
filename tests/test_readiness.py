@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from agent_insights_quality.cli import main
+import agent_insights_quality.contracts as contracts
 from agent_insights_quality.contracts import ContractError, ROOT, SCHEMAS, load_data, validate_instance
 from agent_insights_quality.readiness import (
     MANDATORY_RUNTIME_COMPONENTS,
@@ -14,7 +15,12 @@ from agent_insights_quality.readiness import (
     require_daily_runtime,
     validate_runtime_readiness,
 )
-from agent_insights_quality.reporting import finalize_readiness_failure, record_email_delivery
+from agent_insights_quality.reporting import (
+    finalize_readiness_failure,
+    record_email_delivery,
+    validate_email_handoff,
+    validate_stored_bundle_content,
+)
 
 
 def test_runtime_readiness_is_explicitly_disabled() -> None:
@@ -73,7 +79,9 @@ def test_readiness_failure_finalizer_requires_email_without_operational_actions(
     ]
     assert handoff["required"] is True
     assert handoff["message_count"] == 1
+    assert handoff["reporting_mode"] == "test"
     assert handoff["recipient_variable"] == "AIQ_TEST_REPORT_RECIPIENT"
+    assert handoff["content_digest"].startswith("sha256:")
     assert handoff["sender_context"] == "authenticated_user_mailbox"
     assert handoff["delivery"] == {
         "status": "pending",
@@ -144,6 +152,76 @@ def test_email_delivery_result_is_recorded_once(tmp_path: Path) -> None:
     assert preserved["delivery"]["receipt_reference"] == receipt
 
 
+def test_sent_receipt_cannot_be_reused_for_changed_readiness_content(tmp_path: Path) -> None:
+    readiness = load_data(ROOT / "config" / "runtime-readiness.yaml")
+    reporting = load_data(ROOT / "config" / "reporting.yaml")
+    handoff_path = finalize_readiness_failure(
+        readiness,
+        reporting,
+        "2026-08-21",
+        output_root=tmp_path,
+        generated_at="2026-08-21T08:00:00Z",
+    )
+    record_email_delivery(
+        handoff_path,
+        status="sent",
+        receipt_reference="sha256:" + ("c" * 64),
+    )
+    delivered_bundle = {
+        path.name: path.read_bytes() for path in handoff_path.parent.iterdir()
+    }
+    changed_readiness = deepcopy(readiness)
+    changed_readiness["mandatory_components"]["infrastructure"] = True
+    with pytest.raises(ContractError, match="content does not match"):
+        finalize_readiness_failure(
+            changed_readiness,
+            reporting,
+            "2026-08-21",
+            output_root=tmp_path,
+            generated_at="2026-08-21T09:00:00Z",
+        )
+    assert {
+        path.name: path.read_bytes() for path in handoff_path.parent.iterdir()
+    } == delivered_bundle
+
+
+def test_content_digest_binds_email_subject(tmp_path: Path) -> None:
+    handoff_path = finalize_readiness_failure(
+        load_data(ROOT / "config" / "runtime-readiness.yaml"),
+        load_data(ROOT / "config" / "reporting.yaml"),
+        "2026-08-21",
+        output_root=tmp_path,
+        generated_at="2026-08-21T08:00:00Z",
+    )
+    handoff = json.loads(handoff_path.read_text(encoding="ascii"))
+    handoff["subject"] = (
+        "[Agent Insights Quality] INCONCLUSIVE - 2026-08-21 - alternate signal"
+    )
+    with pytest.raises(ContractError, match="content digest"):
+        validate_stored_bundle_content(handoff_path, handoff)
+
+
+def test_email_handoff_supports_configured_production_recipient(tmp_path: Path) -> None:
+    reporting = deepcopy(load_data(ROOT / "config" / "reporting.yaml"))
+    reporting["mode"] = "production"
+    reporting["recipient_variable"] = "AIQ_PRODUCTION_REPORT_RECIPIENT"
+    handoff_path = finalize_readiness_failure(
+        load_data(ROOT / "config" / "runtime-readiness.yaml"),
+        reporting,
+        "2026-08-21",
+        output_root=tmp_path,
+        generated_at="2026-08-21T08:00:00Z",
+    )
+    handoff = json.loads(handoff_path.read_text(encoding="ascii"))
+    validate_email_handoff(handoff, "handoff", reporting)
+    assert handoff["reporting_mode"] == "production"
+    assert handoff["recipient_variable"] == "AIQ_PRODUCTION_REPORT_RECIPIENT"
+
+    test_reporting = load_data(ROOT / "config" / "reporting.yaml")
+    with pytest.raises(ContractError, match="reporting mode does not match"):
+        validate_email_handoff(handoff, "handoff", test_reporting)
+
+
 def test_failed_email_delivery_requires_sanitized_error_code(tmp_path: Path) -> None:
     handoff_path = finalize_readiness_failure(
         load_data(ROOT / "config" / "runtime-readiness.yaml"),
@@ -193,3 +271,76 @@ def test_record_email_result_cli_updates_pending_handoff(
     assert "Email delivery result recorded" in capsys.readouterr().out
     handoff = json.loads(handoff_path.read_text(encoding="ascii"))
     assert handoff["delivery"]["receipt_reference"] == receipt
+
+
+@pytest.mark.parametrize(
+    "filenames",
+    [
+        {"email-handoff.json"},
+        {"readiness-failure.json", "readiness-failure.md", "failure-email.html"},
+        {"failure-email.html"},
+        {"plan.json", "plan.md", "report.json", "report.md", "email-handoff.json"},
+        {
+            "plan.json",
+            "plan.md",
+            "report.json",
+            "report.md",
+            "readiness-failure.json",
+            "readiness-failure.md",
+            "failure-email.html",
+            "email-handoff.json",
+        },
+    ],
+)
+def test_report_layout_rejects_partial_or_mixed_readiness_bundles(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    filenames: set[str],
+) -> None:
+    day = tmp_path / "reports" / "daily" / "2026" / "08" / "21"
+    day.mkdir(parents=True)
+    for filename in filenames:
+        (day / filename).write_text("{}\n", encoding="ascii")
+    monkeypatch.setattr(contracts, "ROOT", tmp_path)
+    with pytest.raises(ContractError, match="artifact set|exactly its four artifacts"):
+        contracts.validate_report_layout()
+
+
+def test_report_layout_accepts_only_complete_readiness_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    day = tmp_path / "reports" / "daily" / "2026" / "08" / "21"
+    day.mkdir(parents=True)
+    for filename in {
+        "readiness-failure.json",
+        "readiness-failure.md",
+        "failure-email.html",
+        "email-handoff.json",
+    }:
+        (day / filename).write_text("{}\n", encoding="ascii")
+    monkeypatch.setattr(contracts, "ROOT", tmp_path)
+    contracts.validate_report_layout()
+
+
+def test_complete_readiness_bundle_is_schema_validated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reports = tmp_path / "reports"
+    reporting = load_data(ROOT / "config" / "reporting.yaml")
+    handoff_path = finalize_readiness_failure(
+        load_data(ROOT / "config" / "runtime-readiness.yaml"),
+        reporting,
+        "2026-08-21",
+        output_root=reports,
+        generated_at="2026-08-21T08:00:00Z",
+    )
+    failure_path = handoff_path.with_name("readiness-failure.json")
+    failure = json.loads(failure_path.read_text(encoding="ascii"))
+    failure["status"] = "AT BAR"
+    failure_path.write_text(json.dumps(failure, indent=2) + "\n", encoding="ascii")
+
+    monkeypatch.setattr(contracts, "ROOT", tmp_path)
+    with pytest.raises(ContractError, match="'INCONCLUSIVE' was expected"):
+        contracts.validate_report_artifacts([], {}, reporting)

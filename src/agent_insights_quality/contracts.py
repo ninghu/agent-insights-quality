@@ -596,20 +596,23 @@ def validate_report_layout() -> None:
         "failure-email.html",
         "email-handoff.json",
     }
+    readiness_markers = readiness_failure - {"failure-email.html"}
+    operational_failure = complete_report | {"failure-email.html"}
     for report_day, filenames in files_by_day.items():
-        if readiness_failure.issubset(filenames):
+        if filenames & readiness_markers:
             if filenames != readiness_failure:
                 raise ContractError(
-                    f"reports/daily/{report_day}: readiness failure artifacts cannot mix "
-                    "with operational report artifacts"
+                    f"reports/daily/{report_day}: readiness failure bundle must contain "
+                    "exactly its four artifacts"
                 )
-        elif not complete_report.issubset(filenames):
+        elif filenames not in (complete_report, operational_failure):
             raise ContractError(f"reports/daily/{report_day}: incomplete daily report artifact set")
 
 
 def validate_report_artifacts(
     agents: list[dict[str, Any]],
     catalog: dict[str, Any],
+    reporting: dict[str, Any],
 ) -> None:
     validate_report_layout()
     plan_schema = SCHEMAS / "daily-plan.schema.json"
@@ -634,7 +637,10 @@ def validate_report_artifacts(
             raise ContractError(f"{label}: email handoff identity does not match failure report")
         from agent_insights_quality.reporting import validate_email_handoff
 
-        validate_email_handoff(handoff, f"{label}.email_handoff")
+        validate_email_handoff(handoff, f"{label}.email_handoff", reporting)
+        from agent_insights_quality.reporting import validate_stored_bundle_content
+
+        validate_stored_bundle_content(path.with_name("email-handoff.json"), handoff)
     for path in sorted((ROOT / "reports" / "daily").glob("*/*/*/plan.json")):
         label = str(path.relative_to(ROOT))
         plan = load_data(path)
@@ -719,4 +725,4 @@ def validate_contracts() -> None:
     validate_traffic_policy(load_data(ROOT / "config" / "traffic-policy.yaml"))
     validate_link_policy(load_data(ROOT / "config" / "link-policy.yaml"))
     validate_runtime_readiness(load_data(ROOT / "config" / "runtime-readiness.yaml"))
-    validate_report_artifacts(agents, catalog)
+    validate_report_artifacts(agents, catalog, reporting)

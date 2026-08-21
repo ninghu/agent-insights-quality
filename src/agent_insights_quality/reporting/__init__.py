@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import date, datetime, timezone
 from html import escape
@@ -10,6 +11,7 @@ from agent_insights_quality.contracts import (
     ContractError,
     ROOT,
     SCHEMAS,
+    load_data,
     validate_instance,
     validate_reporting_config,
 )
@@ -56,9 +58,57 @@ def _validate_delivery_result(delivery: dict[str, Any], label: str) -> None:
         raise ContractError(f"{label}: failed delivery requires only an error code")
 
 
-def validate_email_handoff(handoff: dict[str, Any], label: str) -> None:
+def validate_email_handoff(
+    handoff: dict[str, Any],
+    label: str,
+    reporting: dict[str, Any],
+) -> None:
+    validate_reporting_config(reporting)
     validate_instance(handoff, SCHEMAS / "email-handoff.schema.json", label)
+    if handoff["reporting_mode"] != reporting["mode"]:
+        raise ContractError(f"{label}: reporting mode does not match config/reporting.yaml")
+    if handoff["recipient_variable"] != reporting["recipient_variable"]:
+        raise ContractError(f"{label}: recipient variable does not match reporting mode")
+    if handoff["allowed_domain"] != reporting["allowed_domain"]:
+        raise ContractError(f"{label}: allowed domain does not match config/reporting.yaml")
     _validate_delivery_result(handoff["delivery"], label)
+
+
+def _bundle_content_digest(contents: dict[str, str], subject: str) -> str:
+    digest = hashlib.sha256()
+    digest_inputs = dict(contents)
+    digest_inputs["email-subject.txt"] = subject + "\n"
+    for filename in sorted(digest_inputs):
+        digest.update(filename.encode("ascii"))
+        digest.update(b"\0")
+        digest.update(digest_inputs[filename].encode("ascii"))
+        digest.update(b"\0")
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _stored_bundle_content(target: Path) -> dict[str, str]:
+    filenames = ("readiness-failure.json", "readiness-failure.md", "failure-email.html")
+    missing = [filename for filename in filenames if not (target / filename).is_file()]
+    if missing:
+        raise ContractError(
+            f"{target}: incomplete readiness failure bundle: {', '.join(missing)}"
+        )
+    return {
+        filename: (target / filename).read_text(encoding="ascii")
+        for filename in filenames
+    }
+
+
+def validate_stored_bundle_content(
+    handoff_path: Path,
+    handoff: dict[str, Any],
+) -> None:
+    actual = _bundle_content_digest(
+        _stored_bundle_content(handoff_path.parent),
+        handoff["subject"],
+    )
+    if handoff["content_digest"] != actual:
+        raise ContractError(f"{handoff_path}: content digest does not match rendered artifacts")
 
 
 def record_email_delivery(
@@ -69,7 +119,9 @@ def record_email_delivery(
     error_code: str | None = None,
 ) -> None:
     handoff = json.loads(handoff_path.read_text(encoding="ascii"))
-    validate_email_handoff(handoff, str(handoff_path))
+    reporting = load_data(ROOT / "config" / "reporting.yaml")
+    validate_email_handoff(handoff, str(handoff_path), reporting)
+    validate_stored_bundle_content(handoff_path, handoff)
     if handoff["delivery"]["status"] != "pending":
         raise ContractError(f"{handoff_path}: delivery result is already recorded")
     handoff["delivery"] = {
@@ -77,7 +129,7 @@ def record_email_delivery(
         "receipt_reference": receipt_reference,
         "error_code": error_code,
     }
-    validate_email_handoff(handoff, str(handoff_path))
+    validate_email_handoff(handoff, str(handoff_path), reporting)
     handoff_path.write_text(json.dumps(handoff, indent=2) + "\n", encoding="ascii")
 
 
@@ -97,6 +149,21 @@ def finalize_readiness_failure(
     generated_at = generated_at or _default_generated_at()
     report_id = f"aiq-{parsed_date:%Y%m%d}"
     target = (output_root or ROOT / "reports") / "daily" / parsed_date.strftime("%Y/%m/%d")
+    handoff_path = target / "email-handoff.json"
+    existing_handoff = None
+    if handoff_path.exists():
+        existing_handoff = json.loads(handoff_path.read_text(encoding="ascii"))
+        validate_email_handoff(existing_handoff, str(handoff_path), reporting)
+        validate_stored_bundle_content(handoff_path, existing_handoff)
+        existing_report = json.loads(
+            (target / "readiness-failure.json").read_text(encoding="ascii")
+        )
+        validate_instance(
+            existing_report,
+            SCHEMAS / "readiness-failure.schema.json",
+            str(target / "readiness-failure.json"),
+        )
+        generated_at = existing_report["generated_at"]
     reason = "Daily runtime components are incomplete: " + ", ".join(missing) + "."
     subject = f"[Agent Insights Quality] INCONCLUSIVE - {report_date} - runtime incomplete"
 
@@ -122,42 +189,6 @@ def finalize_readiness_failure(
         ),
         "email_handoff_reference": "email-handoff.json",
     }
-    email_handoff = {
-        "schema_version": "1.0.0",
-        "report_id": report_id,
-        "report_date": report_date,
-        "required": True,
-        "message_count": 1,
-        "recipient_variable": reporting["recipient_variable"],
-        "allowed_domain": reporting["allowed_domain"],
-        "sender_context": "authenticated_user_mailbox",
-        "transport": "copilot_connected_microsoft_mail",
-        "subject": subject,
-        "html_artifact": "failure-email.html",
-        "delivery": {
-            "status": "pending",
-            "receipt_reference": None,
-            "error_code": None,
-        },
-    }
-    handoff_path = target / "email-handoff.json"
-    if handoff_path.exists():
-        existing_handoff = json.loads(handoff_path.read_text(encoding="ascii"))
-        validate_email_handoff(existing_handoff, str(handoff_path))
-        expected_contract = {key: value for key, value in email_handoff.items() if key != "delivery"}
-        existing_contract = {
-            key: value for key, value in existing_handoff.items() if key != "delivery"
-        }
-        if existing_contract != expected_contract:
-            raise ContractError(f"{handoff_path}: existing handoff contract does not match this run")
-        email_handoff = existing_handoff
-    validate_instance(
-        failure_report,
-        SCHEMAS / "readiness-failure.schema.json",
-        "readiness failure report",
-    )
-    validate_email_handoff(email_handoff, "readiness failure email handoff")
-
     markdown = "\n".join(
         [
             f"# Agent Insights Quality: {report_id}",
@@ -192,13 +223,49 @@ def finalize_readiness_failure(
             "</body></html>\n",
         ]
     )
+    contents = {
+        "readiness-failure.json": json.dumps(failure_report, indent=2) + "\n",
+        "readiness-failure.md": markdown,
+        "failure-email.html": html,
+    }
+    email_handoff = {
+        "schema_version": "1.0.0",
+        "report_id": report_id,
+        "report_date": report_date,
+        "required": True,
+        "message_count": 1,
+        "reporting_mode": reporting["mode"],
+        "recipient_variable": reporting["recipient_variable"],
+        "allowed_domain": reporting["allowed_domain"],
+        "sender_context": "authenticated_user_mailbox",
+        "transport": "copilot_connected_microsoft_mail",
+        "subject": subject,
+        "html_artifact": "failure-email.html",
+        "content_digest": _bundle_content_digest(contents, subject),
+        "delivery": {
+            "status": "pending",
+            "receipt_reference": None,
+            "error_code": None,
+        },
+    }
+    if existing_handoff is not None:
+        expected_contract = {key: value for key, value in email_handoff.items() if key != "delivery"}
+        existing_contract = {
+            key: value for key, value in existing_handoff.items() if key != "delivery"
+        }
+        if existing_contract != expected_contract:
+            raise ContractError(f"{handoff_path}: existing handoff content does not match this run")
+        return handoff_path
+
+    validate_instance(
+        failure_report,
+        SCHEMAS / "readiness-failure.schema.json",
+        "readiness failure report",
+    )
+    validate_email_handoff(email_handoff, "readiness failure email handoff", reporting)
 
     target.mkdir(parents=True, exist_ok=True)
-    (target / "readiness-failure.json").write_text(
-        json.dumps(failure_report, indent=2) + "\n",
-        encoding="ascii",
-    )
-    (target / "readiness-failure.md").write_text(markdown, encoding="ascii")
-    (target / "failure-email.html").write_text(html, encoding="ascii")
+    for filename, content in contents.items():
+        (target / filename).write_text(content, encoding="ascii")
     handoff_path.write_text(json.dumps(email_handoff, indent=2) + "\n", encoding="ascii")
     return handoff_path
