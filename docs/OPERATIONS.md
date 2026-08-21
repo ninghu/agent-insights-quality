@@ -117,6 +117,13 @@ aggregates from plans, evidence, and judgments. `memory-reconcile`, `ado-dry-run
 remaining deterministic handoffs. No command calls an external model or claims mail delivery without
 an imported provider receipt.
 
+The email request carries one immutable `content_digest` and an ordered, no-duplicate transport
+policy. Automation tries connected Copilot mail first, Graph `/me/sendMail` only when `Mail.Send` is
+confirmed, and local Outlook COM only on `hostId=local` for the verified authenticated-user test
+mailbox. Outlook success requires Sent Items verification. Stop after the first confirmed success,
+retain only opaque SHA receipt references, and never use a Logic App. A missing capability or Graph
+403 is recorded as unavailable/unauthorized rather than treated as delivery.
+
 ## Reporting audience
 
 `config/reporting.yaml` is the public-safe authority. Test mode uses the authenticated user's connected
@@ -139,7 +146,8 @@ hashes, counts, verdicts, and links only when the links themselves are approved 
 Any unavailable identity, service, quota, trace set, judge, consistency check, or delivery
 prerequisite makes the run `INCONCLUSIVE`. The finalizer preserves sanitized diagnostics, renders the
 failure report, and creates an explicit unsent connected-mail request with bounded retry instructions.
-Automation imports a provider receipt before claiming delivery. Incomplete runs never advance clean
+Automation imports a provider receipt with ordered attempts, a matching content digest, and any
+required mailbox/Sent Items checks before claiming delivery. Incomplete runs never advance clean
 streaks or create, resolve, or reopen bugs.
 
 When readiness itself fails, the finalizer additionally prohibits Azure deployments, agent traffic,

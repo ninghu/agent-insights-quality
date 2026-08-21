@@ -22,6 +22,7 @@ from agent_insights_quality.contracts import (
 from agent_insights_quality.generated_paths import validate_generated_paths
 from agent_insights_quality.public_safety import PUBLIC_FORBIDDEN_PATTERNS
 from agent_insights_quality.reporting import (
+    build_email_send_request,
     create_email_send_request,
     render_email_html,
     render_report_markdown,
@@ -269,8 +270,9 @@ def render_failure_email_html(report: dict[str, Any]) -> str:
         "<h2>Gaps and regressions</h2>"
         f"<p>{html.escape(failure['reason'])}</p>"
         f"<p>Next action: {html.escape(failure['next_action'])}</p>"
-        "<p>Email state: unsent. The connected mail automation may retry after 60, 300, "
-        "and 900 seconds and must import a provider receipt before claiming delivery.</p>"
+        "<p>Email state: unsent. The direct-mail handoff may retry after 60, 300, "
+        "and 900 seconds, must stop after the first confirmed success, and must import "
+        "a provider receipt before claiming delivery.</p>"
         "<h2>Test agents and Agent Insights links</h2>"
         "<table><tr><th>Agent ID</th><th>Test agent</th><th>Type</th>"
         "<th>Agent Insights page</th><th>Human validation recommended</th></tr>"
@@ -285,24 +287,13 @@ def create_failure_send_request(
     if report["failure"] is None:
         raise ContractError("Failure send request requires failure details")
     body = render_failure_email_html(report)
-    request = {
-        "schema_version": "1.0.0",
-        "channel": "connected_microsoft_mail",
-        "recipient": deepcopy(recipient),
-        "subject": (
+    request = build_email_send_request(
+        (
             f"[Agent Insights Quality] INCONCLUSIVE - {report['report_date']} - "
             f"{report['failure']['failed_phase']}"
         ),
-        "html": body,
-        "state": "unsent",
-        "retry_delays_seconds": [60, 300, 900],
-        "attempt_count": 0,
-    }
-    request["request_hash"] = content_hash(request)
-    validate_instance(
-        request,
-        SCHEMAS / "email-send-request.schema.json",
-        "failure email send request",
+        body,
+        recipient,
     )
     return request
 
