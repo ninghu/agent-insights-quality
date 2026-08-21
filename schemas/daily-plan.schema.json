@@ -63,16 +63,32 @@
           "required": [
             "id",
             "number",
-            "day",
-            "length_days",
-            "full_coverage_horizon_days"
+            "business_day",
+            "weekday",
+            "length_business_days",
+            "full_coverage_horizon_business_days"
           ],
           "properties": {
             "id": {"type": "string", "pattern": "^cycle--?[0-9]+-[0-9a-f]{12}$"},
             "number": {"type": "integer"},
-            "day": {"type": "integer", "minimum": 1, "maximum": 6},
-            "length_days": {"const": 6},
-            "full_coverage_horizon_days": {"const": 6}
+            "business_day": {
+              "oneOf": [
+                {"type": "integer", "minimum": 1, "maximum": 5},
+                {"type": "null"}
+              ]
+            },
+            "weekday": {
+              "enum": [
+                "Monday",
+                "Tuesday",
+                "Wednesday",
+                "Thursday",
+                "Friday",
+                "non_scheduled"
+              ]
+            },
+            "length_business_days": {"const": 5},
+            "full_coverage_horizon_business_days": {"const": 5}
           }
         },
         "mandatory_scenario_ids": {"$ref": "#/$defs/scenario_ids"},
@@ -85,6 +101,7 @@
             "enum": [
               "healthy_control_daily",
               "p0_fault_daily",
+              "p0_collection_probe_cadence",
               "rotating_priority_fairness",
               "full_catalog_release"
             ]
@@ -216,6 +233,7 @@
             "enum": [
               "healthy_control_daily",
               "p0_fault_daily",
+              "p0_collection_probe_cadence",
               "rotating_priority_fairness",
               "full_catalog_release"
             ]

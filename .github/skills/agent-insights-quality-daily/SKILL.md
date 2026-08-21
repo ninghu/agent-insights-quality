@@ -66,8 +66,10 @@ contract scaffolding as an operational workflow.
    allowlist, and 90-day artifact retention.
 4. Hash the catalog and selection policy and compute the reproducible seed from report date plus
    both hashes.
-5. Select all six healthy controls, all ten P0 faults, and the current deterministic six-day P1/P2
-   partition. The 8/8/8/8/8/7 partitions cover all 47 rotating faults exactly once per cycle.
+5. Run only Monday through Friday. Select all six healthy controls and nine single-root P0 faults
+   every weekday. Select the two-root `aiq-scn-062-umbrella-insight` collection probe only on
+   Monday/Wednesday/Friday, plus the current deterministic `9/10/9/10/9` P1/P2 partition. One
+   Monday-Friday cycle covers all 47 rotating faults exactly once.
 6. Assign every selected scenario exactly once to a compatible agent and version wave. Put at most
    four expected root causes on an agent across every version in the daily project and at most four
    in a run. Never co-locate conflict-tagged scenarios. Fail rather than dropping a selection.

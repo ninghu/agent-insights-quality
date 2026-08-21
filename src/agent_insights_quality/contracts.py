@@ -612,12 +612,38 @@ def selection_policy_hash(policy: dict[str, Any] | None = None) -> str:
     return "sha256:" + hashlib.sha256(_canonical_bytes(data)).hexdigest()
 
 
+def mandatory_scenarios_for_weekday(
+    active: list[dict[str, Any]],
+    policy: dict[str, Any],
+    weekday: str,
+) -> list[dict[str, Any]]:
+    cadence = policy["selection"]["scenario_cadence"]
+    priorities = set(policy["selection"]["mandatory_fault_priorities"])
+    return [
+        scenario
+        for scenario in active
+        if scenario["expected"]["category"] == "none"
+        or (
+            scenario["priority"] in priorities
+            and (
+                scenario["id"] not in cadence
+                or weekday in cadence[scenario["id"]]
+            )
+        )
+    ]
+
+
 def validate_selection_policy(
     data: dict[str, Any],
     catalog: dict[str, Any] | None = None,
 ) -> None:
     validate_instance(data, SELECTION_POLICY_SCHEMA, "config/selection-policy.yaml")
     cycle = data["cycle"]
+    epoch = date.fromisoformat(cycle["epoch_monday"])
+    if epoch.weekday() != 0:
+        raise ContractError(
+            "config/selection-policy.yaml: cycle epoch must be a Monday"
+        )
     if sum(cycle["partition_scenario_counts"]) != 47:
         raise ContractError(
             "config/selection-policy.yaml: rotating partitions must cover 47 scenarios"
@@ -631,6 +657,10 @@ def validate_selection_policy(
     if set(data["selection"]["required_fault_categories"]) != REQUIRED_CATEGORIES - {"none"}:
         raise ContractError(
             "config/selection-policy.yaml: required categories must match the fault taxonomy"
+        )
+    if data["scheduled_automation"]["weekdays"] != cycle["weekdays"]:
+        raise ContractError(
+            "config/selection-policy.yaml: scheduled automation must use the reviewed weekdays"
         )
     if catalog is None:
         return
@@ -659,15 +689,47 @@ def validate_selection_policy(
         raise ContractError(
             "config/selection-policy.yaml: expected 6 controls, 10 mandatory faults, and 47 rotating faults"
         )
-    mandatory_roots = sum(expected_finding_count(scenario) for scenario in mandatory)
+    cadence = data["selection"]["scenario_cadence"]
+    if set(cadence) != {"aiq-scn-062-umbrella-insight"}:
+        raise ContractError(
+            "config/selection-policy.yaml: only the reviewed umbrella probe has a special cadence"
+        )
+    umbrella = next(
+        scenario
+        for scenario in mandatory
+        if scenario["id"] == "aiq-scn-062-umbrella-insight"
+    )
+    if expected_finding_count(umbrella) != 2:
+        raise ContractError(
+            "config/selection-policy.yaml: umbrella probe must retain two expected roots"
+        )
+    ordinary_p0 = [scenario for scenario in mandatory if scenario is not umbrella]
+    if len(ordinary_p0) != 9 or any(
+        expected_finding_count(scenario) != 1 for scenario in ordinary_p0
+    ):
+        raise ContractError(
+            "config/selection-policy.yaml: nine single-root P0 faults must run every weekday"
+        )
     daily_capacity = len(EXPECTED_AGENTS) * data["limits"][
         "expected_insight_cap_per_agent"
     ]
-    if mandatory_roots != 11 or mandatory_roots + max(
-        cycle["partition_scenario_counts"]
-    ) > daily_capacity:
+    expected_totals = [20, 19, 20, 19, 20]
+    actual_totals = []
+    for weekday, rotating_count in zip(
+        cycle["weekdays"],
+        cycle["partition_scenario_counts"],
+        strict=True,
+    ):
+        selected_mandatory = mandatory_scenarios_for_weekday(active, data, weekday)
+        mandatory_roots = sum(
+            expected_finding_count(scenario)
+            for scenario in selected_mandatory
+            if scenario["expected"]["category"] != "none"
+        )
+        actual_totals.append(mandatory_roots + rotating_count)
+    if actual_totals != expected_totals or max(actual_totals) > daily_capacity:
         raise ContractError(
-            "config/selection-policy.yaml: six-day rotation exceeds the reviewed daily root capacity"
+            "config/selection-policy.yaml: weekday selections must total 20/19/20/19/20 expected roots"
         )
 
 
@@ -767,9 +829,15 @@ def validate_daily_plan_semantics(
     if set(selection["selection_reasons"]) != set(selected_ids):
         raise ContractError(f"{label}: every selected scenario needs one selection reason")
     report_day = date.fromisoformat(plan["report_date"])
-    epoch = date.fromisoformat(policy["cycle"]["epoch"])
-    elapsed = (report_day - epoch).days
-    expected_cycle_number, expected_cycle_index = divmod(elapsed, policy["cycle"]["days"])
+    epoch = date.fromisoformat(policy["cycle"]["epoch_monday"])
+    expected_cycle_number = (report_day - epoch).days // 7
+    weekday_index = report_day.weekday()
+    expected_cycle_index = weekday_index if weekday_index < 5 else None
+    expected_weekday = (
+        policy["cycle"]["weekdays"][weekday_index]
+        if weekday_index < 5
+        else "non_scheduled"
+    )
     expected_cycle_id = (
         f"cycle-{expected_cycle_number}-"
         + hashlib.sha256(
@@ -782,18 +850,24 @@ def validate_daily_plan_semantics(
     if not policy_historical and (
         cycle["id"] != expected_cycle_id
         or cycle["number"] != expected_cycle_number
-        or cycle["day"] != expected_cycle_index + 1
-        or cycle["length_days"] != policy["cycle"]["days"]
-        or cycle["full_coverage_horizon_days"] != policy["cycle"]["days"]
+        or cycle["business_day"] != (
+            expected_cycle_index + 1 if expected_cycle_index is not None else None
+        )
+        or cycle["weekday"] != expected_weekday
+        or cycle["length_business_days"] != policy["cycle"]["business_days"]
+        or cycle["full_coverage_horizon_business_days"]
+        != policy["cycle"]["business_days"]
     ):
         raise ContractError(f"{label}: selection cycle metadata is not deterministic")
+    active = [
+        scenario for scenario in catalog["scenarios"] if scenario["status"] == "active"
+    ]
     mandatory_ids = {
         scenario["id"]
-        for scenario in catalog["scenarios"]
-        if scenario["status"] == "active"
-        and (
-            scenario["expected"]["category"] == "none"
-            or scenario["priority"] in policy["selection"]["mandatory_fault_priorities"]
+        for scenario in mandatory_scenarios_for_weekday(
+            active,
+            policy,
+            expected_weekday,
         )
     }
     rotating_ids = {
@@ -804,6 +878,10 @@ def validate_daily_plan_semantics(
         and scenario["priority"] in policy["selection"]["rotating_fault_priorities"]
     }
     if not policy_historical and plan["selection_mode"] == "rotating_daily":
+        if expected_cycle_index is None:
+            raise ContractError(
+                f"{label}: rotating daily plans are allowed only Monday through Friday"
+            )
         expected_rotating_count = policy["cycle"]["partition_scenario_counts"][
             expected_cycle_index
         ]

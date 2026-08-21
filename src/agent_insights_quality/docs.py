@@ -10,6 +10,7 @@ from agent_insights_quality.contracts import (
     load_agent_manifests,
     load_data,
     load_scenario_catalog,
+    load_selection_policy,
 )
 
 
@@ -61,9 +62,9 @@ def _scenario_doc(catalog: dict[str, Any]) -> str:
             f"healthy controls: **{categories['none']}**."
         ),
         "",
-        "This is the predefined, human-reviewed issue library. The default daily plan runs all",
-        "healthy controls and P0 faults plus one deterministic six-day rotating partition of P1/P2",
-        "faults; it does not run the full library every day.",
+        "This is the predefined, human-reviewed issue library. The default weekday plan runs all",
+        "healthy controls, nine single-root P0 faults, the umbrella P0 probe on Monday/Wednesday/",
+        "Friday, and one deterministic five-business-day partition of P1/P2 faults.",
         "",
         "Category coverage: "
         + ", ".join(f"`{name}` ({count})" for name, count in sorted(categories.items())),
@@ -101,7 +102,10 @@ def _scenario_doc(catalog: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _issue_library_doc(catalog: dict[str, Any]) -> str:
+def _issue_library_doc(
+    catalog: dict[str, Any],
+    policy: dict[str, Any],
+) -> str:
     active = [scenario for scenario in catalog["scenarios"] if scenario["status"] == "active"]
     grouped: dict[str, list[dict[str, Any]]] = {}
     for scenario in active:
@@ -112,8 +116,8 @@ def _issue_library_doc(catalog: dict[str, Any]) -> str:
         GENERATED_NOTICE,
         "",
         "This file lists every predefined, reviewed scenario contract. Daily assignment is a",
-        "deterministic subset governed by `config/selection-policy.yaml`; omission from one day is",
-        "rotation, not retirement or a change to ground truth.",
+        "deterministic weekday subset governed by `config/selection-policy.yaml`; omission from one",
+        "day is reviewed cadence or rotation, not retirement or a change to ground truth.",
         "",
         f"Active contracts: **{len(active)}** across **{len(grouped)}** categories.",
         "",
@@ -128,15 +132,25 @@ def _issue_library_doc(catalog: dict[str, Any]) -> str:
                 "",
                 f"## {category}",
                 "",
-                "| Scenario | Priority | Expected roots | Root-cause contract | Fix boundary |",
-                "| --- | --- | ---: | --- | --- |",
+                "| Scenario | Priority | Daily cadence | Expected roots | Root-cause contract | Fix boundary |",
+                "| --- | --- | --- | ---: | --- | --- |",
             ]
         )
         for scenario in sorted(scenarios, key=lambda item: item["id"]):
             expected = scenario["expected"]
+            if expected["category"] == "none":
+                cadence = "Every weekday"
+            elif scenario["id"] in policy["selection"]["scenario_cadence"]:
+                cadence = "/".join(
+                    policy["selection"]["scenario_cadence"][scenario["id"]]
+                )
+            elif scenario["priority"] == "P0":
+                cadence = "Every weekday"
+            else:
+                cadence = "Once per Monday-Friday cycle"
             lines.append(
                 f"| `{scenario['id']}` - {scenario['title']} | {scenario['priority']} | "
-                f"{expected.get('finding_count', int(category != 'none'))} | "
+                f"{cadence} | {expected.get('finding_count', int(category != 'none'))} | "
                 f"{expected['root_cause']} | {expected['fix']['boundary']} |"
             )
     lines.append("")
@@ -175,11 +189,12 @@ def _memory_doc(memory: dict[str, Any]) -> str:
 def generated_documents() -> dict[Path, str]:
     agents = load_agent_manifests()
     catalog = load_scenario_catalog({agent["id"] for agent in agents})
+    policy = load_selection_policy(catalog)
     memory = load_data(ROOT / "state" / "quality-memory.json")
     return {
         ROOT / "docs" / "TEST_AGENTS.md": _agent_doc(agents),
         ROOT / "docs" / "SCENARIO_CATALOG.md": _scenario_doc(catalog),
-        ROOT / "docs" / "ISSUE_LIBRARY.md": _issue_library_doc(catalog),
+        ROOT / "docs" / "ISSUE_LIBRARY.md": _issue_library_doc(catalog, policy),
         ROOT / "state" / "QUALITY_MEMORY.md": _memory_doc(memory),
     }
 

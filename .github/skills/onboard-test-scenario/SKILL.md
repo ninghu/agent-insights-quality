@@ -19,7 +19,8 @@ description: Scaffold a reviewed deterministic scenario and ground-truth contrac
 7. Run documentation generation, repository validation, and tests.
 8. Submit a normal human-reviewed PR. A discovered product gap is only a candidate until this review
    establishes ground truth; daily automation cannot invent, activate, retire, or weaken a scenario.
-9. Treat the catalog as the predefined issue library, not the daily assignment. P0 faults and healthy
-   controls are mandatory daily; P1/P2 faults enter the deterministic six-day rotation. Confirm that
-   the policy can still partition and assign the complete rotating library within four expected roots
-   per agent, or fail the onboarding change for human redesign.
+9. Treat the catalog as the predefined issue library, not the weekday assignment. Healthy controls
+   and nine single-root P0 faults run every weekday; the reviewed two-root umbrella collection probe
+   runs Monday/Wednesday/Friday; P1/P2 faults enter the deterministic five-business-day rotation.
+   Confirm that the policy can still partition and assign the complete rotating library within four
+   expected roots per agent, or fail the onboarding change for human redesign.
