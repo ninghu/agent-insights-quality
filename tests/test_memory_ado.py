@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 
 import pytest
 
 from agent_insights_quality.ado import (
     AdoClient,
+    AdoPolicy,
     AdoRuntimeConfig,
     automatic_bug_eligible,
     build_repro_html,
@@ -14,12 +16,25 @@ from agent_insights_quality.ado import (
 )
 from agent_insights_quality.memory import issue_fingerprint, reconcile_memory
 from agent_insights_quality.contracts import ContractError
+from agent_insights_quality.cli import main
 from agent_insights_quality.finalizer import build_failure_report
 from agent_insights_quality.planning import generate_daily_plan
 from datetime import date
 
 
 SHA = "sha256:" + "a" * 64
+
+
+def enabled_ado_policy() -> AdoPolicy:
+    return AdoPolicy.from_config(
+        {
+            "schema_version": "1.0.0",
+            "policy_version": "1.0.0",
+            "candidate_reporting_enabled": True,
+            "auto_apply_enabled": True,
+        },
+        environ={},
+    )
 
 
 def finding() -> dict:
@@ -362,7 +377,8 @@ def test_wiql_search_has_no_state_filter_and_uses_root_cause() -> None:
             return {"workItems": []}
 
     client = RecordingClient(
-        AdoRuntimeConfig("org", "project", "team", "template", "runtime-token")
+        AdoRuntimeConfig("org", "project", "team", "template", "runtime-token"),
+        enabled_ado_policy(),
     )
     assert client.search_duplicates(candidate()) == []
     query = calls[0][2]["query"]
@@ -383,7 +399,8 @@ def test_duplicate_detail_fetch_batches_all_wiql_ids() -> None:
             return {"value": [{"id": int(value)} for value in ids]}
 
     client = RecordingClient(
-        AdoRuntimeConfig("org", "project", "team", "template", "runtime-token")
+        AdoRuntimeConfig("org", "project", "team", "template", "runtime-token"),
+        enabled_ado_policy(),
     )
     results = client.search_duplicates(candidate())
 
@@ -408,7 +425,8 @@ def test_reopen_uses_runtime_template_state_reason_and_tags() -> None:
             return {"id": 7}
 
     client = RecordingClient(
-        AdoRuntimeConfig("org", "project", "team", "template", "runtime-token")
+        AdoRuntimeConfig("org", "project", "team", "template", "runtime-token"),
+        enabled_ado_policy(),
     )
     client.reopen(
         7,
@@ -441,7 +459,8 @@ def test_update_validates_repro_before_any_mutation() -> None:
     value = candidate()
     value["artifact_url"] = "not-a-runtime-url"
     client = RecordingClient(
-        AdoRuntimeConfig("org", "project", "team", "template", "runtime-token")
+        AdoRuntimeConfig("org", "project", "team", "template", "runtime-token"),
+        enabled_ado_policy(),
     )
     with pytest.raises(ContractError, match="HTTPS runtime link"):
         client.update_bug(7, value)
@@ -457,7 +476,8 @@ def test_template_route_includes_project_team_shape() -> None:
             return {}
 
     client = RecordingClient(
-        AdoRuntimeConfig("org", "project", "team", "template", "runtime-token")
+        AdoRuntimeConfig("org", "project", "team", "template", "runtime-token"),
+        enabled_ado_policy(),
     )
     client.fetch_template()
     assert calls == [
@@ -485,8 +505,144 @@ def test_request_uses_runtime_bearer_token(monkeypatch) -> None:
 
     monkeypatch.setattr("agent_insights_quality.ado.client.urlopen", fake_urlopen)
     client = AdoClient(
-        AdoRuntimeConfig("org", "project", "team", "template", "short-lived-token")
+        AdoRuntimeConfig("org", "project", "team", "template", "short-lived-token"),
+        enabled_ado_policy(),
     )
     client.get_work_item(7)
     assert captured["authorization"] == "Bearer short-lived-token"
     assert captured["timeout"] == 30
+
+
+def test_ado_policy_defaults_disabled_and_runtime_cannot_enable() -> None:
+    configured_off = {
+        "schema_version": "1.0.0",
+        "policy_version": "1.0.0",
+        "candidate_reporting_enabled": True,
+        "auto_apply_enabled": False,
+    }
+    assert AdoPolicy.from_config(
+        configured_off,
+        environ={"AIQ_ADO_AUTO_APPLY_ENABLED": "true"},
+    ).auto_apply_enabled is False
+
+    configured_on = configured_off | {"auto_apply_enabled": True}
+    assert AdoPolicy.from_config(configured_on, environ={}).auto_apply_enabled is True
+    assert AdoPolicy.from_config(
+        configured_on,
+        environ={"AIQ_ADO_AUTO_APPLY_ENABLED": "false"},
+    ).auto_apply_enabled is False
+    assert AdoPolicy.from_config(
+        configured_on,
+        environ={"AIQ_ADO_AUTO_APPLY_ENABLED": "invalid"},
+    ).auto_apply_enabled is False
+
+
+@pytest.mark.parametrize(
+    ("method_name", "arguments", "requested_action"),
+    [
+        ("create_bug", (candidate(), {"fields": {}}), "create"),
+        ("comment_occurrence", (7, candidate()), "comment"),
+        ("update_bug", (7, candidate()), "update"),
+        (
+            "reopen",
+            (
+                7,
+                candidate(),
+                {"fields": {"System.State": "New", "System.Reason": "Regression"}},
+            ),
+            "reopen",
+        ),
+    ],
+)
+def test_disabled_policy_makes_every_write_path_candidate_only(
+    method_name,
+    arguments,
+    requested_action,
+) -> None:
+    calls = []
+
+    class RecordingClient(AdoClient):
+        def _request(self, method, route, *, body=None, content_type="application/json"):
+            calls.append((method, route))
+            return {"id": 7}
+
+    client = RecordingClient(
+        AdoRuntimeConfig("org", "project", "team", "template", "runtime-token")
+    )
+    result = getattr(client, method_name)(*arguments)
+
+    assert calls == []
+    assert result["mode"] == "candidate-only"
+    assert result["action"] == "candidate"
+    assert result["requested_action"] == requested_action
+    assert result["applied"] is False
+    assert result["reason"] == "ado_auto_apply_disabled"
+
+
+def test_disabled_policy_still_allows_template_lookup_wiql_and_reads() -> None:
+    calls = []
+
+    class RecordingClient(AdoClient):
+        def _request(self, method, route, *, body=None, content_type="application/json"):
+            calls.append((method, route))
+            if "wiql" in route:
+                return {"workItems": []}
+            return {}
+
+    client = RecordingClient(
+        AdoRuntimeConfig("org", "project", "team", "template", "runtime-token")
+    )
+    client.fetch_template()
+    client.get_work_item(7)
+    client.search_duplicates(candidate())
+
+    assert [method for method, _ in calls] == ["GET", "GET", "POST"]
+
+
+def test_low_level_mutating_request_is_guarded_before_http(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "agent_insights_quality.ado.client.urlopen",
+        lambda *_args, **_kwargs: pytest.fail("disabled mutation reached HTTP"),
+    )
+    client = AdoClient(
+        AdoRuntimeConfig("org", "project", "team", "template", "runtime-token")
+    )
+
+    result = client._request(
+        "PATCH",
+        "_apis/wit/workitems/7?api-version=7.1",
+        body=[],
+        content_type="application/json-patch+json",
+    )
+
+    assert result["mode"] == "candidate-only"
+    assert result["applied"] is False
+
+
+def test_ado_apply_fails_closed_without_loading_private_runtime(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    candidate_path = tmp_path / "candidate.json"
+    output_path = tmp_path / "result.json"
+    candidate_path.write_text(json.dumps(candidate()), encoding="utf-8")
+    monkeypatch.setattr(
+        AdoRuntimeConfig,
+        "from_env",
+        classmethod(lambda cls: pytest.fail("disabled apply loaded private runtime")),
+    )
+
+    assert main(
+        [
+            "ado-apply",
+            "--candidate",
+            str(candidate_path),
+            "--output",
+            str(output_path),
+        ]
+    ) == 0
+    result = json.loads(output_path.read_text(encoding="utf-8"))
+    assert result["mode"] == "candidate-only"
+    assert result["action"] == "candidate"
+    assert result["applied"] is False
+    assert result["reason"] == "ado_auto_apply_disabled"

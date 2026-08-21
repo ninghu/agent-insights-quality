@@ -11,8 +11,9 @@ The quality bar is intentionally strict. A day is `AT BAR` only after its comple
 selection runs, healthy agents produce no insights, actual insight counts exactly match expected
 root-cause counts, all structural checks pass, high-severity recall is 100%,
 overall recall is at least 90%, precision is at least 95%, accepted insight attributes are all
-correct, and duplicate, umbrella, and stale-version rates are zero. Incomplete or untrustworthy
-runs are `INCONCLUSIVE`, never passes.
+correct, every run's observed count exactly matches the sum of its selected assignments' expected
+finding counts, and duplicate, umbrella, and stale-version rates are zero. Extra findings are noise;
+missing findings are misses. Incomplete or untrustworthy runs are `INCONCLUSIVE`, never passes.
 
 ## Local development
 
@@ -79,6 +80,13 @@ generated PR mutation. The required minimal finalizer still renders a sanitized 
 one-message email handoff so readiness failures cannot bypass finalization. The handoff preserves one
 content digest and orders connected Copilot mail, authorized Graph, then verified local Outlook on
 `hostId=local`; it stops after the first confirmed success and never uses a Logic App.
+
+`config/ado-policy.yaml` is the reviewed public authority for ADO side effects. Candidate reporting is
+enabled and automatic apply is disabled by default. `AIQ_ADO_AUTO_APPLY_ENABLED` can further disable
+an approved apply policy, but it cannot enable apply when the file says false. Generated automation
+cannot edit this or any other file under `config/`; enabling writes requires a normal human-reviewed
+configuration change. Template reads, work-item reads, and WIQL duplicate searches remain read-only
+planning operations.
 
 After every mandatory component is implemented, validated, and human-reviewed, the scheduled Copilot
 automation will follow `.github/skills/agent-insights-quality-daily/SKILL.md`. Qualification uses the

@@ -18,7 +18,7 @@ from agent_insights_quality.contracts import (
     validate_daily_plan_semantics,
     validate_instance,
 )
-from agent_insights_quality.ado import AdoClient, AdoRuntimeConfig, plan_bug_action
+from agent_insights_quality.ado import AdoClient, AdoPolicy, AdoRuntimeConfig, plan_bug_action
 from agent_insights_quality.docs import generate_documents
 from agent_insights_quality.finalizer import (
     build_failure_report,
@@ -485,19 +485,22 @@ def run(args: argparse.Namespace) -> None:
         existing = load_data(Path(args.existing)) if args.existing else []
         if not isinstance(existing, list):
             raise ContractError("existing ADO work items must be a JSON array")
+        policy = AdoPolicy.load()
         write_json(
             Path(args.output),
-            plan_bug_action(candidate, existing, mode=args.mode),
+            plan_bug_action(candidate, existing, mode=args.mode, policy=policy),
         )
         print("ADO side-effect-free plan written.")
     elif args.command == "ado-apply":
         candidate = read_json_object(Path(args.candidate), "ADO candidate")
-        if not plan_bug_action(candidate, [], mode="apply")["eligible"]:
-            result = plan_bug_action(candidate, [], mode="candidate-only")
+        policy = AdoPolicy.load()
+        initial = plan_bug_action(candidate, [], mode="apply", policy=policy)
+        if not initial["eligible"] or not policy.auto_apply_enabled:
+            result = initial
         else:
-            client = AdoClient(AdoRuntimeConfig.from_env())
+            client = AdoClient(AdoRuntimeConfig.from_env(), policy)
             existing = client.search_duplicates(candidate)
-            result = plan_bug_action(candidate, existing, mode="apply")
+            result = plan_bug_action(candidate, existing, mode="apply", policy=policy)
             matched = next(
                 (
                     item
@@ -524,6 +527,7 @@ def run(args: argparse.Namespace) -> None:
             result["confirmed_reference"] = content_hash(
                 {"work_item_id": applied["id"]}
             )
+            result["applied"] = True
         write_json(Path(args.output), result)
         print(result["action"])
     elif args.command == "render-report":

@@ -362,7 +362,7 @@ def test_null_mapping_cannot_replace_produced_insight_coverage(
     assert "unresolved_judgment" in score["violations"]
 
 
-def test_over_five_insights_is_explicit_not_at_bar(synthetic_contracts) -> None:
+def test_extra_findings_are_noise_and_explicit_not_at_bar(synthetic_contracts) -> None:
     raw = raw_bundle("aiq-scn-010-fault")
     template = raw["insights"][0]
     raw["insights"] = []
@@ -383,7 +383,23 @@ def test_over_five_insights_is_explicit_not_at_bar(synthetic_contracts) -> None:
 
     assert score["verdict"] == "NOT AT BAR"
     assert score["complete"] is True
-    assert "over_five_insights" in score["violations"]
+    assert "finding_count_mismatch" in score["violations"]
+    assert score["counts"]["false_positives"] == 5
+    assert "duplication" not in score["violations"]
+
+
+def test_missing_expected_count_is_a_miss_not_inconclusive(synthetic_contracts) -> None:
+    expected_plan = plan()
+    expected_plan["assignments"][0]["expected"]["finding_count"] = 2
+    fault = project_evidence(raw_bundle("aiq-scn-010-fault"))
+    healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
+
+    score = score_run(expected_plan, [fault, healthy], [judgment(fault)])
+
+    assert score["verdict"] == "NOT AT BAR"
+    assert score["complete"] is True
+    assert score["counts"]["false_negatives"] == 1
+    assert "finding_count_mismatch" in score["violations"]
 
 
 @pytest.mark.parametrize("mutation", ["missing_traces", "null_insights"])
@@ -496,7 +512,7 @@ def test_scoring_enforces_semantic_and_collection_gates(
     assert violation in score["violations"]
 
 
-def test_evidence_projection_preserves_over_five_insights_for_scoring() -> None:
+def test_evidence_projection_preserves_insights_up_to_structural_bound() -> None:
     value = raw_bundle("aiq-scn-010-fault")
     value["insights"] = [
         {
@@ -508,6 +524,21 @@ def test_evidence_projection_preserves_over_five_insights_for_scoring() -> None:
         for index in range(6)
     ]
     assert len(project_evidence(value)["insights"]) == 6
+
+
+def test_evidence_projection_rejects_more_than_structural_bound() -> None:
+    value = raw_bundle("aiq-scn-010-fault")
+    value["insights"] = [
+        {
+            **deepcopy(value["insights"][0]),
+            "id": f"insight-{index}",
+            "signature": content_hash({"signature": index}),
+            "evidence_fingerprint": content_hash({"evidence": index}),
+        }
+        for index in range(101)
+    ]
+    with pytest.raises(ContractError, match="too long"):
+        project_evidence(value)
 
 
 def test_judge_export_rejects_pii_shaped_evidence() -> None:

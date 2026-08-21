@@ -123,6 +123,12 @@ def render_report_markdown(report: dict[str, Any]) -> str:
     ]
     for name, value in counts.items():
         lines.append(f"| {name.replace('_', ' ').title()} | {value} |")
+    lines.append(
+        f"| Expected Findings | {counts['true_positives'] + counts['false_negatives']} |"
+    )
+    lines.append(
+        f"| Observed Findings | {counts['true_positives'] + counts['false_positives']} |"
+    )
     for name, value in rates.items():
         lines.append(f"| {name.replace('_', ' ').title()} | {value:.3f} |")
     lines.extend(
@@ -440,6 +446,8 @@ def render_email_html(
         validate_agent_insights_url(agent_links[agent["id"]], agent["name"])
     score = report["scorecard"]
     counts = score["counts"]
+    expected_findings = counts["true_positives"] + counts["false_negatives"]
+    observed_findings = counts["true_positives"] + counts["false_positives"]
     signal = (
         f"{counts['new_issues']} new, {counts['regressed_issues']} regressed"
         if counts["new_issues"] or counts["regressed_issues"]
@@ -452,19 +460,24 @@ def render_email_html(
         action["action"] in {"created", "updated", "reopened"}
         for action in report["bug_actions"]
     )
-    good = [
-        f"{counts['true_positives']} expected findings were fully correct.",
-        f"{counts['resolved_issues']} tracked gaps resolved.",
-    ]
+    good = ["Correct findings were supported by the required evidence and field checks."]
+    if counts["resolved_issues"]:
+        good.append("Tracked gaps resolved.")
     if counts["healthy_insights"] == 0:
         good.append("Healthy controls produced no insights.")
-    gaps = [
-        f"{counts['false_negatives']} expected findings were missed.",
-        f"{counts['false_positives']} produced findings were not fully trusted.",
-        f"{counts['healthy_insights']} unexpected insights appeared on healthy controls.",
-        f"{counts['regressed_issues']} tracked gaps regressed.",
-        f"{bug_signal} private bug actions are ready or completed.",
-    ]
+    gaps = []
+    if counts["false_negatives"]:
+        gaps.append("Missing findings were missed issues.")
+    if counts["false_positives"]:
+        gaps.append("Extra findings were noise.")
+    if counts["healthy_insights"]:
+        gaps.append("Healthy controls produced unexpected noise.")
+    if counts["regressed_issues"]:
+        gaps.append("Tracked gaps regressed.")
+    if bug_signal:
+        gaps.append("Private bug actions are ready or completed.")
+    if not gaps:
+        gaps.append("No quality gaps or regressions were observed.")
     status_style = _STATUS_STYLES[report["status"]]
     rows = []
     for agent in report["agents"]:
@@ -524,10 +537,9 @@ def render_email_html(
         + '<p style="margin:0 0 12px 0;color:#334155;font-size:15px;line-height:23px;">'
         f"{html.escape(report['summary'])}</p>"
         '<p style="margin:0 0 18px 0;color:#475569;font-size:14px;line-height:21px;">'
+        f"Expected {expected_findings} findings; observed {observed_findings}. "
         f"{counts['completed_scenarios']} of {counts['active_scenarios']} scenarios "
-        f"completed; {counts['true_positives']} correct, "
-        f"{counts['partially_useful']} partially useful, and "
-        f"{counts['false_positives']} incorrect or noisy.</p>"
+        "completed.</p>"
         + _trend_table(trend)
         + "</td></tr>"
         '<tr><td style="padding:30px 38px 0 38px;">'

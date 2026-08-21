@@ -47,6 +47,8 @@ cannot modify readiness configuration or treat contract scaffolding as an operat
    configuration, and enforce the allowed domain. Never override it. Daily automation cannot promote
    test mode to production.
 10. Do not claim delivery, bug creation, merge, or cleanup unless the action was confirmed.
+11. Read ADO write authority only from `config/ado-policy.yaml`. Generated automation cannot edit this
+   protected config. `AIQ_ADO_AUTO_APPLY_ENABLED` may disable but never enable the reviewed policy.
 
 ## Phase A: deterministic preflight and plan
 
@@ -99,8 +101,8 @@ For each planned wave:
 4. Poll for complete natural traces and verify project, agent, version, trace hierarchy, and exact
    half-open window provenance.
 5. Trigger a GPT-5.6 Terra production Agent Insights run and poll to a terminal state.
-6. Retrieve full insight details. Require the actual insight count to equal the selected expected
-   root-cause count exactly; extras are noise and missing insights are misses.
+6. Retrieve full insight details. The 100-item schema limit is a structural safety bound, not a
+   quality threshold.
 7. Build a bounded, sanitized evidence bundle using `schemas/evidence-bundle.schema.json`.
 8. For sequential versions, use non-overlapping windows and preserve prior-insight metadata so stale
    evidence, deduplication, resolution, and recurrence behavior can be tested.
@@ -124,7 +126,8 @@ For each collection validate:
 - distinct causes are not merged into umbrella cards;
 - one cause is not fragmented into multiple cards;
 - later versions do not cite stale evidence; and
-- every run and agent/day has exactly its selected expected insight count.
+- for each report date, run, and agent, the observed insight count exactly equals the sum of
+  `expected.finding_count` across the selected plan assignments.
 
 Any structural, provenance, secret/PII, or schema failure blocks automatic bug action.
 
@@ -152,7 +155,7 @@ Invalid or unavailable judgment is `INCONCLUSIVE` when it prevents trustworthy c
 Calculate the schema-validated scorecard and canonical report. `AT BAR` requires:
 
 - complete reviewed daily selection;
-- zero healthy insights and exact expected insight counts;
+- zero healthy insights and exact expected-versus-observed counts for every run and agent;
 - 100% high-severity recall;
 - at least 90% overall recall and 95% precision;
 - 100% category, severity, title, description, proposed-fix, and linked-trace correctness among
@@ -190,6 +193,13 @@ Efficiency metrics are diagnostics and cannot improve the quality verdict.
    root-cause fingerprint, both confidences, acceptance criteria, and a direct Agent Insights page
    link. Never copy private work-item templates or content into this public repository.
 
+The reviewed `config/ado-policy.yaml` defaults to candidate reporting on and automatic apply off.
+Template lookup, work-item reads, and WIQL duplicate search are allowed, but every create, patch,
+reopen, and comment/evidence path must return an explicit candidate-only result without issuing a
+write HTTP request while apply is off. Enabling writes requires a normal human-reviewed config
+change; neither this skill nor generated automation may make that change. A runtime environment value
+can only disable an already enabled policy.
+
 Build runtime Agent Insights links according to `config/link-policy.yaml`. Use `/insights` when the
 standalone-tab flight is on and `/monitor/insights` when it is off. Trace links use the correlated
 `operation_Id`. Do not invent monitor, run, or insight-ID deep links.
@@ -210,9 +220,10 @@ standalone-tab flight is on and `/monitor/insights` when it is off. Trace links 
    `[Agent Insights Quality] <AT BAR|NOT AT BAR|INCONCLUSIVE> - YYYY-MM-DD - <short signal>`.
 5. Email sections are Summary, What we are doing well, Gaps and regressions, and Test agents and
    Agent Insights links. Resolve private links only while rendering the direct email; do not persist
-   them in public files. Include a 14-day email-safe trend and every agent. Human validation is
-   exactly `N/A` unless ambiguity, disagreement, low confidence, novelty, or an unverifiable fix
-   warrants review.
+   them in public files. State `Expected X findings; observed Y`; describe extras as noise and missing
+   findings as missed issues. Keep detailed numbers in Markdown. Include a 14-day email-safe trend
+   and every agent. Human validation is exactly `N/A` unless ambiguity, disagreement, low confidence,
+   novelty, or an unverifiable fix warrants review.
 6. Resolve the selected protected recipient variable, enforce the configured allowed domain, and
    execute the request's no-duplicate transport strategy. Do not use a repository credential, relay,
    hidden override, or Logic App.

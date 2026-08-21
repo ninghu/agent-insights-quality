@@ -19,9 +19,13 @@ PUBLIC_FORBIDDEN_PATTERNS = {
     "private Azure DevOps endpoint": re.compile(
         r"(?i)(?<![A-Za-z0-9.-])"
         r"(?:(?:https?:)?//)?"
-        r"(?:[A-Za-z0-9-]+\.)*(?:dev\.azure\.com|visualstudio\.com)"
+        r"(?:"
+        r"dev\.azure\.com\.?(?::[0-9]+)?/"
+        r"|"
+        r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.visualstudio\.com\.?"
         r"(?::[0-9]+)?"
-        r"(?=$|[/?:#\s<>'\"\)\]\},;!]|[.,](?=$|[\s\)\]\},;!]))"
+        r"(?=$|[/?:#\s<>'\"`\)\]\},;!*_]|[.,](?=$|[\s`*_\)\]\},;!]))"
+        r")"
     ),
     "private key": re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     "GitHub token": re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}\b"),

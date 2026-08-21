@@ -118,7 +118,7 @@
     },
     "insights": {
       "type": "array",
-      "maxItems": 25,
+      "maxItems": 100,
       "items": {
         "type": "object",
         "additionalProperties": false,

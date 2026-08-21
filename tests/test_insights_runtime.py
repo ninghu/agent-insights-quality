@@ -345,7 +345,7 @@ def test_run_window_and_checkpoint_scope_insights_fail_closed() -> None:
         )
 
 
-def test_run_scope_enforces_five_insight_gate() -> None:
+def test_run_scope_uses_structural_bound_not_quality_gate() -> None:
     start = datetime(2026, 8, 21, 1, tzinfo=UTC)
     insights = [
         {
@@ -355,9 +355,26 @@ def test_run_scope_enforces_five_insight_gate() -> None:
         }
         for index in range(6)
     ]
-    with pytest.raises(RuntimeFailure, match="more than five"):
+    assert len(
         AgentInsightsClient.scope_insights(
             insights,
+            InsightCheckpoint(start + timedelta(minutes=1), {}),
+            start,
+            start + timedelta(hours=1),
+        )
+    ) == 6
+
+    oversized = [
+        {
+            "id": f"i{index}",
+            "revision": "1",
+            "created_at": (start + timedelta(minutes=2)).isoformat(),
+        }
+        for index in range(101)
+    ]
+    with pytest.raises(RuntimeFailure, match="structural limit of 100"):
+        AgentInsightsClient.scope_insights(
+            oversized,
             InsightCheckpoint(start + timedelta(minutes=1), {}),
             start,
             start + timedelta(hours=1),

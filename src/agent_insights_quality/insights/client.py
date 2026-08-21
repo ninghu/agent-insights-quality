@@ -528,10 +528,10 @@ class AgentInsightsClient:
                     "Changed insight cannot be proven to belong to the completed run.",
                 )
             selected.append(insight)
-        if len(selected) > 5:
+        if len(selected) > 100:
             raise RuntimeFailure(
                 "insight_limit_exceeded",
-                "Agent Insights returned more than five run-scoped insights.",
+                "Agent Insights exceeded the structural limit of 100 run-scoped insights.",
                 {"insight_count": len(selected)},
             )
         return selected

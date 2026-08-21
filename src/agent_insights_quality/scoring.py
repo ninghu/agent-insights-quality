@@ -85,6 +85,7 @@ def deterministic_violations(
     seen_signatures: set[str] = set()
     seen_evidence: set[str] = set()
     bundle_scenarios: set[str] = set()
+    observed_by_run: Counter[tuple[str, str, str]] = Counter()
 
     for bundle in bundles:
         try:
@@ -101,6 +102,9 @@ def deterministic_violations(
             continue
         bundle_scenarios.add(scenario_id)
         expected = assignment["expected"]
+        observed_by_run[
+            (plan["report_date"], assignment["run_id"], assignment["agent_id"])
+        ] += len(bundle["insights"])
         catalog_scenario = scenario_by_id.get(scenario_id)
         registered_agent = agent_by_id.get(assignment["agent_id"])
         if (
@@ -130,9 +134,6 @@ def deterministic_violations(
             != catalog_scenario["expected"]["severity"]
         ):
             violations.add("provenance_failure")
-        if len(bundle["insights"]) > 5:
-            violations.add("over_five_insights")
-
         trace_ids = {trace["trace_id"] for trace in bundle["trace_evidence"]}
         window_start = _timestamp(bundle["run"]["window_start"])
         window_end = _timestamp(bundle["run"]["window_end"])
@@ -178,6 +179,16 @@ def deterministic_violations(
 
     if bundle_scenarios != set(assignments):
         violations.add("incomplete_catalog")
+    expected_by_run: Counter[tuple[str, str, str]] = Counter()
+    for assignment in plan["assignments"]:
+        expected_by_run[
+            (plan["report_date"], assignment["run_id"], assignment["agent_id"])
+        ] += assignment["expected"]["finding_count"]
+    if any(
+        observed_by_run[group] != expected_count
+        for group, expected_count in expected_by_run.items()
+    ):
+        violations.add("finding_count_mismatch")
     return violations, structural_failures
 
 
@@ -301,11 +312,6 @@ def score_run(
         scenario_id: [item for item in classifications[scenario_id] if is_true_positive(item)]
         for scenario_id in expected_faults
     }
-    if any(
-        len(items) > assignments[scenario_id]["expected"]["finding_count"]
-        for scenario_id, items in true_positive_by_scenario.items()
-    ):
-        violations.add("duplication")
     true_positive_counts = {
         scenario_id: min(
             len(items),
