@@ -122,7 +122,7 @@ def project_evidence(raw: dict[str, Any]) -> dict[str, Any]:
             ),
         },
         "trace_evidence": [_project_trace(item) for item in raw["trace_evidence"][:100]],
-        "insights": [_project_insight(item) for item in raw["insights"][:6]],
+        "insights": [_project_insight(item) for item in raw["insights"][:25]],
         "previous_insight": deepcopy(raw["previous_insight"]),
         "untrusted_content_notice": UNTRUSTED_NOTICE,
     }
@@ -224,7 +224,10 @@ def import_judgment(package: dict[str, Any], judgment: dict[str, Any]) -> dict[s
     mapping = judgment["mapping"]
     if mapping["scenario_id"] != evidence["scenario"]["id"]:
         raise ContractError("judgment: scenario mapping does not match evidence")
-    if mapping["insight_id"] is not None and mapping["insight_id"] not in insight_ids:
+    if (
+        (insight_ids and mapping["insight_id"] not in insight_ids)
+        or (not insight_ids and mapping["insight_id"] is not None)
+    ):
         raise ContractError("judgment: insight mapping does not exist in evidence")
     verified_hash(judgment, "output_hash", "judgment")
     return deepcopy(judgment)

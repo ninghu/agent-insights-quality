@@ -108,11 +108,14 @@ def reconcile_memory(
         == {item["scenario_id"] for item in plan["assignments"]}
         and all(item["completed"] for item in report["scenario_results"])
     )
+    stable_report = deepcopy(report)
+    stable_report["memory_changes"] = []
     report_reference = content_hash(
         {
             "run_id": run_id,
             "plan": plan,
-            "report": report,
+            "report": stable_report,
+            "findings": findings,
         }
     )
     result = deepcopy(memory)

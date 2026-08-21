@@ -139,7 +139,10 @@ def automatic_bug_eligible(
         and candidate.get("report_date") == plan.get("report_date")
     )
     try:
-        validate_agent_insights_url(str(candidate.get("insights_url", "")))
+        validate_agent_insights_url(
+            str(candidate.get("insights_url", "")),
+            str(bundle.get("agent", {}).get("name", "")),
+        )
     except ContractError:
         reproduced = False
     return (

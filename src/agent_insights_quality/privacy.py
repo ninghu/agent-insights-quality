@@ -42,6 +42,7 @@ _OPAQUE_IDENTIFIER_KEYS = {
     "signature",
     "evidence_fingerprint",
     "artifact_reference",
+    "report_reference",
     "project_reference",
     "version_digest",
     "healthy_digest",
