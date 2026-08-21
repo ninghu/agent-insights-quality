@@ -270,6 +270,41 @@ def _sanitize_public_value(value: Any) -> Any:
     return value
 
 
+def _insight_trace_ids(insight: Mapping[str, Any]) -> list[str]:
+    traces = (
+        insight.get("trace_ids")
+        or insight.get("traceIds")
+        or insight.get("operation_ids")
+        or []
+    )
+    if isinstance(traces, str):
+        try:
+            traces = json.loads(traces)
+        except json.JSONDecodeError:
+            traces = [traces] if traces else []
+    if not isinstance(traces, list):
+        return []
+    return [str(value) for value in traces if value]
+
+
+def _finding_count_assessment(expected: int, actual: int) -> dict[str, Any]:
+    if actual == expected:
+        reason = "exact"
+        verdict = "AT_BAR"
+    elif actual > expected:
+        reason = "extra_noise"
+        verdict = "NOT_AT_BAR"
+    else:
+        reason = "missing_findings"
+        verdict = "NOT_AT_BAR"
+    return {
+        "expected": expected,
+        "actual": actual,
+        "verdict": verdict,
+        "reason": reason,
+    }
+
+
 def _healthy_artifact_digest(
     agent: HealthyAgent,
     definition: Mapping[str, Any],
@@ -2018,11 +2053,7 @@ class LiveRuntimeHooks:
             or insight.get("recommendation")
             or ""
         )
-        traces = (
-            insight.get("trace_ids")
-            or insight.get("traceIds")
-            or insight.get("operation_ids")
-        )
+        traces = _insight_trace_ids(insight)
         if (
             not insight_id
             or not title
@@ -2040,7 +2071,6 @@ class LiveRuntimeHooks:
             }
             or severity not in {"high", "medium", "low"}
             or not proposed_fix
-            or not isinstance(traces, list)
             or not traces
         ):
             raise RuntimeFailure("invalid_insight", "Agent Insights detail is incomplete.")
@@ -2151,6 +2181,18 @@ class LiveRuntimeHooks:
                 scenario_id = str(assignment["scenario_id"])
                 scenario = self._registry.scenarios[scenario_id]
                 expected = scenario["expected"]
+                planned_expected = assignment.get("expected")
+                if (
+                    not isinstance(planned_expected, Mapping)
+                    or not isinstance(planned_expected.get("finding_count"), int)
+                ):
+                    raise RuntimeFailure(
+                        "invalid_plan",
+                        "Assignment is missing the reviewed expected finding count.",
+                    )
+                expected_finding_count = int(
+                    planned_expected["finding_count"]
+                )
                 assignment_correlations = scenario_correlations.get(scenario_id)
                 if not assignment_correlations:
                     raise RuntimeFailure(
@@ -2160,35 +2202,23 @@ class LiveRuntimeHooks:
                 operation_ids = {
                     item.operation_id for item in assignment_correlations
                 }
-                matching_insights = [
+                scenario_insights = [
                     insight
                     for insight in insights
-                    if str(insight.get("category") or "") == str(expected["category"])
-                    and isinstance(
-                        insight.get("trace_ids")
-                        or insight.get("traceIds")
-                        or insight.get("operation_ids"),
-                        list,
-                    )
-                    and {
-                        str(value)
-                        for value in (
-                            insight.get("trace_ids")
-                            or insight.get("traceIds")
-                            or insight.get("operation_ids")
-                        )
-                    }.issubset(operation_ids)
+                    if _insight_trace_ids(insight)
+                    and set(_insight_trace_ids(insight)).issubset(operation_ids)
                 ]
-                if len(matching_insights) > 1:
-                    raise RuntimeFailure(
-                        "insight_provenance_ambiguous",
-                        "More than one insight matched a scenario root-cause category.",
-                    )
+                matching_insights = [
+                    insight
+                    for insight in scenario_insights
+                    if str(insight.get("category") or "")
+                    == str(expected["category"])
+                ]
                 previous_insight = self._prior_insight(work, scenario_id)
-                if matching_insights:
+                if len(matching_insights) == 1:
                     matched = matching_insights[0]
-                    raw_traces = matched.get("trace_ids") or matched.get("traceIds")
-                    if not isinstance(raw_traces, list) or not raw_traces:
+                    raw_traces = _insight_trace_ids(matched)
+                    if not raw_traces:
                         raise RuntimeFailure(
                             "insight_provenance_ambiguous",
                             "Matched insight has no trace provenance.",
@@ -2236,6 +2266,7 @@ class LiveRuntimeHooks:
                         "root_cause": expected["root_cause"],
                         "category": expected["category"],
                         "severity": expected["severity"],
+                        "finding_count": expected_finding_count,
                         "fix_boundary": expected["fix"]["boundary"],
                     },
                     "mutation": {
@@ -2246,6 +2277,10 @@ class LiveRuntimeHooks:
                             f"operation(s) for phase {work.phase}"
                         ),
                     },
+                    "finding_count": _finding_count_assessment(
+                        expected_finding_count,
+                        len(scenario_insights),
+                    ),
                     "trace_evidence": [
                         {
                             "trace_id": opaque_reference(item.operation_id),
@@ -2266,7 +2301,7 @@ class LiveRuntimeHooks:
                     ][:100],
                     "insights": [
                         self._insight_payload(item)
-                        for item in matching_insights
+                        for item in scenario_insights
                     ],
                     "previous_insight": previous_insight,
                     "untrusted_content_notice": _NOTICE,

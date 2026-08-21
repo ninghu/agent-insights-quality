@@ -14,6 +14,7 @@
     "version_sequence",
     "ground_truth",
     "mutation",
+    "finding_count",
     "trace_evidence",
     "insights",
     "previous_insight",
@@ -84,11 +85,12 @@
     "ground_truth": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["root_cause", "category", "severity", "fix_boundary"],
+      "required": ["root_cause", "category", "severity", "finding_count", "fix_boundary"],
       "properties": {
         "root_cause": {"type": "string", "minLength": 3, "maxLength": 2000},
         "category": {"$ref": "#/$defs/category"},
         "severity": {"enum": ["high", "medium", "low", "none"]},
+        "finding_count": {"type": "integer", "minimum": 0, "maximum": 4},
         "fix_boundary": {"type": "string", "minLength": 3, "maxLength": 1000}
       }
     },
@@ -100,6 +102,17 @@
         "healthy_digest": {"$ref": "#/$defs/sha256"},
         "faulted_digest": {"$ref": "#/$defs/sha256"},
         "sanitized_delta": {"type": "string", "minLength": 1, "maxLength": 10000}
+      }
+    },
+    "finding_count": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expected", "actual", "verdict", "reason"],
+      "properties": {
+        "expected": {"type": "integer", "minimum": 0, "maximum": 4},
+        "actual": {"type": "integer", "minimum": 0, "maximum": 100},
+        "verdict": {"enum": ["AT_BAR", "NOT_AT_BAR"]},
+        "reason": {"enum": ["exact", "extra_noise", "missing_findings"]}
       }
     },
     "trace_evidence": {

@@ -131,6 +131,10 @@ operation IDs. Resume recovers private idempotency receipts without replaying co
 effects and rejects checkpoint drift. Cleanup is a dry run unless `--execute` is present and filters
 exact framework purpose, owner, name, and expiration metadata.
 
+The runtime executes every version selected by the reviewed plan; it does not stop scheduling at a
+generic observed-insight threshold. Evidence compares each scenario's exact `finding_count` with all
+trace-associated insights. Missing findings and extra noise are both recorded as `NOT_AT_BAR`.
+
 Install the optional identity-backed Azure clients with `python -m pip install -e ".[azure]"` on live
 runners that query Application Insights or use the Azure Blob artifact backend.
 

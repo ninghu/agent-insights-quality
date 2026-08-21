@@ -162,6 +162,28 @@ def test_every_reviewed_recipe_shape_is_supported_and_unknown_shape_is_rejected(
 
 
 @pytest.mark.parametrize(
+    ("expected", "actual", "verdict", "reason"),
+    [
+        (1, 1, "AT_BAR", "exact"),
+        (1, 2, "NOT_AT_BAR", "extra_noise"),
+        (2, 1, "NOT_AT_BAR", "missing_findings"),
+    ],
+)
+def test_finding_count_assessment_requires_exact_count(
+    expected: int,
+    actual: int,
+    verdict: str,
+    reason: str,
+) -> None:
+    assert live._finding_count_assessment(expected, actual) == {
+        "expected": expected,
+        "actual": actual,
+        "verdict": verdict,
+        "reason": reason,
+    }
+
+
+@pytest.mark.parametrize(
     "recipe_id",
     sorted(RecipeRegistry.load().mutations),
 )
@@ -905,6 +927,12 @@ def test_realized_windows_are_exact_non_overlapping_and_feed_evidence(
     assert len(bundle["trace_evidence"]) == int(
         pair[1].assignments[0]["traffic_requests"]
     )
+    assert bundle["finding_count"] == {
+        "expected": pair[1].assignments[0]["expected"]["finding_count"],
+        "actual": 0,
+        "verdict": "NOT_AT_BAR",
+        "reason": "missing_findings",
+    }
     expected_tools = next(
         agent.representative_tools
         for agent in live.load_healthy_agents()
