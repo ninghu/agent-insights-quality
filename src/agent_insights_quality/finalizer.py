@@ -29,7 +29,7 @@ from agent_insights_quality.reporting import (
     render_trend,
     validate_report_consistency,
 )
-from agent_insights_quality.runtime import canonical_json, content_hash, write_json
+from agent_insights_quality.artifact_io import canonical_json, content_hash, write_json
 
 
 _PRIVATE_RUNTIME_URL = re.compile(

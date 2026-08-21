@@ -20,7 +20,7 @@ from agent_insights_quality.reporting import (
     resolve_recipient,
     validate_report_consistency,
 )
-from agent_insights_quality.runtime import content_hash
+from agent_insights_quality.artifact_io import content_hash
 
 
 SHA = "sha256:" + "a" * 64

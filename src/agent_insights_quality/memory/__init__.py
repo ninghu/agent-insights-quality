@@ -6,7 +6,7 @@ from copy import deepcopy
 from typing import Any
 
 from agent_insights_quality.contracts import ContractError, MEMORY_SCHEMA, validate_instance
-from agent_insights_quality.runtime import content_hash
+from agent_insights_quality.artifact_io import content_hash
 
 
 _REPORT_PATH = re.compile(

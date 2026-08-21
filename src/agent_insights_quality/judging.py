@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from agent_insights_quality.contracts import ContractError, ROOT, SCHEMAS, validate_instance
 from agent_insights_quality.privacy import require_privacy_safe
-from agent_insights_quality.runtime import (
+from agent_insights_quality.artifact_io import (
     bounded_text,
     content_hash,
     read_json_object,
