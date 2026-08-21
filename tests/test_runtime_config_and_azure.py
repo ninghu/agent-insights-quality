@@ -551,12 +551,22 @@ def test_azure_cli_rejects_argument_injection_without_invoking_executor() -> Non
     assert invoked is False
 
 
-def test_azure_cli_uses_conditional_headers_and_rejects_etag_injection() -> None:
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        'ERROR: Precondition Failed({"error":{"code":"PreconditionFailed","message":"ETag mismatch"}})',
+        'ERROR: Conflict({"error":{"code":"Conflict","message":"Resource exists"}})',
+        '{"error":{"code":"PreconditionFailed","message":"ETag mismatch"}}',
+        "HTTP 412 Precondition Failed",
+        "status code: 409 Conflict",
+    ],
+)
+def test_azure_cli_recognizes_exact_conditional_failures(stderr: str) -> None:
     commands: list[list[str]] = []
 
     def executor(command, _timeout):
         commands.append(list(command))
-        return CommandResult(1, "", "HTTP 412 Precondition Failed")
+        return CommandResult(1, "", stderr)
 
     cli = AzureCli(executor)
     assert cli.put_conditionally("resource?api-version=test", {}, etag=None) is False
@@ -567,6 +577,27 @@ def test_azure_cli_uses_conditional_headers_and_rejects_etag_injection() -> None
         etag='"owned-etag"',
     ) is False
     assert 'If-Match="owned-etag"' in commands[-1]
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "ERROR: AuthorizationFailed({'message':'Conflict while checking permissions'})",
+        "The request had 412 validation findings.",
+        "ERROR: ConflictResolutionRequired({})",
+        '{"error":{"code":"AuthorizationFailed","message":"Precondition Failed"}}',
+        "ERROR: Precondition Failed to parse response",
+    ],
+)
+def test_azure_cli_does_not_misclassify_non_conflict_failures(stderr: str) -> None:
+    cli = AzureCli(lambda _command, _timeout: CommandResult(1, "", stderr))
+    with pytest.raises(RuntimeFailure) as caught:
+        cli.put_conditionally("resource?api-version=test", {}, etag=None)
+    assert caught.value.code == "azure_conditional_write_blocked"
+
+
+def test_azure_cli_rejects_etag_header_injection() -> None:
+    cli = AzureCli(lambda _command, _timeout: CommandResult(0, "{}", ""))
     with pytest.raises(RuntimeFailure, match="ETag"):
         cli.put_conditionally(
             "resource?api-version=test",

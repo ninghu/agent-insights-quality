@@ -22,6 +22,13 @@ _PURPOSE_TAG = "agent-insights-quality"
 _QUALIFICATION_TAG = "true"
 _MONITORING_READER_ROLE = "43d0d8ad-25c7-4714-9337-8ba259a9fe05"
 _MODEL_INFERENCE_ROLE = "5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"
+_PRECONDITION_CODES = {"conflict", "preconditionfailed"}
+_PRECONDITION_ERROR = re.compile(
+    r"(?m)^ERROR:\s*(?:PreconditionFailed|Precondition Failed|Conflict)\s*(?:\(|$)"
+)
+_PRECONDITION_STATUS = re.compile(
+    r"(?im)^(?:ERROR:\s*)?(?:HTTP\s+|status(?:\s+code)?\s*[:=]?\s*)(?:409|412)\b"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +39,29 @@ class CommandResult:
 
 
 Executor = Callable[[Sequence[str], float], CommandResult]
+
+
+def _is_precondition_failure(stderr: str) -> bool:
+    if _PRECONDITION_ERROR.search(stderr) or _PRECONDITION_STATUS.search(stderr):
+        return True
+    start = stderr.find("{")
+    end = stderr.rfind("}")
+    if start < 0 or end <= start:
+        return False
+    try:
+        payload = json.loads(stderr[start : end + 1])
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(payload, Mapping):
+        return False
+    error = payload.get("error")
+    candidates = [payload]
+    if isinstance(error, Mapping):
+        candidates.append(error)
+    return any(
+        str(candidate.get("code") or "").casefold() in _PRECONDITION_CODES
+        for candidate in candidates
+    )
 
 
 def _execute(command: Sequence[str], timeout: float) -> CommandResult:
@@ -153,7 +183,7 @@ class AzureCli:
         result = self.run(arguments, allow_failure=True)
         if result.returncode == 0:
             return True
-        if re.search(r"\b(?:409|412)\b", result.stderr):
+        if _is_precondition_failure(result.stderr):
             return False
         raise RuntimeFailure(
             "azure_conditional_write_blocked",
