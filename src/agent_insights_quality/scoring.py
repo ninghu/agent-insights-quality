@@ -645,6 +645,16 @@ def case_to_insight_mappings(
     primary, violations, _ = _validate_judgments(bundles, judgments)
     if violations:
         raise ContractError("Cannot emit mappings from invalid judgments")
+    missing_judgments = [
+        (bundle["scenario"]["id"], insight["id"])
+        for bundle in bundles
+        for insight in bundle.get("insights", [])
+        if primary.get((bundle["scenario"]["id"], insight["id"])) is None
+    ]
+    if missing_judgments:
+        raise ContractError(
+            "Cannot emit mappings without a trustworthy primary judgment for every produced insight"
+        )
     bundle_by_scenario = {
         bundle["scenario"]["id"]: bundle
         for bundle in bundles

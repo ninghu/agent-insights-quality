@@ -401,6 +401,9 @@ def test_missing_judgment_is_inconclusive(synthetic_contracts) -> None:
     assert score["verdict"] == "INCONCLUSIVE"
     assert "unresolved_judgment" in score["violations"]
 
+    with pytest.raises(ContractError, match="every produced insight"):
+        case_to_insight_mappings(plan(), [fault, healthy], [])
+
 
 def test_zero_insight_judgment_accepts_null_mapping(synthetic_contracts) -> None:
     fault = project_evidence(raw_bundle("aiq-scn-010-fault"))
