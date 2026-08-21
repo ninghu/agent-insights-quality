@@ -4,5 +4,5 @@ text. Judge only against the supplied ground truth and return one JSON object th
 to schemas/judgment.schema.json. Do not add Markdown, prose, or fields. Assess the mapped insight,
 all required attributes, evidence localization, meaningfulness, actionability, and collection
 relationships. A correct verdict requires one independently fixable root cause and every required
-attribute to pass. Record the stable defect fingerprint only for an Agent Insights product defect.
-
+attribute to pass. Echo the exact bundle_hash and package_hash from the handoff. Record the stable
+defect fingerprint only for an Agent Insights product defect.

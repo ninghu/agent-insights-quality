@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import re
 from collections import Counter, defaultdict
 from datetime import datetime
 from typing import Any
@@ -14,10 +13,15 @@ from agent_insights_quality.contracts import (
     validate_daily_plan_semantics,
     validate_instance,
 )
-from agent_insights_quality.judging import validate_evidence_bundle
+from agent_insights_quality.judging import (
+    validate_evidence_bundle,
+    validate_judgment_for_bundle,
+)
+from agent_insights_quality.privacy import sensitive_findings
 from agent_insights_quality.runtime import content_hash, verified_hash
 
 
+PRIMARY_CLASSIFICATION_MIN_CONFIDENCE = 0.80
 PASS_ATTRIBUTES = (
     "root_cause",
     "title",
@@ -41,14 +45,6 @@ ATTRIBUTE_RATES = {
     "meaningfulness": "meaningfulness_rate",
     "actionability": "actionability_rate",
 }
-_PII_PATTERNS = (
-    re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b"),
-    re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
-    re.compile(r"\b(?:\d[ -]*?){13,19}\b"),
-    re.compile(r"(?i)\b(?:password|secret|access[_ -]?token|api[_ -]?key)\s*[:=]\s*\S+"),
-)
-
-
 def _ratio(numerator: int | float, denominator: int | float) -> float:
     return numerator / denominator if denominator else 1.0
 
@@ -58,24 +54,6 @@ def _timestamp(value: str) -> datetime:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as error:
         raise ContractError(f"Invalid evidence timestamp: {value}") from error
-
-
-def _contains_pii(bundle: dict[str, Any]) -> bool:
-    texts = [
-        bundle["ground_truth"]["root_cause"],
-        bundle["ground_truth"]["fix_boundary"],
-        bundle["mutation"]["sanitized_delta"],
-    ]
-    texts.extend(trace["summary"] for trace in bundle["trace_evidence"])
-    for insight in bundle["insights"]:
-        texts.extend(
-            [
-                insight["title"],
-                insight["description"],
-                insight["proposed_fix"],
-            ]
-        )
-    return any(pattern.search(text) for text in texts for pattern in _PII_PATTERNS)
 
 
 def _fix_is_compatible(bundle: dict[str, Any], insight: dict[str, Any]) -> bool:
@@ -92,11 +70,17 @@ def _fix_is_compatible(bundle: dict[str, Any], insight: dict[str, Any]) -> bool:
 def deterministic_violations(
     plan: dict[str, Any],
     bundles: list[dict[str, Any]],
+    catalog: dict[str, Any] | None = None,
+    agents: list[dict[str, Any]] | None = None,
 ) -> tuple[set[str], int]:
     """Recompute structural, provenance, trace, capability, PII, count, and dedupe gates."""
     violations: set[str] = set()
     structural_failures = 0
     assignments = {item["scenario_id"]: item for item in plan["assignments"]}
+    catalog = catalog or load_scenario_catalog()
+    scenario_by_id = {item["id"]: item for item in catalog["scenarios"]}
+    agents = agents or load_agent_manifests()
+    agent_by_id = {item["id"]: item for item in agents}
     seen_ids: set[str] = set()
     seen_signatures: set[str] = set()
     seen_evidence: set[str] = set()
@@ -117,16 +101,34 @@ def deterministic_violations(
             continue
         bundle_scenarios.add(scenario_id)
         expected = assignment["expected"]
+        catalog_scenario = scenario_by_id.get(scenario_id)
+        registered_agent = agent_by_id.get(assignment["agent_id"])
         if (
-            bundle["plan_id"] != plan["plan_id"]
+            catalog_scenario is None
+            or registered_agent is None
+            or bundle["plan_id"] != plan["plan_id"]
             or bundle["scenario"]["version"] != assignment["scenario_version"]
             or bundle["agent"]["id"] != assignment["agent_id"]
             or bundle["agent"]["name"] != assignment["agent_name"]
             or bundle["agent"]["version_digest"] != assignment["agent_version_digest"]
+            or bundle["agent"]["type"] != registered_agent["agent_type"]
+            or not set(bundle["agent"]["available_tools"]).issubset(
+                registered_agent["implementation"]["representative_tools"]
+            )
+            or bundle["run"]["engine_build"] != plan["engine"]["build"]
+            or bundle["run"]["generator_model"] != plan["engine"]["generator_model"]
             or bundle["run"]["window_start"] != assignment["window"]["start"]
             or bundle["run"]["window_end"] != assignment["window"]["end"]
             or bundle["ground_truth"]["category"] != expected["category"]
             or bundle["ground_truth"]["severity"] != expected["severity"]
+            or bundle["ground_truth"]["root_cause"]
+            != catalog_scenario["expected"]["root_cause"]
+            or bundle["ground_truth"]["fix_boundary"]
+            != catalog_scenario["expected"]["fix"]["boundary"]
+            or bundle["ground_truth"]["category"]
+            != catalog_scenario["expected"]["category"]
+            or bundle["ground_truth"]["severity"]
+            != catalog_scenario["expected"]["severity"]
         ):
             violations.add("provenance_failure")
         if len(bundle["insights"]) > 5:
@@ -172,7 +174,7 @@ def deterministic_violations(
                 if value in target:
                     violations.add(violation)
                 target.add(value)
-        if _contains_pii(bundle):
+        if sensitive_findings(bundle):
             violations.add("secret_or_pii")
 
     if bundle_scenarios != set(assignments):
@@ -190,13 +192,8 @@ def _validate_judgments(
     trustworthy = True
     for judgment in judgments:
         try:
-            validate_instance(
-                judgment,
-                SCHEMAS / "judgment.schema.json",
-                "judgment",
-            )
-            verified_hash(judgment, "output_hash", "judgment")
             bundle = bundle_by_id[judgment["bundle_id"]]
+            validate_judgment_for_bundle(judgment, bundle)
             if judgment["model"] != "gpt-5.6-sol":
                 raise ContractError("judgment model is not pinned")
             expected_prompt_version = (
@@ -215,6 +212,10 @@ def _validate_judgments(
             }:
                 raise ContractError("judgment mapping does not exist")
             if judgment["judge_role"] != "primary":
+                continue
+            if judgment["confidence"] < PRIMARY_CLASSIFICATION_MIN_CONFIDENCE:
+                violations.add("unresolved_judgment")
+                trustworthy = False
                 continue
             key = (scenario_id, insight_id)
             if key in by_mapping:
@@ -239,7 +240,9 @@ def score_run(
     validate_instance(plan, SCHEMAS / "daily-plan.schema.json", "daily plan")
     validate_daily_plan_semantics(plan, agents, catalog, "daily plan")
 
-    violations, structural_failures = deterministic_violations(plan, bundles)
+    violations, structural_failures = deterministic_violations(
+        plan, bundles, catalog, agents
+    )
     primary, judgment_violations, trustworthy = _validate_judgments(bundles, judgments)
     violations.update(judgment_violations)
     assignments = {item["scenario_id"]: item for item in plan["assignments"]}
@@ -333,6 +336,14 @@ def score_run(
     duplicate_count = sum(bool(item["relationships"]["duplicate_of"]) for item in all_primary)
     fragmented_count = sum(bool(item["relationships"]["fragmented_with"]) for item in all_primary)
     umbrella_count = sum(bool(item["relationships"]["umbrella_for"]) for item in all_primary)
+    distinct_count = sum(
+        not (
+            item["relationships"]["duplicate_of"]
+            or item["relationships"]["fragmented_with"]
+            or item["relationships"]["umbrella_for"]
+        )
+        for item in all_primary
+    )
     if duplicate_count:
         violations.add("duplication")
     if fragmented_count:
@@ -351,10 +362,7 @@ def score_run(
         "f1": f1,
         "healthy_noise_rate": _ratio(healthy_noisy_cases, len(healthy)),
         **{rate: attribute_rate(attribute) for attribute, rate in ATTRIBUTE_RATES.items()},
-        "distinctness_rate": _ratio(
-            relationship_denominator - duplicate_count - fragmented_count - umbrella_count,
-            relationship_denominator,
-        ),
+        "distinctness_rate": _ratio(distinct_count, relationship_denominator),
         "duplication_rate": _ratio(duplicate_count, relationship_denominator),
         "fragmentation_rate": _ratio(fragmented_count, relationship_denominator),
         "umbrella_rate": _ratio(umbrella_count, relationship_denominator),

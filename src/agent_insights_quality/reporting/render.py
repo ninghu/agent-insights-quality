@@ -12,9 +12,13 @@ from agent_insights_quality.contracts import (
     ContractError,
     SCHEMAS,
     SCORECARD_SCHEMA,
+    load_agent_manifests,
+    load_scenario_catalog,
+    validate_canonical_report_semantics,
     validate_instance,
 )
 from agent_insights_quality.runtime import content_hash, verified_hash
+from agent_insights_quality.judging import AUTO_BUG_CONFIDENCE
 
 
 SECTION_TITLES = (
@@ -26,9 +30,43 @@ SECTION_TITLES = (
 _EMAIL = re.compile(r"^[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+)$")
 
 
-def validate_report_consistency(report: dict[str, Any]) -> None:
+def _human_validation_reason(items: list[dict[str, Any]]) -> str:
+    reasons: set[str] = set()
+    for item in items:
+        if item["verdict"] == "partially_useful":
+            reasons.add("partially useful judgment")
+        if (
+            item["verifier_verdict"] is not None
+            and item["verifier_verdict"] != item["verdict"]
+        ):
+            reasons.add("primary/verifier disagreement")
+        if item["confidence"] < AUTO_BUG_CONFIDENCE or (
+            item["verifier_confidence"] is not None
+            and item["verifier_confidence"] < AUTO_BUG_CONFIDENCE
+        ):
+            reasons.add("low-confidence judgment")
+        if item["novel"]:
+            reasons.add("novel finding")
+        if not item["fix_verifiable"]:
+            reasons.add("unverifiable fix")
+    if not reasons:
+        return "N/A"
+    return "Required: " + "; ".join(sorted(reasons)) + "."
+
+
+def validate_report_consistency(
+    report: dict[str, Any],
+    *,
+    validate_catalog: bool = True,
+) -> None:
     validate_instance(report, SCHEMAS / "canonical-report.schema.json", "canonical report")
     validate_instance(report["scorecard"], SCORECARD_SCHEMA, "canonical report scorecard")
+    if validate_catalog:
+        agents = load_agent_manifests()
+        catalog = load_scenario_catalog({agent["id"] for agent in agents})
+        validate_canonical_report_semantics(
+            report, agents, catalog, "canonical report"
+        )
     if report["status"] != report["scorecard"]["verdict"]:
         raise ContractError("Canonical report status contradicts its scorecard")
     if report["status"] == "INCONCLUSIVE" and report["failure"] is None:
@@ -41,10 +79,22 @@ def validate_report_consistency(report: dict[str, Any]) -> None:
         raise ContractError("INCONCLUSIVE report cannot claim completeness")
     if report["status"] != "INCONCLUSIVE" and not report["scorecard"]["complete"]:
         raise ContractError("Conclusive report requires a complete scorecard")
+    scenarios_by_agent: dict[str, set[str]] = {}
+    for result in report["scenario_results"]:
+        scenarios_by_agent.setdefault(result["agent_id"], set()).add(
+            result["scenario_id"]
+        )
     for agent in report["agents"]:
-        reason = agent["human_validation"]
-        if reason != "N/A" and len(reason.strip()) < 10:
-            raise ContractError("Human validation reason must be exact N/A or a specific reason")
+        relevant = [
+            item
+            for item in report["field_judgments"]
+            if item["scenario_id"] in scenarios_by_agent.get(agent["id"], set())
+        ]
+        expected_reason = _human_validation_reason(relevant)
+        if agent["human_validation"] != expected_reason:
+            raise ContractError(
+                "Human validation must be derived from semantic judgments"
+            )
 
 
 def render_report_markdown(report: dict[str, Any]) -> str:
@@ -179,7 +229,7 @@ def render_trend(reports: list[dict[str, Any]], *, limit: int = 14) -> dict[str,
         raise ContractError("Trend limit must be between 1 and 90")
     unique: dict[str, dict[str, Any]] = {}
     for report in reports:
-        validate_report_consistency(report)
+        validate_report_consistency(report, validate_catalog=False)
         unique[report["report_date"]] = report
     selected = [unique[key] for key in sorted(unique)[-limit:]]
     trend = {
@@ -258,6 +308,27 @@ def render_email_html(
     agent_links: Mapping[str, str],
 ) -> tuple[str, str]:
     validate_report_consistency(report)
+    validate_instance(trend, SCHEMAS / "trend.schema.json", "trend")
+    current_rows = [
+        day for day in trend["days"] if day["report_date"] == report["report_date"]
+    ]
+    expected_rate = (
+        None
+        if report["status"] == "INCONCLUSIVE"
+        else report["scorecard"]["rates"]["precision"]
+    )
+    expected_path = (
+        "reports/daily/"
+        + report["report_date"].replace("-", "/")
+        + "/report.md"
+    )
+    if (
+        len(current_rows) != 1
+        or current_rows[0]["status"] != report["status"]
+        or current_rows[0]["trusted_insight_rate"] != expected_rate
+        or current_rows[0]["report_path"] != expected_path
+    ):
+        raise ContractError("Current trend entry contradicts the canonical report")
     expected_agents = {agent["id"] for agent in report["agents"]}
     if set(agent_links) != expected_agents:
         raise ContractError("Direct email must contain a runtime Agent Insights link for every agent")

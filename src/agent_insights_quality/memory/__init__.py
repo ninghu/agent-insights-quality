@@ -63,6 +63,8 @@ def reconcile_memory(
     memory: dict[str, Any],
     findings: list[dict[str, Any]],
     *,
+    report_id: str,
+    run_id: str,
     report_date: str,
     report_path: str,
     generated_at: str,
@@ -75,6 +77,31 @@ def reconcile_memory(
     if not complete:
         return deepcopy(memory), []
     result = deepcopy(memory)
+    report_reference = content_hash(
+        {
+            "report_id": report_id,
+            "run_id": run_id,
+            "report_path": report_path,
+            "report_date": report_date,
+            "findings": findings,
+        }
+    )
+    matching = [
+        item
+        for item in result["processed_runs"]
+        if item["report_id"] == report_id or item["run_id"] == run_id
+    ]
+    expected_run = {
+        "report_id": report_id,
+        "run_id": run_id,
+        "report_reference": report_reference,
+    }
+    if matching:
+        if len(matching) == 1 and matching[0] == expected_run:
+            return result, []
+        raise ContractError("report_id and run_id are immutable and cannot be reused")
+    result["processed_runs"].append(expected_run)
+    result["processed_runs"].sort(key=lambda item: (item["report_id"], item["run_id"]))
     by_fingerprint = {item["fingerprint"]: item for item in result["issues"]}
     seen: set[str] = set()
     changes: list[dict[str, Any]] = []

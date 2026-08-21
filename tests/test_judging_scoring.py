@@ -157,13 +157,16 @@ def raw_bundle(scenario_id: str, *, healthy: bool = False) -> dict:
 
 
 def judgment(bundle: dict, *, valid: bool = True) -> dict:
+    package = export_judge_package(bundle, "primary")
     value = {
         "schema_version": "1.0.0",
         "bundle_id": bundle["bundle_id"],
+        "bundle_hash": bundle["bundle_hash"],
+        "package_hash": package["package_hash"],
         "judge_role": "primary",
         "model": "gpt-5.6-sol",
         "prompt_version": "primary-v1",
-        "prompt_hash": export_judge_package(bundle, "primary")["prompt_hash"],
+        "prompt_hash": package["prompt_hash"],
         "evidence_schema_version": "1.0.0",
         "mapping": {
             "scenario_id": bundle["scenario"]["id"],
@@ -200,6 +203,43 @@ def judgment(bundle: dict, *, valid: bool = True) -> dict:
     return value
 
 
+def synthetic_catalog() -> dict:
+    return {
+        "scenarios": [
+            {
+                "id": "aiq-scn-010-fault",
+                "expected": {
+                    "root_cause": "The agent selected an incompatible tool.",
+                    "fix": {"boundary": "Prompt selection boundary."},
+                    "category": "tool_call_failures",
+                    "severity": "high",
+                },
+            },
+            {
+                "id": "aiq-scn-011-healthy",
+                "expected": {
+                    "root_cause": "none",
+                    "fix": {"boundary": "No change expected."},
+                    "category": "none",
+                    "severity": "none",
+                },
+            },
+        ]
+    }
+
+
+@pytest.fixture
+def synthetic_contracts(monkeypatch):
+    monkeypatch.setattr(
+        "agent_insights_quality.scoring.validate_daily_plan_semantics",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.scoring.load_scenario_catalog",
+        lambda *_args: synthetic_catalog(),
+    )
+
+
 def test_blinded_package_contains_no_primary_result() -> None:
     bundle = project_evidence(raw_bundle("aiq-scn-010-fault"))
     package = export_judge_package(bundle, "blinded_verifier")
@@ -217,13 +257,9 @@ def test_judgment_import_rejects_changed_output_after_hash() -> None:
         import_judgment(package, result)
 
 
-def test_scoring_recomputes_full_at_bar_metrics(monkeypatch) -> None:
+def test_scoring_recomputes_full_at_bar_metrics(synthetic_contracts) -> None:
     fault = project_evidence(raw_bundle("aiq-scn-010-fault"))
     healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
-    monkeypatch.setattr(
-        "agent_insights_quality.scoring.validate_daily_plan_semantics",
-        lambda *_args: None,
-    )
     score = score_run(plan(), [fault, healthy], [judgment(fault)])
     assert score["verdict"] == "AT BAR"
     assert score["rates"]["high_severity_recall"] == 1
@@ -231,16 +267,54 @@ def test_scoring_recomputes_full_at_bar_metrics(monkeypatch) -> None:
     assert score["rates"]["distinctness_rate"] == 1
 
 
-def test_missing_judgment_is_inconclusive(monkeypatch) -> None:
+def test_missing_judgment_is_inconclusive(synthetic_contracts) -> None:
     fault = project_evidence(raw_bundle("aiq-scn-010-fault"))
     healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
-    monkeypatch.setattr(
-        "agent_insights_quality.scoring.validate_daily_plan_semantics",
-        lambda *_args: None,
-    )
     score = score_run(plan(), [fault, healthy], [])
     assert score["verdict"] == "INCONCLUSIVE"
     assert "unresolved_judgment" in score["violations"]
+
+
+def test_low_confidence_primary_judgment_is_inconclusive(
+    synthetic_contracts,
+) -> None:
+    fault = project_evidence(raw_bundle("aiq-scn-010-fault"))
+    healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
+    result = judgment(fault)
+    result["confidence"] = 0.79
+    result["output_hash"] = content_hash(
+        {key: value for key, value in result.items() if key != "output_hash"}
+    )
+    score = score_run(plan(), [fault, healthy], [result])
+    assert score["verdict"] == "INCONCLUSIVE"
+    assert "unresolved_judgment" in score["violations"]
+
+
+def test_judgment_package_hash_must_match_exact_bundle(
+    synthetic_contracts,
+) -> None:
+    fault = project_evidence(raw_bundle("aiq-scn-010-fault"))
+    healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
+    result = judgment(fault)
+    result["package_hash"] = SHA_B
+    result["output_hash"] = content_hash(
+        {key: value for key, value in result.items() if key != "output_hash"}
+    )
+    score = score_run(plan(), [fault, healthy], [result])
+    assert score["verdict"] == "INCONCLUSIVE"
+    assert "judge_schema_failure" in score["violations"]
+
+
+def test_catalog_ground_truth_mismatch_fails_provenance(
+    synthetic_contracts,
+) -> None:
+    raw = raw_bundle("aiq-scn-010-fault")
+    raw["ground_truth"]["fix_boundary"] = "An unreviewed fix boundary."
+    fault = project_evidence(raw)
+    healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
+    score = score_run(plan(), [fault, healthy], [judgment(fault)])
+    assert score["verdict"] == "INCONCLUSIVE"
+    assert "provenance_failure" in score["violations"]
 
 
 @pytest.mark.parametrize(
@@ -265,7 +339,7 @@ def test_missing_judgment_is_inconclusive(monkeypatch) -> None:
     ],
 )
 def test_scoring_enforces_semantic_and_collection_gates(
-    monkeypatch,
+    synthetic_contracts,
     mutate,
     violation,
 ) -> None:
@@ -275,10 +349,6 @@ def test_scoring_enforces_semantic_and_collection_gates(
     mutate(result)
     result["output_hash"] = content_hash(
         {key: value for key, value in result.items() if key != "output_hash"}
-    )
-    monkeypatch.setattr(
-        "agent_insights_quality.scoring.validate_daily_plan_semantics",
-        lambda *_args: None,
     )
     score = score_run(plan(), [fault, healthy], [result])
     assert score["verdict"] == "NOT AT BAR"
@@ -303,6 +373,48 @@ def test_judge_export_rejects_pii_shaped_evidence() -> None:
         export_judge_package(bundle, "primary")
 
 
+@pytest.mark.parametrize(
+    "sensitive",
+    [
+        "Payment card 4111 1111 1111 1111",
+        "account number: 123456789",
+        "api_key=abcdefgh12345678",
+        "secret=abcdefgh12345678",
+        "token=abcdefgh12345678",
+        "https://storage.example/item?sig=abcdefghijklmnop",
+    ],
+)
+def test_all_judge_exports_use_comprehensive_privacy_scan(sensitive) -> None:
+    value = raw_bundle("aiq-scn-010-fault")
+    value["trace_evidence"][0]["summary"] = sensitive
+    bundle = project_evidence(value)
+    with pytest.raises(ContractError, match="secret or PII"):
+        export_judge_package(bundle, "blinded_verifier")
+
+
+def test_judge_export_scans_unconstrained_run_identifier() -> None:
+    value = raw_bundle("aiq-scn-010-fault")
+    value["run"]["run_id"] = "person@example.test"
+    bundle = project_evidence(value)
+    with pytest.raises(ContractError, match="secret or PII"):
+        export_judge_package(bundle, "primary")
+
+
+def test_overlapping_relationships_do_not_make_distinctness_negative(
+    synthetic_contracts,
+) -> None:
+    fault = project_evidence(raw_bundle("aiq-scn-010-fault"))
+    healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
+    result = judgment(fault)
+    result["relationships"]["duplicate_of"] = ["prior"]
+    result["relationships"]["fragmented_with"] = ["other"]
+    result["output_hash"] = content_hash(
+        {key: value for key, value in result.items() if key != "output_hash"}
+    )
+    score = score_run(plan(), [fault, healthy], [result])
+    assert score["rates"]["distinctness_rate"] == 0
+
+
 def test_trace_count_and_stale_version_are_rejected() -> None:
     value = project_evidence(raw_bundle("aiq-scn-010-fault"))
     value["insights"][0]["trace_count"] = 2
@@ -310,9 +422,24 @@ def test_trace_count_and_stale_version_are_rejected() -> None:
     value["bundle_hash"] = content_hash(
         {key: item for key, item in value.items() if key != "bundle_hash"}
     )
-    violations, failures = deterministic_violations(plan(), [value])
+    violations, failures = deterministic_violations(
+        plan(), [value], synthetic_catalog()
+    )
     assert failures == 1
     assert {"structural_failure", "cross_version_stale", "provenance_failure"} <= violations
+
+
+def test_engine_and_agent_capabilities_are_provenance_bound() -> None:
+    value = project_evidence(raw_bundle("aiq-scn-010-fault"))
+    value["run"]["engine_build"] = "forged-build"
+    value["agent"]["available_tools"].append("unregistered-tool")
+    value["bundle_hash"] = content_hash(
+        {key: item for key, item in value.items() if key != "bundle_hash"}
+    )
+    violations, _ = deterministic_violations(
+        plan(), [value], synthetic_catalog()
+    )
+    assert "provenance_failure" in violations
 
 
 def test_strict_json_rejects_duplicate_keys_and_non_finite_numbers(tmp_path) -> None:

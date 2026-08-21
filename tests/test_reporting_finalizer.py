@@ -26,6 +26,14 @@ from agent_insights_quality.runtime import content_hash
 SHA = "sha256:" + "a" * 64
 
 
+@pytest.fixture(autouse=True)
+def isolate_report_renderer_semantics(monkeypatch):
+    monkeypatch.setattr(
+        "agent_insights_quality.reporting.render.validate_canonical_report_semantics",
+        lambda *_args: None,
+    )
+
+
 def scorecard(status: str = "AT BAR") -> dict:
     rates = {
         name: 1.0
@@ -131,6 +139,40 @@ def report(day: str = "2026-08-21") -> dict:
     }
 
 
+def field_judgment(scenario_id: str, reference: str) -> dict:
+    return {
+        "scenario_id": scenario_id,
+        "insight_reference": reference,
+        "verdict": "correct",
+        "confidence": 0.99,
+        "verifier_verdict": "correct",
+        "verifier_confidence": 0.99,
+        "novel": False,
+        "fix_verifiable": True,
+        "attributes": {
+            name: True
+            for name in (
+                "root_cause",
+                "title",
+                "description",
+                "proposed_fix",
+                "category",
+                "severity",
+                "linked_traces",
+                "meaningfulness",
+                "evidence_localization",
+                "actionability",
+            )
+        },
+        "relationships": {
+            "duplicate": False,
+            "fragment": False,
+            "umbrella": False,
+        },
+        "stale_version": False,
+    }
+
+
 def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> None:
     value = report()
     value["summary"] = "Quality met bar <without injection>."
@@ -153,10 +195,74 @@ def test_trend_is_bounded_to_fourteen_days() -> None:
     assert trend["days"][0]["report_date"] == "2026-08-03"
 
 
+def test_historical_trend_does_not_use_current_catalog(monkeypatch) -> None:
+    def fail_current_catalog(*_args):
+        raise AssertionError("historical report was checked against current catalog")
+
+    monkeypatch.setattr(
+        "agent_insights_quality.reporting.render.validate_canonical_report_semantics",
+        fail_current_catalog,
+    )
+    assert render_trend([report()])["days"]
+
+
 def test_email_requires_all_agent_links() -> None:
     value = report()
     with pytest.raises(ContractError, match="every agent"):
         render_email_html(value, render_trend([value]), {})
+
+
+def test_email_rejects_current_trend_entry_that_contradicts_report() -> None:
+    value = report()
+    trend = render_trend([value])
+    trend["days"][0]["status"] = "NOT AT BAR"
+    links = {agent["id"]: f"https://example.test/{agent['id']}" for agent in value["agents"]}
+    with pytest.raises(ContractError, match="trend entry contradicts"):
+        render_email_html(value, trend, links)
+    trend = render_trend([value])
+    trend["days"][0]["report_path"] = "reports/daily/2026/08/20/report.md"
+    with pytest.raises(ContractError, match="trend entry contradicts"):
+        render_email_html(value, trend, links)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        (
+            lambda item: item.update(verdict="partially_useful"),
+            "partially useful judgment; primary/verifier disagreement",
+        ),
+        (
+            lambda item: item.update(verifier_verdict="incorrect_noise"),
+            "primary/verifier disagreement",
+        ),
+        (lambda item: item.update(confidence=0.90), "low-confidence judgment"),
+        (lambda item: item.update(novel=True), "novel finding"),
+        (lambda item: item.update(fix_verifiable=False), "unverifiable fix"),
+    ],
+)
+def test_human_validation_is_derived_from_judgments(mutation, reason) -> None:
+    value = report()
+    scenario_id = "aiq-scn-010-test"
+    reference = SHA
+    value["scenario_results"] = [
+        {
+            "scenario_id": scenario_id,
+            "agent_id": value["agents"][0]["id"],
+            "agent_version_digest": SHA,
+            "completed": True,
+            "verdict": "correct",
+            "insight_references": [reference],
+        }
+    ]
+    item = field_judgment(scenario_id, reference)
+    mutation(item)
+    value["field_judgments"] = [item]
+    value["agents"][0]["human_validation"] = "N/A"
+    with pytest.raises(ContractError, match="derived"):
+        validate_report_consistency(value)
+    value["agents"][0]["human_validation"] = f"Required: {reason}."
+    validate_report_consistency(value)
 
 
 def test_recipient_supports_authenticated_user_and_guards_domain() -> None:
@@ -246,4 +352,24 @@ def test_public_artifact_writer_rejects_private_link(tmp_path) -> None:
     value = build_failure_report(plan, failure, generated_at="2026-08-21T08:00:00Z")
     value["summary"] = "See https://" + "dev.azure.com/private"
     with pytest.raises(ContractError, match="private Azure DevOps"):
+        write_daily_artifacts(tmp_path, plan, value)
+
+
+def test_public_artifact_writer_rejects_agent_insights_deep_link(tmp_path) -> None:
+    plan = build_preflight_plan("2026-08-21", "2026-08-21T08:00:00Z")
+    failure = {
+        "failed_phase": "runtime readiness",
+        "last_confirmed_stage": "contracts",
+        "reason": "Not ready.",
+        "affected_agents": [],
+        "diagnostics_reference": SHA,
+        "next_action": "Complete readiness.",
+        "completed_scenarios": [],
+    }
+    value = build_failure_report(plan, failure, generated_at="2026-08-21T08:00:00Z")
+    value["summary"] = "See https://" + "ai.azure.com/resource/deep-link"
+    with pytest.raises(ContractError, match="private runtime URL"):
+        write_daily_artifacts(tmp_path, plan, value)
+    value["summary"] = "See http://" + "ai.azure.com/resource/deep-link"
+    with pytest.raises(ContractError, match="private runtime URL"):
         write_daily_artifacts(tmp_path, plan, value)

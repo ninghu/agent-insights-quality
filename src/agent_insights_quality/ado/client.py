@@ -12,12 +12,16 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from agent_insights_quality.contracts import ContractError
+from agent_insights_quality.judging import (
+    judgments_agree_for_auto_bug,
+    validate_judgment_for_bundle,
+)
+from agent_insights_quality.privacy import sanitize_sensitive_text
+from agent_insights_quality.links import validate_agent_insights_url
 from agent_insights_quality.runtime import SHA256_PATTERN, content_hash
+from agent_insights_quality.scoring import score_run
 
 
-_TOKEN = re.compile(r"(?i)\b(?:bearer\s+)?[A-Za-z0-9._~+/=-]{32,}\b")
-_EMAIL = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
-_URL = re.compile(r"https?://[^\s<>'\"]+")
 _ACTIVE_STATES = {"new", "active", "in review", "committed"}
 _RESOLVED_STATES = {"resolved", "done", "removed", "closed"}
 
@@ -56,33 +60,99 @@ class AdoRuntimeConfig:
 
 
 def sanitize_log(value: str) -> str:
-    value = _TOKEN.sub("[REDACTED_TOKEN]", value)
-    value = _EMAIL.sub("[REDACTED_EMAIL]", value)
-    return _URL.sub("[REDACTED_URL]", value)
+    return sanitize_sensitive_text(value)
 
 
-def automatic_bug_eligible(candidate: dict[str, Any]) -> bool:
-    required_true = (
-        "complete_reproduction",
-        "agent_insights_owned",
-        "deterministic_checks_pass",
-        "provenance_checks_pass",
-        "retained_evidence",
-        "duplicate_search_succeeded",
-    )
+def automatic_bug_eligible(
+    candidate: dict[str, Any],
+    *,
+    duplicate_search_completed: bool = False,
+) -> bool:
     fingerprint = candidate.get("fingerprint")
     primary = candidate.get("primary", {})
     verifier = candidate.get("verifier", {})
+    bundle = candidate.get("evidence_bundle")
+    plan = candidate.get("daily_plan")
+    evidence_bundles = candidate.get("evidence_bundles")
+    primary_judgments = candidate.get("primary_judgments")
+    if (
+        not isinstance(bundle, dict)
+        or not isinstance(plan, dict)
+        or not isinstance(evidence_bundles, list)
+        or not isinstance(primary_judgments, list)
+    ):
+        return False
+    try:
+        validate_judgment_for_bundle(primary, bundle)
+        validate_judgment_for_bundle(verifier, bundle)
+        if not any(
+            item.get("bundle_hash") == bundle.get("bundle_hash")
+            for item in evidence_bundles
+            if isinstance(item, dict)
+        ) or not any(
+            item.get("output_hash") == primary.get("output_hash")
+            for item in primary_judgments
+            if isinstance(item, dict)
+        ):
+            return False
+        deterministic = score_run(plan, evidence_bundles, primary_judgments)
+    except (ContractError, KeyError, TypeError):
+        return False
+
+    deterministic_blockers = {
+        "structural_failure",
+        "provenance_failure",
+        "capability_fix_mismatch",
+        "secret_or_pii",
+        "over_five_insights",
+        "cross_version_stale",
+        "unresolved_judgment",
+    }
+    trace_ids = {
+        trace["trace_id"] for trace in bundle.get("trace_evidence", [])
+    }
+    assignment = next(
+        (
+            item
+            for item in plan.get("assignments", [])
+            if item.get("scenario_id") == bundle.get("scenario", {}).get("id")
+        ),
+        None,
+    )
+    reproduced = (
+        assignment is not None
+        and bool(candidate.get("expected"))
+        and bool(candidate.get("actual"))
+        and bool(candidate.get("reproduction_steps"))
+        and bool(candidate.get("artifact_url"))
+        and bool(candidate.get("insights_url"))
+        and bool(candidate.get("trace_ids"))
+        and set(candidate["trace_ids"]).issubset(trace_ids)
+        and candidate.get("run_id") == bundle.get("run", {}).get("run_id")
+        and candidate.get("engine_build") == bundle.get("run", {}).get("engine_build")
+        and candidate.get("generator_model")
+        == bundle.get("run", {}).get("generator_model")
+        and candidate.get("project_label") == plan.get("project", {}).get("name")
+        and candidate.get("agent") == bundle.get("agent", {}).get("name")
+        and candidate.get("scenario_id") == bundle.get("scenario", {}).get("id")
+        and candidate.get("traffic_seed") == assignment.get("traffic_seed")
+        and candidate.get("report_date") == plan.get("report_date")
+    )
+    try:
+        validate_agent_insights_url(str(candidate.get("insights_url", "")))
+    except ContractError:
+        reproduced = False
     return (
         isinstance(fingerprint, str)
         and bool(SHA256_PATTERN.fullmatch(fingerprint))
-        and all(candidate.get(key) is True for key in required_true)
-        and primary.get("role") == "primary"
-        and verifier.get("role") == "blinded_verifier"
-        and primary.get("confidence", 0) >= 0.95
-        and verifier.get("confidence", 0) >= 0.95
-        and primary.get("defect_fingerprint") == fingerprint
-        and verifier.get("defect_fingerprint") == fingerprint
+        and duplicate_search_completed
+        and reproduced
+        and deterministic.get("complete") is True
+        and not (set(deterministic["violations"]) & deterministic_blockers)
+        and judgments_agree_for_auto_bug(
+            primary, verifier, defect_fingerprint=fingerprint
+        )
+        and primary.get("mapping") == verifier.get("mapping")
     )
 
 
@@ -131,7 +201,10 @@ def plan_bug_action(
 ) -> dict[str, Any]:
     if mode not in {"candidate-only", "dry-run", "apply"}:
         raise ContractError("ADO mode must be candidate-only, dry-run, or apply")
-    eligible = automatic_bug_eligible(candidate)
+    eligible = automatic_bug_eligible(
+        candidate,
+        duplicate_search_completed=mode in {"dry-run", "apply"},
+    )
     duplicate = classify_duplicate(candidate, work_items)
     if mode == "candidate-only" or not eligible:
         action = "candidate"
@@ -180,14 +253,24 @@ def build_repro_html(candidate: dict[str, Any]) -> str:
         parsed = urlparse(str(candidate[key]))
         if parsed.scheme != "https" or not parsed.netloc or parsed.query or parsed.fragment:
             raise ContractError(f"ADO {key} must be an HTTPS runtime link")
+    if not SHA256_PATTERN.fullmatch(str(candidate["fingerprint"])):
+        raise ContractError("ADO fingerprint must be a SHA-256 reference")
+    if any(
+        not re.fullmatch(r"[0-9a-fA-F]{32}", str(trace_id))
+        for trace_id in candidate["trace_ids"]
+    ):
+        raise ContractError("ADO trace IDs must be 32 hexadecimal characters")
 
     def escaped(value: Any) -> str:
         return html.escape(sanitize_log(str(value)), quote=True)
 
+    def identifier(value: Any) -> str:
+        return html.escape(str(value), quote=True)
+
     steps = "".join(
         f"<li>{escaped(step)}</li>" for step in candidate["reproduction_steps"]
     )
-    traces = ", ".join(escaped(value) for value in candidate["trace_ids"])
+    traces = ", ".join(identifier(value) for value in candidate["trace_ids"])
     assessment = "".join(
         f"<tr><th>{escaped(key)}</th><td>{escaped(value)}</td></tr>"
         for key, value in sorted(candidate["field_assessment"].items())
@@ -218,7 +301,7 @@ def build_repro_html(candidate: dict[str, Any]) -> str:
         "Retained evidence</a></p>"
         f"<p><a href=\"{html.escape(str(candidate['insights_url']), quote=True)}\">"
         "Agent Insights page</a></p>"
-        f"<p><strong>Fingerprint:</strong> {escaped(candidate['fingerprint'])}</p>"
+        f"<p><strong>Fingerprint:</strong> {identifier(candidate['fingerprint'])}</p>"
         f"<p><strong>Primary confidence:</strong> {escaped(candidate['primary']['confidence'])}; "
         f"<strong>Verifier confidence:</strong> {escaped(candidate['verifier']['confidence'])}</p>"
         "<h2>Acceptance criteria</h2>"
@@ -263,8 +346,24 @@ class AdoClient:
         template = quote(self.config.template_id, safe="")
         return self._request(
             "GET",
-            f"_apis/wit/templates/{team}/{template}?api-version=7.1",
+            f"{team}/_apis/wit/templates/{template}?api-version=7.1",
         )
+
+    def get_work_item(self, work_item_id: int) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            f"_apis/wit/workitems/{work_item_id}?api-version=7.1",
+        )
+
+    @staticmethod
+    def _union_tags(*values: str) -> str:
+        tags = {
+            tag.strip()
+            for value in values
+            for tag in value.split(";")
+            if tag.strip()
+        }
+        return "; ".join(sorted(tags, key=str.casefold))
 
     def search_duplicates(self, candidate: dict[str, Any]) -> list[dict[str, Any]]:
         marker = candidate["fingerprint"].replace("'", "''")
@@ -275,8 +374,8 @@ class AdoClient:
                 "SELECT [System.Id] FROM WorkItems "
                 "WHERE [System.WorkItemType] = 'Bug' "
                 "AND ([System.Tags] CONTAINS 'AgentInsights' "
-                "OR [System.Tags] CONTAINS 'Quality') "
-                f"AND ([System.Title] CONTAINS WORDS '{title_terms}' "
+                "OR [System.Tags] CONTAINS 'Quality' "
+                f"OR [System.Title] CONTAINS WORDS '{title_terms}' "
                 f"OR [System.Description] CONTAINS WORDS '{root_terms}' "
                 f"OR [System.Description] CONTAINS '{marker}' "
                 f"OR [Microsoft.VSTS.TCM.ReproSteps] CONTAINS '{marker}')"
@@ -300,6 +399,9 @@ class AdoClient:
     ) -> dict[str, Any]:
         fields = dict(template.get("fields", {}))
         prefix = fields.pop("System.Title", "")
+        fields["System.Tags"] = self._union_tags(
+            str(fields.get("System.Tags", "")), "AgentInsights; Quality"
+        )
         fields.update(
             {
                 "System.Title": f"{prefix}{candidate['title']}",
@@ -325,19 +427,29 @@ class AdoClient:
         )
 
     def update_bug(self, work_item_id: int, candidate: dict[str, Any]) -> dict[str, Any]:
+        build_repro_html(candidate)
+        existing = self.get_work_item(work_item_id)
+        revision = existing.get("rev")
+        if not isinstance(revision, int):
+            raise ContractError("ADO work item response did not include its revision")
+        existing_tags = str(existing.get("fields", {}).get("System.Tags", ""))
         self._request(
             "PATCH",
             f"_apis/wit/workitems/{work_item_id}?api-version=7.1",
             body=[
+                {"op": "test", "path": "/rev", "value": revision},
                 {
                     "op": "add",
-                    "path": "/fields/System.Description",
-                    "value": build_repro_html(candidate),
+                    "path": "/fields/System.Tags",
+                    "value": self._union_tags(
+                        existing_tags, "AgentInsights; Quality"
+                    ),
                 }
             ],
             content_type="application/json-patch+json",
         )
-        return self.comment_occurrence(work_item_id, candidate)
+        self.comment_occurrence(work_item_id, candidate)
+        return {"id": work_item_id}
 
     def reopen(
         self,
@@ -345,12 +457,22 @@ class AdoClient:
         candidate: dict[str, Any],
         template: dict[str, Any],
     ) -> dict[str, Any]:
+        build_repro_html(candidate)
         template_fields = template.get("fields", {})
+        existing = self.get_work_item(work_item_id)
+        revision = existing.get("rev")
+        if not isinstance(revision, int):
+            raise ContractError("ADO work item response did not include its revision")
+        existing_tags = str(existing.get("fields", {}).get("System.Tags", ""))
         state = template_fields.get("System.State", "New")
         reason = template_fields.get("System.Reason")
-        tags = str(template_fields.get("System.Tags", "AgentInsights; Quality"))
-        tags = tags + "; Regression"
+        tags = self._union_tags(
+            existing_tags,
+            str(template_fields.get("System.Tags", "")),
+            "AgentInsights; Quality; Regression",
+        )
         patch = [
+            {"op": "test", "path": "/rev", "value": revision},
             {"op": "add", "path": "/fields/System.State", "value": state},
             {"op": "add", "path": "/fields/System.Tags", "value": tags},
         ]
@@ -364,4 +486,5 @@ class AdoClient:
             body=patch,
             content_type="application/json-patch+json",
         )
-        return self.comment_occurrence(work_item_id, candidate)
+        self.comment_occurrence(work_item_id, candidate)
+        return {"id": work_item_id}

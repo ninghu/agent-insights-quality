@@ -7,6 +7,8 @@
   "required": [
     "schema_version",
     "bundle_id",
+    "bundle_hash",
+    "package_hash",
     "judge_role",
     "model",
     "prompt_version",
@@ -24,6 +26,8 @@
   "properties": {
     "schema_version": {"const": "1.0.0"},
     "bundle_id": {"type": "string", "format": "uuid"},
+    "bundle_hash": {"$ref": "#/$defs/sha256"},
+    "package_hash": {"$ref": "#/$defs/sha256"},
     "judge_role": {"enum": ["primary", "blinded_verifier"]},
     "model": {"const": "gpt-5.6-sol"},
     "prompt_version": {

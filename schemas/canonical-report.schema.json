@@ -101,13 +101,38 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["scenario_id", "insight_reference", "attributes"],
+        "required": [
+          "scenario_id",
+          "insight_reference",
+          "verdict",
+          "confidence",
+          "verifier_verdict",
+          "verifier_confidence",
+          "novel",
+          "fix_verifiable",
+          "attributes",
+          "relationships",
+          "stale_version"
+        ],
         "properties": {
           "scenario_id": {
             "type": "string",
             "pattern": "^aiq-scn-[0-9]{3}-[a-z][a-z0-9-]*$"
           },
           "insight_reference": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "verdict": {"enum": ["correct", "partially_useful", "incorrect_noise"]},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+          "verifier_verdict": {
+            "type": ["string", "null"],
+            "enum": ["correct", "partially_useful", "incorrect_noise", null]
+          },
+          "verifier_confidence": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "maximum": 1
+          },
+          "novel": {"type": "boolean"},
+          "fix_verifiable": {"type": "boolean"},
           "attributes": {
             "type": "object",
             "additionalProperties": false,
@@ -135,7 +160,18 @@
               "evidence_localization": {"type": "boolean"},
               "actionability": {"type": "boolean"}
             }
-          }
+          },
+          "relationships": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["duplicate", "fragment", "umbrella"],
+            "properties": {
+              "duplicate": {"type": "boolean"},
+              "fragment": {"type": "boolean"},
+              "umbrella": {"type": "boolean"}
+            }
+          },
+          "stale_version": {"type": "boolean"}
         }
       }
     },
