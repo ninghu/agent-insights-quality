@@ -130,6 +130,8 @@ chronologically.
 
 `ado-apply` loads the reviewed ADO policy before private runtime configuration. With the default
 policy, it succeeds only as an explicit candidate-only handoff and performs no ADO mutation.
+`render-email` and `finalize` require `--runtime-link-context`; every private Agent Insights link is
+matched exactly to that authorized subscription, resource group, account, project, and report plan.
 
 The email request carries one immutable `content_digest` and an ordered, no-duplicate transport
 policy. Automation tries connected Copilot mail first, Graph `/me/sendMail` only when `Mail.Send` is

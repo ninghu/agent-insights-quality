@@ -12,10 +12,12 @@ from agent_insights_quality.contracts import (
     SCORECARD_SCHEMA,
     load_agent_manifests,
     load_scenario_catalog,
+    validate_bug_action_semantics,
     validate_canonical_report_semantics,
     validate_instance,
 )
 from agent_insights_quality.links import validate_agent_insights_url
+from agent_insights_quality.links import RuntimeLinkContext
 from agent_insights_quality.artifact_io import content_hash, verified_hash
 from agent_insights_quality.judging import AUTO_BUG_CONFIDENCE
 
@@ -65,6 +67,7 @@ def validate_report_consistency(
 ) -> None:
     validate_instance(report, SCHEMAS / "canonical-report.schema.json", "canonical report")
     validate_instance(report["scorecard"], SCORECARD_SCHEMA, "canonical report scorecard")
+    validate_bug_action_semantics(report, "canonical report")
     if validate_catalog:
         agents = load_agent_manifests()
         catalog = load_scenario_catalog({agent["id"] for agent in agents})
@@ -140,14 +143,15 @@ def render_report_markdown(report: dict[str, Any]) -> str:
             "",
             "## Scenario results",
             "",
-            "| Scenario | Agent | Completed | Verdict | Insights |",
-            "| --- | --- | --- | --- | ---: |",
+            "| Scenario | Agent | Completed | Expected | Observed | Verdict | Insights |",
+            "| --- | --- | --- | ---: | ---: | --- | ---: |",
         ]
     )
     for result in report["scenario_results"]:
         lines.append(
             f"| `{result['scenario_id']}` | `{result['agent_id']}` | "
-            f"{result['completed']} | {result['verdict']} | "
+            f"{result['completed']} | {result['expected_count']} | "
+            f"{result['observed_count']} | {result['verdict']} | "
             f"{len(result['insight_references'])} |"
         )
     lines.extend(
@@ -411,6 +415,7 @@ def render_email_html(
     report: dict[str, Any],
     trend: dict[str, Any],
     agent_links: Mapping[str, str],
+    expected_link_context: RuntimeLinkContext,
 ) -> tuple[str, str]:
     validate_report_consistency(report)
     validate_instance(trend, SCHEMAS / "trend.schema.json", "trend")
@@ -442,12 +447,21 @@ def render_email_html(
     expected_agents = {agent["id"] for agent in report["agents"]}
     if set(agent_links) != expected_agents:
         raise ContractError("Direct email must contain a runtime Agent Insights link for every agent")
+    if expected_link_context.project != report["plan_id"]:
+        raise ContractError("Runtime Agent Insights context does not match the report plan")
     for agent in report["agents"]:
-        validate_agent_insights_url(agent_links[agent["id"]], agent["name"])
+        validate_agent_insights_url(
+            agent_links[agent["id"]], expected_link_context, agent["name"]
+        )
     score = report["scorecard"]
     counts = score["counts"]
-    expected_findings = counts["true_positives"] + counts["false_negatives"]
-    observed_findings = counts["true_positives"] + counts["false_positives"]
+    complete = score["complete"] and report["status"] != "INCONCLUSIVE"
+    expected_findings = sum(
+        result["expected_count"] for result in report["scenario_results"]
+    )
+    observed_findings = sum(
+        result["observed_count"] for result in report["scenario_results"]
+    )
     signal = (
         f"{counts['new_issues']} new, {counts['regressed_issues']} regressed"
         if counts["new_issues"] or counts["regressed_issues"]
@@ -456,27 +470,62 @@ def render_email_html(
     subject = (
         f"[Agent Insights Quality] {report['status']} - {report['report_date']} - {signal}"
     )
-    bug_signal = sum(
-        action["action"] in {"created", "updated", "reopened"}
+    mutation_count = sum(
+        action["action"] in {"created", "updated", "reopened", "commented"}
         for action in report["bug_actions"]
     )
-    good = ["Correct findings were supported by the required evidence and field checks."]
-    if counts["resolved_issues"]:
+    candidate_count = sum(
+        action["action"] == "candidate" for action in report["bug_actions"]
+    )
+    if not complete:
+        good = ["N/A - quality controls were not evaluated from incomplete evidence."]
+    elif report["status"] == "AT BAR":
+        good = ["Correct findings were supported by the required evidence and field checks."]
+        if counts["healthy_insights"] == 0:
+            good.append("Healthy controls produced no insights.")
+    else:
+        good = ["All completed scenarios were evaluated against the strict quality gates."]
+    if complete and counts["resolved_issues"]:
         good.append("Tracked gaps resolved.")
-    if counts["healthy_insights"] == 0:
-        good.append("Healthy controls produced no insights.")
     gaps = []
-    if counts["false_negatives"]:
+    if not complete:
+        gaps.append("Quality counts and rates are N/A until complete evidence is available.")
+        if report["failure"] is not None:
+            gaps.append(report["failure"]["reason"])
+    elif counts["false_negatives"]:
         gaps.append("Missing findings were missed issues.")
-    if counts["false_positives"]:
+    if complete and counts["false_positives"]:
         gaps.append("Extra findings were noise.")
-    if counts["healthy_insights"]:
+    if complete and counts["healthy_insights"]:
         gaps.append("Healthy controls produced unexpected noise.")
-    if counts["regressed_issues"]:
+    if complete and counts["regressed_issues"]:
         gaps.append("Tracked gaps regressed.")
-    if bug_signal:
-        gaps.append("Private bug actions are ready or completed.")
-    if not gaps:
+    violation_labels = {
+        "duplication": "Duplicate insight relationship gate failed.",
+        "fragmentation": "Fragmented insight relationship gate failed.",
+        "umbrella": "Umbrella insight relationship gate failed.",
+        "cross_version_stale": "Cross-version stale insight gate failed.",
+        "finding_count_mismatch": "Expected and observed finding counts did not match.",
+        "attribute_correctness": "One or more insight field judgments failed.",
+    }
+    if report["status"] == "NOT AT BAR":
+        gaps.extend(
+            violation_labels.get(
+                violation, f"Quality gate failed: {violation.replace('_', ' ')}."
+            )
+            for violation in score["violations"]
+        )
+    if candidate_count:
+        gaps.append(
+            f"{candidate_count} bug candidate"
+            f"{'s' if candidate_count != 1 else ''} prepared; no work-item mutation was claimed."
+        )
+    if mutation_count:
+        gaps.append(
+            f"{mutation_count} private bug action"
+            f"{'s were' if mutation_count != 1 else ' was'} confirmed by apply receipts."
+        )
+    if not gaps and report["status"] == "AT BAR":
         gaps.append("No quality gaps or regressions were observed.")
     status_style = _STATUS_STYLES[report["status"]]
     rows = []
@@ -535,10 +584,14 @@ def render_email_html(
         '<tr><td style="padding:28px 38px 0 38px;">'
         + _section_heading(SECTION_TITLES[0])
         + '<p style="margin:0 0 12px 0;color:#334155;font-size:15px;line-height:23px;">'
-        f"{html.escape(report['summary'])}</p>"
+        f"{html.escape(_quality_conclusion(report['status']))}</p>"
         '<p style="margin:0 0 18px 0;color:#475569;font-size:14px;line-height:21px;">'
-        f"Expected {expected_findings} findings; observed {observed_findings}. "
-        f"{counts['completed_scenarios']} of {counts['active_scenarios']} scenarios "
+        + (
+            f"Expected {expected_findings} findings; observed {observed_findings}. "
+            if complete
+            else "Expected findings: N/A; observed findings: N/A. "
+        )
+        + f"{counts['completed_scenarios']} of {counts['active_scenarios']} scenarios "
         "completed.</p>"
         + _trend_table(trend)
         + "</td></tr>"
@@ -614,9 +667,12 @@ def create_email_send_request(
     report: dict[str, Any],
     trend: dict[str, Any],
     agent_links: Mapping[str, str],
+    expected_link_context: RuntimeLinkContext,
     recipient: dict[str, str | None],
 ) -> dict[str, Any]:
-    subject, body = render_email_html(report, trend, agent_links)
+    subject, body = render_email_html(
+        report, trend, agent_links, expected_link_context
+    )
     return build_email_send_request(subject, body, recipient)
 
 

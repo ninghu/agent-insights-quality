@@ -85,7 +85,7 @@ def deterministic_violations(
     seen_signatures: set[str] = set()
     seen_evidence: set[str] = set()
     bundle_scenarios: set[str] = set()
-    observed_by_run: Counter[tuple[str, str, str]] = Counter()
+    observed_by_scenario: dict[str, int] = {}
 
     for bundle in bundles:
         try:
@@ -102,9 +102,7 @@ def deterministic_violations(
             continue
         bundle_scenarios.add(scenario_id)
         expected = assignment["expected"]
-        observed_by_run[
-            (plan["report_date"], assignment["run_id"], assignment["agent_id"])
-        ] += len(bundle["insights"])
+        observed_by_scenario[scenario_id] = len(bundle["insights"])
         catalog_scenario = scenario_by_id.get(scenario_id)
         registered_agent = agent_by_id.get(assignment["agent_id"])
         if (
@@ -179,16 +177,14 @@ def deterministic_violations(
 
     if bundle_scenarios != set(assignments):
         violations.add("incomplete_catalog")
-    expected_by_run: Counter[tuple[str, str, str]] = Counter()
     for assignment in plan["assignments"]:
-        expected_by_run[
-            (plan["report_date"], assignment["run_id"], assignment["agent_id"])
-        ] += assignment["expected"]["finding_count"]
-    if any(
-        observed_by_run[group] != expected_count
-        for group, expected_count in expected_by_run.items()
-    ):
-        violations.add("finding_count_mismatch")
+        scenario_id = assignment["scenario_id"]
+        if (
+            scenario_id in observed_by_scenario
+            and observed_by_scenario[scenario_id]
+            != assignment["expected"]["finding_count"]
+        ):
+            violations.add("finding_count_mismatch")
     return violations, structural_failures
 
 
@@ -497,7 +493,45 @@ def case_to_insight_mappings(
                     "verdict": judgment["verdict"] if judgment else "inconclusive",
                 }
             )
-        mappings.append({"scenario_id": scenario_id, "insights": items})
+        expected_count = assignment["expected"]["finding_count"]
+        observed_count = len(items)
+        trusted_count = sum(
+            item["verdict"] == "correct"
+            and all(
+                primary[(scenario_id, insight["id"])]["attributes"][name]["passes"]
+                for name in PASS_ATTRIBUTES
+            )
+            for item, insight in zip(items, bundle["insights"] if bundle else [])
+            if primary.get((scenario_id, insight["id"])) is not None
+        )
+        verdicts = {item["verdict"] for item in items}
+        if bundle is None or "inconclusive" in verdicts:
+            verdict = "inconclusive"
+        elif expected_count == 0:
+            verdict = "correct" if observed_count == 0 else "incorrect_noise"
+        elif observed_count == 0:
+            verdict = "missed"
+        elif (
+            trusted_count == expected_count
+            and observed_count == expected_count
+            and verdicts == {"correct"}
+        ):
+            verdict = "correct"
+        elif trusted_count == 0 and verdicts == {"incorrect_noise"}:
+            verdict = "incorrect_noise"
+        elif trusted_count == 0 and verdicts == {"partially_useful"}:
+            verdict = "partially_useful"
+        else:
+            verdict = "mixed"
+        mappings.append(
+            {
+                "scenario_id": scenario_id,
+                "expected_count": expected_count,
+                "observed_count": observed_count,
+                "verdict": verdict,
+                "insights": items,
+            }
+        )
     return mappings
 
 

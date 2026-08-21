@@ -24,7 +24,9 @@ from agent_insights_quality.reporting import (
 )
 from agent_insights_quality.artifact_io import content_hash
 from agent_insights_quality.planning import generate_daily_plan
+from agent_insights_quality.links import RuntimeLinkContext, agent_insights_url
 from agent_insights_quality.privacy import require_privacy_safe
+from agent_insights_quality.public_safety import require_public_artifact_safe
 from datetime import date
 
 
@@ -178,11 +180,16 @@ def field_judgment(scenario_id: str, reference: str) -> dict:
     }
 
 
+def runtime_link_context(value: dict) -> RuntimeLinkContext:
+    return RuntimeLinkContext("sub", "rg", "account", value["plan_id"])
+
+
 def runtime_agent_links(value: dict) -> dict[str, str]:
     return {
-        agent["id"]: (
-            "https://ai.azure.com/nextgen/r/sub,rg,,account,project/"
-            f"build/agents/{agent['name']}/monitor/insights"
+        agent["id"]: agent_insights_url(
+            runtime_link_context(value),
+            agent["name"],
+            standalone_tab=False,
         )
         for agent in value["agents"]
     }
@@ -193,10 +200,12 @@ def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> No
     value["summary"] = "Quality met bar <without injection>."
     trend = render_trend([value])
     links = runtime_agent_links(value)
-    subject, body = render_email_html(value, trend, links)
+    subject, body = render_email_html(
+        value, trend, links, runtime_link_context(value)
+    )
     assert subject.startswith("[Agent Insights Quality] AT BAR")
     assert body.count("<h2 ") == 4
-    assert "&lt;without injection&gt;" in body
+    assert "&lt;without injection&gt;" not in body
     assert "<without injection>" not in body
     assert all(agent["id"] in body for agent in value["agents"])
     assert "Healthy controls produced no insights." in body
@@ -224,6 +233,20 @@ def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> No
 
 def test_email_uses_simple_expected_observed_noise_and_miss_narrative() -> None:
     value = report()
+    value["scenario_results"] = [
+        {
+            "scenario_id": "aiq-scn-010-test",
+            "agent_id": value["agents"][0]["id"],
+            "agent_version_digest": SHA,
+            "completed": True,
+            "expected_count": 4,
+            "observed_count": 5,
+            "verdict": "mixed",
+            "insight_references": [
+                "sha256:" + f"{index:064x}" for index in range(1, 6)
+            ],
+        }
+    ]
     value["scorecard"]["counts"].update(
         {"true_positives": 3, "false_positives": 2, "false_negatives": 1}
     )
@@ -231,11 +254,108 @@ def test_email_uses_simple_expected_observed_noise_and_miss_narrative() -> None:
         value,
         render_trend([value]),
         runtime_agent_links(value),
+        runtime_link_context(value),
     )
 
     assert "Expected 4 findings; observed 5." in body
     assert "Extra findings were noise." in body
     assert "Missing findings were missed issues." in body
+
+
+def test_not_at_bar_email_names_relationship_violation_and_candidate_action() -> None:
+    value = report()
+    value["status"] = "NOT AT BAR"
+    value["scorecard"]["verdict"] = "NOT AT BAR"
+    value["scorecard"]["violations"] = ["umbrella"]
+    value["bug_actions"] = [
+        {
+            "fingerprint": SHA,
+            "action": "candidate",
+            "work_item_reference": None,
+            "policy_snapshot": {
+                "policy_version": "1.0.0",
+                "auto_apply_enabled": False,
+            },
+            "apply_receipt": None,
+        }
+    ]
+
+    _, body = render_email_html(
+        value,
+        render_trend([value]),
+        runtime_agent_links(value),
+        runtime_link_context(value),
+    )
+
+    assert "Umbrella insight relationship gate failed." in body
+    assert "1 bug candidate prepared; no work-item mutation was claimed." in body
+    assert "bug created" not in body.casefold()
+
+
+def test_report_rejects_unconfirmed_or_disabled_bug_mutation() -> None:
+    value = report()
+    value["status"] = "NOT AT BAR"
+    value["scorecard"]["verdict"] = "NOT AT BAR"
+    value["scorecard"]["violations"] = ["umbrella"]
+    value["bug_actions"] = [
+        {
+            "fingerprint": SHA,
+            "action": "created",
+            "work_item_reference": SHA,
+            "policy_snapshot": {
+                "policy_version": "1.0.0",
+                "auto_apply_enabled": False,
+            },
+            "apply_receipt": None,
+        }
+    ]
+    with pytest.raises(ContractError, match="disabled ADO policy"):
+        validate_report_consistency(value)
+
+    value["bug_actions"][0]["policy_snapshot"]["auto_apply_enabled"] = True
+    with pytest.raises(ContractError, match="confirmed receipt"):
+        validate_report_consistency(value)
+
+    value["bug_actions"][0]["apply_receipt"] = {
+        "confirmed": True,
+        "operation_reference": SHA,
+        "work_item_reference": SHA,
+    }
+    validate_report_consistency(value)
+
+
+def test_inconclusive_report_cannot_claim_confirmed_bug_mutation() -> None:
+    value = report()
+    value["status"] = "INCONCLUSIVE"
+    value["scorecard"]["verdict"] = "INCONCLUSIVE"
+    value["scorecard"]["complete"] = False
+    value["scorecard"]["violations"] = ["incomplete_catalog"]
+    value["failure"] = {
+        "failed_phase": "judgment",
+        "last_confirmed_stage": "evidence",
+        "reason": "Judgments were incomplete.",
+        "affected_agents": [],
+        "diagnostics_reference": SHA,
+        "next_action": "Retry.",
+    }
+    value["bug_actions"] = [
+        {
+            "fingerprint": SHA,
+            "action": "updated",
+            "work_item_reference": SHA,
+            "policy_snapshot": {
+                "policy_version": "1.0.0",
+                "auto_apply_enabled": True,
+            },
+            "apply_receipt": {
+                "confirmed": True,
+                "operation_reference": SHA,
+                "work_item_reference": SHA,
+            },
+        }
+    ]
+    with pytest.raises(ContractError, match="INCONCLUSIVE"):
+        validate_report_consistency(value)
 
 
 @pytest.mark.parametrize(
@@ -287,10 +407,16 @@ def test_email_status_variants_have_outlook_safe_semantic_colors(
         value,
         render_trend([value]),
         runtime_agent_links(value),
+        runtime_link_context(value),
     )
     assert f'background-color:{background}' in body
     assert f"color:{foreground}" in body
     assert conclusion in body
+    if status == "INCONCLUSIVE":
+        assert "Expected findings: N/A; observed findings: N/A." in body
+        assert "Correct findings were supported" not in body
+        assert "Healthy controls produced no insights." not in body
+        assert "No quality gaps or regressions were observed." not in body
 
 
 def test_email_trend_is_a_bordered_four_column_outlook_table() -> None:
@@ -300,6 +426,7 @@ def test_email_trend_is_a_bordered_four_column_outlook_table() -> None:
         values[-1],
         trend,
         runtime_agent_links(values[-1]),
+        runtime_link_context(values[-1]),
     )
     assert ">Trusted insight trend</th>" in body
     assert ">Rate</th>" in body
@@ -332,7 +459,9 @@ def test_historical_trend_does_not_use_current_catalog(monkeypatch) -> None:
 def test_email_requires_all_agent_links() -> None:
     value = report()
     with pytest.raises(ContractError, match="every agent"):
-        render_email_html(value, render_trend([value]), {})
+        render_email_html(
+            value, render_trend([value]), {}, runtime_link_context(value)
+        )
 
 
 def test_email_rejects_current_trend_entry_that_contradicts_report() -> None:
@@ -341,11 +470,11 @@ def test_email_rejects_current_trend_entry_that_contradicts_report() -> None:
     trend["days"][0]["status"] = "NOT AT BAR"
     links = runtime_agent_links(value)
     with pytest.raises(ContractError, match="trend entry contradicts"):
-        render_email_html(value, trend, links)
+        render_email_html(value, trend, links, runtime_link_context(value))
     trend = render_trend([value])
     trend["days"][0]["report_path"] = "reports/daily/2026/08/20/report.md"
     with pytest.raises(ContractError, match="trend entry contradicts"):
-        render_email_html(value, trend, links)
+        render_email_html(value, trend, links, runtime_link_context(value))
 
 
 @pytest.mark.parametrize(
@@ -374,6 +503,8 @@ def test_human_validation_is_derived_from_judgments(mutation, reason) -> None:
             "agent_id": value["agents"][0]["id"],
             "agent_version_digest": SHA,
             "completed": True,
+            "expected_count": 1,
+            "observed_count": 1,
             "verdict": "correct",
             "insight_references": [reference],
         }
@@ -412,6 +543,7 @@ def test_send_request_remains_unsent_until_matching_provider_receipt() -> None:
         value,
         trend,
         links,
+        runtime_link_context(value),
         {
             "mode": "authenticated_user",
             "address": None,
@@ -485,6 +617,7 @@ def test_local_outlook_fallback_requires_order_and_sent_items_verification() -> 
         value,
         render_trend([value]),
         runtime_agent_links(value),
+        runtime_link_context(value),
         {
             "mode": "authenticated_user",
             "address": None,
@@ -528,6 +661,7 @@ def test_authenticated_user_handoff_rejects_literal_or_uncanonical_mailbox() -> 
             value,
             render_trend([value]),
             links,
+            runtime_link_context(value),
             {
                 "mode": "authenticated_user",
                 "address": "different@" + "microsoft.com",
@@ -542,6 +676,7 @@ def test_receipt_rejects_duplicate_send_after_success() -> None:
         value,
         render_trend([value]),
         runtime_agent_links(value),
+        runtime_link_context(value),
         {
             "mode": "authenticated_user",
             "address": None,
@@ -582,6 +717,7 @@ def test_receipt_rejects_changed_content_digest_and_unauthorized_graph() -> None
         value,
         render_trend([value]),
         runtime_agent_links(value),
+        runtime_link_context(value),
         {
             "mode": "authenticated_user",
             "address": None,
@@ -628,7 +764,12 @@ def test_failure_finalizer_is_inconclusive_and_has_no_mutations() -> None:
     assert value["bug_actions"] == []
     assert value["delivery"]["state"] == "unsent"
     body = render_failure_email_html(value)
-    assert body.count("<h2>") == 4
+    assert body.count("<h2 ") == 4
+    assert 'bgcolor="#12304a"' in body
+    assert "Expected findings: N/A; observed findings: N/A." in body
+    assert "Correct findings were supported" not in body
+    assert "Healthy controls produced no insights." not in body
+    assert "No quality gaps or regressions were observed." not in body
     request = create_failure_send_request(
         value,
         {
@@ -743,6 +884,33 @@ def test_public_artifact_writer_rejects_agent_insights_deep_link(tmp_path) -> No
         write_daily_artifacts(tmp_path, plan, value)
 
 
+@pytest.mark.parametrize(
+    "private_url",
+    [
+        "https:%2F%2F" + "vssps.dev." + "azure.com/org",
+        "https:" + "\\\\" + "dev." + "azure.com\\org\\project",
+        "//" + "account.services.ai.azure.com/project",
+        "https://" + "org." + "visualstudio.com./project).",
+        "[https://" + "portal.azure.com./resource]",
+    ],
+)
+def test_public_safety_rejects_canonicalized_private_urls(private_url) -> None:
+    with pytest.raises(ContractError, match="private"):
+        require_public_artifact_safe(f"See {private_url}", "public output")
+
+
+@pytest.mark.parametrize(
+    "public_url",
+    [
+        "https://" + "notdev.azure.com.example.test/path",
+        "https://" + "visualstudio.com.example.test/path",
+        "https://" + "ai.azure.com.example.test/path",
+    ],
+)
+def test_public_safety_avoids_private_host_near_matches(public_url) -> None:
+    require_public_artifact_safe(public_url, "public output")
+
+
 def test_public_artifact_writer_rejects_comprehensive_pii(tmp_path) -> None:
     plan = build_preflight_plan("2026-08-21", "2026-08-21T08:00:00Z")
     failure = {
@@ -789,9 +957,15 @@ def test_email_rejects_arbitrary_or_mismatched_agent_insights_links() -> None:
     links = runtime_agent_links(value)
     links[value["agents"][0]["id"]] = "https://example.test/insights"
     with pytest.raises(ContractError, match="approved runtime route"):
-        render_email_html(value, trend, links)
+        render_email_html(value, trend, links, runtime_link_context(value))
 
     links = runtime_agent_links(value)
     links[value["agents"][0]["id"]] = links[value["agents"][1]["id"]]
-    with pytest.raises(ContractError, match="corresponding report agent"):
-        render_email_html(value, trend, links)
+    with pytest.raises(ContractError, match="authorized runtime context"):
+        render_email_html(value, trend, links, runtime_link_context(value))
+
+    wrong_context = RuntimeLinkContext("sub", "rg", "account", "other-project")
+    with pytest.raises(ContractError, match="does not match the report plan"):
+        render_email_html(
+            value, trend, runtime_agent_links(value), wrong_context
+        )

@@ -3,7 +3,12 @@ from __future__ import annotations
 import pytest
 
 from agent_insights_quality.contracts import ContractError
-from agent_insights_quality.links import RuntimeLinkContext, agent_insights_url, trace_url
+from agent_insights_quality.links import (
+    RuntimeLinkContext,
+    agent_insights_url,
+    trace_url,
+    validate_agent_insights_url,
+)
 
 
 CONTEXT = RuntimeLinkContext(
@@ -48,5 +53,22 @@ def test_runtime_link_context_rejects_path_injection() -> None:
         account="runtime-account",
         project="aiq-20260820",
     )
-    with pytest.raises(ContractError, match="slash or comma"):
+    with pytest.raises(ContractError, match="canonical"):
         unsafe.resource_route()
+
+
+def test_agent_insights_link_must_match_authorized_runtime_context() -> None:
+    value = agent_insights_url(
+        CONTEXT, "aiq-001-weather-v1", standalone_tab=False
+    )
+    validate_agent_insights_url(value, CONTEXT, "aiq-001-weather-v1")
+    wrong_project = RuntimeLinkContext(
+        subscription=CONTEXT.subscription,
+        resource_group=CONTEXT.resource_group,
+        account=CONTEXT.account,
+        project="aiq-20260821",
+    )
+    with pytest.raises(ContractError, match="authorized runtime context"):
+        validate_agent_insights_url(
+            value, wrong_project, "aiq-001-weather-v1"
+        )

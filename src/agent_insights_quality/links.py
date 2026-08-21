@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
-from urllib.parse import quote, unquote, urlparse
+from typing import Any
+from urllib.parse import quote, urlparse
 
 from agent_insights_quality.contracts import ContractError
 
 
 _AGENT_NAME = re.compile(r"^aiq-[0-9]{3}-[a-z][a-z0-9-]*(?:[-_.][A-Za-z0-9]+)*$")
 _OPERATION_ID = re.compile(r"^[0-9a-f]{32}$")
+_CONTEXT_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._()~-]{0,127}$")
 
 
 @dataclass(frozen=True)
@@ -20,10 +23,23 @@ class RuntimeLinkContext:
     account: str
     project: str
 
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "RuntimeLinkContext":
+        expected = {"subscription", "resource_group", "account", "project"}
+        if set(value) != expected or not all(
+            isinstance(value[key], str) for key in expected
+        ):
+            raise ContractError(
+                "Runtime link context requires exact subscription, resource_group, account, and project strings"
+            )
+        return cls(**{key: value[key] for key in expected})
+
     def resource_route(self) -> str:
         values = (self.subscription, self.resource_group, self.account, self.project)
-        if any(not value or "/" in value or "," in value for value in values):
-            raise ContractError("Runtime link components must be non-empty and contain no slash or comma")
+        if any(not _CONTEXT_COMPONENT.fullmatch(value) for value in values):
+            raise ContractError(
+                "Runtime link components must be canonical non-empty path segments"
+            )
         return (
             "https://ai.azure.com/nextgen/r/"
             f"{self.subscription},{self.resource_group},,{self.account},{self.project}"
@@ -53,28 +69,26 @@ def trace_url(context: RuntimeLinkContext, agent_name: str, operation_id: str) -
     )
 
 
-def validate_agent_insights_url(value: str, expected_agent_name: str | None = None) -> None:
+def validate_agent_insights_url(
+    value: str,
+    expected_context: RuntimeLinkContext,
+    expected_agent_name: str,
+) -> None:
     parsed = urlparse(value)
-    match = re.fullmatch(
-        r"/nextgen/r/[^/,]+,[^/,]+,,[^/,]+,[^/,]+/"
-        r"build/agents/(?P<agent>[^/]+)/(?:(?:monitor/)?insights)",
-        parsed.path,
-    )
     if (
         parsed.scheme != "https"
         or parsed.netloc.casefold() != "ai.azure.com"
         or parsed.query
         or parsed.fragment
-        or match is None
+        or parsed.username
+        or parsed.password
     ):
         raise ContractError("Agent Insights URL does not match the approved runtime route")
-    encoded_agent = match.group("agent")
-    decoded_agent = unquote(encoded_agent)
-    if (
-        not _AGENT_NAME.fullmatch(decoded_agent)
-        or quote(decoded_agent, safe="") != encoded_agent
-        or (expected_agent_name is not None and decoded_agent != expected_agent_name)
-    ):
+    allowed = {
+        agent_insights_url(expected_context, expected_agent_name, standalone_tab=True),
+        agent_insights_url(expected_context, expected_agent_name, standalone_tab=False),
+    }
+    if value not in allowed:
         raise ContractError(
-            "Agent Insights URL agent segment does not match the corresponding report agent"
+            "Agent Insights URL does not match the authorized runtime context and report agent"
         )

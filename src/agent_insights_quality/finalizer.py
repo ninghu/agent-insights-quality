@@ -18,6 +18,7 @@ from agent_insights_quality.contracts import (
     validate_report_plan_binding,
 )
 from agent_insights_quality.generated_paths import validate_generated_paths
+from agent_insights_quality.links import RuntimeLinkContext
 from agent_insights_quality.planning import generate_daily_plan
 from agent_insights_quality.public_safety import require_public_artifact_safe
 from agent_insights_quality.reporting import (
@@ -135,6 +136,8 @@ def build_failure_report(
                 "agent_id": assignment["agent_id"],
                 "agent_version_digest": assignment["agent_version_digest"],
                 "completed": assignment["scenario_id"] in completed_ids,
+                "expected_count": assignment["expected"]["finding_count"],
+                "observed_count": 0,
                 "verdict": "inconclusive",
                 "insight_references": [],
             }
@@ -174,33 +177,72 @@ def build_failure_report(
     return report
 
 
+def _failure_section_heading(title: str) -> str:
+    return (
+        '<h2 style="margin:0 0 14px;color:#12304a;font-family:Segoe UI,Arial,'
+        f'sans-serif;font-size:20px;line-height:26px;">{html.escape(title)}</h2>'
+    )
+
+
 def render_failure_email_html(report: dict[str, Any]) -> str:
     validate_report_consistency(report)
     if report["status"] != "INCONCLUSIVE" or report["failure"] is None:
         raise ContractError("Failure email requires an INCONCLUSIVE failure report")
     failure = report["failure"]
     rows = "".join(
-        f"<tr><td>{html.escape(agent['id'])}</td><td>{html.escape(agent['name'])}</td>"
-        f"<td>{html.escape(agent['type'])}</td><td>N/A</td><td>N/A</td></tr>"
+        "<tr>"
+        '<td style="padding:10px;border:1px solid #d6deea;">'
+        f"{html.escape(agent['id'])}</td>"
+        '<td style="padding:10px;border:1px solid #d6deea;">'
+        f"{html.escape(agent['name'])}</td>"
+        '<td style="padding:10px;border:1px solid #d6deea;">'
+        f"{html.escape(agent['type'])}</td>"
+        '<td style="padding:10px;border:1px solid #d6deea;">N/A</td>'
+        '<td style="padding:10px;border:1px solid #d6deea;">N/A</td></tr>'
         for agent in report["agents"]
     )
     return (
-        "<html><body><h1>INCONCLUSIVE</h1>"
-        "<h2>Summary</h2>"
-        f"<p>{html.escape(report['summary'])}</p>"
-        f"<p>Last confirmed stage: {html.escape(failure['last_confirmed_stage'])}.</p>"
-        "<h2>What we are doing well</h2>"
-        "<p>No quality conclusion was inferred from incomplete evidence.</p>"
-        "<h2>Gaps and regressions</h2>"
-        f"<p>{html.escape(failure['reason'])}</p>"
+        '<!doctype html><html><body bgcolor="#f3f6fa" style="margin:0;padding:0;'
+        'background-color:#f3f6fa;font-family:Segoe UI,Arial,sans-serif;color:#1f2937;">'
+        '<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
+        'width="100%" bgcolor="#f3f6fa"><tr><td align="center" style="padding:24px 12px;">'
+        "<!--[if mso]><table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" "
+        "border=\"0\" width=\"760\"><tr><td><![endif]-->"
+        '<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
+        'width="100%" bgcolor="#ffffff" style="width:100%;max-width:760px;'
+        'background-color:#ffffff;border:1px solid #dfe6ef;border-collapse:collapse;">'
+        '<tr><td bgcolor="#12304a" style="padding:30px 38px;background-color:#12304a;">'
+        '<h1 style="margin:0;color:#ffffff;font-size:30px;line-height:38px;">'
+        "Agent Insights quality</h1>"
+        '<p style="margin:10px 0 0;color:#fff4ce;font-weight:700;">INCONCLUSIVE</p>'
+        "</td></tr>"
+        '<tr><td style="padding:28px 38px 0;">'
+        + _failure_section_heading("Summary")
+        + "<p>No quality conclusion can be made because the validated evidence set is incomplete.</p>"
+        "<p>Expected findings: N/A; observed findings: N/A. "
+        f"Last confirmed stage: {html.escape(failure['last_confirmed_stage'])}.</p>"
+        "</td></tr>"
+        '<tr><td style="padding:24px 38px 0;">'
+        + _failure_section_heading("What we are doing well")
+        + "<p>N/A - quality controls were not evaluated from incomplete evidence.</p>"
+        "</td></tr>"
+        '<tr><td style="padding:24px 38px 0;">'
+        + _failure_section_heading("Gaps and regressions")
+        + f"<p>{html.escape(failure['reason'])}</p>"
         f"<p>Next action: {html.escape(failure['next_action'])}</p>"
         "<p>Email state: unsent. The direct-mail handoff may retry after 60, 300, "
         "and 900 seconds, must stop after the first confirmed success, and must import "
         "a provider receipt before claiming delivery.</p>"
-        "<h2>Test agents and Agent Insights links</h2>"
-        "<table><tr><th>Agent ID</th><th>Test agent</th><th>Type</th>"
+        "</td></tr>"
+        '<tr><td style="padding:24px 38px 38px;">'
+        + _failure_section_heading("Test agents and Agent Insights links")
+        + '<table cellpadding="0" cellspacing="0" border="0" width="100%" '
+        'style="width:100%;border-collapse:collapse;font-size:13px;">'
+        '<tr bgcolor="#e8eef7"><th>Agent ID</th><th>Test agent</th><th>Type</th>'
         "<th>Agent Insights page</th><th>Human validation recommended</th></tr>"
-        f"{rows}</table></body></html>"
+        f"{rows}</table></td></tr></table>"
+        "<!--[if mso]></td></tr></table><![endif]-->"
+        "</td></tr></table></body></html>"
     )
 
 
@@ -287,10 +329,13 @@ def finalize_success(
     report: dict[str, Any],
     prior_reports: list[dict[str, Any]],
     agent_links: Mapping[str, str],
+    expected_link_context: RuntimeLinkContext,
     recipient: dict[str, str | None],
 ) -> dict[str, Any]:
     trend = render_trend(prior_reports + [report])
-    request = create_email_send_request(report, trend, agent_links, recipient)
+    request = create_email_send_request(
+        report, trend, agent_links, expected_link_context, recipient
+    )
     public_report = deepcopy(report)
     public_report["delivery"] = {
         "state": "unsent",

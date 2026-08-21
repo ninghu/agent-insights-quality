@@ -273,9 +273,15 @@ def candidate() -> dict:
         "trace_ids": ["1" * 32],
         "artifact_url": "https://artifacts.example/item",
         "insights_url": (
-            "https://ai.azure.com/nextgen/r/sub,rg,,account,project/"
+            "https://ai.azure.com/nextgen/r/sub,rg,,account,aiq-20260821/"
             "build/agents/aiq-001-weather-v1/monitor/insights"
         ),
+        "runtime_link_context": {
+            "subscription": "sub",
+            "resource_group": "rg",
+            "account": "account",
+            "project": "aiq-20260821",
+        },
         "acceptance_criteria": "One distinct card is emitted.",
     }
 
@@ -332,9 +338,18 @@ def test_auto_bug_rejects_canonical_link_for_different_agent(
     trusted_candidate,
 ) -> None:
     trusted_candidate["insights_url"] = (
-        "https://ai.azure.com/nextgen/r/sub,rg,,account,project/"
+        "https://ai.azure.com/nextgen/r/sub,rg,,account,aiq-20260821/"
         "build/agents/aiq-002-support-v1/monitor/insights"
     )
+    assert not automatic_bug_eligible(
+        trusted_candidate, duplicate_search_completed=True
+    )
+
+
+def test_auto_bug_rejects_link_for_different_runtime_project(
+    trusted_candidate,
+) -> None:
+    trusted_candidate["runtime_link_context"]["project"] = "other-project"
     assert not automatic_bug_eligible(
         trusted_candidate, duplicate_search_completed=True
     )
@@ -351,10 +366,65 @@ def test_duplicate_action_updates_or_reopens_across_states(trusted_candidate) ->
     }
     resolved = deepcopy(active)
     resolved["fields"]["System.State"] = "Removed"
-    assert plan_bug_action(trusted_candidate, [active], mode="dry-run")["action"] == "updated"
-    assert plan_bug_action(trusted_candidate, [resolved], mode="dry-run")["action"] == "reopened"
-    assert plan_bug_action(trusted_candidate, [], mode="dry-run")["action"] == "created"
+    active_plan = plan_bug_action(
+        trusted_candidate, [active], mode="dry-run", policy=enabled_ado_policy()
+    )
+    resolved_plan = plan_bug_action(
+        trusted_candidate, [resolved], mode="dry-run", policy=enabled_ado_policy()
+    )
+    create_plan = plan_bug_action(
+        trusted_candidate, [], mode="dry-run", policy=enabled_ado_policy()
+    )
+    assert active_plan["action"] == "candidate"
+    assert active_plan["planned_action"] == "updated"
+    assert resolved_plan["action"] == "candidate"
+    assert resolved_plan["planned_action"] == "reopened"
+    assert create_plan["action"] == "candidate"
+    assert create_plan["planned_action"] == "created"
     assert plan_bug_action(trusted_candidate, [], mode="candidate-only")["action"] == "candidate"
+
+
+def test_duplicate_prefers_active_exact_match_over_closed_exact(
+    trusted_candidate,
+) -> None:
+    closed = {
+        "id": 1,
+        "fields": {"System.State": "Closed", "System.Description": SHA},
+    }
+    active = {
+        "id": 2,
+        "fields": {"System.State": "Active", "System.Description": SHA},
+    }
+    result = plan_bug_action(
+        trusted_candidate,
+        [closed, active],
+        mode="apply",
+        policy=enabled_ado_policy(),
+    )
+    assert result["action"] == "candidate"
+    assert result["planned_action"] == "updated"
+    assert result["matched_reference"] == result["work_item_reference"]
+
+
+def test_multiple_active_exact_duplicates_fail_closed(
+    trusted_candidate,
+) -> None:
+    matches = [
+        {
+            "id": item_id,
+            "fields": {"System.State": "Active", "System.Description": SHA},
+        }
+        for item_id in (1, 2)
+    ]
+    result = plan_bug_action(
+        trusted_candidate,
+        matches,
+        mode="apply",
+        policy=enabled_ado_policy(),
+    )
+    assert result["action"] == "candidate"
+    assert result["planned_action"] == "candidate"
+    assert result["reason"] == "ambiguous_active_exact_matches"
 
 
 def test_repro_html_escapes_dynamic_content_and_sanitizes_logs() -> None:

@@ -23,7 +23,7 @@ from agent_insights_quality.judging import (
     validate_judgment_for_bundle,
 )
 from agent_insights_quality.privacy import sanitize_sensitive_text
-from agent_insights_quality.links import validate_agent_insights_url
+from agent_insights_quality.links import RuntimeLinkContext, validate_agent_insights_url
 from agent_insights_quality.artifact_io import SHA256_PATTERN, content_hash
 from agent_insights_quality.scoring import score_run
 
@@ -31,6 +31,10 @@ from agent_insights_quality.scoring import score_run
 _ACTIVE_STATES = {"new", "active", "in review", "committed"}
 _RESOLVED_STATES = {"resolved", "done", "removed", "closed"}
 _TRUE_VALUES = {"1", "true", "yes", "on"}
+
+
+class _AmbiguousDuplicateError(ContractError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -113,6 +117,12 @@ class AdoPolicy:
             "candidate_reporting_enabled": self.candidate_reporting_enabled,
             "candidate_reported": self.candidate_reporting_enabled,
             "auto_apply_enabled": False,
+            "policy_snapshot": {
+                "policy_version": self.policy_version,
+                "auto_apply_enabled": False,
+            },
+            "apply_receipt": None,
+            "work_item_reference": matched_reference,
             "matched_reference": matched_reference,
             "reason": "ado_auto_apply_disabled",
         }
@@ -198,10 +208,18 @@ def automatic_bug_eligible(
         and candidate.get("report_date") == plan.get("report_date")
     )
     try:
+        runtime_link_context = RuntimeLinkContext.from_mapping(
+            candidate.get("runtime_link_context", {})
+        )
         validate_agent_insights_url(
             str(candidate.get("insights_url", "")),
+            runtime_link_context,
             str(bundle.get("agent", {}).get("name", "")),
         )
+        if runtime_link_context.project != plan.get("project", {}).get("name"):
+            raise ContractError(
+                "Agent Insights URL project does not match the daily plan"
+            )
     except ContractError:
         reproduced = False
     return (
@@ -233,7 +251,7 @@ def classify_duplicate(
     fingerprint = candidate["fingerprint"]
     title_tokens = _tokens(candidate["title"])
     root_tokens = _tokens(candidate["root_cause"])
-    best: tuple[int, dict[str, Any]] | None = None
+    matches: list[tuple[bool, bool, int, int, dict[str, Any]]] = []
     for work_item in work_items:
         fields = work_item.get("fields", {})
         searchable = " ".join(
@@ -250,9 +268,22 @@ def classify_duplicate(
         tagged = "agentinsights" in searchable.casefold().replace(" ", "")
         score = 1000 if exact else overlap + (2 if tagged else 0)
         if exact or (tagged and overlap >= 3):
-            if best is None or score > best[0]:
-                best = (score, work_item)
-    return best[1] if best else None
+            state = str(fields.get("System.State", "")).strip().casefold()
+            active = state in _ACTIVE_STATES
+            identifier = work_item.get("id")
+            stable_id = identifier if isinstance(identifier, int) else 2**63 - 1
+            matches.append((exact, active, score, stable_id, work_item))
+    active_exact = [match for match in matches if match[0] and match[1]]
+    if len(active_exact) > 1:
+        raise _AmbiguousDuplicateError(
+            "Ambiguous duplicate search found multiple active exact matches"
+        )
+    if active_exact:
+        return active_exact[0][4]
+    if not matches:
+        return None
+    matches.sort(key=lambda item: (-int(item[0]), -item[2], item[3]))
+    return matches[0][4]
 
 
 def plan_bug_action(
@@ -272,32 +303,51 @@ def plan_bug_action(
         candidate,
         duplicate_search_completed=mode in {"dry-run", "apply"},
     )
-    duplicate = classify_duplicate(candidate, work_items)
-    if mode == "candidate-only" or not eligible:
-        action = "candidate"
+    ambiguous = False
+    try:
+        duplicate = classify_duplicate(candidate, work_items)
+    except _AmbiguousDuplicateError:
+        duplicate = None
+        ambiguous = True
+    if not eligible or ambiguous:
+        planned_action = "candidate"
     elif duplicate is None:
-        action = "created"
+        planned_action = "created"
     else:
         state = str(duplicate.get("fields", {}).get("System.State", "")).casefold()
-        action = "reopened" if state in _RESOLVED_STATES else "updated"
+        planned_action = "reopened" if state in _RESOLVED_STATES else "updated"
+    action = "candidate"
     return {
         "fingerprint": candidate["fingerprint"],
         "eligible": eligible,
         "mode": mode,
         "requested_mode": requested_mode,
         "action": action,
+        "planned_action": planned_action,
         "matched_reference": (
             content_hash({"work_item_id": duplicate.get("id")}) if duplicate else None
         ),
-        "would_apply": mode == "dry-run" and action in {"created", "updated", "reopened"},
+        "would_apply": mode == "dry-run" and planned_action in {"created", "updated", "reopened"},
         "applied": False,
         "candidate_reporting_enabled": policy.candidate_reporting_enabled,
         "candidate_reported": action == "candidate" and policy.candidate_reporting_enabled,
         "auto_apply_enabled": policy.auto_apply_enabled,
+        "policy_snapshot": {
+            "policy_version": policy.policy_version,
+            "auto_apply_enabled": policy.auto_apply_enabled,
+        },
+        "apply_receipt": None,
+        "work_item_reference": (
+            content_hash({"work_item_id": duplicate.get("id")}) if duplicate else None
+        ),
         "reason": (
-            "ado_auto_apply_disabled"
-            if requested_mode == "apply" and mode == "candidate-only"
-            else None
+            "ambiguous_active_exact_matches"
+            if ambiguous
+            else (
+                "ado_auto_apply_disabled"
+                if requested_mode == "apply" and mode == "candidate-only"
+                else None
+            )
         ),
     }
 

@@ -74,6 +74,8 @@
           "agent_id",
           "agent_version_digest",
           "completed",
+          "expected_count",
+          "observed_count",
           "verdict",
           "insight_references"
         ],
@@ -85,8 +87,10 @@
           "agent_id": {"type": "string", "pattern": "^aiq-[0-9]{3}-[a-z][a-z0-9-]*$"},
           "agent_version_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
           "completed": {"type": "boolean"},
+          "expected_count": {"type": "integer", "minimum": 0},
+          "observed_count": {"type": "integer", "minimum": 0},
           "verdict": {
-            "enum": ["correct", "partially_useful", "incorrect_noise", "missed", "inconclusive"]
+            "enum": ["correct", "partially_useful", "incorrect_noise", "missed", "mixed", "inconclusive"]
           },
           "insight_references": {
             "type": "array",
@@ -202,13 +206,49 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["fingerprint", "action", "work_item_reference"],
+        "required": [
+          "fingerprint",
+          "action",
+          "work_item_reference",
+          "policy_snapshot",
+          "apply_receipt"
+        ],
         "properties": {
           "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-          "action": {"enum": ["candidate", "created", "updated", "reopened", "none"]},
+          "action": {"enum": ["candidate", "created", "updated", "reopened", "commented", "none"]},
           "work_item_reference": {
             "type": ["string", "null"],
             "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "policy_snapshot": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["policy_version", "auto_apply_enabled"],
+            "properties": {
+              "policy_version": {"const": "1.0.0"},
+              "auto_apply_enabled": {"type": "boolean"}
+            }
+          },
+          "apply_receipt": {
+            "oneOf": [
+              {"type": "null"},
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["confirmed", "operation_reference", "work_item_reference"],
+                "properties": {
+                  "confirmed": {"const": true},
+                  "operation_reference": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$"
+                  },
+                  "work_item_reference": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$"
+                  }
+                }
+              }
+            ]
           }
         }
       }

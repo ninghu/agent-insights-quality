@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 import re
 import subprocess
-import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from agent_insights_quality.contracts import ContractError, ROOT
 from agent_insights_quality.privacy import require_privacy_safe
@@ -20,10 +21,11 @@ PUBLIC_FORBIDDEN_PATTERNS = {
         r"(?i)(?<![A-Za-z0-9.-])"
         r"(?:(?:https?:)?//)?"
         r"(?:"
-        r"dev\.azure\.com\.?(?::[0-9]+)?/"
+        r"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)*dev\.azure\.com"
+        r"(?=\.?(?::[0-9]+)?/)"
         r"|"
-        r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.visualstudio\.com\.?"
-        r"(?::[0-9]+)?"
+        r"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+visualstudio\.com"
+        r"\.?(?::[0-9]+)?"
         r"(?=$|[/?:#\s<>'\"`\)\]\},;!*_]|[.,](?=$|[\s`*_\)\]\},;!]))"
         r")"
     ),
@@ -39,22 +41,35 @@ PUBLIC_FORBIDDEN_PATTERNS = {
     ),
 }
 _PRIVATE_RUNTIME_URL = re.compile(
-    r"(?i)https?://[^\s<>'\"]*?(?:"
+    r"(?i)(?<![A-Za-z0-9.-])(?:(?:https?:)?//)"
+    r"(?:"
     r"ai\.azure\.com|portal\.azure\.com|"
-    r"[a-z0-9.-]+\.(?:services\.ai\.azure\.com|openai\.azure\.com|azurewebsites\.net)|"
+    r"(?:[a-z0-9-]+\.)+(?:services\.ai\.azure\.com|openai\.azure\.com|azurewebsites\.net)|"
     r"(?:internal|private)(?:[.-][a-z0-9-]+)*\.[a-z0-9.-]+"
-    r")"
+    r")\.?(?::[0-9]+)?"
+    r"(?=$|[/?:#\s<>'\"`\)\]\},;!*_]|[.,](?=$|[\s`*_\)\]\},;!]))"
 )
+
+
+def _canonicalize_url_separators(text: str) -> str:
+    normalized = text
+    for _ in range(2):
+        decoded = unquote(normalized)
+        if decoded == normalized:
+            break
+        normalized = decoded
+    return normalized.replace("\\", "/")
 
 
 def require_public_artifact_safe(value: Any, label: str) -> None:
     """Reject sensitive content and private runtime endpoints from public artifacts."""
     require_privacy_safe(value, label)
     text = value if isinstance(value, str) else json.dumps(value, sort_keys=True)
+    normalized = _canonicalize_url_separators(text)
     for pattern_label, pattern in PUBLIC_FORBIDDEN_PATTERNS.items():
-        if pattern.search(text):
+        if pattern.search(normalized):
             raise ContractError(f"{label}: public artifact contains {pattern_label}")
-    if _PRIVATE_RUNTIME_URL.search(text):
+    if _PRIVATE_RUNTIME_URL.search(normalized):
         raise ContractError(f"{label}: public artifact contains private runtime URL")
 
 
@@ -83,6 +98,7 @@ def validate_public_repository_content() -> None:
         except UnicodeDecodeError:
             violations.append(f"{path.relative_to(ROOT)}: non-ASCII content")
             continue
+        text = _canonicalize_url_separators(text)
         for label, pattern in PUBLIC_FORBIDDEN_PATTERNS.items():
             if pattern.search(text):
                 violations.append(f"{path.relative_to(ROOT)}: {label}")
