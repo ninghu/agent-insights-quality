@@ -5,6 +5,7 @@ from collections.abc import Mapping
 
 import pytest
 
+import agent_insights_quality.contracts as contracts
 from agent_insights_quality.contracts import (
     AGENT_SCHEMA,
     ContractError,
@@ -17,6 +18,7 @@ from agent_insights_quality.contracts import (
     validate_contracts,
     validate_instance,
     validate_historical_report_semantics,
+    validate_report_layout,
     validate_report_plan_binding,
     validate_reporting_config,
 )
@@ -247,3 +249,23 @@ def test_historical_report_uses_plan_snapshot_semantics() -> None:
     invalid["scorecard"]["counts"]["true_positives"] = 0
     with pytest.raises(ContractError, match="true_positives"):
         validate_historical_report_semantics(invalid, plan, "report")
+
+
+def test_report_layout_preserves_original_and_rerun_records(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = tmp_path / "reports" / "daily" / "2026" / "08" / "20"
+    rerun = base / "aiq-20260820-r01"
+    for directory in (base, rerun):
+        directory.mkdir(parents=True, exist_ok=True)
+        for filename in ("plan.json", "plan.md", "report.json", "report.md"):
+            (directory / filename).write_text("", encoding="ascii")
+    monkeypatch.setattr(contracts, "ROOT", tmp_path)
+    validate_report_layout()
+
+    invalid = base / "aiq-20260819-r02"
+    invalid.mkdir()
+    (invalid / "plan.json").write_text("", encoding="ascii")
+    with pytest.raises(ContractError, match="does not match report date"):
+        validate_report_layout()

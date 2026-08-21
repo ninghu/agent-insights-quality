@@ -14,6 +14,7 @@ from agent_insights_quality.contracts import (
     REQUIRED_SCENARIO_FAMILIES,
     REQUIRED_SEVERITIES,
     ROOT,
+    catalog_bundle_hash,
     load_agent_manifests,
     load_scenario_catalog,
     validate_daily_plan_semantics,
@@ -121,27 +122,27 @@ def test_same_inputs_produce_byte_equivalent_plan() -> None:
 
 def test_catalog_content_change_changes_hash_seed_and_plan(tmp_path) -> None:
     agents, catalog = _inputs()
-    source = (ROOT / "scenarios" / "catalog.yaml").read_bytes()
-    changed = source.replace(b'catalog_version: "1.0.0"', b'catalog_version: "1.0.1"', 1)
-    changed_path = tmp_path / "catalog.yaml"
-    changed_path.write_bytes(changed)
-    original_digest = catalog_hash()
-    changed_digest = catalog_hash(changed_path)
-    original = generate_daily_plan(
-        REPORT_DATE,
-        agents=agents,
-        catalog=catalog,
-        catalog_digest=original_digest,
-    )
+    changed_catalog = deepcopy(catalog)
+    changed_catalog["scenarios"][0]["title"] = "Fully healthy endpoint control revised"
+    original_digest = catalog_bundle_hash(catalog=catalog, agents=agents)
+    changed_digest = catalog_bundle_hash(catalog=changed_catalog, agents=agents)
+    original = generate_daily_plan(REPORT_DATE, agents=agents, catalog=catalog)
     changed_plan = generate_daily_plan(
         REPORT_DATE,
         agents=agents,
-        catalog=catalog,
-        catalog_digest=changed_digest,
+        catalog=changed_catalog,
     )
     assert original_digest != changed_digest
     assert original["seed"] != changed_plan["seed"]
     assert original["plan_digest"] != changed_plan["plan_digest"]
+
+    with pytest.raises(ContractError, match="catalog_digest"):
+        generate_daily_plan(
+            REPORT_DATE,
+            agents=agents,
+            catalog=changed_catalog,
+            catalog_digest=original_digest,
+        )
 
 
 def test_catalog_bundle_hash_changes_with_recipe_or_agent_input(
@@ -185,6 +186,22 @@ def test_plan_covers_each_active_scenario_once_and_is_schema_valid() -> None:
     assert set(assignment_ids) == active_ids
     validate_instance(plan, ROOT / "schemas" / "daily-plan.schema.json", "plan")
     validate_daily_plan_semantics(plan, agents, catalog, "plan")
+
+
+def test_plan_validation_rejects_recomputed_digest_with_tampered_traffic_seed() -> None:
+    agents, catalog = _inputs()
+    plan = generate_daily_plan(REPORT_DATE, agents=agents, catalog=catalog)
+    tampered = deepcopy(plan)
+    tampered["assignments"][0]["traffic_seed"] += 1
+    tampered["plan_digest"] = canonical_plan_digest(tampered)
+    with pytest.raises(ContractError, match="traffic seed is not deterministic"):
+        validate_daily_plan_semantics(tampered, agents, catalog, "plan")
+
+    namespace_tampered = deepcopy(plan)
+    namespace_tampered["assignments"][0]["traffic_seed_namespace"] = "tampered-v1"
+    namespace_tampered["plan_digest"] = canonical_plan_digest(namespace_tampered)
+    with pytest.raises(ContractError, match="traffic seed namespace"):
+        validate_daily_plan_semantics(namespace_tampered, agents, catalog, "plan")
 
 
 def test_assignments_are_compatible_balanced_and_cover_agent_types() -> None:
@@ -295,6 +312,8 @@ def test_rerun_id_is_schema_valid_without_changing_seeded_assignments() -> None:
     original = generate_daily_plan(REPORT_DATE)
     rerun = generate_daily_plan(REPORT_DATE, rerun=1)
     assert rerun["plan_id"] == "aiq-20260821-r01"
+    assert rerun["artifact_directory"].endswith("/aiq-20260821-r01")
+    assert original["artifact_directory"] == "reports/daily/2026/08/21"
     assert rerun["seed"] == original["seed"]
     assert rerun["assignments"] == original["assignments"]
     assert rerun["plan_digest"] != original["plan_digest"]
@@ -338,6 +357,12 @@ def test_rendered_plan_has_assignment_wave_finding_and_control_tables() -> None:
 
 def test_write_daily_plan_persists_replayable_bytes(tmp_path) -> None:
     json_path, markdown_path = write_daily_plan(REPORT_DATE, tmp_path)
+    original_bytes = json_path.read_bytes()
+    rerun_json, rerun_markdown = write_daily_plan(REPORT_DATE, tmp_path, rerun=1)
     expected = generate_daily_plan(REPORT_DATE)
-    assert json_path.read_bytes() == serialize_plan(expected)
+    expected_rerun = generate_daily_plan(REPORT_DATE, rerun=1)
+    assert json_path.read_bytes() == original_bytes == serialize_plan(expected)
     assert expected["plan_id"] in markdown_path.read_text(encoding="ascii")
+    assert rerun_json == tmp_path / "aiq-20260821-r01" / "plan.json"
+    assert rerun_markdown == tmp_path / "aiq-20260821-r01" / "plan.md"
+    assert rerun_json.read_bytes() == serialize_plan(expected_rerun)

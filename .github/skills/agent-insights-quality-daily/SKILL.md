@@ -71,8 +71,9 @@ contract scaffolding as an operational workflow.
 7. Record exact public-safe build/model labels, catalog and prompt hashes, immutable source/image
    digests, traffic seeds, half-open windows, expected evidence, expected findings, and controls.
 8. Validate the plan against `schemas/daily-plan.schema.json` before deployment.
-9. Write sanitized `reports/daily/YYYY/MM/DD/plan.json` and render `plan.md` from it. The JSON is the
-   authority.
+9. Write sanitized `reports/daily/YYYY/MM/DD/plan.json` and render `plan.md` from it. For reruns,
+   write both under `reports/daily/YYYY/MM/DD/aiq-YYYYMMDD-rNN/` so the original is never
+   overwritten. The JSON is the authority.
 
 The planner and orchestrator are deterministic. Run independent agents concurrently; run versions
 of one agent sequentially.

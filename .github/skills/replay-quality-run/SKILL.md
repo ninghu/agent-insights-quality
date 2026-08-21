@@ -9,6 +9,8 @@ description: Reproduce a quality run without changing reviewed ground truth or d
    through authorized runtime access. Verify plan, catalog, build/model labels, prompt hash, agent
    digests, and traffic seeds before running.
 2. Use a new rerun project `aiq-YYYYMMDD-rNN`. Resolve exact private resource identifiers at runtime.
+   Persist its artifacts under `reports/daily/YYYY/MM/DD/aiq-YYYYMMDD-rNN/`; never overwrite the
+   original date-level plan or report.
 3. Recreate immutable versions and invoke deployed endpoints only. Never inject traces.
 4. Use the original assignments, ordering, seeds, half-open windows, evidence projection, deterministic
    checks, and judge contracts. Mark any unavailable dependency `INCONCLUSIVE`.

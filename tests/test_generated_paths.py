@@ -14,6 +14,7 @@ ALLOWED = [
     "reports/daily/*/*/*/plan.json",
     "reports/daily/*/*/*/readiness-failure.json",
     "reports/daily/*/*/*/email-handoff.json",
+    "reports/daily/*/*/*/aiq-*-r??/plan.json",
     "reports/latest.json",
     "state/quality-memory.json",
 ]
@@ -25,6 +26,7 @@ ALLOWED = [
         "reports/daily/2026/08/20/plan.json",
         "reports/daily/2026/08/20/readiness-failure.json",
         "reports/daily/2026/08/20/email-handoff.json",
+        "reports/daily/2026/08/20/aiq-20260820-r01/plan.json",
         "reports/latest.json",
         "state/quality-memory.json",
     ],
@@ -63,6 +65,10 @@ def test_generated_path_rejects_literal_backslash_filename() -> None:
 
 def test_generated_path_pattern_does_not_match_malformed_daily_layout() -> None:
     assert not path_is_allowed("reports/daily/2026/08/20/nested/plan.json", ALLOWED)
+    assert not path_is_allowed(
+        "reports/daily/2026/08/20/aiq-20260820-r1/plan.json",
+        ALLOWED,
+    )
 
 
 def test_generated_change_cannot_modify_its_own_authority() -> None:

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_insights_quality.contracts import (
+    ContractError,
     ROOT,
     catalog_bundle_hash,
     expected_finding_count,
@@ -173,10 +174,17 @@ def generate_daily_plan(
 ) -> dict[str, Any]:
     if rerun < 0 or rerun > 99:
         raise ValueError("rerun must be between 0 and 99")
-    agents = agents or load_agent_manifests()
-    catalog = catalog or load_scenario_catalog({agent["id"] for agent in agents})
+    agents = agents if agents is not None else load_agent_manifests()
+    catalog = (
+        catalog
+        if catalog is not None
+        else load_scenario_catalog({agent["id"] for agent in agents})
+    )
     validate_supporting_manifests(catalog)
-    digest = catalog_digest or catalog_hash()
+    computed_digest = catalog_bundle_hash(catalog=catalog, agents=agents)
+    if catalog_digest is not None and catalog_digest != computed_digest:
+        raise ContractError("catalog_digest does not match the supplied planning bundle")
+    digest = computed_digest
     seed = int(
         hashlib.sha256(f"{report_date.isoformat()}:{digest}".encode("ascii")).hexdigest()[:16],
         16,
@@ -217,6 +225,7 @@ def generate_daily_plan(
                         ).hexdigest()[:16],
                         16,
                     ),
+                    "traffic_seed_namespace": scenario["traffic"]["seed_namespace"],
                     "traffic_recipe_id": scenario["traffic"]["recipe_id"],
                     "traffic_requests": scenario["traffic"]["minimum_requests"],
                     "lifecycle": scenario["version_semantics"]["applies_to"],
@@ -231,10 +240,15 @@ def generate_daily_plan(
             )
     assignments.sort(key=lambda item: (item["wave"], item["agent_id"], item["scenario_id"]))
     plan_id = f"aiq-{report_date:%Y%m%d}" + (f"-r{rerun:02d}" if rerun else "")
+    artifact_directory = (
+        f"reports/daily/{report_date:%Y/%m/%d}"
+        + (f"/{plan_id}" if rerun else "")
+    )
     plan = {
         "schema_version": "1.0.0",
         "plan_id": plan_id,
         "plan_digest": "",
+        "artifact_directory": artifact_directory,
         "report_date": report_date.isoformat(),
         "created_at": f"{report_date.isoformat()}T00:00:00Z",
         "catalog_version": catalog["catalog_version"],
@@ -291,6 +305,7 @@ def render_plan_markdown(
         "",
         f"- Plan: `{plan['plan_id']}`",
         f"- Plan digest: `{plan['plan_digest']}`",
+        f"- Artifact directory: `{plan['artifact_directory']}`",
         f"- Report date: `{plan['report_date']}`",
         f"- Catalog: `{plan['catalog_version']}` (`{plan['catalog_hash']}`)",
         f"- Deterministic seed: `{plan['seed']}`",
@@ -377,9 +392,10 @@ def write_daily_plan(
     agents = load_agent_manifests()
     catalog = load_scenario_catalog({agent["id"] for agent in agents})
     plan = generate_daily_plan(report_date, catalog=catalog, agents=agents, rerun=rerun)
-    destination = output_dir or (
-        ROOT / "reports" / "daily" / f"{report_date:%Y}" / f"{report_date:%m}" / f"{report_date:%d}"
-    )
+    if output_dir is None:
+        destination = ROOT / Path(plan["artifact_directory"])
+    else:
+        destination = output_dir / plan["plan_id"] if rerun else output_dir
     destination.mkdir(parents=True, exist_ok=True)
     json_path = destination / "plan.json"
     markdown_path = destination / "plan.md"
