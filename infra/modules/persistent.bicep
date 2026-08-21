@@ -1,4 +1,6 @@
 param location string
+@minLength(4)
+@maxLength(12)
 param uniqueSuffix string
 param terraModelVersion string
 param automationOwner string

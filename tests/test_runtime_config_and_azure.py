@@ -171,6 +171,7 @@ class FakeAzureCli:
                     {
                         "id": url.split("/connections?", 1)[0] + "/connections/application-insights",
                         "name": "application-insights",
+                        "etag": '"connection-etag"',
                         "properties": {
                             "category": "AppInsights",
                             "authType": "AAD",
@@ -195,6 +196,9 @@ class FakeAzureCli:
         created = project(name)
         created["tags"] = dict(body["tags"])
         self.projects.append(created)
+        return True
+
+    def put_conditionally(self, url, body, *, etag):
         return True
 
 
@@ -333,7 +337,7 @@ def test_project_preflight_requires_exact_managed_identity_roles() -> None:
         manager.discover_qualified()
 
 
-def test_project_creation_is_conditional_and_skips_a_raced_name() -> None:
+def test_project_creation_rejects_a_foreign_raced_name() -> None:
     class RacingAzureCli(FakeAzureCli):
         def __init__(self):
             super().__init__([])
@@ -350,9 +354,35 @@ def test_project_creation_is_conditional_and_skips_a_raced_name() -> None:
     cli = RacingAzureCli()
     config = RuntimeConfig.from_env(environment()).azure
     manager = AzureProjectManager(cli, AzureContext(SUBSCRIPTION, "tenant", "user"), config, "ninghu")
+    with pytest.raises(RuntimeFailure) as caught:
+        manager.select_or_create(date(2026, 8, 20), "sha256:catalog")
+    assert caught.value.code == "ownership_mismatch"
+    assert cli.attempts == ["aiq-20260820"]
+
+
+def test_stale_resource_graph_conflict_reuses_exact_owned_project() -> None:
+    class StaleGraphAzureCli(FakeAzureCli):
+        def __init__(self):
+            super().__init__([project()])
+            self.attempts: list[str] = []
+
+        def json(self, arguments, **kwargs):
+            if list(arguments)[:2] == ["graph", "query"]:
+                return {"data": []}
+            return super().json(arguments, **kwargs)
+
+        def put_if_absent(self, url, body):
+            self.attempts.append(url.split("/projects/", 1)[1].split("?", 1)[0])
+            return False
+
+    cli = StaleGraphAzureCli()
+    config = RuntimeConfig.from_env(environment()).azure
+    manager = AzureProjectManager(cli, AzureContext(SUBSCRIPTION, "tenant", "user"), config, "ninghu")
+
     selected = manager.select_or_create(date(2026, 8, 20), "sha256:catalog")
-    assert selected.project_name == "aiq-20260820-r01"
-    assert cli.attempts == ["aiq-20260820", "aiq-20260820-r01"]
+
+    assert selected.project_name == "aiq-20260820"
+    assert cli.attempts == ["aiq-20260820"]
 
 
 def test_project_creation_reports_role_assignment_permission_blocker() -> None:
@@ -412,15 +442,19 @@ def test_partial_project_reconciles_after_role_permission_is_restored() -> None:
         def rest(self, method, url, body=None):
             if method == "get" and "/connections?" in url:
                 return {"value": [self.connection] if self.connection else []}
-            if method == "put" and "/connections/application-insights?" in url:
+            return super().rest(method, url, body)
+
+        def put_conditionally(self, url, body, *, etag):
+            if "/connections/application-insights?" in url:
                 self.connection_puts += 1
                 self.connection = {
                     "id": url.split("?", 1)[0],
                     "name": "application-insights",
+                    "etag": '"connection-etag"',
                     "properties": dict(body["properties"]),
                 }
-                return body
-            return super().rest(method, url, body)
+                return True
+            return super().put_conditionally(url, body, etag=etag)
 
     cli = RecoveringAzureCli()
     config = RuntimeConfig.from_env(environment()).azure
@@ -447,6 +481,63 @@ def test_partial_project_reconciles_after_role_permission_is_restored() -> None:
     assert len(cli.assignments) == 2
 
 
+def test_connection_reconcile_does_not_overwrite_concurrent_foreign_replacement() -> None:
+    class ReplacedConnectionAzureCli(FakeAzureCli):
+        def __init__(self):
+            super().__init__([project()])
+            self.connection = self._connection(
+                owner="ninghu",
+                etag='"owned-etag"',
+                expires_on="2026-08-18",
+            )
+            self.writes = 0
+
+        @staticmethod
+        def _connection(*, owner, etag, expires_on="2026-08-19"):
+            project_id = project()["id"]
+            return {
+                "id": project_id + "/connections/application-insights",
+                "name": "application-insights",
+                "etag": etag,
+                "properties": {
+                    "category": "AppInsights",
+                    "target": (
+                        "/subscriptions/" + SUBSCRIPTION
+                        + "/resourceGroups/quality-rg/providers/"
+                        "Microsoft.Insights/components/quality"
+                    ),
+                    "authType": "AAD",
+                    "metadata": {
+                        "purpose": "agent-insights-quality",
+                        "owner_reference": owner,
+                        "expires_on": expires_on,
+                    },
+                },
+            }
+
+        def rest(self, method, url, body=None):
+            if method == "get" and "/connections?" in url:
+                return {"value": [self.connection]}
+            return super().rest(method, url, body)
+
+        def put_conditionally(self, url, body, *, etag):
+            self.writes += 1
+            assert etag == '"owned-etag"'
+            self.connection = self._connection(owner="foreign-owner", etag='"foreign-etag"')
+            return False
+
+    cli = ReplacedConnectionAzureCli()
+    config = RuntimeConfig.from_env(environment()).azure
+    manager = AzureProjectManager(cli, AzureContext(SUBSCRIPTION, "tenant", "user"), config, "ninghu")
+
+    with pytest.raises(RuntimeFailure) as caught:
+        manager.select_or_create(date(2026, 8, 20), "sha256:catalog")
+
+    assert caught.value.code == "project_connection_conflict"
+    assert cli.writes == 1
+    assert cli.connection["properties"]["metadata"]["owner_reference"] == "foreign-owner"
+
+
 def test_azure_cli_rejects_argument_injection_without_invoking_executor() -> None:
     invoked = False
 
@@ -458,6 +549,30 @@ def test_azure_cli_rejects_argument_injection_without_invoking_executor() -> Non
     with pytest.raises(RuntimeFailure, match="null byte"):
         AzureCli(executor).run(["resource", "show", "--ids", "bad\x00value"])
     assert invoked is False
+
+
+def test_azure_cli_uses_conditional_headers_and_rejects_etag_injection() -> None:
+    commands: list[list[str]] = []
+
+    def executor(command, _timeout):
+        commands.append(list(command))
+        return CommandResult(1, "", "HTTP 412 Precondition Failed")
+
+    cli = AzureCli(executor)
+    assert cli.put_conditionally("resource?api-version=test", {}, etag=None) is False
+    assert "If-None-Match=*" in commands[-1]
+    assert cli.put_conditionally(
+        "resource?api-version=test",
+        {},
+        etag='"owned-etag"',
+    ) is False
+    assert 'If-Match="owned-etag"' in commands[-1]
+    with pytest.raises(RuntimeFailure, match="ETag"):
+        cli.put_conditionally(
+            "resource?api-version=test",
+            {},
+            etag='"safe"\r\nIf-Match=*',
+        )
 
 
 def test_cleanup_cli_processes_every_resource_class_before_reporting_failures(
