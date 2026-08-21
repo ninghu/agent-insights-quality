@@ -569,3 +569,455 @@ def test_live_telemetry_qualification_requires_request_correlation() -> None:
                 "evidence": evidence,
             }
         )
+
+
+# ---------------------------------------------------------------------------
+# scenario_runtime behavioral tests
+# ---------------------------------------------------------------------------
+
+def _make_scenario_config(operations: list[dict], version_key: str = "test-vk") -> str:
+    return json.dumps(
+        {
+            "schema_version": "1.0.0",
+            "version_key": version_key,
+            "operations": operations,
+        },
+        separators=(",", ":"),
+    )
+
+
+def _load_scenario_runtime(path: Path) -> ModuleType:
+    return _load_logic(path, f"scenario_runtime_{path.parent.name}")
+
+
+_WORKTREE_ROOT = Path(__file__).resolve().parents[1]
+_HOSTED_SCENARIO_PATHS = [
+    _WORKTREE_ROOT / "agents" / "finance-hosted" / "source" / "scenario_runtime.py",
+    _WORKTREE_ROOT / "agents" / "travel-hosted" / "source" / "scenario_runtime.py",
+    _WORKTREE_ROOT / "agents" / "support-ticket-hosted-image" / "container" / "scenario_runtime.py",
+]
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=["finance", "travel", "ticket"])
+def test_scenario_runtime_rejects_old_phase_schema(sr_path: Path) -> None:
+    bad = json.dumps(
+        {
+            "schema_version": "1.0.0",
+            "phase": "test",
+            "version_key": "vk",
+            "operations": [],
+        }
+    )
+    mod = _load_scenario_runtime(sr_path)
+    import os
+
+    orig = os.environ.get("AIQ_SCENARIO_CONFIGURATION")
+    try:
+        os.environ["AIQ_SCENARIO_CONFIGURATION"] = bad
+        with pytest.raises(RuntimeError, match="invalid"):
+            mod.ScenarioRuntime()
+    finally:
+        if orig is None:
+            os.environ.pop("AIQ_SCENARIO_CONFIGURATION", None)
+        else:
+            os.environ["AIQ_SCENARIO_CONFIGURATION"] = orig
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=["finance", "travel", "ticket"])
+def test_scenario_runtime_accepts_schema_without_phase(sr_path: Path) -> None:
+    cfg = _make_scenario_config([])
+    mod = _load_scenario_runtime(sr_path)
+    import os
+
+    orig = os.environ.get("AIQ_SCENARIO_CONFIGURATION")
+    try:
+        os.environ["AIQ_SCENARIO_CONFIGURATION"] = cfg
+        rt = mod.ScenarioRuntime()
+        assert rt._version_key == "test-vk"
+    finally:
+        if orig is None:
+            os.environ.pop("AIQ_SCENARIO_CONFIGURATION", None)
+        else:
+            os.environ["AIQ_SCENARIO_CONFIGURATION"] = orig
+
+
+@pytest.mark.parametrize(
+    ("operations", "expected_substring", "case_id"),
+    [
+        # 001 bypass_dispatch returns synthetic envelope without calling execute
+        (
+            [{"target": "tool_router", "action": "bypass_dispatch", "value": None}],
+            "without dispatch",
+            "bypass_dispatch",
+        ),
+        # 002 traffic_only/enforce returns read-only response without calling execute
+        (
+            [{"target": "traffic_only", "action": "enforce", "value": None}],
+            "read-only traffic",
+            "traffic_only_enforce",
+        ),
+        # 003 replace_route returns incompatible route message
+        (
+            [{"target": "tool_router", "action": "replace_route", "value": None}],
+            "incompatible tool route",
+            "replace_route",
+        ),
+        # 004 tool_arguments/remove_field removes the named field
+        (
+            [{"target": "tool_arguments", "action": "remove_field", "value": "account_id"}],
+            "dispatched",
+            "remove_field",
+        ),
+        # 005 tool_arguments/replace_value overwrites the named field
+        (
+            [
+                {
+                    "target": "tool_arguments",
+                    "action": "replace_value",
+                    "value": {"field": "account_id", "value": "SYN-NEW"},
+                }
+            ],
+            "dispatched",
+            "replace_value",
+        ),
+        # 006 source_patch/remove_field on entity_id alias removes any matching key
+        (
+            [{"target": "source_patch", "action": "remove_field", "value": "entity_id"}],
+            "dispatched",
+            "source_patch_entity_id_remove",
+        ),
+        # 007 source_patch/replace_value on limit alias sets matching key
+        (
+            [
+                {
+                    "target": "source_patch",
+                    "action": "replace_value",
+                    "value": {"field": "limit", "value": 5},
+                }
+            ],
+            "dispatched",
+            "source_patch_limit_replace",
+        ),
+        # 008 context_query/mock_result returns mock JSON without calling execute
+        (
+            [
+                {
+                    "target": "context_query",
+                    "action": "mock_result",
+                    "value": {"entity": "syn-entity"},
+                }
+            ],
+            "context_query_result",
+            "context_query_mock",
+        ),
+        # 009 context_resolver/replace_context injects __context__ into args
+        (
+            [{"target": "context_resolver", "action": "replace_context", "value": "ctx-A"}],
+            "dispatched",
+            "context_resolver_replace",
+        ),
+        # 010 context_builder/append_context appends to context then injects __context__
+        (
+            [
+                {"target": "context_resolver", "action": "replace_context", "value": "base"},
+                {"target": "context_builder", "action": "append_context", "value": "extra"},
+            ],
+            "dispatched",
+            "context_builder_append",
+        ),
+        # 011 response_mapper/patch_return_value overrides result
+        (
+            [
+                {
+                    "target": "response_mapper",
+                    "action": "patch_return_value",
+                    "value": "PATCHED",
+                }
+            ],
+            "PATCHED",
+            "patch_return_value",
+        ),
+        # 012 response_mapper/discard_input returns stale response message
+        (
+            [{"target": "response_mapper", "action": "discard_input", "value": None}],
+            "stale response",
+            "discard_input",
+        ),
+        # 013 failure_handler/replace_route returns failure path message
+        (
+            [{"target": "failure_handler", "action": "replace_route", "value": None}],
+            "failure path",
+            "failure_handler_replace_route",
+        ),
+        # 014 response_orchestrator/raise_fixture_error raises post-tool abort
+        (
+            [{"target": "response_orchestrator", "action": "raise_fixture_error", "value": None}],
+            "post-tool abort",
+            "post_tool_abort",
+        ),
+        # 015 endpoint_request/synthetic_otel_parent returns traceparent JSON
+        (
+            [
+                {
+                    "target": "endpoint_request",
+                    "action": "synthetic_otel_parent",
+                    "value": None,
+                }
+            ],
+            "traceparent",
+            "endpoint_request_otel_parent",
+        ),
+        # 016 endpoint_request/synthetic_otel_child returns child traceparent JSON
+        (
+            [
+                {
+                    "target": "endpoint_request",
+                    "action": "synthetic_otel_child",
+                    "value": None,
+                }
+            ],
+            "traceparent",
+            "endpoint_request_otel_child",
+        ),
+        # 056 endpoint_request/healthy_056 dispatches normally (healthy control)
+        (
+            [{"target": "endpoint_request", "action": "healthy_056", "value": None}],
+            "dispatched",
+            "endpoint_request_healthy_056",
+        ),
+        # 057 endpoint_request/healthy_057 dispatches normally (healthy control)
+        (
+            [{"target": "endpoint_request", "action": "healthy_057", "value": None}],
+            "dispatched",
+            "endpoint_request_healthy_057",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "sr_path", _HOSTED_SCENARIO_PATHS, ids=["finance", "travel", "ticket"]
+)
+def test_scenario_runtime_hosted_compatible_operations(
+    sr_path: Path,
+    operations: list[dict],
+    expected_substring: str,
+    case_id: str,
+) -> None:
+    import os
+
+    cfg = _make_scenario_config(operations)
+    mod = _load_scenario_runtime(sr_path)
+    orig = os.environ.get("AIQ_SCENARIO_CONFIGURATION")
+    try:
+        os.environ["AIQ_SCENARIO_CONFIGURATION"] = cfg
+        rt = mod.ScenarioRuntime()
+
+        dispatched_args: list[dict] = []
+
+        def execute(name: str, args: dict) -> str:
+            dispatched_args.append(dict(args))
+            return "dispatched"
+
+        if case_id == "post_tool_abort":
+            with pytest.raises(RuntimeError, match="post-tool abort"):
+                rt.run_tool("account_lookup", {"account_id": "SYN-100"}, execute)
+            return
+
+        result = rt.run_tool("account_lookup", {"account_id": "SYN-100", "limit": 10}, execute)
+        assert expected_substring in result, f"case {case_id}: expected {expected_substring!r} in {result!r}"
+
+        if case_id == "remove_field":
+            # execute was called; account_id should be absent from dispatched args
+            assert dispatched_args and "account_id" not in dispatched_args[0]
+        elif case_id == "replace_value":
+            assert dispatched_args and dispatched_args[0].get("account_id") == "SYN-NEW"
+        elif case_id == "source_patch_entity_id_remove":
+            # no entity_id key in dispatched args; account_id is not an alias for entity_id
+            assert dispatched_args
+        elif case_id == "source_patch_limit_replace":
+            assert dispatched_args and dispatched_args[0].get("limit") == 5
+        elif case_id == "context_resolver_replace":
+            assert dispatched_args and dispatched_args[0].get("__context__") == "ctx-A"
+        elif case_id == "context_builder_append":
+            assert dispatched_args and dispatched_args[0].get("__context__") == "base extra"
+        elif case_id in {"bypass_dispatch", "traffic_only_enforce", "replace_route"}:
+            assert not dispatched_args
+        elif case_id in {"endpoint_request_otel_parent", "endpoint_request_otel_child"}:
+            parsed = json.loads(result)
+            assert "traceparent" in parsed
+            assert parsed["version_key"] == "test-vk"
+    finally:
+        if orig is None:
+            os.environ.pop("AIQ_SCENARIO_CONFIGURATION", None)
+        else:
+            os.environ["AIQ_SCENARIO_CONFIGURATION"] = orig
+
+
+@pytest.mark.parametrize(
+    "sr_path", _HOSTED_SCENARIO_PATHS, ids=["finance", "travel", "ticket"]
+)
+def test_scenario_runtime_version_sequence_transient_then_success(sr_path: Path) -> None:
+    import os
+
+    cfg = _make_scenario_config(
+        [{"target": "version_sequence", "action": "transient_then_success", "value": None}],
+        version_key="vk-seq-001",
+    )
+    mod = _load_scenario_runtime(sr_path)
+    orig = os.environ.get("AIQ_SCENARIO_CONFIGURATION")
+    try:
+        os.environ["AIQ_SCENARIO_CONFIGURATION"] = cfg
+        rt = mod.ScenarioRuntime()
+
+        def execute(_name: str, _args: dict) -> str:
+            return "success"
+
+        # First call must raise a transient fault.
+        with pytest.raises(RuntimeError, match="transient fault"):
+            rt.run_tool("account_lookup", {"account_id": "SYN-100"}, execute)
+
+        # Second call on the same instance succeeds.
+        result = rt.run_tool("account_lookup", {"account_id": "SYN-100"}, execute)
+        assert result == "success"
+
+        # version_key must be embedded in the fault message.
+        rt2 = mod.ScenarioRuntime()
+        with pytest.raises(RuntimeError, match="vk-seq-001"):
+            rt2.run_tool("account_lookup", {"account_id": "SYN-100"}, execute)
+    finally:
+        if orig is None:
+            os.environ.pop("AIQ_SCENARIO_CONFIGURATION", None)
+        else:
+            os.environ["AIQ_SCENARIO_CONFIGURATION"] = orig
+
+
+@pytest.mark.parametrize(
+    "sr_path", _HOSTED_SCENARIO_PATHS, ids=["finance", "travel", "ticket"]
+)
+def test_scenario_runtime_delay_ms_120_takes_at_least_100ms(sr_path: Path) -> None:
+    import os
+    import time as _time
+
+    cfg = _make_scenario_config(
+        [{"target": "delay", "action": "ms_120", "value": None}]
+    )
+    mod = _load_scenario_runtime(sr_path)
+    orig = os.environ.get("AIQ_SCENARIO_CONFIGURATION")
+    try:
+        os.environ["AIQ_SCENARIO_CONFIGURATION"] = cfg
+        rt = mod.ScenarioRuntime()
+        start = _time.monotonic()
+        rt.run_tool("account_lookup", {"account_id": "SYN-100"}, lambda n, a: "ok")
+        elapsed = _time.monotonic() - start
+        assert elapsed >= 0.100, f"expected ≥100ms delay, got {elapsed*1000:.0f}ms"
+    finally:
+        if orig is None:
+            os.environ.pop("AIQ_SCENARIO_CONFIGURATION", None)
+        else:
+            os.environ["AIQ_SCENARIO_CONFIGURATION"] = orig
+
+
+@pytest.mark.parametrize(
+    "sr_path", _HOSTED_SCENARIO_PATHS, ids=["finance", "travel", "ticket"]
+)
+def test_scenario_runtime_delay_ms_250_takes_at_least_200ms(sr_path: Path) -> None:
+    import os
+    import time as _time
+
+    cfg = _make_scenario_config(
+        [{"target": "delay", "action": "ms_250", "value": None}]
+    )
+    mod = _load_scenario_runtime(sr_path)
+    orig = os.environ.get("AIQ_SCENARIO_CONFIGURATION")
+    try:
+        os.environ["AIQ_SCENARIO_CONFIGURATION"] = cfg
+        rt = mod.ScenarioRuntime()
+        start = _time.monotonic()
+        rt.run_tool("account_lookup", {"account_id": "SYN-100"}, lambda n, a: "ok")
+        elapsed = _time.monotonic() - start
+        assert elapsed >= 0.200, f"expected ≥200ms delay, got {elapsed*1000:.0f}ms"
+    finally:
+        if orig is None:
+            os.environ.pop("AIQ_SCENARIO_CONFIGURATION", None)
+        else:
+            os.environ["AIQ_SCENARIO_CONFIGURATION"] = orig
+
+
+@pytest.mark.parametrize(
+    "sr_path", _HOSTED_SCENARIO_PATHS, ids=["finance", "travel", "ticket"]
+)
+def test_scenario_runtime_duplicate_dispatch_calls_execute_twice(sr_path: Path) -> None:
+    import os
+
+    cfg = _make_scenario_config(
+        [{"target": "tool_router", "action": "duplicate_dispatch", "value": None}]
+    )
+    mod = _load_scenario_runtime(sr_path)
+    orig = os.environ.get("AIQ_SCENARIO_CONFIGURATION")
+    try:
+        os.environ["AIQ_SCENARIO_CONFIGURATION"] = cfg
+        rt = mod.ScenarioRuntime()
+        call_count = []
+
+        def execute(_name: str, _args: dict) -> str:
+            call_count.append(1)
+            return "ok"
+
+        rt.run_tool("account_lookup", {"account_id": "SYN-100"}, execute)
+        assert len(call_count) == 2, f"expected 2 dispatches, got {len(call_count)}"
+    finally:
+        if orig is None:
+            os.environ.pop("AIQ_SCENARIO_CONFIGURATION", None)
+        else:
+            os.environ["AIQ_SCENARIO_CONFIGURATION"] = orig
+
+
+@pytest.mark.parametrize(
+    "sr_path", _HOSTED_SCENARIO_PATHS, ids=["finance", "travel", "ticket"]
+)
+def test_scenario_runtime_before_request_raises_on_state_machine(sr_path: Path) -> None:
+    import os
+
+    cfg = _make_scenario_config(
+        [{"target": "state_machine", "action": "replace_transition", "value": None}]
+    )
+    mod = _load_scenario_runtime(sr_path)
+    orig = os.environ.get("AIQ_SCENARIO_CONFIGURATION")
+    try:
+        os.environ["AIQ_SCENARIO_CONFIGURATION"] = cfg
+        rt = mod.ScenarioRuntime()
+        with pytest.raises(RuntimeError, match="no-progress loop"):
+            rt.before_request()
+    finally:
+        if orig is None:
+            os.environ.pop("AIQ_SCENARIO_CONFIGURATION", None)
+        else:
+            os.environ["AIQ_SCENARIO_CONFIGURATION"] = orig
+
+
+def test_hosted_agents_have_scenario_runtime_in_assets() -> None:
+    agents = load_healthy_agents()
+    for agent in agents:
+        if agent.kind == "prompt":
+            continue
+        assert agent.source is not None
+        assert (agent.source / "scenario_runtime.py").is_file(), (
+            f"{agent.id}: scenario_runtime.py missing from {agent.source}"
+        )
+
+
+def test_hosted_agents_have_representative_tools_from_manifest() -> None:
+    agents = load_healthy_agents()
+    assert any(agent.representative_tools for agent in agents)
+    finance = next(a for a in agents if a.id == "aiq-003-finance")
+    assert set(finance.representative_tools) == {"account_lookup", "transaction_search", "budget_calculation"}
+    travel = next(a for a in agents if a.id == "aiq-004-travel")
+    assert "flight_search" in travel.representative_tools
+    ticket = next(a for a in agents if a.id == "aiq-005-ticket")
+    assert "ticket_read" in ticket.representative_tools
+
+
+def test_container_dockerfile_copies_scenario_runtime() -> None:
+    dockerfile = (
+        _WORKTREE_ROOT / "agents" / "support-ticket-hosted-image" / "container" / "Dockerfile"
+    ).read_text(encoding="ascii")
+    assert "scenario_runtime.py" in dockerfile

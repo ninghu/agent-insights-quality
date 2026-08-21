@@ -7,7 +7,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir --requirement requirements.txt \
     && useradd --create-home --uid 10001 agent
-COPY --chown=agent:agent main.py logic.py model_runtime.py agent.yaml ./
+COPY --chown=agent:agent main.py logic.py model_runtime.py scenario_runtime.py agent.yaml ./
 
 USER agent
 EXPOSE 8088

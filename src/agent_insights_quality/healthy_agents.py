@@ -31,6 +31,7 @@ class HealthyAgent:
     root: Path
     definition: dict[str, Any]
     fixtures: tuple[HealthyFixture, ...]
+    representative_tools: tuple[str, ...]
 
     @property
     def source(self) -> Path | None:
@@ -110,6 +111,7 @@ def load_healthy_agents() -> tuple[HealthyAgent, ...]:
                 "main.py",
                 "model_runtime.py",
                 "requirements.txt",
+                "scenario_runtime.py",
             }
             if not all((source / filename).is_file() for filename in required_files):
                 raise RuntimeContractError(
@@ -129,6 +131,9 @@ def load_healthy_agents() -> tuple[HealthyAgent, ...]:
                 raise RuntimeContractError(
                     f"Hosted model/tool tracing contract is incomplete: {agent_id}"
                 )
+        representative_tools: tuple[str, ...] = tuple(
+            str(t) for t in manifest.get("implementation", {}).get("representative_tools") or []
+        )
         agents.append(
             HealthyAgent(
                 id=agent_id,
@@ -136,6 +141,7 @@ def load_healthy_agents() -> tuple[HealthyAgent, ...]:
                 root=root,
                 definition=definition,
                 fixtures=fixtures,
+                representative_tools=representative_tools,
             )
         )
     if {agent.id for agent in agents} != set(EXPECTED_AGENTS):
