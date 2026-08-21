@@ -1116,6 +1116,8 @@ def validate_canonical_report_semantics(
     agents: list[dict[str, Any]],
     catalog: dict[str, Any],
     label: str,
+    *,
+    expected_scenario_ids: set[str] | None = None,
 ) -> None:
     agent_by_id = {agent["id"]: agent for agent in agents}
     registered_ids = set(agent_by_id)
@@ -1134,11 +1136,21 @@ def validate_canonical_report_semantics(
     active_ids = {
         scenario["id"] for scenario in catalog["scenarios"] if scenario["status"] == "active"
     }
+    expected_ids = expected_scenario_ids if expected_scenario_ids is not None else active_ids
+    if not expected_ids.issubset(active_ids):
+        raise ContractError(f"{label}: expected scenario set contains a non-active scenario")
     result_ids = [result["scenario_id"] for result in report["scenario_results"]]
     if len(result_ids) != len(set(result_ids)):
         raise ContractError(f"{label}: scenario results must be unique")
-    if not set(result_ids).issubset(active_ids):
-        raise ContractError(f"{label}: report contains a non-active or unknown scenario")
+    if expected_scenario_ids is not None and set(result_ids) != expected_ids:
+        missing = sorted(expected_ids - set(result_ids))
+        extra = sorted(set(result_ids) - expected_ids)
+        raise ContractError(
+            f"{label}: scenario results must exactly match selected plan assignments; "
+            f"missing={missing}, extra={extra}"
+        )
+    if not set(result_ids).issubset(expected_ids):
+        raise ContractError(f"{label}: report contains an unselected or unknown scenario")
     for result in report["scenario_results"]:
         if result["agent_id"] not in registered_ids:
             raise ContractError(f"{label}: scenario result references an unknown agent")
@@ -1168,8 +1180,8 @@ def validate_canonical_report_semantics(
     rates = scorecard["rates"]
     completed_count = sum(result["completed"] for result in report["scenario_results"])
     complete = (
-        set(result_ids) == active_ids
-        and completed_count == len(active_ids)
+        set(result_ids) == expected_ids
+        and completed_count == len(expected_ids)
         and all(result["verdict"] != "inconclusive" for result in report["scenario_results"])
     )
     fault_results = [
@@ -1236,8 +1248,10 @@ def validate_canonical_report_semantics(
 
     if report["status"] != scorecard["verdict"]:
         raise ContractError(f"{label}: report status and scorecard verdict must match")
-    if counts["active_scenarios"] != len(active_ids):
-        raise ContractError(f"{label}: scorecard active scenario count does not match the catalog")
+    if counts["active_scenarios"] != len(expected_ids):
+        raise ContractError(
+            f"{label}: scorecard active scenario count does not match the selected plan"
+        )
     if counts["completed_scenarios"] != completed_count:
         raise ContractError(f"{label}: scorecard completed count does not match scenario results")
     expected_counts = {
@@ -1306,6 +1320,18 @@ def validate_report_plan_binding(
     assignment_by_scenario = {
         assignment["scenario_id"]: assignment for assignment in plan["assignments"]
     }
+    result_ids = [result["scenario_id"] for result in report["scenario_results"]]
+    if len(result_ids) != len(set(result_ids)):
+        raise ContractError(f"{label}: scenario results must be unique")
+    expected_ids = set(assignment_by_scenario)
+    actual_ids = set(result_ids)
+    if actual_ids != expected_ids:
+        missing = sorted(expected_ids - actual_ids)
+        extra = sorted(actual_ids - expected_ids)
+        raise ContractError(
+            f"{label}: scenario results must exactly match selected plan assignments; "
+            f"missing={missing}, extra={extra}"
+        )
     for result in report["scenario_results"]:
         assignment = assignment_by_scenario.get(result["scenario_id"])
         if assignment is None:
@@ -1351,6 +1377,7 @@ def validate_historical_report_semantics(
         list(snapshot_agents.values()),
         {"scenarios": snapshot_scenarios},
         label,
+        expected_scenario_ids=set(assignments),
     )
 
 
@@ -1472,11 +1499,19 @@ def validate_report_artifacts(
         if not plan_path.is_file():
             raise ContractError(f"{label}: report requires a sibling plan.json")
         plan = load_data(plan_path)
+        validate_report_plan_binding(report, plan, label)
         if plan["catalog_version"] == catalog["catalog_version"]:
-            validate_canonical_report_semantics(report, agents, catalog, label)
+            validate_canonical_report_semantics(
+                report,
+                agents,
+                catalog,
+                label,
+                expected_scenario_ids={
+                    assignment["scenario_id"] for assignment in plan["assignments"]
+                },
+            )
         else:
             validate_historical_report_semantics(report, plan, label)
-        validate_report_plan_binding(report, plan, label)
         failure_email = path.with_name("failure-email.html")
         if failure_email.exists():
             if report["status"] != "INCONCLUSIVE":
@@ -1492,7 +1527,6 @@ def validate_report_artifacts(
         latest = load_data(latest_json)
         validate_instance(latest, report_schema, "reports/latest.json")
         validate_instance(latest["scorecard"], SCORECARD_SCHEMA, "reports/latest.json.scorecard")
-        validate_canonical_report_semantics(latest, agents, catalog, "reports/latest.json")
         day_root = (
             ROOT
             / "reports"
@@ -1504,10 +1538,36 @@ def validate_report_artifacts(
             day_root /= latest["report_id"]
         daily_json = day_root / "report.json"
         daily_markdown = day_root / "report.md"
+        plan_path = day_root / "plan.json"
         if not daily_json.is_file() or load_data(daily_json) != latest:
             raise ContractError("reports/latest.json must exactly match its dated report.json")
         if not daily_markdown.is_file() or daily_markdown.read_bytes() != latest_markdown.read_bytes():
             raise ContractError("reports/latest.md must exactly match its dated report.md")
+        if not plan_path.is_file():
+            raise ContractError("reports/latest.json requires its dated plan.json")
+        latest_plan = load_data(plan_path)
+        validate_report_plan_binding(
+            latest,
+            latest_plan,
+            "reports/latest.json",
+        )
+        if latest_plan["catalog_version"] == catalog["catalog_version"]:
+            validate_canonical_report_semantics(
+                latest,
+                agents,
+                catalog,
+                "reports/latest.json",
+                expected_scenario_ids={
+                    assignment["scenario_id"]
+                    for assignment in latest_plan["assignments"]
+                },
+            )
+        else:
+            validate_historical_report_semantics(
+                latest,
+                latest_plan,
+                "reports/latest.json",
+            )
 
     trend_path = ROOT / "reports" / "trend.json"
     if trend_path.exists():

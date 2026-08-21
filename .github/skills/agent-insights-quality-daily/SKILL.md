@@ -206,23 +206,27 @@ standalone-tab flight is on and `/monitor/insights` when it is off. Trace links 
 
 1. Produce one canonical report model validated against
    `schemas/canonical-report.schema.json`; validate its scorecard separately.
-2. Render detailed `report.json` and `report.md`, then consistent `latest.json`, `latest.md`, and
+2. Bind report completeness to the validated plan snapshot: `active_scenarios` is the selected
+   assignment count, and results contain every selected scenario exactly once with no unselected
+   scenario. Keep incomplete selected scenarios as `inconclusive`; omitted rotating scenarios are
+   not report-required. Full-catalog mode still requires all 63.
+3. Render detailed `report.json` and `report.md`, then consistent `latest.json`, `latest.md`, and
    `trend.json`. Include per-agent/version/scenario results, field judgments, collection analysis,
    memory changes, bug actions, diagnostics, and opaque Agent Insights references. Never commit a
    private link.
-3. Render HTML from the canonical model with HTML encoding. Subject:
+4. Render HTML from the canonical model with HTML encoding. Subject:
    `[Agent Insights Quality] <AT BAR|NOT AT BAR|INCONCLUSIVE> - YYYY-MM-DD - <short signal>`.
-4. Email sections are Summary, What we are doing well, Gaps and regressions, and Test agents and
+5. Email sections are Summary, What we are doing well, Gaps and regressions, and Test agents and
    Agent Insights links. Resolve private links only while rendering the direct email; do not persist
    them in public files. Include a 14-day email-safe trend and every agent. Human validation is
    exactly `N/A` unless ambiguity, disagreement, low confidence, novelty, or an unverifiable fix
    warrants review.
-5. Resolve the selected protected recipient variable, enforce the configured allowed domain, and
+6. Resolve the selected protected recipient variable, enforce the configured allowed domain, and
    send HTML directly through the connected Microsoft mail capability. Do not use a repository
    credential, relay, or hidden override.
-6. Open an `aiq-daily/` generated-only PR. Validate schemas, docs, links, consistency, tests, and
+7. Open an `aiq-daily/` generated-only PR. Validate schemas, docs, links, consistency, tests, and
    changed-path allowlist before auto-merge. Never include a private URL in the public PR.
-7. Clean only exact privately resolved framework-tagged resources beyond retention.
+8. Clean only exact privately resolved framework-tagged resources beyond retention.
 
 ## Failure finalizer
 

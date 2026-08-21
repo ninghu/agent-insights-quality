@@ -82,6 +82,13 @@ agent across all versions in a daily project and four roots per run. There is no
 insight cap: actual insights must equal the selected expected count exactly. Any extra insight is
 noise and any missing insight is a miss, making a complete run `NOT AT BAR`.
 
+Canonical reporting is scoped to the validated plan snapshot. `active_scenarios` equals the number
+of selected assignments, and `scenario_results` must contain exactly one result for every selected
+scenario with no unselected result. An incomplete selected scenario remains present with an
+`inconclusive` result and makes the report `INCONCLUSIVE`; catalog scenarios omitted by rotation are
+recorded in `plan.selection.omitted_scenario_ids` and do not block a conclusive daily verdict.
+Explicit full-catalog plans select all 63 scenarios and therefore still require all 63 results.
+
 `run` and `resume` require a reviewed adapter module through `AIQ_RUNTIME_ADAPTER`. Independent agents
 run concurrently while versions of one agent remain sequential. Resume replays completed operations
 with their idempotency keys and rejects checkpoint drift. Cleanup is a dry run unless `--execute` is
