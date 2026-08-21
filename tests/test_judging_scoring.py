@@ -905,6 +905,45 @@ def test_sequential_evidence_binds_current_and_prior_phase_versions(
     assert {"provenance_failure", "cross_version_stale"} <= violations
 
 
+def test_single_version_evidence_rejects_previous_insight_before_judging() -> None:
+    raw = raw_bundle("aiq-scn-010-fault")
+    raw["previous_insight"] = {
+        "id": "foreign-prior",
+        "fingerprint": SHA_B,
+        "phase": "faulted",
+        "run_id": "foreign-run",
+        "version_digest": SHA_B,
+    }
+
+    with pytest.raises(
+        ContractError,
+        match="single-version evidence cannot include previous_insight",
+    ):
+        project_evidence(raw)
+
+
+def test_single_version_bundle_with_previous_insight_is_provenance_failure() -> None:
+    bundle = project_evidence(raw_bundle("aiq-scn-010-fault"))
+    bundle["previous_insight"] = {
+        "id": "foreign-prior",
+        "fingerprint": SHA_B,
+        "phase": "faulted",
+        "run_id": "foreign-run",
+        "version_digest": SHA_B,
+    }
+    bundle["bundle_hash"] = content_hash(
+        {key: item for key, item in bundle.items() if key != "bundle_hash"}
+    )
+
+    violations, _ = deterministic_violations(
+        plan(),
+        [bundle],
+        synthetic_catalog(),
+    )
+
+    assert {"provenance_failure", "cross_version_stale"} <= violations
+
+
 def test_engine_and_agent_capabilities_are_provenance_bound() -> None:
     value = project_evidence(raw_bundle("aiq-scn-010-fault"))
     value["run"]["engine_build"] = "forged-build"

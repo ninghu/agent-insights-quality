@@ -180,6 +180,8 @@ def deterministic_violations(
                 for version in prior_versions
             ):
                 violations.update({"provenance_failure", "cross_version_stale"})
+        elif previous is not None:
+            violations.update({"provenance_failure", "cross_version_stale"})
         trace_ids = {trace["trace_id"] for trace in bundle["trace_evidence"]}
         window_start = _timestamp(bundle["run"]["window_start"])
         window_end = _timestamp(bundle["run"]["window_end"])

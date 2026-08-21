@@ -90,6 +90,13 @@ def project_evidence(raw: dict[str, Any]) -> dict[str, Any]:
         raise ContractError("evidence projection: trace entries must be objects")
     if not all(isinstance(item, Mapping) for item in raw["insights"]):
         raise ContractError("evidence projection: insight entries must be objects")
+    if (
+        raw["version_sequence"].get("phase") in {"healthy", "faulted"}
+        and raw["previous_insight"] is not None
+    ):
+        raise ContractError(
+            "evidence projection: single-version evidence cannot include previous_insight"
+        )
     projected = {
         "schema_version": EVIDENCE_SCHEMA_VERSION,
         "bundle_id": raw["bundle_id"],
