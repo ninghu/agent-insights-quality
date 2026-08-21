@@ -97,12 +97,12 @@ def validate_public_repository_content() -> None:
     for path in repository_files():
         if not path.is_file() or path.resolve() == scanner_path:
             continue
+        raw = path.read_bytes()
         try:
-            raw = path.read_bytes()
             text = raw.decode("ascii")
         except UnicodeDecodeError:
             violations.append(f"{path.relative_to(ROOT)}: non-ASCII content")
-            continue
+            text = raw.decode("latin-1")
         text = _canonicalize_url_separators(text)
         for label, pattern in PUBLIC_FORBIDDEN_PATTERNS.items():
             if pattern.search(text):

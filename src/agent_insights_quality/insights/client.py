@@ -413,9 +413,15 @@ class AgentInsightsClient:
         *,
         timeout_seconds: float = 21600,
         poll_seconds: float = 30,
+        cancelled: Callable[[], bool] | None = None,
     ) -> Mapping[str, Any]:
         deadline = self._monotonic() + timeout_seconds
         while True:
+            if cancelled is not None and cancelled():
+                raise RuntimeFailure(
+                    "insights_run_cancelled",
+                    "Agent Insights polling was cancelled.",
+                )
             payload = self.get_run(monitor_id, run_id)
             payload_id = str(payload.get("id") or "")
             payload_monitor = str(payload.get("monitor_id") or payload.get("monitorId") or "")
@@ -436,7 +442,16 @@ class AgentInsightsClient:
                 return payload
             if self._monotonic() >= deadline:
                 raise RuntimeFailure("insights_run_timeout", "Agent Insights run polling timed out.")
-            self._sleep(poll_seconds)
+            remaining = poll_seconds
+            while remaining > 0:
+                if cancelled is not None and cancelled():
+                    raise RuntimeFailure(
+                        "insights_run_cancelled",
+                        "Agent Insights polling was cancelled.",
+                    )
+                interval = min(1.0, remaining)
+                self._sleep(interval)
+                remaining -= interval
 
     def cancel_run(self, monitor_id: str, run_id: str) -> None:
         self._request(
@@ -564,7 +579,12 @@ class AgentInsightsClient:
                         "Insight agent version does not match the expected version.",
                     )
             if operation_ids is not None:
-                raw_ids = insight.get("trace_ids") or insight.get("operation_ids") or []
+                raw_ids = (
+                    insight.get("trace_ids")
+                    or insight.get("traceIds")
+                    or insight.get("operation_ids")
+                    or []
+                )
                 if isinstance(raw_ids, str):
                     try:
                         raw_ids = json.loads(raw_ids)
@@ -612,8 +632,14 @@ class AgentInsightsClient:
         agent_name: str | None = None,
         agent_version: str | None = None,
         operation_ids: frozenset[str] | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> tuple[Mapping[str, Any], list[Mapping[str, Any]]]:
-        run = self.wait_run(monitor_id, run_id, timeout_seconds=timeout_seconds)
+        run = self.wait_run(
+            monitor_id,
+            run_id,
+            timeout_seconds=timeout_seconds,
+            cancelled=cancelled,
+        )
         run_start, run_end = self.validate_run_window(run, expected_start, expected_end, lookback_hours)
         insights = self.scope_insights(
             self.list_insights(monitor_id),

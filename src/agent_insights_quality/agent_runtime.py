@@ -39,7 +39,7 @@ _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _OPERATION_ID = re.compile(r"^[0-9a-f]{32}$")
 _SPAN_ID = re.compile(r"^[0-9a-f]{16}$")
 
-# Reviewed endpoint-faults catalog — mirrors scenario_runtime._ENDPOINT_CASES so that
+# Reviewed endpoint-faults catalog - mirrors scenario_runtime._ENDPOINT_CASES so that
 # prompt-agent scenario_operations can produce the same structured tool-call output as
 # hosted agents without re-defining case semantics in individual tests.
 _ENDPOINT_CASES: dict[str, dict[str, Any]] = {
@@ -484,6 +484,89 @@ class FoundryDeploymentClient:
         self._poll_interval = poll_interval_seconds
         self._sleep = sleeper
         self._monotonic = monotonic
+
+    def recover_version(
+        self,
+        *,
+        agent_name: str,
+        agent_type: str,
+        run_id: str,
+        artifact_digest: str,
+        source_digest: str | None = None,
+        image_digest: str | None = None,
+    ) -> tuple[DeploymentReceipt | None, bool]:
+        """Reconcile a deterministic deployment after a process interruption."""
+        _validate_agent_name(agent_name)
+        response = self._request(
+            "GET",
+            f"/agents/{_quote(agent_name)}",
+            headers=(
+                {"Foundry-Features": HOSTED_FEATURES}
+                if agent_type != "prompt"
+                else {}
+            ),
+            body=None,
+            expected_statuses={200, 404},
+        )
+        if response.status_code == 404:
+            return None, False
+        payload = response.json()
+        candidates: list[Mapping[str, Any]] = []
+        if payload.get("version"):
+            candidates.append(payload)
+        versions = payload.get("versions")
+        if isinstance(versions, Mapping):
+            latest = versions.get("latest")
+            if isinstance(latest, Mapping):
+                candidates.append(latest)
+            values = versions.get("value") or versions.get("data")
+            if isinstance(values, list):
+                candidates.extend(
+                    item for item in values if isinstance(item, Mapping)
+                )
+        elif isinstance(versions, list):
+            candidates.extend(
+                item for item in versions if isinstance(item, Mapping)
+            )
+        expected = _ownership_metadata(
+            run_id,
+            artifact_digest,
+            source_digest=source_digest,
+            image_digest=image_digest,
+        )
+        matches = [
+            candidate
+            for candidate in candidates
+            if isinstance(candidate.get("metadata"), Mapping)
+            and all(
+                candidate["metadata"].get(key) == value
+                for key, value in expected.items()
+            )
+        ]
+        unique = {
+            str(candidate.get("version") or ""): candidate
+            for candidate in matches
+            if candidate.get("version")
+        }
+        if len(unique) > 1:
+            raise RuntimeContractError(
+                "Foundry returned multiple versions for one immutable deployment identity."
+            )
+        if not unique:
+            return None, True
+        version = next(iter(unique))
+        return (
+            self._poll(
+                agent_name,
+                version,
+                agent_type,
+                run_id,
+                artifact_digest,
+                source_digest=source_digest,
+                image_digest=image_digest,
+            ),
+            True,
+        )
 
     def deploy_prompt(
         self,

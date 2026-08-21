@@ -31,14 +31,17 @@ def work(agent: str, version: str, start: datetime) -> VersionWork:
 
 
 class Hooks:
-    def __init__(self, *, fail_once: bool = False) -> None:
+    def __init__(self, *, fail_once: bool = False, results=None) -> None:
         self.calls: list[str] = []
         self.fail_once = fail_once
         self.finalized = 0
+        self.results: dict[str, dict[str, str]] = results if results is not None else {}
 
     def _value(self, name, key):
         self.calls.append(name + ":" + key)
-        return {"result_reference": "sha256:" + "a" * 64}
+        result = {"result_reference": "sha256:" + "a" * 64}
+        self.results[key] = result
+        return result
 
     def preflight(self, _plan, *, dry_run):
         return self._value("preflight", str(dry_run))
@@ -60,7 +63,7 @@ class Hooks:
         else:
             start = datetime(2026, 8, 21, tzinfo=UTC)
             end = start + timedelta(minutes=5)
-        return value | {
+        result = value | {
             "window_binding": {
                 "planned_start": "window://test/healthy/start-inclusive",
                 "planned_end": "window://test/healthy/end-exclusive",
@@ -68,6 +71,8 @@ class Hooks:
                 "realized_end": end.isoformat(),
             }
         }
+        self.results[idempotency_key] = result
+        return result
 
     def wait_ingestion(self, _work, _invocation, *, idempotency_key):
         return self._value("ingestion", idempotency_key)
@@ -77,6 +82,10 @@ class Hooks:
 
     def assemble_evidence(self, _work, _run, *, idempotency_key):
         return self._value("evidence", idempotency_key)
+
+    def recover(self, key, _checkpoint):
+        self.calls.append("recover:" + key)
+        return self.results[key]
 
     def cancel(self, _work):
         self.calls.append("cancel")
@@ -108,6 +117,31 @@ def test_orchestrator_retries_and_resumes_idempotently_with_public_receipt(tmp_p
     )
     with pytest.raises(RuntimeFailure, match="different plan"):
         ProductionOrchestrator(hooks, receipt).run(changed, resume=True)
+
+
+def test_resume_recovers_completed_steps_without_replaying_side_effects(
+    tmp_path: Path,
+) -> None:
+    class InterruptedHooks(Hooks):
+        def wait_ingestion(self, _work, _invocation, *, idempotency_key):
+            raise RuntimeFailure("interrupted", "Synthetic process interruption.")
+
+    start = datetime(2026, 8, 21, tzinfo=UTC)
+    plan = PlanInput("aiq-20260821", "aiq-20260821", {"a": (work("a", "v1", start),)})
+    receipt = tmp_path / "state.json"
+    shared: dict[str, dict[str, str]] = {}
+    with pytest.raises(RuntimeFailure, match="interruption"):
+        ProductionOrchestrator(
+            InterruptedHooks(results=shared),
+            receipt,
+        ).run(plan)
+
+    resumed_hooks = Hooks(results=shared)
+    result = ProductionOrchestrator(resumed_hooks, receipt).run(plan, resume=True)
+    assert result.status == "succeeded"
+    assert not any(call.startswith(("deploy:", "invoke:")) for call in resumed_hooks.calls)
+    assert any(call.startswith("recover:") and call.endswith(":deploy") for call in resumed_hooks.calls)
+    assert any(call.startswith("recover:") and call.endswith(":invoke") for call in resumed_hooks.calls)
 
 
 def test_orchestrator_finalizes_failure_without_success_shaped_state(tmp_path: Path) -> None:

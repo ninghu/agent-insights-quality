@@ -125,9 +125,11 @@ same exact module may be selected through `AIQ_RUNTIME_ADAPTER` or `--adapter`; 
 injection is rejected. Set protected `AIQ_TICKET_IMAGE_URI` to the reviewed public GHCR image pinned
 by digest. Independent agents run concurrently while versions of one agent remain sequential.
 Symbolic plan windows remain immutable; endpoint traffic binds them to exact UTC half-open windows in
-the runtime receipt, and both wave order and realized non-overlap are checked. Resume replays completed
-operations with their idempotency keys and rejects checkpoint drift. Cleanup is a dry run unless
-`--execute` is present and filters exact framework purpose, owner, name, and expiration metadata.
+the runtime receipt, and both wave order and realized non-overlap are checked. Agent Insights uses its
+service-returned lookback window, then scopes changed revisions to the exact agent version and correlated
+operation IDs. Resume recovers private idempotency receipts without replaying completed remote side
+effects and rejects checkpoint drift. Cleanup is a dry run unless `--execute` is present and filters
+exact framework purpose, owner, name, and expiration metadata.
 
 Install the optional identity-backed Azure clients with `python -m pip install -e ".[azure]"` on live
 runners that query Application Insights or use the Azure Blob artifact backend.

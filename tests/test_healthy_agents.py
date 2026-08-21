@@ -1153,7 +1153,7 @@ def test_duplicate_dispatch_calls_execute_twice(sr_path: Path) -> None:
     [
         ("tool_router", "bypass_dispatch", "required_tool", "without dispatch"),
         ("operation_handler", "bypass_dispatch", "success_envelope", "without dispatch"),
-        ("tool_router", "replace_route", "incompatible_tool", "incompatible"),
+        ("tool_router", "replace_route", "incompatible_tool", "dispatch-result"),
         ("response_mapper", "patch_return_value", "deterministic contradictory value", "deterministic contradictory value"),
         ("failure_handler", "patch_return_value", "synthetic available result", "synthetic available result"),
         ("response_mapper", "discard_input", "tool_result", "stale response"),
@@ -1171,12 +1171,17 @@ def test_source_patch_control_flow_operations(
 ) -> None:
     cfg = _make_config([{"target": target, "action": action, "value": value}])
 
+    dispatched: list[str] = []
+
     def execute(n: str, a: dict) -> str:
+        dispatched.append(n)
         return "dispatch-result"
 
     rt = _rt(sr_path, cfg)
     result = rt.run_tool("lookup", {"account_id": "SYN-1"}, execute)
     assert expected in result, f"expected {expected!r} in {result!r}"
+    if target == "tool_router" and action == "replace_route":
+        assert dispatched == ["incompatible_tool"]
 
 
 @pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
@@ -1656,5 +1661,4 @@ def test_handled_child_failure_emits_nested_spans_and_dispatches(sr_path: Path) 
     assert parent.status.status_code == StatusCode.OK, "parent span must be OK (recovered)"
     assert parent.attributes.get("endpoint.parent.status") == "recovered"
     assert parent.attributes.get("endpoint.case") == "handled-child-failure"
-
 

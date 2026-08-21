@@ -323,13 +323,13 @@ def test_run_window_and_checkpoint_scope_insights_fail_closed() -> None:
     }
     # Exact match still accepted as enclosing window
     assert AgentInsightsClient.validate_run_window(run, start, end, lookback_hours=1) == (start, end)
-    # Service window starts after expected_start — rejected
+    # Service window starts after expected_start - rejected
     with pytest.raises(RuntimeFailure, match="different analysis window"):
         AgentInsightsClient.validate_run_window(run, start - timedelta(seconds=1), end, lookback_hours=1)
-    # Service window ends before expected_end — rejected
+    # Service window ends before expected_end - rejected
     with pytest.raises(RuntimeFailure, match="different analysis window"):
         AgentInsightsClient.validate_run_window(run, start, end + timedelta(seconds=1), lookback_hours=1)
-    # Duration inconsistent with lookback — rejected
+    # Duration inconsistent with lookback - rejected
     with pytest.raises(RuntimeFailure, match="duration is inconsistent"):
         AgentInsightsClient.validate_run_window(run, start, end, lookback_hours=24)
     # Slight timestamp shift is fine as long as window still encloses and duration matches
@@ -520,7 +520,7 @@ def test_ingestion_polling_is_bounded_and_fails_closed() -> None:
         )
 
 
-# ── new focused tests ─────────────────────────────────────────────────────────
+# New focused tests
 
 
 def test_scope_insights_filters_by_exact_agent_name_and_version() -> None:
@@ -562,7 +562,7 @@ def test_scope_insights_requires_nonempty_trace_ids_in_operation_set() -> None:
     checkpoint = InsightCheckpoint(captured_at=start + timedelta(minutes=1), revisions={})
     base_time = (start + timedelta(minutes=2)).isoformat()
 
-    # No trace_ids field — rejected when operation_ids is provided
+    # No trace_ids field - rejected when operation_ids is provided
     with pytest.raises(RuntimeFailure, match="no trace IDs"):
         AgentInsightsClient.scope_insights(
             [{"id": "x", "revision": "1", "created_at": base_time}],
@@ -570,7 +570,7 @@ def test_scope_insights_requires_nonempty_trace_ids_in_operation_set() -> None:
             operation_ids=frozenset([op_id]),
         )
 
-    # trace_id not in operation_ids — rejected
+    # trace_id not in operation_ids - rejected
     with pytest.raises(RuntimeFailure, match="do not all belong"):
         AgentInsightsClient.scope_insights(
             [{"id": "x", "revision": "1", "created_at": base_time, "trace_ids": ["ff" * 16]}],
@@ -578,7 +578,7 @@ def test_scope_insights_requires_nonempty_trace_ids_in_operation_set() -> None:
             operation_ids=frozenset([op_id]),
         )
 
-    # trace_id in operation_ids — accepted
+    # trace_id in operation_ids - accepted
     selected = AgentInsightsClient.scope_insights(
         [{"id": "x", "revision": "1", "created_at": base_time, "trace_ids": [op_id]}],
         checkpoint, start, start + timedelta(hours=1),
@@ -590,7 +590,7 @@ def test_scope_insights_requires_nonempty_trace_ids_in_operation_set() -> None:
 def test_validate_run_window_accepts_enclosing_window_without_equality() -> None:
     start = datetime(2026, 8, 21, 1, tzinfo=UTC)
     end = start + timedelta(hours=1)
-    # Service returned slightly wider window — still valid
+    # Service returned slightly wider window - still valid
     run = {
         "start_time": (start - timedelta(minutes=2)).isoformat(),
         "end_time": (end + timedelta(minutes=2)).isoformat(),
@@ -602,7 +602,7 @@ def test_validate_run_window_accepts_enclosing_window_without_equality() -> None
     run_exact = {"start_time": start.isoformat(), "end_time": end.isoformat()}
     assert AgentInsightsClient.validate_run_window(run_exact, start, end, lookback_hours=1) == (start, end)
 
-    # Window too short (4 min) for 1-hour lookback — rejected
+    # Window too short (4 min) for 1-hour lookback - rejected
     run_short = {
         "start_time": start.isoformat(),
         "end_time": (start + timedelta(minutes=4)).isoformat(),
@@ -651,7 +651,7 @@ def test_telemetry_correlation_without_chat_span_succeeds_when_not_required() ->
 
 
 def test_telemetry_correlation_with_only_session_id_for_failed_request() -> None:
-    """Failed invocations may only carry a session_id — correlation must still work."""
+    """Failed invocations may only carry a session_id; correlation must still work."""
     start = datetime(2026, 8, 21, tzinfo=UTC)
     trace = "f" * 32
     rows = [

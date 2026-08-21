@@ -230,9 +230,9 @@ def finalize_readiness_failure(
         [
             f"# Agent Insights Quality: {report_id}",
             "",
-            f"**Status:** INCONCLUSIVE",
+            "**Status:** INCONCLUSIVE",
             f"**Report date:** {report_date}",
-            f"**Failed phase:** Runtime readiness",
+            "**Failed phase:** Runtime readiness",
             "",
             reason,
             "",

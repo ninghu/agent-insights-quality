@@ -33,6 +33,7 @@ class ValidationOnlyHooks:
     wait_ingestion = _unavailable
     run_insights = _unavailable
     assemble_evidence = _unavailable
+    recover = _unavailable
 
     @staticmethod
     def cancel(_work: Any) -> None:
@@ -78,6 +79,7 @@ def load_runtime_hooks(config: RuntimeConfig, *, validation_only: bool = False) 
         "wait_ingestion",
         "run_insights",
         "assemble_evidence",
+        "recover",
         "cancel",
         "finalize_failure",
     }

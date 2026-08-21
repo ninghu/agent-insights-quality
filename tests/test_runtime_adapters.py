@@ -128,6 +128,51 @@ def test_prompt_deployment_sends_real_token_and_polls_owned_version() -> None:
     )
 
 
+def test_deployment_recovery_reuses_exact_owned_version_without_post() -> None:
+    digest = "sha256:" + ("a" * 64)
+    metadata = _metadata("run-1", digest)
+    transport = QueueTransport(
+        [
+            _response(
+                200,
+                {
+                    "name": "aiq-001-weather",
+                    "versions": {
+                        "latest": {
+                            "version": "7",
+                            "metadata": metadata,
+                        }
+                    },
+                },
+            ),
+            _response(
+                200,
+                {
+                    "version": "7",
+                    "status": "active",
+                    "metadata": metadata,
+                },
+            ),
+        ]
+    )
+    client = FoundryDeploymentClient(
+        PROJECT_ENDPOINT,
+        lambda: "short-lived-token",
+        transport=transport,
+        sleeper=lambda _seconds: None,
+    )
+    receipt, agent_exists = client.recover_version(
+        agent_name="aiq-001-weather",
+        agent_type="prompt",
+        run_id="run-1",
+        artifact_digest=digest,
+    )
+    assert agent_exists is True
+    assert receipt is not None
+    assert receipt.agent_version == "7"
+    assert [call["method"] for call in transport.calls] == ["GET", "GET"]
+
+
 def test_hosted_source_uses_multipart_hash_feature_header_and_timeout() -> None:
     source = ROOT / "agents" / "finance-hosted" / "source"
     _, source_digest = deterministic_zip(source)
@@ -461,7 +506,7 @@ def test_hosted_session_version_mismatch_is_cleaned_up() -> None:
 
 
 def test_hosted_endpoint_failure_raises_invocation_endpoint_error_and_still_deletes_session() -> None:
-    """HTTP 5xx from the endpoint after exact-version session creation → InvocationEndpointError."""
+    """HTTP 5xx after exact-version session creation raises InvocationEndpointError."""
     fixture = HealthyFixture(
         id="hosted-fail",
         input="do-work",

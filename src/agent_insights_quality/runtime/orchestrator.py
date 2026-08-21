@@ -290,6 +290,8 @@ class RuntimeHooks(Protocol):
         idempotency_key: str,
     ) -> Mapping[str, Any]: ...
 
+    def recover(self, key: str, checkpoint: str) -> Mapping[str, Any]: ...
+
     def cancel(self, work: VersionWork) -> None: ...
 
     def finalize_failure(self, failure: RuntimeFailure, state: Mapping[str, Any]) -> None: ...
@@ -405,6 +407,8 @@ class ProductionOrchestrator:
         key: str,
         phase: str,
         operation: Callable[[], Mapping[str, Any]],
+        *,
+        replay_existing: bool = False,
     ) -> Mapping[str, Any]:
         with self._write_lock:
             if self._cancelled.is_set():
@@ -413,7 +417,11 @@ class ProductionOrchestrator:
             state.phase = phase
         if checkpoint is not None:
             try:
-                value = self._retry(operation)
+                value = (
+                    self._retry(operation)
+                    if replay_existing
+                    else self._hooks.recover(key, checkpoint)
+                )
             except RuntimeFailure as error:
                 error.details.setdefault("phase", phase)
                 raise
@@ -577,6 +585,7 @@ class ProductionOrchestrator:
                 "preflight",
                 "preflight",
                 lambda: self._hooks.preflight(plan, dry_run=dry_run),
+                replay_existing=True,
             )
             if dry_run:
                 state.status = "dry_run"
@@ -585,7 +594,7 @@ class ProductionOrchestrator:
                 return state
             self._step(
                 state,
-                "project",
+                f"{plan.plan_id}:project",
                 "project",
                 lambda: self._hooks.ensure_project(plan, idempotency_key=f"{plan.plan_id}:project"),
             )

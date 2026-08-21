@@ -155,7 +155,22 @@ class ScenarioRuntime:
         ):
             return "Synthetic success envelope without dispatch."
         if self._has("tool_router", "replace_route"):
-            return "Synthetic incompatible tool route selected."
+            route = next(
+                str(operation["value"])
+                for operation in self._operations
+                if operation.get("target") == "tool_router"
+                and operation.get("action") == "replace_route"
+            )
+            try:
+                return execute(route, dict(arguments))
+            except (KeyError, TypeError, ValueError, RuntimeError) as error:
+                return _canonical(
+                    {
+                        "route": route,
+                        "status": "dispatch_error",
+                        "error_type": type(error).__name__,
+                    }
+                )
 
         # --- state_machine: re-enter current state (bounded loop via model turns) ---
         if self._has("state_machine", "replace_transition"):

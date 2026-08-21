@@ -135,7 +135,7 @@ class ModelBackedAgent:
                 )
                 try:
                     dispatch_result = self._execute_tool(dispatch_name, dispatch_args)
-                except (KeyError, TypeError, ValueError) as error:
+                except (KeyError, TypeError, ValueError, RuntimeError) as error:
                     span.record_exception(error)
                     span.set_status(Status(StatusCode.ERROR, str(error)))
                     raise
