@@ -59,6 +59,10 @@ def test_public_safety_patterns_reject_private_identifiers(unsafe: str) -> None:
         "http://" + "example." + "visualstudio." + "com/Project",
         "//" + "example." + "visualstudio." + "com/Project",
         "dev." + "azure.com/org/project",
+        "https://" + "org." + "visualstudio." + "com",
+        "//" + "org." + "visualstudio." + "com",
+        "org." + "visualstudio." + "com",
+        "org." + "visualstudio." + "com?view=workitems",
     ],
 )
 def test_public_safety_rejects_ado_hosts_independent_of_scheme(unsafe: str) -> None:
@@ -73,6 +77,8 @@ def test_public_safety_rejects_ado_hosts_independent_of_scheme(unsafe: str) -> N
         "https://not" + "visualstudio." + "com/docs",
         "The phrase dev azure com is not a URL.",
         "https://example.test/path/dev." + "azure.com-guide",
+        "https://org." + "visualstudio." + "com.example.test/docs",
+        "org." + "visualstudio." + "company/docs",
     ],
 )
 def test_public_safety_ado_host_pattern_avoids_near_matches(safe: str) -> None:

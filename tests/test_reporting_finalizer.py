@@ -195,10 +195,100 @@ def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> No
     links = runtime_agent_links(value)
     subject, body = render_email_html(value, trend, links)
     assert subject.startswith("[Agent Insights Quality] AT BAR")
-    assert body.count("<h2>") == 4
+    assert body.count("<h2 ") == 4
     assert "&lt;without injection&gt;" in body
+    assert "<without injection>" not in body
     assert all(agent["id"] in body for agent in value["agents"])
     assert "Healthy controls produced no insights." in body
+    assert 'bgcolor="#f3f6fa"' in body
+    assert 'bgcolor="#12304a"' in body
+    assert "max-width:760px" in body
+    assert "<!--[if mso]>" in body
+    assert 'border-left:5px solid #0078d4' in body
+    assert "Agent Insights met the strict daily quality bar" in body
+    assert 'bgcolor="#e8eef7"' in body
+    assert 'width="100%"' in body
+    assert "<style" not in body
+    assert "<script" not in body
+    assert "<img" not in body
+    positions = [body.index(f">{title}</h2>") for title in (
+        "Summary",
+        "What we are doing well",
+        "Gaps and regressions",
+        "Test agents and Agent Insights links",
+    )]
+    assert positions == sorted(positions)
+
+
+@pytest.mark.parametrize(
+    ("status", "background", "foreground", "conclusion"),
+    [
+        (
+            "AT BAR",
+            "#e6f4ea",
+            "#0b6a0b",
+            "met the strict daily quality bar",
+        ),
+        (
+            "NOT AT BAR",
+            "#fde7e9",
+            "#a4262c",
+            "did not meet the strict daily quality bar",
+        ),
+        (
+            "INCONCLUSIVE",
+            "#fff4ce",
+            "#8a5700",
+            "No quality conclusion can be made",
+        ),
+    ],
+)
+def test_email_status_variants_have_outlook_safe_semantic_colors(
+    status,
+    background,
+    foreground,
+    conclusion,
+) -> None:
+    value = report()
+    value["status"] = status
+    value["scorecard"]["verdict"] = status
+    value["scorecard"]["complete"] = status != "INCONCLUSIVE"
+    value["scorecard"]["violations"] = (
+        [] if status == "AT BAR" else ["incomplete_catalog"]
+    )
+    if status == "INCONCLUSIVE":
+        value["failure"] = {
+            "failed_phase": "judgment import",
+            "last_confirmed_stage": "evidence",
+            "reason": "Synthetic evidence was incomplete.",
+            "affected_agents": [],
+            "diagnostics_reference": SHA,
+            "next_action": "Retry the bounded import.",
+        }
+    _, body = render_email_html(
+        value,
+        render_trend([value]),
+        runtime_agent_links(value),
+    )
+    assert f'background-color:{background}' in body
+    assert f"color:{foreground}" in body
+    assert conclusion in body
+
+
+def test_email_trend_is_a_bordered_four_column_outlook_table() -> None:
+    values = [report("2026-08-20"), report("2026-08-21")]
+    trend = render_trend(values)
+    _, body = render_email_html(
+        values[-1],
+        trend,
+        runtime_agent_links(values[-1]),
+    )
+    assert ">Trusted insight trend</th>" in body
+    assert ">Rate</th>" in body
+    assert body.count("2026-08-20") == 1
+    assert body.count("2026-08-21") >= 2
+    assert 'border:1px solid #d6deea' in body
+    assert 'bgcolor="#107c10"' in body
 
 
 def test_trend_is_bounded_to_fourteen_days() -> None:

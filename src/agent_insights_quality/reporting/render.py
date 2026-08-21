@@ -293,23 +293,112 @@ def resolve_recipient(
     return {"mode": "address", "address": address, "source": variable}
 
 
+_STATUS_STYLES = {
+    "AT BAR": {
+        "background": "#e6f4ea",
+        "foreground": "#0b6a0b",
+        "accent": "#107c10",
+    },
+    "NOT AT BAR": {
+        "background": "#fde7e9",
+        "foreground": "#a4262c",
+        "accent": "#c50f1f",
+    },
+    "INCONCLUSIVE": {
+        "background": "#fff4ce",
+        "foreground": "#8a5700",
+        "accent": "#d29200",
+    },
+}
+
+
 def _trend_table(trend: dict[str, Any]) -> str:
     validate_instance(trend, SCHEMAS / "trend.schema.json", "trend")
-    cells = []
-    colors = {"AT BAR": "#107c10", "NOT AT BAR": "#c50f1f", "INCONCLUSIVE": "#8a8886"}
+    rows = []
     for day in trend["days"][-14:]:
-        rate = (
-            "N/A"
-            if day["trusted_insight_rate"] is None
-            else f"{day['trusted_insight_rate'] * 100:.0f}%"
+        style = _STATUS_STYLES[day["status"]]
+        rate_value = day["trusted_insight_rate"]
+        rate = "N/A" if rate_value is None else f"{rate_value * 100:.0f}%"
+        bar = "&mdash;"
+        if rate_value is not None:
+            bar_width = round(rate_value * 100)
+            bar = (
+                '<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
+                'width="100%" style="width:100%;border-collapse:collapse;">'
+                "<tr>"
+                f'<td width="{bar_width}%" bgcolor="{style["accent"]}" '
+                'style="height:8px;line-height:8px;font-size:1px;">&nbsp;</td>'
+                f'<td width="{100 - bar_width}%" bgcolor="#e8eef7" '
+                'style="height:8px;line-height:8px;font-size:1px;">&nbsp;</td>'
+                "</tr></table>"
+            )
+        rows.append(
+            "<tr>"
+            '<td style="padding:9px 10px;border:1px solid #d6deea;'
+            'color:#334155;white-space:nowrap;">'
+            f"{html.escape(day['report_date'])}</td>"
+            f'<td bgcolor="{style["background"]}" style="padding:9px 10px;'
+            f'border:1px solid #d6deea;color:{style["foreground"]};'
+            'font-weight:700;white-space:nowrap;">'
+            f"{html.escape(day['status'])}</td>"
+            '<td style="padding:9px 10px;border:1px solid #d6deea;">'
+            f"{bar}</td>"
+            '<td style="padding:9px 10px;border:1px solid #d6deea;'
+            'text-align:right;color:#334155;font-weight:600;">'
+            f"{rate}</td>"
+            "</tr>"
         )
-        cells.append(
-            "<td style=\"padding:6px;text-align:center;border:1px solid #ddd\">"
-            f"<div>{html.escape(day['report_date'][5:])}</div>"
-            f"<div style=\"color:{colors[day['status']]}\">{html.escape(day['status'])}</div>"
-            f"<div>{rate}</div></td>"
+    return (
+        '<table cellpadding="0" cellspacing="0" border="0" width="100%" '
+        'style="width:100%;border-collapse:collapse;font-size:13px;">'
+        '<tr bgcolor="#e8eef7">'
+        '<th align="left" style="padding:9px 10px;border:1px solid #d6deea;'
+        'color:#12304a;">Date</th>'
+        '<th align="left" style="padding:9px 10px;border:1px solid #d6deea;'
+        'color:#12304a;">Result</th>'
+        '<th align="left" style="padding:9px 10px;border:1px solid #d6deea;'
+        'color:#12304a;">Trusted insight trend</th>'
+        '<th align="right" style="padding:9px 10px;border:1px solid #d6deea;'
+        'color:#12304a;">Rate</th></tr>'
+        + "".join(rows)
+        + "</table>"
+    )
+
+
+def _section_heading(title: str) -> str:
+    return (
+        '<h2 style="margin:0 0 14px 0;color:#12304a;font-family:Segoe UI,Arial,'
+        f'sans-serif;font-size:20px;line-height:26px;">{html.escape(title)}</h2>'
+    )
+
+
+def _bullet_list(values: list[str]) -> str:
+    return (
+        '<ul style="margin:0;padding:0 0 0 22px;color:#334155;">'
+        + "".join(
+            '<li style="margin:0 0 9px 0;padding-left:3px;line-height:21px;">'
+            f"{html.escape(value)}</li>"
+            for value in values
         )
-    return "<table role=\"presentation\"><tr>" + "".join(cells) + "</tr></table>"
+        + "</ul>"
+    )
+
+
+def _quality_conclusion(status: str) -> str:
+    return {
+        "AT BAR": (
+            "Agent Insights met the strict daily quality bar with complete, "
+            "validated evidence."
+        ),
+        "NOT AT BAR": (
+            "Agent Insights did not meet the strict daily quality bar; the gaps "
+            "below require attention."
+        ),
+        "INCONCLUSIVE": (
+            "No quality conclusion can be made because the validated evidence "
+            "set is incomplete."
+        ),
+    }[status]
 
 
 def render_email_html(
@@ -376,37 +465,98 @@ def render_email_html(
         f"{counts['regressed_issues']} tracked gaps regressed.",
         f"{bug_signal} private bug actions are ready or completed.",
     ]
+    status_style = _STATUS_STYLES[report["status"]]
     rows = []
     for agent in report["agents"]:
         rows.append(
             "<tr>"
-            f"<td>{html.escape(agent['id'])}</td>"
-            f"<td>{html.escape(agent['name'])}</td>"
-            f"<td>{html.escape(agent['type'])}</td>"
-            f"<td><a href=\"{html.escape(agent_links[agent['id']], quote=True)}\">Open</a></td>"
-            f"<td>{html.escape(agent['human_validation'])}</td>"
+            '<td style="padding:11px 12px;border:1px solid #d6deea;'
+            'color:#1f2937;line-height:18px;">'
+            f"<strong>{html.escape(agent['name'])}</strong><br>"
+            '<span style="color:#64748b;font-size:12px;">'
+            f"{html.escape(agent['id'])}</span></td>"
+            '<td style="padding:11px 12px;border:1px solid #d6deea;'
+            f'color:#334155;">{html.escape(agent["type"])}</td>'
+            '<td style="padding:11px 12px;border:1px solid #d6deea;">'
+            f'<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
+            f'href="{html.escape(agent_links[agent["id"]], quote=True)}">'
+            "Open Agent Insights</a></td>"
+            '<td style="padding:11px 12px;border:1px solid #d6deea;'
+            f'color:#334155;line-height:18px;">{html.escape(agent["human_validation"])}</td>'
             "</tr>"
         )
     body = (
-        "<html><body>"
-        f"<h1>{html.escape(report['status'])}</h1>"
-        f"<h2>{SECTION_TITLES[0]}</h2>"
-        f"<p>{html.escape(report['summary'])}</p>"
-        f"<p>{counts['completed_scenarios']} of {counts['active_scenarios']} scenarios completed; "
-        f"{counts['true_positives']} correct, {counts['partially_useful']} partially useful, "
+        '<!doctype html><html><body bgcolor="#f3f6fa" '
+        'style="margin:0;padding:0;background-color:#f3f6fa;font-family:Segoe UI,'
+        'Arial,sans-serif;color:#1f2937;">'
+        '<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
+        'width="100%" bgcolor="#f3f6fa" style="width:100%;background-color:#f3f6fa;">'
+        '<tr><td align="center" style="padding:24px 12px;">'
+        "<!--[if mso]><table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" "
+        "border=\"0\" width=\"760\"><tr><td><![endif]-->"
+        '<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
+        'width="100%" bgcolor="#ffffff" style="width:100%;max-width:760px;'
+        'background-color:#ffffff;border:1px solid #dfe6ef;border-collapse:collapse;">'
+        '<tr><td bgcolor="#12304a" style="padding:34px 38px 30px 38px;'
+        'background-color:#12304a;">'
+        '<h1 style="margin:0 0 8px 0;color:#ffffff;font-family:Segoe UI,Arial,'
+        'sans-serif;font-size:32px;line-height:39px;font-weight:700;">'
+        "Agent Insights quality</h1>"
+        '<p style="margin:0 0 14px 0;color:#dbeafe;font-size:17px;line-height:24px;">'
+        f"Daily qualification report &middot; {html.escape(report['report_date'])}</p>"
+        f'<span style="display:inline-block;padding:5px 10px;background-color:'
+        f'{status_style["background"]};color:{status_style["foreground"]};'
+        'font-size:12px;line-height:16px;font-weight:700;">'
+        f"{html.escape(report['status'])}</span>"
+        '<p style="margin:15px 0 0 0;color:#aebfd0;font-size:12px;line-height:18px;">'
+        f"Report {html.escape(report['report_id'])} &middot; Build "
+        f"{html.escape(report['engine']['build'])}</p>"
+        "</td></tr>"
+        '<tr><td style="padding:24px 38px 0 38px;">'
+        '<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
+        'width="100%" bgcolor="#eaf4ff" style="width:100%;background-color:#eaf4ff;'
+        'border-left:5px solid #0078d4;border-collapse:collapse;">'
+        '<tr><td style="padding:18px 20px;color:#12304a;font-size:16px;line-height:24px;">'
+        f"<strong>{html.escape(_quality_conclusion(report['status']))}</strong>"
+        "</td></tr></table></td></tr>"
+        '<tr><td style="padding:28px 38px 0 38px;">'
+        + _section_heading(SECTION_TITLES[0])
+        + '<p style="margin:0 0 12px 0;color:#334155;font-size:15px;line-height:23px;">'
+        f"{html.escape(report['summary'])}</p>"
+        '<p style="margin:0 0 18px 0;color:#475569;font-size:14px;line-height:21px;">'
+        f"{counts['completed_scenarios']} of {counts['active_scenarios']} scenarios "
+        f"completed; {counts['true_positives']} correct, "
+        f"{counts['partially_useful']} partially useful, and "
         f"{counts['false_positives']} incorrect or noisy.</p>"
         + _trend_table(trend)
-        + f"<h2>{SECTION_TITLES[1]}</h2><ul>"
-        + "".join(f"<li>{html.escape(value)}</li>" for value in good)
-        + f"</ul><h2>{SECTION_TITLES[2]}</h2><ul>"
-        + "".join(f"<li>{html.escape(value)}</li>" for value in gaps)
-        + f"</ul><h2>{SECTION_TITLES[3]}</h2>"
-        "<table><tr><th>Agent ID</th><th>Test agent</th><th>Type</th>"
-        "<th>Agent Insights page</th><th>Human validation recommended</th></tr>"
+        + "</td></tr>"
+        '<tr><td style="padding:30px 38px 0 38px;">'
+        + _section_heading(SECTION_TITLES[1])
+        + _bullet_list(good)
+        + "</td></tr>"
+        '<tr><td style="padding:24px 38px 0 38px;">'
+        + _section_heading(SECTION_TITLES[2])
+        + _bullet_list(gaps)
+        + "</td></tr>"
+        '<tr><td style="padding:24px 38px 38px 38px;">'
+        + _section_heading(SECTION_TITLES[3])
+        + '<table cellpadding="0" cellspacing="0" border="0" width="100%" '
+        'style="width:100%;border-collapse:collapse;font-size:13px;">'
+        '<tr bgcolor="#e8eef7">'
+        '<th align="left" style="padding:10px 12px;border:1px solid #d6deea;'
+        'color:#12304a;">Test agent</th>'
+        '<th align="left" style="padding:10px 12px;border:1px solid #d6deea;'
+        'color:#12304a;">Type</th>'
+        '<th align="left" style="padding:10px 12px;border:1px solid #d6deea;'
+        'color:#12304a;">Agent Insights</th>'
+        '<th align="left" style="padding:10px 12px;border:1px solid #d6deea;'
+        'color:#12304a;">Human validation</th></tr>'
         + "".join(rows)
-        + "</table></body></html>"
+        + "</table></td></tr></table>"
+        "<!--[if mso]></td></tr></table><![endif]-->"
+        "</td></tr></table></body></html>"
     )
-    if tuple(re.findall(r"<h2>(.*?)</h2>", body)) != SECTION_TITLES:
+    if tuple(re.findall(r"<h2[^>]*>(.*?)</h2>", body)) != SECTION_TITLES:
         raise ContractError("Email must contain exactly the four approved sections")
     return subject, body
 
