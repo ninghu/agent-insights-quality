@@ -11,6 +11,7 @@
     "scenario",
     "agent",
     "run",
+    "version_sequence",
     "ground_truth",
     "mutation",
     "trace_evidence",
@@ -58,6 +59,16 @@
         "window_end": {"type": "string", "format": "date-time"},
         "engine_build": {"type": "string", "minLength": 1, "maxLength": 200},
         "generator_model": {"const": "gpt-5.6-terra"}
+      }
+    },
+    "version_sequence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase", "run_id", "version_digest"],
+      "properties": {
+        "phase": {"$ref": "#/$defs/phase"},
+        "run_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "version_digest": {"$ref": "#/$defs/sha256"}
       }
     },
     "ground_truth": {
@@ -167,10 +178,12 @@
     "previous_insight": {
       "type": ["object", "null"],
       "additionalProperties": false,
-      "required": ["id", "fingerprint", "version_digest"],
+      "required": ["id", "fingerprint", "phase", "run_id", "version_digest"],
       "properties": {
         "id": {"type": "string", "minLength": 1, "maxLength": 200},
         "fingerprint": {"$ref": "#/$defs/sha256"},
+        "phase": {"$ref": "#/$defs/phase"},
+        "run_id": {"type": "string", "minLength": 1, "maxLength": 200},
         "version_digest": {"$ref": "#/$defs/sha256"}
       }
     },
@@ -181,6 +194,9 @@
   },
   "$defs": {
     "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "phase": {
+      "enum": ["healthy", "faulted", "faulted-initial", "faulted-repeat", "corrected", "recurred"]
+    },
     "category": {
       "enum": [
         "tool_call_failures",

@@ -502,9 +502,10 @@ Each evidence bundle contains only the information needed to judge:
 
 - Daily-plan ground truth and expected failure contract.
 - Healthy baseline and mutation diff.
-- Agent instructions, available tools, and version metadata.
+- Agent instructions, available tools, and the current `version_sequence` phase/digest mapping.
 - User requests, tool calls/results, final responses, and trace hierarchy.
-- Produced insight fields and previous matching insight metadata.
+- Produced insight fields and previous matching insight metadata, including its separately validated
+  prior phase, run, and immutable version digest.
 
 Trace and tool content is explicitly fenced as untrusted evidence. Copilot must return strict JSON
 with:

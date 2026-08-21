@@ -99,6 +99,8 @@
           "incomplete_catalog",
           "healthy_false_positive",
           "finding_count_mismatch",
+          "extra_noise",
+          "missing_findings",
           "high_severity_recall",
           "overall_recall",
           "precision",

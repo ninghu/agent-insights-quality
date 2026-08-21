@@ -72,6 +72,8 @@
         "required": [
           "scenario_id",
           "agent_id",
+          "run_id",
+          "version_sequence",
           "agent_version_digest",
           "completed",
           "expected_count",
@@ -85,6 +87,18 @@
             "pattern": "^aiq-scn-[0-9]{3}-[a-z][a-z0-9-]*$"
           },
           "agent_id": {"type": "string", "pattern": "^aiq-[0-9]{3}-[a-z][a-z0-9-]*$"},
+          "run_id": {"type": "string", "minLength": 1, "maxLength": 200},
+          "version_sequence": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["phase", "version_digest"],
+            "properties": {
+              "phase": {
+                "enum": ["healthy", "faulted", "faulted-initial", "faulted-repeat", "corrected", "recurred"]
+              },
+              "version_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+            }
+          },
           "agent_version_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
           "completed": {"type": "boolean"},
           "expected_count": {"type": "integer", "minimum": 0},

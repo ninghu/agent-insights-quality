@@ -72,7 +72,13 @@ def validate_report_consistency(
         agents = load_agent_manifests()
         catalog = load_scenario_catalog({agent["id"] for agent in agents})
         validate_canonical_report_semantics(
-            report, agents, catalog, "canonical report"
+            report,
+            agents,
+            catalog,
+            "canonical report",
+            expected_scenario_ids={
+                result["scenario_id"] for result in report["scenario_results"]
+            },
         )
     if report["status"] != report["scorecard"]["verdict"]:
         raise ContractError("Canonical report status contradicts its scorecard")
@@ -506,6 +512,8 @@ def render_email_html(
         "umbrella": "Umbrella insight relationship gate failed.",
         "cross_version_stale": "Cross-version stale insight gate failed.",
         "finding_count_mismatch": "Expected and observed finding counts did not match.",
+        "extra_noise": "Run-scoped insight count included extra noise.",
+        "missing_findings": "Run-scoped insight count was missing findings.",
         "attribute_correctness": "One or more insight field judgments failed.",
     }
     if report["status"] == "NOT AT BAR":

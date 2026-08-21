@@ -40,25 +40,30 @@ PUBLIC_FORBIDDEN_PATTERNS = {
         r"(?<![A-Za-z0-9:])[A-Za-z0-9+/]{48,}={0,2}(?![A-Za-z0-9])"
     ),
 }
-_PRIVATE_RUNTIME_URL = re.compile(
-    r"(?i)(?<![A-Za-z0-9.-])(?:(?:https?:)?//)"
+_PRIVATE_RUNTIME_HOST = re.compile(
+    r"(?i)(?<![A-Za-z0-9.-])"
     r"(?:"
     r"ai\.azure\.com|portal\.azure\.com|"
-    r"(?:[a-z0-9-]+\.)+(?:services\.ai\.azure\.com|openai\.azure\.com|azurewebsites\.net)|"
+    r"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)*"
+    r"(?:services\.ai\.azure\.com|openai\.azure\.com|azurewebsites\.net)|"
     r"(?:internal|private)(?:[.-][a-z0-9-]+)*\.[a-z0-9.-]+"
     r")\.?(?::[0-9]+)?"
     r"(?=$|[/?:#\s<>'\"`\)\]\},;!*_]|[.,](?=$|[\s`*_\)\]\},;!]))"
 )
+_MAX_NORMALIZED_LENGTH = 4 * 1024 * 1024
+_MAX_DECODE_ITERATIONS = 8
 
 
 def _canonicalize_url_separators(text: str) -> str:
-    normalized = text
-    for _ in range(2):
+    if len(text) > _MAX_NORMALIZED_LENGTH:
+        raise ContractError("Public artifact exceeds the URL safety scan length limit")
+    normalized = text.replace("\\", "/")
+    for _ in range(_MAX_DECODE_ITERATIONS):
         decoded = unquote(normalized)
         if decoded == normalized:
-            break
-        normalized = decoded
-    return normalized.replace("\\", "/")
+            return normalized
+        normalized = decoded.replace("\\", "/")
+    raise ContractError("Public artifact URL encoding exceeds the normalization limit")
 
 
 def require_public_artifact_safe(value: Any, label: str) -> None:
@@ -69,7 +74,7 @@ def require_public_artifact_safe(value: Any, label: str) -> None:
     for pattern_label, pattern in PUBLIC_FORBIDDEN_PATTERNS.items():
         if pattern.search(normalized):
             raise ContractError(f"{label}: public artifact contains {pattern_label}")
-    if _PRIVATE_RUNTIME_URL.search(normalized):
+    if _PRIVATE_RUNTIME_HOST.search(normalized):
         raise ContractError(f"{label}: public artifact contains private runtime URL")
 
 

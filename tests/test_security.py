@@ -12,7 +12,10 @@ from agent_insights_quality.contracts import (
     load_data,
     validate_security_policy,
 )
-from agent_insights_quality.public_safety import PUBLIC_FORBIDDEN_PATTERNS
+from agent_insights_quality.public_safety import (
+    PUBLIC_FORBIDDEN_PATTERNS,
+    require_public_artifact_safe,
+)
 from agent_insights_quality.security import scan_text
 
 
@@ -108,6 +111,40 @@ def test_public_safety_rejects_ado_hosts_independent_of_scheme(unsafe: str) -> N
 def test_public_safety_ado_host_pattern_avoids_near_matches(safe: str) -> None:
     pattern = PUBLIC_FORBIDDEN_PATTERNS["private Azure DevOps endpoint"]
     assert pattern.search(safe) is None
+
+
+@pytest.mark.parametrize(
+    "unsafe",
+    [
+        "ai." + "azure.com/nextgen/r/private",
+        "portal." + "azure.com/#view/private",
+        "//project.services." + "ai.azure.com/api",
+        "project.openai." + "azure.com/openai",
+        "https:%25252f%25252fai." + "azure.com/nextgen",
+        "https:%255c%255cportal." + "azure.com/private",
+        "project%252eservices%252eai%252eazure%252ecom/api",
+    ],
+)
+def test_public_safety_rejects_runtime_hosts_after_bounded_canonicalization(
+    unsafe: str,
+) -> None:
+    with pytest.raises(ContractError, match="private runtime URL"):
+        require_public_artifact_safe(unsafe, "test")
+
+
+@pytest.mark.parametrize(
+    "safe",
+    [
+        "https://ai.azure.com.example.test/docs",
+        "https://notai.azure.com/docs",
+        "portal.azure.company/docs",
+        "services.ai.azure.com.example.test/docs",
+        "openai.azure.com.example.test/docs",
+        "The words ai azure com are not a host.",
+    ],
+)
+def test_public_safety_runtime_host_scan_avoids_near_matches(safe: str) -> None:
+    require_public_artifact_safe(safe, "test")
 
 
 @pytest.mark.parametrize(

@@ -513,7 +513,9 @@ def run(args: argparse.Namespace) -> None:
                 ),
                 None,
             )
-            if result["planned_action"] == "created":
+            if result["planned_action"] == "candidate":
+                applied = None
+            elif result["planned_action"] == "created":
                 applied = client.create_bug(candidate, client.fetch_template())
             elif result["planned_action"] == "reopened" and matched:
                 applied = client.reopen(
@@ -527,27 +529,28 @@ def run(args: argparse.Namespace) -> None:
                 raise ContractError(
                     f"Unhandled eligible ADO action: {result['planned_action']}"
                 )
-            if not isinstance(applied.get("id"), int):
-                raise ContractError("ADO apply did not confirm the work-item ID")
-            confirmed_reference = content_hash(
-                {"work_item_id": applied["id"]}
-            )
-            result["confirmed_reference"] = confirmed_reference
-            result["work_item_reference"] = confirmed_reference
-            result["action"] = result["planned_action"]
-            result["candidate_reported"] = False
-            result["apply_receipt"] = {
-                "confirmed": True,
-                "operation_reference": content_hash(
-                    {
-                        "action": result["action"],
-                        "fingerprint": result["fingerprint"],
-                        "work_item_reference": confirmed_reference,
-                    }
-                ),
-                "work_item_reference": confirmed_reference,
-            }
-            result["applied"] = True
+            if applied is not None:
+                if not isinstance(applied.get("id"), int):
+                    raise ContractError("ADO apply did not confirm the work-item ID")
+                confirmed_reference = content_hash(
+                    {"work_item_id": applied["id"]}
+                )
+                result["confirmed_reference"] = confirmed_reference
+                result["work_item_reference"] = confirmed_reference
+                result["action"] = result["planned_action"]
+                result["candidate_reported"] = False
+                result["apply_receipt"] = {
+                    "confirmed": True,
+                    "operation_reference": content_hash(
+                        {
+                            "action": result["action"],
+                            "fingerprint": result["fingerprint"],
+                            "work_item_reference": confirmed_reference,
+                        }
+                    ),
+                    "work_item_reference": confirmed_reference,
+                }
+                result["applied"] = True
         write_json(Path(args.output), result)
         print(result["action"])
     elif args.command == "render-report":

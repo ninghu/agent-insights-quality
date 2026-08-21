@@ -72,6 +72,7 @@ def project_evidence(raw: dict[str, Any]) -> dict[str, Any]:
         "scenario",
         "agent",
         "run",
+        "version_sequence",
         "ground_truth",
         "mutation",
         "trace_evidence",
@@ -99,6 +100,7 @@ def project_evidence(raw: dict[str, Any]) -> dict[str, Any]:
             "available_tools": list(dict.fromkeys(raw["agent"]["available_tools"]))[:100],
         },
         "run": deepcopy(raw["run"]),
+        "version_sequence": deepcopy(raw["version_sequence"]),
         "ground_truth": {
             "root_cause": bounded_text(
                 raw["ground_truth"]["root_cause"],

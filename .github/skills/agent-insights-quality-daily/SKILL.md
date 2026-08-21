@@ -104,8 +104,9 @@ For each planned wave:
 6. Retrieve full insight details. The 100-item schema limit is a structural safety bound, not a
    quality threshold.
 7. Build a bounded, sanitized evidence bundle using `schemas/evidence-bundle.schema.json`.
-8. For sequential versions, use non-overlapping windows and preserve prior-insight metadata so stale
-   evidence, deduplication, resolution, and recurrence behavior can be tested.
+8. For sequential versions, record the current `version_sequence` phase/digest in evidence and
+   results. Validate current traces against that phase, and validate prior-insight phase/run/digest
+   metadata separately so stale evidence, deduplication, resolution, and recurrence can be tested.
 
 Store raw synthetic artifacts only in the private 90-day artifact store. Repository evidence is a
 sanitized summary and an approved public-safe link, never a raw payload.

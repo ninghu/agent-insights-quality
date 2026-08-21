@@ -7,6 +7,7 @@ from datetime import date
 import pytest
 
 import agent_insights_quality.contracts as contracts
+from agent_insights_quality.artifact_io import content_hash
 from agent_insights_quality.contracts import (
     AGENT_SCHEMA,
     ContractError,
@@ -188,6 +189,8 @@ def _report_fixture(*, completed: bool) -> tuple[dict[str, object], list[dict], 
             {
                 "scenario_id": scenario["id"],
                 "agent_id": "aiq-001-weather",
+                "run_id": "run-00-aiq-001-weather",
+                "version_sequence": {"phase": "faulted", "version_digest": digest},
                 "agent_version_digest": digest,
                 "completed": completed,
                 "expected_count": 1,
@@ -227,10 +230,29 @@ def _report_for_plan(
             {
                 "scenario_id": assignment["scenario_id"],
                 "agent_id": assignment["agent_id"],
-                "agent_version_digest": assignment["agent_version_digest"],
+                "run_id": assignment["run_id"],
+                "version_sequence": {
+                    "phase": assignment["version_sequence"][-1]["phase"],
+                    "version_digest": assignment["version_sequence"][-1]["digest"],
+                },
+                "agent_version_digest": assignment["version_sequence"][-1]["digest"],
                 "completed": not incomplete,
+                "expected_count": expected_count,
+                "observed_count": 0 if incomplete else expected_count,
                 "verdict": "inconclusive" if incomplete else "correct",
-                "insight_references": [] if incomplete else [reference] * expected_count,
+                "insight_references": (
+                    []
+                    if incomplete
+                    else [
+                        content_hash(
+                            {
+                                "scenario": assignment["scenario_id"],
+                                "insight": index,
+                            }
+                        )
+                        for index in range(expected_count)
+                    ]
+                ),
             }
         )
     completed = sum(result["completed"] for result in results)
@@ -294,6 +316,16 @@ def _report_for_plan(
 def test_at_bar_rejects_incomplete_scenario_results() -> None:
     report, agents, catalog = _report_fixture(completed=False)
     with pytest.raises(ContractError, match="completeness"):
+        validate_canonical_report_semantics(report, agents, catalog, "report")
+
+
+def test_conclusive_not_at_bar_rejects_trust_failure() -> None:
+    report, agents, catalog = _report_fixture(completed=True)
+    report["status"] = "NOT AT BAR"
+    report["scorecard"]["verdict"] = "NOT AT BAR"
+    report["scorecard"]["violations"] = ["structural_failure"]
+
+    with pytest.raises(ContractError, match="trust failures require INCONCLUSIVE"):
         validate_canonical_report_semantics(report, agents, catalog, "report")
 
 
