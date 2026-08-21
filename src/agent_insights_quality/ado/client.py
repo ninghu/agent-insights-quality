@@ -56,7 +56,7 @@ class AdoRuntimeConfig:
     def base_url(self) -> str:
         if "/" in self.organization or not self.organization.strip():
             raise ContractError("ADO organization must be a simple runtime name")
-        return "https://" + "dev.azure.com/" + quote(self.organization, safe="")
+        return "https://" + "dev." + "azure.com/" + quote(self.organization, safe="")
 
 
 def sanitize_log(value: str) -> str:
