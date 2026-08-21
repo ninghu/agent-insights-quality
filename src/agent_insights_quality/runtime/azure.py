@@ -389,7 +389,35 @@ class AzureProjectManager:
                 "Discovery did not resolve exactly one owned qualification project.",
                 {"match_count": len(matches)},
             )
-        return self._validate_project(matches[0], managed=False)
+        return self._validate_project(matches[0], managed=False, require_owned=True)
+
+    def validate_explicit_project(self) -> ProjectResources:
+        if (
+            not self._config.resource_group
+            or not self._config.account_name
+            or not self._config.project_name
+        ):
+            raise RuntimeFailure(
+                "missing_runtime_configuration",
+                "Explicit project validation requires resource group, account, and project names.",
+            )
+        project_id = (
+            f"/subscriptions/{self._context.subscription_id}"
+            f"/resourceGroups/{self._config.resource_group}"
+            f"/providers/Microsoft.CognitiveServices/accounts/{self._config.account_name}"
+            f"/projects/{self._config.project_name}"
+        )
+        item = _mapping(
+            self._cli.json(["resource", "show", "--ids", project_id]),
+            "invalid_project_resource",
+            "Explicit project response was invalid.",
+        )
+        if str(item.get("id") or "").casefold() != project_id.casefold():
+            raise RuntimeFailure(
+                "project_selection_mismatch",
+                "Explicit project response did not match the configured project.",
+            )
+        return self._validate_project(item, managed=False, require_owned=False)
 
     def qualified_projects(self, failures: list[str]) -> list[ProjectResources]:
         selected: list[ProjectResources] = []
@@ -397,13 +425,21 @@ class AzureProjectManager:
             if not self._owned(item):
                 continue
             try:
-                selected.append(self._validate_project(item, managed=False))
+                selected.append(
+                    self._validate_project(item, managed=False, require_owned=True)
+                )
             except RuntimeFailure as error:
                 failures.append(error.code)
                 continue
         return selected
 
-    def _validate_project(self, item: Mapping[str, Any], *, managed: bool) -> ProjectResources:
+    def _validate_project(
+        self,
+        item: Mapping[str, Any],
+        *,
+        managed: bool,
+        require_owned: bool = True,
+    ) -> ProjectResources:
         project_id = str(item.get("id") or "")
         parts = project_id.strip("/").split("/")
         try:
@@ -423,7 +459,7 @@ class AzureProjectManager:
             str(account_resource.get("type") or "").casefold()
             != "microsoft.cognitiveservices/accounts"
             or str(account_resource.get("kind") or "").casefold() != "aiservices"
-            or not self._owned_tags(account_resource.get("tags"))
+            or (require_owned and not self._owned_tags(account_resource.get("tags")))
         ):
             raise RuntimeFailure(
                 "invalid_foundry_account",
@@ -465,7 +501,7 @@ class AzureProjectManager:
         if (
             str(app_insights_resource.get("type") or "").casefold()
             != "microsoft.insights/components"
-            or not self._owned_tags(app_insights_resource.get("tags"))
+            or (require_owned and not self._owned_tags(app_insights_resource.get("tags")))
         ):
             raise RuntimeFailure(
                 "invalid_project_connections",

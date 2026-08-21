@@ -337,6 +337,31 @@ def test_project_preflight_requires_exact_managed_identity_roles() -> None:
         manager.discover_qualified()
 
 
+def test_explicit_project_validation_does_not_depend_on_discovery_tags() -> None:
+    explicit = project()
+    explicit["tags"] = {}
+
+    class UntaggedExplicitCli(FakeAzureCli):
+        def json(self, arguments, **kwargs):
+            arguments = list(arguments)
+            if arguments[:2] == ["resource", "show"]:
+                target = arguments[arguments.index("--ids") + 1]
+                if "/projects/" not in target:
+                    result = dict(super().json(arguments, **kwargs))
+                    result["tags"] = {}
+                    return result
+            return super().json(arguments, **kwargs)
+
+    config = RuntimeConfig.from_env(environment()).azure
+    manager = AzureProjectManager(
+        UntaggedExplicitCli([explicit]),
+        AzureContext(SUBSCRIPTION, "tenant", "user"),
+        config,
+        "ninghu",
+    )
+    assert manager.validate_explicit_project().project_name == "aiq-20260820"
+
+
 def test_project_creation_rejects_a_foreign_raced_name() -> None:
     class RacingAzureCli(FakeAzureCli):
         def __init__(self):
@@ -640,3 +665,52 @@ def test_cleanup_cli_processes_every_resource_class_before_reporting_failures(
     monkeypatch.setattr(cli_module, "LocalArtifactStore", lambda _path: Artifacts())
     assert cli_module.main(["cleanup"]) == 1
     assert calls == ["monitors", "connections", "artifacts", "projects"]
+
+
+@pytest.mark.parametrize(
+    ("values", "arguments", "expected"),
+    [
+        (environment(), ["preflight"], "explicit"),
+        (environment(discovery=True), ["preflight"], "discovery"),
+        (environment(), ["preflight", "--discover-project"], "discovery"),
+    ],
+)
+def test_preflight_routes_explicit_and_discovery_modes(
+    values: dict[str, str],
+    arguments: list[str],
+    expected: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    config = RuntimeConfig.from_env(values)
+    selected = SimpleNamespace(
+        project_id=project()["id"],
+        project_endpoint="https://project.example.invalid",
+    )
+
+    class Projects:
+        def discover_qualified(self):
+            calls.append("discovery")
+            return selected
+
+        def validate_explicit_project(self):
+            calls.append("explicit")
+            return selected
+
+    class Insights:
+        def __init__(self, endpoint, _credential):
+            assert endpoint == selected.project_endpoint
+
+        def probe(self):
+            calls.append("probe")
+
+    monkeypatch.setattr(cli_module.RuntimeConfig, "from_env", lambda: config)
+    monkeypatch.setattr(
+        cli_module,
+        "_runtime_context",
+        lambda _config: (SimpleNamespace(), Projects()),
+    )
+    monkeypatch.setattr(cli_module, "AgentInsightsClient", Insights)
+
+    assert cli_module.main(arguments) == 0
+    assert calls == [expected, "probe"]
