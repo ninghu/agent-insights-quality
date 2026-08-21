@@ -801,6 +801,25 @@ def test_trace_count_and_stale_version_are_rejected() -> None:
     assert {"structural_failure", "cross_version_stale", "provenance_failure"} <= violations
 
 
+def test_incompatible_fix_is_not_at_bar_not_inconclusive(
+    synthetic_contracts,
+) -> None:
+    fault = project_evidence(raw_bundle("aiq-scn-010-fault"))
+    fault["insights"][0]["tool_references"] = ["unavailable_tool"]
+    fault["bundle_hash"] = content_hash(
+        {key: item for key, item in fault.items() if key != "bundle_hash"}
+    )
+    healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
+
+    score = score_run(plan(), [fault, healthy], [judgment(fault)])
+
+    assert score["verdict"] == "NOT AT BAR"
+    assert score["complete"] is True
+    assert score["counts"]["structural_failures"] == 0
+    assert "capability_fix_mismatch" in score["violations"]
+    assert "structural_failure" not in score["violations"]
+
+
 @pytest.mark.parametrize(
     "scenario_id",
     [

@@ -218,8 +218,13 @@ def reconcile_memory(
             )
 
     if complete:
+        selected_scenarios = {
+            assignment["scenario_id"] for assignment in plan["assignments"]
+        }
         for issue in result["issues"]:
             if issue["fingerprint"] in seen or issue["state"] == "resolved":
+                continue
+            if not set(issue["affected_scenarios"]).issubset(selected_scenarios):
                 continue
             prior = issue["state"]
             issue["consecutive_clean_complete_runs"] += 1
