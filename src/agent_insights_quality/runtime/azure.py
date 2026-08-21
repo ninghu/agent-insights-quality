@@ -16,6 +16,7 @@ from .config import AzureRuntimeConfig
 from .errors import RuntimeFailure
 
 _PROJECT_NAME = re.compile(r"^aiq-[0-9]{8}(?:-r[0-9]{2})?$")
+_ETAG = re.compile(r'^(?:W/)?"[^"\r\n]{1,256}"$')
 _PROJECT_TYPE = "microsoft.cognitiveservices/accounts/projects"
 _PURPOSE_TAG = "agent-insights-quality"
 _QUALIFICATION_TAG = "true"
@@ -124,6 +125,18 @@ class AzureCli:
         )
 
     def put_if_absent(self, url: str, body: Mapping[str, Any]) -> bool:
+        return self.put_conditionally(url, body, etag=None)
+
+    def put_conditionally(
+        self,
+        url: str,
+        body: Mapping[str, Any],
+        *,
+        etag: str | None,
+    ) -> bool:
+        if etag is not None and not _ETAG.fullmatch(etag):
+            raise RuntimeFailure("invalid_azure_etag", "Azure resource ETag is invalid.")
+        condition = "If-None-Match=*" if etag is None else f"If-Match={etag}"
         arguments = [
             "rest",
             "--method",
@@ -131,7 +144,7 @@ class AzureCli:
             "--url",
             url,
             "--headers",
-            "If-None-Match=*",
+            condition,
             "--body",
             json.dumps(body, separators=(",", ":")),
             "--output",
@@ -143,9 +156,9 @@ class AzureCli:
         if re.search(r"\b(?:409|412)\b", result.stderr):
             return False
         raise RuntimeFailure(
-            "azure_project_create_blocked",
-            "Conditional project creation failed. Verify project write permission on the exact "
-            "Foundry account; the runtime will not overwrite an existing project.",
+            "azure_conditional_write_blocked",
+            "Conditional Azure resource write failed. Verify write permission on the exact "
+            "resource scope; the runtime will not overwrite a concurrently changed resource.",
         )
 
     @staticmethod
@@ -726,6 +739,19 @@ class AzureProjectManager:
                 f"{project_id}?api-version=2025-06-01",
                 body,
             ):
+                direct = self._cli.json(
+                    ["resource", "show", "--ids", project_id],
+                    allow_failure=True,
+                )
+                if direct is not None:
+                    item = _mapping(
+                        direct,
+                        "invalid_project_resource",
+                        "Conflicting project response was invalid.",
+                    )
+                    item = self._wait_ready_item(project_id)
+                    self._verify_created_project(item, report_date, catalog_hash)
+                    return self._reconcile_project(item, project_id)
                 continue
             item = self._wait_ready_item(project_id)
             self._verify_created_project(item, report_date, catalog_hash)
@@ -823,74 +849,101 @@ class AzureProjectManager:
                 "Project creation requires an explicit Application Insights resource ID.",
             )
         connection_id = f"{project_id}/connections/application-insights"
-        connections = self._connections(project_id)
-        reserved = [
-            connection
-            for connection in connections
-            if str(connection.get("id") or "").casefold() == connection_id.casefold()
-            or str(connection.get("name") or "") == "application-insights"
-        ]
-        exact = [
-            connection
-            for connection in reserved
-            if str(connection.get("id") or "").casefold() == connection_id.casefold()
-            and str(connection.get("name") or "") == "application-insights"
-        ]
-        app_insights = []
-        for connection in connections:
-            properties = connection.get("properties")
-            category = (
-                str(properties.get("category") or properties.get("connectionType") or "").casefold()
-                if isinstance(properties, Mapping)
-                else ""
-            )
-            if category in {"appinsights", "applicationinsights"}:
-                app_insights.append(connection)
-        if reserved:
-            if len(reserved) != 1 or len(exact) != 1 or len(app_insights) != 1:
-                raise RuntimeFailure(
-                    "project_connection_conflict",
-                    "Existing project connections cannot be safely reconciled.",
+        body = {
+            "properties": {
+                "category": "AppInsights",
+                "target": target,
+                "authType": "AAD",
+                "metadata": {
+                    "purpose": _PURPOSE_TAG,
+                    "owner_reference": self._owner,
+                    "expires_on": project_tags["expiresOn"],
+                },
+            }
+        }
+        for _attempt in range(3):
+            connections = self._connections(project_id)
+            reserved = [
+                connection
+                for connection in connections
+                if str(connection.get("id") or "").casefold() == connection_id.casefold()
+                or str(connection.get("name") or "") == "application-insights"
+            ]
+            exact = [
+                connection
+                for connection in reserved
+                if str(connection.get("id") or "").casefold() == connection_id.casefold()
+                and str(connection.get("name") or "") == "application-insights"
+            ]
+            app_insights = []
+            for connection in connections:
+                properties = connection.get("properties")
+                category = (
+                    str(
+                        properties.get("category")
+                        or properties.get("connectionType")
+                        or ""
+                    ).casefold()
+                    if isinstance(properties, Mapping)
+                    else ""
                 )
-            properties = exact[0].get("properties")
-            metadata = properties.get("metadata") if isinstance(properties, Mapping) else None
-            if (
-                not isinstance(properties, Mapping)
-                or str(properties.get("category") or properties.get("connectionType") or "").casefold()
-                not in {"appinsights", "applicationinsights"}
-                or str(properties.get("target") or properties.get("targetResourceId") or "").casefold()
-                != target.casefold()
-                or str(properties.get("authType") or "").casefold() != "aad"
-                or not isinstance(metadata, Mapping)
-                or metadata.get("purpose") != _PURPOSE_TAG
-                or metadata.get("owner_reference") != self._owner
+                if category in {"appinsights", "applicationinsights"}:
+                    app_insights.append(connection)
+            if reserved:
+                if len(reserved) != 1 or len(exact) != 1 or len(app_insights) != 1:
+                    raise RuntimeFailure(
+                        "project_connection_conflict",
+                        "Existing project connections cannot be safely reconciled.",
+                    )
+                properties = exact[0].get("properties")
+                metadata = properties.get("metadata") if isinstance(properties, Mapping) else None
+                if (
+                    not isinstance(properties, Mapping)
+                    or str(
+                        properties.get("category")
+                        or properties.get("connectionType")
+                        or ""
+                    ).casefold()
+                    not in {"appinsights", "applicationinsights"}
+                    or str(
+                        properties.get("target")
+                        or properties.get("targetResourceId")
+                        or ""
+                    ).casefold()
+                    != target.casefold()
+                    or str(properties.get("authType") or "").casefold() != "aad"
+                    or not isinstance(metadata, Mapping)
+                    or metadata.get("purpose") != _PURPOSE_TAG
+                    or metadata.get("owner_reference") != self._owner
+                ):
+                    raise RuntimeFailure(
+                        "project_connection_conflict",
+                        "Existing Application Insights connection is not exactly owned by this project.",
+                    )
+                if metadata.get("expires_on") == project_tags["expiresOn"]:
+                    return
+                etag = str(exact[0].get("etag") or "")
+                if not etag:
+                    raise RuntimeFailure(
+                        "project_connection_etag_missing",
+                        "Owned Application Insights connection has no ETag for a safe update.",
+                    )
+            else:
+                if app_insights:
+                    raise RuntimeFailure(
+                        "project_connection_conflict",
+                        "A differently named Application Insights connection already exists.",
+                    )
+                etag = None
+            if self._cli.put_conditionally(
+                f"{connection_id}?api-version=2025-06-01",
+                body,
+                etag=etag,
             ):
-                raise RuntimeFailure(
-                    "project_connection_conflict",
-                    "Existing Application Insights connection is not exactly owned by this project.",
-                )
-            if metadata.get("expires_on") == project_tags["expiresOn"]:
                 return
-        if app_insights and not exact:
-            raise RuntimeFailure(
-                "project_connection_conflict",
-                "A differently named Application Insights connection already exists.",
-            )
-        self._cli.rest(
-            "put",
-            f"{connection_id}?api-version=2025-06-01",
-            {
-                "properties": {
-                    "category": "AppInsights",
-                    "target": target,
-                    "authType": "AAD",
-                    "metadata": {
-                        "purpose": _PURPOSE_TAG,
-                        "owner_reference": self._owner,
-                        "expires_on": project_tags["expiresOn"],
-                    },
-                }
-            },
+        raise RuntimeFailure(
+            "project_connection_race",
+            "Application Insights connection changed repeatedly during reconciliation.",
         )
 
     def _wait_ready_item(

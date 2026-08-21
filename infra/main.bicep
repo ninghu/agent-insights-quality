@@ -10,7 +10,7 @@ param location string = 'westus2'
 
 @description('Globally unique suffix generated outside source control.')
 @minLength(4)
-@maxLength(16)
+@maxLength(12)
 param uniqueSuffix string
 
 @description('GPT-5.6 Terra model version selected during reviewed deployment.')
