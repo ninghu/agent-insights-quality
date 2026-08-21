@@ -1,10 +1,6 @@
 from __future__ import annotations
 
 import importlib
-import sys
-
-import agent_insights_quality
-
 from agent_insights_quality import artifact_io
 from agent_insights_quality.contracts import ROOT
 
@@ -15,26 +11,10 @@ def test_artifact_io_does_not_claim_runtime_module_name() -> None:
     assert not (package / "runtime.py").exists()
 
 
-def test_artifact_io_coexists_with_orchestrator_runtime_package(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    package_extension = tmp_path / "agent_insights_quality"
-    runtime_package = package_extension / "runtime"
-    runtime_package.mkdir(parents=True)
-    (runtime_package / "__init__.py").write_text(
-        "ORCHESTRATOR_RUNTIME = True\n",
-        encoding="ascii",
-    )
-    monkeypatch.setattr(
-        agent_insights_quality,
-        "__path__",
-        [*agent_insights_quality.__path__, str(package_extension)],
-    )
-    sys.modules.pop("agent_insights_quality.runtime", None)
-    importlib.invalidate_caches()
-
+def test_artifact_io_coexists_with_orchestrator_runtime_package() -> None:
     runtime = importlib.import_module("agent_insights_quality.runtime")
+    artifacts = importlib.import_module("agent_insights_quality.runtime.artifacts")
 
-    assert runtime.ORCHESTRATOR_RUNTIME is True
+    assert runtime.__path__
+    assert artifacts.LocalArtifactStore
     assert artifact_io.content_hash({"coexists": True}).startswith("sha256:")

@@ -23,9 +23,11 @@ TRACE = "1" * 32
 
 
 def plan() -> dict:
-    return {
+    value = {
         "schema_version": "1.0.0",
         "plan_id": "aiq-20260821",
+        "plan_digest": SHA_A,
+        "artifact_directory": "reports/daily/2026/08/21",
         "report_date": "2026-08-21",
         "created_at": "2026-08-21T07:00:00Z",
         "catalog_version": "1.0.0",
@@ -42,45 +44,94 @@ def plan() -> dict:
             "resource_reference": SHA_C,
             "expires_on": "2026-11-19",
         },
+        "coverage": {
+            "scenario_count": 2,
+            "healthy_control_count": 1,
+            "families": ["synthetic"],
+            "categories": ["none", "tool_call_failures"],
+            "severities": ["high", "none"],
+            "agent_types": ["prompt"],
+        },
         "assignments": [
             {
                 "scenario_id": "aiq-scn-010-fault",
                 "scenario_version": "1.0.0",
+                "family": "synthetic",
+                "conflict_tags": ["synthetic"],
+                "run_id": "run-01-aiq-001-weather",
                 "agent_id": "aiq-001-weather",
                 "agent_name": "aiq-001-weather-v1",
+                "agent_type": "prompt",
                 "agent_version_digest": SHA_A,
+                "version_sequence": [
+                    {
+                        "phase": "faulted",
+                        "version_key": "faulted",
+                        "digest": SHA_A,
+                        "window": {
+                            "start": "window://run-01-aiq-001-weather/faulted/start-inclusive",
+                            "end": "window://run-01-aiq-001-weather/faulted/end-exclusive",
+                        },
+                    }
+                ],
                 "wave": 1,
                 "traffic_seed": 7,
+                "traffic_seed_namespace": "synthetic-fault-v1",
+                "traffic_recipe_id": "traffic-synthetic-fault-v1",
+                "traffic_requests": 1,
+                "lifecycle": "injected_immutable_version",
                 "window": {
-                    "start": "2026-08-21T07:00:00Z",
-                    "end": "2026-08-21T07:10:00Z",
+                    "start": "window://run-01-aiq-001-weather/faulted/start-inclusive",
+                    "end": "window://run-01-aiq-001-weather/faulted/end-exclusive",
                 },
                 "expected": {
                     "category": "tool_call_failures",
                     "severity": "high",
                     "finding_count": 1,
+                    "validation_targets": ["root_cause"],
                 },
             },
             {
                 "scenario_id": "aiq-scn-011-healthy",
                 "scenario_version": "1.0.0",
+                "family": "synthetic",
+                "conflict_tags": ["healthy-control"],
+                "run_id": "run-00-aiq-001-weather",
                 "agent_id": "aiq-001-weather",
                 "agent_name": "aiq-001-weather-v1",
+                "agent_type": "prompt",
                 "agent_version_digest": SHA_A,
+                "version_sequence": [
+                    {
+                        "phase": "healthy",
+                        "version_key": "healthy",
+                        "digest": SHA_A,
+                        "window": {
+                            "start": "window://run-00-aiq-001-weather/healthy/start-inclusive",
+                            "end": "window://run-00-aiq-001-weather/healthy/end-exclusive",
+                        },
+                    }
+                ],
                 "wave": 0,
                 "traffic_seed": 8,
+                "traffic_seed_namespace": "synthetic-healthy-v1",
+                "traffic_recipe_id": "traffic-synthetic-healthy-v1",
+                "traffic_requests": 1,
+                "lifecycle": "current_immutable_version",
                 "window": {
-                    "start": "2026-08-21T07:10:00Z",
-                    "end": "2026-08-21T07:20:00Z",
+                    "start": "window://run-00-aiq-001-weather/healthy/start-inclusive",
+                    "end": "window://run-00-aiq-001-weather/healthy/end-exclusive",
                 },
                 "expected": {
                     "category": "none",
                     "severity": "none",
                     "finding_count": 0,
+                    "validation_targets": ["healthy_noise"],
                 },
             },
         ],
     }
+    return value
 
 
 def raw_bundle(scenario_id: str, *, healthy: bool = False) -> dict:
@@ -122,7 +173,11 @@ def raw_bundle(scenario_id: str, *, healthy: bool = False) -> dict:
             "available_tools": ["forecast"],
         },
         "run": {
-            "run_id": f"run-{scenario_id}",
+            "run_id": (
+                "run-00-aiq-001-weather"
+                if healthy
+                else "run-01-aiq-001-weather"
+            ),
             "window_start": window[0],
             "window_end": window[1],
             "engine_build": "build-1",

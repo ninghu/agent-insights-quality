@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import html
-import hashlib
 import re
 from copy import deepcopy
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -20,6 +19,7 @@ from agent_insights_quality.contracts import (
     validate_report_plan_binding,
 )
 from agent_insights_quality.generated_paths import validate_generated_paths
+from agent_insights_quality.planning import generate_daily_plan
 from agent_insights_quality.public_safety import PUBLIC_FORBIDDEN_PATTERNS
 from agent_insights_quality.reporting import (
     build_email_send_request,
@@ -40,76 +40,8 @@ _PRIVATE_RUNTIME_URL = re.compile(
 
 
 def build_preflight_plan(report_date: str, generated_at: str) -> dict[str, Any]:
-    manifests = load_agent_manifests()
-    catalog = load_scenario_catalog({item["id"] for item in manifests})
-    report_day = date.fromisoformat(report_date)
-    start = datetime.combine(report_day, datetime.min.time(), tzinfo=timezone.utc)
-    end = start + timedelta(minutes=1)
-    assignments = []
-    for index, scenario in enumerate(
-        item for item in catalog["scenarios"] if item["status"] == "active"
-    ):
-        compatible = next(
-            agent
-            for agent in manifests
-            if agent["domain"] in scenario["compatibility"]["domains"]
-            and agent["agent_type"] in scenario["compatibility"]["agent_types"]
-            and (
-                not scenario["compatibility"]["agent_ids"]
-                or agent["id"] in scenario["compatibility"]["agent_ids"]
-            )
-        )
-        assignments.append(
-            {
-                "scenario_id": scenario["id"],
-                "scenario_version": scenario["version"],
-                "agent_id": compatible["id"],
-                "agent_name": compatible["id"],
-                "agent_version_digest": content_hash(
-                    {"agent": compatible["id"], "state": "preflight-unavailable"}
-                ),
-                "wave": index,
-                "traffic_seed": 0,
-                "window": {
-                    "start": start.isoformat().replace("+00:00", "Z"),
-                    "end": end.isoformat().replace("+00:00", "Z"),
-                },
-                "expected": {
-                    "category": scenario["expected"]["category"],
-                    "severity": scenario["expected"]["severity"],
-                    "finding_count": int(scenario["expected"]["category"] != "none"),
-                },
-            }
-        )
-    catalog_hash = "sha256:" + hashlib.sha256(
-        (ROOT / "scenarios" / "catalog.yaml").read_bytes()
-    ).hexdigest()
-    plan_id = "aiq-" + report_date.replace("-", "")
-    plan = {
-        "schema_version": "1.0.0",
-        "plan_id": plan_id,
-        "report_date": report_date,
-        "created_at": generated_at,
-        "catalog_version": catalog["catalog_version"],
-        "catalog_hash": catalog_hash,
-        "planner_version": "1.0.0",
-        "seed": 0,
-        "engine": {
-            "endpoint_reference": content_hash({"state": "preflight-unavailable"}),
-            "build": "unavailable-preflight",
-            "generator_model": "gpt-5.6-terra",
-        },
-        "project": {
-            "name": plan_id,
-            "resource_reference": content_hash(
-                {"plan": plan_id, "state": "not-created"}
-            ),
-            "expires_on": (report_day + timedelta(days=90)).isoformat(),
-        },
-        "assignments": assignments,
-    }
-    validate_instance(plan, SCHEMAS / "daily-plan.schema.json", "preflight failure plan")
-    return plan
+    date.fromisoformat(generated_at[:10])
+    return generate_daily_plan(date.fromisoformat(report_date))
 
 
 def _zero_scorecard(active: int, completed: int) -> dict[str, Any]:

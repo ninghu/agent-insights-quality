@@ -1204,27 +1204,37 @@ def validate_canonical_report_semantics(
         raise ContractError(
             f"{label}: low-confidence judgment requires an INCONCLUSIVE report"
         )
-    trusted_findings_by_scenario = {
-        scenario_id: [
-            item
-            for item in field_judgments
-            if item["scenario_id"] == scenario_id
-            and item["verdict"] == "correct"
-            and item["confidence"] >= 0.80
-            and all(item["attributes"].values())
-        ]
-        for scenario_id in fault_ids
-    }
-    true_positives = sum(
-        min(
-            len(trusted_findings_by_scenario[scenario_id]),
-            expected_finding_count(scenario_by_id[scenario_id]),
+    if "field_judgments" in report:
+        trusted_counts_by_scenario = {
+            scenario_id: min(
+                sum(
+                    item["scenario_id"] == scenario_id
+                    and item["verdict"] == "correct"
+                    and item["confidence"] >= 0.80
+                    and all(item["attributes"].values())
+                    for item in field_judgments
+                ),
+                expected_finding_count(scenario_by_id[scenario_id]),
+            )
+            for scenario_id in fault_ids
+        }
+        partially_useful = sum(
+            item["verdict"] == "partially_useful" for item in field_judgments
         )
-        for scenario_id in fault_ids
-    )
-    partially_useful = sum(
-        item["verdict"] == "partially_useful" for item in field_judgments
-    )
+    else:
+        trusted_counts_by_scenario = {
+            result["scenario_id"]: (
+                expected_finding_count(scenario_by_id[result["scenario_id"]])
+                if result["verdict"] == "correct"
+                else 0
+            )
+            for result in fault_results
+        }
+        partially_useful = sum(
+            result["verdict"] == "partially_useful"
+            for result in report["scenario_results"]
+        )
+    true_positives = sum(trusted_counts_by_scenario.values())
     expected_fault_count = sum(
         expected_finding_count(scenario_by_id[result["scenario_id"]])
         for result in fault_results
@@ -1258,7 +1268,7 @@ def validate_canonical_report_semantics(
         "high_severity_recall": ratio(
             sum(
                 min(
-                    len(trusted_findings_by_scenario[result["scenario_id"]]),
+                    trusted_counts_by_scenario[result["scenario_id"]],
                     expected_finding_count(scenario_by_id[result["scenario_id"]]),
                 )
                 for result in expected_high
@@ -1286,7 +1296,7 @@ def validate_canonical_report_semantics(
         expected_rates[rate_name] = ratio(
             sum(
                 min(
-                    len(trusted_findings_by_scenario[result["scenario_id"]]),
+                    trusted_counts_by_scenario[result["scenario_id"]],
                     expected_finding_count(scenario_by_id[result["scenario_id"]]),
                 )
                 for result in expected_severity
