@@ -117,8 +117,7 @@ def deterministic_violations(
             )
             or bundle["run"]["engine_build"] != plan["engine"]["build"]
             or bundle["run"]["generator_model"] != plan["engine"]["generator_model"]
-            or bundle["run"]["window_start"] != assignment["window"]["start"]
-            or bundle["run"]["window_end"] != assignment["window"]["end"]
+            or bundle["run"]["run_id"] != assignment["run_id"]
             or bundle["ground_truth"]["category"] != expected["category"]
             or bundle["ground_truth"]["severity"] != expected["severity"]
             or bundle["ground_truth"]["root_cause"]
@@ -268,7 +267,7 @@ def score_run(
     expected_faults = [
         scenario_id
         for scenario_id, assignment in assignments.items()
-        if assignment["expected"]["finding_count"] == 1
+        if assignment["expected"]["finding_count"] > 0
     ]
     healthy = [
         scenario_id
@@ -285,14 +284,26 @@ def score_run(
         scenario_id: [item for item in classifications[scenario_id] if is_true_positive(item)]
         for scenario_id in expected_faults
     }
-    if any(len(items) > 1 for items in true_positive_by_scenario.values()):
+    if any(
+        len(items) > assignments[scenario_id]["expected"]["finding_count"]
+        for scenario_id, items in true_positive_by_scenario.items()
+    ):
         violations.add("duplication")
-    if any(len(items) > 1 for items in classifications.values()):
-        violations.add("fragmentation")
-    true_positives = sum(bool(items) for items in true_positive_by_scenario.values())
+    true_positive_counts = {
+        scenario_id: min(
+            len(items),
+            assignments[scenario_id]["expected"]["finding_count"],
+        )
+        for scenario_id, items in true_positive_by_scenario.items()
+    }
+    expected_fault_count = sum(
+        assignments[scenario_id]["expected"]["finding_count"]
+        for scenario_id in expected_faults
+    )
+    true_positives = sum(true_positive_counts.values())
     produced = sum(len(bundle.get("insights", [])) for bundle in bundles)
     false_positives = produced - true_positives
-    false_negatives = len(expected_faults) - true_positives
+    false_negatives = expected_fault_count - true_positives
     partially_useful = sum(item["verdict"] == "partially_useful" for item in all_primary)
     healthy_insights = sum(
         len(bundles_by_scenario.get(scenario_id, {}).get("insights", []))
@@ -306,7 +317,7 @@ def score_run(
         violations.add("healthy_false_positive")
 
     precision = _ratio(true_positives, produced)
-    recall = _ratio(true_positives, len(expected_faults))
+    recall = _ratio(true_positives, expected_fault_count)
     f1 = _ratio(2 * precision * recall, precision + recall)
 
     def severity_recall(severity: str) -> float:
@@ -316,8 +327,11 @@ def score_run(
             if assignments[scenario_id]["expected"]["severity"] == severity
         ]
         return _ratio(
-            sum(bool(true_positive_by_scenario[scenario_id]) for scenario_id in relevant),
-            len(relevant),
+            sum(true_positive_counts[scenario_id] for scenario_id in relevant),
+            sum(
+                assignments[scenario_id]["expected"]["finding_count"]
+                for scenario_id in relevant
+            ),
         )
 
     mapped_expected = [

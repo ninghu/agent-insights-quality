@@ -30,8 +30,13 @@ def test_runtime_readiness_keeps_daily_disabled_until_every_component_is_ready()
     assert set(readiness["mandatory_components"]) == MANDATORY_RUNTIME_COMPONENTS
     assert readiness["mandatory_components"]["scenario_catalog"] is True
     assert readiness["mandatory_components"]["healthy_agents"] is False
+    assert readiness["mandatory_components"]["deterministic_scoring"] is True
+    assert readiness["mandatory_components"]["copilot_judging"] is True
+    assert readiness["mandatory_components"]["quality_memory"] is True
+    assert readiness["mandatory_components"]["ado_synchronization"] is True
+    assert readiness["mandatory_components"]["reporting_and_email"] is True
     assert readiness["mandatory_components"]["live_qualification"] is False
-    assert sum(readiness["mandatory_components"].values()) == 1
+    assert sum(readiness["mandatory_components"].values()) == 6
 
 
 def test_daily_runtime_fails_closed_as_inconclusive(capsys: pytest.CaptureFixture[str]) -> None:
