@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from collections.abc import Mapping
+from datetime import date
 
 import pytest
 
@@ -23,6 +24,7 @@ from agent_insights_quality.contracts import (
     validate_reporting_config,
 )
 from agent_insights_quality.docs import generate_documents
+from agent_insights_quality.planning import generate_daily_plan
 from agent_insights_quality.public_safety import validate_public_repository_content
 from agent_insights_quality.security import validate_no_direct_trace_injection
 
@@ -184,6 +186,96 @@ def _report_fixture(*, completed: bool) -> tuple[dict[str, object], list[dict], 
     return report, agents, catalog
 
 
+def _report_for_plan(
+    plan: dict,
+    catalog: dict,
+    *,
+    incomplete_scenario_id: str | None = None,
+) -> dict:
+    agents = load_agent_manifests()
+    scenario_by_id = {
+        scenario["id"]: scenario for scenario in catalog["scenarios"]
+    }
+    digest = "sha256:" + ("a" * 64)
+    reference = "sha256:" + ("b" * 64)
+    results = []
+    true_positives = 0
+    false_negatives = 0
+    for assignment in plan["assignments"]:
+        expected_count = assignment["expected"]["finding_count"]
+        incomplete = assignment["scenario_id"] == incomplete_scenario_id
+        if incomplete:
+            false_negatives += expected_count
+        else:
+            true_positives += expected_count
+        results.append(
+            {
+                "scenario_id": assignment["scenario_id"],
+                "agent_id": assignment["agent_id"],
+                "agent_version_digest": assignment["agent_version_digest"],
+                "completed": not incomplete,
+                "verdict": "inconclusive" if incomplete else "correct",
+                "insight_references": [] if incomplete else [reference] * expected_count,
+            }
+        )
+    completed = sum(result["completed"] for result in results)
+    expected_faults = true_positives + false_negatives
+    expected_high = sum(
+        assignment["expected"]["finding_count"]
+        for assignment in plan["assignments"]
+        if scenario_by_id[assignment["scenario_id"]]["expected"]["severity"] == "high"
+    )
+    detected_high = sum(
+        assignment["expected"]["finding_count"]
+        for assignment in plan["assignments"]
+        if scenario_by_id[assignment["scenario_id"]]["expected"]["severity"] == "high"
+        and assignment["scenario_id"] != incomplete_scenario_id
+    )
+    scorecard = _scorecard(
+        complete=incomplete_scenario_id is None,
+        completed=completed,
+    )
+    scorecard["verdict"] = (
+        "INCONCLUSIVE" if incomplete_scenario_id is not None else "AT BAR"
+    )
+    scorecard["counts"].update(
+        {
+            "active_scenarios": len(plan["assignments"]),
+            "true_positives": true_positives,
+            "false_negatives": false_negatives,
+        }
+    )
+    recall = true_positives / expected_faults if expected_faults else 1.0
+    high_recall = detected_high / expected_high if expected_high else 1.0
+    scorecard["rates"].update(
+        {
+            "high_severity_recall": high_recall,
+            "overall_recall": recall,
+            "f1": 2 * recall / (1 + recall) if recall else 0.0,
+        }
+    )
+    return {
+        "report_id": plan["plan_id"],
+        "plan_id": plan["plan_id"],
+        "report_date": plan["report_date"],
+        "status": scorecard["verdict"],
+        "engine": deepcopy(plan["engine"]),
+        "agents": [
+            {
+                "id": agent["id"],
+                "name": f"{agent['id']}-report",
+                "type": agent["agent_type"],
+                "version_digest": digest,
+                "insights_reference": reference,
+                "human_validation": "N/A",
+            }
+            for agent in agents
+        ],
+        "scenario_results": results,
+        "scorecard": scorecard,
+    }
+
+
 def test_at_bar_rejects_incomplete_scenario_results() -> None:
     report, agents, catalog = _report_fixture(completed=False)
     with pytest.raises(ContractError, match="completeness"):
@@ -219,6 +311,117 @@ def test_report_must_match_exact_plan_assignment() -> None:
     }
     with pytest.raises(ContractError, match="agent differs"):
         validate_report_plan_binding(report, plan, "report")
+
+
+def test_monday_rotating_report_can_be_conclusive_for_selected_scenarios() -> None:
+    agents = load_agent_manifests()
+    catalog = load_scenario_catalog(set(EXPECTED_AGENTS))
+    plan = generate_daily_plan(
+        date(2026, 8, 17),
+        agents=agents,
+        catalog=catalog,
+    )
+    report = _report_for_plan(plan, catalog)
+    assert len(plan["assignments"]) == 25
+    assert report["scorecard"]["counts"]["active_scenarios"] == 25
+    validate_report_plan_binding(report, plan, "report")
+    validate_canonical_report_semantics(
+        report,
+        agents,
+        catalog,
+        "report",
+        expected_scenario_ids={
+            assignment["scenario_id"] for assignment in plan["assignments"]
+        },
+    )
+
+
+def test_incomplete_selected_result_requires_inconclusive_rotating_report() -> None:
+    agents = load_agent_manifests()
+    catalog = load_scenario_catalog(set(EXPECTED_AGENTS))
+    plan = generate_daily_plan(date(2026, 8, 17), agents=agents, catalog=catalog)
+    incomplete_id = next(
+        assignment["scenario_id"]
+        for assignment in plan["assignments"]
+        if assignment["expected"]["finding_count"] == 0
+    )
+    report = _report_for_plan(
+        plan,
+        catalog,
+        incomplete_scenario_id=incomplete_id,
+    )
+    assert report["status"] == "INCONCLUSIVE"
+    validate_report_plan_binding(report, plan, "report")
+    validate_canonical_report_semantics(
+        report,
+        agents,
+        catalog,
+        "report",
+        expected_scenario_ids={
+            assignment["scenario_id"] for assignment in plan["assignments"]
+        },
+    )
+
+    missing = deepcopy(report)
+    missing["scenario_results"] = [
+        result
+        for result in missing["scenario_results"]
+        if result["scenario_id"] != incomplete_id
+    ]
+    with pytest.raises(ContractError, match="exactly match selected"):
+        validate_report_plan_binding(missing, plan, "report")
+    with pytest.raises(ContractError, match="exactly match selected"):
+        validate_canonical_report_semantics(
+            missing,
+            agents,
+            catalog,
+            "report",
+            expected_scenario_ids={
+                assignment["scenario_id"] for assignment in plan["assignments"]
+            },
+        )
+
+
+def test_unselected_scenario_result_is_rejected() -> None:
+    agents = load_agent_manifests()
+    catalog = load_scenario_catalog(set(EXPECTED_AGENTS))
+    plan = generate_daily_plan(date(2026, 8, 17), agents=agents, catalog=catalog)
+    report = _report_for_plan(plan, catalog)
+    selected = {
+        assignment["scenario_id"] for assignment in plan["assignments"]
+    }
+    unselected = next(
+        scenario for scenario in catalog["scenarios"] if scenario["id"] not in selected
+    )
+    extra = deepcopy(report["scenario_results"][0])
+    extra["scenario_id"] = unselected["id"]
+    report["scenario_results"].append(extra)
+    with pytest.raises(ContractError, match="exactly match selected"):
+        validate_report_plan_binding(report, plan, "report")
+
+
+def test_full_catalog_report_requires_all_63_results() -> None:
+    agents = load_agent_manifests()
+    catalog = load_scenario_catalog(set(EXPECTED_AGENTS))
+    plan = generate_daily_plan(
+        date(2026, 8, 17),
+        agents=agents,
+        catalog=catalog,
+        full_catalog=True,
+    )
+    report = _report_for_plan(plan, catalog)
+    assert len(plan["assignments"]) == 63
+    assert report["scorecard"]["counts"]["active_scenarios"] == 63
+    validate_report_plan_binding(report, plan, "report")
+    validate_canonical_report_semantics(
+        report,
+        agents,
+        catalog,
+        "report",
+        expected_scenario_ids={
+            assignment["scenario_id"] for assignment in plan["assignments"]
+        },
+    )
 
 
 def test_historical_report_uses_plan_snapshot_semantics() -> None:
