@@ -290,6 +290,7 @@ def finalize_readiness_failure(
     handoff_path.write_text(json.dumps(email_handoff, indent=2) + "\n", encoding="ascii")
     return handoff_path
 from agent_insights_quality.reporting.render import (
+    build_email_send_request,
     create_email_send_request,
     import_email_receipt,
     render_email_html,

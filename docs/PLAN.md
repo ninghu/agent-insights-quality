@@ -237,9 +237,11 @@ Deploy once through Bicep into the privately configured dedicated resource group
   - `terra-insights-generator` for Agent Insights runs.
 
 Separate deployment names make usage and throttling attribution clear even if quota is shared.
-GitHub Copilot supplies GPT-5.6 Sol, so no Sol deployment is needed in the Foundry account. Email is
-sent directly by GitHub Copilot automation through the user's connected Microsoft mail capability;
-no Logic App or mail relay resource is provisioned.
+GitHub Copilot supplies GPT-5.6 Sol, so no Sol deployment is needed in the Foundry account. Email uses
+one digest-bound direct-mail handoff: connected Copilot mail first, Graph only with confirmed
+`Mail.Send`, then local Outlook COM only on `hostId=local` for the verified authenticated-user test
+mailbox with Sent Items verification. The workflow stops after the first confirmed success. No Logic
+App or mail relay resource is provisioned.
 
 ### Daily project
 
@@ -449,19 +451,22 @@ lineage, monitor checkpoints, and previous-insight reconciliation are part of th
 6. Open a generated-only PR for memory, latest status, trend data, generated inventories, and the
    date-stamped plan/report history.
 7. Auto-merge only after schema, rendering, link, path-allowlist, and consistency checks pass.
-8. Send the report directly through the user's connected Microsoft mail capability to the exact
-   allowed-domain recipient resolved from the protected variable selected by `config/reporting.yaml`;
-   qualification starts with the test-recipient variable.
+8. Submit the report through the no-duplicate direct-mail handoff to the exact allowed-domain
+   recipient resolved from `config/reporting.yaml`; qualification starts with the authenticated-user
+   test mailbox or protected test-recipient variable. Preserve one content digest and import an
+   ordered receipt before claiming delivery.
 9. Delete expired daily projects and artifacts using exact tags and retention dates.
 
 The workflow has a finalizer that always attempts an email. If the automation fails before a normal
 report is complete, it sends an `INCONCLUSIVE` failure report to the same configured recipient with the failed
 phase, last confirmed stage, plain-language reason, affected agents, retained diagnostics link, and
 safe next action. Never advance clean streaks, resolve memory issues, or close/reopen bugs from an
-incomplete run. If the mail capability itself is unavailable, retry with a bounded backoff, preserve
-the rendered failure email in the daily report directory, mark the automation failed, and surface the
-delivery failure in the GitHub run/PR; no implementation can truthfully guarantee email when the
-mail channel itself is down.
+incomplete run. Try connected Copilot mail first; use Graph only when `Mail.Send` is authorized; use
+local Outlook only on `hostId=local` for the verified authenticated-user test mailbox and verify Sent
+Items. Stop after the first confirmed success and never use a Logic App. If every authorized
+transport is unavailable, retry transient failures with bounded backoff, preserve the rendered
+failure email, mark the automation failed, and surface delivery failure; no implementation can
+truthfully guarantee email when every authorized channel is down.
 
 ## 11. Insight validation contract
 
@@ -724,9 +729,10 @@ Subject format:
 Generate one canonical report model, then render detailed JSON/Markdown and the simpler email-safe
 HTML from it. All dynamic content is HTML-encoded. Add deterministic consistency tests so the
 subject, banner, narrative, trend, bug links, agent links, and detailed report cannot contradict one
-another. The GitHub automation sends the HTML directly through the user's connected Microsoft mail
-tool. The initial recipient is resolved from a protected test variable; after email content and
-delivery are approved, a human-reviewed configuration PR selects the protected production variable.
+another. The automation follows the digest-bound direct-mail transport order and stops after one
+confirmed success. The initial recipient is the authenticated user's test mailbox or a protected test
+variable; after email content and delivery are approved, a human-reviewed configuration PR selects
+the protected production variable.
 
 ## 16. Repository skills and GitHub Copilot bootstrap prompt
 

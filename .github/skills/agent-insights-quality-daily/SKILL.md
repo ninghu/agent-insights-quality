@@ -24,8 +24,9 @@ query or trigger Agent Insights, access ADO, transition memory, clean resources,
 generated PR. It must still run the failure finalizer, persist the
 sanitized canonical `INCONCLUSIVE` report and explicit unsent direct-email handoff, and return
 nonzero. The automation must then submit that handoff through connected Microsoft mail and import a
-provider receipt before claiming delivery. Daily automation cannot modify readiness configuration
-or treat contract scaffolding as an operational workflow.
+provider receipt before claiming delivery. Use the transport strategy below even when readiness
+failed; a nonzero readiness result does not skip the finalizer or mail handoff. Daily automation
+cannot modify readiness configuration or treat contract scaffolding as an operational workflow.
 
 ## Non-negotiable rules
 
@@ -213,11 +214,32 @@ standalone-tab flight is on and `/monitor/insights` when it is off. Trace links 
    exactly `N/A` unless ambiguity, disagreement, low confidence, novelty, or an unverifiable fix
    warrants review.
 6. Resolve the selected protected recipient variable, enforce the configured allowed domain, and
-   send HTML directly through the connected Microsoft mail capability. Do not use a repository
-   credential, relay, or hidden override.
+   execute the request's no-duplicate transport strategy. Do not use a repository credential, relay,
+   hidden override, or Logic App.
 7. Open an `aiq-daily/` generated-only PR. Validate schemas, docs, links, consistency, tests, and
    changed-path allowlist before auto-merge. Never include a private URL in the public PR.
 8. Clean only exact privately resolved framework-tagged resources beyond retention.
+
+### Direct-mail handoff and no-duplicate transport strategy
+
+The repository renders and validates the handoff and receipt; it does not claim that an unavailable
+transport sent mail. Compute one `content_digest` over the recipient contract, subject, and HTML, and
+preserve it unchanged across all attempts:
+
+1. Try the connected Copilot Microsoft mail capability first.
+2. If it is unavailable, use Microsoft Graph `/me/sendMail` only when the active identity is already
+   authorized for `Mail.Send`. A 403 or missing permission records `unauthorized`; do not retry Graph
+   as though it sent.
+3. If Graph cannot be authorized, local Outlook COM is allowed only when the workflow host is exactly
+   `hostId=local`, recipient mode is `authenticated_user`, and the signed-in Outlook mailbox is
+   verified as that same test mailbox. After sending, verify the message in Sent Items and retain only
+   an opaque SHA-256 provider reference.
+4. Stop immediately after the first confirmed success. Never attempt a later transport after a sent
+   receipt, never resend with a changed body or subject, and never use a Logic App.
+
+Import one receipt containing the ordered attempt history. Every attempt must echo the same
+`content_digest`; a local Outlook success additionally requires `host_id=local`, mailbox-match
+verification, and Sent Items verification. Until that receipt validates, delivery remains unsent.
 
 ## Failure finalizer
 
@@ -229,8 +251,9 @@ failure:
 2. Do not advance clean streaks, resolve memory, create/update/reopen bugs, clean resources, or mutate
    a generated PR when readiness failed.
 3. Render and persist the sanitized failure report and email in the daily report directory.
-4. Attempt exactly one logical direct email to the configured recipient. Transient retries with
-   bounded backoff are retries of that one message, not additional report emails.
+4. Attempt direct email to the configured recipient using the no-duplicate transport order above.
+   Retry only transient failure with bounded backoff, preserve the same content digest, and stop after
+   the first confirmed success.
 5. If mail remains unavailable, record delivery failure, fail the automation visibly, and preserve
    the rendered email. Never claim it was sent.
 

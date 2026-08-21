@@ -7,17 +7,76 @@
   "required": [
     "schema_version",
     "request_hash",
+    "content_digest",
     "state",
     "completed_at",
+    "successful_transport",
+    "attempts",
     "provider_reference",
     "error"
   ],
   "properties": {
     "schema_version": {"const": "1.0.0"},
     "request_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "content_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "state": {"enum": ["sent", "failed"]},
     "completed_at": {"type": "string", "format": "date-time"},
-    "provider_reference": {"type": ["string", "null"], "minLength": 1, "maxLength": 500},
+    "successful_transport": {
+      "type": ["string", "null"],
+      "enum": [
+        "connected_copilot_mail",
+        "microsoft_graph",
+        "local_outlook_com",
+        null
+      ]
+    },
+    "attempts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "transport",
+          "state",
+          "content_digest",
+          "host_id",
+          "authorization_confirmed",
+          "mailbox_match_verified",
+          "sent_items_verified",
+          "provider_reference",
+          "error"
+        ],
+        "properties": {
+          "transport": {
+            "enum": [
+              "connected_copilot_mail",
+              "microsoft_graph",
+              "local_outlook_com"
+            ]
+          },
+          "state": {"enum": ["unavailable", "unauthorized", "failed", "sent"]},
+          "content_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "host_id": {"type": ["string", "null"], "maxLength": 100},
+          "authorization_confirmed": {"type": "boolean"},
+          "mailbox_match_verified": {"type": "boolean"},
+          "sent_items_verified": {"type": "boolean"},
+          "provider_reference": {
+            "type": ["string", "null"],
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "error": {"type": ["string", "null"], "maxLength": 2000}
+        }
+      }
+    },
+    "provider_reference": {
+      "type": ["string", "null"],
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
     "error": {"type": ["string", "null"], "maxLength": 2000}
   }
 }

@@ -27,6 +27,11 @@ SECTION_TITLES = (
     "Gaps and regressions",
     "Test agents and Agent Insights links",
 )
+MAIL_TRANSPORT_ORDER = (
+    "connected_copilot_mail",
+    "microsoft_graph",
+    "local_outlook_com",
+)
 _EMAIL = re.compile(r"^[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+)$")
 
 
@@ -398,13 +403,14 @@ def render_email_html(
     return subject, body
 
 
-def create_email_send_request(
-    report: dict[str, Any],
-    trend: dict[str, Any],
-    agent_links: Mapping[str, str],
+def build_email_send_request(
+    subject: str,
+    body: str,
     recipient: dict[str, str | None],
 ) -> dict[str, Any]:
-    subject, body = render_email_html(report, trend, agent_links)
+    content_digest = content_hash(
+        {"recipient": recipient, "subject": subject, "html": body}
+    )
     request = {
         "schema_version": "1.0.0",
         "channel": "connected_microsoft_mail",
@@ -414,6 +420,16 @@ def create_email_send_request(
         "state": "unsent",
         "retry_delays_seconds": [60, 300, 900],
         "attempt_count": 0,
+        "content_digest": content_digest,
+        "transport_strategy": {
+            "attempt_order": list(MAIL_TRANSPORT_ORDER),
+            "graph_requires_authorization": True,
+            "local_outlook_host_id": "local",
+            "local_outlook_requires_authenticated_user": True,
+            "local_outlook_requires_sent_items_verification": True,
+            "stop_after_first_confirmed_success": True,
+            "logic_app_forbidden": True,
+        },
     }
     request["request_hash"] = content_hash(request)
     validate_instance(
@@ -422,6 +438,16 @@ def create_email_send_request(
         "email send request",
     )
     return request
+
+
+def create_email_send_request(
+    report: dict[str, Any],
+    trend: dict[str, Any],
+    agent_links: Mapping[str, str],
+    recipient: dict[str, str | None],
+) -> dict[str, Any]:
+    subject, body = render_email_html(report, trend, agent_links)
+    return build_email_send_request(subject, body, recipient)
 
 
 def import_email_receipt(
@@ -434,6 +460,15 @@ def import_email_receipt(
         "email send request",
     )
     verified_hash(request, "request_hash", "email send request")
+    expected_content_digest = content_hash(
+        {
+            "recipient": request["recipient"],
+            "subject": request["subject"],
+            "html": request["html"],
+        }
+    )
+    if request["content_digest"] != expected_content_digest:
+        raise ContractError("Email handoff content digest is invalid")
     validate_instance(
         receipt,
         SCHEMAS / "email-receipt.schema.json",
@@ -441,8 +476,68 @@ def import_email_receipt(
     )
     if receipt.get("request_hash") != request.get("request_hash"):
         raise ContractError("Email receipt does not match its send request")
-    if receipt.get("state") not in {"sent", "failed"}:
-        raise ContractError("Email receipt state must be sent or failed")
-    if receipt["state"] == "sent" and not receipt.get("provider_reference"):
-        raise ContractError("Sent email receipt requires provider confirmation")
+    if receipt["content_digest"] != request["content_digest"]:
+        raise ContractError("Email receipt content digest does not match the handoff")
+
+    attempts = receipt["attempts"]
+    transports = [attempt["transport"] for attempt in attempts]
+    if transports != list(MAIL_TRANSPORT_ORDER[: len(transports)]):
+        raise ContractError("Email transports must follow the no-duplicate fallback order")
+    if any(
+        attempt["content_digest"] != request["content_digest"]
+        for attempt in attempts
+    ):
+        raise ContractError("Every email attempt must preserve the same content digest")
+    sent_attempts = [
+        (index, attempt)
+        for index, attempt in enumerate(attempts)
+        if attempt["state"] == "sent"
+    ]
+    if len(sent_attempts) > 1 or (
+        sent_attempts and sent_attempts[0][0] != len(attempts) - 1
+    ):
+        raise ContractError("Email transport attempts must stop after first confirmed success")
+
+    for attempt in attempts:
+        transport = attempt["transport"]
+        if attempt["state"] == "sent":
+            if attempt["error"] is not None or not attempt["provider_reference"]:
+                raise ContractError(
+                    "Successful email attempt requires opaque confirmation and no error"
+                )
+        elif attempt["provider_reference"] is not None or not attempt["error"]:
+            raise ContractError(
+                "Unsuccessful email attempt requires an error and no confirmation"
+            )
+        if transport == "microsoft_graph" and attempt["state"] != "unauthorized":
+            if not attempt["authorization_confirmed"]:
+                raise ContractError("Microsoft Graph mail requires confirmed authorization")
+        if transport == "local_outlook_com":
+            if (
+                attempt["host_id"] != "local"
+                or request["recipient"]["mode"] != "authenticated_user"
+                or not attempt["mailbox_match_verified"]
+            ):
+                raise ContractError(
+                    "Local Outlook requires hostId=local and the authenticated-user mailbox"
+                )
+            if attempt["state"] == "sent" and not attempt["sent_items_verified"]:
+                raise ContractError(
+                    "Local Outlook delivery requires Sent Items verification"
+                )
+
+    if receipt["state"] == "sent":
+        if len(sent_attempts) != 1:
+            raise ContractError("Sent email receipt requires one confirmed transport")
+        successful = sent_attempts[0][1]
+        if (
+            receipt["successful_transport"] != successful["transport"]
+            or receipt["provider_reference"] != successful["provider_reference"]
+            or not receipt["provider_reference"]
+        ):
+            raise ContractError("Sent email receipt requires matching opaque confirmation")
+    elif sent_attempts or receipt["successful_transport"] is not None:
+        raise ContractError("Failed email receipt cannot claim a successful transport")
+    if receipt["state"] == "failed" and receipt["provider_reference"] is not None:
+        raise ContractError("Failed email receipt cannot contain provider confirmation")
     return deepcopy(receipt)

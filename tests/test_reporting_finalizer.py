@@ -289,21 +289,206 @@ def test_send_request_remains_unsent_until_matching_provider_receipt() -> None:
         value,
         trend,
         links,
-        {"mode": "authenticated_user", "address": None, "source": "connected"},
+        {
+            "mode": "authenticated_user",
+            "address": None,
+            "source": "connected_microsoft_mailbox",
+        },
     )
     assert request["state"] == "unsent"
-    with pytest.raises(ContractError, match="provider"):
+    assert request["transport_strategy"]["attempt_order"] == [
+        "connected_copilot_mail",
+        "microsoft_graph",
+        "local_outlook_com",
+    ]
+    assert request["transport_strategy"]["stop_after_first_confirmed_success"]
+    assert request["transport_strategy"]["logic_app_forbidden"]
+    with pytest.raises(ContractError, match="confirmation"):
         import_email_receipt(
             request,
             {
                 "schema_version": "1.0.0",
                 "request_hash": request["request_hash"],
+                "content_digest": request["content_digest"],
                 "state": "sent",
                 "completed_at": "2026-08-21T09:00:00Z",
+                "successful_transport": "connected_copilot_mail",
+                "attempts": [
+                    {
+                        "transport": "connected_copilot_mail",
+                        "state": "sent",
+                        "content_digest": request["content_digest"],
+                        "host_id": None,
+                        "authorization_confirmed": True,
+                        "mailbox_match_verified": True,
+                        "sent_items_verified": False,
+                        "provider_reference": None,
+                        "error": None,
+                    }
+                ],
                 "provider_reference": None,
                 "error": None,
             },
         )
+
+
+def _mail_attempt(
+    request,
+    transport,
+    state,
+    *,
+    host_id=None,
+    authorized=False,
+    mailbox_verified=False,
+    sent_items_verified=False,
+):
+    sent = state == "sent"
+    return {
+        "transport": transport,
+        "state": state,
+        "content_digest": request["content_digest"],
+        "host_id": host_id,
+        "authorization_confirmed": authorized,
+        "mailbox_match_verified": mailbox_verified,
+        "sent_items_verified": sent_items_verified,
+        "provider_reference": SHA if sent else None,
+        "error": None if sent else f"{transport} {state}",
+    }
+
+
+def test_local_outlook_fallback_requires_order_and_sent_items_verification() -> None:
+    value = report()
+    request = create_email_send_request(
+        value,
+        render_trend([value]),
+        {agent["id"]: f"https://example.test/{agent['id']}" for agent in value["agents"]},
+        {
+            "mode": "authenticated_user",
+            "address": None,
+            "source": "connected_microsoft_mailbox",
+        },
+    )
+    attempts = [
+        _mail_attempt(request, "connected_copilot_mail", "unavailable"),
+        _mail_attempt(request, "microsoft_graph", "unauthorized"),
+        _mail_attempt(
+            request,
+            "local_outlook_com",
+            "sent",
+            host_id="local",
+            mailbox_verified=True,
+            sent_items_verified=True,
+        ),
+    ]
+    receipt = {
+        "schema_version": "1.0.0",
+        "request_hash": request["request_hash"],
+        "content_digest": request["content_digest"],
+        "state": "sent",
+        "completed_at": "2026-08-21T09:00:00Z",
+        "successful_transport": "local_outlook_com",
+        "attempts": attempts,
+        "provider_reference": SHA,
+        "error": None,
+    }
+    assert import_email_receipt(request, receipt)["state"] == "sent"
+    receipt["attempts"][-1]["sent_items_verified"] = False
+    with pytest.raises(ContractError, match="Sent Items"):
+        import_email_receipt(request, receipt)
+
+
+def test_authenticated_user_handoff_rejects_literal_or_uncanonical_mailbox() -> None:
+    value = report()
+    links = {
+        agent["id"]: f"https://example.test/{agent['id']}"
+        for agent in value["agents"]
+    }
+    with pytest.raises(ContractError, match="connected_microsoft_mailbox"):
+        create_email_send_request(
+            value,
+            render_trend([value]),
+            links,
+            {
+                "mode": "authenticated_user",
+                "address": "different@" + "microsoft.com",
+                "source": "untrusted",
+            },
+        )
+
+
+def test_receipt_rejects_duplicate_send_after_success() -> None:
+    value = report()
+    request = create_email_send_request(
+        value,
+        render_trend([value]),
+        {agent["id"]: f"https://example.test/{agent['id']}" for agent in value["agents"]},
+        {
+            "mode": "authenticated_user",
+            "address": None,
+            "source": "connected_microsoft_mailbox",
+        },
+    )
+    receipt = {
+        "schema_version": "1.0.0",
+        "request_hash": request["request_hash"],
+        "content_digest": request["content_digest"],
+        "state": "sent",
+        "completed_at": "2026-08-21T09:00:00Z",
+        "successful_transport": "microsoft_graph",
+        "attempts": [
+            _mail_attempt(
+                request,
+                "connected_copilot_mail",
+                "sent",
+                authorized=True,
+            ),
+            _mail_attempt(
+                request,
+                "microsoft_graph",
+                "sent",
+                authorized=True,
+            ),
+        ],
+        "provider_reference": SHA,
+        "error": None,
+    }
+    with pytest.raises(ContractError, match="stop after first"):
+        import_email_receipt(request, receipt)
+
+
+def test_receipt_rejects_changed_content_digest_and_unauthorized_graph() -> None:
+    value = report()
+    request = create_email_send_request(
+        value,
+        render_trend([value]),
+        {agent["id"]: f"https://example.test/{agent['id']}" for agent in value["agents"]},
+        {
+            "mode": "authenticated_user",
+            "address": None,
+            "source": "connected_microsoft_mailbox",
+        },
+    )
+    graph = _mail_attempt(request, "microsoft_graph", "sent")
+    receipt = {
+        "schema_version": "1.0.0",
+        "request_hash": request["request_hash"],
+        "content_digest": request["content_digest"],
+        "state": "sent",
+        "completed_at": "2026-08-21T09:00:00Z",
+        "successful_transport": "microsoft_graph",
+        "attempts": [
+            _mail_attempt(request, "connected_copilot_mail", "unavailable"),
+            graph,
+        ],
+        "provider_reference": SHA,
+        "error": None,
+    }
+    with pytest.raises(ContractError, match="requires confirmed authorization"):
+        import_email_receipt(request, receipt)
+    receipt["attempts"][1]["authorization_confirmed"] = True
+    receipt["attempts"][1]["content_digest"] = "sha256:" + ("b" * 64)
+    with pytest.raises(ContractError, match="same content digest"):
+        import_email_receipt(request, receipt)
 
 
 def test_failure_finalizer_is_inconclusive_and_has_no_mutations() -> None:
@@ -326,9 +511,15 @@ def test_failure_finalizer_is_inconclusive_and_has_no_mutations() -> None:
     assert body.count("<h2>") == 4
     request = create_failure_send_request(
         value,
-        {"mode": "authenticated_user", "address": None, "source": "connected"},
+        {
+            "mode": "authenticated_user",
+            "address": None,
+            "source": "connected_microsoft_mailbox",
+        },
     )
     assert request["state"] == "unsent"
+    assert request["content_digest"].startswith("sha256:")
+    assert request["transport_strategy"]["local_outlook_host_id"] == "local"
 
 
 def test_report_contradiction_is_rejected() -> None:
