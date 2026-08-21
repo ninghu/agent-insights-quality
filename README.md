@@ -47,7 +47,9 @@ Application Insights is read-only evidence storage, and direct telemetry injecti
 
 `config/runtime-readiness.yaml` is the fail-closed authority. Today all mandatory runtime phases are
 false, so `python -m agent_insights_quality check-runtime-readiness` and `run-daily` return an
-actionable `INCONCLUSIVE` result without deploying, sending traffic, modifying ADO, or sending mail.
+actionable `INCONCLUSIVE` result without deployments, traffic, insights, ADO, memory transitions,
+cleanup, or generated PR mutation. The required minimal finalizer still renders a sanitized report
+and one-message email handoff for Copilot to send through the authenticated user's mailbox.
 
 After every mandatory component is implemented, validated, and human-reviewed, the scheduled Copilot
 automation will follow `.github/skills/agent-insights-quality-daily/SKILL.md`. Qualification uses the

@@ -12,6 +12,8 @@ from agent_insights_quality.generated_paths import (
 
 ALLOWED = [
     "reports/daily/*/*/*/plan.json",
+    "reports/daily/*/*/*/readiness-failure.json",
+    "reports/daily/*/*/*/email-handoff.json",
     "reports/latest.json",
     "state/quality-memory.json",
 ]
@@ -21,6 +23,8 @@ ALLOWED = [
     "path",
     [
         "reports/daily/2026/08/20/plan.json",
+        "reports/daily/2026/08/20/readiness-failure.json",
+        "reports/daily/2026/08/20/email-handoff.json",
         "reports/latest.json",
         "state/quality-memory.json",
     ],

@@ -18,6 +18,23 @@ MANDATORY_RUNTIME_COMPONENTS = {
     "live_qualification",
 }
 
+READINESS_FAILURE_PROHIBITED_ACTIONS = (
+    "azure_deployments",
+    "agent_traffic",
+    "agent_insights",
+    "ado",
+    "memory_transitions",
+    "resource_cleanup",
+    "generated_pr_mutation",
+)
+
+
+def incomplete_runtime_components(data: dict[str, Any]) -> list[str]:
+    validate_runtime_readiness(data)
+    return sorted(
+        name for name, available in data["mandatory_components"].items() if not available
+    )
+
 
 def validate_runtime_readiness(data: dict[str, Any]) -> None:
     expected_keys = {
@@ -48,13 +65,10 @@ def validate_runtime_readiness(data: dict[str, Any]) -> None:
 
 
 def require_daily_runtime(data: dict[str, Any]) -> None:
-    validate_runtime_readiness(data)
-    missing = sorted(
-        name for name, available in data["mandatory_components"].items() if not available
-    )
+    missing = incomplete_runtime_components(data)
     if missing:
         raise ContractError(
             "INCONCLUSIVE: daily runtime is not ready. Incomplete components: "
             + ", ".join(missing)
-            + ". Complete and human-review these phases before enabling daily automation."
+            + ". Run the readiness-failure finalizer before stopping; do not run operational phases."
         )

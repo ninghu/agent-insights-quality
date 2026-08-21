@@ -16,7 +16,9 @@ python -m pytest
 This release is contract scaffolding. `config/runtime-readiness.yaml` records every mandatory runtime
 workstream, and all are initially false. `check-runtime-readiness` and `run-daily` fail closed with an
 actionable `INCONCLUSIVE` result until every component is implemented, tested, and enabled through a
-human-reviewed source change. The readiness file is protected from generated automation.
+human-reviewed source change. A readiness failure prohibits all operational phases but still requires
+the minimal report/email finalizer and its one-message Copilot mail handoff. The readiness file is
+protected from generated automation.
 
 Generated automation branches use the `aiq-daily/` prefix. CI restricts those branches to the paths
 in the **base branch's** `config/automation-policy.yaml`, using the base branch's installed validator.
@@ -46,6 +48,11 @@ Any unavailable identity, service, quota, trace set, judge, consistency check, o
 prerequisite makes the run `INCONCLUSIVE`. The finalizer preserves sanitized diagnostics, renders the
 failure report, retries direct email with bounded backoff, and surfaces delivery failure. Incomplete
 runs never advance clean streaks or create, resolve, or reopen bugs.
+
+When readiness itself fails, the finalizer additionally prohibits Azure deployments, agent traffic,
+Agent Insights access, ADO access, memory transitions, resource cleanup, and generated PR mutation.
+It renders a pending handoff rather than claiming delivery; Copilot sends exactly one logical message
+through connected Microsoft mail and records a sanitized receipt reference or failure result.
 
 Cleanup resolves exact private runtime resource IDs and deletes only framework-tagged resources past
 their retention date. It never guesses names or deletes unrelated resources.
