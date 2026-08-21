@@ -17,7 +17,7 @@ from agent_insights_quality.contracts import (
     validate_canonical_report_semantics,
     validate_instance,
 )
-from agent_insights_quality.runtime import content_hash, verified_hash
+from agent_insights_quality.artifact_io import content_hash, verified_hash
 from agent_insights_quality.judging import AUTO_BUG_CONFIDENCE
 
 

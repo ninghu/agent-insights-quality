@@ -18,7 +18,7 @@ from agent_insights_quality.judging import (
 )
 from agent_insights_quality.privacy import sanitize_sensitive_text
 from agent_insights_quality.links import validate_agent_insights_url
-from agent_insights_quality.runtime import SHA256_PATTERN, content_hash
+from agent_insights_quality.artifact_io import SHA256_PATTERN, content_hash
 from agent_insights_quality.scoring import score_run
 
 

@@ -46,7 +46,7 @@ from agent_insights_quality.reporting import (
     render_report_markdown,
     resolve_recipient,
 )
-from agent_insights_quality.runtime import content_hash, read_json_object, write_json
+from agent_insights_quality.artifact_io import content_hash, read_json_object, write_json
 from agent_insights_quality.scoring import case_to_insight_mappings, score_run
 from agent_insights_quality.security import validate_no_direct_trace_injection
 from agent_insights_quality.runtime.adapters import load_runtime_hooks

@@ -18,7 +18,7 @@ from agent_insights_quality.judging import (
     validate_judgment_for_bundle,
 )
 from agent_insights_quality.privacy import sensitive_findings
-from agent_insights_quality.runtime import content_hash, verified_hash
+from agent_insights_quality.artifact_io import content_hash, verified_hash
 
 
 PRIMARY_CLASSIFICATION_MIN_CONFIDENCE = 0.80

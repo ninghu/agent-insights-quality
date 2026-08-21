@@ -70,5 +70,9 @@ def write_json(path: Path, value: Any) -> None:
 def bounded_text(value: Any, *, field: str, limit: int) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ContractError(f"{field}: expected non-empty text")
-    text = "".join(character for character in value if character in "\n\r\t" or ord(character) >= 32)
+    text = "".join(
+        character
+        for character in value
+        if character in "\n\r\t" or ord(character) >= 32
+    )
     return text[:limit]

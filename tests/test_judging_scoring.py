@@ -10,8 +10,8 @@ from agent_insights_quality.judging import (
     import_judgment,
     project_evidence,
 )
-from agent_insights_quality.runtime import content_hash
-from agent_insights_quality.runtime import read_json_object
+from agent_insights_quality.artifact_io import content_hash
+from agent_insights_quality.artifact_io import read_json_object
 from agent_insights_quality.scoring import score_run
 from agent_insights_quality.scoring import deterministic_violations
 
