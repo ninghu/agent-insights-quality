@@ -594,9 +594,17 @@ def _load_scenario_runtime(path: Path) -> ModuleType:
     return _load_logic(path, f"scenario_runtime_{path.parent.name}")
 
 
-def _make_config(operations: list[dict], version_key: str = "test-vk") -> str:
+def _make_config(
+    operations: list[dict],
+    version_key: str = "test-vk",
+    scenario_id: str = "test-scenario",
+) -> str:
     return json.dumps(
-        {"schema_version": "1.0.0", "version_key": version_key, "operations": operations},
+        {
+            "schema_version": "1.0.0",
+            "version_key": version_key,
+            "scenarios": [{"scenario_id": scenario_id, "operations": operations}],
+        },
         separators=(",", ":"),
     )
 
@@ -622,11 +630,13 @@ class _ScenarioCtx:
             self._os.environ["AIQ_SCENARIO_CONFIGURATION"] = self._orig
 
 
-def _rt(path: Path, cfg: str) -> object:
-    """Load and instantiate ScenarioRuntime with the given config."""
+def _rt(path: Path, cfg: str, scenario_id: str = "test-scenario") -> object:
+    """Load ScenarioRuntime with the given config and activate scenario_id."""
     mod = _load_scenario_runtime(path)
     with _ScenarioCtx(cfg):
-        return mod.ScenarioRuntime()
+        rt = mod.ScenarioRuntime()
+    rt.select_scenario(scenario_id)
+    return rt
 
 
 # ---------------------------------------------------------------------------
@@ -636,9 +646,14 @@ def _rt(path: Path, cfg: str) -> object:
 
 @pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
 def test_schema_rejects_phase_key(sr_path: Path) -> None:
-    """The reviewed schema does not include 'phase'."""
+    """The reviewed schema does not include 'phase'; extra keys cause rejection."""
     bad = json.dumps(
-        {"schema_version": "1.0.0", "phase": "faulted", "version_key": "vk", "operations": []}
+        {
+            "schema_version": "1.0.0",
+            "phase": "faulted",
+            "version_key": "vk",
+            "scenarios": [{"scenario_id": "x", "operations": []}],
+        }
     )
     mod = _load_scenario_runtime(sr_path)
     with _ScenarioCtx(bad), pytest.raises(RuntimeError, match="invalid"):
@@ -648,7 +663,11 @@ def test_schema_rejects_phase_key(sr_path: Path) -> None:
 @pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
 def test_schema_requires_nonempty_version_key(sr_path: Path) -> None:
     bad = json.dumps(
-        {"schema_version": "1.0.0", "version_key": "", "operations": []}
+        {
+            "schema_version": "1.0.0",
+            "version_key": "",
+            "scenarios": [{"scenario_id": "x", "operations": []}],
+        }
     )
     mod = _load_scenario_runtime(sr_path)
     with _ScenarioCtx(bad), pytest.raises(RuntimeError, match="invalid"):
@@ -662,6 +681,40 @@ def test_schema_accepts_valid_config(sr_path: Path) -> None:
     with _ScenarioCtx(cfg):
         rt = mod.ScenarioRuntime()
     assert rt._version_key == "test-vk"
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_schema_rejects_old_operations_key(sr_path: Path) -> None:
+    """Schema uses 'scenarios', not the old flat 'operations' key."""
+    bad = json.dumps(
+        {"schema_version": "1.0.0", "version_key": "vk", "operations": []}
+    )
+    mod = _load_scenario_runtime(sr_path)
+    with _ScenarioCtx(bad), pytest.raises(RuntimeError, match="invalid"):
+        mod.ScenarioRuntime()
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_select_scenario_fails_closed_on_unknown_id(sr_path: Path) -> None:
+    """select_scenario raises on any scenario_id not present in the config."""
+    cfg = _make_config([], scenario_id="aiq-scn-001")
+    mod = _load_scenario_runtime(sr_path)
+    with _ScenarioCtx(cfg):
+        rt = mod.ScenarioRuntime()
+    with pytest.raises(RuntimeError, match="Unknown scenario_id"):
+        rt.select_scenario("aiq-scn-not-real")
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_select_scenario_is_noop_when_no_config_loaded(sr_path: Path) -> None:
+    """With no configuration the runtime is a no-op and any scenario_id is accepted."""
+    mod = _load_scenario_runtime(sr_path)
+    with _ScenarioCtx(""):
+        rt = mod.ScenarioRuntime()
+    rt.select_scenario("any-scenario-id")  # must not raise
+    dispatched: list[int] = []
+    rt.run_tool("lookup", {"account_id": "SYN-1"}, lambda n, a: dispatched.append(1) or "ok")
+    assert dispatched, "no-config runtime must dispatch normally"
 
 
 # ---------------------------------------------------------------------------
@@ -986,6 +1039,72 @@ def test_version_sequence_materialize_recurred_is_faulted(sr_path: Path) -> None
     result = rt.run_tool("lookup", {}, execute)
     assert not dispatched
     assert "faulted" in json.loads(result).get("status", "")
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_version_sequence_generic_faulted_accepts_named_variant_list(sr_path: Path) -> None:
+    """version_key='faulted' returns stable faulted behavior even when the variant list
+    uses only named sub-variants (scn-059: ['faulted-window-a','faulted-window-b'])."""
+    cfg = _make_config(
+        [
+            {
+                "target": "version_sequence",
+                "action": "materialize",
+                "value": ["faulted-window-a", "faulted-window-b"],
+            }
+        ],
+        version_key="faulted",
+    )
+    dispatched: list[int] = []
+
+    def execute(n: str, a: dict) -> str:
+        dispatched.append(1)
+        return "ok"
+
+    rt = _rt(sr_path, cfg)
+    result = rt.run_tool("lookup", {"account_id": "SYN-1"}, execute)
+    assert not dispatched, "generic faulted must not dispatch"
+    parsed = json.loads(result)
+    assert parsed.get("status") == "faulted"
+    assert parsed.get("variant") == "faulted"
+    assert "faulted-window-a" in parsed.get("sequence", [])
+
+
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_scenario_isolation_only_selected_ops_execute(sr_path: Path) -> None:
+    """Each select_scenario call activates only that scenario's ops; no cross-bleed."""
+    ops_a = [{"target": "tool_arguments", "action": "remove_field", "value": "entity_id"}]
+    ops_b = [{"target": "context_resolver", "action": "replace_source", "value": "previous_entity"}]
+    cfg = json.dumps(
+        {
+            "schema_version": "1.0.0",
+            "version_key": "test-vk",
+            "scenarios": [
+                {"scenario_id": "aiq-scn-A", "operations": ops_a},
+                {"scenario_id": "aiq-scn-B", "operations": ops_b},
+            ],
+        },
+        separators=(",", ":"),
+    )
+    mod = _load_scenario_runtime(sr_path)
+    with _ScenarioCtx(cfg):
+        rt = mod.ScenarioRuntime()
+
+    # Request 1: scenario A -- removes entity_id alias.
+    rt.select_scenario("aiq-scn-A")
+    seen_a: list[dict] = []
+    rt.run_tool("lookup", {"account_id": "SYN-1"}, lambda n, a: seen_a.append(dict(a)) or "ok")
+    assert seen_a
+    assert "account_id" not in seen_a[0], "A must remove entity_id alias"
+    assert "__context_source__" not in seen_a[0], "B must not bleed into A"
+
+    # Request 2: scenario B -- injects __context_source__; A's op must be absent.
+    rt.select_scenario("aiq-scn-B")
+    seen_b: list[dict] = []
+    rt.run_tool("lookup", {"account_id": "SYN-1"}, lambda n, a: seen_b.append(dict(a)) or "ok")
+    assert seen_b
+    assert "__context_source__" in seen_b[0], "B must inject context source"
+    assert "account_id" in seen_b[0], "A's remove must not bleed into B"
 
 
 @pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
@@ -1423,11 +1542,13 @@ def _make_span_harness():
     return provider.get_tracer("test"), exporter
 
 
-def _rt_with_spans(path: Path, cfg: str, tracer: object) -> object:
+def _rt_with_spans(path: Path, cfg: str, tracer: object, scenario_id: str = "test-scenario") -> object:
     """Instantiate ScenarioRuntime with an injected tracer for span capture."""
     mod = _load_scenario_runtime(path)
     with _ScenarioCtx(cfg):
-        return mod.ScenarioRuntime(_tracer=tracer)
+        rt = mod.ScenarioRuntime(_tracer=tracer)
+    rt.select_scenario(scenario_id)
+    return rt
 
 
 @pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)

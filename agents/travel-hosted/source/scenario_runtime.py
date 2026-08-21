@@ -64,6 +64,7 @@ class ScenarioRuntime:
         self._tracer = _tracer
         raw = os.environ.get("AIQ_SCENARIO_CONFIGURATION", "")
         if not raw:
+            self._scenarios: dict[str, tuple[dict[str, Any], ...]] = {}
             self._operations: tuple[dict[str, Any], ...] = ()
             self._version_key: str = ""
             self._fixture_calls: dict[str, int] = {}
@@ -74,14 +75,29 @@ class ScenarioRuntime:
         value = json.loads(raw)
         if (
             not isinstance(value, dict)
-            or set(value) != {"schema_version", "version_key", "operations"}
+            or set(value) != {"schema_version", "version_key", "scenarios"}
             or value["schema_version"] != "1.0.0"
             or not isinstance(value["version_key"], str)
             or not value["version_key"]
-            or not isinstance(value["operations"], list)
+            or not isinstance(value["scenarios"], list)
+            or not value["scenarios"]
         ):
             raise RuntimeError("Scenario configuration is invalid.")
-        self._operations = tuple(value["operations"])
+        scenarios: dict[str, tuple[dict[str, Any], ...]] = {}
+        for entry in value["scenarios"]:
+            if (
+                not isinstance(entry, dict)
+                or not isinstance(entry.get("scenario_id"), str)
+                or not entry["scenario_id"]
+                or not isinstance(entry.get("operations"), list)
+            ):
+                raise RuntimeError("Scenario configuration is invalid.")
+            sid = entry["scenario_id"]
+            if sid in scenarios:
+                raise RuntimeError("Scenario configuration is invalid.")
+            scenarios[sid] = tuple(entry["operations"])
+        self._scenarios = scenarios
+        self._operations = ()  # unset until select_scenario() activates a scenario
         self._version_key = value["version_key"]
         self._fixture_calls = {}
         self.instructions = os.environ.get("AIQ_SCENARIO_INSTRUCTIONS", "")
@@ -97,6 +113,22 @@ class ScenarioRuntime:
             raise RuntimeError("Synthetic pre-model abort.")
         # state_machine/replace_transition causes a bounded loop through model
         # calls, not an immediate abort here.
+
+    def select_scenario(self, scenario_id: str) -> None:
+        """Activate operations for scenario_id. Fails closed on unknown IDs.
+
+        When no configuration is loaded the runtime is a no-op and any
+        scenario_id is accepted silently so callers need no special casing.
+        """
+        if not self._scenarios:
+            return
+        if scenario_id not in self._scenarios:
+            raise RuntimeError(
+                f"Unknown scenario_id {scenario_id!r}. "
+                f"Known IDs: {sorted(self._scenarios)}."
+            )
+        self._operations = self._scenarios[scenario_id]
+        self._fixture_calls = {}
 
     def before_model(self) -> None:
         if self._has("model_error_handler", "remove_handler"):
@@ -258,26 +290,35 @@ class ScenarioRuntime:
         arguments: dict[str, Any],
         execute: Callable[[str, dict[str, Any]], str],
     ) -> str:
-        """Materialize the correct behavior based on version_key position.
+        """Materialize behavior based on version_key.
 
-        A version_key of "corrected" is the healthy variant - dispatch normally.
-        Any other listed variant is a faulted deployment.
+        "corrected" (when in the variant list) dispatches normally -- healthy.
+        "faulted" is the generic faulted signal: accepted even when not
+        literally in the list (e.g. scn-059: ['faulted-window-a','faulted-window-b']).
+        Any other listed variant also returns stable faulted behavior.
         """
         variant_list = [str(v) for v in (value if isinstance(value, list) else [value])]
-        if self._version_key not in variant_list:
-            raise RuntimeError(
-                f"version_key {self._version_key!r} is not in the materialize "
-                f"sequence {variant_list}."
-            )
-        if self._version_key == "corrected":
+        vk = self._version_key
+        if vk == "corrected":
+            if "corrected" not in variant_list:
+                raise RuntimeError(
+                    f"version_key 'corrected' is not in the materialize "
+                    f"sequence {variant_list}."
+                )
             return execute(name, dict(arguments))
-        return _canonical(
-            {
-                "version_sequence": "materialize",
-                "variant": self._version_key,
-                "sequence": variant_list,
-                "status": "faulted",
-            }
+        # "faulted" acts as a generic faulted signal even when not in the list.
+        if vk == "faulted" or vk in variant_list:
+            return _canonical(
+                {
+                    "version_sequence": "materialize",
+                    "variant": vk,
+                    "sequence": variant_list,
+                    "status": "faulted",
+                }
+            )
+        raise RuntimeError(
+            f"version_key {vk!r} is not a recognized variant in "
+            f"sequence {variant_list}."
         )
 
     def _apply_fixture(

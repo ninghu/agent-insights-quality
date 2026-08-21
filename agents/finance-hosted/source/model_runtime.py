@@ -35,6 +35,18 @@ class ModelBackedAgent:
         self._client_lock = threading.Lock()
 
     def respond(self, user_input: str) -> str:
+        try:
+            input_obj = json.loads(user_input)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise RuntimeError("Endpoint input must be valid JSON.") from exc
+        if not isinstance(input_obj, dict):
+            raise RuntimeError("Endpoint input must be a JSON object.")
+        scenario_id = input_obj.get("scenario_id")
+        if not isinstance(scenario_id, str) or not scenario_id:
+            raise RuntimeError(
+                "Endpoint input must contain a non-empty string scenario_id."
+            )
+        self._scenario.select_scenario(scenario_id)
         self._scenario.before_request()
         response = self._model_response(input=user_input)
         for _ in range(_MAX_TOOL_TURNS):
