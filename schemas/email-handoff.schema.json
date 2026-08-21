@@ -10,12 +10,14 @@
     "report_date",
     "required",
     "message_count",
+    "reporting_mode",
     "recipient_variable",
     "allowed_domain",
     "sender_context",
     "transport",
     "subject",
     "html_artifact",
+    "content_digest",
     "delivery"
   ],
   "properties": {
@@ -24,7 +26,10 @@
     "report_date": {"type": "string", "format": "date"},
     "required": {"const": true},
     "message_count": {"const": 1},
-    "recipient_variable": {"const": "AIQ_TEST_REPORT_RECIPIENT"},
+    "reporting_mode": {"enum": ["test", "production"]},
+    "recipient_variable": {
+      "enum": ["AIQ_TEST_REPORT_RECIPIENT", "AIQ_PRODUCTION_REPORT_RECIPIENT"]
+    },
     "allowed_domain": {"const": "microsoft.com"},
     "sender_context": {"const": "authenticated_user_mailbox"},
     "transport": {"const": "copilot_connected_microsoft_mail"},
@@ -34,6 +39,7 @@
       "maxLength": 300
     },
     "html_artifact": {"const": "failure-email.html"},
+    "content_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "delivery": {
       "type": "object",
       "additionalProperties": false,
