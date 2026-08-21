@@ -3,21 +3,36 @@
     "id": "finance-account-summary",
     "input": "account-summary account=SYN-100 currency=USD",
     "output_contains": "SYN-100 balance is USD 2450.00",
-    "tool_outputs": {},
-    "expected_tool_calls": []
+    "tool_outputs": {
+      "account_lookup": {
+        "arguments": {"account_id": "SYN-100"},
+        "result": "SYN-100 balance is USD 2450.00."
+      }
+    },
+    "expected_tool_calls": ["account_lookup"]
   },
   {
     "id": "finance-transaction-search",
     "input": "transactions account=SYN-100 category=groceries",
     "output_contains": "TXN-003 groceries USD -54.25",
-    "tool_outputs": {},
-    "expected_tool_calls": []
+    "tool_outputs": {
+      "transaction_search": {
+        "arguments": {"account_id": "SYN-100", "category": "groceries"},
+        "result": "TXN-003 groceries USD -54.25"
+      }
+    },
+    "expected_tool_calls": ["transaction_search"]
   },
   {
     "id": "finance-budget",
     "input": "prepare-budget account=SYN-100 monthly_limit=1200",
     "output_contains": "No transfer was attempted",
-    "tool_outputs": {},
-    "expected_tool_calls": []
+    "tool_outputs": {
+      "budget_calculation": {
+        "arguments": {"account_id": "SYN-100", "monthly_limit": 1200},
+        "result": "Budget for SYN-100: USD 854.25 spent, USD 345.75 remaining. No transfer was attempted."
+      }
+    },
+    "expected_tool_calls": ["budget_calculation"]
   }
 ]

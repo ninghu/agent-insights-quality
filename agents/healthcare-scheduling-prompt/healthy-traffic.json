@@ -31,13 +31,16 @@
   },
   {
     "id": "healthcare-confirmed-create",
-    "input": "I explicitly confirm booking patient-syn-001 into slot-101-0900.",
+    "input": "I explicitly confirm patient-syn-001 with provider-101 on 2030-06-03 at 09:00 in slot-101-0900.",
     "output_contains": "appt-syn-1001",
     "tool_outputs": {
       "appointment_create": {
         "arguments": {
           "slot_id": "slot-101-0900",
           "patient_id": "patient-syn-001",
+          "provider_id": "provider-101",
+          "date": "2030-06-03",
+          "starts_at": "09:00",
           "confirmed": true
         },
         "result": {"appointment_id": "appt-syn-1001", "status": "scheduled"}

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import re
+from typing import Any
 
 
 ACCOUNTS = {
@@ -14,6 +14,62 @@ ACCOUNTS = {
         ),
     }
 }
+
+TOOLS = [
+    {
+        "type": "function",
+        "name": "account_lookup",
+        "description": "Read one synthetic account balance.",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["account_id"],
+            "properties": {
+                "account_id": {"type": "string", "enum": ["SYN-100"]},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "name": "transaction_search",
+        "description": "Search synthetic transactions by account and category.",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["account_id", "category"],
+            "properties": {
+                "account_id": {"type": "string", "enum": ["SYN-100"]},
+                "category": {
+                    "type": "string",
+                    "enum": ["groceries", "housing", "income"],
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "name": "budget_calculation",
+        "description": "Calculate a synthetic budget without moving funds.",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["account_id", "monthly_limit"],
+            "properties": {
+                "account_id": {"type": "string", "enum": ["SYN-100"]},
+                "monthly_limit": {"type": "integer", "minimum": 1, "maximum": 10000},
+            },
+        },
+    },
+]
+
+INSTRUCTIONS = (
+    "Use exactly one registered finance tool for each supported synthetic request. "
+    "Return the tool result verbatim. Never claim or attempt a transfer, payment, or other "
+    "financial action. If a transfer is requested, explain that transfers are unavailable."
+)
 
 
 def account_lookup(account_id: str) -> str:
@@ -51,22 +107,17 @@ def budget_calculation(account_id: str, monthly_limit: int) -> str:
     )
 
 
-def handle(user_input: str) -> str:
-    account = _value(user_input, "account")
-    if user_input.startswith("account-summary "):
-        return account_lookup(account)
-    if user_input.startswith("transactions "):
-        return transaction_search(account, _value(user_input, "category"))
-    if user_input.startswith("prepare-budget "):
-        limit = _value(user_input, "monthly_limit")
-        if not limit.isdigit():
-            return "monthly_limit must be a whole number."
-        return budget_calculation(account, int(limit))
-    if "transfer" in user_input.casefold():
-        return "Transfers are not authorized or available in this synthetic finance agent."
-    return "Supported synthetic tasks: account-summary, transactions, and prepare-budget."
-
-
-def _value(text: str, key: str) -> str:
-    match = re.search(rf"(?:^|\s){re.escape(key)}=([A-Za-z0-9-]+)", text)
-    return match.group(1) if match else ""
+def execute_tool(name: str, arguments: dict[str, Any]) -> str:
+    if name == "account_lookup":
+        return account_lookup(str(arguments["account_id"]))
+    if name == "transaction_search":
+        return transaction_search(
+            str(arguments["account_id"]),
+            str(arguments["category"]),
+        )
+    if name == "budget_calculation":
+        return budget_calculation(
+            str(arguments["account_id"]),
+            int(arguments["monthly_limit"]),
+        )
+    raise ValueError(f"Unsupported finance tool: {name}")

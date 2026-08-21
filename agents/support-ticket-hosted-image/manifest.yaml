@@ -6,7 +6,7 @@ domain: support_ticket
 agent_type: hosted_custom_container
 status: active
 healthy_contract:
-  responsibility: Triage and update synthetic tickets with current-ticket grounding and bounded escalation.
+  responsibility: Triage and preview synthetic ticket updates with current-ticket grounding and bounded escalation.
   immutable: true
   synthetic_data_only: true
   expected_baseline_insights: 0

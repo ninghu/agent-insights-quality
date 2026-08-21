@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import re
+from typing import Any
 
 
 TICKETS = {
@@ -17,6 +17,76 @@ TICKETS = {
         "priority": "normal",
     },
 }
+
+TOOLS = [
+    {
+        "type": "function",
+        "name": "ticket_read",
+        "description": "Read the current revision of a synthetic ticket.",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["ticket_id"],
+            "properties": {
+                "ticket_id": {"type": "string", "enum": ["TKT-1001", "TKT-1002"]},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "name": "customer_context",
+        "description": "Read bounded synthetic customer context for the current ticket.",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["ticket_id"],
+            "properties": {
+                "ticket_id": {"type": "string", "enum": ["TKT-1001", "TKT-1002"]},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "name": "ticket_update",
+        "description": "Preview a synthetic ticket update without persisting state.",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["ticket_id", "status", "expected_revision"],
+            "properties": {
+                "ticket_id": {"type": "string", "enum": ["TKT-1001", "TKT-1002"]},
+                "status": {
+                    "type": "string",
+                    "enum": ["investigating", "waiting-customer", "resolved"],
+                },
+                "expected_revision": {"type": "integer", "minimum": 1},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "name": "escalation",
+        "description": "Evaluate bounded escalation against current synthetic ticket state.",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["ticket_id"],
+            "properties": {
+                "ticket_id": {"type": "string", "enum": ["TKT-1001", "TKT-1002"]},
+            },
+        },
+    },
+]
+
+INSTRUCTIONS = (
+    "Use exactly one registered support tool for each supported synthetic request and return its "
+    "result verbatim. Stay grounded in the requested current ticket. ticket_update is explicitly a "
+    "dry-run preview and never persists or claims a completed update."
+)
 
 
 def ticket_read(ticket_id: str) -> str:
@@ -38,18 +108,18 @@ def customer_context(ticket_id: str) -> str:
 def ticket_update(ticket_id: str, status: str, expected_revision: int) -> str:
     ticket = TICKETS.get(ticket_id)
     if ticket is None:
-        return f"No update applied: current synthetic ticket {ticket_id} was not found."
+        return f"No dry-run preview: current synthetic ticket {ticket_id} was not found."
     if ticket["revision"] != expected_revision:
         return (
-            f"No update applied: {ticket_id} is currently revision {ticket['revision']}, "
+            f"No dry-run preview: {ticket_id} is currently revision {ticket['revision']}, "
             f"not revision {expected_revision}."
         )
     if status not in {"investigating", "waiting-customer", "resolved"}:
-        return f"No update applied: status {status} is unsupported."
+        return f"No dry-run preview: status {status} is unsupported."
     next_revision = expected_revision + 1
     return (
-        f"Synthetic update accepted for {ticket_id}: {status}, revision {next_revision}. "
-        f"The response was grounded in current revision {expected_revision}."
+        f"Dry-run update preview for {ticket_id}: {status}, prospective revision "
+        f"{next_revision}. No state was persisted; current revision remains {expected_revision}."
     )
 
 
@@ -63,22 +133,17 @@ def escalation(ticket_id: str) -> str:
     )
 
 
-def handle(user_input: str) -> str:
-    ticket_id = _value(user_input, "ticket")
-    if user_input.startswith("read-ticket "):
-        return ticket_read(ticket_id)
-    if user_input.startswith("triage-ticket "):
-        return customer_context(ticket_id)
-    if user_input.startswith("update-ticket "):
-        revision = _value(user_input, "expected_revision")
-        if not revision.isdigit():
-            return "No update applied: expected_revision must be numeric."
-        return ticket_update(ticket_id, _value(user_input, "status"), int(revision))
-    if user_input.startswith("escalate-ticket "):
-        return escalation(ticket_id)
-    return "Supported synthetic tasks: read-ticket, triage-ticket, update-ticket, escalate-ticket."
-
-
-def _value(text: str, key: str) -> str:
-    match = re.search(rf"(?:^|\s){re.escape(key)}=([A-Za-z0-9-]+)", text)
-    return match.group(1) if match else ""
+def execute_tool(name: str, arguments: dict[str, Any]) -> str:
+    if name == "ticket_read":
+        return ticket_read(str(arguments["ticket_id"]))
+    if name == "customer_context":
+        return customer_context(str(arguments["ticket_id"]))
+    if name == "ticket_update":
+        return ticket_update(
+            str(arguments["ticket_id"]),
+            str(arguments["status"]),
+            int(arguments["expected_revision"]),
+        )
+    if name == "escalation":
+        return escalation(str(arguments["ticket_id"]))
+    raise ValueError(f"Unsupported ticket tool: {name}")

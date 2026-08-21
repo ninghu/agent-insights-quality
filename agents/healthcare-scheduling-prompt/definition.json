@@ -40,10 +40,20 @@
       "parameters": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["slot_id", "patient_id", "confirmed"],
+        "required": [
+          "slot_id",
+          "patient_id",
+          "provider_id",
+          "date",
+          "starts_at",
+          "confirmed"
+        ],
         "properties": {
           "slot_id": {"type": "string", "enum": ["slot-101-0900"]},
           "patient_id": {"type": "string", "enum": ["patient-syn-001"]},
+          "provider_id": {"type": "string", "enum": ["provider-101"]},
+          "date": {"type": "string", "enum": ["2030-06-03"]},
+          "starts_at": {"type": "string", "enum": ["09:00"]},
           "confirmed": {"const": true}
         }
       }
