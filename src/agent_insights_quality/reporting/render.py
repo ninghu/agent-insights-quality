@@ -465,8 +465,12 @@ def render_email_html(
     expected_findings = sum(
         result["expected_count"] for result in report["scenario_results"]
     )
-    observed_findings = sum(
-        result["observed_count"] for result in report["scenario_results"]
+    observed_findings = len(
+        {
+            (result["run_id"], result["agent_id"], reference)
+            for result in report["scenario_results"]
+            for reference in result["insight_references"]
+        }
     )
     signal = (
         f"{counts['new_issues']} new, {counts['regressed_issues']} regressed"

@@ -356,6 +356,26 @@ def test_scenario_counts_bind_to_catalog_and_insight_references() -> None:
         validate_canonical_report_semantics(report, agents, catalog, "report")
 
 
+def test_one_physical_run_insight_cannot_belong_to_multiple_scenarios() -> None:
+    agents = load_agent_manifests()
+    catalog = load_scenario_catalog(set(EXPECTED_AGENTS))
+    plan = generate_daily_plan(date(2026, 8, 17), agents=agents, catalog=catalog)
+    report = _report_for_plan(plan, catalog)
+    eligible = [
+        result
+        for result in report["scenario_results"]
+        if result["expected_count"] == 1
+    ]
+    first, second = eligible[:2]
+    second["run_id"] = first["run_id"]
+    second["agent_id"] = first["agent_id"]
+    second["insight_references"] = list(first["insight_references"])
+    second["observed_count"] = len(second["insight_references"])
+
+    with pytest.raises(ContractError, match="one physical run insight"):
+        validate_canonical_report_semantics(report, agents, catalog, "report")
+
+
 def test_report_cannot_treat_low_confidence_judgment_as_at_bar() -> None:
     report, agents, catalog = _report_fixture(completed=True)
     result = report["scenario_results"][0]
