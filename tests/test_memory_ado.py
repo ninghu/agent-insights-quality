@@ -182,6 +182,20 @@ def test_memory_rejects_sensitive_content_in_any_record() -> None:
         reconcile(empty_memory(), [value], 1)
 
 
+@pytest.mark.parametrize(
+    "private_url",
+    [
+        "https://ai.azure.com/nextgen/r/sub,rg,,account,project/build/agents/aiq-001-weather-v1/insights",
+        "https://private.internal.example.test/quality",
+    ],
+)
+def test_memory_rejects_private_runtime_urls(private_url) -> None:
+    value = finding()
+    value["description"] = f"Private runtime location: {private_url}"
+    with pytest.raises(ContractError, match="private runtime URL"):
+        reconcile(empty_memory(), [value], 1)
+
+
 def candidate() -> dict:
     return {
         "fingerprint": SHA,

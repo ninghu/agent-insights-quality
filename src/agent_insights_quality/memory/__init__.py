@@ -19,7 +19,7 @@ from agent_insights_quality.contracts import (
     validate_report_plan_binding,
 )
 from agent_insights_quality.artifact_io import content_hash
-from agent_insights_quality.privacy import require_privacy_safe
+from agent_insights_quality.public_safety import require_public_artifact_safe
 
 
 _REPORT_PATH = re.compile(
@@ -82,7 +82,7 @@ def reconcile_memory(
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Reconcile confirmed findings while preserving immutable fingerprints and history."""
     validate_instance(memory, MEMORY_SCHEMA, "quality memory")
-    require_privacy_safe(memory, "Quality memory")
+    require_public_artifact_safe(memory, "Quality memory")
     agents = load_agent_manifests()
     catalog = load_scenario_catalog({agent["id"] for agent in agents})
     validate_instance(plan, SCHEMAS / "daily-plan.schema.json", "daily plan")
@@ -96,9 +96,9 @@ def reconcile_memory(
     report_path = f"{plan['artifact_directory']}/report.md"
     if not _REPORT_PATH.fullmatch(report_path):
         raise ContractError("Quality memory report path must be a public daily report path")
-    require_privacy_safe(report, "Canonical report for quality memory")
+    require_public_artifact_safe(report, "Canonical report for quality memory")
     for finding in findings:
-        require_privacy_safe(finding, "Quality memory finding")
+        require_public_artifact_safe(finding, "Quality memory finding")
     complete = (
         report["scorecard"]["complete"]
         and report["status"] != "INCONCLUSIVE"
@@ -233,17 +233,17 @@ def reconcile_memory(
     result["updated_at"] = generated_at
     result["issues"].sort(key=lambda item: item["fingerprint"])
     for record in result["processed_runs"]:
-        require_privacy_safe(record, "Quality memory processed-run record")
+        require_public_artifact_safe(record, "Quality memory processed-run record")
     for issue in result["issues"]:
-        require_privacy_safe(issue, "Quality memory issue record")
-    require_privacy_safe(result, "Quality memory")
+        require_public_artifact_safe(issue, "Quality memory issue record")
+    require_public_artifact_safe(result, "Quality memory")
     validate_instance(result, MEMORY_SCHEMA, "quality memory")
     return result, changes
 
 
 def render_memory_markdown(memory: dict[str, Any]) -> str:
     validate_instance(memory, MEMORY_SCHEMA, "quality memory")
-    require_privacy_safe(memory, "Quality memory")
+    require_public_artifact_safe(memory, "Quality memory")
     lines = [
         "# Quality Memory",
         "",
@@ -267,4 +267,6 @@ def render_memory_markdown(memory: dict[str, Any]) -> str:
             f"{issue['first_seen']} | {issue['last_seen']} | {issue['occurrence_count']} | "
             f"{issue['consecutive_clean_complete_runs']} | {ado} |"
         )
-    return "\n".join(lines + [""])
+    markdown = "\n".join(lines + [""])
+    require_public_artifact_safe(markdown, "Quality memory Markdown")
+    return markdown

@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import re
 import subprocess
+import json
 from pathlib import Path
+from typing import Any
 
 from agent_insights_quality.contracts import ContractError, ROOT
+from agent_insights_quality.privacy import require_privacy_safe
 
 
 PUBLIC_FORBIDDEN_PATTERNS = {
@@ -25,6 +28,24 @@ PUBLIC_FORBIDDEN_PATTERNS = {
         r"(?<![A-Za-z0-9:])[A-Za-z0-9+/]{48,}={0,2}(?![A-Za-z0-9])"
     ),
 }
+_PRIVATE_RUNTIME_URL = re.compile(
+    r"(?i)https?://[^\s<>'\"]*?(?:"
+    r"ai\.azure\.com|portal\.azure\.com|"
+    r"[a-z0-9.-]+\.(?:services\.ai\.azure\.com|openai\.azure\.com|azurewebsites\.net)|"
+    r"(?:internal|private)(?:[.-][a-z0-9-]+)*\.[a-z0-9.-]+"
+    r")"
+)
+
+
+def require_public_artifact_safe(value: Any, label: str) -> None:
+    """Reject sensitive content and private runtime endpoints from public artifacts."""
+    require_privacy_safe(value, label)
+    text = value if isinstance(value, str) else json.dumps(value, sort_keys=True)
+    for pattern_label, pattern in PUBLIC_FORBIDDEN_PATTERNS.items():
+        if pattern.search(text):
+            raise ContractError(f"{label}: public artifact contains {pattern_label}")
+    if _PRIVATE_RUNTIME_URL.search(text):
+        raise ContractError(f"{label}: public artifact contains private runtime URL")
 
 
 def repository_files() -> list[Path]:
