@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0.0",
+  "report_id": "aiq-20260821",
+  "report_date": "2026-08-21",
+  "required": true,
+  "message_count": 1,
+  "reporting_mode": "test",
+  "recipient_variable": "AIQ_TEST_REPORT_RECIPIENT",
+  "allowed_domain": "microsoft.com",
+  "sender_context": "authenticated_user_mailbox",
+  "transport": "copilot_connected_microsoft_mail",
+  "subject": "[Agent Insights Quality] INCONCLUSIVE - 2026-08-21 - runtime incomplete",
+  "html_artifact": "failure-email.html",
+  "content_digest": "sha256:cbea3cabed24fe95e6fc060b4a48aa183cf936c9e317144788bbc3be0c4f012a",
+  "delivery": {
+    "status": "sent",
+    "receipt_reference": "sha256:2db8ff0de544a11a112572a317146f01ebc402f5f3e4c9a4e3c6efe48a31dfc9",
+    "error_code": null
+  }
+}
