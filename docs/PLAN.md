@@ -382,6 +382,8 @@ Each date has a reviewable, permanent, sanitized record:
   and retained diagnostics.
 - `reports/daily/YYYY/MM/DD/report.json`: canonical machine-readable report used to render Markdown,
   LT email, trends, and future comparisons.
+- Reruns use `reports/daily/YYYY/MM/DD/aiq-YYYYMMDD-rNN/` with the same four filenames so each
+  rerun preserves its full plan identity and cannot overwrite the original daily artifacts.
 
 The LT email links to `report.md` for readers who want the full numbers.
 

@@ -545,30 +545,56 @@ def validate_link_policy(data: dict[str, Any]) -> None:
         raise ContractError("config/link-policy.yaml: public-safe Agent Insights link contract changed")
 
 
-def catalog_bundle_hash(catalog_path: Path | None = None) -> str:
-    catalog_path = catalog_path or ROOT / "scenarios" / "catalog.yaml"
-    inputs: list[tuple[str, Path]] = [("scenarios/catalog.yaml", catalog_path)]
-    inputs.extend(
-        (path.relative_to(ROOT).as_posix(), path)
-        for root in (
-            ROOT / "agents",
-            ROOT / "scenarios" / "mutations",
-            ROOT / "scenarios" / "traffic",
-        )
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
-    )
+def _canonical_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("ascii")
+
+
+def catalog_bundle_hash(
+    catalog_path: Path | None = None,
+    *,
+    catalog: dict[str, Any] | None = None,
+    agents: list[dict[str, Any]] | None = None,
+) -> str:
+    if catalog_path is not None and catalog is not None:
+        raise ContractError("Catalog hash accepts a path or an object, not both")
+    catalog_data = catalog or load_data(catalog_path or ROOT / "scenarios" / "catalog.yaml")
+    inputs: dict[str, bytes] = {"scenarios/catalog.yaml": _canonical_bytes(catalog_data)}
+
+    if agents is None:
+        for path in sorted((ROOT / "agents").rglob("*")):
+            if not path.is_file():
+                continue
+            logical_path = path.relative_to(ROOT).as_posix()
+            inputs[logical_path] = (
+                _canonical_bytes(load_data(path))
+                if path.suffix in {".json", ".yaml", ".yml"}
+                else path.read_bytes().replace(b"\r\n", b"\n")
+            )
+    else:
+        for agent in agents:
+            source_path = agent["implementation"]["source_path"]
+            inputs[f"{source_path}/manifest.yaml"] = _canonical_bytes(agent)
+            for path in sorted((ROOT / source_path).rglob("*")):
+                if not path.is_file() or path.name == "manifest.yaml":
+                    continue
+                logical_path = path.relative_to(ROOT).as_posix()
+                inputs[logical_path] = (
+                    _canonical_bytes(load_data(path))
+                    if path.suffix in {".json", ".yaml", ".yml"}
+                    else path.read_bytes().replace(b"\r\n", b"\n")
+                )
+
+    for root in (ROOT / "scenarios" / "mutations", ROOT / "scenarios" / "traffic"):
+        for path in sorted(root.glob("*.yaml")):
+            inputs[path.relative_to(ROOT).as_posix()] = _canonical_bytes(load_data(path))
+
     digest = hashlib.sha256()
-    for logical_path, path in inputs:
-        if path.suffix in {".json", ".yaml", ".yml"}:
-            content = json.dumps(
-                load_data(path),
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=True,
-            ).encode("ascii")
-        else:
-            content = path.read_bytes().replace(b"\r\n", b"\n")
+    for logical_path, content in sorted(inputs.items()):
         digest.update(logical_path.encode("ascii"))
         digest.update(b"\0")
         digest.update(content)
@@ -610,6 +636,13 @@ def validate_daily_plan_semantics(
     plan_id_pattern = rf"aiq-{plan['report_date'].replace('-', '')}(?:-r[0-9]{{2}})?"
     if re.fullmatch(plan_id_pattern, plan["plan_id"]) is None:
         raise ContractError(f"{label}: plan_id does not match report date")
+    base_plan_id = f"aiq-{plan['report_date'].replace('-', '')}"
+    expected_artifact_directory = (
+        f"reports/daily/{plan['report_date'].replace('-', '/')}"
+        + (f"/{plan['plan_id']}" if plan["plan_id"] != base_plan_id else "")
+    )
+    if plan["artifact_directory"] != expected_artifact_directory:
+        raise ContractError(f"{label}: artifact directory does not preserve plan identity")
     if plan["project"]["name"] != plan["plan_id"]:
         raise ContractError(f"{label}: project name does not match plan identity")
     expected_project_reference = "sha256:" + hashlib.sha256(
@@ -669,6 +702,11 @@ def validate_daily_plan_semantics(
                 raise ContractError(f"{label}: assignment agent type does not match its manifest")
             if assignment["traffic_recipe_id"] != scenario["traffic"]["recipe_id"]:
                 raise ContractError(f"{label}: traffic recipe does not match the scenario")
+            if (
+                assignment["traffic_seed_namespace"]
+                != scenario["traffic"]["seed_namespace"]
+            ):
+                raise ContractError(f"{label}: traffic seed namespace does not match the scenario")
             if assignment["traffic_requests"] != scenario["traffic"]["minimum_requests"]:
                 raise ContractError(f"{label}: traffic request count does not match the scenario")
             if assignment["lifecycle"] != scenario["version_semantics"]["applies_to"]:
@@ -682,6 +720,16 @@ def validate_daily_plan_semantics(
                 or expected["finding_count"] != expected_finding_count(scenario)
             ):
                 raise ContractError(f"{label}: expected finding contract does not match the scenario")
+        expected_traffic_seed = int(
+            hashlib.sha256(
+                (
+                    f"{plan['seed']}:{assignment['traffic_seed_namespace']}"
+                ).encode("ascii")
+            ).hexdigest()[:16],
+            16,
+        )
+        if assignment["traffic_seed"] != expected_traffic_seed:
+            raise ContractError(f"{label}: assignment traffic seed is not deterministic")
         sequence = assignment["version_sequence"]
         sequential = (
             assignment["lifecycle"] == "sequential_faulted_and_corrected_versions"
@@ -1045,11 +1093,12 @@ def validate_report_layout() -> None:
     reports_root = ROOT / "reports"
     allowed_root = {"latest.json", "latest.md", "trend.json"}
     daily_pattern = re.compile(
-        r"^daily/([0-9]{4})/([0-9]{2})/([0-9]{2})/"
-        r"(plan\.json|plan\.md|report\.json|report\.md|failure-email\.html|"
+        r"^daily/(?P<year>[0-9]{4})/(?P<month>[0-9]{2})/(?P<day>[0-9]{2})/"
+        r"(?:(?P<rerun>aiq-[0-9]{8}-r[0-9]{2})/)?"
+        r"(?P<filename>plan\.json|plan\.md|report\.json|report\.md|failure-email\.html|"
         r"readiness-failure\.json|readiness-failure\.md|email-handoff\.json)$"
     )
-    files_by_day: dict[str, set[str]] = {}
+    files_by_record: dict[str, set[str]] = {}
     for path in sorted(reports_root.rglob("*")):
         if not path.is_file():
             continue
@@ -1059,12 +1108,19 @@ def validate_report_layout() -> None:
         match = daily_pattern.fullmatch(relative)
         if match is None:
             raise ContractError(f"reports/{relative}: unrecognized generated report path")
-        year, month, day, filename = match.groups()
+        year = match.group("year")
+        month = match.group("month")
+        day = match.group("day")
+        rerun = match.group("rerun")
+        filename = match.group("filename")
         try:
             date(int(year), int(month), int(day))
         except ValueError as error:
             raise ContractError(f"reports/{relative}: invalid report date path") from error
-        files_by_day.setdefault(f"{year}/{month}/{day}", set()).add(filename)
+        if rerun is not None and not rerun.startswith(f"aiq-{year}{month}{day}-r"):
+            raise ContractError(f"reports/{relative}: rerun plan ID does not match report date path")
+        record = f"{year}/{month}/{day}" + (f"/{rerun}" if rerun else "")
+        files_by_record.setdefault(record, set()).add(filename)
     complete_report = {"plan.json", "plan.md", "report.json", "report.md"}
     readiness_failure = {
         "readiness-failure.json",
@@ -1074,15 +1130,17 @@ def validate_report_layout() -> None:
     }
     readiness_markers = readiness_failure - {"failure-email.html"}
     operational_failure = complete_report | {"failure-email.html"}
-    for report_day, filenames in files_by_day.items():
+    for report_record, filenames in files_by_record.items():
         if filenames & readiness_markers:
-            if filenames != readiness_failure:
+            if "/aiq-" in report_record or filenames != readiness_failure:
                 raise ContractError(
-                    f"reports/daily/{report_day}: readiness failure bundle must contain "
-                    "exactly its four artifacts"
+                    f"reports/daily/{report_record}: readiness failure bundle must contain "
+                    "exactly its four artifacts at the date level"
                 )
         elif filenames not in (complete_report, operational_failure):
-            raise ContractError(f"reports/daily/{report_day}: incomplete daily report artifact set")
+            raise ContractError(
+                f"reports/daily/{report_record}: incomplete daily report artifact set"
+            )
 
 
 def validate_report_artifacts(
@@ -1117,7 +1175,7 @@ def validate_report_artifacts(
         from agent_insights_quality.reporting import validate_stored_bundle_content
 
         validate_stored_bundle_content(path.with_name("email-handoff.json"), handoff)
-    for path in sorted((ROOT / "reports" / "daily").glob("*/*/*/plan.json")):
+    for path in sorted((ROOT / "reports" / "daily").rglob("plan.json")):
         label = str(path.relative_to(ROOT))
         plan = load_data(path)
         validate_instance(plan, plan_schema, label)
@@ -1128,10 +1186,12 @@ def validate_report_artifacts(
             label,
             allow_historical=True,
         )
+        if path.parent.relative_to(ROOT).as_posix() != plan["artifact_directory"]:
+            raise ContractError(f"{label}: plan is stored outside its artifact directory")
         markdown = path.with_name("plan.md").read_text(encoding="ascii")
         if plan["plan_id"] not in markdown or plan["report_date"] not in markdown:
             raise ContractError(f"{label}: plan.md does not identify its canonical plan")
-    for path in sorted((ROOT / "reports" / "daily").glob("*/*/*/report.json")):
+    for path in sorted((ROOT / "reports" / "daily").rglob("report.json")):
         label = str(path.relative_to(ROOT))
         report = load_data(path)
         validate_instance(report, report_schema, label)
@@ -1174,6 +1234,9 @@ def validate_report_artifacts(
             / "daily"
             / latest["report_date"].replace("-", "/")
         )
+        base_report_id = f"aiq-{latest['report_date'].replace('-', '')}"
+        if latest["report_id"] != base_report_id:
+            day_root /= latest["report_id"]
         daily_json = day_root / "report.json"
         daily_markdown = day_root / "report.md"
         if not daily_json.is_file() or load_data(daily_json) != latest:
