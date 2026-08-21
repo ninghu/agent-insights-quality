@@ -62,13 +62,18 @@ def validate_email_handoff(
     handoff: dict[str, Any],
     label: str,
     reporting: dict[str, Any],
+    *,
+    require_current_selection: bool = False,
 ) -> None:
     validate_reporting_config(reporting)
     validate_instance(handoff, SCHEMAS / "email-handoff.schema.json", label)
-    if handoff["reporting_mode"] != reporting["mode"]:
+    recorded_mode = handoff["reporting_mode"]
+    if handoff["recipient_variable"] != reporting["recipient_variables"][recorded_mode]:
+        raise ContractError(f"{label}: recipient variable does not match recorded reporting mode")
+    if require_current_selection and recorded_mode != reporting["mode"]:
         raise ContractError(f"{label}: reporting mode does not match config/reporting.yaml")
-    if handoff["recipient_variable"] != reporting["recipient_variable"]:
-        raise ContractError(f"{label}: recipient variable does not match reporting mode")
+    if require_current_selection and handoff["recipient_variable"] != reporting["recipient_variable"]:
+        raise ContractError(f"{label}: recipient variable does not match current reporting mode")
     if handoff["allowed_domain"] != reporting["allowed_domain"]:
         raise ContractError(f"{label}: allowed domain does not match config/reporting.yaml")
     _validate_delivery_result(handoff["delivery"], label)
@@ -120,7 +125,12 @@ def record_email_delivery(
 ) -> None:
     handoff = json.loads(handoff_path.read_text(encoding="ascii"))
     reporting = load_data(ROOT / "config" / "reporting.yaml")
-    validate_email_handoff(handoff, str(handoff_path), reporting)
+    validate_email_handoff(
+        handoff,
+        str(handoff_path),
+        reporting,
+        require_current_selection=True,
+    )
     validate_stored_bundle_content(handoff_path, handoff)
     if handoff["delivery"]["status"] != "pending":
         raise ContractError(f"{handoff_path}: delivery result is already recorded")
@@ -129,7 +139,12 @@ def record_email_delivery(
         "receipt_reference": receipt_reference,
         "error_code": error_code,
     }
-    validate_email_handoff(handoff, str(handoff_path), reporting)
+    validate_email_handoff(
+        handoff,
+        str(handoff_path),
+        reporting,
+        require_current_selection=True,
+    )
     handoff_path.write_text(json.dumps(handoff, indent=2) + "\n", encoding="ascii")
 
 
@@ -262,7 +277,12 @@ def finalize_readiness_failure(
         SCHEMAS / "readiness-failure.schema.json",
         "readiness failure report",
     )
-    validate_email_handoff(email_handoff, "readiness failure email handoff", reporting)
+    validate_email_handoff(
+        email_handoff,
+        "readiness failure email handoff",
+        reporting,
+        require_current_selection=True,
+    )
 
     target.mkdir(parents=True, exist_ok=True)
     for filename, content in contents.items():
