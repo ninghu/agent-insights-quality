@@ -20,7 +20,8 @@ PUBLIC_FORBIDDEN_PATTERNS = {
         r"(?i)(?<![A-Za-z0-9.-])"
         r"(?:(?:https?:)?//)?"
         r"(?:[A-Za-z0-9-]+\.)*(?:dev\.azure\.com|visualstudio\.com)"
-        r"(?::[0-9]+)?(?=$|[/?:#\s<>'\"])"
+        r"(?::[0-9]+)?"
+        r"(?=$|[/?:#\s<>'\"\)\]\},;!]|[.,](?=$|[\s\)\]\},;!]))"
     ),
     "private key": re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     "GitHub token": re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}\b"),

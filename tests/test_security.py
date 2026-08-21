@@ -63,6 +63,10 @@ def test_public_safety_patterns_reject_private_identifiers(unsafe: str) -> None:
         "//" + "org." + "visualstudio." + "com",
         "org." + "visualstudio." + "com",
         "org." + "visualstudio." + "com?view=workitems",
+        "(https://" + "org." + "visualstudio." + "com)",
+        "[ADO](//" + "org." + "visualstudio." + "com)",
+        "See dev." + "azure.com, then continue.",
+        "See dev." + "azure.com. Then continue.",
     ],
 )
 def test_public_safety_rejects_ado_hosts_independent_of_scheme(unsafe: str) -> None:
@@ -79,6 +83,7 @@ def test_public_safety_rejects_ado_hosts_independent_of_scheme(unsafe: str) -> N
         "https://example.test/path/dev." + "azure.com-guide",
         "https://org." + "visualstudio." + "com.example.test/docs",
         "org." + "visualstudio." + "company/docs",
+        "https://dev." + "azure.com.example.test/docs",
     ],
 )
 def test_public_safety_ado_host_pattern_avoids_near_matches(safe: str) -> None:
