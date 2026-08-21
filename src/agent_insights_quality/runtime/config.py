@@ -11,7 +11,7 @@ from .errors import RuntimeFailure
 
 _GUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,126}$")
-_DISPLAY_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._()'-]{0,126}$")
+_DISPLAY_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 &._()'-]{0,126}$")
 _CONTAINER = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])$")
 _PROJECT = re.compile(r"^aiq-[0-9]{8}(?:-r[0-9]{2})?$")
 
@@ -91,7 +91,7 @@ class RuntimeConfig:
     def from_env(cls, source: Mapping[str, str] | None = None) -> RuntimeConfig:
         env = os.environ if source is None else source
         subscription_id = env.get("AIQ_AZURE_SUBSCRIPTION_ID", "").strip() or None
-        subscription_name = env.get("AIQ_AZURE_SUBSCRIPTION_NAME", "").strip() or None
+        subscription_name = env.get("AIQ_AZURE_SUBSCRIPTION_NAME", "") or None
         if bool(subscription_id) == bool(subscription_name):
             raise RuntimeFailure(
                 "invalid_runtime_configuration",
@@ -103,7 +103,7 @@ class RuntimeConfig:
                 "AIQ_AZURE_SUBSCRIPTION_ID must be a subscription GUID.",
             )
         if subscription_name is not None:
-            if not _DISPLAY_NAME.fullmatch(subscription_name):
+            if subscription_name != subscription_name.strip() or not _DISPLAY_NAME.fullmatch(subscription_name):
                 raise RuntimeFailure(
                     "invalid_runtime_configuration",
                     "subscription display name has an invalid format.",
