@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import html
-import re
 from copy import deepcopy
 from datetime import date
 from pathlib import Path
@@ -20,8 +19,7 @@ from agent_insights_quality.contracts import (
 )
 from agent_insights_quality.generated_paths import validate_generated_paths
 from agent_insights_quality.planning import generate_daily_plan
-from agent_insights_quality.privacy import require_privacy_safe
-from agent_insights_quality.public_safety import PUBLIC_FORBIDDEN_PATTERNS
+from agent_insights_quality.public_safety import require_public_artifact_safe
 from agent_insights_quality.reporting import (
     build_email_send_request,
     create_email_send_request,
@@ -31,13 +29,6 @@ from agent_insights_quality.reporting import (
     validate_report_consistency,
 )
 from agent_insights_quality.artifact_io import canonical_json, content_hash, write_json
-
-
-_PRIVATE_RUNTIME_URL = re.compile(
-    r"(?i)https?://[^\s<>'\"]*?(?:ai\.azure\.com|portal\.azure\.com|"
-    r"[a-z0-9.-]+\.(?:services\.ai\.azure\.com|openai\.azure\.com|"
-    r"azurewebsites\.net))"
-)
 
 
 def build_preflight_plan(report_date: str, generated_at: str) -> dict[str, Any]:
@@ -231,14 +222,6 @@ def create_failure_send_request(
     return request
 
 
-def _assert_public_safe_text(label: str, value: str) -> None:
-    for pattern_label, pattern in PUBLIC_FORBIDDEN_PATTERNS.items():
-        if pattern.search(value):
-            raise ContractError(f"{label}: public artifact contains {pattern_label}")
-    if _PRIVATE_RUNTIME_URL.search(value):
-        raise ContractError(f"{label}: public artifact contains private runtime URL")
-
-
 def write_daily_artifacts(
     root: Path,
     plan: dict[str, Any],
@@ -275,18 +258,17 @@ def write_daily_artifacts(
         f"- Assignments: {len(plan['assignments'])}\n"
     )
     report_markdown = render_report_markdown(report)
-    require_privacy_safe(report, "Canonical public report")
+    require_public_artifact_safe(plan, "Canonical public plan")
+    require_public_artifact_safe(report, "Canonical public report")
     if failure_email is not None:
-        require_privacy_safe(failure_email, "Public failure email")
+        require_public_artifact_safe(failure_email, "Public failure email")
     for label, text in (
         ("plan.md", plan_markdown),
         ("report.md", report_markdown),
         ("failure-email.html", failure_email or ""),
-        ("plan.json", canonical_json(plan).decode("ascii")),
-        ("report.json", canonical_json(report).decode("ascii")),
     ):
         if text:
-            _assert_public_safe_text(label, text)
+            require_public_artifact_safe(text, label)
     target.mkdir(parents=True, exist_ok=True)
     write_json(target / "plan.json", plan)
     (target / "plan.md").write_bytes(plan_markdown.encode("ascii"))

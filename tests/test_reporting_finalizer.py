@@ -24,6 +24,7 @@ from agent_insights_quality.reporting import (
 )
 from agent_insights_quality.artifact_io import content_hash
 from agent_insights_quality.planning import generate_daily_plan
+from agent_insights_quality.privacy import require_privacy_safe
 from datetime import date
 
 
@@ -543,6 +544,44 @@ def test_report_contradiction_is_rejected() -> None:
 def test_render_report_cli_rejects_sensitive_payload(tmp_path) -> None:
     value = report()
     value["summary"] = "Synthetic payment card 4111 1111 1111 1111"
+    report_path = tmp_path / "report.json"
+    output_path = tmp_path / "report.md"
+    report_path.write_text(json.dumps(value), encoding="ascii")
+
+    assert main(
+        [
+            "render-report",
+            "--report",
+            str(report_path),
+            "--output",
+            str(output_path),
+        ]
+    ) == 1
+    assert not output_path.exists()
+
+
+def test_privacy_scanner_ignores_numeric_metrics_but_rejects_card_text() -> None:
+    require_privacy_safe({"seed": 4111111111111111}, "Numeric plan fields")
+    with pytest.raises(ContractError, match="payment card number"):
+        require_privacy_safe(
+            {"summary": "4111111111111111"},
+            "String report fields",
+        )
+
+
+@pytest.mark.parametrize(
+    "private_url",
+    [
+        "https://ai.azure.com/nextgen/r/sub,rg,,account,project/build/agents/aiq-001-agent/insights",
+        "https://internal.example.test/agent-insights",
+    ],
+)
+def test_render_report_cli_rejects_private_runtime_urls(
+    tmp_path,
+    private_url,
+) -> None:
+    value = report()
+    value["summary"] = f"Private runtime location: {private_url}"
     report_path = tmp_path / "report.json"
     output_path = tmp_path / "report.md"
     report_path.write_text(json.dumps(value), encoding="ascii")
