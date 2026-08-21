@@ -7,6 +7,7 @@
   "required": [
     "schema_version",
     "plan_id",
+    "plan_digest",
     "report_date",
     "created_at",
     "catalog_version",
@@ -15,11 +16,13 @@
     "seed",
     "engine",
     "project",
+    "coverage",
     "assignments"
   ],
   "properties": {
     "schema_version": {"const": "1.0.0"},
     "plan_id": {"type": "string", "pattern": "^aiq-[0-9]{8}(?:-r[0-9]{2})?$"},
+    "plan_digest": {"$ref": "#/$defs/sha256"},
     "report_date": {"type": "string", "format": "date"},
     "created_at": {"type": "string", "format": "date-time"},
     "catalog_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
@@ -46,6 +49,46 @@
         "expires_on": {"type": "string", "format": "date"}
       }
     },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario_count",
+        "healthy_control_count",
+        "families",
+        "categories",
+        "severities",
+        "agent_types"
+      ],
+      "properties": {
+        "scenario_count": {"type": "integer", "minimum": 1},
+        "healthy_control_count": {"type": "integer", "minimum": 1},
+        "families": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string"}
+        },
+        "categories": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string"}
+        },
+        "severities": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string"}
+        },
+        "agent_types": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["prompt", "hosted_code", "hosted_custom_container"]}
+        }
+      }
+    },
     "assignments": {
       "type": "array",
       "minItems": 1,
@@ -55,11 +98,19 @@
         "required": [
           "scenario_id",
           "scenario_version",
+          "family",
+          "conflict_tags",
+          "run_id",
           "agent_id",
           "agent_name",
+          "agent_type",
           "agent_version_digest",
+          "version_sequence",
           "wave",
           "traffic_seed",
+          "traffic_recipe_id",
+          "traffic_requests",
+          "lifecycle",
           "window",
           "expected"
         ],
@@ -72,24 +123,61 @@
             "type": "string",
             "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
           },
+          "family": {"type": "string", "minLength": 1},
+          "conflict_tags": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"}
+          },
+          "run_id": {"type": "string", "pattern": "^run-[0-9]{2}-aiq-[0-9]{3}-[a-z][a-z0-9-]*$"},
           "agent_id": {"type": "string", "pattern": "^aiq-[0-9]{3}-[a-z][a-z0-9-]*$"},
           "agent_name": {"type": "string", "pattern": "^aiq-[0-9]{3}-[a-z][a-z0-9-]*.*$"},
+          "agent_type": {"enum": ["prompt", "hosted_code", "hosted_custom_container"]},
           "agent_version_digest": {"$ref": "#/$defs/sha256"},
-          "wave": {"type": "integer", "minimum": 0},
-          "traffic_seed": {"type": "integer", "minimum": 0},
-          "window": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["start", "end"],
-            "properties": {
-              "start": {"type": "string", "format": "date-time"},
-              "end": {"type": "string", "format": "date-time"}
+          "version_sequence": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["phase", "version_key", "digest", "window"],
+              "properties": {
+                "phase": {
+                  "enum": [
+                    "healthy",
+                    "faulted",
+                    "faulted-initial",
+                    "faulted-repeat",
+                    "corrected",
+                    "recurred"
+                  ]
+                },
+                "version_key": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]*$"
+                },
+                "digest": {"$ref": "#/$defs/sha256"},
+                "window": {"$ref": "#/$defs/window"}
+              }
             }
           },
+          "wave": {"type": "integer", "minimum": 0},
+          "traffic_seed": {"type": "integer", "minimum": 0},
+          "traffic_recipe_id": {"type": "string", "pattern": "^traffic-[a-z0-9-]+-v[0-9]+$"},
+          "traffic_requests": {"type": "integer", "minimum": 1},
+          "lifecycle": {
+            "enum": [
+              "current_immutable_version",
+              "injected_immutable_version",
+              "sequential_faulted_and_corrected_versions"
+            ]
+          },
+          "window": {"$ref": "#/$defs/window"},
           "expected": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["category", "severity", "finding_count"],
+            "required": ["category", "severity", "finding_count", "validation_targets"],
             "properties": {
               "category": {
                 "enum": [
@@ -105,7 +193,14 @@
                 ]
               },
               "severity": {"enum": ["high", "medium", "low", "none"]},
-              "finding_count": {"type": "integer", "minimum": 0, "maximum": 1}
+              "finding_count": {"type": "integer", "minimum": 0, "maximum": 4}
+              ,
+              "validation_targets": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {"type": "string"}
+              }
             }
           }
         }
@@ -113,6 +208,21 @@
     }
   },
   "$defs": {
-    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": {
+          "type": "string",
+          "pattern": "^window://run-[0-9]{2}-aiq-[0-9]{3}-[a-z][a-z0-9-]*/[a-z-]+/start-inclusive$"
+        },
+        "end": {
+          "type": "string",
+          "pattern": "^window://run-[0-9]{2}-aiq-[0-9]{3}-[a-z][a-z0-9-]*/[a-z-]+/end-exclusive$"
+        }
+      }
+    }
   }
 }

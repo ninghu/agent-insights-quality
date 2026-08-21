@@ -4,7 +4,7 @@ daily_workflow_enabled: false
 mandatory_components:
   infrastructure: false
   healthy_agents: false
-  scenario_catalog: false
+  scenario_catalog: true
   production_orchestrator: false
   deterministic_scoring: false
   copilot_judging: false

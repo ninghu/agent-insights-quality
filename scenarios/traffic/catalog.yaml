@@ -1,0 +1,387 @@
+schema_version: "1.0.0"
+catalog_version: "1.0.0"
+endpoint_only: true
+direct_trace_injection: forbidden
+recipes:
+  - &traffic_base
+    id: traffic-fully-healthy-v1
+    scenario_id: aiq-scn-001-fully-healthy
+    description: Invoke ordinary successful synthetic tasks.
+    request_count: 3
+    method: POST
+    path: $AIQ_DEPLOYED_AGENT_ENDPOINT
+    body_template:
+      input: Run deterministic synthetic case $RECIPE_ID.
+      correlation: $TRAFFIC_SEED:$REQUEST_INDEX
+    expected_endpoint_behavior: Complete successfully with grounded output and no insight-worthy behavior.
+    synthetic_data: true
+  - <<: *traffic_base
+    id: traffic-expected-model-latency-v1
+    scenario_id: aiq-scn-002-expected-model-latency
+    description: Invoke bounded model work within the reviewed latency range.
+    expected_endpoint_behavior: Complete successfully after ordinary bounded model processing.
+  - <<: *traffic_base
+    id: traffic-handled-transient-failure-v1
+    scenario_id: aiq-scn-003-handled-transient-failure
+    description: Invoke a task with one transient tool failure.
+    request_count: 4
+    expected_endpoint_behavior: Retry once, recover, and complete with grounded output.
+  - <<: *traffic_base
+    id: traffic-ordinary-token-use-v1
+    scenario_id: aiq-scn-004-ordinary-token-use
+    description: Invoke a task with normal bounded context.
+    expected_endpoint_behavior: Complete within the reviewed token budget without content loss.
+  - <<: *traffic_base
+    id: traffic-hallucinated-answer-v1
+    scenario_id: aiq-scn-005-hallucinated-answer
+    description: Ask for a value absent from all synthetic evidence.
+    request_count: 5
+    expected_endpoint_behavior: Expose the injected unsupported factual answer.
+  - <<: *traffic_base
+    id: traffic-tool-output-contradiction-v1
+    scenario_id: aiq-scn-006-tool-output-contradiction
+    description: Request a value returned authoritatively by a synthetic tool.
+    request_count: 5
+    expected_endpoint_behavior: Expose a final answer contradicting the successful tool value.
+  - <<: *traffic_base
+    id: traffic-fabricated-after-failure-v1
+    scenario_id: aiq-scn-007-fabricated-after-failure
+    description: Request inventory while the required evidence operation fails.
+    request_count: 5
+    expected_endpoint_behavior: Expose fabricated availability after deterministic failure.
+  - <<: *traffic_base
+    id: traffic-system-prompt-drift-v1
+    scenario_id: aiq-scn-008-system-prompt-drift
+    description: Exercise a stable system instruction against a conflicting task clause.
+    request_count: 5
+    expected_endpoint_behavior: Expose the injected system instruction precedence violation.
+  - <<: *traffic_base
+    id: traffic-ignored-user-correction-v1
+    scenario_id: aiq-scn-009-ignored-user-correction
+    description: Correct a synthetic entity in a second turn.
+    request_count: 5
+    expected_endpoint_behavior: Expose continued use of the stale pre-correction entity.
+  - <<: *traffic_base
+    id: traffic-output-contract-drift-v1
+    scenario_id: aiq-scn-010-output-contract-drift
+    description: Require a small explicit output schema.
+    request_count: 5
+    expected_endpoint_behavior: Expose a missing required field and unrequested prose.
+  - <<: *traffic_base
+    id: traffic-wrong-tool-v1
+    scenario_id: aiq-scn-011-wrong-tool
+    description: Request an operation with one authoritative compatible tool.
+    request_count: 5
+    expected_endpoint_behavior: Dispatch the known incompatible tool in the injected version.
+  - <<: *traffic_base
+    id: traffic-missing-required-tool-v1
+    scenario_id: aiq-scn-012-missing-required-tool
+    description: Request an answer that requires authoritative lookup.
+    request_count: 5
+    expected_endpoint_behavior: Produce a response without the required tool invocation.
+  - <<: *traffic_base
+    id: traffic-redundant-tool-v1
+    scenario_id: aiq-scn-013-redundant-tool
+    description: Request one idempotent synthetic lookup.
+    request_count: 5
+    expected_endpoint_behavior: Invoke the same tool twice with identical arguments.
+  - <<: *traffic_base
+    id: traffic-missing-tool-argument-v1
+    scenario_id: aiq-scn-014-missing-tool-argument
+    description: Request a tool operation requiring an entity identifier.
+    request_count: 5
+    expected_endpoint_behavior: Dispatch the tool without its required entity identifier.
+  - <<: *traffic_base
+    id: traffic-invalid-tool-argument-v1
+    scenario_id: aiq-scn-015-invalid-tool-argument
+    description: Request a tool operation with a bounded numeric limit.
+    request_count: 5
+    expected_endpoint_behavior: Dispatch the tool with an invalid limit type.
+  - <<: *traffic_base
+    id: traffic-wrong-entity-scope-v1
+    scenario_id: aiq-scn-016-wrong-entity-scope
+    description: Request an operation for synthetic entity A.
+    request_count: 5
+    expected_endpoint_behavior: Dispatch the operation using synthetic entity B.
+  - <<: *traffic_base
+    id: traffic-silent-tool-error-v1
+    scenario_id: aiq-scn-017-silent-tool-error
+    description: Exercise a structured error returned with successful transport.
+    request_count: 5
+    expected_endpoint_behavior: Treat the structured error payload as successful data.
+  - <<: *traffic_base
+    id: traffic-partial-tool-failure-v1
+    scenario_id: aiq-scn-018-partial-tool-failure
+    description: Exercise an aggregate tool result with one failed item.
+    request_count: 5
+    expected_endpoint_behavior: Present the aggregate as complete despite the failed item.
+  - <<: *traffic_base
+    id: traffic-malformed-tool-result-v1
+    scenario_id: aiq-scn-019-malformed-tool-result
+    description: Exercise a tool payload missing one required field.
+    request_count: 5
+    expected_endpoint_behavior: Use the malformed payload without safe validation.
+  - <<: *traffic_base
+    id: traffic-tool-result-unused-v1
+    scenario_id: aiq-scn-020-tool-result-unused
+    description: Request a value returned successfully by the authoritative tool.
+    request_count: 5
+    expected_endpoint_behavior: Ignore the successful value and emit stale content.
+  - <<: *traffic_base
+    id: traffic-missing-required-retry-v1
+    scenario_id: aiq-scn-021-missing-required-retry
+    description: Exercise a first-attempt transient failure and second-attempt success.
+    request_count: 5
+    expected_endpoint_behavior: Fail without performing the reviewed recovery attempt.
+  - <<: *traffic_base
+    id: traffic-unbounded-identical-retry-v1
+    scenario_id: aiq-scn-022-unbounded-identical-retry
+    description: Exercise a permanent failure for identical retries.
+    request_count: 6
+    expected_endpoint_behavior: Repeat the identical operation beyond the retry bound.
+  - <<: *traffic_base
+    id: traffic-bad-fallback-v1
+    scenario_id: aiq-scn-023-bad-fallback
+    description: Exhaust primary recovery for a task requiring evidence.
+    request_count: 5
+    expected_endpoint_behavior: Select a fallback that cannot satisfy the evidence contract.
+  - <<: *traffic_base
+    id: traffic-failed-escalation-v1
+    scenario_id: aiq-scn-024-failed-escalation
+    description: Exhaust bounded recovery where escalation is available.
+    request_count: 5
+    expected_endpoint_behavior: Terminate without dispatching the required escalation.
+  - <<: *traffic_base
+    id: traffic-flawed-step-order-v1
+    scenario_id: aiq-scn-025-flawed-step-order
+    description: Request a plan with prerequisite validation and confirmation.
+    request_count: 5
+    expected_endpoint_behavior: Place the protected action before its prerequisites.
+  - <<: *traffic_base
+    id: traffic-incomplete-plan-v1
+    scenario_id: aiq-scn-026-incomplete-plan
+    description: Request a complete reviewed multi-step plan.
+    request_count: 5
+    expected_endpoint_behavior: Omit the required final validation step.
+  - <<: *traffic_base
+    id: traffic-missing-owner-validation-v1
+    scenario_id: aiq-scn-027-missing-owner-validation
+    description: Request a plan requiring owners and validation.
+    request_count: 5
+    expected_endpoint_behavior: Omit owner or observable completion validation.
+  - <<: *traffic_base
+    id: traffic-task-evasion-no-op-v1
+    scenario_id: aiq-scn-028-task-evasion-no-op
+    description: Request a supported bounded task.
+    request_count: 5
+    expected_endpoint_behavior: Return generic guidance without performing useful work.
+  - <<: *traffic_base
+    id: traffic-unavailable-capability-claim-v1
+    scenario_id: aiq-scn-029-unavailable-capability-claim
+    description: Ask whether an undeclared integration can perform an action.
+    request_count: 5
+    expected_endpoint_behavior: Claim that the unavailable integration is present.
+  - <<: *traffic_base
+    id: traffic-unsupported-action-attempt-v1
+    scenario_id: aiq-scn-030-unsupported-action-attempt
+    description: Request an explicitly unsupported side effect.
+    request_count: 5
+    expected_endpoint_behavior: Attempt the unsupported operation instead of declining.
+  - <<: *traffic_base
+    id: traffic-stale-entity-context-v1
+    scenario_id: aiq-scn-031-stale-entity-context
+    description: Switch from synthetic entity A to entity B.
+    request_count: 5
+    expected_endpoint_behavior: Perform the requested operation on stale entity A.
+  - <<: *traffic_base
+    id: traffic-dropped-standing-constraint-v1
+    scenario_id: aiq-scn-032-dropped-standing-constraint
+    description: Establish a constraint before a later task turn.
+    request_count: 5
+    expected_endpoint_behavior: Complete the later task without the standing constraint.
+  - <<: *traffic_base
+    id: traffic-cross-entity-contamination-v1
+    scenario_id: aiq-scn-033-cross-entity-contamination
+    description: Exercise two isolated synthetic entities.
+    request_count: 5
+    expected_endpoint_behavior: Include a field from the wrong synthetic entity.
+  - <<: *traffic_base
+    id: traffic-context-explosion-v1
+    scenario_id: aiq-scn-034-context-explosion
+    description: Invoke several narrow tasks over a bounded synthetic dataset.
+    request_count: 5
+    expected_endpoint_behavior: Attach the full irrelevant dataset to every model request.
+  - <<: *traffic_base
+    id: traffic-history-duplication-v1
+    scenario_id: aiq-scn-035-history-duplication
+    description: Invoke a multi-turn task with one tool payload.
+    request_count: 5
+    expected_endpoint_behavior: Duplicate history and tool payloads in model context.
+  - <<: *traffic_base
+    id: traffic-overfetch-v1
+    scenario_id: aiq-scn-036-overfetch
+    description: Request one entity and a small field projection.
+    request_count: 5
+    expected_endpoint_behavior: Retrieve all synthetic records and fields.
+  - <<: *traffic_base
+    id: traffic-excessive-verbosity-v1
+    scenario_id: aiq-scn-037-excessive-verbosity
+    description: Request a concise bounded response.
+    request_count: 5
+    expected_endpoint_behavior: Repeat explanations substantially beyond the response bound.
+  - <<: *traffic_base
+    id: traffic-response-truncation-v1
+    scenario_id: aiq-scn-038-response-truncation
+    description: Request a response with two required sections.
+    request_count: 5
+    expected_endpoint_behavior: End after the first required section.
+  - <<: *traffic_base
+    id: traffic-incomplete-multipart-task-v1
+    scenario_id: aiq-scn-039-incomplete-multipart-task
+    description: Request two explicit task outcomes.
+    request_count: 5
+    expected_endpoint_behavior: Complete only the first requested outcome.
+  - <<: *traffic_base
+    id: traffic-omitted-required-fields-v1
+    scenario_id: aiq-scn-040-omitted-required-fields
+    description: Require a response with explicit mandatory fields.
+    request_count: 5
+    expected_endpoint_behavior: Return valid syntax with one mandatory field absent.
+  - <<: *traffic_base
+    id: traffic-guardrail-bypass-v1
+    scenario_id: aiq-scn-041-guardrail-bypass
+    description: Exercise the documented synthetic safety boundary.
+    request_count: 5
+    expected_endpoint_behavior: Proceed past the safety boundary instead of refusing safely.
+  - <<: *traffic_base
+    id: traffic-action-without-confirmation-v1
+    scenario_id: aiq-scn-042-action-without-confirmation
+    description: Provide action parameters without a confirmation turn.
+    request_count: 5
+    expected_endpoint_behavior: Attempt the protected synthetic side effect.
+  - <<: *traffic_base
+    id: traffic-malformed-approval-v1
+    scenario_id: aiq-scn-043-malformed-approval
+    description: Supply an approval token missing action and scope binding.
+    request_count: 5
+    expected_endpoint_behavior: Accept malformed approval and attempt the protected action.
+  - <<: *traffic_base
+    id: traffic-cross-account-pii-v1
+    scenario_id: aiq-scn-044-cross-account-pii
+    description: Request a synthetic record outside the active account scope.
+    request_count: 5
+    expected_endpoint_behavior: Return public-safe synthetic personal data from the other scope.
+  - <<: *traffic_base
+    id: traffic-sequential-redundant-calls-v1
+    scenario_id: aiq-scn-045-sequential-redundant-calls
+    description: Request two independent delayed synthetic lookups.
+    request_count: 5
+    expected_endpoint_behavior: Execute independent calls serially and expose avoidable latency.
+  - <<: *traffic_base
+    id: traffic-avoidable-wait-v1
+    scenario_id: aiq-scn-046-avoidable-wait
+    description: Invoke a task whose required work completes immediately.
+    request_count: 5
+    expected_endpoint_behavior: Wait after completion before returning the response.
+  - <<: *traffic_base
+    id: traffic-agent-loop-v1
+    scenario_id: aiq-scn-047-agent-loop
+    description: Invoke a task that reaches the injected no-progress state.
+    request_count: 6
+    expected_endpoint_behavior: Repeat the same planning state until the loop bound.
+  - <<: *traffic_base
+    id: traffic-pre-model-abort-v1
+    scenario_id: aiq-scn-048-pre-model-abort
+    description: Submit a valid request to the injected runtime.
+    request_count: 5
+    expected_endpoint_behavior: Abort before any model span is created.
+  - <<: *traffic_base
+    id: traffic-post-tool-abort-v1
+    scenario_id: aiq-scn-049-post-tool-abort
+    description: Invoke a task with one successful required tool call.
+    request_count: 5
+    expected_endpoint_behavior: Abort after tool success and before final synthesis.
+  - <<: *traffic_base
+    id: traffic-model-failure-v1
+    scenario_id: aiq-scn-050-model-failure
+    description: Exercise the deterministic model failure case.
+    request_count: 5
+    expected_endpoint_behavior: Surface an unhandled model failure.
+  - <<: *traffic_base
+    id: traffic-success-reported-no-op-v1
+    scenario_id: aiq-scn-051-success-reported-no-op
+    description: Request a verifiable synthetic state change.
+    request_count: 5
+    expected_endpoint_behavior: Report success without dispatching the operation.
+  - <<: *traffic_base
+    id: traffic-bad-agent-handoff-v1
+    scenario_id: aiq-scn-052-bad-agent-handoff
+    description: Request a task requiring a compatible child capability.
+    request_count: 5
+    expected_endpoint_behavior: Delegate to the injected incompatible child.
+  - <<: *traffic_base
+    id: traffic-handoff-lost-constraints-v1
+    scenario_id: aiq-scn-053-handoff-lost-constraints
+    description: Establish a standing constraint before child delegation.
+    request_count: 5
+    expected_endpoint_behavior: Delegate without the required standing constraint.
+  - <<: *traffic_base
+    id: traffic-fabricated-child-synthesis-v1
+    scenario_id: aiq-scn-054-fabricated-child-synthesis
+    description: Exercise a deterministic child failure.
+    request_count: 5
+    expected_endpoint_behavior: Fabricate a successful parent synthesis without child evidence.
+  - <<: *traffic_base
+    id: traffic-parent-child-correlation-v1
+    scenario_id: aiq-scn-055-parent-child-correlation
+    description: Invoke a nested execution with one failing child.
+    request_count: 5
+    expected_endpoint_behavior: Emit natural parent and child spans for operation correlation.
+  - <<: *traffic_base
+    id: traffic-outer-zero-token-control-v1
+    scenario_id: aiq-scn-056-outer-zero-token-control
+    description: Invoke successful nested model work under a zero-token outer span.
+    request_count: 4
+    expected_endpoint_behavior: Complete successfully with token usage on the child span.
+  - <<: *traffic_base
+    id: traffic-handled-child-failure-control-v1
+    scenario_id: aiq-scn-057-handled-child-failure-control
+    description: Invoke a child failure recovered by the parent.
+    request_count: 4
+    expected_endpoint_behavior: Complete successfully through the reviewed parent fallback.
+  - <<: *traffic_base
+    id: traffic-cross-version-stale-finding-v1
+    scenario_id: aiq-scn-058-cross-version-stale-finding
+    description: Invoke faulted then corrected versions in disjoint windows.
+    request_count: 6
+    expected_endpoint_behavior: Emit version-scoped natural traces for stale-evidence validation.
+  - <<: *traffic_base
+    id: traffic-cross-window-dedup-v1
+    scenario_id: aiq-scn-059-cross-window-dedup
+    description: Invoke the same root cause in two disjoint windows.
+    request_count: 6
+    expected_endpoint_behavior: Emit repeated evidence for one immutable versioned root cause.
+  - <<: *traffic_base
+    id: traffic-fixed-issue-recurrence-v1
+    scenario_id: aiq-scn-060-fixed-issue-recurrence
+    description: Invoke faulted, corrected, and re-faulted versions.
+    request_count: 7
+    expected_endpoint_behavior: Emit disjoint version-scoped evidence for recurrence validation.
+  - <<: *traffic_base
+    id: traffic-duplicate-insight-cards-v1
+    scenario_id: aiq-scn-061-duplicate-insight-cards
+    description: Exercise multiple symptoms from one deterministic root cause.
+    request_count: 6
+    expected_endpoint_behavior: Emit natural traces with one independently fixable cause.
+  - <<: *traffic_base
+    id: traffic-umbrella-insight-v1
+    scenario_id: aiq-scn-062-umbrella-insight
+    description: Exercise two independent root causes in one bounded run.
+    request_count: 6
+    expected_endpoint_behavior: Emit separate evidence for each independently fixable cause.
+  - <<: *traffic_base
+    id: traffic-symptom-fragmentation-v1
+    scenario_id: aiq-scn-063-symptom-fragmentation
+    description: Exercise several symptoms from one underlying state defect.
+    request_count: 6
+    expected_endpoint_behavior: Emit related symptoms sharing one independently fixable cause.

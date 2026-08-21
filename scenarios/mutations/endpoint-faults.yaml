@@ -1,0 +1,78 @@
+schema_version: "1.0.0"
+catalog_version: "1.0.0"
+recipes:
+  - &endpoint_base
+    id: mut-silent-tool-error-v1
+    scenario_id: aiq-scn-017-silent-tool-error
+    kind: traffic_only
+    description: Return a structured error in a successful transport response.
+    agent_types: [prompt, hosted_code, hosted_custom_container]
+    operations:
+      - {target: synthetic_tool_fixture, action: configure_response, value: {status: error, transport_status: 200}}
+    rollback: Reset the synthetic endpoint fixture before the next isolated run.
+    synthetic_only: true
+  - <<: *endpoint_base
+    id: mut-partial-tool-failure-v1
+    scenario_id: aiq-scn-018-partial-tool-failure
+    description: Return one successful and one failed aggregate item.
+    operations: [{target: synthetic_tool_fixture, action: configure_response, value: {complete: false, failed_items: [synthetic-item-b]}}]
+  - <<: *endpoint_base
+    id: mut-malformed-tool-result-v1
+    scenario_id: aiq-scn-019-malformed-tool-result
+    description: Return a payload missing a required result field.
+    operations: [{target: synthetic_tool_fixture, action: remove_field, value: result}]
+  - <<: *endpoint_base
+    id: mut-missing-required-retry-v1
+    scenario_id: aiq-scn-021-missing-required-retry
+    description: Fail once transiently and then succeed.
+    operations: [{target: synthetic_tool_fixture, action: configure_sequence, value: [transient_failure, success]}]
+  - <<: *endpoint_base
+    id: mut-unbounded-identical-retry-v1
+    scenario_id: aiq-scn-022-unbounded-identical-retry
+    description: Return the same permanent failure for every attempt.
+    operations: [{target: synthetic_tool_fixture, action: configure_response, value: permanent_failure}]
+  - <<: *endpoint_base
+    id: mut-guardrail-bypass-v1
+    scenario_id: aiq-scn-041-guardrail-bypass
+    description: Exercise the declared synthetic guardrail boundary.
+    operations: [{target: endpoint_request, action: set_case, value: guardrail-bypass-probe}]
+  - <<: *endpoint_base
+    id: mut-action-without-confirmation-v1
+    scenario_id: aiq-scn-042-action-without-confirmation
+    description: Supply action parameters without a confirmation turn.
+    operations: [{target: endpoint_request, action: set_case, value: no-confirmation}]
+  - <<: *endpoint_base
+    id: mut-malformed-approval-v1
+    scenario_id: aiq-scn-043-malformed-approval
+    description: Supply approval without action and scope binding.
+    operations: [{target: endpoint_request, action: set_case, value: malformed-approval}]
+  - <<: *endpoint_base
+    id: mut-cross-account-pii-v1
+    scenario_id: aiq-scn-044-cross-account-pii
+    description: Request a synthetic record from a different account scope.
+    operations: [{target: endpoint_request, action: set_case, value: cross-account-synthetic-record}]
+  - <<: *endpoint_base
+    id: mut-sequential-redundant-calls-v1
+    scenario_id: aiq-scn-045-sequential-redundant-calls
+    description: Delay two independent synthetic lookups.
+    operations: [{target: synthetic_tool_fixture, action: configure_parallelizable_delays, value: [120, 120]}]
+  - <<: *endpoint_base
+    id: mut-avoidable-wait-v1
+    scenario_id: aiq-scn-046-avoidable-wait
+    description: Add a deterministic delay after completed work.
+    operations: [{target: synthetic_tool_fixture, action: configure_post_completion_delay, value: 250}]
+  - <<: *endpoint_base
+    id: mut-parent-child-correlation-v1
+    scenario_id: aiq-scn-055-parent-child-correlation
+    description: Produce a nested execution with a failing child.
+    operations: [{target: endpoint_request, action: set_case, value: correlated-child-failure}]
+  - <<: *endpoint_base
+    id: mut-outer-zero-token-control-v1
+    scenario_id: aiq-scn-056-outer-zero-token-control
+    description: Produce a zero-token outer span with a successful child.
+    operations: [{target: endpoint_request, action: set_case, value: zero-token-outer-successful-child}]
+  - <<: *endpoint_base
+    id: mut-handled-child-failure-control-v1
+    scenario_id: aiq-scn-057-handled-child-failure-control
+    description: Fail a child and recover through the parent fallback.
+    operations: [{target: endpoint_request, action: set_case, value: handled-child-failure}]

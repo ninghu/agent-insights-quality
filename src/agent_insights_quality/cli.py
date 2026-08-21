@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Sequence
+from datetime import date
 from pathlib import Path
 
 from agent_insights_quality.contracts import ContractError, ROOT, load_data, validate_contracts
@@ -18,6 +19,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="aiq-quality")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("validate", help="Validate all repository contracts and generated docs")
+    plan_parser = subparsers.add_parser("plan", help="Generate a deterministic daily plan")
+    plan_parser.add_argument("--report-date", required=True, type=date.fromisoformat)
+    plan_parser.add_argument("--output-dir", type=Path)
+    plan_parser.add_argument("--rerun", type=int, default=0)
     docs_parser = subparsers.add_parser("generate-docs", help="Render manifest-backed documentation")
     docs_parser.add_argument("--check", action="store_true", help="Fail instead of writing stale docs")
     path_parser = subparsers.add_parser(
@@ -69,6 +74,15 @@ def run(args: argparse.Namespace) -> None:
         validate_no_direct_trace_injection()
         validate_public_repository_content()
         print("Repository contracts are valid.")
+    elif args.command == "plan":
+        from agent_insights_quality.planning import write_daily_plan
+
+        json_path, markdown_path = write_daily_plan(
+            args.report_date,
+            args.output_dir,
+            rerun=args.rerun,
+        )
+        print(f"Wrote {json_path} and {markdown_path}.")
     elif args.command == "generate-docs":
         generate_documents(check=args.check)
         print("Generated documentation is current.")

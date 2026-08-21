@@ -28,7 +28,8 @@ def test_runtime_readiness_is_explicitly_disabled() -> None:
     validate_runtime_readiness(readiness)
     assert readiness["daily_workflow_enabled"] is False
     assert set(readiness["mandatory_components"]) == MANDATORY_RUNTIME_COMPONENTS
-    assert not any(readiness["mandatory_components"].values())
+    assert readiness["mandatory_components"]["scenario_catalog"] is True
+    assert sum(readiness["mandatory_components"].values()) == 1
 
 
 def test_daily_runtime_fails_closed_as_inconclusive(capsys: pytest.CaptureFixture[str]) -> None:

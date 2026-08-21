@@ -27,6 +27,7 @@
         "version",
         "status",
         "title",
+        "family",
         "priority",
         "customer_impact",
         "tags",
@@ -36,6 +37,8 @@
         "traffic",
         "evidence",
         "expected",
+        "recurrence",
+        "healthy_decoys",
         "version_semantics",
         "retirement"
       ],
@@ -47,6 +50,29 @@
         "version": {"$ref": "#/$defs/semver"},
         "status": {"enum": ["reviewed_placeholder", "active", "retired"]},
         "title": {"type": "string", "minLength": 3, "maxLength": 120},
+        "family": {
+          "enum": [
+            "healthy_controls",
+            "grounding_correctness",
+            "system_instruction",
+            "tool_selection",
+            "tool_arguments",
+            "tool_result_handling",
+            "recovery",
+            "planning",
+            "capability_awareness",
+            "context_memory",
+            "context_cost",
+            "response_completion",
+            "safety_authorization",
+            "latency_loops",
+            "runtime_reliability",
+            "multi_agent",
+            "trace_interpretation",
+            "insight_lifecycle",
+            "collection_quality"
+          ]
+        },
         "priority": {"enum": ["P0", "P1", "P2", "P3"]},
         "customer_impact": {"type": "string", "minLength": 20, "maxLength": 500},
         "tags": {
@@ -94,7 +120,7 @@
         "mutation": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["kind", "manifest", "healthy_to_fault_delta"],
+          "required": ["kind", "manifest", "recipe_id", "healthy_to_fault_delta"],
           "properties": {
             "kind": {
               "enum": [
@@ -109,6 +135,10 @@
               "type": ["string", "null"],
               "pattern": "^scenarios/mutations/[a-z0-9-]+\\.yaml$"
             },
+            "recipe_id": {
+              "type": ["string", "null"],
+              "pattern": "^mut-[a-z0-9-]+-v[0-9]+$"
+            },
             "healthy_to_fault_delta": {
               "type": "string",
               "minLength": 10,
@@ -119,11 +149,15 @@
         "traffic": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["recipe", "seed_namespace", "minimum_requests"],
+          "required": ["recipe", "recipe_id", "seed_namespace", "minimum_requests"],
           "properties": {
             "recipe": {
               "type": "string",
               "pattern": "^scenarios/traffic/[a-z0-9-]+\\.yaml$"
+            },
+            "recipe_id": {
+              "type": "string",
+              "pattern": "^traffic-[a-z0-9-]+-v[0-9]+$"
             },
             "seed_namespace": {
               "type": "string",
@@ -164,7 +198,7 @@
         "expected": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["root_cause", "category", "severity", "fix"],
+          "required": ["root_cause", "category", "severity", "validation_targets", "fix"],
           "properties": {
             "root_cause": {"type": "string", "minLength": 3, "maxLength": 1000},
             "category": {
@@ -181,6 +215,26 @@
               ]
             },
             "severity": {"enum": ["high", "medium", "low", "none"]},
+            "finding_count": {"type": "integer", "minimum": 0, "maximum": 4},
+            "validation_targets": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "root_cause",
+                  "title",
+                  "description",
+                  "category",
+                  "severity",
+                  "proposed_fix",
+                  "evidence",
+                  "version_identity",
+                  "collection",
+                  "no_insight"
+                ]
+              }
+            },
             "fix": {
               "type": "object",
               "additionalProperties": false,
@@ -200,10 +254,28 @@
             }
           }
         },
+        "recurrence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["identity_scope", "dedup_behavior", "recurrence_behavior"],
+          "properties": {
+            "identity_scope": {
+              "enum": ["scenario_version", "root_cause_version", "root_cause_cross_version"]
+            },
+            "dedup_behavior": {"type": "string", "minLength": 10, "maxLength": 500},
+            "recurrence_behavior": {"type": "string", "minLength": 10, "maxLength": 500}
+          }
+        },
+        "healthy_decoys": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 3, "maxLength": 200}
+        },
         "version_semantics": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["applies_to", "prior_insight_behavior"],
+          "required": ["applies_to", "phases", "version_keys", "prior_insight_behavior"],
           "properties": {
             "applies_to": {
               "enum": [
@@ -211,6 +283,27 @@
                 "injected_immutable_version",
                 "sequential_faulted_and_corrected_versions"
               ]
+            },
+            "phases": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 3,
+              "items": {
+                "enum": [
+                  "healthy",
+                  "faulted",
+                  "faulted-initial",
+                  "faulted-repeat",
+                  "corrected",
+                  "recurred"
+                ]
+              }
+            },
+            "version_keys": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 3,
+              "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"}
             },
             "prior_insight_behavior": {
               "type": "string",

@@ -1,0 +1,148 @@
+schema_version: "1.0.0"
+catalog_version: "1.0.0"
+recipes:
+  - &runtime_base
+    id: mut-tool-output-contradiction-v1
+    scenario_id: aiq-scn-006-tool-output-contradiction
+    kind: source_patch
+    description: Replace grounded response mapping with a contradictory value.
+    agent_types: [hosted_code, hosted_custom_container]
+    operations:
+      - {target: response_mapper, action: patch_return_value, value: deterministic contradictory value}
+    rollback: Rebuild from the immutable healthy source or image digest.
+    synthetic_only: true
+  - <<: *runtime_base
+    id: mut-fabricated-after-failure-v1
+    scenario_id: aiq-scn-007-fabricated-after-failure
+    description: Synthesize availability after required operation failure.
+    operations: [{target: failure_handler, action: patch_return_value, value: synthetic available result}]
+  - <<: *runtime_base
+    id: mut-wrong-tool-v1
+    scenario_id: aiq-scn-011-wrong-tool
+    description: Route a request to an incompatible declared tool.
+    operations: [{target: tool_router, action: replace_route, value: incompatible_tool}]
+  - <<: *runtime_base
+    id: mut-missing-required-tool-v1
+    scenario_id: aiq-scn-012-missing-required-tool
+    description: Skip required authoritative tool dispatch.
+    operations: [{target: tool_router, action: bypass_dispatch, value: required_tool}]
+  - <<: *runtime_base
+    id: mut-redundant-tool-v1
+    scenario_id: aiq-scn-013-redundant-tool
+    description: Dispatch one successful tool twice with identical arguments.
+    operations: [{target: tool_router, action: duplicate_dispatch, value: identical_arguments}]
+  - <<: *runtime_base
+    id: mut-missing-tool-argument-v1
+    scenario_id: aiq-scn-014-missing-tool-argument
+    description: Remove one required tool argument.
+    operations: [{target: tool_arguments, action: remove_field, value: entity_id}]
+  - <<: *runtime_base
+    id: mut-invalid-tool-argument-v1
+    scenario_id: aiq-scn-015-invalid-tool-argument
+    description: Serialize one tool argument with an invalid type.
+    operations: [{target: tool_arguments, action: replace_value, value: {field: limit, value: not-an-integer}}]
+  - <<: *runtime_base
+    id: mut-wrong-entity-scope-v1
+    scenario_id: aiq-scn-016-wrong-entity-scope
+    description: Substitute a different synthetic entity scope.
+    operations: [{target: tool_arguments, action: replace_value, value: {field: entity_id, value: synthetic-entity-b}}]
+  - <<: *runtime_base
+    id: mut-tool-result-unused-v1
+    scenario_id: aiq-scn-020-tool-result-unused
+    description: Ignore successful tool payload during synthesis.
+    operations: [{target: response_mapper, action: discard_input, value: tool_result}]
+  - <<: *runtime_base
+    id: mut-bad-fallback-v1
+    scenario_id: aiq-scn-023-bad-fallback
+    description: Route permanent failure to an invalid fallback.
+    operations: [{target: failure_handler, action: replace_route, value: unsupported_fallback}]
+  - <<: *runtime_base
+    id: mut-failed-escalation-v1
+    scenario_id: aiq-scn-024-failed-escalation
+    description: Suppress escalation after recovery exhaustion.
+    operations: [{target: failure_handler, action: bypass_dispatch, value: escalation}]
+  - <<: *runtime_base
+    id: mut-stale-entity-context-v1
+    scenario_id: aiq-scn-031-stale-entity-context
+    description: Resolve the operation against the prior entity.
+    operations: [{target: context_resolver, action: replace_source, value: previous_entity}]
+  - <<: *runtime_base
+    id: mut-dropped-standing-constraint-v1
+    scenario_id: aiq-scn-032-dropped-standing-constraint
+    description: Exclude a standing constraint from request context.
+    operations: [{target: context_builder, action: remove_field, value: standing_constraint}]
+  - <<: *runtime_base
+    id: mut-cross-entity-contamination-v1
+    scenario_id: aiq-scn-033-cross-entity-contamination
+    description: Merge a field from another synthetic entity.
+    operations: [{target: context_builder, action: merge_fixture, value: synthetic-entity-b}]
+  - <<: *runtime_base
+    id: mut-context-explosion-v1
+    scenario_id: aiq-scn-034-context-explosion
+    description: Append the full synthetic dataset to every model request.
+    operations: [{target: context_builder, action: append_fixture, value: full_synthetic_dataset}]
+  - <<: *runtime_base
+    id: mut-history-duplication-v1
+    scenario_id: aiq-scn-035-history-duplication
+    description: Duplicate history and tool payloads.
+    operations: [{target: context_builder, action: duplicate_sections, value: [history, tool_results]}]
+  - <<: *runtime_base
+    id: mut-overfetch-v1
+    scenario_id: aiq-scn-036-overfetch
+    description: Fetch all records instead of requested fields.
+    operations: [{target: query_builder, action: replace_scope, value: all_records_all_fields}]
+  - <<: *runtime_base
+    id: mut-agent-loop-v1
+    scenario_id: aiq-scn-047-agent-loop
+    description: Re-enter a no-progress planning state.
+    operations: [{target: state_machine, action: replace_transition, value: current_state}]
+  - <<: *runtime_base
+    id: mut-pre-model-abort-v1
+    scenario_id: aiq-scn-048-pre-model-abort
+    description: Raise a deterministic error before model dispatch.
+    operations: [{target: request_initializer, action: raise_fixture_error, value: pre-model-abort}]
+  - <<: *runtime_base
+    id: mut-post-tool-abort-v1
+    scenario_id: aiq-scn-049-post-tool-abort
+    description: Raise a deterministic error after tool success.
+    operations: [{target: response_orchestrator, action: raise_fixture_error, value: post-tool-abort}]
+  - <<: *runtime_base
+    id: mut-model-failure-v1
+    scenario_id: aiq-scn-050-model-failure
+    description: Leave a bounded model failure unhandled.
+    operations: [{target: model_error_handler, action: remove_handler, value: deterministic_model_error}]
+  - <<: *runtime_base
+    id: mut-success-reported-no-op-v1
+    scenario_id: aiq-scn-051-success-reported-no-op
+    description: Return success without dispatching the operation.
+    operations: [{target: operation_handler, action: bypass_dispatch, value: success_envelope}]
+  - <<: *runtime_base
+    id: mut-cross-version-stale-finding-v1
+    scenario_id: aiq-scn-058-cross-version-stale-finding
+    description: Materialize faulted and corrected immutable variants.
+    operations: [{target: version_sequence, action: materialize, value: [faulted, corrected]}]
+  - <<: *runtime_base
+    id: mut-cross-window-dedup-v1
+    scenario_id: aiq-scn-059-cross-window-dedup
+    description: Preserve one root cause across disjoint run windows.
+    operations: [{target: version_sequence, action: materialize, value: [faulted-window-a, faulted-window-b]}]
+  - <<: *runtime_base
+    id: mut-fixed-issue-recurrence-v1
+    scenario_id: aiq-scn-060-fixed-issue-recurrence
+    description: Materialize faulted, corrected, and re-faulted variants.
+    operations: [{target: version_sequence, action: materialize, value: [faulted, corrected, recurred]}]
+  - <<: *runtime_base
+    id: mut-duplicate-insight-cards-v1
+    scenario_id: aiq-scn-061-duplicate-insight-cards
+    description: Produce multiple symptoms from one root cause.
+    operations: [{target: failure_fixture, action: expose_symptoms, value: [symptom-a, symptom-b]}]
+  - <<: *runtime_base
+    id: mut-umbrella-insight-v1
+    scenario_id: aiq-scn-062-umbrella-insight
+    description: Inject two independent root causes in one run.
+    operations: [{target: failure_fixture, action: combine_independent_faults, value: [fault-a, fault-b]}]
+  - <<: *runtime_base
+    id: mut-symptom-fragmentation-v1
+    scenario_id: aiq-scn-063-symptom-fragmentation
+    description: Expose several symptoms from one state defect.
+    operations: [{target: failure_fixture, action: expose_symptoms, value: [state-loss, stale-output, retry]}]

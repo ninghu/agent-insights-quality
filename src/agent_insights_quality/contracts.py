@@ -4,7 +4,8 @@ import hashlib
 import json
 import math
 import re
-from datetime import date
+from collections import Counter, defaultdict
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,41 @@ EXPECTED_DEPLOYMENT_PROTOCOLS = {
     "hosted_code": "foundry_hosted_multipart",
     "hosted_custom_container": "foundry_hosted_container_json",
 }
+REQUIRED_SCENARIO_FAMILIES = {
+    "healthy_controls",
+    "grounding_correctness",
+    "system_instruction",
+    "tool_selection",
+    "tool_arguments",
+    "tool_result_handling",
+    "recovery",
+    "planning",
+    "capability_awareness",
+    "context_memory",
+    "context_cost",
+    "response_completion",
+    "safety_authorization",
+    "latency_loops",
+    "runtime_reliability",
+    "multi_agent",
+    "trace_interpretation",
+    "insight_lifecycle",
+    "collection_quality",
+}
+REQUIRED_CATEGORIES = {
+    "tool_call_failures",
+    "latency",
+    "cost_tokens",
+    "reliability_errors",
+    "hallucinations",
+    "output_quality",
+    "context_memory",
+    "safety_guardrails",
+    "none",
+}
+REQUIRED_SEVERITIES = {"high", "medium", "low", "none"}
+MINIMUM_ACTIVE_SCENARIOS = 63
+MINIMUM_HEALTHY_CONTROLS = 4
 
 
 class ContractError(ValueError):
@@ -44,6 +80,13 @@ def load_data(path: Path) -> Any:
         if path.suffix == ".json":
             return json.load(handle)
         return yaml.safe_load(handle)
+
+
+def expected_finding_count(scenario: dict[str, Any]) -> int:
+    return scenario["expected"].get(
+        "finding_count",
+        int(scenario["expected"]["category"] != "none"),
+    )
 
 
 def validate_instance(instance: Any, schema_path: Path, label: str) -> None:
@@ -133,23 +176,97 @@ def load_scenario_catalog(agent_ids: set[str] | None = None) -> dict[str, Any]:
     path = ROOT / "scenarios" / "catalog.yaml"
     catalog = load_data(path)
     validate_instance(catalog, SCENARIO_SCHEMA, str(path.relative_to(ROOT)))
+    agents = load_agent_manifests() if agent_ids is not None else []
+    validate_scenario_catalog_semantics(catalog, agents)
+    if agent_ids is not None:
+        for scenario in catalog["scenarios"]:
+            explicit_agents = set(scenario["compatibility"]["agent_ids"])
+            if not explicit_agents.issubset(agent_ids):
+                raise ContractError(f"{scenario['id']}: compatibility references unknown agents")
+    return catalog
+
+
+def validate_scenario_catalog_semantics(
+    catalog: dict[str, Any],
+    agents: list[dict[str, Any]] | None = None,
+) -> None:
     scenario_ids = [scenario["id"] for scenario in catalog["scenarios"]]
     if len(scenario_ids) != len(set(scenario_ids)):
         raise ContractError("Scenario IDs must be unique")
 
+    agents = agents or []
     for scenario in catalog["scenarios"]:
         mutation = scenario["mutation"]["manifest"]
-        if scenario["mutation"]["kind"] == "none" and mutation is not None:
-            raise ContractError(f"{scenario['id']}: a no-mutation scenario must not name a mutation manifest")
-        if scenario["mutation"]["kind"] != "none" and mutation is None:
-            raise ContractError(f"{scenario['id']}: a fault scenario must name a mutation manifest")
+        mutation_recipe = scenario["mutation"]["recipe_id"]
+        if scenario["mutation"]["kind"] == "none" and (
+            mutation is not None or mutation_recipe is not None
+        ):
+            raise ContractError(
+                f"{scenario['id']}: a no-mutation scenario must not name a mutation recipe"
+            )
+        if scenario["mutation"]["kind"] != "none" and (
+            mutation is None or mutation_recipe is None
+        ):
+            raise ContractError(f"{scenario['id']}: a fault scenario must name a mutation recipe")
         for relative in filter(None, [mutation, scenario["traffic"]["recipe"]]):
             if not (ROOT / relative).is_file():
                 raise ContractError(f"{scenario['id']}: referenced file does not exist: {relative}")
         explicit_agents = set(scenario["compatibility"]["agent_ids"])
-        if agent_ids is not None and not explicit_agents.issubset(agent_ids):
-            raise ContractError(f"{scenario['id']}: compatibility references unknown agents")
-    return catalog
+        if agents and not any(
+            agent["domain"] in scenario["compatibility"]["domains"]
+            and agent["agent_type"] in scenario["compatibility"]["agent_types"]
+            and (not explicit_agents or agent["id"] in explicit_agents)
+            for agent in agents
+        ):
+            raise ContractError(f"{scenario['id']}: compatibility cannot match a registered agent")
+        category = scenario["expected"]["category"]
+        severity = scenario["expected"]["severity"]
+        if (category == "none") != (severity == "none"):
+            raise ContractError(f"{scenario['id']}: category and severity none values must agree")
+        finding_count = expected_finding_count(scenario)
+        if (category == "none" and finding_count != 0) or (
+            category != "none" and finding_count < 1
+        ):
+            raise ContractError(f"{scenario['id']}: finding count does not match expected category")
+        if (category == "none") != ("no_insight" in scenario["expected"]["validation_targets"]):
+            raise ContractError(f"{scenario['id']}: no_insight target must match a healthy control")
+        if not scenario["conflict_tags"]:
+            raise ContractError(f"{scenario['id']}: at least one conflict tag is required")
+        if not scenario["evidence"]["negative_controls"]:
+            raise ContractError(f"{scenario['id']}: at least one negative evidence control is required")
+        semantics = scenario["version_semantics"]
+        phases = semantics["phases"]
+        version_keys = semantics["version_keys"]
+        if len(phases) != len(version_keys):
+            raise ContractError(f"{scenario['id']}: lifecycle phases and version keys must align")
+        if semantics["applies_to"] == "current_immutable_version" and phases != ["healthy"]:
+            raise ContractError(f"{scenario['id']}: current-version controls require a healthy phase")
+        if semantics["applies_to"] == "injected_immutable_version" and phases != ["faulted"]:
+            raise ContractError(f"{scenario['id']}: injected versions require one faulted phase")
+        if (
+            semantics["applies_to"] == "sequential_faulted_and_corrected_versions"
+            and (len(phases) < 2 or "healthy" in phases)
+        ):
+            raise ContractError(f"{scenario['id']}: sequential lifecycle phases are invalid")
+
+    active = [scenario for scenario in catalog["scenarios"] if scenario["status"] == "active"]
+    family_counts = Counter(scenario["family"] for scenario in active)
+    if len(active) < MINIMUM_ACTIVE_SCENARIOS:
+        raise ContractError(
+            f"Scenario catalog requires at least {MINIMUM_ACTIVE_SCENARIOS} active scenarios"
+        )
+    if set(family_counts) != REQUIRED_SCENARIO_FAMILIES:
+        missing = sorted(REQUIRED_SCENARIO_FAMILIES - set(family_counts))
+        extra = sorted(set(family_counts) - REQUIRED_SCENARIO_FAMILIES)
+        raise ContractError(f"Scenario family coverage mismatch; missing={missing}, extra={extra}")
+    if family_counts["healthy_controls"] < MINIMUM_HEALTHY_CONTROLS:
+        raise ContractError("Scenario catalog requires at least four healthy controls")
+    categories = {scenario["expected"]["category"] for scenario in active}
+    severities = {scenario["expected"]["severity"] for scenario in active}
+    if categories != REQUIRED_CATEGORIES:
+        raise ContractError("Scenario catalog does not cover the full category taxonomy")
+    if severities != REQUIRED_SEVERITIES:
+        raise ContractError("Scenario catalog does not cover every severity")
 
 
 def _require_exact_keys(data: Any, required: set[str], label: str) -> None:
@@ -161,25 +278,116 @@ def _require_exact_keys(data: Any, required: set[str], label: str) -> None:
 
 
 def validate_supporting_manifests(catalog: dict[str, Any]) -> None:
-    scenarios = {scenario["id"] for scenario in catalog["scenarios"]}
-    mutation_keys = {"schema_version", "scenario_id", "status", "description"}
-    traffic_keys = mutation_keys | {"endpoint_only"}
+    scenarios = {scenario["id"]: scenario for scenario in catalog["scenarios"]}
+    mutation_recipes: dict[str, tuple[dict[str, Any], str]] = {}
+    traffic_recipes: dict[str, tuple[dict[str, Any], str]] = {}
     for path in sorted((ROOT / "scenarios" / "mutations").glob("*.yaml")):
         data = load_data(path)
-        _require_exact_keys(data, mutation_keys, str(path.relative_to(ROOT)))
-        if data["schema_version"] != "1.0.0" or data["status"] != "placeholder":
-            raise ContractError(f"{path.relative_to(ROOT)}: invalid placeholder metadata")
-        if data["scenario_id"] not in scenarios:
-            raise ContractError(f"{path.relative_to(ROOT)}: unknown scenario_id")
+        label = str(path.relative_to(ROOT))
+        _require_exact_keys(data, {"schema_version", "catalog_version", "recipes"}, label)
+        if data["schema_version"] != "1.0.0" or data["catalog_version"] != catalog["catalog_version"]:
+            raise ContractError(f"{label}: version does not match the scenario catalog")
+        for recipe in data["recipes"]:
+            _require_exact_keys(
+                recipe,
+                {
+                    "id",
+                    "scenario_id",
+                    "kind",
+                    "description",
+                    "agent_types",
+                    "operations",
+                    "rollback",
+                    "synthetic_only",
+                },
+                label,
+            )
+            if recipe["id"] in mutation_recipes:
+                raise ContractError(f"{label}: duplicate mutation recipe ID {recipe['id']}")
+            if recipe["scenario_id"] not in scenarios:
+                raise ContractError(f"{label}: unknown scenario_id")
+            if recipe["synthetic_only"] is not True or not recipe["operations"]:
+                raise ContractError(f"{label}: mutation recipes must be synthetic and actionable")
+            mutation_recipes[recipe["id"]] = (recipe, path.relative_to(ROOT).as_posix())
     for path in sorted((ROOT / "scenarios" / "traffic").glob("*.yaml")):
         data = load_data(path)
-        _require_exact_keys(data, traffic_keys, str(path.relative_to(ROOT)))
-        if data["schema_version"] != "1.0.0" or data["status"] != "placeholder":
-            raise ContractError(f"{path.relative_to(ROOT)}: invalid placeholder metadata")
-        if data["scenario_id"] not in scenarios:
-            raise ContractError(f"{path.relative_to(ROOT)}: unknown scenario_id")
-        if data["endpoint_only"] is not True:
-            raise ContractError(f"{path.relative_to(ROOT)}: endpoint_only must be true")
+        label = str(path.relative_to(ROOT))
+        _require_exact_keys(
+            data,
+            {
+                "schema_version",
+                "catalog_version",
+                "endpoint_only",
+                "direct_trace_injection",
+                "recipes",
+            },
+            label,
+        )
+        if data["schema_version"] != "1.0.0" or data["catalog_version"] != catalog["catalog_version"]:
+            raise ContractError(f"{label}: version does not match the scenario catalog")
+        if data["endpoint_only"] is not True or data["direct_trace_injection"] != "forbidden":
+            raise ContractError(f"{label}: traffic must invoke endpoints without telemetry injection")
+        for recipe in data["recipes"]:
+            _require_exact_keys(
+                recipe,
+                {
+                    "id",
+                    "scenario_id",
+                    "description",
+                    "request_count",
+                    "method",
+                    "path",
+                    "body_template",
+                    "expected_endpoint_behavior",
+                    "synthetic_data",
+                },
+                label,
+            )
+            if recipe["id"] in traffic_recipes:
+                raise ContractError(f"{label}: duplicate traffic recipe ID {recipe['id']}")
+            if recipe["scenario_id"] not in scenarios:
+                raise ContractError(f"{label}: unknown scenario_id")
+            if recipe["method"] != "POST" or recipe["path"] != "$AIQ_DEPLOYED_AGENT_ENDPOINT":
+                raise ContractError(f"{label}: traffic recipes must POST to the deployed endpoint")
+            if recipe["synthetic_data"] is not True:
+                raise ContractError(f"{label}: traffic recipes must use synthetic data")
+            traffic_recipes[recipe["id"]] = (recipe, path.relative_to(ROOT).as_posix())
+
+    expected_mutations = set()
+    expected_traffic = set()
+    for scenario in scenarios.values():
+        mutation_id = scenario["mutation"]["recipe_id"]
+        if mutation_id is not None:
+            expected_mutations.add(mutation_id)
+            recipe_entry = mutation_recipes.get(mutation_id)
+            if recipe_entry is None:
+                raise ContractError(f"{scenario['id']}: mutation recipe does not exist")
+            recipe, recipe_path = recipe_entry
+            if (
+                recipe["scenario_id"] != scenario["id"]
+                or recipe["kind"] != scenario["mutation"]["kind"]
+                or recipe_path != scenario["mutation"]["manifest"]
+                or not set(scenario["compatibility"]["agent_types"]).issubset(
+                    set(recipe["agent_types"])
+                )
+            ):
+                raise ContractError(f"{scenario['id']}: mutation recipe contract does not match")
+        traffic_id = scenario["traffic"]["recipe_id"]
+        expected_traffic.add(traffic_id)
+        recipe_entry = traffic_recipes.get(traffic_id)
+        if recipe_entry is None:
+            raise ContractError(f"{scenario['id']}: traffic recipe does not exist")
+        recipe, recipe_path = recipe_entry
+        if (
+            recipe["scenario_id"] != scenario["id"]
+            or recipe_path != scenario["traffic"]["recipe"]
+            or recipe["request_count"] != scenario["traffic"]["minimum_requests"]
+        ):
+            raise ContractError(f"{scenario['id']}: traffic recipe contract does not match")
+    if set(mutation_recipes) != expected_mutations:
+        raise ContractError("Mutation recipe registry contains unreferenced or missing recipes")
+    if set(traffic_recipes) != expected_traffic:
+        raise ContractError("Traffic recipe registry contains unreferenced or missing recipes")
 
 
 def validate_reporting_config(data: dict[str, Any]) -> None:
@@ -337,9 +545,39 @@ def validate_link_policy(data: dict[str, Any]) -> None:
         raise ContractError("config/link-policy.yaml: public-safe Agent Insights link contract changed")
 
 
+def catalog_bundle_hash(catalog_path: Path | None = None) -> str:
+    catalog_path = catalog_path or ROOT / "scenarios" / "catalog.yaml"
+    inputs: list[tuple[str, Path]] = [("scenarios/catalog.yaml", catalog_path)]
+    inputs.extend(
+        (path.relative_to(ROOT).as_posix(), path)
+        for root in (
+            ROOT / "agents",
+            ROOT / "scenarios" / "mutations",
+            ROOT / "scenarios" / "traffic",
+        )
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    )
+    digest = hashlib.sha256()
+    for logical_path, path in inputs:
+        if path.suffix in {".json", ".yaml", ".yml"}:
+            content = json.dumps(
+                load_data(path),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ).encode("ascii")
+        else:
+            content = path.read_bytes().replace(b"\r\n", b"\n")
+        digest.update(logical_path.encode("ascii"))
+        digest.update(b"\0")
+        digest.update(content)
+        digest.update(b"\0")
+    return f"sha256:{digest.hexdigest()}"
+
+
 def _catalog_hash() -> str:
-    content = (ROOT / "scenarios" / "catalog.yaml").read_bytes()
-    return f"sha256:{hashlib.sha256(content).hexdigest()}"
+    return catalog_bundle_hash()
 
 
 def validate_daily_plan_semantics(
@@ -347,6 +585,8 @@ def validate_daily_plan_semantics(
     agents: list[dict[str, Any]],
     catalog: dict[str, Any],
     label: str,
+    expected_catalog_hash: str | None = None,
+    allow_historical: bool = False,
 ) -> None:
     agent_by_id = {agent["id"]: agent for agent in agents}
     scenario_by_id = {scenario["id"]: scenario for scenario in catalog["scenarios"]}
@@ -354,33 +594,210 @@ def validate_daily_plan_semantics(
         scenario["id"] for scenario in catalog["scenarios"] if scenario["status"] == "active"
     }
     assignment_ids = [assignment["scenario_id"] for assignment in plan["assignments"]]
-    if plan["catalog_version"] != catalog["catalog_version"]:
+    historical = plan["catalog_version"] != catalog["catalog_version"]
+    if historical and not allow_historical:
         raise ContractError(f"{label}: catalog_version does not match scenarios/catalog.yaml")
-    if plan["catalog_hash"] != _catalog_hash():
+    if not historical and plan["catalog_hash"] != (expected_catalog_hash or _catalog_hash()):
         raise ContractError(f"{label}: catalog_hash does not match scenarios/catalog.yaml")
+    expected_seed = int(
+        hashlib.sha256(
+            f"{plan['report_date']}:{plan['catalog_hash']}".encode("ascii")
+        ).hexdigest()[:16],
+        16,
+    )
+    if plan["seed"] != expected_seed:
+        raise ContractError(f"{label}: seed does not match report date and catalog hash")
+    plan_id_pattern = rf"aiq-{plan['report_date'].replace('-', '')}(?:-r[0-9]{{2}})?"
+    if re.fullmatch(plan_id_pattern, plan["plan_id"]) is None:
+        raise ContractError(f"{label}: plan_id does not match report date")
+    if plan["project"]["name"] != plan["plan_id"]:
+        raise ContractError(f"{label}: project name does not match plan identity")
+    expected_project_reference = "sha256:" + hashlib.sha256(
+        f"runtime:project:{plan['plan_id']}".encode("ascii")
+    ).hexdigest()
+    if plan["project"]["resource_reference"] != expected_project_reference:
+        raise ContractError(f"{label}: project reference does not match plan identity")
+    expected_expiry = (
+        date.fromisoformat(plan["report_date"]) + timedelta(days=7)
+    ).isoformat()
+    if plan["project"]["expires_on"] != expected_expiry:
+        raise ContractError(f"{label}: project retention must be seven days")
+    digest_input = {key: value for key, value in plan.items() if key != "plan_digest"}
+    expected_digest = "sha256:" + hashlib.sha256(
+        json.dumps(
+            digest_input,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    if plan["plan_digest"] != expected_digest:
+        raise ContractError(f"{label}: plan_digest is not canonical")
     if len(assignment_ids) != len(set(assignment_ids)):
         raise ContractError(f"{label}: each scenario may be assigned only once")
-    if set(assignment_ids) != active_ids:
+    if not historical and set(assignment_ids) != active_ids:
         raise ContractError(f"{label}: assignments must cover every active scenario exactly once")
+    if historical and len(assignment_ids) != plan["coverage"]["scenario_count"]:
+        raise ContractError(f"{label}: historical assignment count contradicts coverage")
 
+    run_assignments: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    load_counts = Counter(assignment["agent_id"] for assignment in plan["assignments"])
     for assignment in plan["assignments"]:
         scenario = scenario_by_id.get(assignment["scenario_id"])
         agent = agent_by_id.get(assignment["agent_id"])
-        if scenario is None:
-            raise ContractError(f"{label}: assignment references an unknown scenario")
-        if agent is None:
-            raise ContractError(f"{label}: assignment references an unknown agent")
-        if assignment["scenario_version"] != scenario["version"]:
-            raise ContractError(f"{label}: scenario version does not match the catalog")
-        if not assignment["agent_name"].startswith(agent["required_name_prefix"]):
-            raise ContractError(f"{label}: agent name does not use its required prefix")
-        compatibility = scenario["compatibility"]
-        if agent["domain"] not in compatibility["domains"]:
-            raise ContractError(f"{label}: scenario is incompatible with the assigned agent domain")
-        if agent["agent_type"] not in compatibility["agent_types"]:
-            raise ContractError(f"{label}: scenario is incompatible with the assigned agent type")
-        if compatibility["agent_ids"] and agent["id"] not in compatibility["agent_ids"]:
-            raise ContractError(f"{label}: scenario is incompatible with the assigned agent ID")
+        if not historical:
+            if scenario is None:
+                raise ContractError(f"{label}: assignment references an unknown scenario")
+            if agent is None:
+                raise ContractError(f"{label}: assignment references an unknown agent")
+            if assignment["scenario_version"] != scenario["version"]:
+                raise ContractError(f"{label}: scenario version does not match the catalog")
+            if assignment["family"] != scenario["family"]:
+                raise ContractError(f"{label}: scenario family does not match the catalog")
+            if assignment["conflict_tags"] != scenario["conflict_tags"]:
+                raise ContractError(f"{label}: conflict tags do not match the catalog")
+            if not assignment["agent_name"].startswith(agent["required_name_prefix"]):
+                raise ContractError(f"{label}: agent name does not use its required prefix")
+            compatibility = scenario["compatibility"]
+            if agent["domain"] not in compatibility["domains"]:
+                raise ContractError(f"{label}: scenario is incompatible with the assigned agent domain")
+            if agent["agent_type"] not in compatibility["agent_types"]:
+                raise ContractError(f"{label}: scenario is incompatible with the assigned agent type")
+            if compatibility["agent_ids"] and agent["id"] not in compatibility["agent_ids"]:
+                raise ContractError(f"{label}: scenario is incompatible with the assigned agent ID")
+            if assignment["agent_type"] != agent["agent_type"]:
+                raise ContractError(f"{label}: assignment agent type does not match its manifest")
+            if assignment["traffic_recipe_id"] != scenario["traffic"]["recipe_id"]:
+                raise ContractError(f"{label}: traffic recipe does not match the scenario")
+            if assignment["traffic_requests"] != scenario["traffic"]["minimum_requests"]:
+                raise ContractError(f"{label}: traffic request count does not match the scenario")
+            if assignment["lifecycle"] != scenario["version_semantics"]["applies_to"]:
+                raise ContractError(f"{label}: lifecycle does not match the scenario")
+            expected = assignment["expected"]
+            scenario_expected = scenario["expected"]
+            if (
+                expected["category"] != scenario_expected["category"]
+                or expected["severity"] != scenario_expected["severity"]
+                or expected["validation_targets"] != scenario_expected["validation_targets"]
+                or expected["finding_count"] != expected_finding_count(scenario)
+            ):
+                raise ContractError(f"{label}: expected finding contract does not match the scenario")
+        sequence = assignment["version_sequence"]
+        sequential = (
+            assignment["lifecycle"] == "sequential_faulted_and_corrected_versions"
+        )
+        if sequential and len(sequence) < 2:
+            raise ContractError(f"{label}: sequential lifecycle requires multiple versions")
+        if not sequential and len(sequence) != 1:
+            raise ContractError(f"{label}: non-sequential lifecycle requires one version")
+        if assignment["agent_version_digest"] != sequence[0]["digest"]:
+            raise ContractError(f"{label}: primary version digest must start the version sequence")
+        if assignment["window"] != sequence[0]["window"]:
+            raise ContractError(f"{label}: primary window must start the version sequence")
+        if not historical and [version["phase"] for version in sequence] != scenario[
+            "version_semantics"
+        ]["phases"]:
+            raise ContractError(f"{label}: version phases do not match the scenario")
+        if not historical and [version["version_key"] for version in sequence] != scenario[
+            "version_semantics"
+        ]["version_keys"]:
+            raise ContractError(f"{label}: version identities do not match the scenario")
+        key_to_digest: dict[str, str] = {}
+        digest_to_key: dict[str, str] = {}
+        for version in sequence:
+            prior_digest = key_to_digest.setdefault(version["version_key"], version["digest"])
+            if prior_digest != version["digest"]:
+                raise ContractError(
+                    f"{label}: repeated version key must reuse its immutable digest"
+                )
+            prior_key = digest_to_key.setdefault(version["digest"], version["version_key"])
+            if prior_key != version["version_key"]:
+                raise ContractError(
+                    f"{label}: distinct version keys must use distinct immutable digests"
+                )
+            expected_window = {
+                "start": (
+                    f"window://{assignment['run_id']}/{version['phase']}/start-inclusive"
+                ),
+                "end": (
+                    f"window://{assignment['run_id']}/{version['phase']}/end-exclusive"
+                ),
+            }
+            if version["window"] != expected_window:
+                raise ContractError(f"{label}: version window placeholder is not exact")
+        run_assignments[assignment["run_id"]].append(assignment)
+
+    if not historical and set(load_counts) != set(agent_by_id):
+        raise ContractError(f"{label}: every registered agent must receive an assignment")
+    if max(load_counts.values()) - min(load_counts.values()) > 1:
+        raise ContractError(f"{label}: assignments are not balanced across agents")
+    for run_id, assignments in run_assignments.items():
+        if len({item["agent_id"] for item in assignments}) != 1:
+            raise ContractError(f"{label}: run {run_id} spans multiple agents")
+        if sum(item["expected"]["finding_count"] for item in assignments) > 4:
+            raise ContractError(f"{label}: run {run_id} exceeds four injected root causes")
+        if len({item["wave"] for item in assignments}) != 1:
+            raise ContractError(f"{label}: run {run_id} spans multiple waves")
+        if len({item["agent_version_digest"] for item in assignments}) != 1:
+            raise ContractError(f"{label}: run {run_id} spans multiple immutable versions")
+        if len(
+            {
+                (item["window"]["start"], item["window"]["end"])
+                for item in assignments
+            }
+        ) != 1:
+            raise ContractError(f"{label}: run {run_id} spans multiple analysis windows")
+        if len(
+            {
+                item["version_sequence"][0]["phase"]
+                for item in assignments
+            }
+        ) != 1:
+            raise ContractError(f"{label}: run {run_id} mixes healthy and faulted phases")
+        seen_conflicts: set[str] = set()
+        for assignment in assignments:
+            conflicts = set(assignment["conflict_tags"])
+            if not seen_conflicts.isdisjoint(conflicts):
+                raise ContractError(f"{label}: run {run_id} co-locates conflicting scenarios")
+            seen_conflicts.update(conflicts)
+        if any(
+            item["lifecycle"] == "sequential_faulted_and_corrected_versions"
+            for item in assignments
+        ) and len(assignments) != 1:
+            raise ContractError(f"{label}: sequential lifecycle runs must be isolated")
+
+    if historical:
+        expected_coverage = {
+            "scenario_count": len(plan["assignments"]),
+            "healthy_control_count": sum(
+                assignment["expected"]["finding_count"] == 0
+                for assignment in plan["assignments"]
+            ),
+            "families": sorted({assignment["family"] for assignment in plan["assignments"]}),
+            "categories": sorted(
+                {assignment["expected"]["category"] for assignment in plan["assignments"]}
+            ),
+            "severities": sorted(
+                {assignment["expected"]["severity"] for assignment in plan["assignments"]}
+            ),
+            "agent_types": sorted(
+                {assignment["agent_type"] for assignment in plan["assignments"]}
+            ),
+        }
+    else:
+        active = [scenario_by_id[scenario_id] for scenario_id in active_ids]
+        expected_coverage = {
+            "scenario_count": len(active),
+            "healthy_control_count": sum(
+                scenario["expected"]["category"] == "none" for scenario in active
+            ),
+            "families": sorted({scenario["family"] for scenario in active}),
+            "categories": sorted({scenario["expected"]["category"] for scenario in active}),
+            "severities": sorted({scenario["expected"]["severity"] for scenario in active}),
+            "agent_types": sorted({agent["agent_type"] for agent in agents}),
+        }
+    if plan["coverage"] != expected_coverage:
+        raise ContractError(f"{label}: declared coverage does not match assignments")
 
 
 def validate_canonical_report_semantics(
@@ -426,9 +843,9 @@ def validate_canonical_report_semantics(
             )
         ):
             raise ContractError(f"{label}: scenario result uses an incompatible agent")
-        expected_fault = scenario["expected"]["category"] != "none"
+        expected_count = expected_finding_count(scenario)
         references = result["insight_references"]
-        if result["verdict"] == "correct" and len(references) != int(expected_fault):
+        if result["verdict"] == "correct" and len(references) != expected_count:
             raise ContractError(f"{label}: correct result has an inconsistent insight reference count")
         if result["verdict"] in {"partially_useful", "incorrect_noise"} and not references:
             raise ContractError(f"{label}: produced insight verdict requires an opaque reference")
@@ -449,11 +866,19 @@ def validate_canonical_report_semantics(
         for result in report["scenario_results"]
         if scenario_by_id[result["scenario_id"]]["expected"]["category"] != "none"
     ]
-    true_positives = sum(result["verdict"] == "correct" for result in fault_results)
+    true_positives = sum(
+        expected_finding_count(scenario_by_id[result["scenario_id"]])
+        for result in fault_results
+        if result["verdict"] == "correct"
+    )
     partially_useful = sum(
         result["verdict"] == "partially_useful" for result in report["scenario_results"]
     )
-    false_negatives = sum(result["verdict"] != "correct" for result in fault_results)
+    false_negatives = sum(
+        expected_finding_count(scenario_by_id[result["scenario_id"]])
+        for result in fault_results
+        if result["verdict"] != "correct"
+    )
     produced_insights = sum(
         len(result["insight_references"]) for result in report["scenario_results"]
     )
@@ -474,10 +899,23 @@ def validate_canonical_report_semantics(
 
     expected_rates = {
         "high_severity_recall": ratio(
-            sum(result["verdict"] == "correct" for result in expected_high),
-            len(expected_high),
+            sum(
+                expected_finding_count(scenario_by_id[result["scenario_id"]])
+                for result in expected_high
+                if result["verdict"] == "correct"
+            ),
+            sum(
+                expected_finding_count(scenario_by_id[result["scenario_id"]])
+                for result in expected_high
+            ),
         ),
-        "overall_recall": ratio(true_positives, len(fault_results)),
+        "overall_recall": ratio(
+            true_positives,
+            sum(
+                expected_finding_count(scenario_by_id[result["scenario_id"]])
+                for result in fault_results
+            ),
+        ),
         "precision": ratio(true_positives, produced_insights),
     }
     expected_rates["f1"] = ratio(
@@ -565,6 +1003,44 @@ def validate_report_plan_binding(
             raise ContractError(f"{label}: scenario result version differs from the daily plan")
 
 
+def validate_historical_report_semantics(
+    report: dict[str, Any],
+    plan: dict[str, Any],
+    label: str,
+) -> None:
+    assignments = {item["scenario_id"]: item for item in plan["assignments"]}
+    if len(assignments) != len(plan["assignments"]):
+        raise ContractError(f"{label}: historical plan assignments must be unique")
+    snapshot_agents = {
+        assignment["agent_id"]: {
+            "id": assignment["agent_id"],
+            "agent_type": assignment["agent_type"],
+            "required_name_prefix": assignment["agent_id"],
+            "domain": "snapshot",
+        }
+        for assignment in plan["assignments"]
+    }
+    snapshot_scenarios = [
+        {
+            "id": assignment["scenario_id"],
+            "status": "active",
+            "compatibility": {
+                "domains": ["snapshot"],
+                "agent_types": [assignment["agent_type"]],
+                "agent_ids": [assignment["agent_id"]],
+            },
+            "expected": assignment["expected"],
+        }
+        for assignment in plan["assignments"]
+    ]
+    validate_canonical_report_semantics(
+        report,
+        list(snapshot_agents.values()),
+        {"scenarios": snapshot_scenarios},
+        label,
+    )
+
+
 def validate_report_layout() -> None:
     reports_root = ROOT / "reports"
     allowed_root = {"latest.json", "latest.md", "trend.json"}
@@ -645,7 +1121,13 @@ def validate_report_artifacts(
         label = str(path.relative_to(ROOT))
         plan = load_data(path)
         validate_instance(plan, plan_schema, label)
-        validate_daily_plan_semantics(plan, agents, catalog, label)
+        validate_daily_plan_semantics(
+            plan,
+            agents,
+            catalog,
+            label,
+            allow_historical=True,
+        )
         markdown = path.with_name("plan.md").read_text(encoding="ascii")
         if plan["plan_id"] not in markdown or plan["report_date"] not in markdown:
             raise ContractError(f"{label}: plan.md does not identify its canonical plan")
@@ -654,7 +1136,6 @@ def validate_report_artifacts(
         report = load_data(path)
         validate_instance(report, report_schema, label)
         validate_instance(report["scorecard"], SCORECARD_SCHEMA, f"{label}.scorecard")
-        validate_canonical_report_semantics(report, agents, catalog, label)
         markdown = path.with_name("report.md").read_text(encoding="ascii")
         if (
             report["report_id"] not in markdown
@@ -666,6 +1147,10 @@ def validate_report_artifacts(
         if not plan_path.is_file():
             raise ContractError(f"{label}: report requires a sibling plan.json")
         plan = load_data(plan_path)
+        if plan["catalog_version"] == catalog["catalog_version"]:
+            validate_canonical_report_semantics(report, agents, catalog, label)
+        else:
+            validate_historical_report_semantics(report, plan, label)
         validate_report_plan_binding(report, plan, label)
         failure_email = path.with_name("failure-email.html")
         if failure_email.exists():
