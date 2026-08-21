@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ninghu.github.io/agent-insights-quality/schemas/v1/selection-policy.schema.json",
+  "title": "Agent Insights Quality scenario selection policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "policy_version",
+    "default_mode",
+    "cycle",
+    "selection",
+    "limits",
+    "full_catalog",
+    "scheduled_automation"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "policy_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "default_mode": {"const": "rotating_daily"},
+    "cycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["epoch", "days", "partition_scenario_counts"],
+      "properties": {
+        "epoch": {"type": "string", "format": "date"},
+        "days": {"const": 6},
+        "partition_scenario_counts": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "items": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "healthy_controls_daily",
+        "mandatory_fault_priorities",
+        "rotating_fault_priorities",
+        "priority_order",
+        "required_fault_categories"
+      ],
+      "properties": {
+        "healthy_controls_daily": {"const": true},
+        "mandatory_fault_priorities": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["P0", "P1", "P2"]}
+        },
+        "rotating_fault_priorities": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["P0", "P1", "P2"]}
+        },
+        "priority_order": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {"enum": ["P0", "P1", "P2"]}
+        },
+        "required_fault_categories": {
+          "type": "array",
+          "minItems": 8,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "tool_call_failures",
+              "latency",
+              "cost_tokens",
+              "reliability_errors",
+              "hallucinations",
+              "output_quality",
+              "context_memory",
+              "safety_guardrails"
+            ]
+          }
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "daily_fault_scenario_count",
+        "daily_expected_root_count",
+        "expected_insight_cap_per_agent",
+        "expected_root_cap_per_run",
+        "actual_insight_count_rule"
+      ],
+      "properties": {
+        "daily_fault_scenario_count": {"const": 20},
+        "daily_expected_root_count": {"const": 20},
+        "expected_insight_cap_per_agent": {"const": 4},
+        "expected_root_cap_per_run": {"const": 4},
+        "actual_insight_count_rule": {"const": "exact_expected"}
+      }
+    },
+    "full_catalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["explicit_only", "human_daily_contract"],
+      "properties": {
+        "explicit_only": {"const": true},
+        "human_daily_contract": {"const": false}
+      }
+    },
+    "scheduled_automation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["full_catalog"],
+      "properties": {
+        "full_catalog": {"const": false}
+      }
+    }
+  }
+}

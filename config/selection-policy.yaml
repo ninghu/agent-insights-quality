@@ -1,0 +1,32 @@
+schema_version: "1.0.0"
+policy_version: "1.0.0"
+default_mode: rotating_daily
+cycle:
+  epoch: "2026-01-01"
+  days: 6
+  partition_scenario_counts: [8, 8, 8, 8, 8, 7]
+selection:
+  healthy_controls_daily: true
+  mandatory_fault_priorities: [P0]
+  rotating_fault_priorities: [P1, P2]
+  priority_order: [P0, P1, P2]
+  required_fault_categories:
+    - tool_call_failures
+    - latency
+    - cost_tokens
+    - reliability_errors
+    - hallucinations
+    - output_quality
+    - context_memory
+    - safety_guardrails
+limits:
+  daily_fault_scenario_count: 20
+  daily_expected_root_count: 20
+  expected_insight_cap_per_agent: 4
+  expected_root_cap_per_run: 4
+  actual_insight_count_rule: exact_expected
+full_catalog:
+  explicit_only: true
+  human_daily_contract: false
+scheduled_automation:
+  full_catalog: false

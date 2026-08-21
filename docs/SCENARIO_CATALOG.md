@@ -6,6 +6,10 @@ Catalog version: `1.0.0`
 
 Active scenarios: **63**; families: **19**; healthy controls: **6**.
 
+This is the predefined, human-reviewed issue library. The default daily plan runs all
+healthy controls and P0 faults plus one deterministic six-day rotating partition of P1/P2
+faults; it does not run the full library every day.
+
 Category coverage: `context_memory` (6), `cost_tokens` (4), `hallucinations` (4), `latency` (3), `none` (6), `output_quality` (8), `reliability_errors` (16), `safety_guardrails` (4), `tool_call_failures` (12)
 
 Severity coverage: `high` (34), `low` (5), `medium` (18), `none` (6)
