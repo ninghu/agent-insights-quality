@@ -9,3 +9,6 @@ Graph `/me/sendMail` only with confirmed `Mail.Send`; then local Outlook COM onl
 for the exact authenticated-user test mailbox with Sent Items verification. Preserve one
 `content_digest`, stop after the first confirmed success, never use a Logic App, and import the
 ordered receipt before claiming delivery.
+Read `config/ado-policy.yaml` before any ADO action. Generated automation must not edit it. With
+`auto_apply_enabled: false`, keep `ado-apply` candidate-only and make no create, patch, reopen, or
+comment/evidence request; a runtime environment value may disable but never enable that policy.

@@ -122,7 +122,7 @@ def project_evidence(raw: dict[str, Any]) -> dict[str, Any]:
             ),
         },
         "trace_evidence": [_project_trace(item) for item in raw["trace_evidence"][:100]],
-        "insights": [_project_insight(item) for item in raw["insights"][:25]],
+        "insights": [_project_insight(item) for item in raw["insights"]],
         "previous_insight": deepcopy(raw["previous_insight"]),
         "untrusted_content_notice": UNTRUSTED_NOTICE,
     }

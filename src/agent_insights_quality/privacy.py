@@ -45,6 +45,7 @@ _OPAQUE_IDENTIFIER_KEYS = {
     "report_reference",
     "project_reference",
     "version_digest",
+    "agent_version_digest",
     "healthy_digest",
     "faulted_digest",
 }

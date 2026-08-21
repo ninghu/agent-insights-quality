@@ -39,6 +39,7 @@ def test_generated_path_allowlist_accepts_daily_outputs(path: str) -> None:
     "path",
     [
         "config/reporting.yaml",
+        "config/ado-policy.yaml",
         "agents/weather-prompt/manifest.yaml",
         ".github/copilot/daily-bootstrap-prompt.md",
         "schemas/judgment.schema.json",
@@ -74,6 +75,7 @@ def test_generated_path_pattern_does_not_match_malformed_daily_layout() -> None:
 def test_generated_change_cannot_modify_its_own_authority() -> None:
     protected_authority = [
         "config/automation-policy.yaml",
+        "config/ado-policy.yaml",
         "config/reporting.yaml",
         "config/runtime-readiness.yaml",
         "src/agent_insights_quality/generated_paths.py",

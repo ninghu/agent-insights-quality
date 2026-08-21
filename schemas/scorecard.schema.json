@@ -98,7 +98,7 @@
         "enum": [
           "incomplete_catalog",
           "healthy_false_positive",
-          "over_five_insights",
+          "finding_count_mismatch",
           "high_severity_recall",
           "overall_recall",
           "precision",

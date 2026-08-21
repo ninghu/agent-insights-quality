@@ -422,6 +422,12 @@ def validate_reporting_config(data: dict[str, Any]) -> None:
         raise ContractError("config/reporting.yaml: automation must not be able to promote")
 
 
+def validate_ado_policy(data: dict[str, Any]) -> None:
+    validate_instance(data, SCHEMAS / "ado-policy.schema.json", "config/ado-policy.yaml")
+    if data["schema_version"] != "1.0.0" or data["policy_version"] != "1.0.0":
+        raise ContractError("config/ado-policy.yaml: unsupported schema or policy version")
+
+
 def validate_automation_policy(data: dict[str, Any]) -> None:
     _require_exact_keys(
         data,
@@ -1774,6 +1780,7 @@ def validate_contracts() -> None:
     )
     reporting = load_data(ROOT / "config" / "reporting.yaml")
     validate_reporting_config(reporting)
+    validate_ado_policy(load_data(ROOT / "config" / "ado-policy.yaml"))
     validate_automation_policy(load_data(ROOT / "config" / "automation-policy.yaml"))
     validate_security_policy(load_data(ROOT / "config" / "security-policy.yaml"))
     validate_traffic_policy(load_data(ROOT / "config" / "traffic-policy.yaml"))

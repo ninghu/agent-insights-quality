@@ -362,8 +362,9 @@ cap of four per agent:
 2. Assign every selected scenario exactly once to a compatible agent and version wave; fail rather
    than silently dropping a scenario.
 3. Balance scenarios across the five domains and three implementation types.
-4. Put no more than four expected root causes on an agent across all daily versions and in one insight
-   run.
+4. Put no more than four distinct injected root causes on an agent across all daily versions and in
+   one insight run so failures remain isolated and diagnosable. This planning constraint is not an
+   output-count quality gate.
 5. Never co-locate conflict-tagged scenarios whose traces would make ground truth ambiguous.
 6. Maximize daily engine-category coverage without repeating a rotating scenario. P0 supplies
    context, reliability, and safety daily; rotating inventory supports tool/output on five days,
@@ -482,8 +483,8 @@ For every insight:
 - Proposed-fix kind and artifact shape are valid for prompt, hosted-code, or prose fallback.
 - Proposed changes never reference a tool/capability absent from the deployed agent.
 - Text contains no credentials, secrets, or synthetic PII values.
-- Actual insight count exactly matches the selected expected count; extras are noise and missing
-  insights are misses.
+- The observed count for each report date, run, and agent equals the sum of
+  `expected.finding_count` across its selected plan assignments.
 - Exact IDs/signatures/evidence fingerprints do not duplicate another insight.
 
 For the collection:
@@ -546,7 +547,7 @@ least 0.95.
 - Duplication and fragmentation rate.
 - Umbrella rate.
 - Cross-version stale/overlap rate.
-- Insight count per run and over-five violation count.
+- Expected and observed insight count per run and agent, plus count-mismatch noise/misses.
 - Engine/judge/trace structural failure count.
 - Engine latency, model calls, and tokens as non-quality efficiency diagnostics.
 - New, known, resolved, and regressed issue counts.
@@ -557,7 +558,7 @@ least 0.95.
 
 - The complete reviewed daily selection completed.
 - Every healthy baseline run produced zero insights.
-- Every run and agent/day produced exactly its selected expected insight count.
+- Every run and agent produced exactly its plan-assignment expected finding count.
 - High-severity detection recall is 100%.
 - Overall scenario recall is at least 90%.
 - Insight precision is at least 95%.
@@ -607,6 +608,14 @@ invent or promote new benchmark ground truth. A proposed new scenario is recorde
 human review.
 
 ## 14. Azure DevOps bug automation
+
+`config/ado-policy.yaml` is the public, reviewed authority. Candidate reporting starts enabled and
+automatic apply starts disabled. The runtime `AIQ_ADO_AUTO_APPLY_ENABLED` switch may further disable
+an approved apply setting, but cannot override false to true. Generated automation cannot modify
+configuration; enabling writes requires a normal human-reviewed config change. With apply disabled,
+all create, patch/update, reopen, and comment/evidence paths return an explicit candidate-only result
+and issue zero write HTTP requests. Template lookup, work-item reads, and WIQL duplicate search remain
+available for side-effect-free planning.
 
 ### Template and duplicate handling
 
@@ -679,7 +688,8 @@ Private link values are never committed.
 Use the attached Foundry Insights Assessment as the visual and editorial reference, but keep the daily
 email shorter and more executive-friendly. The detailed numeric evidence belongs in the committed
 `reports/daily/YYYY/MM/DD/report.md`; the email favors clear written conclusions and only simple,
-easy-to-interpret numbers.
+easy-to-interpret numbers. Its narrative states `Expected X findings; observed Y`, calls extras noise,
+and calls missing findings missed issues while preserving the four-section navy Outlook layout.
 
 ### 1. Summary
 

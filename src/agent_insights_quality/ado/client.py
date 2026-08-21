@@ -4,6 +4,7 @@ import html
 import json
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.error import HTTPError, URLError
@@ -11,7 +12,12 @@ from urllib.parse import quote
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from agent_insights_quality.contracts import ContractError
+from agent_insights_quality.contracts import (
+    ContractError,
+    ROOT,
+    load_data,
+    validate_ado_policy,
+)
 from agent_insights_quality.judging import (
     judgments_agree_for_auto_bug,
     validate_judgment_for_bundle,
@@ -24,6 +30,7 @@ from agent_insights_quality.scoring import score_run
 
 _ACTIVE_STATES = {"new", "active", "in review", "committed"}
 _RESOLVED_STATES = {"resolved", "done", "removed", "closed"}
+_TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
 @dataclass(frozen=True)
@@ -57,6 +64,58 @@ class AdoRuntimeConfig:
         if "/" in self.organization or not self.organization.strip():
             raise ContractError("ADO organization must be a simple runtime name")
         return "https://" + "dev." + "azure.com/" + quote(self.organization, safe="")
+
+
+@dataclass(frozen=True)
+class AdoPolicy:
+    schema_version: str
+    policy_version: str
+    candidate_reporting_enabled: bool
+    configured_auto_apply_enabled: bool
+    auto_apply_enabled: bool
+
+    @classmethod
+    def from_config(
+        cls,
+        data: dict[str, Any],
+        *,
+        environ: Mapping[str, str] | None = None,
+    ) -> "AdoPolicy":
+        validate_ado_policy(data)
+        configured = data["auto_apply_enabled"] is True
+        environment = os.environ if environ is None else environ
+        override = environment.get("AIQ_ADO_AUTO_APPLY_ENABLED")
+        runtime_allows = override is None or override.strip().casefold() in _TRUE_VALUES
+        return cls(
+            schema_version=data["schema_version"],
+            policy_version=data["policy_version"],
+            candidate_reporting_enabled=data["candidate_reporting_enabled"],
+            configured_auto_apply_enabled=configured,
+            auto_apply_enabled=configured and runtime_allows,
+        )
+
+    @classmethod
+    def load(cls) -> "AdoPolicy":
+        return cls.from_config(load_data(ROOT / "config" / "ado-policy.yaml"))
+
+    def candidate_result(
+        self,
+        requested_action: str,
+        *,
+        matched_reference: str | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "mode": "candidate-only",
+            "action": "candidate",
+            "requested_action": requested_action,
+            "applied": False,
+            "would_apply": False,
+            "candidate_reporting_enabled": self.candidate_reporting_enabled,
+            "candidate_reported": self.candidate_reporting_enabled,
+            "auto_apply_enabled": False,
+            "matched_reference": matched_reference,
+            "reason": "ado_auto_apply_disabled",
+        }
 
 
 def sanitize_log(value: str) -> str:
@@ -104,7 +163,7 @@ def automatic_bug_eligible(
         "provenance_failure",
         "capability_fix_mismatch",
         "secret_or_pii",
-        "over_five_insights",
+        "finding_count_mismatch",
         "cross_version_stale",
         "unresolved_judgment",
     }
@@ -201,9 +260,14 @@ def plan_bug_action(
     work_items: list[dict[str, Any]],
     *,
     mode: Literal["candidate-only", "dry-run", "apply"],
+    policy: AdoPolicy | None = None,
 ) -> dict[str, Any]:
     if mode not in {"candidate-only", "dry-run", "apply"}:
         raise ContractError("ADO mode must be candidate-only, dry-run, or apply")
+    policy = policy or AdoPolicy.load()
+    requested_mode = mode
+    if mode == "apply" and not policy.auto_apply_enabled:
+        mode = "candidate-only"
     eligible = automatic_bug_eligible(
         candidate,
         duplicate_search_completed=mode in {"dry-run", "apply"},
@@ -220,11 +284,21 @@ def plan_bug_action(
         "fingerprint": candidate["fingerprint"],
         "eligible": eligible,
         "mode": mode,
+        "requested_mode": requested_mode,
         "action": action,
         "matched_reference": (
             content_hash({"work_item_id": duplicate.get("id")}) if duplicate else None
         ),
         "would_apply": mode == "dry-run" and action in {"created", "updated", "reopened"},
+        "applied": False,
+        "candidate_reporting_enabled": policy.candidate_reporting_enabled,
+        "candidate_reported": action == "candidate" and policy.candidate_reporting_enabled,
+        "auto_apply_enabled": policy.auto_apply_enabled,
+        "reason": (
+            "ado_auto_apply_disabled"
+            if requested_mode == "apply" and mode == "candidate-only"
+            else None
+        ),
     }
 
 
@@ -315,8 +389,29 @@ def build_repro_html(candidate: dict[str, Any]) -> str:
 class AdoClient:
     """Minimal ADO REST client; credentials and private coordinates exist only at runtime."""
 
-    def __init__(self, config: AdoRuntimeConfig) -> None:
+    def __init__(
+        self,
+        config: AdoRuntimeConfig,
+        policy: AdoPolicy | None = None,
+    ) -> None:
         self.config = config
+        self.policy = policy or AdoPolicy.load()
+
+    def _candidate_result(
+        self,
+        requested_action: str,
+        *,
+        work_item_id: int | None = None,
+    ) -> dict[str, Any]:
+        reference = (
+            content_hash({"work_item_id": work_item_id})
+            if work_item_id is not None
+            else None
+        )
+        return self.policy.candidate_result(
+            requested_action,
+            matched_reference=reference,
+        )
 
     def _request(
         self,
@@ -326,6 +421,14 @@ class AdoClient:
         body: Any | None = None,
         content_type: str = "application/json",
     ) -> Any:
+        normalized_method = method.upper()
+        wiql_read = normalized_method == "POST" and route.startswith("_apis/wit/wiql?")
+        if (
+            not self.policy.auto_apply_enabled
+            and normalized_method not in {"GET", "HEAD"}
+            and not wiql_read
+        ):
+            return self._candidate_result(f"{normalized_method} {route.split('?', 1)[0]}")
         data = json.dumps(body).encode("utf-8") if body is not None else None
         request = Request(
             f"{self.config.base_url}/{quote(self.config.project, safe='')}/{route}",
@@ -406,6 +509,8 @@ class AdoClient:
         candidate: dict[str, Any],
         template: dict[str, Any],
     ) -> dict[str, Any]:
+        if not self.policy.auto_apply_enabled:
+            return self._candidate_result("create")
         fields = dict(template.get("fields", {}))
         prefix = fields.pop("System.Title", "")
         fields["System.Tags"] = self._union_tags(
@@ -429,6 +534,8 @@ class AdoClient:
         )
 
     def comment_occurrence(self, work_item_id: int, candidate: dict[str, Any]) -> dict[str, Any]:
+        if not self.policy.auto_apply_enabled:
+            return self._candidate_result("comment", work_item_id=work_item_id)
         return self._request(
             "POST",
             f"_apis/wit/workItems/{work_item_id}/comments?api-version=7.1-preview.4",
@@ -436,6 +543,8 @@ class AdoClient:
         )
 
     def update_bug(self, work_item_id: int, candidate: dict[str, Any]) -> dict[str, Any]:
+        if not self.policy.auto_apply_enabled:
+            return self._candidate_result("update", work_item_id=work_item_id)
         build_repro_html(candidate)
         existing = self.get_work_item(work_item_id)
         revision = existing.get("rev")
@@ -466,6 +575,8 @@ class AdoClient:
         candidate: dict[str, Any],
         template: dict[str, Any],
     ) -> dict[str, Any]:
+        if not self.policy.auto_apply_enabled:
+            return self._candidate_result("reopen", work_item_id=work_item_id)
         build_repro_html(candidate)
         template_fields = template.get("fields", {})
         existing = self.get_work_item(work_item_id)

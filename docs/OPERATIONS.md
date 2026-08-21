@@ -108,6 +108,13 @@ The guard validates additions, changes, deletions, and both sides of renames. A 
 authorize itself by modifying the allowlist, validator, reporting config, or readiness config. Source
 contracts, policies, schemas, prompts, and skills require a normal human-reviewed change.
 
+`config/ado-policy.yaml` enables candidate reporting and disables automatic ADO apply by default.
+Template lookup, work-item reads, and WIQL duplicate search are allowed for planning. Create, patch,
+reopen, and comment/evidence requests return a candidate-only result and issue no write HTTP request
+unless `auto_apply_enabled` is changed to true in a normal human-reviewed configuration change.
+`AIQ_ADO_AUTO_APPLY_ENABLED` may further disable that reviewed permission; it cannot turn a false
+policy value on. Daily/generated automation must never edit this policy.
+
 ## Runtime handoff commands
 
 Use `project-evidence`, `judge-package-export`, and `judge-package-import` for the primary Copilot
@@ -120,6 +127,9 @@ an imported provider receipt.
 `memory-reconcile` requires the validated daily plan and canonical report. Only a full-catalog,
 evidence-complete report can advance issue state, and complete reports must be processed
 chronologically.
+
+`ado-apply` loads the reviewed ADO policy before private runtime configuration. With the default
+policy, it succeeds only as an explicit candidate-only handoff and performs no ADO mutation.
 
 The email request carries one immutable `content_digest` and an ordered, no-duplicate transport
 policy. Automation tries connected Copilot mail first, Graph `/me/sendMail` only when `Mail.Send` is

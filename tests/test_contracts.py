@@ -16,6 +16,7 @@ from agent_insights_quality.contracts import (
     load_data,
     load_scenario_catalog,
     validate_canonical_report_semantics,
+    validate_ado_policy,
     validate_contracts,
     validate_instance,
     validate_historical_report_semantics,
@@ -83,6 +84,18 @@ def test_reporting_promotion_cannot_be_automated() -> None:
     invalid["mode"] = "production"
     with pytest.raises(ContractError, match="recipient variable must match"):
         validate_reporting_config(invalid)
+
+
+def test_ado_policy_defaults_to_candidates_and_requires_reviewed_versions() -> None:
+    policy = load_data(ROOT / "config" / "ado-policy.yaml")
+    validate_ado_policy(policy)
+    assert policy["candidate_reporting_enabled"] is True
+    assert policy["auto_apply_enabled"] is False
+
+    invalid = deepcopy(policy)
+    invalid["policy_version"] = "2.0.0"
+    with pytest.raises(ContractError, match="policy_version|policy version"):
+        validate_ado_policy(invalid)
 
 
 def test_persisted_contracts_use_opaque_runtime_references() -> None:

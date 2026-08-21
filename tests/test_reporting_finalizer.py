@@ -200,6 +200,8 @@ def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> No
     assert "<without injection>" not in body
     assert all(agent["id"] in body for agent in value["agents"])
     assert "Healthy controls produced no insights." in body
+    assert "Expected 0 findings; observed 0." in body
+    assert "No quality gaps or regressions were observed." in body
     assert 'bgcolor="#f3f6fa"' in body
     assert 'bgcolor="#12304a"' in body
     assert "max-width:760px" in body
@@ -218,6 +220,22 @@ def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> No
         "Test agents and Agent Insights links",
     )]
     assert positions == sorted(positions)
+
+
+def test_email_uses_simple_expected_observed_noise_and_miss_narrative() -> None:
+    value = report()
+    value["scorecard"]["counts"].update(
+        {"true_positives": 3, "false_positives": 2, "false_negatives": 1}
+    )
+    _, body = render_email_html(
+        value,
+        render_trend([value]),
+        runtime_agent_links(value),
+    )
+
+    assert "Expected 4 findings; observed 5." in body
+    assert "Extra findings were noise." in body
+    assert "Missing findings were missed issues." in body
 
 
 @pytest.mark.parametrize(
