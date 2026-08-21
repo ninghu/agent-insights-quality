@@ -10,6 +10,7 @@ import urllib.request
 import zipfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Protocol
@@ -35,6 +36,8 @@ FORBIDDEN_INGESTION_HOSTS = frozenset(
 )
 _AGENT_NAME = re.compile(r"^aiq-[0-9]{3}-[a-z][a-z0-9-]*(?:-[a-z0-9]+)*$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_OPERATION_ID = re.compile(r"^[0-9a-f]{32}$")
+_SPAN_ID = re.compile(r"^[0-9a-f]{16}$")
 
 
 class RuntimeContractError(ContractError):
@@ -152,17 +155,99 @@ class HealthyFixture:
 
 
 @dataclass(frozen=True, slots=True)
+class LiveSpanEvidence:
+    operation_id: str
+    span_id: str
+    parent_span_id: str | None
+    observed_at: datetime
+    kind: str
+    name: str
+    tool_name: str | None = None
+    tool_arguments: Mapping[str, Any] | None = None
+    tool_result: Any | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class LiveTelemetryEvidence:
+    run_id: str
     agent_id: str
     agent_name: str
     agent_version: str
     fixture_id: str
     response_id: str
+    invocation_id: str | None
+    request_id: str | None
+    session_id: str | None
     operation_id: str
-    span_kinds: frozenset[str]
-    tool_names: tuple[str, ...]
-    tool_arguments: tuple[Mapping[str, Any], ...]
-    tool_results: tuple[Any, ...]
+    observed_at: datetime
+    spans: tuple[LiveSpanEvidence, ...]
+
+
+def validate_telemetry_identifiers(evidence: LiveTelemetryEvidence) -> None:
+    if (
+        not _OPERATION_ID.fullmatch(evidence.operation_id)
+        or evidence.operation_id == "0" * 32
+    ):
+        raise RuntimeContractError(
+            "Live telemetry operation IDs must be 32-character lowercase hexadecimal values."
+        )
+    span_ids = {span.span_id for span in evidence.spans}
+    if len(span_ids) != len(evidence.spans) or any(
+        not _SPAN_ID.fullmatch(span_id) or span_id == "0" * 16
+        for span_id in span_ids
+    ):
+        raise RuntimeContractError(
+            "Live telemetry span IDs must be unique 16-character lowercase hexadecimal values."
+        )
+    for span in evidence.spans:
+        if (
+            span.operation_id != evidence.operation_id
+            or not _OPERATION_ID.fullmatch(span.operation_id)
+            or span.operation_id == "0" * 32
+        ):
+            raise RuntimeContractError(
+                "Live telemetry spans must belong to the enclosing operation ID."
+            )
+        if span.parent_span_id is not None and (
+            not _SPAN_ID.fullmatch(span.parent_span_id)
+            or span.parent_span_id == "0" * 16
+        ):
+            raise RuntimeContractError(
+                "Live telemetry parent span IDs must be 16-character lowercase hexadecimal values."
+            )
+
+
+def validate_deployment_receipt(receipt: DeploymentReceipt) -> None:
+    _validate_agent_name(receipt.agent_name)
+    if (
+        not receipt.agent_version
+        or not receipt.run_id
+        or len(receipt.run_id) > 64
+        or receipt.agent_type
+        not in {"prompt", "hosted_code", "hosted_custom_container"}
+        or not _DIGEST.fullmatch(receipt.artifact_digest)
+        or (
+            receipt.source_digest is not None
+            and not _DIGEST.fullmatch(receipt.source_digest)
+        )
+        or (
+            receipt.image_digest is not None
+            and not _DIGEST.fullmatch(receipt.image_digest)
+        )
+        or (
+            receipt.agent_type == "prompt"
+            and (receipt.source_digest is not None or receipt.image_digest is not None)
+        )
+        or (
+            receipt.agent_type == "hosted_code"
+            and (receipt.source_digest is None or receipt.image_digest is not None)
+        )
+        or (
+            receipt.agent_type == "hosted_custom_container"
+            and (receipt.image_digest is None or receipt.source_digest is not None)
+        )
+    ):
+        raise RuntimeContractError("Live qualification deployment receipt is malformed.")
 
 
 def sha256_digest(content: bytes) -> str:

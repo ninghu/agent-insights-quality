@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import ModuleType
 
@@ -12,7 +15,13 @@ from agent_insights_quality.healthy_agents import (
     load_healthy_agents,
     require_live_telemetry_qualification,
 )
-from agent_insights_quality.runtime import LiveTelemetryEvidence, RuntimeContractError
+from agent_insights_quality.runtime import (
+    DeploymentReceipt,
+    InvocationReceipt,
+    LiveSpanEvidence,
+    LiveTelemetryEvidence,
+    RuntimeContractError,
+)
 
 
 def _load_logic(path: Path, name: str) -> ModuleType:
@@ -212,56 +221,349 @@ def test_all_healthy_fixtures_are_ascii_json() -> None:
         assert len(value) >= 3
 
 
-def test_live_telemetry_qualification_requires_complete_exact_evidence() -> None:
+def _live_qualification_contract():
     agents = load_healthy_agents()
+    run_id = "live-qualification-20300101"
+    window_start = datetime(2030, 1, 1, 12, 0, tzinfo=timezone.utc)
+    window_end = window_start + timedelta(minutes=15)
+    deployments = [
+        DeploymentReceipt(
+            agent_name=f"{agent.id}-qualification",
+            agent_version="7",
+            agent_type=agent.kind,
+            artifact_digest="sha256:" + f"{index + 1:064x}",
+            run_id=run_id,
+            status="active",
+            source_digest=(
+                "sha256:" + f"{index + 101:064x}"
+                if agent.kind == "hosted_code"
+                else None
+            ),
+            image_digest=(
+                "sha256:" + f"{index + 201:064x}"
+                if agent.kind == "hosted_custom_container"
+                else None
+            ),
+        )
+        for index, agent in enumerate(agents)
+    ]
+    deployment_by_id = dict(zip((agent.id for agent in agents), deployments, strict=True))
+    invocations = [
+        InvocationReceipt(
+            fixture_id=fixture.id,
+            agent_name=deployment_by_id[agent.id].agent_name,
+            agent_version=deployment_by_id[agent.id].agent_version,
+            response_id=f"response-{agent.id}-{index}",
+            invocation_id=f"invocation-{agent.id}-{index}",
+            request_id=f"request-{agent.id}-{index}",
+            session_id=(f"session-{agent.id}-{index}" if agent.kind != "prompt" else None),
+            output_text=fixture.output_contains,
+            called_tools=fixture.expected_tool_calls,
+        )
+        for agent in agents
+        for index, fixture in enumerate(agent.fixtures)
+    ]
+    invocation_by_key = {
+        (agent.id, receipt.fixture_id): receipt
+        for agent in agents
+        for receipt in invocations
+        if receipt.agent_name == deployment_by_id[agent.id].agent_name
+    }
     evidence = [
         LiveTelemetryEvidence(
+            run_id=run_id,
             agent_id=agent.id,
-            agent_name=f"{agent.id}-qualification",
-            agent_version="1",
+            agent_name=deployment_by_id[agent.id].agent_name,
+            agent_version=deployment_by_id[agent.id].agent_version,
             fixture_id=fixture.id,
-            response_id=f"response-{agent.id}-{index}",
-            operation_id=f"operation-{agent.id}-{index}",
-            span_kinds=frozenset(
-                {"agent", "model", "tool"} if agent.kind != "prompt" else {"agent", "model"}
-            ),
-            tool_names=fixture.expected_tool_calls,
-            tool_arguments=tuple(
-                fixture.tool_outputs[name]["arguments"]
-                for name in fixture.expected_tool_calls
-            ),
-            tool_results=tuple(
-                fixture.tool_outputs[name]["result"]
-                for name in fixture.expected_tool_calls
+            response_id=invocation_by_key[(agent.id, fixture.id)].response_id,
+            invocation_id=invocation_by_key[(agent.id, fixture.id)].invocation_id,
+            request_id=invocation_by_key[(agent.id, fixture.id)].request_id,
+            session_id=invocation_by_key[(agent.id, fixture.id)].session_id,
+            operation_id=hashlib.sha256(
+                f"{agent.id}:{fixture.id}".encode("ascii")
+            ).hexdigest()[:32],
+            observed_at=window_start + timedelta(seconds=index + 1),
+            spans=(
+                LiveSpanEvidence(
+                    operation_id=hashlib.sha256(
+                        f"{agent.id}:{fixture.id}".encode("ascii")
+                    ).hexdigest()[:32],
+                    span_id="1" * 16,
+                    parent_span_id=None,
+                    observed_at=window_start + timedelta(seconds=index + 1),
+                    kind="agent",
+                    name="invoke_agent",
+                ),
+                LiveSpanEvidence(
+                    operation_id=hashlib.sha256(
+                        f"{agent.id}:{fixture.id}".encode("ascii")
+                    ).hexdigest()[:32],
+                    span_id="2" * 16,
+                    parent_span_id="1" * 16,
+                    observed_at=window_start + timedelta(seconds=index + 2),
+                    kind="model",
+                    name="model.responses.create",
+                ),
+                *(
+                    LiveSpanEvidence(
+                        operation_id=hashlib.sha256(
+                            f"{agent.id}:{fixture.id}".encode("ascii")
+                        ).hexdigest()[:32],
+                        span_id=f"{tool_index + 3:016x}",
+                        parent_span_id="1" * 16,
+                        observed_at=window_start
+                        + timedelta(seconds=index + tool_index + 3),
+                        kind="tool",
+                        name=f"tool.{name}",
+                        tool_name=name,
+                        tool_arguments=fixture.tool_outputs[name]["arguments"],
+                        tool_result=fixture.tool_outputs[name]["result"],
+                    )
+                    for tool_index, name in enumerate(fixture.expected_tool_calls)
+                ),
             ),
         )
         for agent in agents
         for index, fixture in enumerate(agent.fixtures)
     ]
-    require_live_telemetry_qualification(evidence)
+    return {
+        "run_id": run_id,
+        "window_start": window_start,
+        "window_end": window_end,
+        "deployments": deployments,
+        "invocations": invocations,
+        "evidence": evidence,
+    }
 
-    incomplete = evidence[:-1]
+
+def test_live_telemetry_qualification_binds_exact_receipts_and_span_evidence() -> None:
+    contract = _live_qualification_contract()
+    require_live_telemetry_qualification(**contract)
+
+    incomplete = {**contract, "evidence": contract["evidence"][:-1]}
     with pytest.raises(RuntimeContractError, match="coverage"):
-        require_live_telemetry_qualification(incomplete)
+        require_live_telemetry_qualification(**incomplete)
 
-    changed = list(evidence)
+    changed = list(contract["evidence"])
     hosted_index = next(
         index
         for index, item in enumerate(changed)
         if item.agent_id == "aiq-003-finance"
     )
     item = changed[hosted_index]
-    changed[hosted_index] = LiveTelemetryEvidence(
-        agent_id=item.agent_id,
-        agent_name=item.agent_name,
-        agent_version=item.agent_version,
-        fixture_id=item.fixture_id,
-        response_id=item.response_id,
-        operation_id=item.operation_id,
-        span_kinds=item.span_kinds,
-        tool_names=item.tool_names,
-        tool_arguments=item.tool_arguments,
-        tool_results=("tampered",),
+    changed[hosted_index] = replace(
+        item,
+        spans=(
+            *item.spans[:-1],
+            replace(item.spans[-1], tool_result="tampered"),
+        ),
     )
     with pytest.raises(RuntimeContractError, match="inputs or outputs"):
-        require_live_telemetry_qualification(changed)
+        require_live_telemetry_qualification(**{**contract, "evidence": changed})
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("operation_id", "not-an-operation-id", "operation IDs"),
+        ("operation_id", "0" * 32, "operation IDs"),
+        ("response_id", "stale-response", "current receipt"),
+        ("session_id", "stale-session", "current receipt"),
+        ("agent_version", "previous", "current receipt"),
+        (
+            "observed_at",
+            datetime(2029, 12, 31, 23, 59, tzinfo=timezone.utc),
+            "stale",
+        ),
+    ],
+)
+def test_live_telemetry_qualification_rejects_stale_or_malformed_evidence(
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    contract = _live_qualification_contract()
+    evidence = list(contract["evidence"])
+    evidence[0] = replace(evidence[0], **{field: value})
+    with pytest.raises(RuntimeContractError, match=message):
+        require_live_telemetry_qualification(**{**contract, "evidence": evidence})
+
+
+def test_live_telemetry_qualification_rejects_unrelated_receipts_and_bad_hierarchy() -> None:
+    contract = _live_qualification_contract()
+    deployments = list(contract["deployments"])
+    deployments[0] = replace(deployments[0], run_id="stale-run")
+    with pytest.raises(RuntimeContractError, match="stale or inactive"):
+        require_live_telemetry_qualification(
+            **{**contract, "deployments": deployments}
+        )
+
+    malformed_deployments = list(contract["deployments"])
+    malformed_deployments[0] = replace(
+        malformed_deployments[0],
+        artifact_digest="mutable",
+    )
+    with pytest.raises(RuntimeContractError, match="receipt is malformed"):
+        require_live_telemetry_qualification(
+            **{**contract, "deployments": malformed_deployments}
+        )
+
+    invocations = list(contract["invocations"])
+    invocations.append(replace(invocations[0], response_id="unrelated-response"))
+    with pytest.raises(RuntimeContractError, match="invocation receipts"):
+        require_live_telemetry_qualification(
+            **{**contract, "invocations": invocations}
+        )
+
+    evidence = list(contract["evidence"])
+    evidence[0] = replace(
+        evidence[0],
+        spans=(
+            evidence[0].spans[0],
+            replace(evidence[0].spans[1], parent_span_id="f" * 16),
+            *evidence[0].spans[2:],
+        ),
+    )
+    with pytest.raises(RuntimeContractError, match="parent-child"):
+        require_live_telemetry_qualification(**{**contract, "evidence": evidence})
+
+    malformed_spans = list(contract["evidence"])
+    malformed_spans[0] = replace(
+        malformed_spans[0],
+        spans=(
+            replace(malformed_spans[0].spans[0], span_id="0" * 16),
+            *malformed_spans[0].spans[1:],
+        ),
+    )
+    with pytest.raises(RuntimeContractError, match="span IDs"):
+        require_live_telemetry_qualification(
+            **{**contract, "evidence": malformed_spans}
+        )
+
+    wrong_operation = list(contract["evidence"])
+    wrong_operation[0] = replace(
+        wrong_operation[0],
+        spans=(
+            replace(wrong_operation[0].spans[0], operation_id="f" * 32),
+            *wrong_operation[0].spans[1:],
+        ),
+    )
+    with pytest.raises(RuntimeContractError, match="enclosing operation"):
+        require_live_telemetry_qualification(
+            **{**contract, "evidence": wrong_operation}
+        )
+
+    stale_span = list(contract["evidence"])
+    stale_span[0] = replace(
+        stale_span[0],
+        spans=(
+            replace(
+                stale_span[0].spans[0],
+                observed_at=contract["window_start"] - timedelta(seconds=1),
+            ),
+            *stale_span[0].spans[1:],
+        ),
+    )
+    with pytest.raises(RuntimeContractError, match="stale"):
+        require_live_telemetry_qualification(
+            **{**contract, "evidence": stale_span}
+        )
+
+    reused_invocations = list(contract["invocations"])
+    reused_request_id = list(contract["evidence"])
+    reused_invocations[0] = replace(
+        reused_invocations[0],
+        request_id=reused_request_id[0].operation_id,
+    )
+    reused_request_id[0] = replace(
+        reused_request_id[0],
+        request_id=reused_request_id[0].operation_id,
+    )
+    with pytest.raises(RuntimeContractError, match="current receipt"):
+        require_live_telemetry_qualification(
+            **{
+                **contract,
+                "invocations": reused_invocations,
+                "evidence": reused_request_id,
+            }
+        )
+
+    missing_model = list(contract["evidence"])
+    missing_model[0] = replace(
+        missing_model[0],
+        spans=(
+            missing_model[0].spans[0],
+            *missing_model[0].spans[2:],
+        ),
+    )
+    with pytest.raises(RuntimeContractError, match="core span hierarchy"):
+        require_live_telemetry_qualification(
+            **{**contract, "evidence": missing_model}
+        )
+
+    with pytest.raises(RuntimeContractError, match="bounded UTC window"):
+        require_live_telemetry_qualification(
+            **{
+                **contract,
+                "window_end": contract["window_start"] + timedelta(hours=2),
+            }
+        )
+
+
+def test_live_telemetry_qualification_checks_prompt_tool_arguments_and_results() -> None:
+    contract = _live_qualification_contract()
+    evidence = list(contract["evidence"])
+    prompt_index = next(
+        index
+        for index, item in enumerate(evidence)
+        if item.agent_id == "aiq-001-weather"
+    )
+    item = evidence[prompt_index]
+    evidence[prompt_index] = replace(
+        item,
+        spans=(
+            *item.spans[:-1],
+            replace(item.spans[-1], tool_arguments={"location_id": "stale"}),
+        ),
+    )
+    with pytest.raises(RuntimeContractError, match="inputs or outputs"):
+        require_live_telemetry_qualification(**{**contract, "evidence": evidence})
+
+    healthcare_index = next(
+        index
+        for index, item in enumerate(contract["evidence"])
+        if item.agent_id == "aiq-002-healthcare"
+        and item.fixture_id == "healthcare-confirmed-create"
+    )
+    typed_evidence = list(contract["evidence"])
+    item = typed_evidence[healthcare_index]
+    arguments = dict(item.spans[-1].tool_arguments or {})
+    arguments["confirmed"] = 1
+    typed_evidence[healthcare_index] = replace(
+        item,
+        spans=(
+            *item.spans[:-1],
+            replace(item.spans[-1], tool_arguments=arguments),
+        ),
+    )
+    with pytest.raises(RuntimeContractError, match="inputs or outputs"):
+        require_live_telemetry_qualification(
+            **{**contract, "evidence": typed_evidence}
+        )
+
+
+def test_live_telemetry_qualification_requires_request_correlation() -> None:
+    contract = _live_qualification_contract()
+    invocations = list(contract["invocations"])
+    evidence = list(contract["evidence"])
+    invocations[0] = replace(invocations[0], request_id=None, invocation_id=None)
+    evidence[0] = replace(evidence[0], request_id=None, invocation_id=None)
+    with pytest.raises(RuntimeContractError, match="invocation receipts are invalid"):
+        require_live_telemetry_qualification(
+            **{
+                **contract,
+                "invocations": invocations,
+                "evidence": evidence,
+            }
+        )
