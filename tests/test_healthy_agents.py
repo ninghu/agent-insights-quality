@@ -24,6 +24,10 @@ from agent_insights_quality.agent_runtime import (
     LiveTelemetryEvidence,
     RuntimeContractError,
 )
+from agent_insights_quality.insights.telemetry import (
+    TelemetryExpectation,
+    correlate_complete_traces,
+)
 
 
 def _load_logic(path: Path, name: str) -> ModuleType:
@@ -637,7 +641,14 @@ def _rt(path: Path, cfg: str, scenario_id: str = "test-scenario") -> object:
     mod = _load_scenario_runtime(path)
     with _ScenarioCtx(cfg):
         rt = mod.ScenarioRuntime()
-    rt.select_scenario(scenario_id)
+    rt.select_scenario(
+        scenario_id,
+        {
+            "agent_name": "aiq-003-finance-live",
+            "agent_version": "7",
+            "model_deployment": "terra-deployment",
+        },
+    )
     return rt
 
 
@@ -1664,7 +1675,14 @@ def _rt_with_spans(path: Path, cfg: str, tracer: object, scenario_id: str = "tes
     mod = _load_scenario_runtime(path)
     with _ScenarioCtx(cfg):
         rt = mod.ScenarioRuntime(_tracer=tracer)
-    rt.select_scenario(scenario_id)
+    rt.select_scenario(
+        scenario_id,
+        {
+            "agent_name": "aiq-003-finance-live",
+            "agent_version": "7",
+            "model_deployment": "terra-deployment",
+        },
+    )
     return rt
 
 
@@ -1723,12 +1741,65 @@ def test_zero_token_outer_emits_parent_span_with_zero_token_attributes(sr_path: 
     assert child.parent.span_id == parent.context.span_id
     assert child.status.status_code == StatusCode.OK
     assert child.attributes.get("gen_ai.operation.name") == "chat"
+    assert child.attributes.get("gen_ai.agent.name") == "aiq-003-finance-live"
+    assert child.attributes.get("gen_ai.agent.version") == "7"
+    assert child.attributes.get("gen_ai.request.model") == "terra-deployment"
     assert child.attributes.get("gen_ai.usage.input_tokens") == 1
     assert child.attributes.get("gen_ai.usage.output_tokens") == 1
     assert parent.status.status_code == StatusCode.OK, "parent span must be OK"
     assert parent.attributes.get("gen_ai.usage.input_tokens") == 0
     assert parent.attributes.get("gen_ai.usage.output_tokens") == 0
     assert parent.attributes.get("endpoint.case") == "zero-token-outer-successful-child"
+
+    spans = exporter.get_finished_spans()
+    rows = []
+    for span in spans:
+        attributes = span.attributes
+        rows.append(
+            {
+                "timestamp": datetime.fromtimestamp(
+                    span.start_time / 1_000_000_000,
+                    tz=timezone.utc,
+                ),
+                "operation_id": f"{span.context.trace_id:032x}",
+                "span_id": f"{span.context.span_id:016x}",
+                "parent_id": (
+                    f"{span.parent.span_id:016x}" if span.parent is not None else ""
+                ),
+                "span_name": attributes.get("gen_ai.operation.name", span.name),
+                "span_agent_name": attributes.get("gen_ai.agent.name", ""),
+                "span_agent_version": attributes.get("gen_ai.agent.version", ""),
+                "span_model": attributes.get("gen_ai.request.model", ""),
+                "agent_name": "aiq-003-finance-live",
+                "agent_version": "7",
+                "invocation_id": ["invoke-056"],
+                "response_id": [],
+                "hosted_response_id": [],
+                "session_id": [],
+            }
+        )
+    observed = datetime.fromtimestamp(
+        min(span.start_time for span in spans) / 1_000_000_000,
+        tz=timezone.utc,
+    )
+    projected = correlate_complete_traces(
+        rows,
+        agent="aiq-003-finance-live",
+        version="7",
+        expectations=[
+            TelemetryExpectation(
+                "invoke-056",
+                None,
+                None,
+                "terra-deployment",
+                frozenset({"chat"}),
+            )
+        ],
+        start=observed - timedelta(seconds=1),
+        end=observed + timedelta(seconds=1),
+    )
+    assert projected is not None
+    assert len(projected) == 1
 
 
 @pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)

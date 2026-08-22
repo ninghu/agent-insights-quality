@@ -549,6 +549,19 @@ def _multi_assignment_run(
         item["signature"] = content_hash({"umbrella-signature": index})
         item["evidence_fingerprint"] = content_hash({"umbrella-evidence": index})
         raw_umbrella["insights"].append(item)
+    run_total = first_insight_count + umbrella_insight_count
+    raw_first["ground_truth"]["finding_count"] = 1
+    raw_first["finding_count"] = {"actual": first_insight_count}
+    raw_first["run_finding_count"] = {
+        "expected": 3,
+        "actual": run_total,
+    }
+    raw_umbrella["ground_truth"]["finding_count"] = 2
+    raw_umbrella["finding_count"] = {"actual": umbrella_insight_count}
+    raw_umbrella["run_finding_count"] = {
+        "expected": 3,
+        "actual": run_total,
+    }
     if shared_run_view:
         run_insights = deepcopy(raw_first["insights"] + raw_umbrella["insights"])
         raw_first["insights"] = deepcopy(run_insights)
@@ -774,7 +787,7 @@ def test_evidence_projection_preserves_insights_up_to_structural_bound() -> None
     assert len(project_evidence(value)["insights"]) == 6
 
 
-def test_evidence_projection_rejects_more_than_structural_bound() -> None:
+def test_evidence_projection_preserves_exact_total_while_bounding_samples() -> None:
     value = raw_bundle("aiq-scn-010-fault")
     value["insights"] = [
         {
@@ -785,8 +798,12 @@ def test_evidence_projection_rejects_more_than_structural_bound() -> None:
         }
         for index in range(101)
     ]
-    with pytest.raises(ContractError, match="too long"):
-        project_evidence(value)
+    bundle = project_evidence(value)
+    assert len(bundle["insights"]) == 100
+    assert bundle["finding_count"]["actual"] == 101
+    assert bundle["run_finding_count"]["actual"] == 101
+    assert bundle["run_insight_accounting"]["sampled_count"] == 100
+    assert bundle["run_insight_accounting"]["details_truncated"] is True
 
 
 def test_judge_export_rejects_pii_shaped_evidence() -> None:

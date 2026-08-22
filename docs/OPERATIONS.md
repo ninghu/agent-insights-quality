@@ -50,6 +50,12 @@ there are no connection outputs. The reviewed automation user receives only Stor
 Contributor on artifact storage and AcrPush on that registry. Supply its Microsoft Entra object ID at
 deployment time; never commit it.
 
+When `AIQ_TICKET_IMAGE_URI` points to Azure Container Registry, preflight requires that exact
+project-scoped managed-identity `container-registry` connection and AcrPull assignment. Runtime
+reconciliation never reads, creates, or updates API-key credentials: a project missing the
+preprovisioned connection fails closed with instructions to deploy the qualification-project Bicep
+module instead of being reported ready.
+
 ```powershell
 az deployment sub create `
   --location westus2 `
@@ -66,7 +72,6 @@ az deployment group create `
     reportDate='<YYYY-MM-DD>' expiresOn='<YYYY-MM-DD>' `
     automationOwner='<automation-owner>' catalogVersion='<catalog-version>'
 ```
-
 Set `AIQ_MONITOR_OWNERSHIP_RECEIPT` to a protected private-state path. Monitor ownership is recorded
 there as project-, agent-, monitor-, and model-scoped opaque hashes because the service monitor API
 does not expose a metadata field.
@@ -125,10 +130,14 @@ same exact module may be selected through `AIQ_RUNTIME_ADAPTER` or `--adapter`; 
 injection is rejected. Set protected `AIQ_TICKET_IMAGE_URI` to the reviewed public GHCR image pinned
 by digest. Independent agents run concurrently while versions of one agent remain sequential.
 Symbolic plan windows remain immutable; endpoint traffic binds them to exact UTC half-open windows in
-the runtime receipt, and both wave order and realized non-overlap are checked. Agent Insights uses its
-service-returned lookback window, then scopes changed revisions to the exact agent version and correlated
-operation IDs. Resume recovers private idempotency receipts without replaying completed remote side
-effects and rejects checkpoint drift. Cleanup is a dry run unless `--execute` is present and filters
+the runtime receipt, and both wave order and realized traffic non-overlap are checked. Agent Insights
+uses a 3-2160 hour lookback covering elapsed time since the realized traffic start plus ingestion
+margin. Sequential service analysis windows may overlap, but each successful window end must advance
+beyond the prior checkpoint; changed revisions are then scoped to the exact agent version, correlated
+operation IDs, trace timestamps, and publication bounds. Resume recovers the persisted lookback and
+private idempotency receipts without replaying completed remote side effects. Exact run Insight totals
+are unbounded for scoring; evidence retains at most 100 detail samples and records `sampled_count` and
+`details_truncated`. Cleanup is a dry run unless `--execute` is present and filters
 exact framework purpose, owner, name, and expiration metadata.
 
 The runtime executes every version selected by the reviewed plan; it does not stop scheduling at a

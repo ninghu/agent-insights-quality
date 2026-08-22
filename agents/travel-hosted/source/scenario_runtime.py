@@ -68,6 +68,7 @@ class ScenarioRuntime:
             self._operations: tuple[dict[str, Any], ...] = ()
             self._version_key: str = ""
             self._fixture_calls: dict[str, int] = {}
+            self._provenance: dict[str, str] = {}
             self.instructions = ""
             return
         if len(raw.encode("ascii")) > 8192:
@@ -100,6 +101,7 @@ class ScenarioRuntime:
         self._operations = ()  # unset until select_scenario() activates a scenario
         self._version_key = value["version_key"]
         self._fixture_calls = {}
+        self._provenance = {}
         self.instructions = os.environ.get("AIQ_SCENARIO_INSTRUCTIONS", "")
         if len(self.instructions) > 4000:
             raise RuntimeError("Scenario instructions exceed the reviewed bound.")
@@ -119,7 +121,11 @@ class ScenarioRuntime:
         """True when the configuration contains a scenarios map to route against."""
         return bool(self._scenarios)
 
-    def select_scenario(self, scenario_id: str) -> None:
+    def select_scenario(
+        self,
+        scenario_id: str,
+        runtime_provenance: dict[str, Any] | None = None,
+    ) -> None:
         """Activate operations for scenario_id. Fails closed on unknown IDs.
 
         When no configuration is loaded the runtime is a no-op and any
@@ -134,6 +140,21 @@ class ScenarioRuntime:
             )
         self._operations = self._scenarios[scenario_id]
         self._fixture_calls = {}
+        if runtime_provenance is None:
+            self._provenance = {}
+            return
+        expected = {"agent_name", "agent_version", "model_deployment"}
+        if set(runtime_provenance) != expected or any(
+            not isinstance(runtime_provenance[key], str)
+            or not runtime_provenance[key]
+            or len(runtime_provenance[key]) > 200
+            for key in expected
+        ):
+            raise RuntimeError("Runtime provenance is invalid.")
+        self._provenance = {
+            key: runtime_provenance[key]
+            for key in sorted(expected)
+        }
 
     def before_model(self) -> None:
         if self._has("model_error_handler", "remove_handler"):
@@ -491,6 +512,8 @@ class ScenarioRuntime:
 
             if case == "zero-token-outer-successful-child":
                 # scn-056: zero-token outer control with an observable successful child model span.
+                if not self._provenance:
+                    raise RuntimeError("Scenario 056 requires exact runtime provenance.")
                 with tracer.start_as_current_span(
                     "endpoint.request", kind=SpanKind.CLIENT
                 ) as parent_span:
@@ -502,6 +525,15 @@ class ScenarioRuntime:
                     ) as child_span:
                         child_span.set_attribute("endpoint.case", case)
                         child_span.set_attribute("gen_ai.operation.name", "chat")
+                        child_span.set_attribute(
+                            "gen_ai.agent.name", self._provenance["agent_name"]
+                        )
+                        child_span.set_attribute(
+                            "gen_ai.agent.version", self._provenance["agent_version"]
+                        )
+                        child_span.set_attribute(
+                            "gen_ai.request.model", self._provenance["model_deployment"]
+                        )
                         child_span.set_attribute("gen_ai.usage.input_tokens", 1)
                         child_span.set_attribute("gen_ai.usage.output_tokens", 1)
                         dispatch_result = execute(name, dict(arguments))

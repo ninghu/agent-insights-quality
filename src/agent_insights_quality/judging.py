@@ -97,6 +97,56 @@ def project_evidence(raw: dict[str, Any]) -> dict[str, Any]:
         raise ContractError(
             "evidence projection: single-version evidence cannot include previous_insight"
         )
+    expected_count = raw["ground_truth"].get("finding_count")
+    if not isinstance(expected_count, int):
+        expected_count = 0 if raw["ground_truth"]["category"] == "none" else 1
+    scenario_count = raw.get("finding_count")
+    actual_count = (
+        scenario_count.get("actual")
+        if isinstance(scenario_count, Mapping)
+        else len(raw["insights"])
+    )
+    run_count = raw.get("run_finding_count")
+    run_expected = (
+        run_count.get("expected") if isinstance(run_count, Mapping) else expected_count
+    )
+    run_actual = (
+        run_count.get("actual") if isinstance(run_count, Mapping) else actual_count
+    )
+    if not all(
+        isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        for value in (expected_count, actual_count, run_expected, run_actual)
+    ):
+        raise ContractError("evidence projection: finding counts must be non-negative integers")
+
+    def assessment(expected: int, actual: int) -> dict[str, Any]:
+        if actual == expected:
+            return {
+                "expected": expected,
+                "actual": actual,
+                "verdict": "AT_BAR",
+                "reason": "exact",
+            }
+        return {
+            "expected": expected,
+            "actual": actual,
+            "verdict": "NOT_AT_BAR",
+            "reason": "extra_noise" if actual > expected else "missing_findings",
+        }
+
+    raw_noise = raw.get("run_noise_insights", [])
+    if not isinstance(raw_noise, list) or not all(
+        isinstance(item, Mapping) for item in raw_noise
+    ):
+        raise ContractError(
+            "evidence projection: run_noise_insights must be an array of objects"
+        )
+    sampled_insights = raw["insights"][:100]
+    sampled_noise = raw_noise[: 100 - len(sampled_insights)]
+    sampled_count = len(sampled_insights) + len(sampled_noise)
+    run = deepcopy(raw["run"])
+    run.setdefault("analysis_window_start", run["window_start"])
+    run.setdefault("analysis_window_end", run["window_end"])
     projected = {
         "schema_version": EVIDENCE_SCHEMA_VERSION,
         "bundle_id": raw["bundle_id"],
@@ -106,7 +156,7 @@ def project_evidence(raw: dict[str, Any]) -> dict[str, Any]:
             **deepcopy(raw["agent"]),
             "available_tools": list(dict.fromkeys(raw["agent"]["available_tools"]))[:100],
         },
-        "run": deepcopy(raw["run"]),
+        "run": run,
         "version_sequence": deepcopy(raw["version_sequence"]),
         "ground_truth": {
             "root_cause": bounded_text(
@@ -116,6 +166,7 @@ def project_evidence(raw: dict[str, Any]) -> dict[str, Any]:
             ),
             "category": raw["ground_truth"]["category"],
             "severity": raw["ground_truth"]["severity"],
+            "finding_count": expected_count,
             "fix_boundary": bounded_text(
                 raw["ground_truth"]["fix_boundary"],
                 field="ground_truth.fix_boundary",
@@ -130,8 +181,23 @@ def project_evidence(raw: dict[str, Any]) -> dict[str, Any]:
                 limit=10000,
             ),
         },
+        "finding_count": assessment(expected_count, actual_count),
+        "run_finding_count": assessment(run_expected, run_actual),
+        "run_insight_accounting": {
+            "unique_insight_count": run_actual,
+            "assigned_count": actual_count,
+            "umbrella_noise_count": 0,
+            "extra_noise_count": max(0, run_actual - actual_count),
+            "sampled_count": sampled_count,
+            "details_truncated": run_actual > sampled_count,
+            "insight_references": [
+                content_hash({"insight_id": str(item["id"])})
+                for item in [*sampled_insights, *sampled_noise]
+            ],
+        },
         "trace_evidence": [_project_trace(item) for item in raw["trace_evidence"][:100]],
-        "insights": [_project_insight(item) for item in raw["insights"]],
+        "insights": [_project_insight(item) for item in sampled_insights],
+        "run_noise_insights": [_project_insight(item) for item in sampled_noise],
         "previous_insight": deepcopy(raw["previous_insight"]),
         "untrusted_content_notice": UNTRUSTED_NOTICE,
     }

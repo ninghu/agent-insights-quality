@@ -19,6 +19,16 @@ from agent_insights_quality.readiness import (
     READINESS_FAILURE_PROHIBITED_ACTIONS,
     incomplete_runtime_components,
 )
+from agent_insights_quality.reporting.render import (
+    build_email_send_request,
+    create_email_send_request as create_email_send_request,
+    import_email_receipt,
+    render_email_html as render_email_html,
+    render_report_markdown as render_report_markdown,
+    render_trend as render_trend,
+    resolve_recipient as resolve_recipient,
+    validate_report_consistency as validate_report_consistency,
+)
 
 
 READINESS_FAILURE_ARTIFACTS = (
@@ -265,8 +275,6 @@ def finalize_readiness_failure(
         "readiness-failure.md": markdown,
         "failure-email.html": html,
     }
-    from agent_insights_quality.reporting.render import build_email_send_request
-
     recipient = (
         {
             "mode": "authenticated_user",
@@ -289,8 +297,6 @@ def finalize_readiness_failure(
         if existing_request != email_request:
             raise ContractError(f"{request_path}: existing request content does not match this run")
         if receipt_path.exists():
-            from agent_insights_quality.reporting.render import import_email_receipt
-
             receipt = json.loads(receipt_path.read_text(encoding="ascii"))
             imported = import_email_receipt(existing_request, receipt)
             if imported["state"] == "sent":
@@ -308,13 +314,3 @@ def finalize_readiness_failure(
         (target / filename).write_text(content, encoding="ascii")
     request_path.write_text(json.dumps(email_request, indent=2) + "\n", encoding="ascii")
     return request_path
-from agent_insights_quality.reporting.render import (
-    build_email_send_request,
-    create_email_send_request,
-    import_email_receipt,
-    render_email_html,
-    render_report_markdown,
-    render_trend,
-    resolve_recipient,
-    validate_report_consistency,
-)

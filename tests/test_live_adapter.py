@@ -714,6 +714,86 @@ def _prepared_hooks(tmp_path: Path, moments: list[datetime]):
     return hooks, plan, deployments, invocations, insights
 
 
+def test_insight_lookback_covers_delayed_resume_and_clamps() -> None:
+    start = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    assert live._insight_lookback_hours(
+        start,
+        start + timedelta(minutes=10),
+    ) == 3
+    assert live._insight_lookback_hours(
+        start,
+        start + timedelta(hours=4),
+    ) == 5
+    assert live._insight_lookback_hours(
+        start,
+        start + timedelta(hours=3000),
+    ) == 2160
+    with pytest.raises(RuntimeFailure, match="timezone-aware"):
+        live._insight_lookback_hours(start.replace(tzinfo=None), start)
+
+
+def test_delayed_insight_run_lookback_still_contains_original_traffic(
+    tmp_path: Path,
+) -> None:
+    start = datetime(2026, 8, 21, 12, tzinfo=UTC)
+
+    class DelayedInsights(_Insights):
+        def create_run(self, _monitor, *, lookback_hours):
+            assert lookback_hours == 5
+            return {"id": "delayed-run"}
+
+        def collect_run(self, monitor, run_id, **kwargs):
+            assert kwargs["lookback_hours"] == 5
+            return (
+                {
+                    "id": run_id,
+                    "monitor_id": monitor,
+                    "status": "succeeded",
+                    "start_time": (start - timedelta(minutes=1)).isoformat(),
+                    "end_time": (start + timedelta(hours=4, minutes=1)).isoformat(),
+                },
+                [],
+            )
+
+    hooks, plan, _, _, _ = _prepared_hooks(
+        tmp_path,
+        [start + timedelta(hours=4)],
+    )
+    work = next(iter(plan.agents.values()))[0]
+    deployment = DeploymentReceipt(
+        work.agent_name,
+        "7",
+        work.agent_type,
+        "sha256:" + ("d" * 64),
+        work.run_id,
+        "active",
+    )
+    hooks._deployments[(work.agent_name, work.version_reference)] = deployment
+    hooks._windows[work.key] = WindowBinding(
+        work.window.start_identity,
+        work.window.end_identity,
+        start,
+        start + timedelta(minutes=1),
+    )
+    hooks._checkpoints[work.key] = InsightCheckpoint(
+        start - timedelta(minutes=1),
+        {},
+        {},
+    )
+    hooks._telemetry[work.key] = (
+        TraceCorrelation("a" * 32, 2, 1, ("b" * 16,), start),
+    )
+    hooks._insights = DelayedInsights()
+
+    result = hooks.run_insights(
+        work,
+        {},
+        idempotency_key=work.key + ":delayed-insights",
+    )
+    assert result["analysis_window"]["start"] < start.isoformat()
+    assert hooks._insight_lookbacks[work.key] == 5
+
+
 def test_all_five_agents_route_endpoint_only_and_hooks_are_idempotent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -916,7 +996,10 @@ def test_insight_run_is_persisted_before_polling_and_cancelled_after_restart(
     tmp_path: Path,
 ) -> None:
     start = datetime(2026, 8, 21, 12, tzinfo=UTC)
-    hooks, plan, _, _, _ = _prepared_hooks(tmp_path, [])
+    hooks, plan, _, _, _ = _prepared_hooks(
+        tmp_path,
+        [start + timedelta(seconds=11)],
+    )
     work = next(iter(plan.agents.values()))[0]
     hooks.deploy(work, idempotency_key=work.key + ":deploy")
     hooks._windows[work.key] = WindowBinding(
@@ -968,6 +1051,7 @@ def test_insight_run_is_persisted_before_polling_and_cancelled_after_restart(
     resumed.cancel(work)
     assert resumed_insights.cancelled == [("monitor", "insights-run")]
     assert resumed_deployments.cleaned
+    assert resumed._insight_lookbacks[work.key] == 3
 
     allow_completion.set()
     thread.join(5)
@@ -1072,6 +1156,7 @@ def test_realized_windows_are_exact_non_overlapping_and_feed_evidence(
             start + timedelta(seconds=10),
             start + timedelta(seconds=10),
             start + timedelta(seconds=20),
+            start + timedelta(seconds=21),
         ],
     )
     versions = hooks._plan.agents[pair[0].agent_id]

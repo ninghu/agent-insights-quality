@@ -22,6 +22,7 @@ _PURPOSE_TAG = "agent-insights-quality"
 _QUALIFICATION_TAG = "true"
 _MONITORING_READER_ROLE = "43d0d8ad-25c7-4714-9337-8ba259a9fe05"
 _MODEL_INFERENCE_ROLE = "5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"
+_ACR_PULL_ROLE = "7f951dda-4ed3-4680-a7ca-43fe172d538d"
 _PRECONDITION_CODES = {"conflict", "preconditionfailed"}
 _PRECONDITION_ERROR = re.compile(
     r"(?m)^ERROR:\s*(?:PreconditionFailed|Precondition Failed|Conflict)\s*(?:\(|$)"
@@ -493,6 +494,7 @@ class AzureProjectManager:
                 + urllib.parse.quote(str(item.get("name") or ""), safe="")
             )
         app_insights = self._application_insights_connection(project_id)
+        registry_id = self._container_registry_connection(project_id, principal_id)
         app_insights_resource = _mapping(
             self._cli.json(["resource", "show", "--ids", app_insights]),
             "invalid_project_connections",
@@ -523,6 +525,7 @@ class AzureProjectManager:
             principal_id=principal_id,
             account_id=account_id,
             application_insights_id=app_insights,
+            container_registry_id=registry_id,
         )
         self._cli.json(["resource", "show", "--ids", project_id])
         tags = item.get("tags")
@@ -544,11 +547,13 @@ class AzureProjectManager:
         principal_id: str,
         account_id: str,
         application_insights_id: str,
+        container_registry_id: str | None = None,
     ) -> None:
         missing = self._missing_project_roles(
             principal_id=principal_id,
             account_id=account_id,
             application_insights_id=application_insights_id,
+            container_registry_id=container_registry_id,
         )
         if missing:
             raise RuntimeFailure(
@@ -564,11 +569,14 @@ class AzureProjectManager:
         principal_id: str,
         account_id: str,
         application_insights_id: str,
+        container_registry_id: str | None = None,
     ) -> list[tuple[str, str]]:
-        required = (
+        required = [
             (application_insights_id, _MONITORING_READER_ROLE),
             (account_id, _MODEL_INFERENCE_ROLE),
-        )
+        ]
+        if container_registry_id is not None:
+            required.append((container_registry_id, _ACR_PULL_ROLE))
         observed: set[tuple[str, str]] = set()
         for scope, _ in required:
             assignments = _items(
@@ -661,7 +669,7 @@ class AzureProjectManager:
         return results
 
     def _application_insights_connection(self, project_id: str) -> str:
-        targets: list[str] = []
+        matches: list[Mapping[str, Any]] = []
         for connection in self._connections(project_id):
             properties = connection.get("properties")
             if not isinstance(properties, Mapping):
@@ -673,19 +681,35 @@ class AzureProjectManager:
             ).casefold()
             if category not in {"appinsights", "applicationinsights"}:
                 continue
-            target = str(
-                properties.get("target")
-                or properties.get("targetResourceId")
-                or ""
-            )
-            if target:
-                targets.append(target)
-        if len(targets) != 1:
+            matches.append(connection)
+        if len(matches) != 1:
             raise RuntimeFailure(
                 "invalid_project_connections",
                 "Project must have exactly one Application Insights connection.",
             )
-        target = targets[0]
+        connection = matches[0]
+        properties = connection["properties"]
+        target = str(
+            properties.get("target")
+            or properties.get("targetResourceId")
+            or ""
+        )
+        metadata = properties.get("metadata")
+        expected_id = f"{project_id}/connections/application-insights"
+        if (
+            str(connection.get("id") or "").casefold() != expected_id.casefold()
+            or str(connection.get("name") or "") != "application-insights"
+            or str(properties.get("authType") or "").casefold() != "apikey"
+            or not isinstance(metadata, Mapping)
+            or metadata.get("ApiType") != "Azure"
+            or str(metadata.get("ResourceId") or "").casefold() != target.casefold()
+            or metadata.get("purpose") != _PURPOSE_TAG
+            or metadata.get("owner_reference") != self._owner
+        ):
+            raise RuntimeFailure(
+                "invalid_project_connections",
+                "Application Insights connection must be the exact owned ApiKey connection.",
+            )
         if (
             "/providers/microsoft.insights/components/" not in target.casefold()
             or "?" in target
@@ -705,6 +729,100 @@ class AzureProjectManager:
                 "Application Insights connection differs from configuration.",
             )
         return target
+
+    def _container_registry_requirement(
+        self,
+        project_id: str,
+    ) -> tuple[str, str] | None:
+        image = self._config.ticket_image
+        if not image:
+            return None
+        login_server = image.split("/", 1)[0].casefold()
+        if not login_server.endswith(".azurecr.io"):
+            return None
+        registry_name = login_server.removesuffix(".azurecr.io")
+        if not re.fullmatch(r"[a-z0-9]{5,50}", registry_name):
+            raise RuntimeFailure(
+                "invalid_project_connections",
+                "AIQ_TICKET_IMAGE_URI has an invalid Azure Container Registry host.",
+            )
+        parts = project_id.strip("/").split("/")
+        try:
+            resource_group = parts[parts.index("resourceGroups") + 1]
+        except (ValueError, IndexError) as error:
+            raise RuntimeFailure(
+                "invalid_project_resource",
+                "Project resource ID shape was invalid.",
+            ) from error
+        registry_id = (
+            f"/subscriptions/{self._context.subscription_id}/resourceGroups/{resource_group}"
+            f"/providers/Microsoft.ContainerRegistry/registries/{registry_name}"
+        )
+        return login_server, registry_id
+
+    def _container_registry_connection(
+        self,
+        project_id: str,
+        principal_id: str,
+    ) -> str | None:
+        requirement = self._container_registry_requirement(project_id)
+        if requirement is None:
+            return None
+        login_server, registry_id = requirement
+        expected_id = f"{project_id}/connections/container-registry"
+        matches = [
+            connection
+            for connection in self._connections(project_id)
+            if str(connection.get("id") or "").casefold() == expected_id.casefold()
+            or str(connection.get("name") or "") == "container-registry"
+        ]
+        if len(matches) != 1:
+            raise RuntimeFailure(
+                "missing_project_connections",
+                "The project requires the preprovisioned managed-identity "
+                "ContainerRegistry connection for AIQ_TICKET_IMAGE_URI.",
+            )
+        connection = matches[0]
+        properties = connection.get("properties")
+        metadata = properties.get("metadata") if isinstance(properties, Mapping) else None
+        credentials = (
+            properties.get("credentials") if isinstance(properties, Mapping) else None
+        )
+        if (
+            str(connection.get("id") or "").casefold() != expected_id.casefold()
+            or str(connection.get("name") or "") != "container-registry"
+            or not isinstance(properties, Mapping)
+            or str(properties.get("category") or "").casefold() != "containerregistry"
+            or str(properties.get("target") or "").casefold() != login_server
+            or str(properties.get("authType") or "").casefold() != "managedidentity"
+            or properties.get("isSharedToAll") is not False
+            or not isinstance(metadata, Mapping)
+            or str(metadata.get("ResourceId") or "").casefold()
+            != registry_id.casefold()
+            or not isinstance(credentials, Mapping)
+            or str(credentials.get("clientId") or "") != principal_id
+            or str(credentials.get("resourceId") or "").casefold()
+            != registry_id.casefold()
+        ):
+            raise RuntimeFailure(
+                "project_connection_conflict",
+                "Container registry connection is not the exact managed-identity binding.",
+            )
+        registry = _mapping(
+            self._cli.json(["resource", "show", "--ids", registry_id]),
+            "invalid_project_connections",
+            "Container registry response was invalid.",
+        )
+        if (
+            str(registry.get("type") or "").casefold()
+            != "microsoft.containerregistry/registries"
+            or not self._owned_tags(registry.get("tags"))
+        ):
+            raise RuntimeFailure(
+                "invalid_project_connections",
+                "Container registry is not exactly owned by this runtime.",
+            )
+        return registry_id
 
     def _validate_terra(self, account: str, group: str) -> None:
         for deployment in (
@@ -860,6 +978,13 @@ class AzureProjectManager:
         if not isinstance(tags, Mapping):
             raise RuntimeFailure("ownership_mismatch", "Project ownership tags are unavailable.")
         self._ensure_application_insights_connection(project_id, tags)
+        identity = item.get("identity")
+        principal_id = (
+            str(identity.get("principalId") or "")
+            if isinstance(identity, Mapping)
+            else ""
+        )
+        self._container_registry_connection(project_id, principal_id)
         self._ensure_project_roles(item, project_id)
         return self._validate_project(item, managed=True)
 
@@ -874,10 +999,13 @@ class AzureProjectManager:
                 "Project identity or App Insights target is unavailable for role assignment.",
             )
         account_id = project_id.rsplit("/projects/", 1)[0]
+        registry_requirement = self._container_registry_requirement(project_id)
+        registry_id = registry_requirement[1] if registry_requirement is not None else None
         missing = self._missing_project_roles(
             principal_id=principal_id,
             account_id=account_id,
             application_insights_id=target,
+            container_registry_id=registry_id,
         )
         for scope, role in missing:
             result = self._cli.run(
@@ -914,103 +1042,53 @@ class AzureProjectManager:
                 "missing_project_connections",
                 "Project creation requires an explicit Application Insights resource ID.",
             )
-        connection_id = f"{project_id}/connections/application-insights"
-        body = {
-            "properties": {
-                "category": "AppInsights",
-                "target": target,
-                "authType": "AAD",
-                "metadata": {
-                    "purpose": _PURPOSE_TAG,
-                    "owner_reference": self._owner,
-                    "expires_on": project_tags["expiresOn"],
-                },
-            }
-        }
-        for _attempt in range(3):
-            connections = self._connections(project_id)
-            reserved = [
-                connection
-                for connection in connections
-                if str(connection.get("id") or "").casefold() == connection_id.casefold()
-                or str(connection.get("name") or "") == "application-insights"
-            ]
-            exact = [
-                connection
-                for connection in reserved
-                if str(connection.get("id") or "").casefold() == connection_id.casefold()
-                and str(connection.get("name") or "") == "application-insights"
-            ]
-            app_insights = []
-            for connection in connections:
-                properties = connection.get("properties")
-                category = (
-                    str(
-                        properties.get("category")
-                        or properties.get("connectionType")
-                        or ""
-                    ).casefold()
-                    if isinstance(properties, Mapping)
-                    else ""
-                )
-                if category in {"appinsights", "applicationinsights"}:
-                    app_insights.append(connection)
-            if reserved:
-                if len(reserved) != 1 or len(exact) != 1 or len(app_insights) != 1:
-                    raise RuntimeFailure(
-                        "project_connection_conflict",
-                        "Existing project connections cannot be safely reconciled.",
-                    )
-                properties = exact[0].get("properties")
-                metadata = properties.get("metadata") if isinstance(properties, Mapping) else None
-                if (
-                    not isinstance(properties, Mapping)
-                    or str(
-                        properties.get("category")
-                        or properties.get("connectionType")
-                        or ""
-                    ).casefold()
-                    not in {"appinsights", "applicationinsights"}
-                    or str(
-                        properties.get("target")
-                        or properties.get("targetResourceId")
-                        or ""
-                    ).casefold()
-                    != target.casefold()
-                    or str(properties.get("authType") or "").casefold() != "aad"
-                    or not isinstance(metadata, Mapping)
-                    or metadata.get("purpose") != _PURPOSE_TAG
-                    or metadata.get("owner_reference") != self._owner
-                ):
-                    raise RuntimeFailure(
-                        "project_connection_conflict",
-                        "Existing Application Insights connection is not exactly owned by this project.",
-                    )
-                if metadata.get("expires_on") == project_tags["expiresOn"]:
-                    return
-                etag = str(exact[0].get("etag") or "")
-                if not etag:
-                    raise RuntimeFailure(
-                        "project_connection_etag_missing",
-                        "Owned Application Insights connection has no ETag for a safe update.",
-                    )
-            else:
-                if app_insights:
-                    raise RuntimeFailure(
-                        "project_connection_conflict",
-                        "A differently named Application Insights connection already exists.",
-                    )
-                etag = None
-            if self._cli.put_conditionally(
-                f"{connection_id}?api-version=2025-06-01",
-                body,
-                etag=etag,
-            ):
-                return
-        raise RuntimeFailure(
-            "project_connection_race",
-            "Application Insights connection changed repeatedly during reconciliation.",
-        )
+        connections = self._connections(project_id)
+        app_insights = []
+        for connection in connections:
+            properties = connection.get("properties")
+            category = (
+                str(
+                    properties.get("category")
+                    or properties.get("connectionType")
+                    or ""
+                ).casefold()
+                if isinstance(properties, Mapping)
+                else ""
+            )
+            if category in {"appinsights", "applicationinsights"}:
+                app_insights.append(connection)
+        if not app_insights:
+            raise RuntimeFailure(
+                "missing_project_connections",
+                "The project requires a preprovisioned ApiKey Application Insights "
+                "connection. Deploy infra/modules/qualification-project.bicep; runtime "
+                "reconciliation cannot obtain or persist its secret material.",
+            )
+        if len(app_insights) != 1:
+            raise RuntimeFailure(
+                "project_connection_conflict",
+                "Existing project connections cannot be safely reconciled.",
+            )
+        try:
+            self._application_insights_connection(project_id)
+        except RuntimeFailure as error:
+            if error.code != "invalid_project_connections":
+                raise
+            raise RuntimeFailure(
+                "project_connection_conflict",
+                "Existing Application Insights connection is not the exact owned "
+                "ApiKey binding.",
+            ) from error
+        properties = app_insights[0]["properties"]
+        metadata = properties.get("metadata")
+        if (
+            not isinstance(metadata, Mapping)
+            or metadata.get("expires_on") != project_tags["expiresOn"]
+        ):
+            raise RuntimeFailure(
+                "project_connection_conflict",
+                "Owned Application Insights connection metadata does not match the project.",
+            )
 
     def _wait_ready_item(
         self,

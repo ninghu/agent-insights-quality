@@ -416,13 +416,20 @@ def test_run_window_and_checkpoint_scope_insights_fail_closed() -> None:
         AgentInsightsClient.validate_run_window(
             run, start, end + timedelta(minutes=2), lookback_hours=3
         )
-    with pytest.raises(RuntimeFailure, match="regressed"):
+    assert AgentInsightsClient.validate_run_window(
+        run,
+        start,
+        end,
+        lookback_hours=3,
+        prior_successful_window_end=start - timedelta(minutes=10),
+    ) == (start - timedelta(minutes=20), end + timedelta(minutes=1))
+    with pytest.raises(RuntimeFailure, match="did not progress"):
         AgentInsightsClient.validate_run_window(
             run,
             start,
             end,
             lookback_hours=3,
-            prior_successful_window_end=start - timedelta(minutes=10),
+            prior_successful_window_end=end + timedelta(minutes=1),
         )
 
     checkpoint = InsightCheckpoint(
@@ -498,12 +505,12 @@ def test_run_scope_preserves_extra_insights_for_noise_scoring() -> None:
     assert [item["id"] for item in selected] == [f"i{index}" for index in range(6)]
 
     oversized = [
-        {
-            "id": f"i{index}",
-            "revision": "1",
-            "created_at": (start + timedelta(minutes=2)).isoformat(),
-            "trace_ids": [op_id],
-        }
+        contract_insight(
+            f"i{index}",
+            op_id,
+            start + timedelta(minutes=2),
+            start + timedelta(minutes=3),
+        )
         for index in range(101)
     ]
     assert len(

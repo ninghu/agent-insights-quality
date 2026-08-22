@@ -47,7 +47,10 @@ class ModelBackedAgent:
                 raise RuntimeError(
                     "Endpoint input must contain a non-empty string scenario_id."
                 )
-            self._scenario.select_scenario(scenario_id)
+            provenance = input_obj.get("runtime_provenance")
+            if not isinstance(provenance, dict):
+                raise RuntimeError("Endpoint input must contain runtime_provenance.")
+            self._scenario.select_scenario(scenario_id, provenance)
         self._scenario.before_request()
         response = self._model_response(input=user_input)
         for _ in range(_MAX_TOOL_TURNS):

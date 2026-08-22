@@ -8,7 +8,6 @@ from typing import Any, Mapping
 
 from agent_insights_quality.contracts import (
     ContractError,
-    ROOT,
     SCHEMAS,
     load_agent_manifests,
     load_scenario_catalog,
@@ -24,12 +23,11 @@ from agent_insights_quality.public_safety import require_public_artifact_safe
 from agent_insights_quality.reporting import (
     build_email_send_request,
     create_email_send_request,
-    render_email_html,
     render_report_markdown,
     render_trend,
     validate_report_consistency,
 )
-from agent_insights_quality.artifact_io import canonical_json, content_hash, write_json
+from agent_insights_quality.artifact_io import content_hash, write_json
 
 
 def build_preflight_plan(report_date: str, generated_at: str) -> dict[str, Any]:

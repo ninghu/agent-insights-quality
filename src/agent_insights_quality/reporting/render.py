@@ -4,7 +4,6 @@ import html
 import os
 import re
 from copy import deepcopy
-from datetime import date
 from typing import Any, Mapping
 from agent_insights_quality.contracts import (
     ContractError,

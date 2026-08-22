@@ -18,7 +18,7 @@ from agent_insights_quality.judging import (
     validate_judgment_for_bundle,
 )
 from agent_insights_quality.privacy import sensitive_findings
-from agent_insights_quality.artifact_io import content_hash, verified_hash
+from agent_insights_quality.artifact_io import content_hash
 
 
 PRIMARY_CLASSIFICATION_MIN_CONFIDENCE = 0.80
@@ -80,7 +80,7 @@ def _run_count_mismatches(
     bundles: list[dict[str, Any]],
 ) -> dict[tuple[str, str, str], tuple[int, int]]:
     expected: Counter[tuple[str, str, str]] = Counter()
-    actual: dict[tuple[str, str, str], set[str]] = defaultdict(set)
+    actual: dict[tuple[str, str, str], int] = {}
     assignments = {item["scenario_id"]: item for item in plan["assignments"]}
     for assignment in plan["assignments"]:
         key = (plan["report_date"], assignment["run_id"], assignment["agent_id"])
@@ -91,11 +91,14 @@ def _run_count_mismatches(
         if assignment is None:
             continue
         key = (plan["report_date"], bundle["run"]["run_id"], bundle["agent"]["id"])
-        actual[key].update(insight["id"] for insight in bundle["insights"])
+        count = bundle["run_finding_count"]["actual"]
+        prior = actual.setdefault(key, count)
+        if prior != count:
+            raise ContractError("Evidence bundles disagree on the exact run insight total")
     return {
-        key: (count, len(actual.get(key, set())))
+        key: (count, actual.get(key, 0))
         for key, count in expected.items()
-        if count != len(actual.get(key, set()))
+        if count != actual.get(key, 0)
     }
 
 
@@ -487,30 +490,27 @@ def score_run(
             if owners[key] in expected_faults
         ]
     )
-    produced = len(
-        {
-            (bundle["run"]["run_id"], bundle["agent"]["id"], insight["id"])
-            for bundle in valid_bundles
-            for insight in bundle["insights"]
-        }
-    )
+    run_totals: dict[tuple[str, str], int] = {}
+    for bundle in valid_bundles:
+        key = (bundle["run"]["run_id"], bundle["agent"]["id"])
+        count = bundle["run_finding_count"]["actual"]
+        prior = run_totals.setdefault(key, count)
+        if prior != count:
+            raise ContractError("Evidence bundles disagree on the exact run insight total")
+    produced = sum(run_totals.values())
     false_positives = max(0, produced - true_positives)
     false_negatives = expected_fault_count - true_positives
     partially_useful = sum(item["verdict"] == "partially_useful" for item in all_primary)
-    healthy_insights = len(
-        {
-            (
-                bundles_by_scenario[scenario_id]["run"]["run_id"],
-                bundles_by_scenario[scenario_id]["agent"]["id"],
-                insight["id"],
-            )
-            for scenario_id in healthy
-            if scenario_id in bundles_by_scenario
-            for insight in bundles_by_scenario[scenario_id]["insights"]
-        }
+    healthy_insights = sum(
+        bundles_by_scenario[scenario_id]["finding_count"]["actual"]
+        for scenario_id in healthy
+        if scenario_id in bundles_by_scenario
     )
     healthy_noisy_cases = sum(
-        bool(bundles_by_scenario.get(scenario_id, {}).get("insights", []))
+        bundles_by_scenario.get(scenario_id, {})
+        .get("finding_count", {})
+        .get("actual", 0)
+        > 0
         for scenario_id in healthy
     )
     if healthy_insights:
@@ -703,7 +703,9 @@ def case_to_insight_mappings(
                 }
             )
         expected_count = assignment["expected"]["finding_count"]
-        observed_count = len(items)
+        observed_count = (
+            bundle["finding_count"]["actual"] if bundle is not None else 0
+        )
         verdicts = {item["verdict"] for item in items}
         if bundle is None or "inconclusive" in verdicts:
             verdict = "inconclusive"

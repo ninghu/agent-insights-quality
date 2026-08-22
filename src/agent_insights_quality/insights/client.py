@@ -627,10 +627,10 @@ class AgentInsightsClient:
             )
         if prior_successful_window_end is not None:
             floor = prior_successful_window_end.astimezone(UTC)
-            if actual_start < floor or actual_end <= floor:
+            if actual_end <= floor:
                 raise RuntimeFailure(
                     "run_checkpoint_regression",
-                    "Agent Insights analysis window regressed behind the prior successful checkpoint.",
+                    "Agent Insights analysis window did not progress beyond the prior successful checkpoint.",
                 )
         return actual_start, actual_end
 

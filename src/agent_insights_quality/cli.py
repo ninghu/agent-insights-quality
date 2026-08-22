@@ -23,7 +23,6 @@ from agent_insights_quality.ado import AdoClient, AdoPolicy, AdoRuntimeConfig, p
 from agent_insights_quality.docs import generate_documents
 from agent_insights_quality.finalizer import (
     build_failure_report,
-    build_preflight_plan,
     create_failure_send_request,
     finalize_success,
     render_failure_email_html,
