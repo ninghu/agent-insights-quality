@@ -38,6 +38,10 @@ from protected `AIQ_TERRA_*` variables. Optional protected tenant and user-objec
 selection further; when omitted, preflight still requires an interactive Azure user and verifies that
 identity's access to every selected resource.
 
+The runtime Azure credential coalesces concurrent token requests into one in-process cache entry per
+scope and refreshes with at least five minutes remaining. Azure CLI acquisition failure is a sanitized
+transient runtime error; no command arguments or token values enter public diagnostics.
+
 Dedicated infrastructure creates the Foundry project's Application Insights connection with the
 service-supported API-key shape. ARM resolves the existing Application Insights connection string
 server-side and passes it directly to the connection resource; the secret is never a template

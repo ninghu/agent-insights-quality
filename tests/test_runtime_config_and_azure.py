@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +10,7 @@ import pytest
 import agent_insights_quality.cli as cli_module
 from agent_insights_quality.runtime.azure import (
     AzureCli,
+    AzureCliCredential,
     AzureContext,
     AzureProjectManager,
     CommandResult,
@@ -104,6 +107,86 @@ def test_runtime_config_rejects_partial_coordinates_and_dual_subscription_select
     dual["AIQ_AZURE_SUBSCRIPTION_NAME"] = "also-set"
     with pytest.raises(RuntimeFailure, match="exactly one"):
         RuntimeConfig.from_env(dual)
+
+
+class TokenCli:
+    def __init__(self, *, now: int = 1_000, fail: bool = False) -> None:
+        self.now = now
+        self.fail = fail
+        self.calls: list[list[str]] = []
+        self._lock = threading.Lock()
+
+    def json(self, arguments):
+        with self._lock:
+            self.calls.append(list(arguments))
+            call_number = len(self.calls)
+        if self.fail:
+            raise RuntimeFailure(
+                "azure_cli_failed",
+                "Private CLI failure.",
+                {"command": ["az", "account", "get-access-token", "--resource", "private"]},
+            )
+        return {
+            "accessToken": f"token-{call_number}",
+            "expires_on": self.now + 600,
+        }
+
+
+def test_azure_cli_credential_coalesces_concurrent_scope_requests() -> None:
+    cli = TokenCli()
+    credential = AzureCliCredential(cli, clock=lambda: cli.now)
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        tokens = list(
+            pool.map(
+                lambda _index: credential.get_token(
+                    "https://ai.azure.com/.default"
+                ),
+                range(32),
+            )
+        )
+
+    assert {token.token for token in tokens} == {"token-1"}
+    assert len(cli.calls) == 1
+
+
+def test_azure_cli_credential_refreshes_at_five_minute_skew() -> None:
+    cli = TokenCli()
+    credential = AzureCliCredential(cli, clock=lambda: cli.now)
+    first = credential.get_token("https://ai.azure.com/.default")
+    cli.now = first.expires_on - 301
+    assert credential.get_token("https://ai.azure.com/.default") is first
+    cli.now = first.expires_on - 300
+
+    refreshed = credential.get_token("https://ai.azure.com/.default")
+
+    assert refreshed.token == "token-2"
+    assert len(cli.calls) == 2
+
+
+def test_azure_cli_credential_caches_distinct_scopes_independently() -> None:
+    cli = TokenCli()
+    credential = AzureCliCredential(cli, clock=lambda: cli.now)
+
+    first = credential.get_token("https://ai.azure.com/.default")
+    second = credential.get_token("https://monitor.azure.com/.default")
+    repeated = credential.get_token("https://ai.azure.com/.default")
+
+    assert first is repeated
+    assert second.token == "token-2"
+    assert len(cli.calls) == 2
+
+
+def test_azure_cli_credential_failure_is_sanitized_and_transient() -> None:
+    credential = AzureCliCredential(TokenCli(fail=True), clock=lambda: 1_000)
+
+    with pytest.raises(RuntimeFailure) as caught:
+        credential.get_token("https://ai.azure.com/.default")
+
+    assert caught.value.code == "azure_token_unavailable"
+    assert caught.value.transient is True
+    assert caught.value.details == {}
+    assert "private" not in str(caught.value).casefold()
 
 
 class FakeAzureCli:
