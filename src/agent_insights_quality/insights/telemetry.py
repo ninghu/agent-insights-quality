@@ -35,6 +35,8 @@ class TraceCorrelation:
     operation_id: str
     span_count: int
     root_count: int
+    span_ids: tuple[str, ...] = ()
+    observed_at: datetime | None = None
 
 
 class TelemetryQuery(Protocol):
@@ -237,10 +239,13 @@ def correlate_complete_traces(
             row.get("span_agent_name") == agent and row.get("span_agent_version") == version
             for row in required_spans
         )
-        chat_spans = [row for row in required_spans if row.get("span_name") == "chat"]
-        model_valid = bool(chat_spans) and all(
-            row.get("span_model") == expectation.model_deployment for row in chat_spans
-        )
+        if "chat" in expectation.required_operations:
+            chat_spans = [row for row in required_spans if row.get("span_name") == "chat"]
+            model_valid = bool(chat_spans) and all(
+                row.get("span_model") == expectation.model_deployment for row in chat_spans
+            )
+        else:
+            model_valid = True
         if (
             roots != 1
             or len(span_id_list) != len(spans)
@@ -253,7 +258,23 @@ def correlate_complete_traces(
         ):
             return None
         used.add(operation_id)
-        matched.append(TraceCorrelation(operation_id, len(spans), roots))
+        observed = min(
+            (
+                datetime.fromisoformat(str(row["timestamp"]).replace("Z", "+00:00"))
+                if isinstance(row.get("timestamp"), str)
+                else row["timestamp"]
+            )
+            for row in spans
+        )
+        matched.append(
+            TraceCorrelation(
+                operation_id,
+                len(spans),
+                roots,
+                tuple(sorted(span_ids)),
+                observed.astimezone(UTC),
+            )
+        )
     return matched
 
 
@@ -270,6 +291,7 @@ def wait_for_correlated_traces(
     poll_seconds: float = 20,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
+    cancelled: Callable[[], bool] | None = None,
 ) -> list[TraceCorrelation]:
     if timeout_seconds <= 0 or start.tzinfo is None or end.tzinfo is None or start >= end:
         raise RuntimeFailure("invalid_telemetry_window", "Telemetry polling bounds are invalid.")
@@ -280,6 +302,11 @@ def wait_for_correlated_traces(
     )
     deadline = monotonic() + timeout_seconds
     while True:
+        if cancelled is not None and cancelled():
+            raise RuntimeFailure(
+                "telemetry_polling_cancelled",
+                "Telemetry ingestion polling was cancelled.",
+            )
         rows = query_client.query(
             resource_id,
             query,
@@ -303,4 +330,13 @@ def wait_for_correlated_traces(
                 {"expected": len(expectations), "observed_operations": len(rows)},
                 transient=True,
             )
-        sleep(poll_seconds)
+        remaining = poll_seconds
+        while remaining > 0:
+            if cancelled is not None and cancelled():
+                raise RuntimeFailure(
+                    "telemetry_polling_cancelled",
+                    "Telemetry ingestion polling was cancelled.",
+                )
+            interval = min(1.0, remaining)
+            sleep(interval)
+            remaining -= interval

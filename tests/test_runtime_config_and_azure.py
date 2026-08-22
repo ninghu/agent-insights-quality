@@ -205,13 +205,19 @@ class FakeAzureCli:
                         "etag": '"connection-etag"',
                         "properties": {
                             "category": "AppInsights",
-                            "authType": "AAD",
+                            "authType": "ApiKey",
                             "target": (
                                 "/subscriptions/" + SUBSCRIPTION
                                 + "/resourceGroups/quality-rg/providers/"
                                 "Microsoft.Insights/components/quality"
                             ),
                             "metadata": {
+                                "ApiType": "Azure",
+                                "ResourceId": (
+                                    "/subscriptions/" + SUBSCRIPTION
+                                    + "/resourceGroups/quality-rg/providers/"
+                                    "Microsoft.Insights/components/quality"
+                                ),
                                 "purpose": "agent-insights-quality",
                                 "owner_reference": "ninghu",
                                 "expires_on": "2026-08-19",
@@ -221,13 +227,6 @@ class FakeAzureCli:
                 ]
             }
         raise AssertionError((method, url, body))
-
-    def put_if_absent(self, url, body):
-        name = url.split("/projects/", 1)[1].split("?", 1)[0]
-        created = project(name)
-        created["tags"] = dict(body["tags"])
-        self.projects.append(created)
-        return True
 
     def put_conditionally(self, url, body, *, etag):
         return True
@@ -356,6 +355,170 @@ def test_project_reuse_requires_exact_date_catalog_and_ownership() -> None:
     assert selected.project_name == "aiq-20260820"
 
 
+def test_project_reuse_normalizes_resource_graph_qualified_name() -> None:
+    existing = project("aiq-20260820-r01")
+    existing["name"] = "quality-account/aiq-20260820-r01"
+    config = RuntimeConfig.from_env(environment()).azure
+    manager = AzureProjectManager(
+        FakeAzureCli([existing]),
+        AzureContext(SUBSCRIPTION, "tenant", "user"),
+        config,
+        "ninghu",
+    )
+
+    selected = manager.select_or_create(
+        date(2026, 8, 20),
+        "sha256:catalog",
+        project_name="aiq-20260820-r01",
+    )
+
+    assert selected.project_name == "aiq-20260820-r01"
+    assert selected.project_id == existing["id"]
+
+
+def test_preprovisioned_api_key_connection_is_reconciled_without_secret_access() -> None:
+    class NoConnectionWritesAzureCli(FakeAzureCli):
+        def put_conditionally(self, url, body, *, etag):
+            raise AssertionError("Runtime must not write the ApiKey connection")
+
+    config = RuntimeConfig.from_env(environment()).azure
+    manager = AzureProjectManager(
+        NoConnectionWritesAzureCli([project()]),
+        AzureContext(SUBSCRIPTION, "tenant", "user"),
+        config,
+        "ninghu",
+    )
+
+    assert (
+        manager.select_or_create(date(2026, 8, 20), "sha256:catalog").project_name
+        == "aiq-20260820"
+    )
+
+
+@pytest.mark.parametrize(
+    ("metadata_matches", "has_pull_role", "expected_error"),
+    [
+        (True, True, None),
+        (False, True, "project_connection_conflict"),
+        (True, False, "project_role_assignments_missing"),
+    ],
+)
+def test_acr_image_accepts_redacted_credentials_but_requires_visible_binding(
+    metadata_matches: bool,
+    has_pull_role: bool,
+    expected_error: str | None,
+) -> None:
+    registry_id = (
+        "/subscriptions/" + SUBSCRIPTION + "/resourceGroups/quality-rg/providers/"
+        "Microsoft.ContainerRegistry/registries/aiqacr123"
+    )
+
+    class RegistryAzureCli(FakeAzureCli):
+        def rest(self, method, url, body=None):
+            if method == "get" and "/connections?" in url:
+                app = super().rest(method, url, body)["value"][0]
+                project_id = url.split("/connections?", 1)[0]
+                return {
+                    "value": [
+                        app,
+                        {
+                            "id": project_id + "/connections/container-registry",
+                            "name": "container-registry",
+                            "properties": {
+                                "category": "ContainerRegistry",
+                                "target": "aiqacr123.azurecr.io",
+                                "authType": "ManagedIdentity",
+                                "isSharedToAll": False,
+                                "credentials": None,
+                                "metadata": {
+                                    "ResourceId": (
+                                        registry_id
+                                        if metadata_matches
+                                        else registry_id + "-other"
+                                    )
+                                },
+                            },
+                        },
+                    ]
+                }
+            return super().rest(method, url, body)
+
+        def json(self, arguments, **kwargs):
+            arguments = list(arguments)
+            if arguments[:2] == ["resource", "show"]:
+                target = arguments[arguments.index("--ids") + 1]
+                if target.casefold() == registry_id.casefold():
+                    return {
+                        "id": registry_id,
+                        "type": "Microsoft.ContainerRegistry/registries",
+                        "tags": {
+                            "purpose": "agent-insights-quality",
+                            "agentInsightsQualityQualification": "true",
+                            "automationOwner": "ninghu",
+                        },
+                    }
+            if arguments[:3] == ["role", "assignment", "list"]:
+                scope = arguments[arguments.index("--scope") + 1]
+                if scope.casefold() == registry_id.casefold():
+                    if not has_pull_role:
+                        return []
+                    return [
+                        {
+                            "scope": registry_id,
+                            "roleDefinitionId": (
+                                "/providers/Microsoft.Authorization/roleDefinitions/"
+                                "7f951dda-4ed3-4680-a7ca-43fe172d538d"
+                            ),
+                        }
+                    ]
+            return super().json(arguments, **kwargs)
+
+    source = environment()
+    source["AIQ_TICKET_IMAGE_URI"] = (
+        "aiqacr123.azurecr.io/agent-insights-quality-ticket@sha256:"
+        + ("a" * 64)
+    )
+    config = RuntimeConfig.from_env(source).azure
+    manager = AzureProjectManager(
+        RegistryAzureCli([project()]),
+        AzureContext(SUBSCRIPTION, "tenant", "user"),
+        config,
+        "ninghu",
+    )
+
+    if expected_error is None:
+        assert (
+            manager.select_or_create(
+                date(2026, 8, 20),
+                "sha256:catalog",
+            ).project_name
+            == "aiq-20260820"
+        )
+    else:
+        with pytest.raises(RuntimeFailure) as caught:
+            manager.select_or_create(date(2026, 8, 20), "sha256:catalog")
+        assert caught.value.code == expected_error
+
+
+def test_acr_image_rejects_missing_registry_connection() -> None:
+    source = environment()
+    source["AIQ_TICKET_IMAGE_URI"] = (
+        "aiqacr123.azurecr.io/agent-insights-quality-ticket@sha256:"
+        + ("a" * 64)
+    )
+    config = RuntimeConfig.from_env(source).azure
+    manager = AzureProjectManager(
+        FakeAzureCli([project()]),
+        AzureContext(SUBSCRIPTION, "tenant", "user"),
+        config,
+        "ninghu",
+    )
+
+    with pytest.raises(RuntimeFailure, match="ContainerRegistry") as caught:
+        manager.select_or_create(date(2026, 8, 20), "sha256:catalog")
+    assert caught.value.code == "missing_project_connections"
+
+
 def test_project_preflight_requires_exact_managed_identity_roles() -> None:
     config = RuntimeConfig.from_env(environment(discovery=True)).azure
     manager = AzureProjectManager(
@@ -393,56 +556,91 @@ def test_explicit_project_validation_does_not_depend_on_discovery_tags() -> None
     assert manager.validate_explicit_project().project_name == "aiq-20260820"
 
 
-def test_project_creation_rejects_a_foreign_raced_name() -> None:
-    class RacingAzureCli(FakeAzureCli):
-        def __init__(self):
-            super().__init__([])
-            self.attempts: list[str] = []
-
-        def put_if_absent(self, url, body):
-            name = url.split("/projects/", 1)[1].split("?", 1)[0]
-            self.attempts.append(name)
-            if name == "aiq-20260820":
-                self.projects.append(project(name, owner="other"))
-                return False
-            return super().put_if_absent(url, body)
-
-    cli = RacingAzureCli()
+def test_project_selection_rejects_foreign_preprovisioned_project() -> None:
+    cli = FakeAzureCli([project(owner="other")])
     config = RuntimeConfig.from_env(environment()).azure
     manager = AzureProjectManager(cli, AzureContext(SUBSCRIPTION, "tenant", "user"), config, "ninghu")
     with pytest.raises(RuntimeFailure) as caught:
         manager.select_or_create(date(2026, 8, 20), "sha256:catalog")
-    assert caught.value.code == "ownership_mismatch"
-    assert cli.attempts == ["aiq-20260820"]
+    assert caught.value.code == "preprovisioned_project_mismatch"
 
 
-def test_stale_resource_graph_conflict_reuses_exact_owned_project() -> None:
-    class StaleGraphAzureCli(FakeAzureCli):
+def test_direct_project_selection_does_not_depend_on_resource_graph() -> None:
+    class DirectOnlyAzureCli(FakeAzureCli):
         def __init__(self):
             super().__init__([project()])
-            self.attempts: list[str] = []
 
         def json(self, arguments, **kwargs):
             if list(arguments)[:2] == ["graph", "query"]:
-                return {"data": []}
+                raise AssertionError("Exact plan project selection must use direct ARM lookup")
             return super().json(arguments, **kwargs)
 
-        def put_if_absent(self, url, body):
-            self.attempts.append(url.split("/projects/", 1)[1].split("?", 1)[0])
-            return False
-
-    cli = StaleGraphAzureCli()
+    cli = DirectOnlyAzureCli()
     config = RuntimeConfig.from_env(environment()).azure
     manager = AzureProjectManager(cli, AzureContext(SUBSCRIPTION, "tenant", "user"), config, "ninghu")
 
-    selected = manager.select_or_create(date(2026, 8, 20), "sha256:catalog")
+    selected = manager.select_or_create(
+        date(2026, 8, 20),
+        "sha256:catalog",
+        project_name="aiq-20260820",
+    )
 
     assert selected.project_name == "aiq-20260820"
-    assert cli.attempts == ["aiq-20260820"]
 
 
-def test_project_creation_reports_role_assignment_permission_blocker() -> None:
-    cli = FakeAzureCli([], roles=False, role_create_failure=True)
+def test_missing_preprovisioned_project_never_falls_back_to_raw_put() -> None:
+    class MissingProjectAzureCli(FakeAzureCli):
+        def json(self, arguments, **kwargs):
+            arguments = list(arguments)
+            if (
+                arguments[:2] == ["resource", "show"]
+                and "/projects/" in arguments[arguments.index("--ids") + 1]
+                and kwargs.get("allow_failure")
+            ):
+                return None
+            return super().json(arguments, **kwargs)
+
+    config = RuntimeConfig.from_env(environment()).azure
+    manager = AzureProjectManager(
+        MissingProjectAzureCli(),
+        AzureContext(SUBSCRIPTION, "tenant", "user"),
+        config,
+        "ninghu",
+    )
+
+    with pytest.raises(RuntimeFailure, match="qualification-project Bicep") as caught:
+        manager.select_or_create(date(2026, 8, 20), "sha256:catalog")
+    assert caught.value.code == "missing_preprovisioned_project"
+
+
+@pytest.mark.parametrize(
+    ("tag", "value"),
+    [
+        ("reportDate", "2026-08-19"),
+        ("catalogVersion", "sha256:stale"),
+    ],
+)
+def test_preprovisioned_project_requires_exact_date_and_catalog(
+    tag: str,
+    value: str,
+) -> None:
+    existing = project()
+    existing["tags"][tag] = value
+    config = RuntimeConfig.from_env(environment()).azure
+    manager = AzureProjectManager(
+        FakeAzureCli([existing]),
+        AzureContext(SUBSCRIPTION, "tenant", "user"),
+        config,
+        "ninghu",
+    )
+
+    with pytest.raises(RuntimeFailure) as caught:
+        manager.select_or_create(date(2026, 8, 20), "sha256:catalog")
+    assert caught.value.code == "preprovisioned_project_mismatch"
+
+
+def test_project_reconciliation_reports_role_assignment_permission_blocker() -> None:
+    cli = FakeAzureCli([project()], roles=False, role_create_failure=True)
     config = RuntimeConfig.from_env(environment()).azure
     manager = AzureProjectManager(cli, AzureContext(SUBSCRIPTION, "tenant", "user"), config, "ninghu")
     with pytest.raises(RuntimeFailure, match="roleAssignments/write") as caught:
@@ -450,69 +648,22 @@ def test_project_creation_reports_role_assignment_permission_blocker() -> None:
     assert caught.value.code == "role_assignment_permission_blocked"
 
 
-def test_partial_project_reconciles_after_role_permission_is_restored() -> None:
-    class RecoveringAzureCli(FakeAzureCli):
+def test_project_reconciliation_fails_closed_when_api_key_connection_is_missing() -> None:
+    class MissingConnectionAzureCli(FakeAzureCli):
         def __init__(self):
-            super().__init__([], roles=False, role_create_failure=True)
-            self.connection: dict | None = None
-            self.assignments: list[dict] = []
-            self.project_creates = 0
+            super().__init__([project()])
             self.connection_puts = 0
-            self.role_create_attempts = 0
-
-        def put_if_absent(self, url, body):
-            self.project_creates += 1
-            return super().put_if_absent(url, body)
-
-        def json(self, arguments, **kwargs):
-            arguments = list(arguments)
-            if arguments[:3] == ["role", "assignment", "list"]:
-                scope = arguments[arguments.index("--scope") + 1]
-                return [
-                    assignment
-                    for assignment in self.assignments
-                    if assignment["scope"].casefold() == scope.casefold()
-                ]
-            return super().json(arguments, **kwargs)
-
-        def run(self, arguments, **kwargs):
-            arguments = list(arguments)
-            if arguments[:3] == ["role", "assignment", "create"]:
-                self.role_create_attempts += 1
-                self.commands.append(arguments)
-                if self.role_create_failure:
-                    return CommandResult(1, "", "forbidden")
-                scope = arguments[arguments.index("--scope") + 1]
-                role = arguments[arguments.index("--role") + 1]
-                self.assignments.append(
-                    {
-                        "scope": scope,
-                        "roleDefinitionId": (
-                            "/providers/Microsoft.Authorization/roleDefinitions/" + role
-                        ),
-                    }
-                )
-                return CommandResult(0, "", "")
-            return super().run(arguments, **kwargs)
 
         def rest(self, method, url, body=None):
             if method == "get" and "/connections?" in url:
-                return {"value": [self.connection] if self.connection else []}
+                return {"value": []}
             return super().rest(method, url, body)
 
         def put_conditionally(self, url, body, *, etag):
-            if "/connections/application-insights?" in url:
-                self.connection_puts += 1
-                self.connection = {
-                    "id": url.split("?", 1)[0],
-                    "name": "application-insights",
-                    "etag": '"connection-etag"',
-                    "properties": dict(body["properties"]),
-                }
-                return True
+            self.connection_puts += 1
             return super().put_conditionally(url, body, etag=etag)
 
-    cli = RecoveringAzureCli()
+    cli = MissingConnectionAzureCli()
     config = RuntimeConfig.from_env(environment()).azure
     manager = AzureProjectManager(
         cli,
@@ -521,23 +672,13 @@ def test_partial_project_reconciles_after_role_permission_is_restored() -> None:
         "ninghu",
     )
 
-    with pytest.raises(RuntimeFailure) as blocked:
+    with pytest.raises(RuntimeFailure, match="preprovisioned ApiKey") as blocked:
         manager.select_or_create(date(2026, 8, 20), "sha256:catalog")
-    assert blocked.value.code == "role_assignment_permission_blocked"
-    assert cli.project_creates == 1
-    assert cli.connection_puts == 1
-
-    cli.role_create_failure = False
-    selected = manager.select_or_create(date(2026, 8, 20), "sha256:catalog")
-
-    assert selected.project_name == "aiq-20260820"
-    assert cli.project_creates == 1
-    assert cli.connection_puts == 1
-    assert cli.role_create_attempts == 3
-    assert len(cli.assignments) == 2
+    assert blocked.value.code == "missing_project_connections"
+    assert cli.connection_puts == 0
 
 
-def test_connection_reconcile_does_not_overwrite_concurrent_foreign_replacement() -> None:
+def test_stale_aad_connection_is_rejected_without_overwrite() -> None:
     class ReplacedConnectionAzureCli(FakeAzureCli):
         def __init__(self):
             super().__init__([project()])
@@ -590,8 +731,8 @@ def test_connection_reconcile_does_not_overwrite_concurrent_foreign_replacement(
         manager.select_or_create(date(2026, 8, 20), "sha256:catalog")
 
     assert caught.value.code == "project_connection_conflict"
-    assert cli.writes == 1
-    assert cli.connection["properties"]["metadata"]["owner_reference"] == "foreign-owner"
+    assert cli.writes == 0
+    assert cli.connection["properties"]["authType"] == "AAD"
 
 
 def test_azure_cli_rejects_argument_injection_without_invoking_executor() -> None:

@@ -21,6 +21,7 @@ _FORBIDDEN_VALUE = re.compile(
     r"(?i)(?:bearer\s+|instrumentationkey=|accountkey=|sharedaccesssignature=|"
     r"https?://|/subscriptions/)"
 )
+_PRIVATE_TELEMETRY_ID = re.compile(r"^(?:[0-9a-f]{16}|[0-9a-f]{32})$")
 
 
 def ensure_public_safe(value: Any, path: str = "$") -> None:
@@ -38,7 +39,9 @@ def ensure_public_safe(value: Any, path: str = "$") -> None:
         for index, child in enumerate(value):
             ensure_public_safe(child, f"{path}[{index}]")
         return
-    if isinstance(value, str) and _FORBIDDEN_VALUE.search(value):
+    if isinstance(value, str) and (
+        _FORBIDDEN_VALUE.search(value) or _PRIVATE_TELEMETRY_ID.fullmatch(value)
+    ):
         raise RuntimeFailure(
             "private_value_in_receipt",
             f"Receipt value at {path} is not public-safe.",

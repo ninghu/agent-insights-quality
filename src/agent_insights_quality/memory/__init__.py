@@ -9,7 +9,6 @@ from typing import Any
 from agent_insights_quality.contracts import (
     ContractError,
     MEMORY_SCHEMA,
-    ROOT,
     SCHEMAS,
     TRUST_FAILURES,
     load_agent_manifests,

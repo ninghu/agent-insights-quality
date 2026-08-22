@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import tomllib
 
 from agent_insights_quality.contracts import ROOT
 
@@ -216,3 +217,10 @@ def test_role_assignments_do_not_hardcode_principal_ids() -> None:
         "automationPrincipalId",
         "project.identity.principalId",
     }
+
+
+def test_clean_dev_install_includes_otel_sdk_and_ruff() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    dependencies = project["project"]["optional-dependencies"]["dev"]
+    assert any(item.startswith("opentelemetry-sdk") for item in dependencies)
+    assert any(item.startswith("ruff") for item in dependencies)

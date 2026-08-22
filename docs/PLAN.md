@@ -398,11 +398,13 @@ The LT email links to `report.md` for readers who want the full numbers.
 
 ## 10. Daily execution flow
 
-### Phase A: Preflight and project creation
+### Phase A: Planning, provisioning, and preflight
 
-1. Resolve the Pacific report date and create/reuse the exact date-stamped project.
-2. Validate identity, subscription, endpoints, model deployments, quota, and report/bug integrations.
-3. Generate and schema-validate the complete daily plan.
+1. Resolve the Pacific report date and validate static runtime configuration, identity, and subscription.
+2. Generate and schema-validate the complete daily plan and exact catalog digest.
+3. Deploy the reviewed qualification-project Bicep with `plan.project.name`, report date, and catalog
+   digest, then validate the exact project, connections, endpoints, model deployments, quota, and
+   report/bug integrations.
 
 ### Phase B: Healthy baseline
 
@@ -855,7 +857,8 @@ orchestrator, memory, ADO, and final automation depend on those contracts.
   is `INCONCLUSIVE`, not a partial pass.
 - **Trace ingestion delay:** poll exact trace IDs with a bounded deadline; never judge a partial trace
   set as complete.
-- **Daily project propagation:** make create/connect/deploy operations idempotent and poll readiness.
+- **Daily project propagation:** make the reviewed Bicep deployment idempotent, then poll the exact
+  preprovisioned project and connections for readiness.
 - **Synthetic health/finance data sensitivity:** use generated fictitious identities and no real
   medical or financial records.
 - **Automation self-modification:** generated-path allowlist and branch protection prevent changes to

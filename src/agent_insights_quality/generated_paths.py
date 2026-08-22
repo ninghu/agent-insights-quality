@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import subprocess
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from typing import Iterable
 
 from agent_insights_quality.contracts import ContractError, ROOT, load_data

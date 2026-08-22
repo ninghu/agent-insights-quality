@@ -16,6 +16,8 @@ from agent_insights_quality.public_safety import (
     PUBLIC_FORBIDDEN_PATTERNS,
     require_public_artifact_safe,
 )
+from agent_insights_quality.runtime.errors import RuntimeFailure
+from agent_insights_quality.runtime.receipts import ensure_public_safe
 from agent_insights_quality.security import scan_text
 
 
@@ -159,6 +161,18 @@ def test_public_safety_runtime_host_scan_avoids_near_matches(safe: str) -> None:
 )
 def test_public_safety_patterns_reject_credentials(unsafe: str) -> None:
     assert any(pattern.search(unsafe) for pattern in PUBLIC_FORBIDDEN_PATTERNS.values())
+
+
+@pytest.mark.parametrize("identifier", ["a" * 16, "b" * 32])
+def test_public_receipts_reject_raw_telemetry_identifiers(identifier: str) -> None:
+    with pytest.raises(RuntimeFailure, match="not public-safe"):
+        ensure_public_safe({"trace_reference": identifier})
+
+
+def test_non_ascii_content_still_exposes_ascii_credentials_to_scanner() -> None:
+    content = b"\xef\xbb\xbf" + b"ghp_" + (b"a" * 36)
+    text = content.decode("latin-1")
+    assert PUBLIC_FORBIDDEN_PATTERNS["GitHub token"].search(text)
 
 
 @pytest.mark.parametrize(

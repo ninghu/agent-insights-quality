@@ -10,6 +10,8 @@ from .errors import RuntimeFailure
 from .orchestrator import RuntimeHooks
 
 _MODULE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
+DEFAULT_RUNTIME_ADAPTER = "agent_insights_quality.live_adapter"
+ALLOWED_RUNTIME_ADAPTERS = frozenset({DEFAULT_RUNTIME_ADAPTER})
 
 
 class ValidationOnlyHooks:
@@ -31,6 +33,7 @@ class ValidationOnlyHooks:
     wait_ingestion = _unavailable
     run_insights = _unavailable
     assemble_evidence = _unavailable
+    recover = _unavailable
 
     @staticmethod
     def cancel(_work: Any) -> None:
@@ -45,10 +48,14 @@ def load_runtime_hooks(config: RuntimeConfig, *, validation_only: bool = False) 
     name = config.adapter
     if validation_only and not name:
         return ValidationOnlyHooks(config)
-    if not name or not _MODULE.fullmatch(name):
+    if (
+        not name
+        or not _MODULE.fullmatch(name)
+        or name not in ALLOWED_RUNTIME_ADAPTERS
+    ):
         raise RuntimeFailure(
             "runtime_adapter_unavailable",
-            "Set AIQ_RUNTIME_ADAPTER to a reviewed Python module that implements create_runtime_hooks.",
+            "AIQ_RUNTIME_ADAPTER must name an explicitly reviewed runtime adapter.",
         )
     try:
         module = importlib.import_module(name)
@@ -72,6 +79,7 @@ def load_runtime_hooks(config: RuntimeConfig, *, validation_only: bool = False) 
         "wait_ingestion",
         "run_insights",
         "assemble_evidence",
+        "recover",
         "cancel",
         "finalize_failure",
     }

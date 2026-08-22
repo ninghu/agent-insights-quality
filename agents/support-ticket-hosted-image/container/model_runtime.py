@@ -10,6 +10,7 @@ from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
+from scenario_runtime import ScenarioRuntime
 
 
 _MAX_TOOL_TURNS = 4
@@ -27,10 +28,30 @@ class ModelBackedAgent:
         self._instructions = instructions
         self._tools = tools
         self._execute_tool = execute_tool
+        self._scenario = ScenarioRuntime()
+        if self._scenario.instructions:
+            self._instructions = f"{self._instructions}\n\n{self._scenario.instructions}"
         self._client: Any | None = None
         self._client_lock = threading.Lock()
 
     def respond(self, user_input: str) -> str:
+        if self._scenario.scenario_routing_configured:
+            try:
+                input_obj = json.loads(user_input)
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise RuntimeError("Endpoint input must be valid JSON.") from exc
+            if not isinstance(input_obj, dict):
+                raise RuntimeError("Endpoint input must be a JSON object.")
+            scenario_id = input_obj.get("scenario_id")
+            if not isinstance(scenario_id, str) or not scenario_id:
+                raise RuntimeError(
+                    "Endpoint input must contain a non-empty string scenario_id."
+                )
+            provenance = input_obj.get("runtime_provenance")
+            if not isinstance(provenance, dict):
+                raise RuntimeError("Endpoint input must contain runtime_provenance.")
+            self._scenario.select_scenario(scenario_id, provenance)
+        self._scenario.before_request()
         response = self._model_response(input=user_input)
         for _ in range(_MAX_TOOL_TURNS):
             calls = [
@@ -42,7 +63,7 @@ class ModelBackedAgent:
                 output_text = str(getattr(response, "output_text", "") or "").strip()
                 if not output_text:
                     raise RuntimeError("The model completed without output text.")
-                return output_text
+                return self._scenario.finalize_output(output_text)
             outputs = []
             for call in calls:
                 name = str(getattr(call, "name", "") or "")
@@ -71,6 +92,10 @@ class ModelBackedAgent:
         raise RuntimeError("The model exceeded the bounded function-call turn limit.")
 
     def _model_response(self, **kwargs: Any) -> Any:
+        self._scenario.before_model()
+        if "input" not in kwargs:
+            raise RuntimeError("Model request is missing input.")
+        kwargs["input"] = self._scenario.mutate_model_input(kwargs["input"])
         model = os.environ["AZURE_AI_MODEL_DEPLOYMENT_NAME"].strip()
         if not model:
             raise RuntimeError("AZURE_AI_MODEL_DEPLOYMENT_NAME is empty.")
@@ -91,25 +116,40 @@ class ModelBackedAgent:
             return response
 
     def _run_tool(self, name: str, arguments: dict[str, Any]) -> str:
-        with _TRACER.start_as_current_span(
-            f"tool.{name}",
-            kind=SpanKind.INTERNAL,
-        ) as span:
-            span.set_attribute("tool.name", name)
-            span.set_attribute("gen_ai.tool.name", name)
-            span.set_attribute(
-                "tool.arguments",
-                json.dumps(arguments, sort_keys=True, separators=(",", ":")),
-            )
-            try:
-                result = self._execute_tool(name, arguments)
-            except (KeyError, TypeError, ValueError) as error:
-                span.record_exception(error)
-                span.set_status(Status(StatusCode.ERROR, str(error)))
-                raise
-            span.set_attribute("tool.result", result)
-            span.set_status(Status(StatusCode.OK))
-            return result
+        # Each actual dispatch creates its own tool.<effective-name> span.
+        # There is no outer pre-mutation span - spans are per-dispatch only.
+        result = self._scenario.run_tool(name, arguments, self._make_dispatch())
+        return result
+
+    def _make_dispatch(self) -> Callable[[str, dict[str, Any]], str]:
+        """Return a callable that wraps each actual tool dispatch in its own span.
+
+        The span name is ``tool.<dispatch_name>`` using the effective (possibly
+        mutated) tool name, populated with the mutated arguments and result.
+        Duplicate dispatch produces two separate spans without recursion.
+        """
+
+        def _dispatch(dispatch_name: str, dispatch_args: dict[str, Any]) -> str:
+            with _TRACER.start_as_current_span(
+                f"tool.{dispatch_name}", kind=SpanKind.INTERNAL
+            ) as span:
+                span.set_attribute("tool.name", dispatch_name)
+                span.set_attribute("gen_ai.tool.name", dispatch_name)
+                span.set_attribute(
+                    "tool.arguments",
+                    json.dumps(dispatch_args, sort_keys=True, separators=(",", ":")),
+                )
+                try:
+                    dispatch_result = self._execute_tool(dispatch_name, dispatch_args)
+                except (KeyError, TypeError, ValueError, RuntimeError) as error:
+                    span.record_exception(error)
+                    span.set_status(Status(StatusCode.ERROR, str(error)))
+                    raise
+                span.set_attribute("tool.result", dispatch_result)
+                span.set_status(Status(StatusCode.OK))
+                return dispatch_result
+
+        return _dispatch
 
     def _openai_client(self) -> Any:
         if self._client is not None:

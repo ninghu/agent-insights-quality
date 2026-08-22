@@ -1,0 +1,45 @@
+{
+  "data": [
+    {
+      "id": "insight-synthetic-001",
+      "agent_name": "aiq-001-weather-live",
+      "agent_version": "7",
+      "revision": "3",
+      "title": "Tool result was ignored",
+      "description": "The response contradicted the exact weather tool result.",
+      "category": "tool_call_failures",
+      "severity": "high",
+      "created_at": "2026-08-21T12:06:00Z",
+      "updated_at": "2026-08-21T12:07:00Z",
+      "details": {
+        "highlighted_traces": [
+          {
+            "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "timestamp": "2026-08-21T12:01:00Z",
+            "summary": "The exact correlated invocation highlighted by Agent Insights."
+          }
+        ],
+        "linked_traces": [
+          {
+            "trace_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "timestamp": "2026-08-21T12:02:00Z",
+            "summary": "A second exact invocation linked to the same finding."
+          }
+        ],
+        "recommended_actions": {
+          "proposed_fix": {
+            "text": "Use the weather tool result before producing the final response.",
+            "kind": "code_change",
+            "changes": [
+              {
+                "path": "agent.py",
+                "description": "Map the tool result into the response."
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "has_more": false
+}

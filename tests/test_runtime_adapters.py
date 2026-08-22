@@ -25,7 +25,12 @@ from agent_insights_quality.agent_runtime import (
     FoundryInvocationClient,
     HealthyFixture,
     HttpResponse,
+    InvocationEndpointError,
+    InvocationFailureReceipt,
     RuntimeContractError,
+    SyntheticToolOperation,
+    _ENDPOINT_CASES,
+    _ENDPOINT_HEALTHY_CASES,
     canonical_json_digest,
     deterministic_zip,
     load_fixtures,
@@ -123,6 +128,51 @@ def test_prompt_deployment_sends_real_token_and_polls_owned_version() -> None:
     )
 
 
+def test_deployment_recovery_reuses_exact_owned_version_without_post() -> None:
+    digest = "sha256:" + ("a" * 64)
+    metadata = _metadata("run-1", digest)
+    transport = QueueTransport(
+        [
+            _response(
+                200,
+                {
+                    "name": "aiq-001-weather",
+                    "versions": {
+                        "latest": {
+                            "version": "7",
+                            "metadata": metadata,
+                        }
+                    },
+                },
+            ),
+            _response(
+                200,
+                {
+                    "version": "7",
+                    "status": "active",
+                    "metadata": metadata,
+                },
+            ),
+        ]
+    )
+    client = FoundryDeploymentClient(
+        PROJECT_ENDPOINT,
+        lambda: "short-lived-token",
+        transport=transport,
+        sleeper=lambda _seconds: None,
+    )
+    receipt, agent_exists = client.recover_version(
+        agent_name="aiq-001-weather",
+        agent_type="prompt",
+        run_id="run-1",
+        artifact_digest=digest,
+    )
+    assert agent_exists is True
+    assert receipt is not None
+    assert receipt.agent_version == "7"
+    assert [call["method"] for call in transport.calls] == ["GET", "GET"]
+
+
 def test_hosted_source_uses_multipart_hash_feature_header_and_timeout() -> None:
     source = ROOT / "agents" / "finance-hosted" / "source"
     _, source_digest = deterministic_zip(source)
@@ -170,7 +220,7 @@ def test_hosted_source_uses_multipart_hash_feature_header_and_timeout() -> None:
     assert call["timeout_seconds"] == 37
 
 
-def test_container_deployment_requires_immutable_public_ghcr_digest() -> None:
+def test_container_deployment_requires_immutable_reviewed_registry_digest() -> None:
     image_digest = "sha256:" + ("a" * 64)
     image = f"ghcr.io/ninghu/agent-insights-quality-ticket@{image_digest}"
     definition = json.loads(
@@ -208,10 +258,23 @@ def test_container_deployment_requires_immutable_public_ghcr_digest() -> None:
     assert receipt.image_digest == image_digest
     assert payload["definition"]["container_configuration"]["image"] == image
     assert transport.calls[0]["headers"]["Foundry-Features"] == HOSTED_FEATURES
-    with pytest.raises(RuntimeContractError, match="public GHCR"):
+    acr_image = (
+        "aiqacr123.azurecr.io/agent-insights-quality-ticket@sha256:"
+        + ("b" * 64)
+    )
+    assert validate_image_reference(acr_image) == acr_image
+    with pytest.raises(RuntimeContractError, match="reviewed GHCR or Azure"):
         validate_image_reference("private.azurecr.io/ticket:latest")
-    with pytest.raises(RuntimeContractError, match="public GHCR"):
+    with pytest.raises(RuntimeContractError, match="reviewed GHCR or Azure"):
         validate_image_reference("ghcr.io/ninghu/agent-insights-quality-ticket:latest")
+    for rejected in (
+        "aiqacr123.azurecr.io/ticket@sha256:" + ("a" * 64),
+        "aiq-acr.azurecr.io/agent-insights-quality-ticket@sha256:" + ("a" * 64),
+        "aiqacr123.azurecr.io/agent-insights-quality-ticket:latest",
+        "aiqacr123.example.com/agent-insights-quality-ticket@sha256:" + ("a" * 64),
+    ):
+        with pytest.raises(RuntimeContractError, match="reviewed GHCR or Azure"):
+            validate_image_reference(rejected)
 
 
 def test_cleanup_deletes_only_the_exact_owned_version() -> None:
@@ -455,6 +518,93 @@ def test_hosted_session_version_mismatch_is_cleaned_up() -> None:
     assert "/endpoint/sessions/wrong-session?" in transport.calls[-1]["url"]
 
 
+def test_hosted_endpoint_failure_raises_invocation_endpoint_error_and_still_deletes_session() -> None:
+    """HTTP 5xx after exact-version session creation raises InvocationEndpointError."""
+    fixture = HealthyFixture(
+        id="hosted-fail",
+        input="do-work",
+        output_contains="unused",
+        tool_outputs={},
+        expected_tool_calls=(),
+    )
+    transport = QueueTransport(
+        [
+            _response(
+                201,
+                {
+                    "agent_session_id": "sess-fail-1",
+                    "version_indicator": {"type": "version_ref", "agent_version": "v5"},
+                },
+            ),
+            # Endpoint call returns 503 with partial body
+            HttpResponse(
+                status_code=503,
+                headers={"x-request-id": "req-fail-42"},
+                body=json.dumps({"id": "partial-resp-id"}).encode(),
+            ),
+            _response(204),  # session deletion
+        ]
+    )
+    client = FoundryInvocationClient(PROJECT_ENDPOINT, lambda: "token", transport=transport)
+    deployment = DeploymentReceipt(
+        "aiq-005-hosted",
+        "v5",
+        "hosted_code",
+        "sha256:" + ("b" * 64),
+        "run",
+        "active",
+    )
+    with pytest.raises(InvocationEndpointError) as exc_info:
+        client.invoke_hosted(deployment, fixture)
+
+    err = exc_info.value
+    assert isinstance(err.receipt, InvocationFailureReceipt)
+    assert err.receipt.http_status == 503
+    assert err.receipt.agent_name == "aiq-005-hosted"
+    assert err.receipt.agent_version == "v5"
+    assert err.receipt.session_id == "sess-fail-1"
+    assert err.receipt.request_id == "req-fail-42"
+    assert err.receipt.response_id == "partial-resp-id"
+    # Session must still have been deleted
+    assert transport.calls[-1]["method"] == "DELETE"
+    assert "/endpoint/sessions/sess-fail-1?" in transport.calls[-1]["url"]
+
+
+def test_hosted_endpoint_contract_error_is_not_wrapped_in_invocation_endpoint_error() -> None:
+    """A RuntimeContractError from inside the try-block (version mismatch) stays distinct."""
+    fixture = HealthyFixture(
+        id="contract-check",
+        input="x",
+        output_contains="unused",
+        tool_outputs={},
+        expected_tool_calls=(),
+    )
+    transport = QueueTransport(
+        [
+            _response(
+                201,
+                {
+                    "agent_session_id": "sess-v6",
+                    "version_indicator": {"type": "version_ref", "agent_version": "v-wrong"},
+                },
+            ),
+            _response(204),
+        ]
+    )
+    client = FoundryInvocationClient(PROJECT_ENDPOINT, lambda: "token", transport=transport)
+    deployment = DeploymentReceipt(
+        "aiq-006-hosted",
+        "v6",
+        "hosted_code",
+        "sha256:" + ("c" * 64),
+        "run",
+        "active",
+    )
+    with pytest.raises(RuntimeContractError) as exc_info:
+        client.invoke_hosted(deployment, fixture)
+    assert not isinstance(exc_info.value, InvocationEndpointError)
+
+
 def test_deployment_poll_fails_on_terminal_state_and_timeout() -> None:
     definition = {"kind": "prompt", "model": "test", "instructions": "healthy", "tools": []}
     failed_transport = QueueTransport(
@@ -581,3 +731,384 @@ def test_version_deployment_uses_version_route_without_create_name() -> None:
 def test_endpoint_adapter_rejects_non_foundry_or_ingestion_routes(endpoint: str) -> None:
     with pytest.raises(RuntimeContractError, match="Foundry project endpoint"):
         FoundryInvocationClient(endpoint, lambda: "token", transport=QueueTransport([]))
+
+
+def _prompt_receipt(version: str = "42") -> DeploymentReceipt:
+    return DeploymentReceipt(
+        "aiq-007-scenario",
+        version,
+        "prompt",
+        "sha256:" + ("7" * 64),
+        "run-sc",
+        "active",
+    )
+
+
+def test_scenario_operations_uses_ordered_results_sleeps_delays_and_records_calls() -> None:
+    """Happy path: two ops across two tool turns; configured results returned in order; delays slept."""
+    slept: list[float] = []
+    ops = (
+        SyntheticToolOperation(tool_name="search", result={"hits": 3}, delay_seconds=0.05),
+        SyntheticToolOperation(tool_name="fetch", result={"body": "hello"}, delay_seconds=0.0),
+    )
+    fixture = HealthyFixture(
+        id="sc-happy",
+        input="go",
+        output_contains="done",
+        tool_outputs={},
+        expected_tool_calls=("search", "fetch"),
+        scenario_operations=ops,
+    )
+    transport = QueueTransport(
+        [
+            # Turn 1: agent calls "search"
+            _response(
+                200,
+                {
+                    "id": "r1",
+                    "status": "in_progress",
+                    "output": [
+                        {"type": "function_call", "call_id": "c1", "name": "search", "arguments": "{}"}
+                    ],
+                },
+            ),
+            # Turn 2: agent calls "fetch"
+            _response(
+                200,
+                {
+                    "id": "r2",
+                    "status": "in_progress",
+                    "output": [
+                        {"type": "function_call", "call_id": "c2", "name": "fetch", "arguments": "{}"}
+                    ],
+                },
+            ),
+            # Final: no more tool calls
+            _response(
+                200,
+                {
+                    "id": "r3",
+                    "invocation_id": "inv-sc",
+                    "status": "completed",
+                    "output_text": "done",
+                },
+                headers={"x-ms-request-id": "req-sc"},
+            ),
+        ]
+    )
+    client = FoundryInvocationClient(
+        PROJECT_ENDPOINT,
+        lambda: "token",
+        transport=transport,
+        sleeper=slept.append,
+    )
+    receipt = client.invoke_prompt(_prompt_receipt(), fixture)
+
+    assert receipt.called_tools == ("search", "fetch")
+    assert receipt.response_id == "r3"
+    assert receipt.invocation_id == "inv-sc"
+    assert receipt.request_id == "req-sc"
+    # Only the operation with delay_seconds > 0 should have triggered a sleep
+    assert slept == [0.05]
+    # Verify outputs sent back to the agent carried the configured results
+    turn1_body = json.loads(transport.calls[1]["body"])
+    assert turn1_body["input"][0]["output"] == '{"hits":3}'
+    turn2_body = json.loads(transport.calls[2]["body"])
+    assert turn2_body["input"][0]["output"] == '{"body":"hello"}'
+
+
+def test_scenario_operations_fails_on_wrong_tool_name() -> None:
+    """Agent calling a different tool than the configured operation is a contract error."""
+    ops = (SyntheticToolOperation(tool_name="expected_tool", result={}),)
+    fixture = HealthyFixture(
+        id="sc-wrong-name",
+        input="go",
+        output_contains="unused",
+        tool_outputs={},
+        expected_tool_calls=("expected_tool",),
+        scenario_operations=ops,
+    )
+    transport = QueueTransport(
+        [
+            _response(
+                200,
+                {
+                    "id": "r1",
+                    "status": "in_progress",
+                    "output": [
+                        {"type": "function_call", "call_id": "c1", "name": "wrong_tool", "arguments": "{}"}
+                    ],
+                },
+            ),
+        ]
+    )
+    client = FoundryInvocationClient(PROJECT_ENDPOINT, lambda: "token", transport=transport)
+    with pytest.raises(RuntimeContractError, match="sequence mismatch"):
+        client.invoke_prompt(_prompt_receipt(), fixture)
+
+
+def test_scenario_operations_fails_when_agent_makes_extra_tool_calls() -> None:
+    """Agent calling more tools than configured operations is a contract error."""
+    ops = (SyntheticToolOperation(tool_name="tool_a", result={"v": 1}),)
+    fixture = HealthyFixture(
+        id="sc-extra",
+        input="go",
+        output_contains="unused",
+        tool_outputs={},
+        expected_tool_calls=("tool_a",),
+        scenario_operations=ops,
+    )
+    transport = QueueTransport(
+        [
+            # Turn 1: agent calls tool_a (consumes op 0)
+            _response(
+                200,
+                {
+                    "id": "r1",
+                    "status": "in_progress",
+                    "output": [
+                        {"type": "function_call", "call_id": "c1", "name": "tool_a", "arguments": "{}"}
+                    ],
+                },
+            ),
+            # Turn 2: agent calls another tool but no operations left
+            _response(
+                200,
+                {
+                    "id": "r2",
+                    "status": "in_progress",
+                    "output": [
+                        {"type": "function_call", "call_id": "c2", "name": "tool_b", "arguments": "{}"}
+                    ],
+                },
+            ),
+        ]
+    )
+    client = FoundryInvocationClient(PROJECT_ENDPOINT, lambda: "token", transport=transport)
+    with pytest.raises(RuntimeContractError, match="more tool calls than configured"):
+        client.invoke_prompt(_prompt_receipt(), fixture)
+
+
+def test_scenario_operations_fails_when_not_all_operations_consumed() -> None:
+    """Agent finishing with unconsumed operations remaining is a contract error."""
+    ops = (
+        SyntheticToolOperation(tool_name="step_1", result={"ok": True}),
+        SyntheticToolOperation(tool_name="step_2", result={"ok": True}),
+    )
+    fixture = HealthyFixture(
+        id="sc-partial",
+        input="go",
+        output_contains="partial",
+        tool_outputs={},
+        expected_tool_calls=("step_1", "step_2"),
+        scenario_operations=ops,
+    )
+    transport = QueueTransport(
+        [
+            # Turn 1: agent calls step_1 (consumes op 0)
+            _response(
+                200,
+                {
+                    "id": "r1",
+                    "status": "in_progress",
+                    "output": [
+                        {"type": "function_call", "call_id": "c1", "name": "step_1", "arguments": "{}"}
+                    ],
+                },
+            ),
+            # Agent finishes without calling step_2
+            _response(
+                200,
+                {
+                    "id": "r2",
+                    "status": "completed",
+                    "output_text": "partial",
+                },
+            ),
+        ]
+    )
+    client = FoundryInvocationClient(PROJECT_ENDPOINT, lambda: "token", transport=transport)
+    with pytest.raises(RuntimeContractError, match="fewer tool calls than configured"):
+        client.invoke_prompt(_prompt_receipt(), fixture)
+
+
+# ---------------------------------------------------------------------------
+# endpoint_request / set_case mutation semantics
+# ---------------------------------------------------------------------------
+
+
+def test_unhealthy_endpoint_case_embeds_case_result_in_request_body_and_ignores_result_field() -> None:
+    """Unhealthy cases produce the catalog definition in the function_call_output body."""
+    case = "guardrail-bypass-probe"
+    expected_case_def = _ENDPOINT_CASES[case]
+    assert case not in _ENDPOINT_HEALTHY_CASES
+
+    ops = (SyntheticToolOperation(tool_name="check", result={"ignored": True}, endpoint_case=case),)
+    fixture = HealthyFixture(
+        id="ec-unhealthy",
+        input="probe",
+        output_contains="guardrail",
+        tool_outputs={},
+        expected_tool_calls=("check",),
+        scenario_operations=ops,
+        expected_final_status="guardrail_triggered",
+        validate_output=False,
+    )
+    transport = QueueTransport(
+        [
+            _response(
+                200,
+                {
+                    "id": "r1",
+                    "status": "in_progress",
+                    "output": [
+                        {"type": "function_call", "call_id": "c1", "name": "check", "arguments": "{}"}
+                    ],
+                },
+            ),
+            # Model returns the case status as the final response status
+            _response(
+                200,
+                {
+                    "id": "r2",
+                    "invocation_id": "inv-ec",
+                    "status": "guardrail_triggered",
+                    "output_text": "",
+                },
+            ),
+        ]
+    )
+    client = FoundryInvocationClient(PROJECT_ENDPOINT, lambda: "token", transport=transport)
+    receipt = client.invoke_prompt(_prompt_receipt(), fixture)
+
+    # The function_call_output sent to the model must carry the case definition
+    second_body = json.loads(transport.calls[1]["body"])
+    embedded_output = json.loads(second_body["input"][0]["output"])
+    assert embedded_output == expected_case_def
+
+    # result field ("ignored": True) must NOT appear in the embedded output
+    assert "ignored" not in embedded_output
+
+    assert receipt.called_tools == ("check",)
+    assert receipt.invocation_id == "inv-ec"
+
+
+def test_healthy_endpoint_case_wraps_dispatch_result_with_case_metadata() -> None:
+    """Healthy cases wrap the configured result with case metadata in the request body."""
+    case = "handled-child-failure"
+    assert case in _ENDPOINT_HEALTHY_CASES
+
+    dispatch_result = {"balance": 500}
+    ops = (SyntheticToolOperation(tool_name="get_balance", result=dispatch_result, endpoint_case=case),)
+    fixture = HealthyFixture(
+        id="ec-healthy",
+        input="check-balance",
+        output_contains="done",
+        tool_outputs={},
+        expected_tool_calls=("get_balance",),
+        scenario_operations=ops,
+    )
+    transport = QueueTransport(
+        [
+            _response(
+                200,
+                {
+                    "id": "r1",
+                    "status": "in_progress",
+                    "output": [
+                        {"type": "function_call", "call_id": "c1", "name": "get_balance", "arguments": "{}"}
+                    ],
+                },
+            ),
+            _response(
+                200,
+                {
+                    "id": "r2",
+                    "status": "completed",
+                    "output_text": "done",
+                },
+            ),
+        ]
+    )
+    client = FoundryInvocationClient(PROJECT_ENDPOINT, lambda: "token", transport=transport)
+    receipt = client.invoke_prompt(_prompt_receipt(), fixture)
+
+    second_body = json.loads(transport.calls[1]["body"])
+    embedded_output = json.loads(second_body["input"][0]["output"])
+
+    # Must contain the case metadata fields
+    case_def = _ENDPOINT_CASES[case]
+    for key, value in case_def.items():
+        assert embedded_output[key] == value
+
+    # Must ALSO contain a dispatch_result key wrapping the configured result
+    assert "dispatch_result" in embedded_output
+    assert json.loads(embedded_output["dispatch_result"]) == dispatch_result
+
+    assert receipt.called_tools == ("get_balance",)
+
+
+def test_endpoint_case_with_non_default_expected_final_status_does_not_raise() -> None:
+    """expected_final_status lets fixtures declare non-completed terminal status without error."""
+    ops = (
+        SyntheticToolOperation(
+            tool_name="tx",
+            result={},
+            endpoint_case="no-confirmation",
+        ),
+    )
+    fixture = HealthyFixture(
+        id="ec-status",
+        input="go",
+        output_contains="",
+        tool_outputs={},
+        expected_tool_calls=("tx",),
+        scenario_operations=ops,
+        expected_final_status="action_without_confirmation",
+        validate_output=False,
+    )
+    transport = QueueTransport(
+        [
+            _response(
+                200,
+                {
+                    "id": "r1",
+                    "status": "in_progress",
+                    "output": [{"type": "function_call", "call_id": "c1", "name": "tx", "arguments": "{}"}],
+                },
+            ),
+            _response(200, {"id": "r2", "status": "action_without_confirmation", "output_text": ""}),
+        ]
+    )
+    client = FoundryInvocationClient(PROJECT_ENDPOINT, lambda: "token", transport=transport)
+    # Must NOT raise; status matches expected_final_status
+    receipt = client.invoke_prompt(_prompt_receipt(), fixture)
+    assert receipt.response_id == "r2"
+
+
+def test_unknown_endpoint_case_raises_contract_error() -> None:
+    """Supplying an unreviewed endpoint_case value is a contract error."""
+    ops = (SyntheticToolOperation(tool_name="t", result={}, endpoint_case="not-a-real-case"),)
+    fixture = HealthyFixture(
+        id="ec-unknown",
+        input="go",
+        output_contains="unused",
+        tool_outputs={},
+        expected_tool_calls=("t",),
+        scenario_operations=ops,
+    )
+    transport = QueueTransport(
+        [
+            _response(
+                200,
+                {
+                    "id": "r1",
+                    "status": "in_progress",
+                    "output": [{"type": "function_call", "call_id": "c1", "name": "t", "arguments": "{}"}],
+                },
+            ),
+        ]
+    )
+    client = FoundryInvocationClient(PROJECT_ENDPOINT, lambda: "token", transport=transport)
+    with pytest.raises(RuntimeContractError, match="Unknown endpoint_case"):
+        client.invoke_prompt(_prompt_receipt(), fixture)

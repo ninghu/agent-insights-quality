@@ -62,12 +62,17 @@ also discover exactly one project tagged `agentInsightsQualityQualification=true
 configured `automationOwner`, avoiding persisted resource identifiers in scheduled Copilot sessions.
 Use `python -m agent_insights_quality preflight --discover-project` to validate identity, AzureCloud,
 the exact subscription, project/account shape, App Insights connection, Terra deployments, and Agent
-Insights authorization without printing private values.
+Insights authorization without printing private values. The daily entrypoint must first deploy the
+reviewed `qualification-project.bicep` module with the exact report date and catalog digest; runtime
+selection fails closed and never creates a partially connected project.
 
-The generic CLI exposes `run`, `resume`, `status`, and dry-run `cleanup`; destructive cleanup requires
-`cleanup --execute`. Production `run` and `resume` load a reviewed adapter named by
-`AIQ_RUNTIME_ADAPTER`, and fail closed when the deployment/traffic workstream is not installed.
-Receipts and CLI output contain opaque hashes rather than private coordinates or URLs.
+The CLI exposes `materialize-execution-plan`, `run`, `resume`, `status`, and dry-run `cleanup`;
+destructive cleanup requires `cleanup --execute`. `run` and `resume` default to the allowlisted
+`agent_insights_quality.live_adapter`; setting
+`AIQ_RUNTIME_ADAPTER=agent_insights_quality.live_adapter` is also supported. The custom-container
+route additionally requires a protected digest-pinned `AIQ_TICKET_IMAGE_URI` for the exact reviewed
+GHCR repository or owned Azure Container Registry repository. Receipts and CLI output contain opaque
+hashes rather than private coordinates or URLs.
 
 ## Daily automation
 

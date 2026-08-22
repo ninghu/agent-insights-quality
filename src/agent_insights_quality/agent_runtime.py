@@ -36,8 +36,56 @@ FORBIDDEN_INGESTION_HOSTS = frozenset(
 )
 _AGENT_NAME = re.compile(r"^aiq-[0-9]{3}-[a-z][a-z0-9-]*(?:-[a-z0-9]+)*$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_ACR_TICKET_REPOSITORY = re.compile(
+    r"^[a-z0-9]{5,50}\.azurecr\.io/agent-insights-quality-ticket$"
+)
 _OPERATION_ID = re.compile(r"^[0-9a-f]{32}$")
 _SPAN_ID = re.compile(r"^[0-9a-f]{16}$")
+
+# Reviewed endpoint-faults catalog - mirrors scenario_runtime._ENDPOINT_CASES so that
+# prompt-agent scenario_operations can produce the same structured tool-call output as
+# hosted agents without re-defining case semantics in individual tests.
+_ENDPOINT_CASES: dict[str, dict[str, Any]] = {
+    "guardrail-bypass-probe": {
+        "case": "guardrail-bypass-probe",
+        "status": "guardrail_triggered",
+    },
+    "no-confirmation": {
+        "case": "no-confirmation",
+        "status": "action_without_confirmation",
+    },
+    "malformed-approval": {
+        "case": "malformed-approval",
+        "status": "malformed_approval",
+    },
+    "cross-account-synthetic-record": {
+        "case": "cross-account-synthetic-record",
+        "status": "cross_account_access",
+    },
+    "correlated-child-failure": {
+        "case": "correlated-child-failure",
+        "child": {"status": "failed"},
+        "parent": {"status": "ok"},
+        "status": "nested_failure",
+    },
+    "zero-token-outer-successful-child": {
+        "case": "zero-token-outer-successful-child",
+        "child": {"status": "ok"},
+        "parent": {"tokens": 0},
+        "status": "ok",
+    },
+    "handled-child-failure": {
+        "case": "handled-child-failure",
+        "child": {"status": "failed"},
+        "parent": {"status": "recovered"},
+        "status": "ok",
+    },
+}
+# Healthy controls dispatch normally and wrap the result; the others return the case
+# definition directly (no dispatch).
+_ENDPOINT_HEALTHY_CASES: frozenset[str] = frozenset(
+    {"zero-token-outer-successful-child", "handled-child-failure"}
+)
 
 
 class RuntimeContractError(ContractError):
@@ -48,6 +96,27 @@ class DeploymentPollError(RuntimeContractError):
     """Raised after creation when a concrete version fails to become usable."""
 
     def __init__(self, message: str, receipt: DeploymentReceipt) -> None:
+        super().__init__(message)
+        self.receipt = receipt
+
+
+@dataclass(frozen=True, slots=True)
+class InvocationFailureReceipt:
+    """Preserves whatever IDs are available when a hosted endpoint call fails."""
+
+    agent_name: str
+    agent_version: str
+    http_status: int
+    response_id: str | None = None
+    invocation_id: str | None = None
+    request_id: str | None = None
+    session_id: str | None = None
+
+
+class InvocationEndpointError(RuntimeContractError):
+    """Raised when the hosted endpoint returns a non-success HTTP status after exact-version session creation."""
+
+    def __init__(self, message: str, receipt: InvocationFailureReceipt) -> None:
         super().__init__(message)
         self.receipt = receipt
 
@@ -146,12 +215,39 @@ class InvocationReceipt:
 
 
 @dataclass(frozen=True, slots=True)
+class SyntheticToolOperation:
+    """One ordered tool-call step for prompt-agent synthetic traffic scenarios.
+
+    When a :class:`HealthyFixture` carries ``scenario_operations``, each tool
+    call the agent makes consumes the next operation in sequence: the declared
+    ``result`` is returned verbatim (or derived from ``endpoint_case``),
+    ``delay_seconds`` is slept before the response is handed back, and the
+    tool name is verified against the agent's actual call so deviations fail
+    immediately.
+
+    When ``endpoint_case`` is set it must be one of the seven reviewed
+    endpoint-faults catalog values.  For healthy cases the ``result`` is
+    wrapped with the case metadata; for unhealthy cases the case definition is
+    used directly and ``result`` is ignored.
+    """
+
+    tool_name: str
+    result: Mapping[str, Any]
+    delay_seconds: float = 0.0
+    endpoint_case: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class HealthyFixture:
     id: str
     input: str
     output_contains: str
     tool_outputs: Mapping[str, Mapping[str, Any]]
     expected_tool_calls: tuple[str, ...]
+    validate_output: bool = True
+    validate_tools: bool = True
+    scenario_operations: tuple[SyntheticToolOperation, ...] | None = None
+    expected_final_status: str = "completed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -333,10 +429,15 @@ def load_fixtures(path: Path) -> tuple[HealthyFixture, ...]:
 
 
 def validate_image_reference(image: str) -> str:
-    prefix = "ghcr.io/ninghu/agent-insights-quality-ticket@"
-    if not image.startswith(prefix) or not _DIGEST.fullmatch(image.removeprefix(prefix)):
+    repository, separator, digest = image.partition("@")
+    allowed_repository = (
+        repository == "ghcr.io/ninghu/agent-insights-quality-ticket"
+        or _ACR_TICKET_REPOSITORY.fullmatch(repository) is not None
+    )
+    if separator != "@" or not allowed_repository or not _DIGEST.fullmatch(digest):
         raise RuntimeContractError(
-            "Ticket image must be the public GHCR repository pinned by sha256 digest."
+            "Ticket image must use the reviewed GHCR or Azure Container Registry repository "
+            "pinned by sha256 digest."
         )
     return image
 
@@ -391,6 +492,89 @@ class FoundryDeploymentClient:
         self._poll_interval = poll_interval_seconds
         self._sleep = sleeper
         self._monotonic = monotonic
+
+    def recover_version(
+        self,
+        *,
+        agent_name: str,
+        agent_type: str,
+        run_id: str,
+        artifact_digest: str,
+        source_digest: str | None = None,
+        image_digest: str | None = None,
+    ) -> tuple[DeploymentReceipt | None, bool]:
+        """Reconcile a deterministic deployment after a process interruption."""
+        _validate_agent_name(agent_name)
+        response = self._request(
+            "GET",
+            f"/agents/{_quote(agent_name)}",
+            headers=(
+                {"Foundry-Features": HOSTED_FEATURES}
+                if agent_type != "prompt"
+                else {}
+            ),
+            body=None,
+            expected_statuses={200, 404},
+        )
+        if response.status_code == 404:
+            return None, False
+        payload = response.json()
+        candidates: list[Mapping[str, Any]] = []
+        if payload.get("version"):
+            candidates.append(payload)
+        versions = payload.get("versions")
+        if isinstance(versions, Mapping):
+            latest = versions.get("latest")
+            if isinstance(latest, Mapping):
+                candidates.append(latest)
+            values = versions.get("value") or versions.get("data")
+            if isinstance(values, list):
+                candidates.extend(
+                    item for item in values if isinstance(item, Mapping)
+                )
+        elif isinstance(versions, list):
+            candidates.extend(
+                item for item in versions if isinstance(item, Mapping)
+            )
+        expected = _ownership_metadata(
+            run_id,
+            artifact_digest,
+            source_digest=source_digest,
+            image_digest=image_digest,
+        )
+        matches = [
+            candidate
+            for candidate in candidates
+            if isinstance(candidate.get("metadata"), Mapping)
+            and all(
+                candidate["metadata"].get(key) == value
+                for key, value in expected.items()
+            )
+        ]
+        unique = {
+            str(candidate.get("version") or ""): candidate
+            for candidate in matches
+            if candidate.get("version")
+        }
+        if len(unique) > 1:
+            raise RuntimeContractError(
+                "Foundry returned multiple versions for one immutable deployment identity."
+            )
+        if not unique:
+            return None, True
+        version = next(iter(unique))
+        return (
+            self._poll(
+                agent_name,
+                version,
+                agent_type,
+                run_id,
+                artifact_digest,
+                source_digest=source_digest,
+                image_digest=image_digest,
+            ),
+            True,
+        )
 
     def deploy_prompt(
         self,
@@ -705,17 +889,21 @@ class FoundryInvocationClient:
         transport: HttpTransport | None = None,
         request_timeout_seconds: float = 120,
         max_tool_turns: int = 4,
+        sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
         self._endpoint = _validate_project_endpoint(project_endpoint)
         self._token_provider = token_provider
         self._transport = transport or UrllibTransport()
         self._request_timeout = request_timeout_seconds
         self._max_tool_turns = max_tool_turns
+        self._sleep = sleeper
 
     def invoke_prompt(
         self,
         receipt: DeploymentReceipt,
         fixture: HealthyFixture,
+        *,
+        cancelled: Callable[[], bool] | None = None,
     ) -> InvocationReceipt:
         if receipt.agent_type != "prompt":
             raise RuntimeContractError("Prompt invocation requires a prompt deployment.")
@@ -724,19 +912,28 @@ class FoundryInvocationClient:
             "name": receipt.agent_name,
             "version": receipt.agent_version,
         }
+        self._require_not_cancelled(cancelled)
         raw_response = self._post_response(
             "/openai/v1/responses",
             {"input": fixture.input, "store": True, "agent_reference": reference},
         )
         response = raw_response.json()
         called_tools: list[str] = []
+        op_index = 0
         for _ in range(self._max_tool_turns):
+            self._require_not_cancelled(cancelled)
             calls = [
                 item
                 for item in response.get("output", [])
                 if isinstance(item, Mapping) and item.get("type") == "function_call"
             ]
             if not calls:
+                if fixture.scenario_operations is not None and op_index != len(
+                    fixture.scenario_operations
+                ):
+                    raise RuntimeContractError(
+                        "Prompt agent returned fewer tool calls than configured operations."
+                    )
                 return _invocation_receipt(
                     receipt,
                     fixture,
@@ -745,46 +942,89 @@ class FoundryInvocationClient:
                     _request_id(raw_response),
                     None,
                     tuple(called_tools),
-                    validate_tools=True,
+                    validate_tools=fixture.validate_tools,
                 )
             outputs = []
             for call in calls:
                 name = str(call.get("name") or "")
                 call_id = str(call.get("call_id") or "")
-                raw_arguments = str(call.get("arguments") or "")
-                if not name or not call_id or not raw_arguments:
+                if not name or not call_id:
                     raise RuntimeContractError("Prompt agent returned an incomplete tool call.")
-                try:
-                    arguments = json.loads(raw_arguments)
-                except json.JSONDecodeError as error:
-                    raise RuntimeContractError(
-                        "Prompt agent returned invalid tool arguments."
-                    ) from error
-                configured = fixture.tool_outputs.get(name)
-                if configured is None:
-                    raise RuntimeContractError(
-                        f"Prompt agent called unexpected tool '{name}'."
-                    )
-                expected_arguments = configured.get("arguments")
-                if arguments != expected_arguments:
-                    raise RuntimeContractError(
-                        f"Prompt agent used unexpected arguments for '{name}'."
+                if fixture.scenario_operations is not None:
+                    if op_index >= len(fixture.scenario_operations):
+                        raise RuntimeContractError(
+                            "Prompt agent made more tool calls than configured operations."
+                        )
+                    operation = fixture.scenario_operations[op_index]
+                    op_index += 1
+                    if name != operation.tool_name:
+                        raise RuntimeContractError(
+                            f"Tool sequence mismatch at position {op_index - 1}: "
+                            f"expected '{operation.tool_name}', agent called '{name}'."
+                        )
+                    if operation.delay_seconds > 0:
+                        self._interruptible_sleep(operation.delay_seconds, cancelled)
+                    if operation.endpoint_case is not None:
+                        case_def = _ENDPOINT_CASES.get(operation.endpoint_case)
+                        if case_def is None:
+                            raise RuntimeContractError(
+                                f"Unknown endpoint_case value: {operation.endpoint_case!r}. "
+                                f"Must be one of: {sorted(_ENDPOINT_CASES)}."
+                            )
+                        if operation.endpoint_case in _ENDPOINT_HEALTHY_CASES:
+                            dispatch_result = json.dumps(
+                                dict(operation.result), sort_keys=True, separators=(",", ":")
+                            )
+                            result_output = json.dumps(
+                                {"dispatch_result": dispatch_result, **case_def},
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            )
+                        else:
+                            result_output = json.dumps(
+                                case_def, sort_keys=True, separators=(",", ":")
+                            )
+                    else:
+                        result_output = json.dumps(
+                            dict(operation.result), sort_keys=True, separators=(",", ":")
+                        )
+                else:
+                    raw_arguments = str(call.get("arguments") or "")
+                    if not raw_arguments:
+                        raise RuntimeContractError("Prompt agent returned an incomplete tool call.")
+                    try:
+                        arguments = json.loads(raw_arguments)
+                    except json.JSONDecodeError as error:
+                        raise RuntimeContractError(
+                            "Prompt agent returned invalid tool arguments."
+                        ) from error
+                    configured = fixture.tool_outputs.get(name)
+                    if configured is None:
+                        raise RuntimeContractError(
+                            f"Prompt agent called unexpected tool '{name}'."
+                        )
+                    expected_arguments = configured.get("arguments")
+                    if arguments != expected_arguments:
+                        raise RuntimeContractError(
+                            f"Prompt agent used unexpected arguments for '{name}'."
+                        )
+                    result_output = json.dumps(
+                        configured.get("result"),
+                        sort_keys=True,
+                        separators=(",", ":"),
                     )
                 outputs.append(
                     {
                         "type": "function_call_output",
                         "call_id": call_id,
-                        "output": json.dumps(
-                            configured.get("result"),
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        ),
+                        "output": result_output,
                     }
                 )
                 called_tools.append(name)
             response_id = str(response.get("id") or "")
             if not response_id:
                 raise RuntimeContractError("Prompt response omitted its response ID.")
+            self._require_not_cancelled(cancelled)
             raw_response = self._post_response(
                 "/openai/v1/responses",
                 {
@@ -801,9 +1041,12 @@ class FoundryInvocationClient:
         self,
         receipt: DeploymentReceipt,
         fixture: HealthyFixture,
+        *,
+        cancelled: Callable[[], bool] | None = None,
     ) -> InvocationReceipt:
         if receipt.agent_type not in {"hosted_code", "hosted_custom_container"}:
             raise RuntimeContractError("Hosted invocation requires a hosted deployment.")
+        self._require_not_cancelled(cancelled)
         session = self._post(
             f"/agents/{_quote(receipt.agent_name)}/endpoint/sessions",
             {
@@ -833,18 +1076,48 @@ class FoundryInvocationClient:
                 raise RuntimeContractError(
                     "Hosted session did not bind to the exact deployed version."
                 )
-            raw_response = self._post_response(
+            self._require_not_cancelled(cancelled)
+            raw_response = self._call(
+                "POST",
                 (
                     f"/agents/{_quote(receipt.agent_name)}"
                     "/endpoint/protocols/openai/responses"
                 ),
-                {
-                    "input": fixture.input,
-                    "store": False,
-                    "agent_session_id": session_id,
-                },
+                body=_json_bytes(
+                    {
+                        "input": fixture.input,
+                        "store": False,
+                        "agent_session_id": session_id,
+                    }
+                ),
                 hosted=True,
+                include_api_version=True,
             )
+            if raw_response.status_code not in {200, 201, 202}:
+                request_id = _request_id(raw_response)
+                body_payload: Mapping[str, Any] | None = None
+                try:
+                    body_payload = raw_response.json()
+                except RuntimeContractError:
+                    pass
+                resp_id = (
+                    str(body_payload.get("id") or "") or None
+                    if isinstance(body_payload, Mapping)
+                    else None
+                )
+                inv_id = _invocation_id(body_payload) if isinstance(body_payload, Mapping) else None
+                raise InvocationEndpointError(
+                    f"Hosted endpoint returned HTTP {raw_response.status_code}.",
+                    InvocationFailureReceipt(
+                        agent_name=receipt.agent_name,
+                        agent_version=receipt.agent_version,
+                        http_status=raw_response.status_code,
+                        response_id=resp_id,
+                        invocation_id=inv_id,
+                        request_id=request_id,
+                        session_id=session_id,
+                    ),
+                )
             response = raw_response.json()
             return _invocation_receipt(
                 receipt,
@@ -858,6 +1131,25 @@ class FoundryInvocationClient:
             )
         finally:
             self._delete_session(receipt.agent_name, session_id)
+
+    def _require_not_cancelled(
+        self,
+        cancelled: Callable[[], bool] | None,
+    ) -> None:
+        if cancelled is not None and cancelled():
+            raise RuntimeContractError("Endpoint invocation was cancelled.")
+
+    def _interruptible_sleep(
+        self,
+        seconds: float,
+        cancelled: Callable[[], bool] | None,
+    ) -> None:
+        remaining = seconds
+        while remaining > 0:
+            self._require_not_cancelled(cancelled)
+            interval = min(0.1, remaining)
+            self._sleep(interval)
+            remaining -= interval
 
     def _delete_session(self, agent_name: str, session_id: str) -> None:
         self._request(
@@ -892,20 +1184,20 @@ class FoundryInvocationClient:
             include_api_version=not path.startswith("/openai/v1/"),
         )
 
-    def _request(
+    def _call(
         self,
         method: str,
         path: str,
         *,
         body: bytes | None,
         hosted: bool,
-        expected_statuses: set[int] | None = None,
         include_api_version: bool = True,
     ) -> HttpResponse:
+        """Send the request and return the raw response without status checking."""
         token = self._token_provider().strip()
         if not token or token == "******":
             raise RuntimeContractError("Token provider returned no usable access token.")
-        headers = {
+        headers: dict[str, str] = {
             "Accept": "application/json",
             "Authorization": f"Bearer {token}",
         }
@@ -917,12 +1209,26 @@ class FoundryInvocationClient:
         request_path = (
             f"{path}{separator}api-version={API_VERSION}" if include_api_version else path
         )
-        response = self._transport.request(
+        return self._transport.request(
             method,
             f"{self._endpoint}{request_path}",
             headers=headers,
             body=body,
             timeout_seconds=self._request_timeout,
+        )
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: bytes | None,
+        hosted: bool,
+        expected_statuses: set[int] | None = None,
+        include_api_version: bool = True,
+    ) -> HttpResponse:
+        response = self._call(
+            method, path, body=body, hosted=hosted, include_api_version=include_api_version
         )
         allowed = expected_statuses or {200, 201, 202}
         if response.status_code not in allowed:
@@ -930,7 +1236,6 @@ class FoundryInvocationClient:
                 f"Agent endpoint request failed with HTTP {response.status_code}."
             )
         return response
-
 
 def run_healthy_traffic(
     client: FoundryInvocationClient,
@@ -968,9 +1273,13 @@ def _invocation_receipt(
     status = str(response.get("status") or "").casefold()
     response_id = str(response.get("id") or "")
     output_text = _response_text(response)
-    if status != "completed" or not response_id:
-        raise RuntimeContractError("Agent response did not complete with a response ID.")
-    if fixture.output_contains not in output_text:
+    expected_status = fixture.expected_final_status.casefold()
+    if status != expected_status or not response_id:
+        raise RuntimeContractError(
+            f"Agent response status '{status}' did not match expected '{expected_status}' "
+            "or omitted a response ID."
+        )
+    if fixture.validate_output and fixture.output_contains not in output_text:
         raise RuntimeContractError(
             f"Healthy fixture '{fixture.id}' returned an unexpected outcome."
         )

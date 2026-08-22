@@ -61,6 +61,7 @@ class AzureRuntimeConfig:
     terra_insights_deployment: str
     terra_model_version: str
     fallback_project_name: str | None
+    ticket_image: str | None
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -190,6 +191,7 @@ class RuntimeConfig:
                     "Terra model version",
                 ),
                 fallback_project_name=fallback,
+                ticket_image=env.get("AIQ_TICKET_IMAGE_URI", "").strip() or None,
             ),
             ado=AdoRuntimeConfig(
                 organization_url=_https(_required(env, "AIQ_ADO_ORGANIZATION_URL"), "ADO organization"),
