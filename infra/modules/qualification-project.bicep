@@ -79,11 +79,7 @@ resource containerRegistryConnection 'Microsoft.CognitiveServices/accounts/proje
     category: 'ContainerRegistry'
     target: registry.properties.loginServer
     authType: 'ManagedIdentity'
-    isSharedToAll: true
-    credentials: {
-      clientId: project.identity.principalId
-      resourceId: registry.id
-    }
+    isSharedToAll: false
     metadata: {
       ResourceId: registry.id
     }

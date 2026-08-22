@@ -43,9 +43,10 @@ server-side and passes it directly to the connection resource; the secret is nev
 parameter or output and is not handled by the CLI. The project managed identity retains Monitoring
 Reader on Application Insights, Cognitive Services OpenAI User on the Foundry account, and AcrPull on
 the existing artifact registry. A project-level ContainerRegistry connection uses that managed
-identity to pull private hosted-agent images without registry credentials or template outputs. The
-reviewed automation user receives only Storage Blob Data Contributor on artifact storage and AcrPush
-on that registry. Supply its Microsoft Entra object ID at deployment time; never commit it.
+identity to pull private hosted-agent images. The connection is project-scoped, is not shared to all
+projects, and omits registry credentials and template outputs. The reviewed automation user receives
+only Storage Blob Data Contributor on artifact storage and AcrPush on that registry. Supply its
+Microsoft Entra object ID at deployment time; never commit it.
 
 ```powershell
 az deployment sub create `
