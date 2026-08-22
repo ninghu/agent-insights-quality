@@ -121,6 +121,9 @@ one-message receipt import, a generated-only PR, and reviewed cleanup.
 A published operational `INCONCLUSIVE` report is terminal for that immutable plan so rerunning cannot
 change an already rendered email. Use the next `--rerun N` suffix. A process interruption before
 public finalization resumes the same private receipt and recovers completed remote operations.
+Rerun agents use `aiq-NNN-domain-YYYYMMDD-rNN-wNN`; the initial run retains
+`aiq-NNN-domain-YYYYMMDD-wNN`. This keeps agent/version identity distinct across same-day projects
+that share one Application Insights component.
 Hosted-code and custom-container deployment recovery, creation, and activation polling are
 process-wide serialized across agents. Prompt deployment may remain parallel; endpoint traffic
 continues in parallel after deployment. A provisioning `CodeError` can be eventually consistent, so

@@ -546,11 +546,31 @@ def test_multi_root_collection_case_consumes_two_run_slots() -> None:
 def test_rerun_id_is_schema_valid_without_changing_seeded_assignments() -> None:
     original = generate_daily_plan(REPORT_DATE)
     rerun = generate_daily_plan(REPORT_DATE, rerun=1)
+    replay = generate_daily_plan(REPORT_DATE, rerun=1)
     assert rerun["plan_id"] == "aiq-20260821-r01"
     assert rerun["artifact_directory"].endswith("/aiq-20260821-r01")
     assert original["artifact_directory"] == "reports/daily/2026/08/21"
     assert rerun["seed"] == original["seed"]
-    assert rerun["assignments"] == original["assignments"]
+    assert [
+        {key: value for key, value in assignment.items() if key != "agent_name"}
+        for assignment in rerun["assignments"]
+    ] == [
+        {key: value for key, value in assignment.items() if key != "agent_name"}
+        for assignment in original["assignments"]
+    ]
+    assert {
+        assignment["agent_name"] for assignment in rerun["assignments"]
+    } != {
+        assignment["agent_name"] for assignment in original["assignments"]
+    }
+    assert all(
+        "-20260821-r01-w" in assignment["agent_name"]
+        and len(assignment["agent_name"]) <= 63
+        for assignment in rerun["assignments"]
+    )
+    assert [item["agent_name"] for item in replay["assignments"]] == [
+        item["agent_name"] for item in rerun["assignments"]
+    ]
     assert rerun["plan_digest"] != original["plan_digest"]
 
     invalid = deepcopy(rerun)

@@ -101,7 +101,9 @@ version before runtime traffic begins.
 Evidence completion writes a schema-validated,
 public-safe `daily-status.json`; its ordered handoff uses the existing judgment, scoring, memory,
 candidate-only ADO, reporting, email-receipt, generated-path, and cleanup commands. Use `--rerun N`
-for `aiq-YYYYMMDD-rNN`; a finalized failed plan is immutable and requires a new rerun suffix.
+for `aiq-YYYYMMDD-rNN`; rerun agent names also include `rNN` so projects sharing Application
+Insights cannot collide on agent/version identity. A finalized failed plan is immutable and requires
+a new rerun suffix.
 
 Hosted-code and custom-container recovery, creation, and activation polling share a process-wide
 serialization gate to avoid cross-hosted deployment contention. Prompt deployments may remain
