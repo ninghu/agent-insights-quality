@@ -1367,10 +1367,18 @@ def test_normalized_legacy_evidence_supports_daily_status_and_scoring(
         reference,
     )
     score = score_run(payload, [normalized], [])
+    package = json.loads(
+        (
+            tmp_path
+            / "packages"
+            / f"{assignment['scenario_id']}-primary-package.json"
+        ).read_text(encoding="ascii")
+    )
 
     assert hooks._project == project
     assert status["evidence"][0]["artifact_reference"] != reference
-    assert status["evidence"][0]["bundle_hash"] == normalized["bundle_hash"]
+    assert status["evidence"][0]["bundle_hash"] == package["evidence"]["bundle_hash"]
+    assert package["evidence"]["bundle_hash"] != normalized["bundle_hash"]
     assert "provenance_failure" not in score["violations"]
     assert path.read_bytes() == original_bytes
     assert "sha256:" + hashlib.sha256(original_bytes).hexdigest() == reference

@@ -19,6 +19,7 @@ from agent_insights_quality.planning import generate_daily_plan
 from agent_insights_quality.runtime.config import RuntimeConfig
 from agent_insights_quality.runtime.errors import RuntimeFailure
 from agent_insights_quality.runtime.orchestrator import PlanInput, PlannedWindow, RunState
+from agent_insights_quality.runtime.receipts import opaque_reference
 
 
 SUBSCRIPTION = "11111111-1111-1111-1111-111111111111"
@@ -98,7 +99,7 @@ def _bundle(payload: dict, work, scenario_id: str) -> dict:
     if expected["category"] != "none":
         insights.append(
             {
-                "id": f"insight-{scenario_id}",
+                "id": opaque_reference(f"insight-{scenario_id}"),
                 "title": "Synthetic finding",
                 "description": "A bounded synthetic finding.",
                 "category": expected["category"],
@@ -173,7 +174,46 @@ def _bundle(payload: dict, work, scenario_id: str) -> dict:
         "run_noise_insights": [],
         "previous_insight": None,
     }
-    return project_evidence(raw)
+    same_run = [
+        item
+        for item in payload["assignments"]
+        if item["run_id"] == assignment["run_id"]
+        and item["agent_id"] == assignment["agent_id"]
+    ]
+    produced_scenarios = [
+        str(item["scenario_id"])
+        for item in same_run
+        if item["expected"]["category"] != "none"
+    ]
+    raw["run_finding_count"] = {
+        "expected": sum(
+            int(item["expected"]["finding_count"]) for item in same_run
+        ),
+        "actual": len(produced_scenarios),
+    }
+    bundle = project_evidence(raw)
+    bundle["run_insight_accounting"] = {
+        "unique_insight_count": len(produced_scenarios),
+        "assigned_count": len(produced_scenarios),
+        "umbrella_noise_count": 0,
+        "extra_noise_count": 0,
+        "sampled_count": len(produced_scenarios),
+        "details_truncated": False,
+        "insight_references": [
+            content_hash(
+                {
+                    "insight_id": opaque_reference(
+                        f"insight-{item}"
+                    )
+                }
+            )
+            for item in produced_scenarios
+        ],
+    }
+    bundle["bundle_hash"] = content_hash(
+        {key: value for key, value in bundle.items() if key != "bundle_hash"}
+    )
+    return bundle
 
 
 def hashlib_suffix(value: str) -> str:
@@ -591,6 +631,474 @@ def test_daily_success_and_completed_resume_are_idempotent(
     )
     assert "preflight" in hooks[-1].calls
     assert "recover" in hooks[-1].calls
+
+
+def test_daily_status_covers_every_r19_like_physical_insight_once(
+    tmp_path: Path,
+) -> None:
+    payload = generate_daily_plan(date(2026, 8, 21))
+    plan = PlanInput.from_daily_plan(payload)
+    final_work = daily._final_work_by_scenario(plan, payload)
+    assignments = {
+        str(item["scenario_id"]): item for item in payload["assignments"]
+    }
+    base = {
+        scenario_id: _bundle(payload, final_work[scenario_id], scenario_id)
+        for scenario_id in assignments
+    }
+    groups: dict[tuple[str, str], list[str]] = {}
+    for scenario_id, assignment in assignments.items():
+        groups.setdefault(
+            (str(assignment["run_id"]), str(assignment["agent_id"])),
+            [],
+        ).append(scenario_id)
+
+    assigned_scenarios = [
+        scenario_id
+        for scenario_id, assignment in assignments.items()
+        if assignment["expected"]["category"] != "none"
+    ][:3]
+    control_group = next(
+        scenario_ids
+        for scenario_ids in groups.values()
+        if len(scenario_ids) > 1
+        and all(
+            assignments[scenario_id]["expected"]["category"] == "none"
+            for scenario_id in scenario_ids
+        )
+    )
+    fault_group = next(
+        scenario_ids
+        for scenario_ids in groups.values()
+        if len(scenario_ids) == 4
+    )
+    template = deepcopy(base[assigned_scenarios[0]]["insights"][0])
+
+    def noise_cards(
+        scenario_ids: list[str],
+        count: int,
+        *,
+        offset: int,
+    ) -> list[dict]:
+        cards = []
+        for index in range(count):
+            owner = scenario_ids[index % len(scenario_ids)]
+            card = deepcopy(template)
+            card["id"] = opaque_reference(
+                f"run-noise-{offset + index:02d}"
+            )
+            card["title"] = f"Synthetic run noise {offset + index:02d}"
+            card["description"] = "A bounded synthetic false-positive card."
+            card["trace_ids"] = [
+                base[owner]["trace_evidence"][0]["trace_id"]
+            ]
+            card["trace_count"] = 1
+            card["signature"] = content_hash(
+                {"run_noise_signature": offset + index}
+            )
+            card["evidence_fingerprint"] = content_hash(
+                {"run_noise_evidence": offset + index}
+            )
+            cards.append(card)
+        return cards
+
+    group_noise = {
+        (
+            str(assignments[control_group[0]]["run_id"]),
+            str(assignments[control_group[0]]["agent_id"]),
+        ): noise_cards(control_group, 2, offset=0),
+        (
+            str(assignments[fault_group[0]]["run_id"]),
+            str(assignments[fault_group[0]]["agent_id"]),
+        ): noise_cards(fault_group, 16, offset=2),
+    }
+    bundles = {}
+    for scenario_id, assignment in assignments.items():
+        raw = deepcopy(base[scenario_id])
+        group_key = (str(assignment["run_id"]), str(assignment["agent_id"]))
+        scenario_ids = groups[group_key]
+        raw["insights"] = (
+            deepcopy(base[scenario_id]["insights"])
+            if scenario_id in assigned_scenarios
+            else []
+        )
+        raw["run_noise_insights"] = deepcopy(group_noise.get(group_key, []))
+        assigned_count = sum(
+            len(base[item]["insights"])
+            for item in scenario_ids
+            if item in assigned_scenarios
+        )
+        run_actual = assigned_count + len(raw["run_noise_insights"])
+        run_expected = sum(
+            int(assignments[item]["expected"]["finding_count"])
+            for item in scenario_ids
+        )
+        raw["finding_count"] = {"actual": len(raw["insights"])}
+        raw["run_finding_count"] = {
+            "expected": run_expected,
+            "actual": run_actual,
+        }
+        bundle = project_evidence(raw)
+        physical_ids = [
+            *(
+                base[item]["insights"][0]["id"]
+                for item in scenario_ids
+                if item in assigned_scenarios
+            ),
+            *(item["id"] for item in raw["run_noise_insights"]),
+        ]
+        bundle["run_insight_accounting"] = {
+            "unique_insight_count": run_actual,
+            "assigned_count": assigned_count,
+            "umbrella_noise_count": 0,
+            "extra_noise_count": len(raw["run_noise_insights"]),
+            "sampled_count": run_actual,
+            "details_truncated": False,
+            "insight_references": [
+                content_hash({"insight_id": item})
+                for item in physical_ids
+            ],
+        }
+        bundle["bundle_hash"] = content_hash(
+            {
+                key: value
+                for key, value in bundle.items()
+                if key != "bundle_hash"
+            }
+        )
+        bundles[scenario_id] = bundle
+
+    class CoverageHooks(Hooks):
+        def load_evidence_bundle(self, work, scenario_id, _reference):
+            assert work == final_work[scenario_id]
+            return deepcopy(bundles[scenario_id])
+
+    hooks = CoverageHooks(payload)
+    checkpoints = {}
+    project_key = f"{plan.plan_id}:project"
+    hooks.ensure_project(plan, idempotency_key=project_key)
+    checkpoints[project_key] = content_hash(hooks.results[project_key])
+    for versions in plan.agents.values():
+        for work in versions:
+            key = f"{work.key}:evidence"
+            hooks.assemble_evidence(work, {}, idempotency_key=key)
+            checkpoints[key] = content_hash(hooks.results[key])
+    state = RunState(
+        plan.plan_id,
+        plan.reference,
+        status="succeeded",
+        phase="complete",
+        checkpoints=checkpoints,
+    )
+    package_root = tmp_path / "packages"
+    package_root.mkdir()
+
+    status = daily.build_daily_status(
+        payload,
+        plan,
+        state,
+        hooks,
+        package_root,
+    )
+    daily.validate_daily_status_packages(status, package_root)
+
+    targets = [
+        target
+        for item in status["evidence"]
+        for target in item["primary_judgment_targets"]
+    ]
+    non_null = [
+        target["insight_reference"]
+        for target in targets
+        if target["insight_reference"] is not None
+    ]
+    assert status["primary_package_count"] == 25
+    assert status["primary_judgment_target_count"] == 43
+    assert len(non_null) == len(set(non_null)) == 21
+    assert sum(target["insight_reference"] is None for target in targets) == 22
+
+    evidence_by_scenario = {
+        item["scenario_id"]: item for item in status["evidence"]
+    }
+    for item in status["evidence"]:
+        package = json.loads(
+            (
+                package_root
+                / f"{item['scenario_id']}-primary-package.json"
+            ).read_text(encoding="ascii")
+        )
+        bundle = package["evidence"]
+        insight_ids = {insight["id"] for insight in bundle["insights"]}
+        noise_ids = {
+            insight["id"] for insight in bundle["run_noise_insights"]
+        }
+        assert insight_ids.isdisjoint(noise_ids)
+        assert bundle["no_insight_target_required"] is any(
+            target["insight_reference"] is None
+            for target in item["primary_judgment_targets"]
+        )
+    for scenario_id in control_group:
+        control_targets = evidence_by_scenario[scenario_id][
+            "primary_judgment_targets"
+        ]
+        assert any(item["insight_reference"] is None for item in control_targets)
+        assert any(
+            item["insight_reference"] is not None for item in control_targets
+        )
+        control_package = json.loads(
+            (
+                package_root / f"{scenario_id}-primary-package.json"
+            ).read_text(encoding="ascii")
+        )
+        assert control_package["evidence"][
+            "no_insight_target_required"
+        ] is True
+
+    missed_fault = next(
+        scenario_id
+        for scenario_id, assignment in assignments.items()
+        if assignment["expected"]["category"] != "none"
+        and scenario_id not in assigned_scenarios
+        and scenario_id not in fault_group
+    )
+    assert [
+        item["insight_reference"]
+        for item in evidence_by_scenario[missed_fault][
+            "primary_judgment_targets"
+        ]
+    ] == [
+        None
+    ]
+
+    for scenario_id in fault_group:
+        package = json.loads(
+            (
+                package_root / f"{scenario_id}-primary-package.json"
+            ).read_text(encoding="ascii")
+        )
+        bundle = package["evidence"]
+        collection_ids = {
+            item["id"]
+            for item in [
+                *bundle["insights"],
+                *bundle["run_noise_insights"],
+            ]
+        }
+        assert len(collection_ids) == 19
+        assert len(bundle["trace_evidence"]) == 4
+        assert bundle["run_finding_count"]["actual"] == 19
+        assert bundle["run_insight_accounting"]["sampled_count"] == 19
+        if scenario_id in assigned_scenarios:
+            assigned_id = base[scenario_id]["insights"][0]["id"]
+            assert assigned_id not in {
+                item["id"] for item in bundle["run_noise_insights"]
+            }
+
+
+def test_primary_projection_keeps_shared_assigned_card_in_non_owner_context() -> None:
+    payload = generate_daily_plan(date(2026, 8, 21))
+    plan = PlanInput.from_daily_plan(payload)
+    final_work = daily._final_work_by_scenario(plan, payload)
+    grouped: dict[tuple[str, str], list[str]] = {}
+    for assignment in payload["assignments"]:
+        grouped.setdefault(
+            (str(assignment["run_id"]), str(assignment["agent_id"])),
+            [],
+        ).append(str(assignment["scenario_id"]))
+    scenario_ids = next(
+        values
+        for values in grouped.values()
+        if len(values) > 1
+        and any(
+            next(
+                assignment
+                for assignment in payload["assignments"]
+                if assignment["scenario_id"] == scenario_id
+            )["expected"]["category"]
+            != "none"
+            for scenario_id in values
+        )
+    )
+    bundles = [
+        _bundle(payload, final_work[scenario_id], scenario_id)
+        for scenario_id in scenario_ids
+    ]
+    shared = deepcopy(bundles[0]["insights"][0])
+    run_expected = sum(
+        int(
+            next(
+                assignment
+                for assignment in payload["assignments"]
+                if assignment["scenario_id"] == scenario_id
+            )["expected"]["finding_count"]
+        )
+        for scenario_id in scenario_ids
+    )
+    accounting = {
+        "unique_insight_count": 1,
+        "assigned_count": 1,
+        "umbrella_noise_count": 0,
+        "extra_noise_count": 0,
+        "sampled_count": 1,
+        "details_truncated": False,
+        "insight_references": [
+            content_hash({"insight_id": shared["id"]})
+        ],
+    }
+    for bundle in bundles:
+        bundle["insights"] = [deepcopy(shared)]
+        bundle["run_noise_insights"] = []
+        bundle["finding_count"]["actual"] = 1
+        bundle["run_finding_count"] = {
+            "expected": run_expected,
+            "actual": 1,
+            "verdict": "NOT_AT_BAR",
+            "reason": "missing_findings",
+        }
+        bundle["run_insight_accounting"] = deepcopy(accounting)
+        bundle["bundle_hash"] = content_hash(
+            {
+                key: value
+                for key, value in bundle.items()
+                if key != "bundle_hash"
+            }
+        )
+
+    projected = daily._project_primary_judgment_bundles(payload, bundles)
+    owners = [
+        bundle["scenario"]["id"]
+        for bundle in projected
+        if shared["id"] in {item["id"] for item in bundle["insights"]}
+    ]
+
+    assert len(owners) == 1
+    for bundle in projected:
+        insight_ids = {item["id"] for item in bundle["insights"]}
+        noise_ids = {
+            item["id"] for item in bundle["run_noise_insights"]
+        }
+        collection_ids = insight_ids | noise_ids
+        assert collection_ids == {shared["id"]}
+        assert insight_ids.isdisjoint(noise_ids)
+        assert bundle["no_insight_target_required"] is (
+            bundle["scenario"]["id"] not in owners
+        )
+
+
+def test_primary_projection_rejects_duplicate_run_accounting_references() -> None:
+    payload = generate_daily_plan(date(2026, 8, 21))
+    plan = PlanInput.from_daily_plan(payload)
+    final_work = daily._final_work_by_scenario(plan, payload)
+    grouped: dict[tuple[str, str], list[str]] = {}
+    for assignment in payload["assignments"]:
+        grouped.setdefault(
+            (str(assignment["run_id"]), str(assignment["agent_id"])),
+            [],
+        ).append(str(assignment["scenario_id"]))
+    scenario_ids = next(
+        values
+        for values in grouped.values()
+        if len(values) > 1
+        and any(
+            next(
+                assignment
+                for assignment in payload["assignments"]
+                if assignment["scenario_id"] == scenario_id
+            )["expected"]["category"]
+            != "none"
+            for scenario_id in values
+        )
+    )
+    bundles = [
+        _bundle(payload, final_work[scenario_id], scenario_id)
+        for scenario_id in scenario_ids
+    ]
+    duplicate_references = [
+        *bundles[0]["run_insight_accounting"]["insight_references"],
+        bundles[0]["run_insight_accounting"]["insight_references"][0],
+    ]
+    for bundle in bundles:
+        bundle["run_insight_accounting"]["insight_references"] = list(
+            duplicate_references
+        )
+        bundle["bundle_hash"] = content_hash(
+            {
+                key: value
+                for key, value in bundle.items()
+                if key != "bundle_hash"
+            }
+        )
+
+    with pytest.raises(RuntimeFailure, match="Run-wide insight accounting"):
+        daily._project_primary_judgment_bundles(payload, bundles)
+
+
+def test_primary_projection_rejects_same_run_accounting_disagreement() -> None:
+    payload = generate_daily_plan(date(2026, 8, 21))
+    plan = PlanInput.from_daily_plan(payload)
+    final_work = daily._final_work_by_scenario(plan, payload)
+    grouped: dict[tuple[str, str], list[str]] = {}
+    for assignment in payload["assignments"]:
+        grouped.setdefault(
+            (str(assignment["run_id"]), str(assignment["agent_id"])),
+            [],
+        ).append(str(assignment["scenario_id"]))
+    scenario_ids = next(
+        values
+        for values in grouped.values()
+        if len(values) > 1
+    )
+    bundles = [
+        _bundle(payload, final_work[scenario_id], scenario_id)
+        for scenario_id in scenario_ids
+    ]
+    bundles[1]["run_insight_accounting"]["assigned_count"] += 1
+    bundles[1]["bundle_hash"] = content_hash(
+        {
+            key: value
+            for key, value in bundles[1].items()
+            if key != "bundle_hash"
+        }
+    )
+
+    with pytest.raises(RuntimeFailure, match="run-wide insight accounting"):
+        daily._project_primary_judgment_bundles(payload, bundles)
+
+
+def test_primary_projection_rejects_unanimous_incorrect_run_accounting() -> None:
+    payload = generate_daily_plan(date(2026, 8, 21))
+    plan = PlanInput.from_daily_plan(payload)
+    final_work = daily._final_work_by_scenario(plan, payload)
+    grouped: dict[tuple[str, str], list[str]] = {}
+    for assignment in payload["assignments"]:
+        grouped.setdefault(
+            (str(assignment["run_id"]), str(assignment["agent_id"])),
+            [],
+        ).append(str(assignment["scenario_id"]))
+    scenario_ids = next(
+        values
+        for values in grouped.values()
+        if len(values) > 1
+    )
+    bundles = [
+        _bundle(payload, final_work[scenario_id], scenario_id)
+        for scenario_id in scenario_ids
+    ]
+    for bundle in bundles:
+        bundle["run_insight_accounting"]["assigned_count"] += 1
+        bundle["bundle_hash"] = content_hash(
+            {
+                key: value
+                for key, value in bundle.items()
+                if key != "bundle_hash"
+            }
+        )
+
+    with pytest.raises(
+        RuntimeFailure,
+        match="does not match the physical judgment cards",
+    ):
+        daily._project_primary_judgment_bundles(payload, bundles)
 
 
 def test_daily_status_rejects_incomplete_evidence_references(tmp_path: Path) -> None:

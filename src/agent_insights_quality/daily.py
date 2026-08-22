@@ -4,6 +4,7 @@ import hashlib
 import json
 import time
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from dataclasses import replace
 from datetime import date
 from pathlib import Path, PurePosixPath
@@ -34,6 +35,7 @@ from agent_insights_quality.finalizer import (
 from agent_insights_quality.generated_paths import validate_generated_paths
 from agent_insights_quality.judging import (
     export_judge_package,
+    judgment_target_insight_ids,
     validate_evidence_bundle,
     validate_judge_package,
 )
@@ -511,6 +513,258 @@ def _workflow_contract() -> dict[str, Any]:
     }
 
 
+def _finding_count_assessment(expected: int, actual: int) -> dict[str, Any]:
+    if actual == expected:
+        return {
+            "expected": expected,
+            "actual": actual,
+            "verdict": "AT_BAR",
+            "reason": "exact",
+        }
+    return {
+        "expected": expected,
+        "actual": actual,
+        "verdict": "NOT_AT_BAR",
+        "reason": "extra_noise" if actual > expected else "missing_findings",
+    }
+
+
+def _physical_insight_key(
+    bundle: Mapping[str, Any],
+    insight: Mapping[str, Any],
+) -> tuple[str, str, str]:
+    return (
+        str(bundle["run"]["run_id"]),
+        str(bundle["agent"]["id"]),
+        str(insight["id"]),
+    )
+
+
+def _primary_insight_reference(
+    bundle: Mapping[str, Any],
+    insight_id: str,
+) -> str:
+    return content_hash(
+        {
+            "run_id": bundle["run"]["run_id"],
+            "agent_id": bundle["agent"]["id"],
+            "insight_id": insight_id,
+        }
+    )
+
+
+def _project_primary_judgment_bundles(
+    plan_payload: Mapping[str, Any],
+    bundles: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    assignment_order = {
+        str(assignment["scenario_id"]): index
+        for index, assignment in enumerate(plan_payload["assignments"])
+    }
+    physical_order: list[tuple[str, str, str]] = []
+    physical: dict[
+        tuple[str, str, str],
+        dict[str, Any],
+    ] = {}
+    run_contracts: dict[
+        tuple[str, str],
+        tuple[dict[str, Any], dict[str, Any]],
+    ] = {}
+    run_expected_counts: dict[tuple[str, str], int] = {}
+    run_traces: dict[
+        tuple[str, str],
+        dict[str, dict[str, Any]],
+    ] = {}
+    run_prior_trace_ids: dict[tuple[str, str], list[str]] = {}
+    for assignment in plan_payload["assignments"]:
+        run_key = (
+            str(assignment["run_id"]),
+            str(assignment["agent_id"]),
+        )
+        run_expected_counts[run_key] = (
+            run_expected_counts.get(run_key, 0)
+            + int(assignment["expected"]["finding_count"])
+        )
+    for bundle in bundles:
+        scenario_id = str(bundle["scenario"]["id"])
+        run_key = (
+            str(bundle["run"]["run_id"]),
+            str(bundle["agent"]["id"]),
+        )
+        run_contract = (
+            bundle["run_finding_count"],
+            bundle["run_insight_accounting"],
+        )
+        prior_contract = run_contracts.setdefault(run_key, run_contract)
+        if prior_contract != run_contract:
+            raise RuntimeFailure(
+                "judgment_target_conflict",
+                "Evidence bundles disagree on run-wide insight accounting.",
+            )
+        traces = run_traces.setdefault(run_key, {})
+        for trace in bundle["trace_evidence"]:
+            trace_id = str(trace["trace_id"])
+            prior_trace = traces.setdefault(trace_id, deepcopy(trace))
+            if prior_trace != trace:
+                raise RuntimeFailure(
+                    "judgment_target_conflict",
+                    "Repeated run trace evidence is inconsistent.",
+                )
+        prior_ids = run_prior_trace_ids.setdefault(run_key, [])
+        for trace_id in bundle["prior_trace_ids"]:
+            if trace_id not in prior_ids:
+                prior_ids.append(str(trace_id))
+        trace_ids = {
+            *(str(trace["trace_id"]) for trace in bundle["trace_evidence"]),
+            *(str(trace_id) for trace_id in bundle["prior_trace_ids"]),
+        }
+        for assigned, insights in (
+            (True, bundle["insights"]),
+            (False, bundle["run_noise_insights"]),
+        ):
+            for insight in insights:
+                key = _physical_insight_key(bundle, insight)
+                entry = physical.get(key)
+                if entry is None:
+                    entry = {
+                        "insight": deepcopy(insight),
+                        "assigned_scenarios": set(),
+                        "candidate_scenarios": set(),
+                        "trace_scenarios": set(),
+                    }
+                    physical[key] = entry
+                    physical_order.append(key)
+                elif entry["insight"] != insight:
+                    raise RuntimeFailure(
+                        "judgment_target_conflict",
+                        "Repeated run insight content is inconsistent.",
+                    )
+                entry["candidate_scenarios"].add(scenario_id)
+                if assigned:
+                    entry["assigned_scenarios"].add(scenario_id)
+                if set(str(value) for value in insight["trace_ids"]).issubset(
+                    trace_ids
+                ):
+                    entry["trace_scenarios"].add(scenario_id)
+
+    owners: dict[tuple[str, str, str], str] = {}
+    owner_counts: dict[str, int] = {
+        scenario_id: 0 for scenario_id in assignment_order
+    }
+    for assigned_only in (True, False):
+        for key in physical_order:
+            if key in owners:
+                continue
+            entry = physical[key]
+            assigned_scenarios = entry["assigned_scenarios"]
+            if assigned_only and not assigned_scenarios:
+                continue
+            candidates = (
+                assigned_scenarios
+                or entry["trace_scenarios"]
+                or entry["candidate_scenarios"]
+            )
+            owner = min(
+                candidates,
+                key=lambda scenario_id: (
+                    owner_counts[scenario_id],
+                    assignment_order[scenario_id],
+                ),
+            )
+            owners[key] = owner
+            owner_counts[owner] += 1
+
+    for key, entry in physical.items():
+        run_key = key[:2]
+        authenticated_trace_ids = {
+            *run_traces[run_key],
+            *run_prior_trace_ids[run_key],
+        }
+        if not set(entry["insight"]["trace_ids"]).issubset(
+            authenticated_trace_ids
+        ):
+            raise RuntimeFailure(
+                "judgment_target_conflict",
+                "A physical judgment card lacks authenticated run trace provenance.",
+            )
+
+    projected = []
+    for bundle in bundles:
+        scenario_id = str(bundle["scenario"]["id"])
+        value = deepcopy(bundle)
+        run_key = (
+            str(bundle["run"]["run_id"]),
+            str(bundle["agent"]["id"]),
+        )
+        run_physical_keys = [
+            key for key in physical_order if key[:2] == run_key
+        ]
+        run_actual = int(value["run_finding_count"]["actual"])
+        if len(run_physical_keys) != run_actual:
+            raise RuntimeFailure(
+                "judgment_target_conflict",
+                "Run insight accounting does not exactly cover physical judgment cards.",
+            )
+        accounting = value["run_insight_accounting"]
+        expected_references = {
+            content_hash({"insight_id": key[2]})
+            for key in run_physical_keys
+        }
+        legacy_references = {key[2] for key in run_physical_keys}
+        accounting_references = accounting["insight_references"]
+        if (
+            int(value["run_finding_count"]["expected"])
+            != run_expected_counts[run_key]
+            or int(accounting["unique_insight_count"]) != run_actual
+            or int(accounting["assigned_count"])
+            + int(accounting["umbrella_noise_count"])
+            + int(accounting["extra_noise_count"])
+            != run_actual
+            or int(accounting["sampled_count"]) != run_actual
+            or bool(accounting["details_truncated"])
+            or len(accounting_references) != run_actual
+            or len(set(accounting_references)) != run_actual
+            or set(accounting_references)
+            not in (expected_references, legacy_references)
+        ):
+            raise RuntimeFailure(
+                "judgment_target_conflict",
+                "Run-wide insight accounting does not match the physical judgment cards.",
+            )
+        value["insights"] = [
+            deepcopy(physical[key]["insight"])
+            for key in physical_order
+            if owners[key] == scenario_id
+        ]
+        value["no_insight_target_required"] = (
+            not bundle["insights"] or not value["insights"]
+        )
+        value["run_noise_insights"] = [
+            deepcopy(physical[key]["insight"])
+            for key in run_physical_keys
+            if owners[key] != scenario_id
+        ]
+        value["trace_evidence"] = [
+            deepcopy(trace) for trace in run_traces[run_key].values()
+        ]
+        value["prior_trace_ids"] = list(run_prior_trace_ids[run_key])
+        expected = int(value["ground_truth"]["finding_count"])
+        value["finding_count"] = _finding_count_assessment(
+            expected,
+            len(value["insights"]),
+        )
+        value["bundle_hash"] = content_hash(
+            {
+                key: item
+                for key, item in value.items()
+                if key != "bundle_hash"
+            }
+        )
+        validate_evidence_bundle(value)
+        projected.append(value)
+    return projected
+
+
 def build_daily_status(
     plan_payload: Mapping[str, Any],
     plan: PlanInput,
@@ -538,8 +792,7 @@ def build_daily_status(
         )
     final_work = _final_work_by_scenario(plan, plan_payload)
     results_by_work: dict[str, Mapping[str, Any]] = {}
-    evidence = []
-    primary_target_references: set[str] = set()
+    loaded: list[tuple[Mapping[str, Any], VersionWork, str, dict[str, Any]]] = []
     for assignment in plan_payload["assignments"]:
         scenario_id = str(assignment["scenario_id"])
         work = final_work[scenario_id]
@@ -560,12 +813,6 @@ def build_daily_status(
                 "A selected scenario has no exact final evidence reference.",
             ) from error
         bundle = _load_evidence_bundle(hooks, work, scenario_id, reference)
-        rendered_bundle = (
-            json.dumps(bundle, indent=2, sort_keys=True).encode("ascii") + b"\n"
-        )
-        materialized_reference = (
-            "sha256:" + hashlib.sha256(rendered_bundle).hexdigest()
-        )
         final_version = assignment["version_sequence"][-1]
         if (
             bundle["plan_id"] != plan.plan_id
@@ -594,21 +841,47 @@ def build_daily_status(
                 "evidence_reference_incomplete",
                 "A completed evidence bundle does not match its final plan assignment.",
             )
+        loaded.append((assignment, work, reference, bundle))
+
+    projected_bundles = _project_primary_judgment_bundles(
+        plan_payload,
+        [item[3] for item in loaded],
+    )
+    evidence = []
+    primary_target_references: set[str] = set()
+    physical_insight_references: set[str] = set()
+    for (assignment, _work, _reference, _raw_bundle), bundle in zip(
+        loaded,
+        projected_bundles,
+        strict=True,
+    ):
+        scenario_id = str(assignment["scenario_id"])
+        rendered_bundle = (
+            json.dumps(bundle, indent=2, sort_keys=True).encode("ascii") + b"\n"
+        )
+        materialized_reference = (
+            "sha256:" + hashlib.sha256(rendered_bundle).hexdigest()
+        )
         package = export_judge_package(bundle, "primary")
         package_path = package_root / f"{scenario_id}-primary-package.json"
         _immutable_json(package_path, package, "Primary judgment package")
-        insight_ids: list[str | None] = (
-            [str(item["id"]) for item in bundle["insights"]]
-            if bundle["insights"]
-            else [None]
-        )
         targets = []
-        for insight_id in insight_ids:
+        for insight_id in judgment_target_insight_ids(bundle):
             insight_reference = (
-                content_hash({"insight_id": insight_id})
+                _primary_insight_reference(bundle, insight_id)
                 if insight_id is not None
                 else None
             )
+            if (
+                insight_reference is not None
+                and insight_reference in physical_insight_references
+            ):
+                raise RuntimeFailure(
+                    "judgment_target_conflict",
+                    "A physical run insight has more than one primary judgment target.",
+                )
+            if insight_reference is not None:
+                physical_insight_references.add(insight_reference)
             target_reference = content_hash(
                 {
                     "plan_id": plan.plan_id,
@@ -713,6 +986,16 @@ def validate_daily_status(
         or len(target_references) != len(set(target_references))
     ):
         raise ContractError("daily status: primary judgment targets are incomplete or duplicated")
+    insight_references = [
+        target["insight_reference"]
+        for item in status["evidence"]
+        for target in item["primary_judgment_targets"]
+        if target["insight_reference"] is not None
+    ]
+    if len(insight_references) != len(set(insight_references)):
+        raise ContractError(
+            "daily status: a physical run insight has duplicate primary targets"
+        )
     stages = [item["name"] for item in status["workflow"]["stages"]]
     if tuple(stages) != _WORKFLOW_STAGES:
         raise ContractError("daily status: workflow stages changed or are out of order")
@@ -740,14 +1023,9 @@ def validate_daily_status_packages(
             "sha256:" + hashlib.sha256(rendered_bundle).hexdigest()
         )
         expected_targets = []
-        insight_ids: list[str | None] = (
-            [str(item["id"]) for item in bundle["insights"]]
-            if bundle["insights"]
-            else [None]
-        )
-        for insight_id in insight_ids:
+        for insight_id in judgment_target_insight_ids(bundle):
             insight_reference = (
-                content_hash({"insight_id": insight_id})
+                _primary_insight_reference(bundle, insight_id)
                 if insight_id is not None
                 else None
             )

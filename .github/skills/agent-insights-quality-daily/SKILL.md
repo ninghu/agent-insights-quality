@@ -203,14 +203,22 @@ Any structural, provenance, secret/PII, or schema failure blocks automatic bug a
 2. Give the primary GPT-5.6 Sol judge only the validated bounded bundle and judging contract.
 3. Require strict JSON matching `schemas/judgment.schema.json`. Record judge role, model ID, prompt
    hash, evidence schema version, confidence, concise reasoning, and output hash.
-4. Judge scenario mapping; `correct`, `partially_useful`, or `incorrect_noise`; root cause; title;
+4. Deterministically assign every physical run insight to exactly one scenario package and one
+   primary judgment target. Keep the complete bounded run collection in each same-run package for
+   relationship judgments. Retain a null no-insight target for every scenario without an originally
+   assigned card, including a healthy control that owns false-positive run noise. Record this
+   scenario-level requirement explicitly in the projected bundle and keep owned cards disjoint from
+   run-noise context.
+5. Require identical run-wide exact counts and insight accounting across same-run bundles, complete
+   physical-card coverage, and no duplicate physical judgment targets.
+6. Judge scenario mapping; `correct`, `partially_useful`, or `incorrect_noise`; root cause; title;
    description; proposed-fix actionability/feasibility/ownership; category; severity; linked-trace
    precision/sufficiency; meaningfulness; duplicate; fragmentation; and umbrella relationships.
-5. Count an insight as a true positive only when it maps to one expected cause and every required
+7. Count an insight as a true positive only when it maps to one expected cause and every required
    attribute passes.
-6. For every automatic-bug candidate, run an independent blinded GPT-5.6 Sol verifier. Do not reveal
+8. For every automatic-bug candidate, run an independent blinded GPT-5.6 Sol verifier. Do not reveal
    the primary verdict, confidence, or reasoning. Validate its JSON independently.
-7. Automatic bug action requires both judges to identify the same Agent Insights defect with
+9. Automatic bug action requires both judges to identify the same Agent Insights defect with
    confidence at least 0.95.
 
 Invalid or unavailable judgment is `INCONCLUSIVE` when it prevents trustworthy classification.
