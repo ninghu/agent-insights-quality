@@ -16,6 +16,16 @@ param uniqueSuffix string
 @description('GPT-5.6 Terra model version selected during reviewed deployment.')
 param terraModelVersion string
 
+@description('Reviewed capacity for the Terra test-agent deployment.')
+@minValue(1)
+@maxValue(1000)
+param terraAgentCapacity int = 100
+
+@description('Reviewed capacity for the Terra insights-generator deployment.')
+@minValue(1)
+@maxValue(1000)
+param terraInsightsCapacity int = 100
+
 @description('Reviewed automation owner used for exact cleanup boundaries.')
 param automationOwner string
 
@@ -38,6 +48,8 @@ module persistent 'modules/persistent.bicep' = {
     location: location
     uniqueSuffix: uniqueSuffix
     terraModelVersion: terraModelVersion
+    terraAgentCapacity: terraAgentCapacity
+    terraInsightsCapacity: terraInsightsCapacity
     automationOwner: automationOwner
     automationPrincipalId: automationPrincipalId
   }
