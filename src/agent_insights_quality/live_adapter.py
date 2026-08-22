@@ -25,11 +25,17 @@ from agent_insights_quality.agent_runtime import (
     SyntheticToolOperation,
     canonical_json_digest,
     deterministic_zip,
+    validate_deployment_receipt,
     validate_image_reference,
 )
 from agent_insights_quality.contracts import ROOT, load_data, validate_instance
 from agent_insights_quality.healthy_agents import HealthyAgent, load_healthy_agents
-from agent_insights_quality.insights.client import AgentInsightsClient, InsightCheckpoint
+from agent_insights_quality.insights.client import (
+    AgentInsightsClient,
+    InsightCheckpoint,
+    insight_proposed_fix,
+    insight_trace_ids,
+)
 from agent_insights_quality.insights.telemetry import (
     AzureTelemetryQuery,
     TelemetryExpectation,
@@ -271,20 +277,7 @@ def _sanitize_public_value(value: Any) -> Any:
 
 
 def _insight_trace_ids(insight: Mapping[str, Any]) -> list[str]:
-    traces = (
-        insight.get("trace_ids")
-        or insight.get("traceIds")
-        or insight.get("operation_ids")
-        or []
-    )
-    if isinstance(traces, str):
-        try:
-            traces = json.loads(traces)
-        except json.JSONDecodeError:
-            traces = [traces] if traces else []
-    if not isinstance(traces, list):
-        return []
-    return [str(value) for value in traces if value]
+    return list(insight_trace_ids(insight))
 
 
 def _finding_count_assessment(expected: int, actual: int) -> dict[str, Any]:
@@ -782,6 +775,21 @@ class ExpectedInvocationFailure:
     receipt: InvocationFailureReceipt
 
 
+@dataclass(frozen=True, slots=True)
+class RunInsightAllocation:
+    by_scenario: Mapping[str, tuple[Mapping[str, Any], ...]]
+    umbrella_noise: tuple[Mapping[str, Any], ...]
+    extra_noise: tuple[Mapping[str, Any], ...]
+
+    @property
+    def total(self) -> int:
+        return (
+            sum(len(items) for items in self.by_scenario.values())
+            + len(self.umbrella_noise)
+            + len(self.extra_noise)
+        )
+
+
 class LiveRuntimeHooks:
     def __init__(
         self,
@@ -832,6 +840,7 @@ class LiveRuntimeHooks:
         self._fixture_results: dict[
             tuple[str, str], InvocationReceipt | ExpectedInvocationFailure
         ] = {}
+        self._invocation_starts: dict[str, datetime] = {}
         self._windows: dict[str, WindowBinding] = {}
         self._telemetry: dict[str, tuple[TraceCorrelation, ...]] = {}
         self._scenario_telemetry: dict[
@@ -844,7 +853,7 @@ class LiveRuntimeHooks:
         self._provenance: dict[tuple[str, str], Mapping[str, Any]] = {}
         self._evidence_public: dict[str, Mapping[str, Any]] = {}
         self._cancelled_deployments: set[tuple[str, str]] = set()
-        self._cancelled_work: set[str] = set()
+        self._cancel_events: dict[str, threading.Event] = {}
 
     def _token(self) -> str:
         return str(self._credential.get_token("https://ai.azure.com/.default").token)
@@ -994,6 +1003,11 @@ class LiveRuntimeHooks:
             "captured_at": checkpoint.captured_at.astimezone(UTC).isoformat(),
             "revisions": dict(checkpoint.revisions),
             "details": dict(checkpoint.details or {}),
+            "prior_successful_window_end": (
+                checkpoint.prior_successful_window_end.astimezone(UTC).isoformat()
+                if checkpoint.prior_successful_window_end is not None
+                else None
+            ),
         }
 
     @staticmethod
@@ -1051,7 +1065,25 @@ class LiveRuntimeHooks:
                 ),
                 dict(checkpoint_value.get("revisions") or {}),
                 dict(checkpoint_value.get("details") or {}),
+                (
+                    datetime.fromisoformat(
+                        str(checkpoint_value["prior_successful_window_end"]).replace(
+                            "Z", "+00:00"
+                        )
+                    )
+                    if checkpoint_value.get("prior_successful_window_end")
+                    else None
+                ),
             )
+        invocation_start = private.get("invocation_start")
+        if isinstance(invocation_start, str) and work_key:
+            parsed_start = datetime.fromisoformat(invocation_start.replace("Z", "+00:00"))
+            if parsed_start.tzinfo is None:
+                raise RuntimeFailure(
+                    "invalid_private_receipt",
+                    "Invocation start receipt has no timezone.",
+                )
+            self._invocation_starts[work_key] = parsed_start.astimezone(UTC)
         invocations = private.get("invocations")
         if isinstance(invocations, list) and work_key:
             self._invocations[work_key] = tuple(
@@ -1284,13 +1316,13 @@ class LiveRuntimeHooks:
             )
             identity = (work.agent_name, work.version_reference)
             receipt = self._deployments.get(identity)
+            (
+                artifact_digest,
+                source_digest,
+                image_digest,
+            ) = _materialized_artifact_identity(materialized)
             try:
                 if receipt is None:
-                    (
-                        artifact_digest,
-                        source_digest,
-                        image_digest,
-                    ) = _materialized_artifact_identity(materialized)
                     receipt, agent_exists = deployment_client.recover_version(
                         agent_name=work.agent_name,
                         agent_type=materialized.agent.kind,
@@ -1324,7 +1356,8 @@ class LiveRuntimeHooks:
                             run_id=work.run_id,
                             create_agent=create_agent,
                         )
-                    self._deployments[identity] = receipt
+                validate_deployment_receipt(receipt)
+                self._deployments[identity] = receipt
             except RuntimeContractError as error:
                 raise RuntimeFailure("agent_deployment_failed", str(error)) from error
             result = _public_deployment(receipt, work.version_reference) | {
@@ -1439,6 +1472,7 @@ class LiveRuntimeHooks:
             operation_result = deepcopy(dict(raw_result))
             delay_seconds = 0.0
             endpoint_case: str | None = None
+            sequence_results: list[Mapping[str, Any]] | None = None
             for operation in traffic_operations:
                 target = str(operation["target"])
                 action = str(operation["action"])
@@ -1464,14 +1498,24 @@ class LiveRuntimeHooks:
                     elif action == "remove_field":
                         operation_result.pop(str(value), None)
                     elif action == "configure_sequence":
-                        sequence = list(value)
-                        selected = str(sequence[request_index % len(sequence)])
-                        if selected == "transient_failure":
-                            operation_result = {
-                                "fixture": "configure_sequence",
-                                "status": "error",
-                                "transient": True,
-                            }
+                        sequence_results = []
+                        for step in value:
+                            if str(step) == "transient_failure":
+                                sequence_results.append(
+                                    {
+                                        "fixture": "configure_sequence",
+                                        "step": "transient_failure",
+                                        "status": "error",
+                                        "transient": True,
+                                    }
+                                )
+                            elif str(step) == "success":
+                                sequence_results.append(deepcopy(dict(raw_result)))
+                            else:
+                                raise RuntimeFailure(
+                                    "unsupported_prompt_traffic_recipe",
+                                    "Prompt configure_sequence step is unsupported.",
+                                )
                     elif action == "configure_parallelizable_delays":
                         delays = [int(item) for item in value]
                         delay_seconds = delays[
@@ -1481,14 +1525,23 @@ class LiveRuntimeHooks:
                         delay_seconds = int(value) / 1000
                 elif target == "endpoint_request" and action == "set_case":
                     endpoint_case = str(value)
-            result.append(
-                SyntheticToolOperation(
-                    tool_name=tool_name,
-                    result=operation_result,
-                    delay_seconds=delay_seconds,
-                    endpoint_case=endpoint_case,
+            if sequence_results is not None:
+                result.extend(
+                    SyntheticToolOperation(
+                        tool_name=tool_name,
+                        result=sequence_result,
+                    )
+                    for sequence_result in sequence_results
                 )
-            )
+            else:
+                result.append(
+                    SyntheticToolOperation(
+                        tool_name=tool_name,
+                        result=operation_result,
+                        delay_seconds=delay_seconds,
+                        endpoint_case=endpoint_case,
+                    )
+                )
         return tuple(result)
 
     def _expects_endpoint_failure(
@@ -1628,38 +1681,43 @@ class LiveRuntimeHooks:
                 return durable
             _, invocation_client, insights, _ = self._require_clients()
             receipt = self._deployments.get((work.agent_name, work.version_reference))
-            if receipt is None:
-                raise RuntimeFailure("deployment_receipt_missing", "Exact deployment receipt is unavailable.")
-            monitor, _ = insights.get_or_create_monitor(
-                agent_name=work.agent_name,
-                model_deployment_name=self._config.azure.terra_insights_deployment,
-                expires_on=date.fromisoformat(self._plan.project_expires_on if self._plan else ""),
+            cancel_event = self._cancel_events.setdefault(work.key, threading.Event())
+        if receipt is None:
+            raise RuntimeFailure("deployment_receipt_missing", "Exact deployment receipt is unavailable.")
+
+        monitor, _ = insights.get_or_create_monitor(
+            agent_name=work.agent_name,
+            model_deployment_name=self._config.azure.terra_insights_deployment,
+            expires_on=date.fromisoformat(self._plan.project_expires_on if self._plan else ""),
+        )
+        monitor_id = str(monitor.get("id") or "")
+        if not monitor_id:
+            raise RuntimeFailure("invalid_monitor", "Agent Insights monitor has no ID.")
+        checkpoint_key = f"{idempotency_key}:checkpoint"
+        checkpoint_payload = self._load_private_receipt(checkpoint_key)
+        if checkpoint_payload is not None:
+            checkpoint_monitor = str(
+                checkpoint_payload["private"].get("monitor_id") or ""
             )
-            monitor_id = str(monitor.get("id") or "")
-            if not monitor_id:
-                raise RuntimeFailure("invalid_monitor", "Agent Insights monitor has no ID.")
-            checkpoint_key = f"{idempotency_key}:checkpoint"
-            checkpoint_payload = self._load_private_receipt(checkpoint_key)
-            if checkpoint_payload is not None:
-                checkpoint_monitor = str(
-                    checkpoint_payload["private"].get("monitor_id") or ""
+            if checkpoint_monitor != monitor_id:
+                raise RuntimeFailure(
+                    "checkpoint_monitor_mismatch",
+                    "Durable invocation checkpoint belongs to a different monitor.",
                 )
-                if checkpoint_monitor != monitor_id:
-                    raise RuntimeFailure(
-                        "checkpoint_monitor_mismatch",
-                        "Durable invocation checkpoint belongs to a different monitor.",
-                    )
+            with self._lock:
                 self._hydrate_private_receipt(checkpoint_payload["private"])
-            if work.key not in self._checkpoints:
-                self._checkpoints[work.key] = insights.capture_insight_checkpoint(
-                    monitor_id,
-                    agent_name=receipt.agent_name,
-                    agent_version=receipt.agent_version,
-                )
+        if work.key not in self._checkpoints:
+            checkpoint = insights.capture_insight_checkpoint(
+                monitor_id,
+                agent_name=receipt.agent_name,
+                agent_version=receipt.agent_version,
+            )
+            with self._lock:
+                self._checkpoints[work.key] = checkpoint
                 checkpoint_public = {
                     "monitor_reference": opaque_reference(monitor_id),
                     "checkpoint_reference": _digest(
-                        self._checkpoint_payload(self._checkpoints[work.key])
+                        self._checkpoint_payload(checkpoint)
                     ),
                 }
                 self._persist_private_receipt(
@@ -1669,77 +1727,115 @@ class LiveRuntimeHooks:
                         "kind": "invoke-checkpoint",
                         "work_key": work.key,
                         "monitor_id": monitor_id,
+                        "checkpoint": self._checkpoint_payload(checkpoint),
+                    },
+                )
+
+        start_key = f"{idempotency_key}:started"
+        start_payload = self._load_private_receipt(start_key)
+        if start_payload is not None:
+            with self._lock:
+                self._hydrate_private_receipt(start_payload["private"])
+        if work.key not in self._invocation_starts:
+            invocation_start = self._now().astimezone(UTC)
+            with self._lock:
+                self._invocation_starts[work.key] = invocation_start
+                self._persist_private_receipt(
+                    start_key,
+                    {
+                        "invocation_start_reference": opaque_reference(
+                            work.key, invocation_start.isoformat()
+                        ),
+                    },
+                    {
+                        "kind": "invoke-started",
+                        "work_key": work.key,
+                        "agent_name": work.agent_name,
+                        "version_reference": work.version_reference,
+                        "deployment": self._deployment_payload(receipt),
+                        "monitor_id": monitor_id,
                         "checkpoint": self._checkpoint_payload(
                             self._checkpoints[work.key]
                         ),
+                        "invocation_start": invocation_start.isoformat(),
                     },
                 )
-            agent = next(item for item in load_healthy_agents() if item.id == work.agent_id)
-            fixtures = self._fixtures(work, agent)
-            start = self._now().astimezone(UTC)
-            completed: list[InvocationReceipt] = []
-            expected_failures: list[ExpectedInvocationFailure] = []
-            for fixture in fixtures:
-                scenario_id = fixture.id.split(":", 1)[0]
-                expects_failure = self._expects_endpoint_failure(
-                    work,
-                    scenario_id,
+        start = self._invocation_starts[work.key]
+
+        agent = next(item for item in load_healthy_agents() if item.id == work.agent_id)
+        fixtures = self._fixtures(work, agent)
+        completed: list[InvocationReceipt] = []
+        expected_failures: list[ExpectedInvocationFailure] = []
+        for fixture in fixtures:
+            if cancel_event.is_set():
+                raise RuntimeFailure(
+                    "invocation_cancelled",
+                    "Endpoint invocation was cancelled.",
                 )
-                restored = self._recover_fixture_result(
-                    work,
+            scenario_id = fixture.id.split(":", 1)[0]
+            expects_failure = self._expects_endpoint_failure(work, scenario_id)
+            restored = self._recover_fixture_result(
+                work,
+                fixture,
+                idempotency_key,
+            )
+            if isinstance(restored, InvocationReceipt):
+                completed.append(restored)
+                continue
+            if isinstance(restored, ExpectedInvocationFailure):
+                expected_failures.append(restored)
+                continue
+            invoke = (
+                invocation_client.invoke_prompt
+                if receipt.agent_type == "prompt"
+                else invocation_client.invoke_hosted
+            )
+            try:
+                invocation_result = invoke(
+                    receipt,
                     fixture,
-                    idempotency_key,
+                    cancelled=cancel_event.is_set,
                 )
-                if isinstance(restored, InvocationReceipt):
-                    completed.append(restored)
-                    continue
-                if isinstance(restored, ExpectedInvocationFailure):
-                    expected_failures.append(restored)
-                    continue
-                invoke = (
-                    invocation_client.invoke_prompt
-                    if receipt.agent_type == "prompt"
-                    else invocation_client.invoke_hosted
-                )
-                try:
-                    invocation_result = invoke(receipt, fixture)
-                except InvocationEndpointError as error:
-                    if not expects_failure or error.receipt.http_status != 500:
-                        raise RuntimeFailure(
-                            "endpoint_invocation_failed",
-                            str(error),
-                        ) from error
-                    failure = ExpectedInvocationFailure(fixture.id, error.receipt)
-                    expected_failures.append(failure)
+            except InvocationEndpointError as error:
+                if not expects_failure or error.receipt.http_status != 500:
+                    raise RuntimeFailure(
+                        "endpoint_invocation_failed",
+                        str(error),
+                    ) from error
+                failure = ExpectedInvocationFailure(fixture.id, error.receipt)
+                expected_failures.append(failure)
+                with self._lock:
                     self._persist_fixture_result(
                         work,
                         fixture,
                         idempotency_key,
                         failure,
                     )
-                    continue
-                except RuntimeContractError as error:
-                    raise RuntimeFailure("endpoint_invocation_failed", str(error)) from error
-                if expects_failure:
-                    raise RuntimeFailure(
-                        "expected_endpoint_failure_missing",
-                        "A reviewed endpoint-failure scenario completed successfully.",
-                    )
-                completed.append(invocation_result)
+                continue
+            except RuntimeContractError as error:
+                raise RuntimeFailure("endpoint_invocation_failed", str(error)) from error
+            if expects_failure:
+                raise RuntimeFailure(
+                    "expected_endpoint_failure_missing",
+                    "A reviewed endpoint-failure scenario completed successfully.",
+                )
+            completed.append(invocation_result)
+            with self._lock:
                 self._persist_fixture_result(
                     work,
                     fixture,
                     idempotency_key,
                     invocation_result,
                 )
-            end = self._now().astimezone(UTC)
-            planned = _planned_window(work)
-            window = WindowBinding(
-                planned.start_identity,
-                planned.end_identity,
-                start,
-                end,
-            )
+        end = self._now().astimezone(UTC)
+        planned = _planned_window(work)
+        window = WindowBinding(
+            planned.start_identity,
+            planned.end_identity,
+            start,
+            end,
+        )
+        with self._lock:
             self._assert_window_order(work, window)
             self._windows[work.key] = window
             self._invocations[work.key] = tuple(completed)
@@ -1781,68 +1877,74 @@ class LiveRuntimeHooks:
         del invocation
         with self._lock:
             existing = self._telemetry.get(work.key)
-            if existing is None:
-                durable = self._reuse_private_receipt(idempotency_key)
-                if durable is not None:
-                    return durable
-                _, _, _, project = self._require_clients()
-                receipts = self._invocations.get(work.key)
-                failures = self._invocation_failures.get(work.key, ())
-                window = self._windows.get(work.key)
-                deployment = self._deployments.get((work.agent_name, work.version_reference))
-                if receipts is None or window is None or deployment is None:
-                    raise RuntimeFailure("invocation_receipt_missing", "Invocation state is unavailable.")
-                expectation_pairs = [
-                    (
-                        item.fixture_id.split(":", 1)[0],
-                        TelemetryExpectation(
-                            item.invocation_id,
-                            item.response_id,
-                            item.session_id,
-                            self._config.azure.terra_agent_deployment,
-                        ),
-                    )
-                    for item in receipts
-                ]
-                expectation_pairs.extend(
-                    (
-                        item.fixture_id.split(":", 1)[0],
-                        TelemetryExpectation(
-                            item.receipt.invocation_id,
-                            item.receipt.response_id,
-                            item.receipt.session_id,
-                            self._config.azure.terra_agent_deployment,
-                            frozenset({"invoke_agent"}),
-                        ),
-                    )
-                    for item in failures
+            durable = (
+                self._reuse_private_receipt(idempotency_key)
+                if existing is None
+                else None
+            )
+            if durable is not None:
+                return durable
+            _, _, _, project = self._require_clients()
+            receipts = self._invocations.get(work.key)
+            failures = self._invocation_failures.get(work.key, ())
+            window = self._windows.get(work.key)
+            deployment = self._deployments.get((work.agent_name, work.version_reference))
+            cancel_event = self._cancel_events.setdefault(work.key, threading.Event())
+        if existing is None:
+            if receipts is None or window is None or deployment is None:
+                raise RuntimeFailure("invocation_receipt_missing", "Invocation state is unavailable.")
+            expectation_pairs = [
+                (
+                    item.fixture_id.split(":", 1)[0],
+                    TelemetryExpectation(
+                        item.invocation_id,
+                        item.response_id,
+                        item.session_id,
+                        self._config.azure.terra_agent_deployment,
+                    ),
                 )
-                expectations = [
-                    expectation for _, expectation in expectation_pairs
-                ]
-                existing = tuple(
-                    wait_for_correlated_traces(
-                        self._telemetry_query,
-                        resource_id=project.application_insights_resource_id,
-                        agent=deployment.agent_name,
-                        version=deployment.agent_version,
-                        expectations=expectations,
-                        start=window.realized_start,
-                        end=window.realized_end,
-                    )
+                for item in receipts
+            ]
+            expectation_pairs.extend(
+                (
+                    item.fixture_id.split(":", 1)[0],
+                    TelemetryExpectation(
+                        item.receipt.invocation_id,
+                        item.receipt.response_id,
+                        item.receipt.session_id,
+                        self._config.azure.terra_agent_deployment,
+                        frozenset({"invoke_agent"}),
+                    ),
                 )
+                for item in failures
+            )
+            expectations = [expectation for _, expectation in expectation_pairs]
+            existing = tuple(
+                wait_for_correlated_traces(
+                    self._telemetry_query,
+                    resource_id=project.application_insights_resource_id,
+                    agent=deployment.agent_name,
+                    version=deployment.agent_version,
+                    expectations=expectations,
+                    start=window.realized_start,
+                    end=window.realized_end,
+                    cancelled=cancel_event.is_set,
+                )
+            )
+            grouped: dict[str, list[TraceCorrelation]] = {}
+            for (scenario_id, _), correlation in zip(
+                expectation_pairs,
+                existing,
+                strict=True,
+            ):
+                grouped.setdefault(scenario_id, []).append(correlation)
+            with self._lock:
                 self._telemetry[work.key] = existing
-                grouped: dict[str, list[TraceCorrelation]] = {}
-                for (scenario_id, _), correlation in zip(
-                    expectation_pairs,
-                    existing,
-                    strict=True,
-                ):
-                    grouped.setdefault(scenario_id, []).append(correlation)
                 self._scenario_telemetry[work.key] = {
                     scenario_id: tuple(items)
                     for scenario_id, items in grouped.items()
                 }
+        with self._lock:
             scenario_correlations = self._scenario_telemetry.get(work.key)
             if scenario_correlations is None:
                 raise RuntimeFailure(
@@ -1909,6 +2011,7 @@ class LiveRuntimeHooks:
             deployment = self._deployments.get(
                 (work.agent_name, work.version_reference)
             )
+            cancel_event = self._cancel_events.setdefault(work.key, threading.Event())
             if (
                 window is None
                 or checkpoint is None
@@ -1919,40 +2022,46 @@ class LiveRuntimeHooks:
                     "telemetry_receipt_missing",
                     "Realized window, checkpoint, deployment, or telemetry is unavailable.",
                 )
-            monitor = insights.find_monitor(work.agent_name)
-            monitor_id = (
-                str(monitor.get("id") or "")
-                if isinstance(monitor, Mapping)
-                else ""
+        monitor = insights.find_monitor(work.agent_name)
+        monitor_id = (
+            str(monitor.get("id") or "")
+            if isinstance(monitor, Mapping)
+            else ""
+        )
+        if not monitor_id:
+            raise RuntimeFailure(
+                "invalid_monitor",
+                "Exact Agent Insights monitor was not found.",
             )
-            if not monitor_id:
-                raise RuntimeFailure(
-                    "invalid_monitor",
-                    "Exact Agent Insights monitor was not found.",
-                )
-            hours = max(
-                1,
+        hours = min(
+            2160,
+            max(
+                3,
                 math.ceil(
                     (window.realized_end - window.realized_start).total_seconds()
                     / 3600
                 ),
-            )
-            run_receipt_key = f"{work.key}:insights-run-created"
+            ),
+        )
+        run_receipt_key = f"{work.key}:insights-run-created"
+        with self._lock:
             if work.key not in self._insight_runs:
                 run_receipt = self._load_private_receipt(run_receipt_key)
                 if run_receipt is not None:
                     self._hydrate_private_receipt(run_receipt["private"])
-            if work.key not in self._insight_runs:
-                created = insights.create_run(
-                    monitor_id,
-                    lookback_hours=hours,
+            persisted_run = self._insight_runs.get(work.key)
+        if persisted_run is None:
+            created = insights.create_run(
+                monitor_id,
+                lookback_hours=hours,
+            )
+            run_id = str(created.get("id") or "")
+            if not run_id:
+                raise RuntimeFailure(
+                    "invalid_insights_run",
+                    "Created Agent Insights run has no ID.",
                 )
-                run_id = str(created.get("id") or "")
-                if not run_id:
-                    raise RuntimeFailure(
-                        "invalid_insights_run",
-                        "Created Agent Insights run has no ID.",
-                    )
+            with self._lock:
                 self._insight_runs[work.key] = (monitor_id, run_id)
                 run_created_public = {
                     "monitor_reference": opaque_reference(monitor_id),
@@ -1968,7 +2077,14 @@ class LiveRuntimeHooks:
                         "run_id": run_id,
                     },
                 )
-            persisted_monitor_id, run_id = self._insight_runs[work.key]
+                persisted_run = (monitor_id, run_id)
+        with self._lock:
+            if persisted_run is None:
+                raise RuntimeFailure(
+                    "invalid_insights_run",
+                    "Agent Insights run receipt was not persisted.",
+                )
+            persisted_monitor_id, run_id = persisted_run
             if persisted_monitor_id != monitor_id:
                 raise RuntimeFailure(
                     "insights_run_monitor_mismatch",
@@ -1988,13 +2104,14 @@ class LiveRuntimeHooks:
             agent_name=deployment.agent_name,
             agent_version=deployment.agent_version,
             operation_ids=operation_ids,
-            cancelled=lambda: work.key in self._cancelled_work,
+            cancelled=cancel_event.is_set,
         )
         analysis_start, analysis_end = insights.validate_run_window(
             run,
             window.realized_start,
             window.realized_end,
             hours,
+            prior_successful_window_end=checkpoint.prior_successful_window_end,
         )
 
         with self._lock:
@@ -2040,6 +2157,62 @@ class LiveRuntimeHooks:
             )
             return result
 
+    def _allocate_run_insights(
+        self,
+        work: VersionWork,
+        insights: Sequence[Mapping[str, Any]],
+        scenario_correlations: Mapping[str, Sequence[TraceCorrelation]],
+    ) -> RunInsightAllocation:
+        by_scenario: dict[str, list[Mapping[str, Any]]] = {
+            str(assignment["scenario_id"]): [] for assignment in work.assignments
+        }
+        umbrella_noise: list[Mapping[str, Any]] = []
+        extra_noise: list[Mapping[str, Any]] = []
+        seen_ids: set[str] = set()
+        operation_sets = {
+            scenario_id: {item.operation_id for item in correlations}
+            for scenario_id, correlations in scenario_correlations.items()
+        }
+        for insight in insights:
+            insight_id = str(insight.get("id") or "")
+            if not insight_id or insight_id in seen_ids:
+                raise RuntimeFailure(
+                    "insight_accounting_invalid",
+                    "Run insights must have unique non-empty IDs.",
+                )
+            seen_ids.add(insight_id)
+            trace_ids = set(_insight_trace_ids(insight))
+            associated = [
+                scenario_id
+                for scenario_id, operation_ids in operation_sets.items()
+                if trace_ids & operation_ids
+            ]
+            if len(associated) > 1:
+                umbrella_noise.append(insight)
+                continue
+            if len(associated) != 1:
+                extra_noise.append(insight)
+                continue
+            scenario_id = associated[0]
+            expected_category = str(
+                self._registry.scenarios[scenario_id]["expected"]["category"]
+            )
+            if str(insight.get("category") or "") != expected_category:
+                extra_noise.append(insight)
+                continue
+            by_scenario[scenario_id].append(insight)
+        allocation = RunInsightAllocation(
+            {key: tuple(value) for key, value in by_scenario.items()},
+            tuple(umbrella_noise),
+            tuple(extra_noise),
+        )
+        if allocation.total != len(insights):
+            raise RuntimeFailure(
+                "insight_accounting_invalid",
+                "Every unique run insight must be associated exactly once.",
+            )
+        return allocation
+
     @staticmethod
     def _insight_payload(insight: Mapping[str, Any]) -> dict[str, Any]:
         insight_id = str(insight.get("id") or "")
@@ -2047,12 +2220,7 @@ class LiveRuntimeHooks:
         description = str(insight.get("description") or "")
         category = str(insight.get("category") or "")
         severity = str(insight.get("severity") or "")
-        proposed_fix = str(
-            insight.get("proposed_fix")
-            or insight.get("proposedFix")
-            or insight.get("recommendation")
-            or ""
-        )
+        proposed_fix = insight_proposed_fix(insight)
         traces = _insight_trace_ids(insight)
         if (
             not insight_id
@@ -2070,7 +2238,6 @@ class LiveRuntimeHooks:
                 "safety_guardrails",
             }
             or severity not in {"high", "medium", "low"}
-            or not proposed_fix
             or not traces
         ):
             raise RuntimeFailure("invalid_insight", "Agent Insights detail is incomplete.")
@@ -2082,7 +2249,11 @@ class LiveRuntimeHooks:
             "severity": severity,
             "trace_count": len(traces),
             "trace_ids": [opaque_reference(str(value)) for value in traces],
-            "proposed_fix": _sanitize_public_text(proposed_fix)[:5000],
+            "proposed_fix": {
+                "text": _sanitize_public_text(str(proposed_fix["text"]))[:5000],
+                "kind": _sanitize_public_text(str(proposed_fix["kind"]))[:200],
+                "changes": _sanitize_public_value(proposed_fix["changes"]),
+            },
         }
 
     def _prior_insight(
@@ -2175,6 +2346,35 @@ class LiveRuntimeHooks:
                 healthy_definition,
                 ticket_image=self._config.azure.ticket_image,
             )
+            allocation = self._allocate_run_insights(
+                work,
+                insights,
+                scenario_correlations,
+            )
+            run_expected_count = sum(
+                int(assignment["expected"]["finding_count"])
+                for assignment in work.assignments
+                if isinstance(assignment.get("expected"), Mapping)
+            )
+            run_finding_count = _finding_count_assessment(
+                run_expected_count,
+                allocation.total,
+            )
+            run_noise = [
+                *allocation.umbrella_noise,
+                *allocation.extra_noise,
+            ]
+            run_accounting = {
+                "unique_insight_count": allocation.total,
+                "assigned_count": sum(
+                    len(items) for items in allocation.by_scenario.values()
+                ),
+                "umbrella_noise_count": len(allocation.umbrella_noise),
+                "extra_noise_count": len(allocation.extra_noise),
+                "insight_references": [
+                    opaque_reference(str(item["id"])) for item in insights
+                ],
+            }
             bundles = []
             work_provenance: dict[str, Mapping[str, Any]] = {}
             for assignment in work.assignments:
@@ -2199,21 +2399,8 @@ class LiveRuntimeHooks:
                         "telemetry_provenance_missing",
                         "Scenario has no exact fixture-to-trace correlation.",
                     )
-                operation_ids = {
-                    item.operation_id for item in assignment_correlations
-                }
-                scenario_insights = [
-                    insight
-                    for insight in insights
-                    if _insight_trace_ids(insight)
-                    and set(_insight_trace_ids(insight)).issubset(operation_ids)
-                ]
-                matching_insights = [
-                    insight
-                    for insight in scenario_insights
-                    if str(insight.get("category") or "")
-                    == str(expected["category"])
-                ]
+                scenario_insights = list(allocation.by_scenario[scenario_id])
+                matching_insights = scenario_insights
                 previous_insight = self._prior_insight(work, scenario_id)
                 if len(matching_insights) == 1:
                     matched = matching_insights[0]
@@ -2245,7 +2432,7 @@ class LiveRuntimeHooks:
                     },
                     "agent": {
                         "id": work.agent_id,
-                        "name": work.agent_name,
+                        "name": opaque_reference(work.agent_name),
                         "type": work.agent_type,
                         "version_digest": deployment.artifact_digest,
                         "available_tools": sorted(
@@ -2254,7 +2441,7 @@ class LiveRuntimeHooks:
                         ),
                     },
                     "run": {
-                        "run_id": work.run_id,
+                        "run_id": opaque_reference(work.run_id),
                         "window_start": window.realized_start.isoformat(),
                         "window_end": window.realized_end.isoformat(),
                         "analysis_window_start": analysis_window[0].isoformat(),
@@ -2281,6 +2468,8 @@ class LiveRuntimeHooks:
                         expected_finding_count,
                         len(scenario_insights),
                     ),
+                    "run_finding_count": run_finding_count,
+                    "run_insight_accounting": run_accounting,
                     "trace_evidence": [
                         {
                             "trace_id": opaque_reference(item.operation_id),
@@ -2302,6 +2491,9 @@ class LiveRuntimeHooks:
                     "insights": [
                         self._insight_payload(item)
                         for item in scenario_insights
+                    ],
+                    "run_noise_insights": [
+                        self._insight_payload(item) for item in run_noise
                     ],
                     "previous_insight": previous_insight,
                     "untrusted_content_notice": _NOTICE,
@@ -2347,30 +2539,36 @@ class LiveRuntimeHooks:
 
     def cancel(self, work: VersionWork) -> None:
         failures: list[str] = []
+        cancel_event = self._cancel_events.setdefault(work.key, threading.Event())
+        cancel_event.set()
         with self._lock:
-            self._cancelled_work.add(work.key)
             if work.key not in self._insight_runs:
                 self._reuse_private_receipt(f"{work.key}:insights-run-created")
-            if work.key in self._insight_runs and self._insights is not None:
-                monitor_id, run_id = self._insight_runs[work.key]
-                try:
-                    self._insights.cancel_run(monitor_id, run_id)
-                except RuntimeFailure as error:
-                    failures.append(error.code)
+            run_identity = self._insight_runs.get(work.key)
+            insights = self._insights
             identity = (work.agent_name, work.version_reference)
             if identity not in self._deployments:
                 self._reuse_private_receipt(f"{work.key}:deploy")
             receipt = self._deployments.get(identity)
-            if (
+            deployment_client = self._deployment_client
+            should_cleanup = (
                 receipt is not None
-                and self._deployment_client is not None
+                and deployment_client is not None
                 and identity not in self._cancelled_deployments
-            ):
-                try:
-                    self._deployment_client.cleanup_version(receipt)
+            )
+        if run_identity is not None and insights is not None:
+            monitor_id, run_id = run_identity
+            try:
+                insights.cancel_run(monitor_id, run_id)
+            except RuntimeFailure as error:
+                failures.append(error.code)
+        if should_cleanup and receipt is not None and deployment_client is not None:
+            try:
+                deployment_client.cleanup_version(receipt)
+                with self._lock:
                     self._cancelled_deployments.add(identity)
-                except (RuntimeFailure, RuntimeContractError) as error:
-                    failures.append(getattr(error, "code", "deployment_cleanup_failed"))
+            except (RuntimeFailure, RuntimeContractError) as error:
+                failures.append(getattr(error, "code", "deployment_cleanup_failed"))
         if failures:
             raise RuntimeFailure(
                 "cancel_partial_failure",

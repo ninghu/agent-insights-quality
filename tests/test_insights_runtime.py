@@ -14,6 +14,8 @@ from agent_insights_quality.insights.client import (
     HttpResponse,
     InsightCheckpoint,
     UrlLibTransport,
+    insight_proposed_fix,
+    insight_trace_ids,
 )
 from agent_insights_quality.insights.telemetry import (
     TelemetryExpectation,
@@ -46,6 +48,47 @@ class FakeTransport:
 
 def response(payload, status=200):
     return HttpResponse(status, {}, json.dumps(payload).encode())
+
+
+def contract_insight(
+    insight_id: str,
+    trace_id: str,
+    trace_time: datetime,
+    publication_time: datetime,
+    *,
+    revision: str = "1",
+    agent_name: str = "agent",
+    agent_version: str = "v1",
+) -> dict:
+    return {
+        "id": insight_id,
+        "agent_name": agent_name,
+        "agent_version": agent_version,
+        "revision": revision,
+        "title": "Tool result was ignored",
+        "description": "The agent did not use the observed tool result.",
+        "category": "tool_call_failures",
+        "severity": "high",
+        "created_at": publication_time.isoformat(),
+        "updated_at": publication_time.isoformat(),
+        "details": {
+            "highlighted_traces": [
+                {
+                    "trace_id": trace_id,
+                    "timestamp": trace_time.isoformat(),
+                    "summary": "The exact correlated invocation.",
+                }
+            ],
+            "linked_traces": [],
+            "recommended_actions": {
+                "proposed_fix": {
+                    "text": "Use the tool result before responding.",
+                    "kind": "code_change",
+                    "changes": [{"path": "agent.py", "description": "Map the result."}],
+                }
+            },
+        },
+    }
 
 
 def registry(tmp_path: Path) -> MonitorOwnershipRegistry:
@@ -88,23 +131,57 @@ def test_default_transport_disables_redirects(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_client_paginates_with_has_more_and_after_and_fetches_details() -> None:
+    now = datetime(2026, 8, 21, 1, tzinfo=UTC)
     transport = FakeTransport(
         [
             response({"data": [{"id": "r1"}], "has_more": True, "last_id": "r1"}),
             response({"data": [{"id": "r2"}], "has_more": False}),
-            response({"data": [{"id": "i1"}], "has_more": True, "last_id": "i1"}),
-            response({"data": [{"id": "i2"}], "has_more": False}),
-            response({"id": "i1", "revision": "1", "updated_at": "2026-08-21T01:00:00Z"}),
-            response({"id": "i2", "revision": "1", "updated_at": "2026-08-21T01:00:00Z"}),
+            response(
+                {
+                    "data": [contract_insight("i1", "a" * 32, now, now)],
+                    "has_more": True,
+                    "last_id": "i1",
+                }
+            ),
+            response(
+                {
+                    "data": [contract_insight("i2", "b" * 32, now, now)],
+                    "has_more": False,
+                }
+            ),
         ]
     )
     client = AgentInsightsClient("https://project.example.invalid", Credential(), transport=transport)
     assert [item["id"] for item in client.list_runs("monitor")] == ["r1", "r2"]
     second_query = parse_qs(urlparse(transport.requests[1][1]).query)
     assert second_query["after"] == ["r1"]
-    details = client.list_insights("monitor")
+    details = client.list_insights("monitor", include_details=True)
     assert [item["id"] for item in details] == ["i1", "i2"]
     assert all("include_details=true" in request[1] for request in transport.requests[-2:])
+
+
+def test_public_agent_insight_fixture_uses_exact_nested_snake_case_contract() -> None:
+    fixture = json.loads(
+        (
+            Path(__file__).parent
+            / "fixtures"
+            / "agent_insights_list_with_details.json"
+        ).read_text(encoding="utf-8")
+    )
+    insight = fixture["data"][0]
+    assert insight_trace_ids(insight) == ("a" * 32, "b" * 32)
+    assert insight_proposed_fix(insight) == {
+        "text": "Use the weather tool result before producing the final response.",
+        "kind": "code_change",
+        "changes": [
+            {
+                "path": "agent.py",
+                "description": "Map the tool result into the response.",
+            }
+        ],
+    }
+    assert "trace_ids" not in insight
+    assert "proposed_fix" not in insight
 
 
 def test_pagination_fails_closed_without_cursor() -> None:
@@ -129,6 +206,9 @@ def test_run_contract_uses_lookback_only_and_real_cancel_route() -> None:
     assert transport.requests[0][3] == {"lookback_hours": 24}
     client.cancel_run("monitor", "run")
     assert "/runs/run:cancel?" in transport.requests[1][1]
+    for invalid in (2, 2161, True, 3.5):
+        with pytest.raises(RuntimeFailure, match="between 3 and 2160"):
+            client.create_run("monitor", lookback_hours=invalid)
 
 
 def test_monitor_ownership_is_external_and_reset_uses_action_route(tmp_path: Path) -> None:
@@ -318,55 +398,81 @@ def test_run_window_and_checkpoint_scope_insights_fail_closed() -> None:
     run = {
         "id": "run",
         "status": "succeeded",
-        "start_time": start.isoformat(),
-        "end_time": end.isoformat(),
-    }
-    # Exact match still accepted as enclosing window
-    assert AgentInsightsClient.validate_run_window(run, start, end, lookback_hours=1) == (start, end)
-    # Service window starts after expected_start - rejected
-    with pytest.raises(RuntimeFailure, match="different analysis window"):
-        AgentInsightsClient.validate_run_window(run, start - timedelta(seconds=1), end, lookback_hours=1)
-    # Service window ends before expected_end - rejected
-    with pytest.raises(RuntimeFailure, match="different analysis window"):
-        AgentInsightsClient.validate_run_window(run, start, end + timedelta(seconds=1), lookback_hours=1)
-    # Duration inconsistent with lookback - rejected
-    with pytest.raises(RuntimeFailure, match="duration is inconsistent"):
-        AgentInsightsClient.validate_run_window(run, start, end, lookback_hours=24)
-    # Slight timestamp shift is fine as long as window still encloses and duration matches
-    run_shifted = {
-        "id": "run",
-        "status": "succeeded",
-        "start_time": (start - timedelta(minutes=1)).isoformat(),
+        "start_time": (start - timedelta(minutes=20)).isoformat(),
         "end_time": (end + timedelta(minutes=1)).isoformat(),
     }
-    result = AgentInsightsClient.validate_run_window(run_shifted, start, end, lookback_hours=1)
-    assert result[0] < start and result[1] > end
+    assert AgentInsightsClient.validate_run_window(
+        run,
+        start,
+        end,
+        lookback_hours=3,
+        prior_successful_window_end=start - timedelta(minutes=30),
+    ) == (start - timedelta(minutes=20), end + timedelta(minutes=1))
+    with pytest.raises(RuntimeFailure, match="different analysis window"):
+        AgentInsightsClient.validate_run_window(
+            run, start - timedelta(minutes=21), end, lookback_hours=3
+        )
+    with pytest.raises(RuntimeFailure, match="different analysis window"):
+        AgentInsightsClient.validate_run_window(
+            run, start, end + timedelta(minutes=2), lookback_hours=3
+        )
+    with pytest.raises(RuntimeFailure, match="regressed"):
+        AgentInsightsClient.validate_run_window(
+            run,
+            start,
+            end,
+            lookback_hours=3,
+            prior_successful_window_end=start - timedelta(minutes=10),
+        )
 
     checkpoint = InsightCheckpoint(
-        captured_at=start + timedelta(minutes=1),
+        captured_at=start - timedelta(minutes=1),
         revisions={"old": "1", "changed": "1"},
     )
     insights = [
-        {"id": "old", "revision": "1", "updated_at": (start + timedelta(minutes=2)).isoformat()},
-        {"id": "changed", "revision": "2", "updated_at": (start + timedelta(minutes=2)).isoformat()},
-        {"id": "new", "revision": "1", "created_at": (start + timedelta(minutes=3)).isoformat()},
+        contract_insight(
+            "old", "a" * 32, start + timedelta(minutes=2), end + timedelta(minutes=5)
+        ),
+        contract_insight(
+            "changed",
+            "a" * 32,
+            start + timedelta(minutes=3),
+            end + timedelta(minutes=6),
+            revision="2",
+        ),
+        contract_insight(
+            "new", "b" * 32, start + timedelta(minutes=4), end + timedelta(minutes=7)
+        ),
     ]
     op_ids = frozenset(["aa" * 16, "bb" * 16])
-    insights_with_trace = [
-        {**i, "trace_ids": ["aa" * 16]} for i in insights
-    ]
     selected = AgentInsightsClient.scope_insights(
-        insights_with_trace, checkpoint, start, end,
+        insights,
+        checkpoint,
+        start,
+        end + timedelta(minutes=1),
         operation_ids=op_ids,
+        publication_deadline=end + timedelta(minutes=10),
     )
     assert [item["id"] for item in selected] == ["changed", "new"]
     with pytest.raises(RuntimeFailure, match="timestamp is missing"):
         AgentInsightsClient.scope_insights(
-            [{"id": "new", "revision": "1", "trace_ids": ["aa" * 16]}],
+            [
+                {
+                    **contract_insight(
+                        "new",
+                        "a" * 32,
+                        start + timedelta(minutes=2),
+                        end + timedelta(minutes=5),
+                    ),
+                    "created_at": None,
+                    "updated_at": None,
+                }
+            ],
             checkpoint,
             start,
             end,
             operation_ids=op_ids,
+            publication_deadline=end + timedelta(minutes=10),
         )
 
 
@@ -374,12 +480,12 @@ def test_run_scope_preserves_extra_insights_for_noise_scoring() -> None:
     start = datetime(2026, 8, 21, 1, tzinfo=UTC)
     op_id = "a" * 32
     insights = [
-        {
-            "id": f"i{index}",
-            "revision": "1",
-            "created_at": (start + timedelta(minutes=2)).isoformat(),
-            "trace_ids": [op_id],
-        }
+        contract_insight(
+            f"i{index}",
+            op_id,
+            start + timedelta(minutes=2),
+            start + timedelta(minutes=3),
+        )
         for index in range(6)
     ]
     selected = AgentInsightsClient.scope_insights(
@@ -409,6 +515,60 @@ def test_run_scope_preserves_extra_insights_for_noise_scoring() -> None:
             operation_ids=frozenset([op_id]),
         )
     ) == 101
+
+
+def test_insight_publication_may_follow_window_but_trace_must_be_inside() -> None:
+    start = datetime(2026, 8, 21, 1, tzinfo=UTC)
+    end = start + timedelta(minutes=10)
+    deadline = end + timedelta(minutes=5)
+    op_id = "a" * 32
+    checkpoint = InsightCheckpoint(start - timedelta(minutes=1), {})
+    published_after_window = contract_insight(
+        "valid",
+        op_id,
+        start + timedelta(minutes=1),
+        end + timedelta(minutes=2),
+    )
+    assert AgentInsightsClient.scope_insights(
+        [published_after_window],
+        checkpoint,
+        start,
+        end,
+        operation_ids=frozenset({op_id}),
+        publication_deadline=deadline,
+    )
+
+    late_trace = contract_insight(
+        "late-trace",
+        op_id,
+        end,
+        end + timedelta(minutes=2),
+    )
+    with pytest.raises(RuntimeFailure, match="trace timestamp"):
+        AgentInsightsClient.scope_insights(
+            [late_trace],
+            checkpoint,
+            start,
+            end,
+            operation_ids=frozenset({op_id}),
+            publication_deadline=deadline,
+        )
+
+    late_publication = contract_insight(
+        "late-publication",
+        op_id,
+        start + timedelta(minutes=1),
+        deadline + timedelta(seconds=1),
+    )
+    with pytest.raises(RuntimeFailure, match="completed run"):
+        AgentInsightsClient.scope_insights(
+            [late_publication],
+            checkpoint,
+            start,
+            end,
+            operation_ids=frozenset({op_id}),
+            publication_deadline=deadline,
+        )
 
 
 def telemetry_rows(start: datetime):
@@ -522,20 +682,42 @@ def test_ingestion_polling_is_bounded_and_fails_closed() -> None:
         )
 
 
+def test_ingestion_polling_honors_independent_cancellation_callback() -> None:
+    class Query:
+        def query(self, *_args):
+            raise AssertionError("cancelled polling must not issue a query")
+
+    start = datetime(2026, 8, 21, tzinfo=UTC)
+    with pytest.raises(RuntimeFailure, match="cancelled"):
+        wait_for_correlated_traces(
+            Query(),
+            resource_id="opaque",
+            agent="agent",
+            version="v1",
+            expectations=[TelemetryExpectation("invoke", None, None, "terra")],
+            start=start,
+            end=start + timedelta(minutes=1),
+            cancelled=lambda: True,
+        )
+
+
 # New focused tests
 
 
 def test_scope_insights_filters_by_exact_agent_name_and_version() -> None:
     start = datetime(2026, 8, 21, 1, tzinfo=UTC)
     op_id = "c" * 32
-    base = {
-        "revision": "2",
-        "created_at": (start + timedelta(minutes=2)).isoformat(),
-        "trace_ids": [op_id],
-    }
-    matching = {"id": "ok", **base, "agent_name": "aiq-001-agent", "agent_version": "v2"}
-    wrong_agent = {"id": "bad-agent", **base, "agent_name": "other-agent"}
-    wrong_version = {"id": "bad-ver", **base, "agent_name": "aiq-001-agent", "agent_version": "v9"}
+    matching = contract_insight(
+        "ok",
+        op_id,
+        start + timedelta(minutes=2),
+        start + timedelta(minutes=3),
+        revision="2",
+        agent_name="aiq-001-agent",
+        agent_version="v2",
+    )
+    wrong_agent = {**matching, "id": "bad-agent", "agent_name": "other-agent"}
+    wrong_version = {**matching, "id": "bad-ver", "agent_version": "v9"}
     checkpoint = InsightCheckpoint(captured_at=start + timedelta(minutes=1), revisions={})
     op = frozenset([op_id])
 
@@ -562,27 +744,42 @@ def test_scope_insights_requires_nonempty_trace_ids_in_operation_set() -> None:
     start = datetime(2026, 8, 21, 1, tzinfo=UTC)
     op_id = "d" * 32
     checkpoint = InsightCheckpoint(captured_at=start + timedelta(minutes=1), revisions={})
-    base_time = (start + timedelta(minutes=2)).isoformat()
 
-    # No trace_ids field - rejected when operation_ids is provided
-    with pytest.raises(RuntimeFailure, match="no trace IDs"):
+    # Missing details are rejected when exact trace provenance is required.
+    with pytest.raises(RuntimeFailure, match="details are required"):
         AgentInsightsClient.scope_insights(
-            [{"id": "x", "revision": "1", "created_at": base_time}],
+            [
+                {
+                    "id": "x",
+                    "revision": "1",
+                    "created_at": (start + timedelta(minutes=2)).isoformat(),
+                }
+            ],
             checkpoint, start, start + timedelta(hours=1),
             operation_ids=frozenset([op_id]),
         )
 
-    # trace_id not in operation_ids - rejected
+    unrelated = contract_insight(
+        "x",
+        "f" * 32,
+        start + timedelta(minutes=2),
+        start + timedelta(minutes=2),
+    )
     with pytest.raises(RuntimeFailure, match="do not all belong"):
         AgentInsightsClient.scope_insights(
-            [{"id": "x", "revision": "1", "created_at": base_time, "trace_ids": ["ff" * 16]}],
+            [unrelated],
             checkpoint, start, start + timedelta(hours=1),
             operation_ids=frozenset([op_id]),
         )
 
-    # trace_id in operation_ids - accepted
+    matching = contract_insight(
+        "x",
+        op_id,
+        start + timedelta(minutes=2),
+        start + timedelta(minutes=2),
+    )
     selected = AgentInsightsClient.scope_insights(
-        [{"id": "x", "revision": "1", "created_at": base_time, "trace_ids": [op_id]}],
+        [matching],
         checkpoint, start, start + timedelta(hours=1),
         operation_ids=frozenset([op_id]),
     )
@@ -597,20 +794,24 @@ def test_validate_run_window_accepts_enclosing_window_without_equality() -> None
         "start_time": (start - timedelta(minutes=2)).isoformat(),
         "end_time": (end + timedelta(minutes=2)).isoformat(),
     }
-    actual_start, actual_end = AgentInsightsClient.validate_run_window(run, start, end, lookback_hours=1)
+    actual_start, actual_end = AgentInsightsClient.validate_run_window(run, start, end, lookback_hours=3)
     assert actual_start < start and actual_end > end
 
     # Exact match also valid
     run_exact = {"start_time": start.isoformat(), "end_time": end.isoformat()}
-    assert AgentInsightsClient.validate_run_window(run_exact, start, end, lookback_hours=1) == (start, end)
+    assert AgentInsightsClient.validate_run_window(run_exact, start, end, lookback_hours=3) == (start, end)
 
-    # Window too short (4 min) for 1-hour lookback - rejected
+    # Requested duration is deliberately not enforced; only realized traffic containment is.
     run_short = {
         "start_time": start.isoformat(),
         "end_time": (start + timedelta(minutes=4)).isoformat(),
     }
-    with pytest.raises(RuntimeFailure, match="duration is inconsistent"):
-        AgentInsightsClient.validate_run_window(run_short, start, start + timedelta(minutes=4), lookback_hours=1)
+    assert AgentInsightsClient.validate_run_window(
+        run_short,
+        start,
+        start + timedelta(minutes=4),
+        lookback_hours=3,
+    ) == (start, start + timedelta(minutes=4))
 
 
 def test_telemetry_correlation_without_chat_span_succeeds_when_not_required() -> None:

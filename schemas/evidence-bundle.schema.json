@@ -15,8 +15,11 @@
     "ground_truth",
     "mutation",
     "finding_count",
+    "run_finding_count",
+    "run_insight_accounting",
     "trace_evidence",
     "insights",
+    "run_noise_insights",
     "previous_insight",
     "untrusted_content_notice",
     "bundle_hash"
@@ -40,7 +43,7 @@
       "required": ["id", "name", "type", "version_digest", "available_tools"],
       "properties": {
         "id": {"type": "string", "pattern": "^aiq-[0-9]{3}-[a-z][a-z0-9-]*$"},
-        "name": {"type": "string", "pattern": "^aiq-[0-9]{3}-[a-z][a-z0-9-]*.*$"},
+        "name": {"$ref": "#/$defs/sha256"},
         "type": {"enum": ["prompt", "hosted_code", "hosted_custom_container"]},
         "version_digest": {"$ref": "#/$defs/sha256"},
         "available_tools": {
@@ -115,6 +118,39 @@
         "reason": {"enum": ["exact", "extra_noise", "missing_findings"]}
       }
     },
+    "run_finding_count": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expected", "actual", "verdict", "reason"],
+      "properties": {
+        "expected": {"type": "integer", "minimum": 0},
+        "actual": {"type": "integer", "minimum": 0},
+        "verdict": {"enum": ["AT_BAR", "NOT_AT_BAR"]},
+        "reason": {"enum": ["exact", "extra_noise", "missing_findings"]}
+      }
+    },
+    "run_insight_accounting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unique_insight_count",
+        "assigned_count",
+        "umbrella_noise_count",
+        "extra_noise_count",
+        "insight_references"
+      ],
+      "properties": {
+        "unique_insight_count": {"type": "integer", "minimum": 0},
+        "assigned_count": {"type": "integer", "minimum": 0},
+        "umbrella_noise_count": {"type": "integer", "minimum": 0},
+        "extra_noise_count": {"type": "integer", "minimum": 0},
+        "insight_references": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    },
     "trace_evidence": {
       "type": "array",
       "minItems": 1,
@@ -153,50 +189,12 @@
     "insights": {
       "type": "array",
       "maxItems": 100,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "title",
-          "description",
-          "category",
-          "severity",
-          "trace_count",
-          "trace_ids",
-          "proposed_fix",
-          "fix_kind",
-          "tool_references",
-          "signature",
-          "evidence_fingerprint"
-        ],
-        "properties": {
-          "id": {"type": "string", "minLength": 1, "maxLength": 200},
-          "title": {"type": "string", "minLength": 1, "maxLength": 500},
-          "description": {"type": "string", "minLength": 1, "maxLength": 5000},
-          "category": {"$ref": "#/$defs/category"},
-          "severity": {"enum": ["high", "medium", "low"]},
-          "trace_count": {"type": "integer", "minimum": 1},
-          "trace_ids": {
-            "type": "array",
-            "minItems": 1,
-            "uniqueItems": true,
-            "items": {"$ref": "#/$defs/sha256"}
-          },
-          "proposed_fix": {"type": "string", "minLength": 1, "maxLength": 5000},
-          "fix_kind": {
-            "enum": ["prompt_patch", "code_change", "container_change", "prose", "no_fix"]
-          },
-          "tool_references": {
-            "type": "array",
-            "maxItems": 100,
-            "uniqueItems": true,
-            "items": {"type": "string", "minLength": 1, "maxLength": 100}
-          },
-          "signature": {"$ref": "#/$defs/sha256"},
-          "evidence_fingerprint": {"$ref": "#/$defs/sha256"}
-        }
-      }
+      "items": {"$ref": "#/$defs/insight"}
+    },
+    "run_noise_insights": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {"$ref": "#/$defs/insight"}
     },
     "previous_insight": {
       "type": ["object", "null"],
@@ -219,6 +217,44 @@
     "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "phase": {
       "enum": ["healthy", "faulted", "faulted-initial", "faulted-repeat", "corrected", "recurred"]
+    },
+    "insight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "description",
+        "category",
+        "severity",
+        "trace_count",
+        "trace_ids",
+        "proposed_fix"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/sha256"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 500},
+        "description": {"type": "string", "minLength": 1, "maxLength": 5000},
+        "category": {"$ref": "#/$defs/category"},
+        "severity": {"enum": ["high", "medium", "low"]},
+        "trace_count": {"type": "integer", "minimum": 1},
+        "trace_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/sha256"}
+        },
+        "proposed_fix": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["text", "kind", "changes"],
+          "properties": {
+            "text": {"type": "string", "minLength": 1, "maxLength": 5000},
+            "kind": {"type": "string", "minLength": 1, "maxLength": 200},
+            "changes": {"type": "array", "maxItems": 100}
+          }
+        }
+      }
     },
     "category": {
       "enum": [

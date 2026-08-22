@@ -139,6 +139,55 @@ class ScenarioRuntime:
         if self._has("model_error_handler", "remove_handler"):
             raise RuntimeError("Synthetic deterministic model failure.")
 
+    def mutate_model_input(self, model_input: Any) -> Any:
+        """Apply context/query mutations to the input sent to the model."""
+        model_operations = [
+            operation
+            for operation in self._operations
+            if operation.get("target")
+            in {"context_resolver", "context_builder", "query_builder"}
+        ]
+        if not model_operations:
+            return model_input
+        marker = _canonical(
+            {
+                "aiq_synthetic_model_context": [
+                    {
+                        "target": operation["target"],
+                        "action": operation["action"],
+                        "value": operation["value"],
+                    }
+                    for operation in model_operations
+                ]
+            }
+        )
+        if isinstance(model_input, str):
+            try:
+                parsed = json.loads(model_input)
+            except json.JSONDecodeError:
+                return f"{model_input}\n{marker}"
+            if isinstance(parsed, dict):
+                for operation in model_operations:
+                    if (
+                        operation["target"] == "context_builder"
+                        and operation["action"] == "remove_field"
+                    ):
+                        parsed.pop(str(operation["value"]), None)
+                parsed["aiq_synthetic_model_context"] = json.loads(marker)[
+                    "aiq_synthetic_model_context"
+                ]
+                return _canonical(parsed)
+            return f"{model_input}\n{marker}"
+        if isinstance(model_input, list):
+            return [
+                *model_input,
+                {
+                    "role": "developer",
+                    "content": marker,
+                },
+            ]
+        raise RuntimeError("Model input has an unsupported type for context mutation.")
+
     # ------------------------------------------------------------------
     # Tool execution
     # ------------------------------------------------------------------
@@ -441,14 +490,22 @@ class ScenarioRuntime:
                 return _canonical(_ENDPOINT_CASES[case])
 
             if case == "zero-token-outer-successful-child":
-                # scn-056: healthy control -- parent carries zero-token attributes; child dispatch succeeds.
+                # scn-056: zero-token outer control with an observable successful child model span.
                 with tracer.start_as_current_span(
                     "endpoint.request", kind=SpanKind.CLIENT
                 ) as parent_span:
                     parent_span.set_attribute("endpoint.case", case)
                     parent_span.set_attribute("gen_ai.usage.input_tokens", 0)
                     parent_span.set_attribute("gen_ai.usage.output_tokens", 0)
-                    dispatch_result = execute(name, dict(arguments))
+                    with tracer.start_as_current_span(
+                        "model.responses.create", kind=SpanKind.CLIENT
+                    ) as child_span:
+                        child_span.set_attribute("endpoint.case", case)
+                        child_span.set_attribute("gen_ai.operation.name", "chat")
+                        child_span.set_attribute("gen_ai.usage.input_tokens", 1)
+                        child_span.set_attribute("gen_ai.usage.output_tokens", 1)
+                        dispatch_result = execute(name, dict(arguments))
+                        child_span.set_status(Status(StatusCode.OK))
                     parent_span.set_status(Status(StatusCode.OK))
                 return _canonical({"dispatch_result": dispatch_result, **_ENDPOINT_CASES[case]})
 

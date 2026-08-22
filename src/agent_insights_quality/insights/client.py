@@ -15,6 +15,8 @@ from agent_insights_quality.runtime.receipts import MonitorOwnershipRegistry
 
 _API_VERSION = "2025-05-15-preview"
 _TERMINAL = {"succeeded", "failed", "cancelled", "canceled"}
+_MIN_LOOKBACK_HOURS = 3
+_MAX_LOOKBACK_HOURS = 2160
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,11 +118,74 @@ def _field(payload: Mapping[str, Any], *names: str) -> Any:
     return None
 
 
+def insight_trace_records(insight: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    """Return the public AgentInsight trace records from the exact wire locations."""
+    details = insight.get("details")
+    if not isinstance(details, Mapping):
+        raise RuntimeFailure(
+            "invalid_insight",
+            "AgentInsight details are required when include_details is true.",
+        )
+    records: list[Mapping[str, Any]] = []
+    for field in ("highlighted_traces", "linked_traces"):
+        value = details.get(field)
+        if not isinstance(value, list) or not all(isinstance(item, Mapping) for item in value):
+            raise RuntimeFailure(
+                "invalid_insight",
+                f"AgentInsight details.{field} must be a list of trace records.",
+            )
+        records.extend(value)
+    return tuple(records)
+
+
+def insight_trace_ids(insight: Mapping[str, Any]) -> tuple[str, ...]:
+    trace_ids: list[str] = []
+    for record in insight_trace_records(insight):
+        trace_id = record.get("trace_id")
+        if not isinstance(trace_id, str) or not trace_id:
+            raise RuntimeFailure(
+                "invalid_insight",
+                "AgentInsight trace record is missing trace_id.",
+            )
+        trace_ids.append(trace_id)
+    return tuple(dict.fromkeys(trace_ids))
+
+
+def insight_proposed_fix(insight: Mapping[str, Any]) -> Mapping[str, Any]:
+    details = insight.get("details")
+    actions = details.get("recommended_actions") if isinstance(details, Mapping) else None
+    proposed_fix = actions.get("proposed_fix") if isinstance(actions, Mapping) else None
+    if (
+        not isinstance(proposed_fix, Mapping)
+        or not isinstance(proposed_fix.get("text"), str)
+        or not proposed_fix["text"]
+        or not isinstance(proposed_fix.get("kind"), str)
+        or not proposed_fix["kind"]
+        or not isinstance(proposed_fix.get("changes"), list)
+    ):
+        raise RuntimeFailure(
+            "invalid_insight",
+            "AgentInsight details.recommended_actions.proposed_fix is invalid.",
+        )
+    return proposed_fix
+
+
+def _trace_timestamp(record: Mapping[str, Any]) -> datetime:
+    for field in ("timestamp", "start_time", "created_at"):
+        if field in record:
+            return _timestamp(record[field], f"insight trace {field}")
+    raise RuntimeFailure(
+        "invalid_insight",
+        "AgentInsight trace record is missing its timestamp.",
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class InsightCheckpoint:
     captured_at: datetime
     revisions: Mapping[str, str]
     details: Mapping[str, Mapping[str, Any]] | None = None
+    prior_successful_window_end: datetime | None = None
 
 
 class AgentInsightsClient:
@@ -134,6 +199,7 @@ class AgentInsightsClient:
         timeout_seconds: float = 60,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
+        now: Callable[[], datetime] | None = None,
     ) -> None:
         parsed = urllib.parse.urlparse(project_endpoint)
         if parsed.scheme != "https" or not parsed.netloc or parsed.query or parsed.fragment:
@@ -146,6 +212,7 @@ class AgentInsightsClient:
         self._timeout = timeout_seconds
         self._sleep = sleep
         self._monotonic = monotonic
+        self._now = now or (lambda: datetime.now(UTC))
 
     def _url(self, path: str, params: Mapping[str, Any] | None = None) -> str:
         query = {"api-version": _API_VERSION}
@@ -378,8 +445,15 @@ class AgentInsightsClient:
         *,
         lookback_hours: int,
     ) -> Mapping[str, Any]:
-        if lookback_hours <= 0:
-            raise RuntimeFailure("invalid_run_window", "Positive lookback_hours is required.")
+        if (
+            isinstance(lookback_hours, bool)
+            or not isinstance(lookback_hours, int)
+            or not _MIN_LOOKBACK_HOURS <= lookback_hours <= _MAX_LOOKBACK_HOURS
+        ):
+            raise RuntimeFailure(
+                "invalid_run_window",
+                "lookback_hours must be an integer between 3 and 2160.",
+            )
         _, payload = self._request(
             "POST",
             f"/agent_insight_monitors/{_segment(monitor_id, 'monitor ID')}/runs",
@@ -464,23 +538,18 @@ class AgentInsightsClient:
     def list_insights(
         self,
         monitor_id: str,
+        *,
+        include_details: bool = False,
     ) -> list[Mapping[str, Any]]:
         path = f"/agent_insight_monitors/{_segment(monitor_id, 'monitor ID')}/insights"
-        summaries = self._paged(path, {"limit": 100, "order": "desc"})
-        details: list[Mapping[str, Any]] = []
-        for summary in summaries:
-            insight_id = str(summary.get("id") or "")
-            if not insight_id:
-                raise RuntimeFailure("invalid_insight", "Insight summary did not contain an ID.")
-            _, payload = self._request(
-                "GET",
-                f"{path}/{_segment(insight_id, 'insight ID')}",
-                params={"include_details": "true"},
-            )
-            if not isinstance(payload, Mapping):
-                raise RuntimeFailure("invalid_insight", "Insight detail response was invalid.")
-            details.append(payload)
-        return details
+        return self._paged(
+            path,
+            {
+                "limit": 100,
+                "order": "desc",
+                "include_details": str(include_details).lower(),
+            },
+        )
 
     def capture_insight_checkpoint(
         self,
@@ -491,7 +560,7 @@ class AgentInsightsClient:
     ) -> InsightCheckpoint:
         revisions: dict[str, str] = {}
         details: dict[str, Mapping[str, Any]] = {}
-        for insight in self.list_insights(monitor_id):
+        for insight in self.list_insights(monitor_id, include_details=True):
             insight_id = str(insight.get("id") or "")
             if agent_name is not None:
                 ia = insight.get("agent_name")
@@ -509,7 +578,25 @@ class AgentInsightsClient:
                 )
             revisions[insight_id] = revision
             details[insight_id] = dict(insight)
-        return InsightCheckpoint(datetime.now(UTC), revisions, details)
+        prior_successful_window_end: datetime | None = None
+        for run in self.list_runs(monitor_id):
+            if str(run.get("status") or "").casefold() != "succeeded":
+                continue
+            try:
+                candidate = _timestamp(
+                    _field(run, "end_time", "window_end"),
+                    "prior successful run end",
+                )
+            except RuntimeFailure:
+                continue
+            if prior_successful_window_end is None or candidate > prior_successful_window_end:
+                prior_successful_window_end = candidate
+        return InsightCheckpoint(
+            self._now().astimezone(UTC),
+            revisions,
+            details,
+            prior_successful_window_end,
+        )
 
     @staticmethod
     def validate_run_window(
@@ -518,7 +605,7 @@ class AgentInsightsClient:
         expected_end: datetime,
         lookback_hours: int,
         *,
-        tolerance_seconds: float = 600.0,
+        prior_successful_window_end: datetime | None = None,
     ) -> tuple[datetime, datetime]:
         actual_start = _timestamp(_field(run, "start_time", "startTime", "window_start"), "run start")
         actual_end = _timestamp(_field(run, "end_time", "endTime", "window_end"), "run end")
@@ -533,13 +620,18 @@ class AgentInsightsClient:
                 "run_window_mismatch",
                 "Agent Insights returned a different analysis window.",
             )
-        actual_duration = (actual_end - actual_start).total_seconds()
-        expected_duration = lookback_hours * 3600.0
-        if abs(actual_duration - expected_duration) > tolerance_seconds:
+        if not _MIN_LOOKBACK_HOURS <= lookback_hours <= _MAX_LOOKBACK_HOURS:
             raise RuntimeFailure(
-                "run_window_mismatch",
-                "Agent Insights run window duration is inconsistent with requested lookback.",
+                "invalid_run_window",
+                "lookback_hours must be between 3 and 2160.",
             )
+        if prior_successful_window_end is not None:
+            floor = prior_successful_window_end.astimezone(UTC)
+            if actual_start < floor or actual_end <= floor:
+                raise RuntimeFailure(
+                    "run_checkpoint_regression",
+                    "Agent Insights analysis window regressed behind the prior successful checkpoint.",
+                )
         return actual_start, actual_end
 
     @staticmethod
@@ -552,6 +644,7 @@ class AgentInsightsClient:
         agent_name: str | None = None,
         agent_version: str | None = None,
         operation_ids: frozenset[str] | None = None,
+        publication_deadline: datetime | None = None,
     ) -> list[Mapping[str, Any]]:
         selected: list[Mapping[str, Any]] = []
         for insight in insights:
@@ -566,31 +659,21 @@ class AgentInsightsClient:
                 continue
             if agent_name is not None:
                 ia = insight.get("agent_name")
-                if ia is not None and str(ia) != agent_name:
+                if not isinstance(ia, str) or ia != agent_name:
                     raise RuntimeFailure(
                         "insight_scope_unproven",
                         "Insight agent name does not match the expected agent.",
                     )
             if agent_version is not None:
                 iv = insight.get("agent_version")
-                if iv is not None and str(iv) != agent_version:
+                if not isinstance(iv, str) or iv != agent_version:
                     raise RuntimeFailure(
                         "insight_scope_unproven",
                         "Insight agent version does not match the expected version.",
                     )
             if operation_ids is not None:
-                raw_ids = (
-                    insight.get("trace_ids")
-                    or insight.get("traceIds")
-                    or insight.get("operation_ids")
-                    or []
-                )
-                if isinstance(raw_ids, str):
-                    try:
-                        raw_ids = json.loads(raw_ids)
-                    except json.JSONDecodeError:
-                        raw_ids = [raw_ids] if raw_ids else []
-                trace_ids = {str(t) for t in raw_ids if t}
+                records = insight_trace_records(insight)
+                trace_ids = set(insight_trace_ids(insight))
                 if not trace_ids:
                     raise RuntimeFailure(
                         "insight_scope_unproven",
@@ -601,11 +684,19 @@ class AgentInsightsClient:
                         "insight_scope_unproven",
                         "Insight trace IDs do not all belong to the correlated operation-ID set.",
                     )
+                for record in records:
+                    observed_trace = _trace_timestamp(record)
+                    if not (run_start <= observed_trace < run_end):
+                        raise RuntimeFailure(
+                            "insight_scope_unproven",
+                            "Insight trace timestamp fell outside the analysis window.",
+                        )
             observed = _timestamp(
-                _field(insight, "updated_at", "updatedAt", "created_at", "createdAt"),
+                _field(insight, "updated_at", "created_at"),
                 "insight evidence",
             )
-            if not (run_start <= observed < run_end) or observed < checkpoint.captured_at:
+            deadline = publication_deadline or datetime.now(UTC)
+            if observed < checkpoint.captured_at or observed > deadline.astimezone(UTC):
                 raise RuntimeFailure(
                     "insight_scope_unproven",
                     "Changed insight cannot be proven to belong to the completed run.",
@@ -634,15 +725,23 @@ class AgentInsightsClient:
             timeout_seconds=timeout_seconds,
             cancelled=cancelled,
         )
-        run_start, run_end = self.validate_run_window(run, expected_start, expected_end, lookback_hours)
+        run_start, run_end = self.validate_run_window(
+            run,
+            expected_start,
+            expected_end,
+            lookback_hours,
+            prior_successful_window_end=checkpoint.prior_successful_window_end,
+        )
+        retrieval_time = self._now().astimezone(UTC)
         insights = self.scope_insights(
-            self.list_insights(monitor_id),
+            self.list_insights(monitor_id, include_details=True),
             checkpoint,
             run_start,
             run_end,
             agent_name=agent_name,
             agent_version=agent_version,
             operation_ids=operation_ids,
+            publication_deadline=retrieval_time,
         )
         return run, insights
 

@@ -894,6 +894,8 @@ class FoundryInvocationClient:
         self,
         receipt: DeploymentReceipt,
         fixture: HealthyFixture,
+        *,
+        cancelled: Callable[[], bool] | None = None,
     ) -> InvocationReceipt:
         if receipt.agent_type != "prompt":
             raise RuntimeContractError("Prompt invocation requires a prompt deployment.")
@@ -902,6 +904,7 @@ class FoundryInvocationClient:
             "name": receipt.agent_name,
             "version": receipt.agent_version,
         }
+        self._require_not_cancelled(cancelled)
         raw_response = self._post_response(
             "/openai/v1/responses",
             {"input": fixture.input, "store": True, "agent_reference": reference},
@@ -910,6 +913,7 @@ class FoundryInvocationClient:
         called_tools: list[str] = []
         op_index = 0
         for _ in range(self._max_tool_turns):
+            self._require_not_cancelled(cancelled)
             calls = [
                 item
                 for item in response.get("output", [])
@@ -951,7 +955,7 @@ class FoundryInvocationClient:
                             f"expected '{operation.tool_name}', agent called '{name}'."
                         )
                     if operation.delay_seconds > 0:
-                        self._sleep(operation.delay_seconds)
+                        self._interruptible_sleep(operation.delay_seconds, cancelled)
                     if operation.endpoint_case is not None:
                         case_def = _ENDPOINT_CASES.get(operation.endpoint_case)
                         if case_def is None:
@@ -1012,6 +1016,7 @@ class FoundryInvocationClient:
             response_id = str(response.get("id") or "")
             if not response_id:
                 raise RuntimeContractError("Prompt response omitted its response ID.")
+            self._require_not_cancelled(cancelled)
             raw_response = self._post_response(
                 "/openai/v1/responses",
                 {
@@ -1028,9 +1033,12 @@ class FoundryInvocationClient:
         self,
         receipt: DeploymentReceipt,
         fixture: HealthyFixture,
+        *,
+        cancelled: Callable[[], bool] | None = None,
     ) -> InvocationReceipt:
         if receipt.agent_type not in {"hosted_code", "hosted_custom_container"}:
             raise RuntimeContractError("Hosted invocation requires a hosted deployment.")
+        self._require_not_cancelled(cancelled)
         session = self._post(
             f"/agents/{_quote(receipt.agent_name)}/endpoint/sessions",
             {
@@ -1060,6 +1068,7 @@ class FoundryInvocationClient:
                 raise RuntimeContractError(
                     "Hosted session did not bind to the exact deployed version."
                 )
+            self._require_not_cancelled(cancelled)
             raw_response = self._call(
                 "POST",
                 (
@@ -1114,6 +1123,25 @@ class FoundryInvocationClient:
             )
         finally:
             self._delete_session(receipt.agent_name, session_id)
+
+    def _require_not_cancelled(
+        self,
+        cancelled: Callable[[], bool] | None,
+    ) -> None:
+        if cancelled is not None and cancelled():
+            raise RuntimeContractError("Endpoint invocation was cancelled.")
+
+    def _interruptible_sleep(
+        self,
+        seconds: float,
+        cancelled: Callable[[], bool] | None,
+    ) -> None:
+        remaining = seconds
+        while remaining > 0:
+            self._require_not_cancelled(cancelled)
+            interval = min(0.1, remaining)
+            self._sleep(interval)
+            remaining -= interval
 
     def _delete_session(self, agent_name: str, session_id: str) -> None:
         self._request(

@@ -291,6 +291,7 @@ def wait_for_correlated_traces(
     poll_seconds: float = 20,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
+    cancelled: Callable[[], bool] | None = None,
 ) -> list[TraceCorrelation]:
     if timeout_seconds <= 0 or start.tzinfo is None or end.tzinfo is None or start >= end:
         raise RuntimeFailure("invalid_telemetry_window", "Telemetry polling bounds are invalid.")
@@ -301,6 +302,11 @@ def wait_for_correlated_traces(
     )
     deadline = monotonic() + timeout_seconds
     while True:
+        if cancelled is not None and cancelled():
+            raise RuntimeFailure(
+                "telemetry_polling_cancelled",
+                "Telemetry ingestion polling was cancelled.",
+            )
         rows = query_client.query(
             resource_id,
             query,
@@ -324,4 +330,13 @@ def wait_for_correlated_traces(
                 {"expected": len(expectations), "observed_operations": len(rows)},
                 transient=True,
             )
-        sleep(poll_seconds)
+        remaining = poll_seconds
+        while remaining > 0:
+            if cancelled is not None and cancelled():
+                raise RuntimeFailure(
+                    "telemetry_polling_cancelled",
+                    "Telemetry ingestion polling was cancelled.",
+                )
+            interval = min(1.0, remaining)
+            sleep(interval)
+            remaining -= interval

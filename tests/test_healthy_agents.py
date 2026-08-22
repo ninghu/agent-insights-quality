@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import json
+import runpy
+import sys
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -948,6 +950,47 @@ def test_query_builder_replace_scope_all_records(sr_path: Path) -> None:
     assert dispatched[0].get("__query_scope__") == "all_records_all_fields"
 
 
+@pytest.mark.parametrize(
+    "operation",
+    [
+        {"target": "context_resolver", "action": "replace_source", "value": "previous_entity"},
+        {"target": "context_builder", "action": "remove_field", "value": "standing_constraint"},
+        {"target": "context_builder", "action": "merge_fixture", "value": "synthetic-entity-b"},
+        {"target": "context_builder", "action": "append_fixture", "value": "full_synthetic_dataset"},
+        {
+            "target": "context_builder",
+            "action": "duplicate_sections",
+            "value": ["history", "tool_results"],
+        },
+        {"target": "query_builder", "action": "replace_scope", "value": "all_records_all_fields"},
+    ],
+)
+@pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
+def test_context_mutations_change_actual_model_input(
+    sr_path: Path,
+    operation: dict,
+) -> None:
+    rt = _rt(sr_path, _make_config([operation]))
+    original = json.dumps(
+        {
+            "input": "synthetic task",
+            "standing_constraint": "preserve this in healthy traffic",
+        },
+        sort_keys=True,
+    )
+    mutated = rt.mutate_model_input(original)
+    assert mutated != original
+    decoded = json.loads(mutated)
+    assert decoded["aiq_synthetic_model_context"] == [operation]
+    if operation["action"] == "remove_field":
+        assert "standing_constraint" not in decoded
+    multi_turn = rt.mutate_model_input(
+        [{"type": "function_call_output", "call_id": "synthetic", "output": "ok"}]
+    )
+    assert len(multi_turn) == 2
+    assert multi_turn[-1]["role"] == "developer"
+
+
 @pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
 def test_state_machine_replace_transition_does_not_abort_before_request(sr_path: Path) -> None:
     """state_machine/replace_transition must NOT raise in before_request (bounded loop via model)."""
@@ -1516,6 +1559,56 @@ def test_container_model_runtime_references_scenario_runtime() -> None:
     assert "from scenario_runtime import ScenarioRuntime" in text
 
 
+def test_ticket_container_entrypoint_imports_and_starts_from_docker_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    container = ROOT / "agents" / "support-ticket-hosted-image" / "container"
+    starts: list[bool] = []
+
+    class Host:
+        def response_handler(self, handler):
+            self.handler = handler
+            return handler
+
+        def run(self):
+            starts.append(True)
+
+    responses = ModuleType("azure.ai.agentserver.responses")
+    responses.CreateResponse = type("CreateResponse", (), {})
+    responses.ResponseContext = type("ResponseContext", (), {})
+    responses.ResponsesAgentServerHost = Host
+    responses.TextResponse = type("TextResponse", (), {})
+    projects = ModuleType("azure.ai.projects")
+    projects.AIProjectClient = type("AIProjectClient", (), {})
+    identity = ModuleType("azure.identity")
+    identity.DefaultAzureCredential = type("DefaultAzureCredential", (), {})
+    azure = ModuleType("azure")
+    azure.__path__ = []
+    azure_ai = ModuleType("azure.ai")
+    azure_ai.__path__ = []
+    agentserver = ModuleType("azure.ai.agentserver")
+    agentserver.__path__ = []
+    for name, module in {
+        "azure": azure,
+        "azure.ai": azure_ai,
+        "azure.ai.agentserver": agentserver,
+        "azure.ai.agentserver.responses": responses,
+        "azure.ai.projects": projects,
+        "azure.identity": identity,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    for name in ("logic", "model_runtime", "scenario_runtime"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    monkeypatch.syspath_prepend(str(container))
+    monkeypatch.setenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "synthetic-model")
+    monkeypatch.setenv(
+        "AZURE_AI_PROJECT_ENDPOINT",
+        "https://synthetic.example.invalid/api/projects/test",
+    )
+    runpy.run_path(str(container / "main.py"), run_name="__main__")
+    assert starts == [True]
+
+
 # ---------------------------------------------------------------------------
 # Hosting-integration tests
 # ---------------------------------------------------------------------------
@@ -1604,7 +1697,7 @@ def test_correlated_child_failure_emits_nested_spans(sr_path: Path) -> None:
 
 @pytest.mark.parametrize("sr_path", _HOSTED_SCENARIO_PATHS, ids=_SR_IDS)
 def test_zero_token_outer_emits_parent_span_with_zero_token_attributes(sr_path: Path) -> None:
-    """scn-056: endpoint.request (OK, tokens=0) wraps a successful child dispatch."""
+    """scn-056: zero-token outer span wraps a successful child model span."""
     from opentelemetry.trace import StatusCode
     tracer, exporter = _make_span_harness()
     cfg = _make_config(
@@ -1623,7 +1716,15 @@ def test_zero_token_outer_emits_parent_span_with_zero_token_attributes(sr_path: 
 
     by_name = {s.name: s for s in exporter.get_finished_spans()}
     assert "endpoint.request" in by_name, "parent span endpoint.request must be emitted"
+    assert "model.responses.create" in by_name, "successful child model span must be emitted"
     parent = by_name["endpoint.request"]
+    child = by_name["model.responses.create"]
+    assert child.parent is not None
+    assert child.parent.span_id == parent.context.span_id
+    assert child.status.status_code == StatusCode.OK
+    assert child.attributes.get("gen_ai.operation.name") == "chat"
+    assert child.attributes.get("gen_ai.usage.input_tokens") == 1
+    assert child.attributes.get("gen_ai.usage.output_tokens") == 1
     assert parent.status.status_code == StatusCode.OK, "parent span must be OK"
     assert parent.attributes.get("gen_ai.usage.input_tokens") == 0
     assert parent.attributes.get("gen_ai.usage.output_tokens") == 0

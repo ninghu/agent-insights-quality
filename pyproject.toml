@@ -15,7 +15,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "opentelemetry-sdk>=1.35,<2",
   "pytest>=8.3,<9",
+  "ruff>=0.12,<1",
 ]
 azure = [
   "azure-monitor-query>=1.4,<2",
@@ -34,3 +36,6 @@ agent_insights_quality = ["prompts/*.md"]
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from threading import Event, Thread
+from typing import Any, Callable
 from zipfile import ZipFile
 
 import pytest
@@ -50,6 +51,16 @@ EXPECTED_FAILURE_SCENARIOS = frozenset(
         ]["operations"]
     )
 )
+
+
+def _capture_failure(
+    failures: list[BaseException],
+    operation: Callable[[], Any],
+) -> None:
+    try:
+        operation()
+    except BaseException as error:
+        failures.append(error)
 
 
 def _work_for_recipe(recipe_id: str) -> tuple[object, object]:
@@ -124,7 +135,10 @@ def _config(tmp_path: Path) -> RuntimeConfig:
 
 
 def _plan() -> tuple[dict, PlanInput]:
-    payload = generate_daily_plan(datetime(2026, 8, 21, tzinfo=UTC).date())
+    payload = generate_daily_plan(
+        datetime(2026, 8, 21, tzinfo=UTC).date(),
+        full_catalog=True,
+    )
     return payload, PlanInput.from_daily_plan(payload)
 
 
@@ -181,6 +195,81 @@ def test_finding_count_assessment_requires_exact_count(
         "verdict": verdict,
         "reason": reason,
     }
+
+
+def _contract_live_insight(
+    insight_id: str,
+    trace_ids: list[str],
+    category: str,
+) -> dict:
+    return {
+        "id": insight_id,
+        "agent_name": "synthetic-agent",
+        "agent_version": "1",
+        "revision": "1",
+        "title": "Synthetic finding",
+        "description": "A bounded synthetic finding.",
+        "category": category,
+        "severity": "high",
+        "created_at": "2026-08-21T12:05:00Z",
+        "updated_at": "2026-08-21T12:06:00Z",
+        "details": {
+            "highlighted_traces": [
+                {
+                    "trace_id": trace_id,
+                    "timestamp": "2026-08-21T12:01:00Z",
+                }
+                for trace_id in trace_ids
+            ],
+            "linked_traces": [],
+            "recommended_actions": {
+                "proposed_fix": {
+                    "text": "Apply the bounded fix.",
+                    "kind": "code_change",
+                    "changes": [],
+                }
+            },
+        },
+    }
+
+
+def test_run_insight_accounting_assigns_every_unique_card_once(
+    tmp_path: Path,
+) -> None:
+    hooks, plan, _, _, _ = _prepared_hooks(tmp_path, [])
+    work = next(
+        work
+        for versions in plan.agents.values()
+        for work in versions
+        if len(work.assignments) >= 2
+    )
+    first_id = str(work.assignments[0]["scenario_id"])
+    second_id = str(work.assignments[1]["scenario_id"])
+    first_trace = "a" * 32
+    second_trace = "b" * 32
+    category = str(hooks._registry.scenarios[first_id]["expected"]["category"])
+    second_category = str(
+        hooks._registry.scenarios[second_id]["expected"]["category"]
+    )
+    wrong_category = "latency" if second_category != "latency" else "output_quality"
+    insights = [
+        _contract_live_insight("assigned", [first_trace], category),
+        _contract_live_insight(
+            "umbrella",
+            [first_trace, second_trace],
+            category,
+        ),
+        _contract_live_insight("extra", [second_trace], wrong_category),
+    ]
+    correlations = {
+        first_id: (TraceCorrelation(first_trace, 1, 1),),
+        second_id: (TraceCorrelation(second_trace, 1, 1),),
+    }
+    allocation = hooks._allocate_run_insights(work, insights, correlations)
+    assert allocation.total == len(insights)
+    assert [item["id"] for item in allocation.by_scenario[first_id]] == ["assigned"]
+    assert [item["id"] for item in allocation.umbrella_noise] == ["umbrella"]
+    assert [item["id"] for item in allocation.extra_noise] == ["extra"]
 
 
 @pytest.mark.parametrize(
@@ -286,6 +375,21 @@ def test_reused_scenario_059_version_has_identical_artifact_configuration() -> N
     ]
     assert materialized[0].definition == materialized[1].definition
     assert materialized[0].instruction_delta == materialized[1].instruction_delta
+    assert live._canonical(materialized[0].definition) == live._canonical(
+        materialized[1].definition
+    )
+    assert live._materialized_artifact_identity(
+        materialized[0]
+    ) == live._materialized_artifact_identity(materialized[1])
+    if materialized[0].agent.source is not None:
+        first_archive, first_digest = live.deterministic_zip(
+            materialized[0].agent.source
+        )
+        second_archive, second_digest = live.deterministic_zip(
+            materialized[1].agent.source
+        )
+        assert first_archive == second_archive
+        assert first_digest == second_digest
 
 
 def test_healthy_artifact_digests_cover_resolved_runtime_assets() -> None:
@@ -373,13 +477,54 @@ def test_every_traffic_recipe_materializes_observable_prompt_operations(
         assert value not in first.result
     elif action == "configure_sequence":
         assert first.result["status"] == "error"
-        assert fixtures[1].scenario_operations[0].result != first.result
+        assert fixtures[0].scenario_operations[1].result != first.result
     elif action == "configure_parallelizable_delays":
         assert first.delay_seconds == value[0] / 1000
     elif action == "configure_post_completion_delay":
         assert first.delay_seconds == value / 1000
     else:
         raise AssertionError(f"unasserted traffic action: {action}")
+
+
+@pytest.mark.parametrize(
+    "traffic_recipe_id",
+    sorted(RecipeRegistry.load().traffic),
+)
+def test_all_63_traffic_recipes_produce_executable_endpoint_requests(
+    tmp_path: Path,
+    traffic_recipe_id: str,
+) -> None:
+    hooks, plan, _, _, _ = _prepared_hooks(tmp_path, [])
+    work = next(
+        work
+        for versions in plan.agents.values()
+        for work in versions
+        if any(
+            assignment["traffic_recipe_id"] == traffic_recipe_id
+            for assignment in work.assignments
+        )
+        and work.phase != "corrected"
+    )
+    agent = next(item for item in live.load_healthy_agents() if item.id == work.agent_id)
+    scenario_ids = {
+        str(assignment["scenario_id"])
+        for assignment in work.assignments
+        if assignment["traffic_recipe_id"] == traffic_recipe_id
+    }
+    fixtures = [
+        fixture
+        for fixture in hooks._fixtures(work, agent)
+        if fixture.id.split(":", 1)[0] in scenario_ids
+    ]
+    recipe = hooks._registry.traffic[traffic_recipe_id]
+    assert len(fixtures) == int(recipe["request_count"])
+    correlations = set()
+    for fixture in fixtures:
+        request = json.loads(fixture.input)
+        assert request["scenario_id"] in scenario_ids
+        assert traffic_recipe_id in request["input"]
+        assert request["correlation"] not in correlations
+        correlations.add(request["correlation"])
 
 
 class _Deployments:
@@ -444,7 +589,8 @@ class _Invocations:
         self.inputs: list[str] = []
         self.abort_on_call: int | None = None
 
-    def _invoke(self, receipt, fixture):
+    def _invoke(self, receipt, fixture, *, cancelled=None):
+        assert cancelled is None or not cancelled()
         self.inputs.append(fixture.input)
         index = len(self.inputs)
         if self.abort_on_call == index:
@@ -496,7 +642,7 @@ class _Insights:
         return {"id": "monitor"}
 
     def create_run(self, _monitor, *, lookback_hours):
-        assert lookback_hours == 1
+        assert lookback_hours == 3
         return {"id": "insights-run"}
 
     def collect_run(
@@ -514,7 +660,7 @@ class _Insights:
         cancelled,
     ):
         assert checkpoint.revisions == {}
-        assert lookback_hours == 1
+        assert lookback_hours == 3
         assert agent_name
         assert agent_version
         assert operation_ids
@@ -625,6 +771,43 @@ def test_private_receipts_recover_deploy_and_invoke_across_hook_instances(
     assert resumed._windows[work.key].public_dict() == invoked["window_binding"]
 
 
+def test_recovered_deployment_receipt_is_cached_before_invocation(
+    tmp_path: Path,
+) -> None:
+    start = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    hooks, plan, deployments, invocations, _ = _prepared_hooks(
+        tmp_path,
+        [start, start + timedelta(seconds=1)],
+    )
+    work = next(
+        work
+        for versions in plan.agents.values()
+        for work in versions
+        if work.agent_type == "prompt"
+    )
+    materialized = materialize_version(
+        work,
+        project_endpoint=hooks._project.project_endpoint,
+        model_deployment=hooks._config.azure.terra_agent_deployment,
+        ticket_image=IMAGE,
+    )
+    artifact_digest, _, _ = live._materialized_artifact_identity(materialized)
+    receipt = DeploymentReceipt(
+        work.agent_name,
+        "recovered-version",
+        "prompt",
+        artifact_digest,
+        work.run_id,
+        "active",
+    )
+    deployments.recovered[(work.agent_name, work.run_id, artifact_digest)] = receipt
+    public = hooks.deploy(work, idempotency_key=work.key + ":deploy")
+    assert deployments.routes == []
+    assert hooks._deployments[(work.agent_name, work.version_reference)] == receipt
+    hooks.invoke(work, public, idempotency_key=work.key + ":invoke")
+    assert invocations.inputs
+
+
 def test_expected_endpoint_failures_persist_each_fixture_and_resume_without_replay(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -651,6 +834,9 @@ def test_expected_endpoint_failures_persist_each_fixture_and_resume_without_repl
     with pytest.raises(RuntimeFailure, match="unexpected transport failure"):
         first.invoke(work, deployed, idempotency_key=work.key + ":invoke")
     assert len(first_invocations.inputs) == 2
+    started = first._load_private_receipt(work.key + ":invoke:started")
+    assert started is not None
+    assert started["private"]["invocation_start"] == start.isoformat()
 
     resumed, _, _, resumed_invocations, resumed_insights = _prepared_hooks(
         tmp_path,
@@ -687,12 +873,14 @@ def test_expected_endpoint_failures_persist_each_fixture_and_resume_without_repl
     assert result["completed_count"] == fixture_count - expected_failure_count
     assert len(resumed_invocations.inputs) == fixture_count - 1
     assert resumed_insights.checkpoint_count == 0
+    assert result["window_binding"]["realized_start"] == start.isoformat()
 
     captured: dict[str, object] = {}
 
     def correlate(*_args, **kwargs):
         expectations = kwargs["expectations"]
         captured["expectations"] = expectations
+        captured["start"] = kwargs["start"]
         return [
             TraceCorrelation(
                 f"{index + 1:032x}",
@@ -712,6 +900,7 @@ def test_expected_endpoint_failures_persist_each_fixture_and_resume_without_repl
     )
     expectations = captured["expectations"]
     assert telemetry["operation_count"] == fixture_count
+    assert captured["start"] == start
     assert len(expectations) == fixture_count
     assert all(item.identifiers() for item in expectations)
     assert (
@@ -784,6 +973,53 @@ def test_insight_run_is_persisted_before_polling_and_cancelled_after_restart(
     thread.join(5)
     assert not thread.is_alive()
     assert failures == []
+
+
+def test_cancellation_is_not_blocked_by_inflight_endpoint_invocation(
+    tmp_path: Path,
+) -> None:
+    start = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    hooks, plan, deployments, _, _ = _prepared_hooks(
+        tmp_path,
+        [start, start + timedelta(seconds=1)],
+    )
+    work = next(iter(plan.agents.values()))[0]
+    deployed = hooks.deploy(work, idempotency_key=work.key + ":deploy")
+    entered = Event()
+    release = Event()
+
+    class BlockingInvocations(_Invocations):
+        def _invoke(self, receipt, fixture, *, cancelled=None):
+            entered.set()
+            assert release.wait(5)
+            if cancelled is not None and cancelled():
+                raise live.RuntimeContractError("Endpoint invocation was cancelled.")
+            return super()._invoke(receipt, fixture, cancelled=cancelled)
+
+        invoke_prompt = _invoke
+        invoke_hosted = _invoke
+
+    hooks._invocation_client = BlockingInvocations()
+    failures: list[BaseException] = []
+    thread = Thread(
+        target=lambda: _capture_failure(
+            failures,
+            lambda: hooks.invoke(
+                work,
+                deployed,
+                idempotency_key=work.key + ":invoke",
+            ),
+        )
+    )
+    thread.start()
+    assert entered.wait(5)
+    hooks.cancel(work)
+    assert deployments.cleaned
+    release.set()
+    thread.join(5)
+    assert not thread.is_alive()
+    assert failures
+    assert isinstance(failures[0], RuntimeFailure)
 
 
 def test_recurred_version_uses_latest_matching_faulted_insight_across_correction(

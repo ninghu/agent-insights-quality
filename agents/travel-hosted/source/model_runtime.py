@@ -90,6 +90,9 @@ class ModelBackedAgent:
 
     def _model_response(self, **kwargs: Any) -> Any:
         self._scenario.before_model()
+        if "input" not in kwargs:
+            raise RuntimeError("Model request is missing input.")
+        kwargs["input"] = self._scenario.mutate_model_input(kwargs["input"])
         model = os.environ["AZURE_AI_MODEL_DEPLOYMENT_NAME"].strip()
         if not model:
             raise RuntimeError("AZURE_AI_MODEL_DEPLOYMENT_NAME is empty.")
