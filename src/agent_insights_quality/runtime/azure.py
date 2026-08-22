@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
@@ -210,27 +211,58 @@ class AccessToken:
 
 
 class AzureCliCredential:
-    def __init__(self, cli: AzureCli) -> None:
+    def __init__(
+        self,
+        cli: AzureCli,
+        *,
+        refresh_skew_seconds: int = 300,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        if refresh_skew_seconds < 0:
+            raise RuntimeFailure(
+                "invalid_token_cache_configuration",
+                "Azure token refresh skew must be non-negative.",
+            )
         self._cli = cli
+        self._refresh_skew = refresh_skew_seconds
+        self._clock = clock
+        self._tokens: dict[str, AccessToken] = {}
+        self._lock = threading.Lock()
 
     def get_token(self, *scopes: str) -> AccessToken:
         if len(scopes) != 1 or not scopes[0].endswith("/.default"):
             raise RuntimeFailure("invalid_token_scope", "Exactly one Azure default scope is required.")
-        resource = scopes[0].removesuffix("/.default")
-        payload = _mapping(
-            self._cli.json(["account", "get-access-token", "--resource", resource]),
-            "invalid_access_token",
-            "Azure CLI access token response was invalid.",
-        )
-        token = str(payload.get("accessToken") or "")
-        if not token:
-            raise RuntimeFailure("invalid_access_token", "Azure CLI returned an empty access token.")
-        raw_expiry = payload.get("expires_on") or payload.get("expiresOn")
-        try:
-            expires_on = int(raw_expiry)
-        except (TypeError, ValueError):
-            expires_on = int(time.time()) + 300
-        return AccessToken(token, expires_on)
+        scope = scopes[0]
+        with self._lock:
+            cached = self._tokens.get(scope)
+            if cached is not None and cached.expires_on - self._refresh_skew > self._clock():
+                return cached
+            resource = scope.removesuffix("/.default")
+            try:
+                payload = _mapping(
+                    self._cli.json(
+                        ["account", "get-access-token", "--resource", resource]
+                    ),
+                    "invalid_access_token",
+                    "Azure CLI access token response was invalid.",
+                )
+                token = str(payload.get("accessToken") or "")
+                if not token:
+                    raise RuntimeFailure(
+                        "invalid_access_token",
+                        "Azure CLI returned an empty access token.",
+                    )
+                raw_expiry = payload.get("expires_on") or payload.get("expiresOn")
+                expires_on = int(raw_expiry)
+            except (RuntimeFailure, TypeError, ValueError) as error:
+                raise RuntimeFailure(
+                    "azure_token_unavailable",
+                    "Azure access token acquisition failed.",
+                    transient=True,
+                ) from error
+            refreshed = AccessToken(token, expires_on)
+            self._tokens[scope] = refreshed
+            return refreshed
 
 
 @dataclass(frozen=True, slots=True, repr=False)
