@@ -25,7 +25,7 @@
       "additionalProperties": false,
       "required": ["mode", "address", "source"],
       "properties": {
-        "mode": {"enum": ["authenticated_user", "address"]},
+        "mode": {"enum": ["authenticated_user", "address", "protected_variable"]},
         "address": {"type": ["string", "null"], "format": "email"},
         "source": {"type": "string", "minLength": 1, "maxLength": 100}
       },
@@ -50,6 +50,18 @@
           "then": {
             "properties": {
               "address": {"type": "string", "format": "email"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"mode": {"const": "protected_variable"}},
+            "required": ["mode"]
+          },
+          "then": {
+            "properties": {
+              "address": {"type": "null"},
+              "source": {"type": "string", "pattern": "^AIQ_[A-Z0-9_]+$"}
             }
           }
         }

@@ -11,7 +11,6 @@ allowed_paths:
   - reports/daily/*/*/*/readiness-failure.json
   - reports/daily/*/*/*/readiness-failure.md
   - reports/daily/*/*/*/failure-email.html
-  - reports/daily/*/*/*/email-handoff.json
   - reports/daily/*/*/*/email-send-request.json
   - reports/daily/*/*/*/email-receipt.json
   - reports/daily/*/*/*/aiq-*-r??/plan.json
