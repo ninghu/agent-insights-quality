@@ -767,7 +767,7 @@ def _public_invocation(
                 item.agent_name,
                 item.agent_version,
                 item.fixture_id,
-                item.response_id,
+                *(item.response_ids or (item.response_id,)),
                 item.invocation_id or "",
                 item.request_id or "",
                 item.session_id or "",
@@ -975,6 +975,7 @@ class LiveRuntimeHooks:
     def _invocation_payload(receipt: InvocationReceipt) -> dict[str, Any]:
         value = asdict(receipt)
         value["called_tools"] = list(receipt.called_tools)
+        value["response_ids"] = list(receipt.response_ids or (receipt.response_id,))
         return value
 
     @staticmethod
@@ -998,6 +999,13 @@ class LiveRuntimeHooks:
             session_id=str(value["session_id"]) if value.get("session_id") else None,
             output_text=str(value["output_text"]),
             called_tools=tuple(str(item) for item in value.get("called_tools") or ()),
+            response_ids=tuple(
+                str(item)
+                for item in (
+                    value.get("response_ids")
+                    or (value["response_id"],)
+                )
+            ),
         )
 
     @staticmethod
@@ -2161,22 +2169,32 @@ class LiveRuntimeHooks:
         if existing is None:
             if receipts is None or window is None or deployment is None:
                 raise RuntimeFailure("invocation_receipt_missing", "Invocation state is unavailable.")
-            expectation_pairs = [
-                (
-                    item.fixture_id.split(":", 1)[0],
-                    TelemetryExpectation(
-                        item.invocation_id,
-                        item.response_id,
-                        item.session_id,
-                        self._config.azure.terra_agent_deployment,
-                        canonical_model=(
-                            "gpt-5.6-terra-"
-                            f"{self._config.azure.terra_model_version}"
-                        ),
-                    ),
-                )
-                for item in receipts
-            ]
+            expectation_pairs = []
+            canonical_model = (
+                "gpt-5.6-terra-"
+                f"{self._config.azure.terra_model_version}"
+            )
+            for item in receipts:
+                response_ids = item.response_ids or (item.response_id,)
+                for index, response_id in enumerate(response_ids):
+                    final_turn = index == len(response_ids) - 1
+                    expectation_pairs.append(
+                        (
+                            item.fixture_id.split(":", 1)[0],
+                            TelemetryExpectation(
+                                item.invocation_id if final_turn else None,
+                                response_id,
+                                item.session_id if final_turn else None,
+                                self._config.azure.terra_agent_deployment,
+                                (
+                                    frozenset({"invoke_agent", "chat"})
+                                    if final_turn
+                                    else frozenset({"invoke_agent"})
+                                ),
+                                canonical_model=canonical_model,
+                            ),
+                        )
+                    )
             expectation_pairs.extend(
                 (
                     item.fixture_id.split(":", 1)[0],
@@ -2186,10 +2204,7 @@ class LiveRuntimeHooks:
                         item.receipt.session_id,
                         self._config.azure.terra_agent_deployment,
                         frozenset({"invoke_agent"}),
-                        canonical_model=(
-                            "gpt-5.6-terra-"
-                            f"{self._config.azure.terra_model_version}"
-                        ),
+                        canonical_model=canonical_model,
                     ),
                 )
                 for item in failures

@@ -343,6 +343,13 @@ Insights data to the trace `operation_Id` before creating a trace link. Runtime 
 direct email and private ADO actions but must never be persisted in this public repository; committed
 artifacts use opaque SHA-256 references.
 
+Prompt tool use can produce one stored response operation per turn. Runtime receipts retain every
+prompt response ID in order while keeping the final ID as the compatibility field. Initial and
+intermediate turns require an exact `invoke_agent` operation; the final turn requires
+`invoke_agent` plus `chat`. Every expanded operation remains bound to the originating scenario and is
+included in its allowed trace/evidence set. Legacy private receipts fall back to their final response
+ID only, so a new rerun is required to recover pre-final operations from an older run.
+
 Project-scoped telemetry may omit an upstream parent span. Correlation accepts exactly one local root
 whose parent is empty or outside the selected span set, then requires every other span to be reachable
 through in-set parents. Chat spans must use either the exact configured deployment name or the exact

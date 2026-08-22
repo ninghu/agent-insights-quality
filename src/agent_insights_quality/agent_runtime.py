@@ -240,6 +240,7 @@ class InvocationReceipt:
     session_id: str | None
     output_text: str
     called_tools: tuple[str, ...]
+    response_ids: tuple[str, ...] = ()
 
     @property
     def trace_id(self) -> None:
@@ -1170,6 +1171,10 @@ class FoundryInvocationClient:
             cancelled=cancelled,
         )
         response = raw_response.json()
+        initial_response_id = str(response.get("id") or "")
+        if not initial_response_id:
+            raise RuntimeContractError("Prompt response omitted its response ID.")
+        response_ids = [initial_response_id]
         called_tools: list[str] = []
         op_index = 0
         for _ in range(self._max_tool_turns):
@@ -1194,6 +1199,7 @@ class FoundryInvocationClient:
                     _request_id(raw_response),
                     None,
                     tuple(called_tools),
+                    tuple(response_ids),
                     validate_tools=fixture.validate_tools,
                 )
             outputs = []
@@ -1290,6 +1296,12 @@ class FoundryInvocationClient:
                 cancelled=cancelled,
             )
             response = raw_response.json()
+            response_id = str(response.get("id") or "")
+            if not response_id or response_id in response_ids:
+                raise RuntimeContractError(
+                    "Prompt response IDs must be non-empty and unique across turns."
+                )
+            response_ids.append(response_id)
         raise RuntimeContractError("Prompt agent exceeded the bounded tool turn limit.")
 
     def invoke_hosted(
@@ -1361,6 +1373,7 @@ class FoundryInvocationClient:
                 _request_id(raw_response),
                 session_id,
                 (),
+                (str(response.get("id") or ""),),
                 validate_tools=False,
             )
         finally:
@@ -1602,6 +1615,7 @@ def _invocation_receipt(
     request_id: str | None,
     session_id: str | None,
     called_tools: tuple[str, ...],
+    response_ids: tuple[str, ...],
     *,
     validate_tools: bool,
 ) -> InvocationReceipt:
@@ -1613,6 +1627,15 @@ def _invocation_receipt(
         raise RuntimeContractError(
             f"Agent response status '{status}' did not match expected '{expected_status}' "
             "or omitted a response ID."
+        )
+    if (
+        not response_ids
+        or response_ids[-1] != response_id
+        or len(response_ids) != len(set(response_ids))
+        or any(not value for value in response_ids)
+    ):
+        raise RuntimeContractError(
+            "Invocation response ID history must be ordered, unique, and end with the final ID."
         )
     if fixture.validate_output and (
         not output_text.strip() or fixture.output_contains not in output_text
@@ -1634,6 +1657,7 @@ def _invocation_receipt(
         session_id=session_id,
         output_text=output_text,
         called_tools=called_tools,
+        response_ids=response_ids,
     )
 
 

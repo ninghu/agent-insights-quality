@@ -1379,6 +1379,114 @@ def test_private_receipts_recover_deploy_and_invoke_across_hook_instances(
     assert resumed._windows[work.key].public_dict() == invoked["window_binding"]
 
 
+def test_private_invocation_receipt_roundtrip_and_legacy_response_id_fallback() -> None:
+    current = InvocationReceipt(
+        fixture_id="fixture",
+        agent_name="aiq-001-weather-test",
+        agent_version="2",
+        response_id="response-final",
+        invocation_id="invocation-final",
+        request_id="request-final",
+        session_id=None,
+        output_text="done",
+        called_tools=("geocode",),
+        response_ids=("response-initial", "response-final"),
+    )
+    payload = LiveRuntimeHooks._invocation_payload(current)
+    assert payload["response_ids"] == ["response-initial", "response-final"]
+    assert LiveRuntimeHooks._restore_invocation(payload) == current
+
+    legacy = dict(payload)
+    del legacy["response_ids"]
+    restored = LiveRuntimeHooks._restore_invocation(legacy)
+    assert restored.response_id == "response-final"
+    assert restored.response_ids == ("response-final",)
+
+
+def test_prompt_turns_expand_to_exact_scenario_bound_telemetry_expectations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    hooks, plan, _, _, _ = _prepared_hooks(tmp_path, [])
+    work = next(
+        item
+        for versions in plan.agents.values()
+        for item in versions
+        if item.agent_type == "prompt"
+    )
+    fixture_id = str(work.assignments[0]["scenario_id"]) + ":0"
+    receipt = DeploymentReceipt(
+        work.agent_name,
+        "2",
+        "prompt",
+        work.version_reference,
+        work.run_id,
+        "active",
+    )
+    hooks._deployments[(work.agent_name, work.version_reference)] = receipt
+    hooks._invocations[work.key] = (
+        InvocationReceipt(
+            fixture_id,
+            work.agent_name,
+            "2",
+            "response-final",
+            "invocation-final",
+            "request-final",
+            None,
+            "done",
+            ("geocode",),
+            ("response-initial", "response-final"),
+        ),
+    )
+    hooks._invocation_failures[work.key] = ()
+    hooks._windows[work.key] = WindowBinding(
+        work.window.start_identity,
+        work.window.end_identity,
+        start,
+        start + timedelta(seconds=10),
+    )
+    captured: dict[str, object] = {}
+
+    def correlate(*_args, **kwargs):
+        expectations = kwargs["expectations"]
+        captured["expectations"] = expectations
+        return [
+            TraceCorrelation(
+                f"{index + 1:032x}",
+                1,
+                1,
+                (f"{index + 1:016x}",),
+                start + timedelta(seconds=index + 1),
+            )
+            for index, _ in enumerate(expectations)
+        ]
+
+    monkeypatch.setattr(live, "wait_for_correlated_traces", correlate)
+    result = hooks.wait_ingestion(
+        work,
+        {},
+        idempotency_key=work.key + ":expanded-ingestion",
+    )
+
+    expectations = captured["expectations"]
+    assert result["operation_count"] == 2
+    assert [item.response_id for item in expectations] == [
+        "response-initial",
+        "response-final",
+    ]
+    assert [item.invocation_id for item in expectations] == [
+        None,
+        "invocation-final",
+    ]
+    assert [item.required_operations for item in expectations] == [
+        frozenset({"invoke_agent"}),
+        frozenset({"invoke_agent", "chat"}),
+    ]
+    scenario_id = fixture_id.split(":", 1)[0]
+    assert len(hooks._scenario_telemetry[work.key][scenario_id]) == 2
+
+
 def test_recovered_deployment_receipt_is_cached_before_invocation(
     tmp_path: Path,
 ) -> None:
