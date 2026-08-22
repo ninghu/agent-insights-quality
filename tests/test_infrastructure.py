@@ -9,6 +9,16 @@ def _bicep(path: str) -> str:
     return (ROOT / "infra" / path).read_text(encoding="utf-8")
 
 
+def _resource(source: str, name: str) -> str:
+    match = re.search(
+        rf"resource {name}\b(?P<body>.*?)(?=\nresource |\Z)",
+        source,
+        re.DOTALL,
+    )
+    assert match is not None
+    return match.group("body")
+
+
 def test_storage_account_name_stays_within_azure_limit() -> None:
     main = _bicep("main.bicep")
     persistent = _bicep("modules/persistent.bicep")
@@ -91,7 +101,7 @@ def test_project_roles_tags_and_retention_contracts_are_preserved() -> None:
     assert "5e0bd9bd-7b93-4f28-af87-19fc36ad61bd" in qualification
     assert "scope: applicationInsights" in qualification
     assert "scope: account" in qualification
-    assert qualification.count("principalId: project.identity.principalId") == 2
+    assert qualification.count("principalId: project.identity.principalId") == 3
 
     for tag in (
         "purpose: 'agent-insights-quality'",
@@ -105,3 +115,104 @@ def test_project_roles_tags_and_retention_contracts_are_preserved() -> None:
     assert "catalogVersion: catalogVersion" in qualification
     assert "retentionInDays: 90" in persistent
     assert "daysAfterModificationGreaterThan: 90" in persistent
+
+
+def test_automation_data_plane_roles_are_exact_and_parameterized() -> None:
+    main = _bicep("main.bicep")
+    persistent = _bicep("modules/persistent.bicep")
+
+    assert re.search(r"param automationPrincipalId string", main)
+    assert "automationPrincipalId: automationPrincipalId" in main
+    assert re.search(r"param automationPrincipalId string", persistent)
+
+    artifact_role = _resource(persistent, "automationArtifactContributor")
+    assert "scope: storage" in artifact_role
+    assert (
+        "name: guid(storage.id, automationPrincipalId, "
+        "storageBlobDataContributorRoleId)"
+        in artifact_role
+    )
+    assert "ba92f5b4-2d11-453d-a403-e96b0029c9fe" in persistent
+    assert "principalId: automationPrincipalId" in artifact_role
+    assert "principalType: 'User'" in artifact_role
+
+    push_role = _resource(persistent, "automationRegistryPush")
+    assert "scope: registry" in push_role
+    assert (
+        "name: guid(registry.id, automationPrincipalId, acrPushRoleId)"
+        in push_role
+    )
+    assert "8311e382-0749-4cb8-b61a-304f252e45ec" in persistent
+    assert "principalId: automationPrincipalId" in push_role
+    assert "principalType: 'User'" in push_role
+
+
+def test_project_registry_pull_role_is_exact_and_identity_backed() -> None:
+    qualification = _bicep("modules/qualification-project.bicep")
+
+    assert re.search(r"param registryName string", qualification)
+    registry = _resource(qualification, "registry")
+    assert "existing" in registry
+    assert "name: registryName" in registry
+
+    pull_role = _resource(qualification, "registryPull")
+    assert "scope: registry" in pull_role
+    assert "name: guid(registry.id, project.id, acrPullRoleId)" in pull_role
+    assert "7f951dda-4ed3-4680-a7ca-43fe172d538d" in qualification
+    assert "principalId: project.identity.principalId" in pull_role
+    assert "principalType: 'ServicePrincipal'" in pull_role
+    assert "Microsoft.Storage" not in qualification
+
+
+def test_project_registry_connection_uses_managed_identity() -> None:
+    qualification = _bicep("modules/qualification-project.bicep")
+    connection = _resource(qualification, "containerRegistryConnection")
+
+    assert (
+        "Microsoft.CognitiveServices/accounts/projects/connections"
+        "@2025-04-01-preview"
+        in connection
+    )
+    assert "category: 'ContainerRegistry'" in connection
+    assert "target: registry.properties.loginServer" in connection
+    assert "authType: 'ManagedIdentity'" in connection
+    assert "isSharedToAll: false" in connection
+    assert re.search(
+        r"credentials:\s*\{\s*"
+        r"clientId:\s*project\.identity\.principalId\s*"
+        r"resourceId:\s*registry\.id\s*\}",
+        connection,
+    )
+    assert re.search(
+        r"metadata:\s*\{\s*ResourceId:\s*registry\.id\s*\}",
+        connection,
+    )
+    assert re.search(r"dependsOn:\s*\[\s*registryPull\s*\]", connection)
+    assert not re.search(
+        r"^\s*output\s+",
+        qualification,
+        re.MULTILINE,
+    )
+    assert (
+        qualification.count(
+            "Microsoft.CognitiveServices/accounts/projects/connections"
+            "@2025-04-01-preview"
+        )
+        == 1
+    )
+
+
+def test_role_assignments_do_not_hardcode_principal_ids() -> None:
+    infra_sources = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((ROOT / "infra").rglob("*.bicep"))
+    )
+    principal_values = re.findall(
+        r"principalId:\s*([^\s]+)",
+        infra_sources,
+    )
+    assert principal_values
+    assert set(principal_values) == {
+        "automationPrincipalId",
+        "project.identity.principalId",
+    }

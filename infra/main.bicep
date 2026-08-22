@@ -19,6 +19,9 @@ param terraModelVersion string
 @description('Reviewed automation owner used for exact cleanup boundaries.')
 param automationOwner string
 
+@description('Microsoft Entra object ID of the user that runs reviewed quality automation.')
+param automationPrincipalId string
+
 resource resourceGroup 'Microsoft.Resources/resourceGroups@2024-11-01' = {
   name: resourceGroupName
   location: location
@@ -36,5 +39,6 @@ module persistent 'modules/persistent.bicep' = {
     uniqueSuffix: uniqueSuffix
     terraModelVersion: terraModelVersion
     automationOwner: automationOwner
+    automationPrincipalId: automationPrincipalId
   }
 }

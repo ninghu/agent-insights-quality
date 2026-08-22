@@ -41,7 +41,31 @@ Dedicated infrastructure creates the Foundry project's Application Insights conn
 service-supported API-key shape. ARM resolves the existing Application Insights connection string
 server-side and passes it directly to the connection resource; the secret is never a template
 parameter or output and is not handled by the CLI. The project managed identity retains Monitoring
-Reader on Application Insights and Cognitive Services OpenAI User on the Foundry account.
+Reader on Application Insights, Cognitive Services OpenAI User on the Foundry account, and AcrPull on
+the existing artifact registry. A project-level ContainerRegistry connection uses that managed
+identity to pull private hosted-agent images. The connection is project-scoped, is not shared to all
+projects, and passes the project principal ID and registry resource ID as the RegistryIdentity
+credential shape required by the service. These values are ARM expressions evaluated server-side;
+there are no connection outputs. The reviewed automation user receives only Storage Blob Data
+Contributor on artifact storage and AcrPush on that registry. Supply its Microsoft Entra object ID at
+deployment time; never commit it.
+
+```powershell
+az deployment sub create `
+  --location westus2 `
+  --template-file infra/main.bicep `
+  --parameters resourceGroupName='<resource-group>' uniqueSuffix='<unique-suffix>' `
+    terraModelVersion='<reviewed-model-version>' automationOwner='<automation-owner>' `
+    automationPrincipalId='<automation-principal-object-id>'
+
+az deployment group create `
+  --resource-group '<resource-group>' `
+  --template-file infra/modules/qualification-project.bicep `
+  --parameters accountName='<foundry-account-name>' projectName='<qualification-project-name>' `
+    applicationInsightsName='<application-insights-name>' registryName='<registry-name>' `
+    reportDate='<YYYY-MM-DD>' expiresOn='<YYYY-MM-DD>' `
+    automationOwner='<automation-owner>' catalogVersion='<catalog-version>'
+```
 
 Set `AIQ_MONITOR_OWNERSHIP_RECEIPT` to a protected private-state path. Monitor ownership is recorded
 there as project-, agent-, monitor-, and model-scoped opaque hashes because the service monitor API
