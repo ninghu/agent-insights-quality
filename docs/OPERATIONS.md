@@ -44,9 +44,11 @@ parameter or output and is not handled by the CLI. The project managed identity 
 Reader on Application Insights, Cognitive Services OpenAI User on the Foundry account, and AcrPull on
 the existing artifact registry. A project-level ContainerRegistry connection uses that managed
 identity to pull private hosted-agent images. The connection is project-scoped, is not shared to all
-projects, and omits registry credentials and template outputs. The reviewed automation user receives
-only Storage Blob Data Contributor on artifact storage and AcrPush on that registry. Supply its
-Microsoft Entra object ID at deployment time; never commit it.
+projects, and passes the project principal ID and registry resource ID as the RegistryIdentity
+credential shape required by the service. These values are ARM expressions evaluated server-side;
+there are no connection outputs. The reviewed automation user receives only Storage Blob Data
+Contributor on artifact storage and AcrPush on that registry. Supply its Microsoft Entra object ID at
+deployment time; never commit it.
 
 ```powershell
 az deployment sub create `
@@ -61,7 +63,7 @@ az deployment group create `
   --template-file infra/modules/qualification-project.bicep `
   --parameters accountName='<foundry-account-name>' projectName='<qualification-project-name>' `
     applicationInsightsName='<application-insights-name>' registryName='<registry-name>' `
-    reportDate='<YYYY-MM-DD>' expiresOn='<ISO-8601-timestamp>' `
+    reportDate='<YYYY-MM-DD>' expiresOn='<YYYY-MM-DD>' `
     automationOwner='<automation-owner>' catalogVersion='<catalog-version>'
 ```
 

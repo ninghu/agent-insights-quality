@@ -168,11 +168,21 @@ def test_project_registry_connection_uses_managed_identity() -> None:
     qualification = _bicep("modules/qualification-project.bicep")
     connection = _resource(qualification, "containerRegistryConnection")
 
+    assert (
+        "Microsoft.CognitiveServices/accounts/projects/connections"
+        "@2025-04-01-preview"
+        in connection
+    )
     assert "category: 'ContainerRegistry'" in connection
     assert "target: registry.properties.loginServer" in connection
     assert "authType: 'ManagedIdentity'" in connection
     assert "isSharedToAll: false" in connection
-    assert "credentials:" not in connection
+    assert re.search(
+        r"credentials:\s*\{\s*"
+        r"clientId:\s*project\.identity\.principalId\s*"
+        r"resourceId:\s*registry\.id\s*\}",
+        connection,
+    )
     assert re.search(
         r"metadata:\s*\{\s*ResourceId:\s*registry\.id\s*\}",
         connection,
@@ -182,6 +192,13 @@ def test_project_registry_connection_uses_managed_identity() -> None:
         r"^\s*output\s+",
         qualification,
         re.MULTILINE,
+    )
+    assert (
+        qualification.count(
+            "Microsoft.CognitiveServices/accounts/projects/connections"
+            "@2025-04-01-preview"
+        )
+        == 1
     )
 
 

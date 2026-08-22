@@ -72,13 +72,17 @@ resource registryPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-resource containerRegistryConnection 'Microsoft.CognitiveServices/accounts/projects/connections@2025-06-01' = {
+resource containerRegistryConnection 'Microsoft.CognitiveServices/accounts/projects/connections@2025-04-01-preview' = {
   parent: project
   name: 'container-registry'
   properties: {
     category: 'ContainerRegistry'
     target: registry.properties.loginServer
     authType: 'ManagedIdentity'
+    credentials: {
+      clientId: project.identity.principalId
+      resourceId: registry.id
+    }
     isSharedToAll: false
     metadata: {
       ResourceId: registry.id
