@@ -1,0 +1,18 @@
+{
+  "id": "insight-synthetic-prompt-001",
+  "details": {
+    "recommended_actions": {
+      "proposed_fix": {
+        "kind": "prompt_change",
+        "text": "Clarify the direct tool-routing instruction.",
+        "changes": [
+          {
+            "surface": "instructions",
+            "old_value": "Use the available tool.",
+            "new_value": "Call only the named tool."
+          }
+        ]
+      }
+    }
+  }
+}

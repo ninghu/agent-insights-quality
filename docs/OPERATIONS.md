@@ -247,6 +247,11 @@ aggregates from plans, evidence, and judgments. `memory-reconcile`, `ado-dry-run
 remaining deterministic handoffs. No command calls an external model or claims mail delivery without
 an imported provider receipt.
 
+Agent Insights prose and `no_fix` recommendations may omit `proposed_fix.changes`; the runtime
+normalizes that omission to an empty list. The live service alias `prompt_change` normalizes exactly
+to the internal `prompt_patch` evidence kind while preserving structured changes. Patch kinds require
+an explicit list of change objects, and unknown kinds remain invalid.
+
 `memory-reconcile` requires the validated daily plan and canonical report. Only a full-catalog,
 evidence-complete report can advance issue state, and complete reports must be processed
 chronologically.

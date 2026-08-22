@@ -200,6 +200,45 @@ def test_live_prose_fix_without_changes_normalizes_to_empty_list() -> None:
     }
 
 
+def test_live_prompt_change_alias_normalizes_to_internal_prompt_patch() -> None:
+    insight = json.loads(
+        (
+            Path(__file__).parent
+            / "fixtures"
+            / "agent_insights_prompt_change_fix.json"
+        ).read_text(encoding="ascii")
+    )
+
+    assert insight_proposed_fix(insight) == {
+        "kind": "prompt_patch",
+        "text": "Clarify the direct tool-routing instruction.",
+        "changes": [
+            {
+                "surface": "instructions",
+                "old_value": "Use the available tool.",
+                "new_value": "Call only the named tool.",
+            }
+        ],
+    }
+
+
+def test_unknown_live_proposed_fix_kind_remains_rejected() -> None:
+    insight = {
+        "details": {
+            "recommended_actions": {
+                "proposed_fix": {
+                    "kind": "prompt_rewrite",
+                    "text": "Unknown service alias.",
+                    "changes": [],
+                }
+            }
+        }
+    }
+
+    with pytest.raises(RuntimeFailure, match="kind is unsupported"):
+        insight_proposed_fix(insight)
+
+
 @pytest.mark.parametrize("kind", ["prose", "no_fix"])
 def test_non_patch_fix_kinds_allow_missing_changes(kind: str) -> None:
     insight = {
