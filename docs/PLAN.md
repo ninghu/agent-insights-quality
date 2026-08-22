@@ -416,6 +416,11 @@ The LT email links to `report.md` for readers who want the full numbers.
    ACR data-plane authorization propagation. Do not infer readiness from role-assignment listings.
 5. Validate the exact project, connections, endpoints, model deployments, quota, and report/bug
    integrations, then execute or resume the live adapter from durable private state.
+6. Bound runtime execution to four hours. An ordinary work failure stops only that agent's sequence;
+   independent agents finish and one aggregate `INCONCLUSIVE` result retains their safe failure codes,
+   opaque work references, deployments, and receipts. Resume skips complete agents/versions and
+   retries only failed or unstarted work. Only explicit operator abort performs exact-resource
+   cancellation and cleanup, after which the attempt is non-resumable and needs a rerun suffix.
 
 ### Phase B: Healthy baseline
 

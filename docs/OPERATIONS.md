@@ -204,6 +204,14 @@ margin. Sequential service analysis windows may overlap, but each successful win
 beyond the prior checkpoint; changed revisions are then scoped to the exact agent version, correlated
 operation IDs, trace timestamps, and publication bounds. Resume recovers the persisted lookback and
 private idempotency receipts without replaying completed remote side effects.
+An ordinary runtime or unexpected work failure stops only that agent's sequential work. Independent
+agents drain to their own terminal evidence or failure checkpoint, and one bounded aggregate
+`INCONCLUSIVE` failure records safe codes and opaque work references after maximum progress. The
+four-hour orchestration deadline is checked before each new or retried step. Deployments and receipts
+are retained on these failures, so resume skips every complete agent/version and retries only failed
+or unstarted work. Only an explicit operator abort invokes cancellation and exact-owned-resource
+cleanup, with a bounded worker drain and a final cleanup sweep. An explicitly aborted receipt is not
+resumable because its deployment resources may have been removed; start an explicit rerun instead.
 Each pre-run checkpoint captures revisions for every version on the exact monitor/agent. Unchanged
 prior-version cards are therefore skipped before current-version validation; any prior-version card
 whose revision changes during the run still fails strict stale provenance. Exact run Insight totals

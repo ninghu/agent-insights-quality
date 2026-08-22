@@ -6,7 +6,7 @@ import re
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import FIRST_EXCEPTION, Future, ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +16,7 @@ from .errors import RuntimeFailure
 from .receipts import read_receipt, write_receipt
 
 _PUBLIC_FAILURE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
+_PUBLIC_REFERENCE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _PUBLIC_FAILURE_COUNTS = frozenset(
     {
         "artifact_reference_count",
@@ -48,6 +49,19 @@ def public_failure_details(details: Mapping[str, Any]) -> dict[str, Any]:
             )
             if codes:
                 result[key] = codes
+    for key in ("agent_references", "work_references"):
+        value = details.get(key)
+        if isinstance(value, list):
+            references = sorted(
+                {
+                    reference
+                    for reference in value
+                    if isinstance(reference, str)
+                    and _PUBLIC_REFERENCE.fullmatch(reference)
+                }
+            )
+            if references:
+                result[key] = references
     for key in _PUBLIC_FAILURE_COUNTS:
         value = details.get(key)
         if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
@@ -355,6 +369,7 @@ class RunState:
     execution_windows: dict[str, dict[str, str]] = field(default_factory=dict)
     failed_phase: str | None = None
     failure: dict[str, Any] | None = None
+    agent_failures: dict[str, dict[str, Any]] = field(default_factory=dict)
     attempt: int = 1
 
     def public_dict(self) -> dict[str, Any]:
@@ -368,6 +383,7 @@ class RunState:
             "execution_windows": self.execution_windows,
             "failed_phase": self.failed_phase,
             "failure": self.failure,
+            "agent_failures": self.agent_failures,
             "attempt": self.attempt,
         }
 
@@ -382,10 +398,12 @@ class RunState:
             raise RuntimeFailure("resume_plan_mismatch", "Receipt belongs to a different plan.")
         checkpoints = payload.get("checkpoints")
         execution_windows = payload.get("execution_windows", {})
+        agent_failures = payload.get("agent_failures", {})
         attempt = payload.get("attempt", 1)
         if (
             not isinstance(checkpoints, Mapping)
             or not isinstance(execution_windows, Mapping)
+            or not isinstance(agent_failures, Mapping)
             or not isinstance(attempt, int)
             or attempt < 1
         ):
@@ -403,6 +421,11 @@ class RunState:
             },
             failed_phase=str(payload["failed_phase"]) if payload.get("failed_phase") else None,
             failure=dict(payload["failure"]) if isinstance(payload.get("failure"), Mapping) else None,
+            agent_failures={
+                str(agent_id): dict(failure)
+                for agent_id, failure in agent_failures.items()
+                if isinstance(failure, Mapping)
+            },
             attempt=attempt,
         )
 
@@ -416,24 +439,81 @@ class ProductionOrchestrator:
         max_parallel_agents: int = 5,
         retry_attempts: int = 3,
         cancellation_wait_seconds: float = 30,
+        run_timeout_seconds: float = 14_400,
         sleep: Callable[[float], None] = time.sleep,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
-        if max_parallel_agents <= 0 or retry_attempts <= 0 or cancellation_wait_seconds < 0:
+        if (
+            max_parallel_agents <= 0
+            or retry_attempts <= 0
+            or cancellation_wait_seconds < 0
+            or run_timeout_seconds <= 0
+            or run_timeout_seconds > 14_400
+        ):
             raise RuntimeFailure(
                 "invalid_orchestrator_settings",
-                "Concurrency and retries must be positive and cancellation wait must be non-negative.",
+                "Concurrency, retries, cancellation wait, and total runtime must be bounded and valid.",
             )
         self._hooks = hooks
         self._receipt_path = receipt_path
         self._parallel = max_parallel_agents
         self._attempts = retry_attempts
         self._cancellation_wait = cancellation_wait_seconds
+        self._run_timeout = run_timeout_seconds
         self._sleep = sleep
+        self._monotonic = monotonic
         self._write_lock = threading.RLock()
-        self._cancelled = threading.Event()
+        self._cleanup_lock = threading.Lock()
+        self._abort_requested = threading.Event()
+        self._active_plan: PlanInput | None = None
+        self._abort_failure_codes: list[str] = []
+        self._abort_cleanup_started = False
+        self._abort_final_sweep_done = False
+        self._deadline: float | None = None
 
     def cancel(self) -> None:
-        self._cancelled.set()
+        with self._write_lock:
+            plan = self._active_plan
+            if plan is None:
+                return
+            self._abort_requested.set()
+        if plan is not None:
+            self._send_abort_cleanup(plan)
+
+    def _send_abort_cleanup(self, plan: PlanInput) -> None:
+        with self._cleanup_lock:
+            with self._write_lock:
+                if self._abort_cleanup_started:
+                    return
+                self._abort_cleanup_started = True
+            failures = self._cancel_plan(plan)
+            with self._write_lock:
+                self._abort_failure_codes.extend(failures)
+
+    def _finish_abort_cleanup(self, plan: PlanInput) -> list[str]:
+        self._send_abort_cleanup(plan)
+        with self._cleanup_lock:
+            with self._write_lock:
+                if self._abort_final_sweep_done:
+                    return sorted(set(self._abort_failure_codes))
+                self._abort_final_sweep_done = True
+            failures = self._cancel_plan(plan)
+            with self._write_lock:
+                self._abort_failure_codes.extend(failures)
+                return sorted(set(self._abort_failure_codes))
+
+    def _check_run_boundary(self) -> None:
+        if self._abort_requested.is_set():
+            raise RuntimeFailure("run_cancelled", "Runtime cancellation was requested.")
+        self._check_run_deadline()
+
+    def _check_run_deadline(self) -> None:
+        if self._deadline is not None and self._monotonic() >= self._deadline:
+            raise RuntimeFailure(
+                "run_deadline_exceeded",
+                "The bounded daily runtime deadline was exceeded.",
+                {"timeout_seconds": self._run_timeout},
+            )
 
     def _save(self, state: RunState) -> None:
         with self._write_lock:
@@ -441,15 +521,13 @@ class ProductionOrchestrator:
 
     def _retry(self, operation: Callable[[], Mapping[str, Any]]) -> Mapping[str, Any]:
         for attempt in range(1, self._attempts + 1):
-            if self._cancelled.is_set():
-                raise RuntimeFailure("run_cancelled", "Runtime cancellation was requested.")
+            self._check_run_boundary()
             try:
                 return operation()
             except RuntimeFailure as error:
                 if not error.transient or attempt == self._attempts:
                     raise
-                if self._cancelled.is_set():
-                    raise RuntimeFailure("run_cancelled", "Runtime cancellation was requested.")
+                self._check_run_boundary()
                 retry_after = error.details.get("retry_after_seconds")
                 delay = (
                     float(retry_after)
@@ -458,8 +536,38 @@ class ProductionOrchestrator:
                     and 0 <= retry_after <= 300
                     else min(2 ** (attempt - 1), 8)
                 )
+                if self._deadline is not None:
+                    remaining = self._deadline - self._monotonic()
+                    if remaining <= 0 or delay > remaining:
+                        raise RuntimeFailure(
+                            "run_deadline_exceeded",
+                            "The bounded daily runtime deadline was exceeded.",
+                            {"timeout_seconds": self._run_timeout},
+                        )
                 self._sleep(delay)
         raise AssertionError("unreachable")
+
+    @staticmethod
+    def _unexpected_failure(error: Exception, phase: str) -> RuntimeFailure:
+        exception_class = type(error).__name__
+        reference = _opaque(
+            {
+                "exception_class": exception_class,
+                "exception_module": type(error).__module__,
+                "exception_message": str(error),
+            }
+        )
+        failure = RuntimeFailure(
+            "unexpected_runtime_failure",
+            "A runtime hook raised an unexpected exception.",
+            {
+                "phase": phase,
+                "unexpected_exception_class": exception_class,
+                "unexpected_exception_reference": reference,
+            },
+        )
+        failure.__cause__ = error
+        return failure
 
     def _step(
         self,
@@ -471,8 +579,7 @@ class ProductionOrchestrator:
         replay_existing: bool = False,
     ) -> Mapping[str, Any]:
         with self._write_lock:
-            if self._cancelled.is_set():
-                raise RuntimeFailure("run_cancelled", "Runtime cancellation was requested.")
+            self._check_run_boundary()
             checkpoint = state.checkpoints.get(key)
             state.phase = phase
         if checkpoint is not None:
@@ -485,22 +592,37 @@ class ProductionOrchestrator:
             except RuntimeFailure as error:
                 error.details.setdefault("phase", phase)
                 raise
-            if self._cancelled.is_set():
-                raise RuntimeFailure("run_cancelled", "Runtime cancellation was requested.")
+            except Exception as error:
+                raise self._unexpected_failure(error, phase) from error
+            if self._abort_requested.is_set():
+                raise RuntimeFailure(
+                    "run_cancelled",
+                    "Runtime cancellation was requested.",
+                )
             if _opaque(value) != checkpoint:
                 raise RuntimeFailure(
                     "checkpoint_drift",
                     "An idempotent resume step no longer matches its public checkpoint.",
                 )
+            try:
+                self._check_run_deadline()
+            except RuntimeFailure as error:
+                error.details.setdefault("phase", phase)
+                raise
             return value
         try:
             value = self._retry(operation)
         except RuntimeFailure as error:
             error.details.setdefault("phase", phase)
             raise
+        except Exception as error:
+            raise self._unexpected_failure(error, phase) from error
         with self._write_lock:
-            if self._cancelled.is_set():
-                raise RuntimeFailure("run_cancelled", "Runtime cancellation was requested.")
+            if self._abort_requested.is_set():
+                raise RuntimeFailure(
+                    "run_cancelled",
+                    "Runtime cancellation was requested.",
+                )
             existing = state.checkpoints.get(key)
             reference = _opaque(value)
             if existing is not None and existing != reference:
@@ -510,50 +632,146 @@ class ProductionOrchestrator:
                 )
             state.checkpoints[key] = reference
             self._save(state)
+        try:
+            self._check_run_deadline()
+        except RuntimeFailure as error:
+            error.details.setdefault("phase", phase)
+            raise
         return value
 
     def _run_agent(self, state: RunState, versions: Sequence[VersionWork]) -> None:
         for work in versions:
             prefix = work.key
-            deployment = self._step(
-                state,
-                f"{prefix}:deploy",
-                "deploy",
-                lambda work=work: self._hooks.deploy(work, idempotency_key=f"{prefix}:deploy"),
-            )
-            invocation = self._step(
-                state,
-                f"{prefix}:invoke",
-                "invoke",
-                lambda work=work, deployment=deployment: self._hooks.invoke(
-                    work, deployment, idempotency_key=f"{prefix}:invoke"
-                ),
-            )
-            self._bind_execution_window(state, versions, work, invocation)
-            telemetry = self._step(
-                state,
-                f"{prefix}:ingestion",
-                "ingestion",
-                lambda work=work, invocation=invocation: self._hooks.wait_ingestion(
-                    work, invocation, idempotency_key=f"{prefix}:ingestion"
-                ),
-            )
-            insight_run = self._step(
-                state,
-                f"{prefix}:insights",
-                "insights",
-                lambda work=work, telemetry=telemetry: self._hooks.run_insights(
-                    work, telemetry, idempotency_key=f"{prefix}:insights"
-                ),
-            )
-            self._step(
-                state,
-                f"{prefix}:evidence",
-                "evidence",
-                lambda work=work, insight_run=insight_run: self._hooks.assemble_evidence(
-                    work, insight_run, idempotency_key=f"{prefix}:evidence"
-                ),
-            )
+            try:
+                deployment = self._step(
+                    state,
+                    f"{prefix}:deploy",
+                    "deploy",
+                    lambda work=work: self._hooks.deploy(work, idempotency_key=f"{prefix}:deploy"),
+                )
+                invocation = self._step(
+                    state,
+                    f"{prefix}:invoke",
+                    "invoke",
+                    lambda work=work, deployment=deployment: self._hooks.invoke(
+                        work, deployment, idempotency_key=f"{prefix}:invoke"
+                    ),
+                )
+                self._bind_execution_window(state, versions, work, invocation)
+                telemetry = self._step(
+                    state,
+                    f"{prefix}:ingestion",
+                    "ingestion",
+                    lambda work=work, invocation=invocation: self._hooks.wait_ingestion(
+                        work, invocation, idempotency_key=f"{prefix}:ingestion"
+                    ),
+                )
+                insight_run = self._step(
+                    state,
+                    f"{prefix}:insights",
+                    "insights",
+                    lambda work=work, telemetry=telemetry: self._hooks.run_insights(
+                        work, telemetry, idempotency_key=f"{prefix}:insights"
+                    ),
+                )
+                self._step(
+                    state,
+                    f"{prefix}:evidence",
+                    "evidence",
+                    lambda work=work, insight_run=insight_run: self._hooks.assemble_evidence(
+                        work, insight_run, idempotency_key=f"{prefix}:evidence"
+                    ),
+                )
+            except RuntimeFailure as error:
+                error.details.setdefault("agent_reference", _opaque(work.agent_id))
+                error.details.setdefault("work_reference", _opaque(prefix))
+                raise
+
+    @staticmethod
+    def _agent_complete(state: RunState, versions: Sequence[VersionWork]) -> bool:
+        return bool(versions) and all(
+            f"{work.key}:evidence" in state.checkpoints for work in versions
+        )
+
+    @staticmethod
+    def _agent_failure_record(failure: RuntimeFailure) -> dict[str, Any]:
+        return {
+            "code": failure.code,
+            "message": failure.message,
+            "transient": failure.transient,
+            "phase": str(failure.details.get("phase") or "agents"),
+            "agent_reference": str(failure.details.get("agent_reference") or ""),
+            "work_reference": str(failure.details.get("work_reference") or ""),
+            "details": public_failure_details(failure.details),
+        }
+
+    @staticmethod
+    def _aggregate_agent_failures(
+        failures: Mapping[str, RuntimeFailure],
+    ) -> RuntimeFailure:
+        codes = sorted({failure.code for failure in failures.values()})
+        agent_references = sorted(
+            {
+                str(failure.details["agent_reference"])
+                for failure in failures.values()
+                if _PUBLIC_REFERENCE.fullmatch(
+                    str(failure.details.get("agent_reference") or "")
+                )
+            }
+        )
+        work_references = sorted(
+            {
+                str(failure.details["work_reference"])
+                for failure in failures.values()
+                if _PUBLIC_REFERENCE.fullmatch(
+                    str(failure.details.get("work_reference") or "")
+                )
+            }
+        )
+        unexpected = sorted(
+            (
+                {
+                    "exception_class": str(
+                        failure.details["unexpected_exception_class"]
+                    ),
+                    "exception_reference": str(
+                        failure.details["unexpected_exception_reference"]
+                    ),
+                    "work_reference": str(
+                        failure.details.get("work_reference") or ""
+                    ),
+                }
+                for failure in failures.values()
+                if isinstance(
+                    failure.details.get("unexpected_exception_class"), str
+                )
+                and _PUBLIC_REFERENCE.fullmatch(
+                    str(
+                        failure.details.get("unexpected_exception_reference")
+                        or ""
+                    )
+                )
+            ),
+            key=lambda item: (
+                item["work_reference"],
+                item["exception_reference"],
+            ),
+        )
+        details: dict[str, Any] = {
+            "phase": "agents",
+            "failure_count": len(failures),
+            "failure_codes": codes,
+            "agent_references": agent_references,
+            "work_references": work_references,
+        }
+        if unexpected:
+            details["unexpected_exceptions"] = unexpected
+        return RuntimeFailure(
+            "daily_work_failures",
+            "One or more independent agent sequences failed; completed evidence was retained.",
+            details,
+            transient=all(failure.transient for failure in failures.values()),
+        )
 
     def _bind_execution_window(
         self,
@@ -638,20 +856,37 @@ class ProductionOrchestrator:
         return sorted(set(failures))
 
     def run(self, plan: PlanInput, *, resume: bool = False, dry_run: bool = False) -> RunState:
-        cancellation_sent = False
-        if resume:
-            state = RunState.from_receipt(
-                read_receipt(self._receipt_path),
-                plan.plan_id,
-                plan.reference,
-            )
-            if state.status == "succeeded":
-                return state
-            state.attempt += 1
-            self._save(state)
-        else:
-            state = RunState(plan.plan_id, plan.reference)
-            self._save(state)
+        self._deadline = self._monotonic() + self._run_timeout
+        try:
+            if resume:
+                state = RunState.from_receipt(
+                    read_receipt(self._receipt_path),
+                    plan.plan_id,
+                    plan.reference,
+                )
+                if state.status == "succeeded":
+                    self._deadline = None
+                    return state
+                if (
+                    isinstance(state.failure, Mapping)
+                    and state.failure.get("code") == "run_cancelled"
+                ):
+                    raise RuntimeFailure(
+                        "aborted_run_not_resumable",
+                        "An explicitly aborted run cannot resume after owned resources were cleaned; use an explicit rerun.",
+                    )
+                state.attempt += 1
+                self._save(state)
+            else:
+                state = RunState(plan.plan_id, plan.reference)
+                self._save(state)
+        except Exception:
+            with self._write_lock:
+                self._active_plan = None
+                self._deadline = None
+            raise
+        with self._write_lock:
+            self._active_plan = plan
         try:
             self._step(
                 state,
@@ -661,9 +896,13 @@ class ProductionOrchestrator:
                 replay_existing=True,
             )
             if dry_run:
-                state.status = "dry_run"
-                state.phase = "complete"
-                self._save(state)
+                with self._write_lock:
+                    self._check_run_boundary()
+                    state.status = "dry_run"
+                    state.phase = "complete"
+                    self._save(state)
+                    self._active_plan = None
+                    self._deadline = None
                 return state
             self._step(
                 state,
@@ -674,96 +913,166 @@ class ProductionOrchestrator:
             state.status = "running"
             state.failed_phase = None
             state.failure = None
+            for agent_id, versions in plan.agents.items():
+                if self._agent_complete(state, versions):
+                    state.agent_failures.pop(agent_id, None)
             self._save(state)
-            pool = ThreadPoolExecutor(max_workers=min(self._parallel, max(1, len(plan.agents))))
-            futures = {
-                pool.submit(self._run_agent, state, versions): versions
-                for versions in plan.agents.values()
+            incomplete = {
+                agent_id: versions
+                for agent_id, versions in plan.agents.items()
+                if not self._agent_complete(state, versions)
             }
-            done, pending = wait(futures, return_when=FIRST_EXCEPTION)
-            failure: RuntimeFailure | None = None
-            for future in done:
-                try:
-                    future.result()
-                except RuntimeFailure as error:
-                    failure = error
-                    break
-                except Exception as error:
-                    failure = RuntimeFailure(
-                        "unexpected_runtime_failure",
-                        "A runtime hook raised an unexpected exception.",
+            failures: dict[str, RuntimeFailure] = {}
+            if incomplete:
+                pool = ThreadPoolExecutor(
+                    max_workers=min(self._parallel, len(incomplete))
+                )
+                futures: dict[Future[None], str] = {
+                    pool.submit(self._run_agent, state, versions): agent_id
+                    for agent_id, versions in incomplete.items()
+                }
+                pending = set(futures)
+                abort_deadline: float | None = None
+                while pending:
+                    if self._abort_requested.is_set():
+                        if abort_deadline is None:
+                            abort_deadline = time.monotonic() + self._cancellation_wait
+                        wait_seconds = max(
+                            0.0,
+                            min(0.1, abort_deadline - time.monotonic()),
+                        )
+                    else:
+                        wait_seconds = 0.1
+                    done, pending = wait(
+                        pending,
+                        timeout=wait_seconds,
+                        return_when=FIRST_COMPLETED,
                     )
-                    failure.__cause__ = error
-                    break
-            if failure is not None:
-                self._cancelled.set()
-                cancellation_failures = self._cancel_plan(plan)
-                cancellation_sent = True
-                if cancellation_failures:
-                    failure.details["cancellation_failures"] = cancellation_failures
-                running: list[Future[None]] = []
-                for future in pending:
-                    if not future.cancel():
-                        running.append(future)
-                pool.shutdown(wait=False, cancel_futures=True)
-                if running:
-                    completed_after_cancel, _ = wait(
-                        running,
-                        timeout=self._cancellation_wait,
-                    )
-                    for future in completed_after_cancel:
+                    for future in done:
+                        agent_id = futures[future]
                         try:
                             future.result()
-                        except RuntimeFailure as late_failure:
-                            nested = late_failure.details.get("failure_codes")
-                            if isinstance(nested, list):
-                                cancellation_failures.extend(
-                                    str(code)
-                                    for code in nested
-                                    if isinstance(code, str)
+                        except RuntimeFailure as error:
+                            failures[agent_id] = error
+                            with self._write_lock:
+                                state.agent_failures[agent_id] = (
+                                    self._agent_failure_record(error)
                                 )
-                            if late_failure.code == "cancel_partial_failure":
-                                cancellation_failures.append(late_failure.code)
-                        except Exception:
-                            cancellation_failures.append(
-                                "unexpected_cancellation_failure"
-                            )
-                    cancellation_failures.extend(
-                        self._cancel_versions(
-                            [futures[future] for future in running]
-                        )
-                    )
+                                self._save(state)
+                        except Exception as error:
+                            failure = self._unexpected_failure(error, "agents")
+                            versions = incomplete[agent_id]
+                            if versions:
+                                failure.details["agent_reference"] = _opaque(
+                                    versions[0].agent_id
+                                )
+                                failure.details["work_reference"] = _opaque(
+                                    versions[0].key
+                                )
+                            failures[agent_id] = failure
+                            with self._write_lock:
+                                state.agent_failures[agent_id] = (
+                                    self._agent_failure_record(failure)
+                                )
+                                self._save(state)
+                        else:
+                            with self._write_lock:
+                                state.agent_failures.pop(agent_id, None)
+                                self._save(state)
+                    if (
+                        abort_deadline is not None
+                        and time.monotonic() >= abort_deadline
+                    ):
+                        break
+                if self._abort_requested.is_set():
+                    for future in pending:
+                        future.cancel()
+                    pool.shutdown(wait=False, cancel_futures=True)
+                else:
+                    pool.shutdown(wait=True)
+            if self._abort_requested.is_set():
+                cancellation_failures = self._finish_abort_cleanup(plan)
+                details: dict[str, Any] = {"phase": "agents"}
                 if cancellation_failures:
-                    failure.details["cancellation_failures"] = sorted(
-                        set(cancellation_failures)
-                    )
-                raise failure
-            pool.shutdown(wait=True)
-            state.status = "succeeded"
-            state.phase = "complete"
-            state.failed_phase = None
-            state.failure = None
-            self._save(state)
+                    details["cancellation_failures"] = cancellation_failures
+                raise RuntimeFailure(
+                    "run_cancelled",
+                    "Runtime cancellation was requested.",
+                    details,
+                )
+            if failures:
+                raise self._aggregate_agent_failures(failures)
+            with self._write_lock:
+                self._check_run_boundary()
+                state.status = "succeeded"
+                state.phase = "complete"
+                state.failed_phase = None
+                state.failure = None
+                state.agent_failures = {}
+                self._save(state)
+                self._active_plan = None
+                self._deadline = None
             return state
         except RuntimeFailure as failure:
-            self._cancelled.set()
-            if not cancellation_sent:
-                cancellation_failures = self._cancel_plan(plan)
+            with self._write_lock:
+                abort_won = self._abort_requested.is_set()
+                if not abort_won:
+                    state.status = "inconclusive"
+                    state.failed_phase = str(
+                        failure.details.get("phase") or state.phase
+                    )
+                    state.failure = {
+                        "code": failure.code,
+                        "message": failure.message,
+                        "transient": failure.transient,
+                        "details": public_failure_details(failure.details),
+                    }
+                    self._save(state)
+                    self._active_plan = None
+                    self._deadline = None
+            if abort_won:
+                cancellation_failures = self._finish_abort_cleanup(plan)
+                original_code = failure.code
+                failure = RuntimeFailure(
+                    "run_cancelled",
+                    "Runtime cancellation was requested.",
+                    {
+                        "phase": str(
+                            failure.details.get("phase") or state.phase
+                        ),
+                        "failure_codes": (
+                            [original_code]
+                            if original_code != "run_cancelled"
+                            else []
+                        ),
+                    },
+                )
                 if cancellation_failures:
                     failure.details["cancellation_failures"] = cancellation_failures
-            state.status = "inconclusive"
-            state.failed_phase = str(failure.details.get("phase") or state.phase)
-            state.failure = {
-                "code": failure.code,
-                "message": failure.message,
-                "transient": failure.transient,
-                "details": public_failure_details(failure.details),
-            }
-            self._save(state)
+                with self._write_lock:
+                    state.status = "inconclusive"
+                    state.failed_phase = str(
+                        failure.details.get("phase") or state.phase
+                    )
+                    state.failure = {
+                        "code": failure.code,
+                        "message": failure.message,
+                        "transient": failure.transient,
+                        "details": public_failure_details(failure.details),
+                    }
+                    self._save(state)
+                    self._active_plan = None
+                    self._deadline = None
             finalization = self._hooks.finalize_failure(failure, state.public_dict())
             if isinstance(finalization, Mapping):
                 artifact_reference = finalization.get("artifact_reference")
                 if isinstance(artifact_reference, str):
                     state.failure["artifact_reference"] = artifact_reference
                     self._save(state)
+            if abort_won:
+                raise failure
             raise
+        finally:
+            with self._write_lock:
+                self._active_plan = None
+                self._deadline = None
