@@ -264,6 +264,7 @@ def raw_bundle(scenario_id: str, *, healthy: bool = False) -> dict:
                 "observed_at": window[0],
             }
         ],
+        "prior_trace_ids": [],
         "insights": insights,
         "previous_insight": None,
     }
@@ -991,6 +992,95 @@ def test_sequential_evidence_binds_current_and_prior_phase_versions(
         agents,
     )
     assert {"provenance_failure", "cross_version_stale"} <= violations
+
+
+def test_proven_prior_trace_is_quality_failure_but_unknown_trace_is_inconclusive(
+    synthetic_contracts,
+) -> None:
+    lifecycle_plan = plan()
+    assignment = lifecycle_plan["assignments"][0]
+    assignment["version_sequence"] = [
+        {
+            "phase": "faulted",
+            "version_key": "faulted",
+            "digest": SHA_B,
+            "window": assignment["window"],
+        },
+        {
+            "phase": "corrected",
+            "version_key": "corrected",
+            "digest": "sha256:" + ("d" * 64),
+            "window": assignment["window"],
+        },
+        {
+            "phase": "recurred",
+            "version_key": "recurred",
+            "digest": SHA_A,
+            "window": assignment["window"],
+        },
+    ]
+    current_raw = raw_bundle("aiq-scn-010-fault")
+    current_raw["version_sequence"]["phase"] = "recurred"
+    current_raw["prior_trace_ids"] = [SHA_B]
+    current_raw["previous_insight"] = {
+        "id": "prior-insight",
+        "fingerprint": SHA_B,
+        "phase": "faulted",
+        "run_id": assignment["run_id"],
+        "version_digest": SHA_B,
+    }
+    current = project_evidence(current_raw)
+    healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
+
+    current_score = score_run(
+        lifecycle_plan,
+        [current, healthy],
+        [judgment(current)],
+    )
+    assert current_score["verdict"] == "AT BAR"
+
+    stale = deepcopy(current)
+    stale["insights"][0]["trace_ids"].append(SHA_B)
+    stale["insights"][0]["trace_count"] = 2
+    stale["bundle_hash"] = content_hash(
+        {key: value for key, value in stale.items() if key != "bundle_hash"}
+    )
+    stale_score = score_run(
+        lifecycle_plan,
+        [stale, healthy],
+        [judgment(stale)],
+    )
+    assert stale_score["verdict"] == "NOT AT BAR"
+    assert "cross_version_stale" in stale_score["violations"]
+    assert "provenance_failure" not in stale_score["violations"]
+
+    prior_only = deepcopy(current)
+    prior_only["insights"][0]["trace_ids"] = [SHA_B]
+    prior_only["bundle_hash"] = content_hash(
+        {key: value for key, value in prior_only.items() if key != "bundle_hash"}
+    )
+    prior_only_score = score_run(
+        lifecycle_plan,
+        [prior_only, healthy],
+        [judgment(prior_only)],
+    )
+    assert prior_only_score["verdict"] == "NOT AT BAR"
+    assert "cross_version_stale" in prior_only_score["violations"]
+    assert "provenance_failure" not in prior_only_score["violations"]
+
+    unknown = deepcopy(current)
+    unknown["insights"][0]["trace_ids"].append(SHA_C)
+    unknown["insights"][0]["trace_count"] = 2
+    unknown["bundle_hash"] = content_hash(
+        {key: value for key, value in unknown.items() if key != "bundle_hash"}
+    )
+    unknown_score = score_run(
+        lifecycle_plan,
+        [unknown, healthy],
+        [judgment(unknown)],
+    )
+    assert unknown_score["verdict"] == "INCONCLUSIVE"
+    assert "provenance_failure" in unknown_score["violations"]
 
 
 def test_single_version_evidence_rejects_previous_insight_before_judging() -> None:

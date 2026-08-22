@@ -211,6 +211,12 @@ are unbounded for scoring; evidence retains at most 100 detail samples and recor
 `details_truncated`. Cleanup is a dry run unless `--execute` is present and filters
 exact framework purpose, owner, name, and expiration metadata.
 
+For reviewed lifecycle sequences, evidence carries a bounded opaque set of exact prior-phase trace
+IDs recovered from persisted scenario telemetry. A current-version insight linked to those proven
+prior traces is a `cross_version_stale` quality failure (`NOT AT BAR`), including a prior-only link.
+Any trace outside the current and exact planned prior sets remains unproven provenance and makes the
+run `INCONCLUSIVE`; non-lifecycle evidence cannot declare prior traces.
+
 Foundry deployment requests use a bounded 300-second timeout. Hosted-version cancellation retries
 HTTP 409 active-session conflicts for up to 15 minutes, never treats a conflict as deletion, and
 preserves the cleanup failure code in append-only attempt-qualified diagnostics for a later resume.

@@ -2470,6 +2470,7 @@ class LiveRuntimeHooks:
         work: VersionWork,
         insights: Sequence[Mapping[str, Any]],
         scenario_correlations: Mapping[str, Sequence[TraceCorrelation]],
+        prior_operation_sets: Mapping[str, set[str]] | None = None,
     ) -> RunInsightAllocation:
         by_scenario: dict[str, list[Mapping[str, Any]]] = {
             str(assignment["scenario_id"]): [] for assignment in work.assignments
@@ -2481,6 +2482,7 @@ class LiveRuntimeHooks:
             scenario_id: {item.operation_id for item in correlations}
             for scenario_id, correlations in scenario_correlations.items()
         }
+        prior_operation_sets = prior_operation_sets or {}
         for insight in insights:
             insight_id = str(insight.get("id") or "")
             if not insight_id or insight_id in seen_ids:
@@ -2493,15 +2495,27 @@ class LiveRuntimeHooks:
             associated = [
                 scenario_id
                 for scenario_id, operation_ids in operation_sets.items()
-                if trace_ids & operation_ids
+                if trace_ids
+                & (operation_ids | prior_operation_sets.get(scenario_id, set()))
             ]
             if len(associated) > 1:
                 umbrella_noise.append(insight)
                 continue
             if len(associated) != 1:
-                extra_noise.append(insight)
-                continue
+                raise RuntimeFailure(
+                    "insight_scope_unproven",
+                    "Insight trace IDs do not match any proven current or prior scenario evidence.",
+                )
             scenario_id = associated[0]
+            allowed_ids = operation_sets[scenario_id] | prior_operation_sets.get(
+                scenario_id,
+                set(),
+            )
+            if not trace_ids.issubset(allowed_ids):
+                raise RuntimeFailure(
+                    "insight_scope_unproven",
+                    "Insight contains trace IDs outside proven current and prior scenario evidence.",
+                )
             expected_category = str(
                 self._registry.scenarios[scenario_id]["expected"]["category"]
             )
@@ -2520,6 +2534,55 @@ class LiveRuntimeHooks:
                 "Every unique run insight must be associated exactly once.",
             )
         return allocation
+
+    def _prior_scenario_operation_ids(
+        self,
+        work: VersionWork,
+        scenario_id: str,
+    ) -> set[str]:
+        if self._plan is None or work.sequence_index == 0:
+            return set()
+        assignment = next(
+            (
+                item
+                for item in work.assignments
+                if str(item["scenario_id"]) == scenario_id
+            ),
+            None,
+        )
+        if assignment is None:
+            raise RuntimeFailure(
+                "invalid_plan",
+                "Scenario is not assigned to the current lifecycle version.",
+            )
+        planned_prior = {
+            (str(item["phase"]), str(item["digest"]))
+            for item in assignment["version_sequence"][: work.sequence_index]
+        }
+        prior_ids: set[str] = set()
+        for prior in self._plan.agents[work.agent_id]:
+            if (
+                prior.sequence_index >= work.sequence_index
+                or prior.run_id != work.run_id
+                or (prior.phase, prior.version_reference) not in planned_prior
+                or scenario_id
+                not in {
+                    str(item["scenario_id"])
+                    for item in prior.assignments
+                }
+            ):
+                continue
+            correlations = self._scenario_telemetry.get(prior.key, {}).get(
+                scenario_id,
+                (),
+            )
+            prior_ids.update(item.operation_id for item in correlations)
+        if len(prior_ids) > 100:
+            raise RuntimeFailure(
+                "evidence_bound_exceeded",
+                "Prior lifecycle trace evidence exceeds the reviewed bound.",
+            )
+        return prior_ids
 
     @staticmethod
     def _insight_payload(
@@ -2695,10 +2758,18 @@ class LiveRuntimeHooks:
                 healthy_definition,
                 ticket_image=self._config.azure.ticket_image,
             )
+            prior_operation_sets = {
+                str(assignment["scenario_id"]): self._prior_scenario_operation_ids(
+                    work,
+                    str(assignment["scenario_id"]),
+                )
+                for assignment in work.assignments
+            }
             allocation = self._allocate_run_insights(
                 work,
                 insights,
                 scenario_correlations,
+                prior_operation_sets,
             )
             run_expected_count = sum(
                 int(assignment["expected"]["finding_count"])
@@ -2869,6 +2940,10 @@ class LiveRuntimeHooks:
                         }
                         for item in assignment_correlations
                     ][:100],
+                    "prior_trace_ids": [
+                        opaque_reference(item)
+                        for item in sorted(prior_operation_sets[scenario_id])
+                    ],
                     "insights": [
                         self._insight_payload(item, agent.representative_tools)
                         for item in sampled_scenario_insights

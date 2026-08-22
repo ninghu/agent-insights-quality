@@ -168,6 +168,7 @@ def _bundle(payload: dict, work, scenario_id: str) -> dict:
                 "observed_at": "2026-08-21T07:00:30Z",
             }
         ],
+        "prior_trace_ids": [],
         "insights": insights,
         "run_noise_insights": [],
         "previous_insight": None,

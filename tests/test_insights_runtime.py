@@ -1204,12 +1204,11 @@ def test_scope_insights_requires_nonempty_trace_ids_in_operation_set() -> None:
         start + timedelta(minutes=2),
         start + timedelta(minutes=2),
     )
-    with pytest.raises(RuntimeFailure, match="do not all belong"):
-        AgentInsightsClient.scope_insights(
-            [unrelated],
-            checkpoint, start, start + timedelta(hours=1),
-            operation_ids=frozenset([op_id]),
-        )
+    assert AgentInsightsClient.scope_insights(
+        [unrelated],
+        checkpoint, start, start + timedelta(hours=1),
+        operation_ids=frozenset([op_id]),
+    ) == [unrelated]
 
     matching = contract_insight(
         "x",

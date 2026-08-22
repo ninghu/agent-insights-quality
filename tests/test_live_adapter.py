@@ -335,6 +335,77 @@ def test_run_insight_accounting_assigns_every_unique_card_once(
     assert [item["id"] for item in allocation.extra_noise] == ["extra"]
 
 
+def test_run_insight_accounting_accepts_only_proven_same_scenario_prior_traces(
+    tmp_path: Path,
+) -> None:
+    hooks, plan, _, _, _ = _prepared_hooks(tmp_path, [])
+    scenario_id = "aiq-scn-060-fixed-issue-recurrence"
+    work = next(
+        item
+        for versions in plan.agents.values()
+        for item in versions
+        if item.phase == "recurred"
+        and any(
+            assignment["scenario_id"] == scenario_id
+            for assignment in item.assignments
+        )
+    )
+    current_trace = "a" * 32
+    prior_trace = "b" * 32
+    unknown_trace = "c" * 32
+    correlations = {
+        scenario_id: (TraceCorrelation(current_trace, 1, 1),),
+    }
+    prior = {scenario_id: {prior_trace}}
+    category = str(hooks._registry.scenarios[scenario_id]["expected"]["category"])
+
+    allocation = hooks._allocate_run_insights(
+        work,
+        [
+            _contract_live_insight(
+                "stale",
+                [current_trace, prior_trace],
+                category,
+            )
+        ],
+        correlations,
+        prior,
+    )
+    assert [item["id"] for item in allocation.by_scenario[scenario_id]] == [
+        "stale"
+    ]
+    prior_only = hooks._allocate_run_insights(
+        work,
+        [
+            _contract_live_insight(
+                "prior-only",
+                [prior_trace],
+                category,
+            )
+        ],
+        correlations,
+        prior,
+    )
+    assert [item["id"] for item in prior_only.by_scenario[scenario_id]] == [
+        "prior-only"
+    ]
+
+    with pytest.raises(RuntimeFailure) as caught:
+        hooks._allocate_run_insights(
+            work,
+            [
+                _contract_live_insight(
+                    "unknown",
+                    [current_trace, unknown_trace],
+                    category,
+                )
+            ],
+            correlations,
+            prior,
+        )
+    assert caught.value.code == "insight_scope_unproven"
+
+
 @pytest.mark.parametrize(
     "recipe_id",
     sorted(RecipeRegistry.load().mutations),
@@ -1888,6 +1959,17 @@ def test_recurred_version_uses_latest_matching_faulted_insight_across_correction
     previous = hooks._prior_insight(works[2], scenario_id)
     assert previous is not None
     assert previous["version_digest"] == works[0].version_reference
+    hooks._scenario_telemetry[works[0].key] = {
+        scenario_id: (TraceCorrelation("a" * 32, 1, 1),),
+    }
+    hooks._scenario_telemetry[works[1].key] = {
+        scenario_id: (TraceCorrelation("b" * 32, 1, 1),),
+    }
+    assert hooks._prior_scenario_operation_ids(works[2], scenario_id) == {
+        "a" * 32,
+        "b" * 32,
+    }
+    assert hooks._prior_scenario_operation_ids(works[0], scenario_id) == set()
 
 
 def test_transient_endpoint_failure_resumes_without_replaying_completed_fixtures(

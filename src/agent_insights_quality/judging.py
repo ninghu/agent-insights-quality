@@ -76,6 +76,7 @@ def project_evidence(raw: dict[str, Any]) -> dict[str, Any]:
         "ground_truth",
         "mutation",
         "trace_evidence",
+        "prior_trace_ids",
         "insights",
         "previous_insight",
     }
@@ -196,6 +197,7 @@ def project_evidence(raw: dict[str, Any]) -> dict[str, Any]:
             ],
         },
         "trace_evidence": [_project_trace(item) for item in raw["trace_evidence"][:100]],
+        "prior_trace_ids": list(dict.fromkeys(raw["prior_trace_ids"]))[:100],
         "insights": [_project_insight(item) for item in sampled_insights],
         "run_noise_insights": [_project_insight(item) for item in sampled_noise],
         "previous_insight": deepcopy(raw["previous_insight"]),

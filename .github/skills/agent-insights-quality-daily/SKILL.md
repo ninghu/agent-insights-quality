@@ -146,6 +146,9 @@ For each planned wave:
 8. For sequential versions, record the current `version_sequence` phase/digest in evidence and
    results. Validate current traces against that phase, and validate prior-insight phase/run/digest
    metadata separately so stale evidence, deduplication, resolution, and recurrence can be tested.
+   Carry only exact prior-phase trace IDs proven by persisted telemetry for the same planned
+   scenario/version sequence. Links to those IDs are `cross_version_stale` quality failures; any
+   other non-current ID is unproven provenance and remains `INCONCLUSIVE`.
 
 Store raw synthetic artifacts only in the private 90-day artifact store. Repository evidence is a
 sanitized summary and an approved public-safe link, never a raw payload.
