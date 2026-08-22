@@ -53,6 +53,11 @@ def test_five_exact_healthy_agents_have_reviewed_implementation_assets() -> None
             for tool in agent.definition["tools"]:
                 assert tool["strict"] is True
                 assert tool["parameters"]["additionalProperties"] is False
+                assert all(
+                    property_schema.get("type")
+                    in {"array", "boolean", "integer", "number", "object", "string"}
+                    for property_schema in tool["parameters"]["properties"].values()
+                )
         else:
             assert agent.source is not None
             assert agent.definition["protocol_versions"] == [
@@ -76,7 +81,17 @@ def test_healthcare_contract_is_scheduling_only_and_confirmation_bounded() -> No
     create_tool = next(
         tool for tool in healthcare.definition["tools"] if tool["name"] == "appointment_create"
     )
-    assert create_tool["parameters"]["properties"]["confirmed"] == {"const": True}
+    assert create_tool["parameters"]["properties"]["confirmed"] == {
+        "type": "boolean",
+        "const": True,
+    }
+    cancel_tool = next(
+        tool for tool in healthcare.definition["tools"] if tool["name"] == "appointment_cancel"
+    )
+    assert cancel_tool["parameters"]["properties"]["confirmed"] == {
+        "type": "boolean",
+        "const": True,
+    }
     assert set(create_tool["parameters"]["required"]) == {
         "slot_id",
         "patient_id",
@@ -96,6 +111,22 @@ def test_healthcare_contract_is_scheduling_only_and_confirmation_bounded() -> No
     }
 
 
+def test_every_prompt_fixture_names_one_unambiguous_expected_tool() -> None:
+    for agent in load_healthy_agents():
+        if agent.kind != "prompt":
+            continue
+        assert "always produce a grounded textual final answer" in agent.definition[
+            "instructions"
+        ]
+        for fixture in agent.fixtures:
+            assert len(fixture.expected_tool_calls) == 1
+            expected_tool = fixture.expected_tool_calls[0]
+            assert f"Call only {expected_tool}" in fixture.input
+            if any(
+                marker in fixture.input
+                for marker in ("location_id", "provider_id", "slot_id")
+            ):
+                assert "prerequisite lookup" in fixture.input
 def test_prompt_definition_resolves_model_only_at_runtime() -> None:
     weather = next(agent for agent in load_healthy_agents() if agent.id == "aiq-001-weather")
     resolved = weather.definition_for_deployment(model_deployment_name="runtime-model")

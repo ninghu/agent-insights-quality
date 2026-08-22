@@ -1753,7 +1753,7 @@ def validate_report_layout() -> None:
         r"(?:(?P<rerun>aiq-[0-9]{8}-r[0-9]{2})/)?"
         r"(?P<filename>plan\.json|plan\.md|report\.json|report\.md|failure-email\.html|"
         r"readiness-failure\.json|readiness-failure\.md|email-handoff\.json|"
-        r"email-send-request\.json|email-receipt\.json)$"
+        r"email-send-request\.json|email-receipt\.json|daily-status\.json)$"
     )
     files_by_record: dict[str, set[str]] = {}
     for path in sorted(reports_root.rglob("*")):
@@ -1796,6 +1796,8 @@ def validate_report_layout() -> None:
         legacy_readiness_failure | current_readiness_failure
     ) - {"failure-email.html"}
     operational_failure = complete_report | {"failure-email.html"}
+    evidence_handoff = {"plan.json", "plan.md", "daily-status.json"}
+    planned_run = {"plan.json", "plan.md"}
     legacy_readiness_records = {"2026/08/21"}
     for report_record, filenames in files_by_record.items():
         if filenames & readiness_markers:
@@ -1817,7 +1819,14 @@ def validate_report_layout() -> None:
                 raise ContractError(
                     f"reports/daily/{report_record}: legacy email handoff is historical-only"
                 )
-        elif filenames not in (complete_report, operational_failure):
+        elif filenames not in (
+            complete_report,
+            complete_report | {"daily-status.json"},
+            operational_failure,
+            operational_failure | {"daily-status.json"},
+            evidence_handoff,
+            planned_run,
+        ):
             raise ContractError(
                 f"reports/daily/{report_record}: incomplete daily report artifact set"
             )
@@ -1899,6 +1908,14 @@ def validate_report_artifacts(
         markdown = path.with_name("plan.md").read_text(encoding="ascii")
         if plan["plan_id"] not in markdown or plan["report_date"] not in markdown:
             raise ContractError(f"{label}: plan.md does not identify its canonical plan")
+        status_path = path.with_name("daily-status.json")
+        if status_path.is_file():
+            from agent_insights_quality.daily import validate_daily_status
+
+            validate_daily_status(
+                load_data(status_path),
+                plan,
+            )
     for path in sorted((ROOT / "reports" / "daily").rglob("report.json")):
         label = str(path.relative_to(ROOT))
         report = load_data(path)

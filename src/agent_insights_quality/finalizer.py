@@ -18,7 +18,11 @@ from agent_insights_quality.contracts import (
 )
 from agent_insights_quality.generated_paths import validate_generated_paths
 from agent_insights_quality.links import RuntimeLinkContext
-from agent_insights_quality.planning import generate_daily_plan
+from agent_insights_quality.planning import (
+    generate_daily_plan,
+    render_plan_markdown,
+    serialize_plan,
+)
 from agent_insights_quality.public_safety import require_public_artifact_safe
 from agent_insights_quality.reporting import (
     build_email_send_request,
@@ -27,7 +31,11 @@ from agent_insights_quality.reporting import (
     render_trend,
     validate_report_consistency,
 )
-from agent_insights_quality.artifact_io import content_hash, write_json
+from agent_insights_quality.artifact_io import (
+    content_hash,
+    write_bytes_atomic,
+    write_json,
+)
 
 
 def build_preflight_plan(report_date: str, generated_at: str) -> dict[str, Any]:
@@ -274,6 +282,21 @@ def write_daily_artifacts(
     *,
     failure_email: str | None = None,
 ) -> Path:
+    return write_daily_artifacts_to_reports_root(
+        root / "reports",
+        plan,
+        report,
+        failure_email=failure_email,
+    )
+
+
+def write_daily_artifacts_to_reports_root(
+    reports_root: Path,
+    plan: dict[str, Any],
+    report: dict[str, Any],
+    *,
+    failure_email: str | None = None,
+) -> Path:
     manifests = load_agent_manifests()
     catalog = load_scenario_catalog({item["id"] for item in manifests})
     validate_instance(plan, SCHEMAS / "daily-plan.schema.json", "daily plan")
@@ -292,7 +315,10 @@ def write_daily_artifacts(
     if report["report_date"] != plan["report_date"] or report["plan_id"] != plan["plan_id"]:
         raise ContractError("Daily report does not match the daily plan")
     relative_root = plan["artifact_directory"]
-    target = root / Path(relative_root)
+    relative_path = Path(relative_root)
+    if not relative_path.parts or relative_path.parts[0] != "reports":
+        raise ContractError("Daily artifact directory must remain under reports/")
+    target = reports_root.joinpath(*relative_path.parts[1:])
     generated = [
         f"{relative_root}/plan.json",
         f"{relative_root}/plan.md",
@@ -304,12 +330,7 @@ def write_daily_artifacts(
     if failure_email is not None:
         generated.append(f"{relative_root}/failure-email.html")
     validate_generated_paths(generated)
-    plan_markdown = (
-        f"# Agent Insights Quality Plan - {plan['report_date']}\n\n"
-        f"- Plan: `{plan['plan_id']}`\n"
-        f"- Catalog: `{plan['catalog_version']}`\n"
-        f"- Assignments: {len(plan['assignments'])}\n"
-    )
+    plan_markdown = render_plan_markdown(plan, catalog)
     report_markdown = render_report_markdown(report)
     require_public_artifact_safe(plan, "Canonical public plan")
     require_public_artifact_safe(report, "Canonical public report")
@@ -323,16 +344,29 @@ def write_daily_artifacts(
         if text:
             require_public_artifact_safe(text, label)
     target.mkdir(parents=True, exist_ok=True)
-    write_json(target / "plan.json", plan)
-    (target / "plan.md").write_bytes(plan_markdown.encode("ascii"))
+    plan_json_path = target / "plan.json"
+    plan_markdown_path = target / "plan.md"
+    plan_json = serialize_plan(plan)
+    plan_markdown_bytes = plan_markdown.encode("ascii")
+    if plan_json_path.exists() and plan_json_path.read_bytes() != plan_json:
+        raise ContractError("Existing daily plan JSON differs from the immutable plan")
+    if (
+        plan_markdown_path.exists()
+        and plan_markdown_path.read_bytes() != plan_markdown_bytes
+    ):
+        raise ContractError("Existing daily plan Markdown differs from the immutable plan")
+    if not plan_json_path.exists():
+        write_bytes_atomic(plan_json_path, plan_json)
+    if not plan_markdown_path.exists():
+        write_bytes_atomic(plan_markdown_path, plan_markdown_bytes)
     write_json(target / "report.json", report)
-    (target / "report.md").write_bytes(report_markdown.encode("ascii"))
+    write_bytes_atomic(target / "report.md", report_markdown.encode("ascii"))
     if failure_email is not None:
         if report["status"] != "INCONCLUSIVE":
             raise ContractError("Failure email can be written only for INCONCLUSIVE reports")
-        (target / "failure-email.html").write_bytes(failure_email.encode("ascii"))
-    write_json(root / "reports" / "latest.json", report)
-    (root / "reports" / "latest.md").write_bytes(report_markdown.encode("ascii"))
+        write_bytes_atomic(target / "failure-email.html", failure_email.encode("ascii"))
+    write_json(reports_root / "latest.json", report)
+    write_bytes_atomic(reports_root / "latest.md", report_markdown.encode("ascii"))
     return target
 
 

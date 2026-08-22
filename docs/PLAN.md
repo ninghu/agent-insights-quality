@@ -97,6 +97,7 @@ GitHub Copilot scheduled automation (GPT-5.6 Sol, `ninghu`)
   |
   +-- deterministic Python orchestrator
   |     |
+  |     +-- fail-closed `run-daily` plan/deploy/resume boundary
   |     +-- Azure deployment/bootstrap (Bicep + Foundry SDK/REST)
   |     +-- daily project and agent-version lifecycle
   |     +-- traffic generation and trace-ingestion checks
@@ -166,6 +167,7 @@ data and public-safe contracts; private Azure, Agent Insights, and ADO identifie
 |   `-- traffic/
 |-- schemas/
 |   |-- daily-plan.schema.json
+|   |-- daily-status.schema.json
 |   |-- evidence-bundle.schema.json
 |   |-- judgment.schema.json
 |   |-- scorecard.schema.json
@@ -192,6 +194,7 @@ data and public-safe contracts; private Azure, Agent Insights, and ADO identifie
 |       `-- YYYY/MM/DD/
 |           |-- plan.md
 |           |-- plan.json
+|           |-- daily-status.json
 |           |-- report.md
 |           `-- report.json
 |-- docs/
@@ -371,7 +374,7 @@ cap of four per agent:
    cost/hallucinations on four, and latency on three.
 7. Create additional immutable versions when an agent cannot safely hold all assigned scenarios in
    one version.
-8. Write `daily-plan.json` before deployment, including every assignment, version digest, traffic
+8. Write `plan.json` before deployment, including every assignment, version digest, traffic
    seed, expected run window, and expected finding.
 
 The randomization is reproducible. A failed run can be replayed exactly from the plan and artifact
@@ -385,13 +388,16 @@ Each date has a reviewable, permanent, sanitized record:
   agent IDs and names, scenario-to-agent/version assignments, deployment waves, endpoint traffic
   counts, expected findings, and expected no-insight controls.
 - `reports/daily/YYYY/MM/DD/plan.json`: schema-validated authority consumed by the orchestrator.
+- `reports/daily/YYYY/MM/DD/daily-status.json`: public-safe evidence-complete handoff that enumerates
+  bounded primary judgment targets and the ordered Copilot-owned completion stages without exposing
+  private artifact coordinates.
 - `reports/daily/YYYY/MM/DD/report.md`: detailed engineering report with the complete numeric
   scorecard, per-agent/per-version/per-scenario results, field-level judgments, duplicate/umbrella
   analysis, opaque trace and Agent Insights references, memory changes, bug actions, costs/latency,
   and retained diagnostics.
 - `reports/daily/YYYY/MM/DD/report.json`: canonical machine-readable report used to render Markdown,
   LT email, trends, and future comparisons.
-- Reruns use `reports/daily/YYYY/MM/DD/aiq-YYYYMMDD-rNN/` with the same four filenames so each
+- Reruns use `reports/daily/YYYY/MM/DD/aiq-YYYYMMDD-rNN/` with the same artifact set so each
   rerun preserves its full plan identity and cannot overwrite the original daily artifacts.
 
 The LT email links to `report.md` for readers who want the full numbers.
@@ -400,11 +406,16 @@ The LT email links to `report.md` for readers who want the full numbers.
 
 ### Phase A: Planning, provisioning, and preflight
 
-1. Resolve the Pacific report date and validate static runtime configuration, identity, and subscription.
-2. Generate and schema-validate the complete daily plan and exact catalog digest.
-3. Deploy the reviewed qualification-project Bicep with `plan.project.name`, report date, and catalog
-   digest, then validate the exact project, connections, endpoints, model deployments, quota, and
-   report/bug integrations.
+1. Resolve the Pacific report date, then generate or byte-validate the immutable weekday plan,
+   including an explicit `rNN` suffix for reruns.
+2. Validate protected runtime configuration and identity only after the plan exists.
+3. Deploy the reviewed qualification-project Bicep with the exact `plan.project.name`, report date,
+   expiry, catalog hash, and `connectionNameSuffix=plan.project.name`. Pass only protected resource
+   names/IDs; ARM resolves the Application Insights connection string server-side.
+4. Persist the successful deployment, then wait a bounded 15 minutes for project-managed-identity and
+   ACR data-plane authorization propagation. Do not infer readiness from role-assignment listings.
+5. Validate the exact project, connections, endpoints, model deployments, quota, and report/bug
+   integrations, then execute or resume the live adapter from durable private state.
 
 ### Phase B: Healthy baseline
 
@@ -434,6 +445,19 @@ For each planned wave:
 
 Different agents run concurrently. Versions of the same agent run sequentially because version
 lineage, monitor checkpoints, and previous-insight reconciliation are part of the test.
+Hosted-code and custom-container recovery, creation, and activation polling additionally share one
+process-wide gate to avoid cross-hosted deployment contention. Prompt deployment can remain parallel,
+and all endpoint traffic resumes normal cross-agent concurrency after deployment.
+Prompt and hosted session requests retry bounded pre-response HTTP 408, 429, and 5xx failures with
+`Retry-After` or conservative exponential backoff. Durable per-fixture receipts prevent replay of
+completed traffic on outer resume. Nontransient 400s and failures with a response ID fail immediately,
+and no response body is promoted into public state.
+Each scenario envelope carries the selected agent's reviewed customer-like synthetic domain input
+and expected tool contract. The scenario ID, provenance, correlation, and bounded recipe marker are
+additive metadata rather than a replacement generic prompt.
+Zero-finding prompt assignments validate the exact tool sequence and require a grounded textual
+answer after every tool result. Faulted assignments relax those checks only when needed to preserve
+the injected failure for Agent Insights.
 
 ### Phase D: Validation and judgment
 
@@ -443,11 +467,17 @@ lineage, monitor checkpoints, and previous-insight reconciliation are part of th
 4. Validate the judge's strict JSON output and calculate the scorecard.
 5. Run an independent, blinded Copilot verification for each automatic-bug candidate.
 
+After evidence completion, `run-daily` validates every selected scenario's final evidence reference,
+writes bounded primary packages in private state, and emits `daily-status.json`. That handoff names
+only existing CLI contracts and permits verifier work only after primary confidence, deterministic,
+provenance, reproducibility, and Agent Insights ownership gates establish an eligible candidate.
+
 ### Phase E: Triage, memory, bugs, and report
 
 1. Reconcile today's findings against the durable quality memory.
 2. Search ADO for exact fingerprint matches and likely semantic duplicates.
-3. Create, update, or reopen bugs only when all gates pass.
+3. Record ADO candidates only while the reviewed policy keeps auto-apply false; no write request is
+   issued.
 4. Generate the detailed English daily `plan.md`, `report.md`, JSON records, and the simpler
    narrative LT email HTML.
 5. Upload raw/sanitized artifacts to the 90-day storage location.
@@ -828,6 +858,10 @@ GitHub Copilot automation itself, not repeated as operational timing instruction
       duplicate/reopen simulation, an email-render/delivery test, and finally one fully enabled daily
       run.
 
+The implementation through workstream 11 is present behind `config/runtime-readiness.yaml`. Live
+qualification, schedule enablement, recipient promotion, and ADO writes remain separate
+human-reviewed operational decisions.
+
 Workstreams 2, 3, 7, and 10 can proceed in parallel after repository contracts are fixed. The live
 orchestrator, memory, ADO, and final automation depend on those contracts.
 
@@ -858,7 +892,8 @@ orchestrator, memory, ADO, and final automation depend on those contracts.
 - **Trace ingestion delay:** poll exact trace IDs with a bounded deadline; never judge a partial trace
   set as complete.
 - **Daily project propagation:** make the reviewed Bicep deployment idempotent, then poll the exact
-  preprovisioned project and connections for readiness.
+  preprovisioned project and connections for readiness after a bounded 15-minute project-MI/ACR
+  propagation gate. A terminal agent `CodeError` is an operational failure, not a quality verdict.
 - **Synthetic health/finance data sensitivity:** use generated fictitious identities and no real
   medical or financial records.
 - **Automation self-modification:** generated-path allowlist and branch protection prevent changes to

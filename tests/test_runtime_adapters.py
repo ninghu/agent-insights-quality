@@ -568,6 +568,200 @@ def test_prompt_invocation_binds_exact_version_and_returns_non_trace_receipt() -
     )
 
 
+def test_prompt_rate_limit_retries_with_conservative_default_backoff() -> None:
+    fixture = HealthyFixture(
+        id="weather-retry",
+        input="weather",
+        output_contains="ready",
+        tool_outputs={},
+        expected_tool_calls=(),
+    )
+    transport = QueueTransport(
+        [
+            _response(429, {"error": {"code": "rate_limit_exceeded"}}),
+            _response(
+                200,
+                {
+                    "id": "response-after-throttle",
+                    "status": "completed",
+                    "output_text": "ready",
+                },
+            ),
+        ]
+    )
+    sleeps: list[float] = []
+    client = FoundryInvocationClient(
+        PROJECT_ENDPOINT,
+        lambda: "token",
+        transport=transport,
+        sleeper=sleeps.append,
+    )
+
+    receipt = client.invoke_prompt(
+        DeploymentReceipt(
+            "aiq-001-weather",
+            "12",
+            "prompt",
+            "sha256:" + ("c" * 64),
+            "run",
+            "active",
+        ),
+        fixture,
+    )
+
+    assert receipt.response_id == "response-after-throttle"
+    assert sum(sleeps) == pytest.approx(60)
+    assert all(0 < interval <= 0.1 for interval in sleeps)
+    assert len(transport.calls) == 2
+
+
+def test_hosted_session_rate_limit_retries_before_creating_one_session() -> None:
+    fixture = HealthyFixture(
+        id="finance-retry",
+        input="prepare",
+        output_contains="ready",
+        tool_outputs={},
+        expected_tool_calls=(),
+    )
+    transport = QueueTransport(
+        [
+            _response(429, {"error": {"code": "rate_limit_exceeded"}}),
+            _response(
+                201,
+                {
+                    "agent_session_id": "session-after-throttle",
+                    "version_indicator": {
+                        "type": "version_ref",
+                        "agent_version": "8",
+                    },
+                },
+            ),
+            _response(
+                200,
+                {
+                    "id": "response-after-throttle",
+                    "status": "completed",
+                    "output_text": "ready",
+                },
+            ),
+            _response(204),
+        ]
+    )
+    sleeps: list[float] = []
+    client = FoundryInvocationClient(
+        PROJECT_ENDPOINT,
+        lambda: "token",
+        transport=transport,
+        sleeper=sleeps.append,
+    )
+
+    receipt = client.invoke_hosted(
+        DeploymentReceipt(
+            "aiq-003-finance",
+            "8",
+            "hosted_code",
+            "sha256:" + ("d" * 64),
+            "run",
+            "active",
+        ),
+        fixture,
+    )
+
+    assert receipt.session_id == "session-after-throttle"
+    assert sum(sleeps) == pytest.approx(60)
+    assert all(0 < interval <= 0.1 for interval in sleeps)
+    assert sum("/endpoint/sessions?" in call["url"] for call in transport.calls) == 2
+    assert sum(
+        "/endpoint/protocols/openai/responses?" in call["url"]
+        for call in transport.calls
+    ) == 1
+
+
+@pytest.mark.parametrize("status", [408, 500, 502, 503, 504])
+def test_pre_response_transient_status_is_preserved_without_body(
+    status: int,
+) -> None:
+    fixture = HealthyFixture(
+        id="transient-status",
+        input="run",
+        output_contains="unused",
+        tool_outputs={},
+        expected_tool_calls=(),
+    )
+    transport = QueueTransport(
+        [
+            _response(
+                status,
+                {"error": {"code": "private-service-detail"}},
+                headers={"x-ms-request-id": "request-reference"},
+            )
+        ]
+    )
+    client = FoundryInvocationClient(
+        PROJECT_ENDPOINT,
+        lambda: "token",
+        transport=transport,
+        transient_retry_attempts=1,
+        sleeper=lambda _seconds: None,
+    )
+
+    with pytest.raises(InvocationEndpointError) as caught:
+        client.invoke_prompt(
+            DeploymentReceipt(
+                "aiq-001-weather",
+                "12",
+                "prompt",
+                "sha256:" + ("c" * 64),
+                "run",
+                "active",
+            ),
+            fixture,
+        )
+
+    assert caught.value.transient is True
+    assert caught.value.receipt.http_status == status
+    assert caught.value.receipt.response_id is None
+    assert "private-service-detail" not in str(caught.value)
+
+
+def test_nontransient_bad_request_is_not_retried() -> None:
+    fixture = HealthyFixture(
+        id="bad-request",
+        input="run",
+        output_contains="unused",
+        tool_outputs={},
+        expected_tool_calls=(),
+    )
+    transport = QueueTransport(
+        [_response(400, {"error": {"code": "invalid_request"}})]
+    )
+    sleeps: list[float] = []
+    client = FoundryInvocationClient(
+        PROJECT_ENDPOINT,
+        lambda: "token",
+        transport=transport,
+        sleeper=sleeps.append,
+    )
+
+    with pytest.raises(InvocationEndpointError) as caught:
+        client.invoke_prompt(
+            DeploymentReceipt(
+                "aiq-001-weather",
+                "12",
+                "prompt",
+                "sha256:" + ("c" * 64),
+                "run",
+                "active",
+            ),
+            fixture,
+        )
+
+    assert caught.value.transient is False
+    assert caught.value.receipt.http_status == 400
+    assert len(transport.calls) == 1
+    assert sleeps == []
+
+
 def test_hosted_invocation_routes_to_endpoint_with_exact_session_binding() -> None:
     fixture = HealthyFixture(
         id="finance-budget",

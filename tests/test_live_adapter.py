@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
-from threading import Event, Thread
+from threading import Barrier, Event, Lock, Thread
 from typing import Any, Callable
 from zipfile import ZipFile
 
@@ -12,6 +14,7 @@ import pytest
 
 import agent_insights_quality.live_adapter as live
 from agent_insights_quality.agent_runtime import (
+    DeploymentCleanupError,
     DeploymentReceipt,
     DeploymentPollError,
     InvocationEndpointError,
@@ -577,9 +580,57 @@ def test_all_63_traffic_recipes_produce_executable_endpoint_requests(
     for fixture in fixtures:
         request = json.loads(fixture.input)
         assert request["scenario_id"] in scenario_ids
-        assert traffic_recipe_id in request["input"]
+        assert request["input"] in {item.input for item in agent.fixtures}
+        assert traffic_recipe_id in request["synthetic_recipe"]
         assert request["correlation"] not in correlations
         correlations.add(request["correlation"])
+
+
+def test_generated_traffic_preserves_each_agents_reviewed_domain_inputs_and_tools(
+    tmp_path: Path,
+) -> None:
+    hooks, plan, _, _, _ = _prepared_hooks(tmp_path, [])
+    agents = {agent.id: agent for agent in live.load_healthy_agents()}
+    for agent_id, versions in plan.agents.items():
+        work = versions[0]
+        agent = agents[agent_id]
+        fixtures = hooks._fixtures(work, agent)
+        assert fixtures
+        for fixture in fixtures:
+            request_index = int(fixture.id.rsplit(":", 1)[1])
+            base = agent.fixtures[request_index % len(agent.fixtures)]
+            request = json.loads(fixture.input)
+            assert request["input"] == base.input
+            assert fixture.expected_tool_calls == base.expected_tool_calls
+            assert fixture.tool_outputs == base.tool_outputs
+
+
+def test_generated_healthy_prompt_traffic_enforces_output_and_tool_contracts(
+    tmp_path: Path,
+) -> None:
+    hooks, plan, _, _, _ = _prepared_hooks(tmp_path, [])
+    agents = {agent.id: agent for agent in live.load_healthy_agents()}
+    saw_fault = False
+    for agent_id, versions in plan.agents.items():
+        agent = agents[agent_id]
+        if agent.kind != "prompt":
+            continue
+        for work in versions:
+            fixtures = hooks._fixtures(work, agent)
+            expected_by_scenario = {
+                assignment["scenario_id"]: assignment["expected"]["finding_count"]
+                for assignment in work.assignments
+            }
+            for fixture in fixtures:
+                scenario_id = fixture.id.split(":", 1)[0]
+                if expected_by_scenario[scenario_id] == 0:
+                    assert fixture.validate_output is True
+                    assert fixture.validate_tools is True
+                else:
+                    saw_fault = True
+                    assert fixture.validate_output is False
+                    assert fixture.validate_tools is False
+    assert saw_fault
 
 
 class _Deployments:
@@ -796,12 +847,177 @@ def test_live_deploy_preserves_transient_poll_timeout_for_orchestrator_retry(
                 transient=True,
             )
 
-    hooks._deployment_client = TimedOutDeployments()
+    deployments = TimedOutDeployments()
+    hooks._deployment_client = deployments
 
     with pytest.raises(RuntimeFailure) as caught:
         hooks.deploy(work, idempotency_key=f"{work.key}:deploy")
     assert caught.value.code == "agent_deployment_timeout"
     assert caught.value.transient is True
+    hooks.cancel(work)
+    assert deployments.cleaned
+
+
+def test_live_deploy_cleans_exact_version_when_cancellation_arrives_late(
+    tmp_path: Path,
+) -> None:
+    hooks, plan, deployments, _, _ = _prepared_hooks(tmp_path, [])
+    work = next(
+        work
+        for versions in plan.agents.values()
+        for work in versions
+        if work.agent_type == "prompt"
+    )
+
+    class CancelAfterCreate(_Deployments):
+        def deploy_prompt(self, **kwargs):
+            receipt = super().deploy_prompt(**kwargs)
+            hooks._cancel_events.setdefault(work.key, Event()).set()
+            return receipt
+
+    late = CancelAfterCreate()
+    hooks._deployment_client = late
+    with pytest.raises(RuntimeFailure) as caught:
+        hooks.deploy(work, idempotency_key=f"{work.key}:deploy")
+
+    assert caught.value.code == "run_cancelled"
+    assert late.cleaned == [f"{work.agent_name}:1"]
+
+
+def test_live_deploy_retains_late_cleanup_failure_code(tmp_path: Path) -> None:
+    hooks, plan, _, _, _ = _prepared_hooks(tmp_path, [])
+    work = next(
+        work
+        for versions in plan.agents.values()
+        for work in versions
+        if work.agent_type == "prompt"
+    )
+
+    class FailedLateCleanup(_Deployments):
+        def deploy_prompt(self, **kwargs):
+            receipt = super().deploy_prompt(**kwargs)
+            hooks._cancel_events.setdefault(work.key, Event()).set()
+            return receipt
+
+        def cleanup_version(self, _receipt):
+            raise DeploymentCleanupError("Synthetic cleanup conflict.")
+
+    hooks._deployment_client = FailedLateCleanup()
+    with pytest.raises(RuntimeFailure) as caught:
+        hooks.deploy(work, idempotency_key=f"{work.key}:deploy")
+
+    assert caught.value.code == "cancel_partial_failure"
+    assert caught.value.details["failure_codes"] == [
+        "deployment_cleanup_sessions_active"
+    ]
+
+
+def test_hosted_deployments_are_process_serialized_while_prompts_overlap(
+    tmp_path: Path,
+) -> None:
+    first, plan, _, _, _ = _prepared_hooks(tmp_path / "first", [])
+    second, _, _, _, _ = _prepared_hooks(tmp_path / "second", [])
+    prompt_works = [
+        versions[0]
+        for versions in plan.agents.values()
+        if versions[0].agent_type == "prompt"
+    ]
+    hosted_works = [
+        versions[0]
+        for versions in plan.agents.values()
+        if versions[0].agent_type != "prompt"
+    ]
+    assert len(prompt_works) >= 2
+    assert len(hosted_works) >= 2
+
+    class ConcurrencyDeployments(_Deployments):
+        def __init__(self):
+            super().__init__()
+            self.counter_lock = Lock()
+            self.receipt_lock = Lock()
+            self.hosted_active = 0
+            self.hosted_max = 0
+            self.prompt_active = 0
+            self.prompt_max = 0
+            self.prompt_barrier = Barrier(2)
+
+        def _hosted_call(self, operation):
+            with self.counter_lock:
+                self.hosted_active += 1
+                self.hosted_max = max(self.hosted_max, self.hosted_active)
+            try:
+                time.sleep(0.02)
+                return operation()
+            finally:
+                with self.counter_lock:
+                    self.hosted_active -= 1
+
+        def recover_version(self, **kwargs):
+            if kwargs["agent_type"] != "prompt":
+                return self._hosted_call(
+                    lambda: super(ConcurrencyDeployments, self).recover_version(
+                        **kwargs
+                    )
+                )
+            return super().recover_version(**kwargs)
+
+        def _receipt(self, *args, **kwargs):
+            with self.receipt_lock:
+                return super()._receipt(*args, **kwargs)
+
+        def deploy_prompt(self, **kwargs):
+            with self.counter_lock:
+                self.prompt_active += 1
+                self.prompt_max = max(self.prompt_max, self.prompt_active)
+            try:
+                self.prompt_barrier.wait(timeout=2)
+                return super().deploy_prompt(**kwargs)
+            finally:
+                with self.counter_lock:
+                    self.prompt_active -= 1
+
+        def deploy_hosted_source(self, **kwargs):
+            return self._hosted_call(
+                lambda: super(ConcurrencyDeployments, self).deploy_hosted_source(
+                    **kwargs
+                )
+            )
+
+        def deploy_hosted_container(self, **kwargs):
+            return self._hosted_call(
+                lambda: super(
+                    ConcurrencyDeployments,
+                    self,
+                ).deploy_hosted_container(**kwargs)
+            )
+
+    deployments = ConcurrencyDeployments()
+    first._deployment_client = deployments
+    second._deployment_client = deployments
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(
+            pool.map(
+                lambda pair: pair[0].deploy(
+                    pair[1],
+                    idempotency_key=pair[1].key + ":deploy",
+                ),
+                ((first, hosted_works[0]), (second, hosted_works[1])),
+            )
+        )
+    assert deployments.hosted_max == 1
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(
+            pool.map(
+                lambda pair: pair[0].deploy(
+                    pair[1],
+                    idempotency_key=pair[1].key + ":deploy",
+                ),
+                ((first, prompt_works[0]), (second, prompt_works[1])),
+            )
+        )
+    assert deployments.prompt_max == 2
 
 
 def test_insight_lookback_covers_delayed_resume_and_clamps() -> None:
@@ -1241,7 +1457,73 @@ def test_recurred_version_uses_latest_matching_faulted_insight_across_correction
     }
     previous = hooks._prior_insight(works[2], scenario_id)
     assert previous is not None
-    assert previous["version_digest"] == "sha256:" + ("d" * 64)
+    assert previous["version_digest"] == works[0].version_reference
+
+
+def test_transient_endpoint_failure_resumes_without_replaying_completed_fixtures(
+    tmp_path: Path,
+) -> None:
+    start = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    hooks, plan, _, _, _ = _prepared_hooks(
+        tmp_path,
+        [start, start + timedelta(seconds=2)],
+    )
+    work = next(
+        item
+        for versions in plan.agents.values()
+        for item in versions
+        if item.agent_type == "prompt"
+        and sum(int(value["traffic_requests"]) for value in item.assignments) >= 2
+        and not any(
+            hooks._expects_endpoint_failure(
+                item,
+                str(assignment["scenario_id"]),
+            )
+            for assignment in item.assignments
+        )
+    )
+    deployed = hooks.deploy(work, idempotency_key=work.key + ":deploy")
+
+    class TransientSecondFixture(_Invocations):
+        def __init__(self):
+            super().__init__()
+            self.failed = False
+
+        def _invoke(self, receipt, fixture, *, cancelled=None):
+            if len(self.inputs) == 1 and not self.failed:
+                self.failed = True
+                self.inputs.append(fixture.input)
+                raise InvocationEndpointError(
+                    "Agent endpoint returned HTTP 429.",
+                    InvocationFailureReceipt(
+                        receipt.agent_name,
+                        receipt.agent_version,
+                        429,
+                    ),
+                    code="endpoint_rate_limited",
+                    transient=True,
+                )
+            return super()._invoke(receipt, fixture, cancelled=cancelled)
+
+        invoke_prompt = _invoke
+        invoke_hosted = _invoke
+
+    invocations = TransientSecondFixture()
+    hooks._invocation_client = invocations
+    with pytest.raises(RuntimeFailure) as caught:
+        hooks.invoke(work, deployed, idempotency_key=work.key + ":invoke")
+    assert caught.value.code == "endpoint_rate_limited"
+    assert caught.value.transient is True
+    assert caught.value.details["http_status"] == 429
+
+    first_fixture_input = invocations.inputs[0]
+    result = hooks.invoke(work, deployed, idempotency_key=work.key + ":invoke")
+    fixture_count = sum(
+        int(assignment["traffic_requests"]) for assignment in work.assignments
+    )
+    assert result["completed_count"] == fixture_count
+    assert invocations.inputs.count(first_fixture_input) == 1
+    assert len(invocations.inputs) == fixture_count + 1
 
 
 def test_realized_windows_are_exact_non_overlapping_and_feed_evidence(
@@ -1336,7 +1618,7 @@ def test_realized_windows_are_exact_non_overlapping_and_feed_evidence(
     assert evidence["evidence_count"] == len(pair[1].assignments)
     assert (
         hooks._prior_insight(pair[1], scenario_id)["version_digest"]
-        == previous_deployment.artifact_digest
+        == pair[0].version_reference
     )
     first = hooks._plan.agents[pair[1].agent_id][0]
     assert hooks._prior_insight(first, scenario_id) is None
@@ -1352,6 +1634,15 @@ def test_realized_windows_are_exact_non_overlapping_and_feed_evidence(
     assert bundle["run"]["analysis_window_start"] == hooks._insight_windows[
         pair[1].key
     ][0].isoformat()
+    assert bundle["agent"]["name"] == pair[1].agent_name
+    assert bundle["agent"]["version_digest"] == pair[1].version_reference
+    assert bundle["run"]["run_id"] == pair[1].run_id
+    assert bundle["version_sequence"]["run_id"] == pair[1].run_id
+    assert bundle["version_sequence"]["version_digest"] == pair[1].version_reference
+    assert all(
+        trace["version_digest"] == pair[1].version_reference
+        for trace in bundle["trace_evidence"]
+    )
     assert len(bundle["trace_evidence"]) == int(
         pair[1].assignments[0]["traffic_requests"]
     )

@@ -134,11 +134,22 @@ class InvocationFailureReceipt:
 
 
 class InvocationEndpointError(RuntimeContractError):
-    """Raised when the hosted endpoint returns a non-success HTTP status after exact-version session creation."""
+    """A sanitized prompt/session endpoint failure with retry-safety metadata."""
 
-    def __init__(self, message: str, receipt: InvocationFailureReceipt) -> None:
+    def __init__(
+        self,
+        message: str,
+        receipt: InvocationFailureReceipt,
+        *,
+        code: str = "endpoint_invocation_failed",
+        transient: bool = False,
+        retry_after_seconds: float | None = None,
+    ) -> None:
         super().__init__(message)
         self.receipt = receipt
+        self.code = code
+        self.transient = transient
+        self.retry_after_seconds = retry_after_seconds
 
 
 @dataclass(frozen=True, slots=True)
@@ -963,13 +974,28 @@ class FoundryInvocationClient:
         transport: HttpTransport | None = None,
         request_timeout_seconds: float = 120,
         max_tool_turns: int = 4,
+        transient_retry_attempts: int = 3,
+        transient_retry_interval_seconds: float = 60,
         sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
+        if (
+            request_timeout_seconds <= 0
+            or max_tool_turns <= 0
+            or transient_retry_attempts <= 0
+            or transient_retry_attempts > 5
+            or transient_retry_interval_seconds < 0
+            or transient_retry_interval_seconds > 300
+        ):
+            raise RuntimeContractError(
+                "Invocation timeouts, turns, and retry settings must be bounded and valid."
+            )
         self._endpoint = _validate_project_endpoint(project_endpoint)
         self._token_provider = token_provider
         self._transport = transport or UrllibTransport()
         self._request_timeout = request_timeout_seconds
         self._max_tool_turns = max_tool_turns
+        self._transient_retry_attempts = transient_retry_attempts
+        self._transient_retry_interval = transient_retry_interval_seconds
         self._sleep = sleeper
 
     def invoke_prompt(
@@ -987,9 +1013,12 @@ class FoundryInvocationClient:
             "version": receipt.agent_version,
         }
         self._require_not_cancelled(cancelled)
-        raw_response = self._post_response(
+        raw_response = self._invoke_response(
+            receipt,
+            fixture,
             "/openai/v1/responses",
             {"input": fixture.input, "store": True, "agent_reference": reference},
+            cancelled=cancelled,
         )
         response = raw_response.json()
         called_tools: list[str] = []
@@ -1099,7 +1128,9 @@ class FoundryInvocationClient:
             if not response_id:
                 raise RuntimeContractError("Prompt response omitted its response ID.")
             self._require_not_cancelled(cancelled)
-            raw_response = self._post_response(
+            raw_response = self._invoke_response(
+                receipt,
+                fixture,
                 "/openai/v1/responses",
                 {
                     "input": outputs,
@@ -1107,6 +1138,7 @@ class FoundryInvocationClient:
                     "store": True,
                     "agent_reference": reference,
                 },
+                cancelled=cancelled,
             )
             response = raw_response.json()
         raise RuntimeContractError("Prompt agent exceeded the bounded tool turn limit.")
@@ -1121,7 +1153,9 @@ class FoundryInvocationClient:
         if receipt.agent_type not in {"hosted_code", "hosted_custom_container"}:
             raise RuntimeContractError("Hosted invocation requires a hosted deployment.")
         self._require_not_cancelled(cancelled)
-        session = self._post(
+        session_response = self._invoke_response(
+            receipt,
+            fixture,
             f"/agents/{_quote(receipt.agent_name)}/endpoint/sessions",
             {
                 "version_indicator": {
@@ -1130,7 +1164,9 @@ class FoundryInvocationClient:
                 }
             },
             hosted=True,
+            cancelled=cancelled,
         )
+        session = session_response.json()
         session_id = _first_text(session, "agent_session_id", "session_id", "id")
         indicator = session.get("version_indicator")
         resolved = (
@@ -1151,47 +1187,22 @@ class FoundryInvocationClient:
                     "Hosted session did not bind to the exact deployed version."
                 )
             self._require_not_cancelled(cancelled)
-            raw_response = self._call(
-                "POST",
+            raw_response = self._invoke_response(
+                receipt,
+                fixture,
                 (
                     f"/agents/{_quote(receipt.agent_name)}"
                     "/endpoint/protocols/openai/responses"
                 ),
-                body=_json_bytes(
-                    {
-                        "input": fixture.input,
-                        "store": False,
-                        "agent_session_id": session_id,
-                    }
-                ),
+                {
+                    "input": fixture.input,
+                    "store": False,
+                    "agent_session_id": session_id,
+                },
                 hosted=True,
-                include_api_version=True,
+                cancelled=cancelled,
+                session_id=session_id,
             )
-            if raw_response.status_code not in {200, 201, 202}:
-                request_id = _request_id(raw_response)
-                body_payload: Mapping[str, Any] | None = None
-                try:
-                    body_payload = raw_response.json()
-                except RuntimeContractError:
-                    pass
-                resp_id = (
-                    str(body_payload.get("id") or "") or None
-                    if isinstance(body_payload, Mapping)
-                    else None
-                )
-                inv_id = _invocation_id(body_payload) if isinstance(body_payload, Mapping) else None
-                raise InvocationEndpointError(
-                    f"Hosted endpoint returned HTTP {raw_response.status_code}.",
-                    InvocationFailureReceipt(
-                        agent_name=receipt.agent_name,
-                        agent_version=receipt.agent_version,
-                        http_status=raw_response.status_code,
-                        response_id=resp_id,
-                        invocation_id=inv_id,
-                        request_id=request_id,
-                        session_id=session_id,
-                    ),
-                )
             response = raw_response.json()
             return _invocation_receipt(
                 receipt,
@@ -1257,6 +1268,107 @@ class FoundryInvocationClient:
             hosted=hosted,
             include_api_version=not path.startswith("/openai/v1/"),
         )
+
+    @staticmethod
+    def _retry_after(response: HttpResponse) -> float | None:
+        for name, value in response.headers.items():
+            if name.casefold() != "retry-after":
+                continue
+            try:
+                seconds = float(value)
+            except (TypeError, ValueError):
+                return None
+            return seconds if 0 <= seconds <= 300 else None
+        return None
+
+    @staticmethod
+    def _response_identity(
+        response: HttpResponse,
+    ) -> tuple[str | None, str | None]:
+        try:
+            payload = response.json()
+        except RuntimeContractError:
+            return None, None
+        response_id = str(payload.get("id") or "") or None
+        return response_id, _invocation_id(payload)
+
+    def _endpoint_error(
+        self,
+        receipt: DeploymentReceipt,
+        response: HttpResponse,
+        *,
+        session_id: str | None,
+    ) -> InvocationEndpointError:
+        response_id, invocation_id = self._response_identity(response)
+        status = response.status_code
+        transient = response_id is None and (
+            status in {408, 429} or 500 <= status <= 599
+        )
+        code = (
+            "endpoint_rate_limited"
+            if status == 429
+            else "endpoint_request_timeout"
+            if status == 408
+            else "endpoint_service_unavailable"
+            if 500 <= status <= 599
+            else "endpoint_invocation_failed"
+        )
+        return InvocationEndpointError(
+            f"Agent endpoint returned HTTP {status}.",
+            InvocationFailureReceipt(
+                agent_name=receipt.agent_name,
+                agent_version=receipt.agent_version,
+                http_status=status,
+                response_id=response_id,
+                invocation_id=invocation_id,
+                request_id=_request_id(response),
+                session_id=session_id,
+            ),
+            code=code,
+            transient=transient,
+            retry_after_seconds=self._retry_after(response),
+        )
+
+    def _invoke_response(
+        self,
+        receipt: DeploymentReceipt,
+        fixture: HealthyFixture,
+        path: str,
+        body: Mapping[str, Any],
+        *,
+        hosted: bool = False,
+        cancelled: Callable[[], bool] | None = None,
+        session_id: str | None = None,
+    ) -> HttpResponse:
+        del fixture
+        for attempt in range(1, self._transient_retry_attempts + 1):
+            self._require_not_cancelled(cancelled)
+            response = self._call(
+                "POST",
+                path,
+                body=_json_bytes(body),
+                hosted=hosted,
+                include_api_version=not path.startswith("/openai/v1/"),
+            )
+            if response.status_code in {200, 201, 202}:
+                return response
+            error = self._endpoint_error(
+                receipt,
+                response,
+                session_id=session_id,
+            )
+            if not error.transient or attempt == self._transient_retry_attempts:
+                raise error
+            delay = (
+                error.retry_after_seconds
+                if error.retry_after_seconds is not None
+                else min(
+                    self._transient_retry_interval * (2 ** (attempt - 1)),
+                    300,
+                )
+            )
+            self._interruptible_sleep(delay, cancelled)
+        raise AssertionError("unreachable")
 
     def _call(
         self,

@@ -18,6 +18,9 @@ Enter the workflow only through:
 python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD>
 ```
 
+Use `--rerun N` only for an explicit rerun; it creates `aiq-YYYYMMDD-rNN`. The default private
+receipt root is `.aiq-runtime/` and may be replaced only with another protected private path.
+
 `config/runtime-readiness.yaml` is human-reviewed authority. If any mandatory component is false,
 the wrapper stops all operational phases: it does not deploy Azure resources, send agent traffic,
 query or trigger Agent Insights, access ADO, transition memory, clean resources, or mutate/open a
@@ -53,29 +56,54 @@ cannot modify readiness configuration or treat contract scaffolding as an operat
 ## Phase A: deterministic preflight and plan
 
 1. Resolve the Pacific report date. Use project `aiq-YYYYMMDD`; a rerun is `aiq-YYYYMMDD-rNN`.
-2. Validate the authorized private runtime configuration without printing private values:
+2. Generate or byte-validate the immutable weekday plan and its rendered Markdown before any Azure
+   action. Never replace an existing plan.
+3. Validate the authorized private runtime configuration without printing private values:
    identity, tenant/subscription selection, resource access, Foundry, Logs, model inference, ACR,
    artifact storage, Agent Insights, GitHub, ADO, and connected Microsoft mail.
-3. Verify GPT-5.6 Terra deployments, quota, production API availability, reporting recipient
+4. Deploy `infra/modules/qualification-project.bicep` with the exact plan project name, report date,
+   expiry, catalog hash, and `connectionNameSuffix=plan.project.name`. Pass only resource names/IDs
+   supplied in protected runtime configuration. Never read, pass, log, or output the Application
+   Insights connection string; ARM resolves it server-side.
+5. Persist the successful Bicep receipt, then wait the bounded 15-minute ACR/project-managed-identity
+   propagation interval before live preflight. Resume a pending wait without redeploying Bicep. Do
+   not treat role-assignment list presence alone as data-plane readiness, and do not classify a
+   terminal agent `CodeError` as a quality result.
+6. Verify GPT-5.6 Terra deployments, quota, production API availability, reporting recipient
    allowlist, and 90-day artifact retention.
-4. Hash the catalog and selection policy and compute the reproducible seed from report date plus
+7. Hash the catalog and selection policy and compute the reproducible seed from report date plus
    both hashes.
-5. Run only Monday through Friday. Select all six healthy controls and nine single-root P0 faults
+8. Run only Monday through Friday. Select all six healthy controls and nine single-root P0 faults
    every weekday. Select the two-root `aiq-scn-062-umbrella-insight` collection probe only on
    Monday/Wednesday/Friday, plus the current deterministic `9/10/9/10/9` P1/P2 partition. One
    Monday-Friday cycle covers all 47 rotating faults exactly once.
-6. Assign every selected scenario exactly once to a compatible agent and version wave. Put at most
+9. Assign every selected scenario exactly once to a compatible agent and version wave. Put at most
    four expected root causes on an agent across every version in the daily project and at most four
    in a run. Never co-locate conflict-tagged scenarios. Fail rather than dropping a selection.
-7. Record exact public-safe build/model labels, catalog and prompt hashes, immutable source/image
+10. Record exact public-safe build/model labels, catalog and prompt hashes, immutable source/image
    digests, traffic seeds, half-open windows, expected evidence, expected findings, and controls.
-8. Validate the plan against `schemas/daily-plan.schema.json` before deployment.
-9. Write sanitized `reports/daily/YYYY/MM/DD/plan.json` and render `plan.md` from it. For reruns,
+11. Validate the plan against `schemas/daily-plan.schema.json` before deployment.
+12. Write sanitized `reports/daily/YYYY/MM/DD/plan.json` and render `plan.md` from it. For reruns,
    write both under `reports/daily/YYYY/MM/DD/aiq-YYYYMMDD-rNN/` so the original is never
    overwritten. The JSON is the authority.
 
 The planner and orchestrator are deterministic. Run independent agents concurrently; run versions
-of one agent sequentially.
+of one agent sequentially. Reuse the durable private receipt and adapter idempotency keys on resume;
+never replay a confirmed remote operation.
+Serialize recovery, creation, and activation polling for all hosted-code and custom-container
+versions through the process-wide hosted deployment gate. Prompt deployments may remain parallel.
+After deployment, endpoint traffic retains normal cross-agent concurrency.
+Retry prompt and hosted session endpoint HTTP 408, 429, and 5xx responses only when no response ID
+exists. Honor a bounded numeric `Retry-After`; otherwise use the reviewed conservative 60/120-second
+backoff. Recover durable successful per-fixture receipts before retrying unfinished traffic. Never
+retry a nontransient 400 or a response-bearing failure, and never persist a response body in public
+state.
+For every generated request, preserve the compatible healthy fixture's reviewed domain input and
+expected tool contract. Add scenario identity, runtime provenance, correlation, and the bounded
+recipe marker around it; never substitute a generic recipe string for the domain request.
+For zero-finding prompt assignments, require the exact expected tool sequence and a nonempty grounded
+final answer containing the tool result. Relax output/tool checks only for faulted assignments whose
+injected behavior intentionally violates the healthy contract.
 
 ## Phase B: healthy baseline
 
@@ -110,6 +138,13 @@ For each planned wave:
 
 Store raw synthetic artifacts only in the private 90-day artifact store. Repository evidence is a
 sanitized summary and an approved public-safe link, never a raw payload.
+
+After every selected scenario has one final evidence reference, require
+`schemas/daily-status.schema.json` and write the public-safe `daily-status.json` handoff. It must
+enumerate bounded primary GPT-5.6 Sol package/insight targets, gate blinded verification to eligible
+automatic-bug candidates, and order the existing `score`, `memory-reconcile`, candidate-only
+`ado-dry-run`, report/finalize, `email-receipt-import`, generated-path validation, and reviewed
+cleanup commands. Primary packages and all runtime coordinates remain in private state.
 
 ## Phase D: deterministic validation
 

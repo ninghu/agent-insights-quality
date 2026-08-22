@@ -344,6 +344,124 @@ def test_orchestrator_sends_peer_cancellation_before_waiting(tmp_path: Path) -> 
     assert peer_released.is_set()
 
 
+def test_orchestrator_second_sweep_cleans_late_deployment(tmp_path: Path) -> None:
+    peer_started = threading.Event()
+    first_cancel_seen = threading.Event()
+    release_peer = threading.Event()
+
+    class LateDeployHooks(Hooks):
+        def __init__(self):
+            super().__init__()
+            self.active: set[str] = set()
+            self.cleaned: list[str] = []
+            self.cancel_counts: dict[str, int] = {}
+
+        def deploy(self, current, *, idempotency_key):
+            if current.agent_id == "b":
+                peer_started.set()
+                assert first_cancel_seen.wait(timeout=2)
+                self.active.add("b")
+                assert release_peer.wait(timeout=2)
+                return self._value("deploy", idempotency_key)
+            assert peer_started.wait(timeout=2)
+            raise RuntimeFailure("deployment_failed", "Deployment failed.")
+
+        def cancel(self, current):
+            self.cancel_counts[current.agent_id] = (
+                self.cancel_counts.get(current.agent_id, 0) + 1
+            )
+            if current.agent_id == "b":
+                if "b" in self.active:
+                    self.active.remove("b")
+                    self.cleaned.append("b")
+                else:
+                    first_cancel_seen.set()
+            else:
+                release_peer.set()
+
+    start = datetime(2026, 8, 21, tzinfo=UTC)
+    plan = PlanInput(
+        "aiq-20260821",
+        "aiq-20260821",
+        {
+            "b": (work("b", "v1", start),),
+            "a": (work("a", "v1", start),),
+        },
+    )
+    hooks = LateDeployHooks()
+
+    with pytest.raises(RuntimeFailure, match="Deployment failed"):
+        ProductionOrchestrator(
+            hooks,
+            tmp_path / "state.json",
+            max_parallel_agents=2,
+            cancellation_wait_seconds=2,
+        ).run(plan)
+
+    assert hooks.active == set()
+    assert hooks.cleaned == ["b"]
+    assert hooks.cancel_counts["b"] == 2
+
+
+def test_orchestrator_retains_late_cleanup_failure_code(tmp_path: Path) -> None:
+    peer_started = threading.Event()
+    first_cancel_seen = threading.Event()
+    release_peer = threading.Event()
+
+    class LateCleanupFailureHooks(Hooks):
+        def __init__(self):
+            super().__init__()
+            self.active = False
+            self.cancel_count = 0
+
+        def deploy(self, current, *, idempotency_key):
+            if current.agent_id == "b":
+                peer_started.set()
+                assert first_cancel_seen.wait(timeout=2)
+                self.active = True
+                assert release_peer.wait(timeout=2)
+                return self._value("deploy", idempotency_key)
+            assert peer_started.wait(timeout=2)
+            raise RuntimeFailure("deployment_failed", "Deployment failed.")
+
+        def cancel(self, current):
+            if current.agent_id == "b":
+                self.cancel_count += 1
+                if self.cancel_count == 1:
+                    first_cancel_seen.set()
+                elif self.active:
+                    raise RuntimeFailure(
+                        "late_cleanup_failed",
+                        "Synthetic late cleanup failure.",
+                    )
+            else:
+                release_peer.set()
+
+    start = datetime(2026, 8, 21, tzinfo=UTC)
+    plan = PlanInput(
+        "aiq-20260821",
+        "aiq-20260821",
+        {
+            "b": (work("b", "v1", start),),
+            "a": (work("a", "v1", start),),
+        },
+    )
+    receipt = tmp_path / "state.json"
+
+    with pytest.raises(RuntimeFailure, match="Deployment failed"):
+        ProductionOrchestrator(
+            LateCleanupFailureHooks(),
+            receipt,
+            max_parallel_agents=2,
+            cancellation_wait_seconds=2,
+        ).run(plan)
+
+    state = read_receipt(receipt)
+    assert "late_cleanup_failed" in state["failure"]["details"][
+        "cancellation_failures"
+    ]
+
+
 def test_plan_rejects_non_symbolic_execution_windows() -> None:
     start = datetime(2026, 8, 21, tzinfo=UTC)
     payload = {

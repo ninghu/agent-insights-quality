@@ -4,8 +4,8 @@
 The current `0.1.x` release includes five reviewed healthy synthetic agents, Foundry deployment and
 endpoint-only traffic adapters, generic production infrastructure and orchestration boundaries,
 deterministic scoring, Copilot judgment handoffs, quality-memory reconciliation, ADO synchronization,
-reporting/email handoffs, and a fail-closed finalizer. Live qualification remains disabled, so this
-is not yet a live daily automation runtime.
+reporting/email handoffs, and a fail-closed finalizer. The live daily entrypoint is implemented but
+remains disabled by the reviewed readiness contract until operational qualification is complete.
 
 The quality bar is intentionally strict. A day is `AT BAR` only after its complete reviewed daily
 selection runs, healthy agents produce no insights, actual insight counts exactly match expected
@@ -56,7 +56,10 @@ forbidden.
 
 ## Production runtime
 
-Runtime coordinates are accepted only through protected environment variables. Azure selection
+Runtime coordinates are accepted only through protected environment variables. Daily deployment
+requires `AIQ_AZURE_RESOURCE_GROUP`, `AIQ_FOUNDRY_ACCOUNT`,
+`AIQ_APPLICATION_INSIGHTS_RESOURCE_ID`, and `AIQ_CONTAINER_REGISTRY_NAME`; it derives no resource
+coordinate from repository content. Azure selection
 supports either `AIQ_AZURE_SUBSCRIPTION_ID` or an exact `AIQ_AZURE_SUBSCRIPTION_NAME`. The runtime can
 also discover exactly one project tagged `agentInsightsQualityQualification=true` and with the
 configured `automationOwner`, avoiding persisted resource identifiers in scheduled Copilot sessions.
@@ -85,6 +88,27 @@ generated PR mutation. The required minimal finalizer still renders a sanitized 
 one-message email handoff so readiness failures cannot bypass finalization. The handoff preserves one
 content digest and orders connected Copilot mail, authorized Graph, then verified local Outlook on
 `hostId=local`; it stops after the first confirmed success and never uses a Logic App.
+
+After a reviewed readiness change enables every component, `run-daily` writes or verifies the
+immutable weekday plan before any Azure operation, deploys `qualification-project.bicep` with the
+exact plan project/date/expiry/catalog hash and full project name as the connection suffix, and runs
+or resumes the live adapter from `.aiq-runtime/`. A durable bounded 15-minute propagation gate after
+Bicep allows the project managed identity and ACR pull authorization to converge before preflight;
+terminal deployment `CodeError` remains an operational failure, never a quality result. Evidence completion writes a schema-validated,
+public-safe `daily-status.json`; its ordered handoff uses the existing judgment, scoring, memory,
+candidate-only ADO, reporting, email-receipt, generated-path, and cleanup commands. Use `--rerun N`
+for `aiq-YYYYMMDD-rNN`; a finalized failed plan is immutable and requires a new rerun suffix.
+
+Hosted-code and custom-container recovery, creation, and activation polling share a process-wide
+serialization gate to avoid cross-hosted deployment contention. Prompt deployments may remain
+parallel, and endpoint traffic remains parallel after deployment.
+Prompt and hosted session calls retry only pre-response HTTP 408, 429, and 5xx failures. Missing
+`Retry-After` uses conservative bounded exponential backoff; completed fixture receipts are
+recovered on resume, nontransient 400s are not retried, and response bodies never enter public state.
+Every generated traffic envelope retains the compatible healthy agent's reviewed domain request and
+expected tools; scenario identity, provenance, correlation, and a bounded recipe marker are additive.
+Zero-finding prompt traffic enforces the expected tool sequence and requires a grounded nonempty final
+answer after tool output; fault-injection traffic remains relaxed only where the scenario requires it.
 
 `config/ado-policy.yaml` is the reviewed public authority for ADO side effects. Candidate reporting is
 enabled and automatic apply is disabled by default. `AIQ_ADO_AUTO_APPLY_ENABLED` can further disable
