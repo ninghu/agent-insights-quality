@@ -937,6 +937,122 @@ def test_scope_insights_filters_by_exact_agent_name_and_version() -> None:
         )
 
 
+def test_sequential_version_checkpoint_skips_unchanged_old_and_rejects_changed_old() -> None:
+    start = datetime(2026, 8, 21, 1, tzinfo=UTC)
+    old_trace = "a" * 32
+    new_trace = "b" * 32
+    checkpoint = InsightCheckpoint(
+        captured_at=start + timedelta(minutes=1),
+        revisions={"old": "1"},
+    )
+    unchanged_old = contract_insight(
+        "old",
+        old_trace,
+        start + timedelta(minutes=2),
+        start,
+        revision="1",
+        agent_name="agent",
+        agent_version="v1",
+    )
+    new_current = contract_insight(
+        "new",
+        new_trace,
+        start + timedelta(minutes=2),
+        start + timedelta(minutes=3),
+        revision="1",
+        agent_name="agent",
+        agent_version="v2",
+    )
+
+    selected = AgentInsightsClient.scope_insights(
+        [unchanged_old, new_current],
+        checkpoint,
+        start,
+        start + timedelta(hours=1),
+        agent_name="agent",
+        agent_version="v2",
+        operation_ids=frozenset({new_trace}),
+        publication_deadline=start + timedelta(minutes=4),
+    )
+    assert [item["id"] for item in selected] == ["new"]
+
+    changed_old = {
+        **unchanged_old,
+        "revision": "2",
+        "updated_at": (start + timedelta(minutes=3)).isoformat(),
+    }
+    with pytest.raises(RuntimeFailure, match="agent version"):
+        AgentInsightsClient.scope_insights(
+            [changed_old, new_current],
+            checkpoint,
+            start,
+            start + timedelta(hours=1),
+            agent_name="agent",
+            agent_version="v2",
+            operation_ids=frozenset({new_trace}),
+            publication_deadline=start + timedelta(minutes=4),
+        )
+
+
+def test_checkpoint_captures_all_versions_for_exact_monitor_agent() -> None:
+    now = datetime(2026, 8, 21, 1, tzinfo=UTC)
+    transport = FakeTransport(
+        [
+            response(
+                {
+                    "data": [
+                        contract_insight(
+                            "v2-insight",
+                            "b" * 32,
+                            now,
+                            now,
+                            revision="2",
+                            agent_name="agent",
+                            agent_version="v2",
+                        ),
+                        contract_insight(
+                            "v1-insight",
+                            "a" * 32,
+                            now,
+                            now,
+                            revision="1",
+                            agent_name="agent",
+                            agent_version="v1",
+                        ),
+                        contract_insight(
+                            "other-agent",
+                            "c" * 32,
+                            now,
+                            now,
+                            revision="3",
+                            agent_name="other",
+                            agent_version="v9",
+                        ),
+                    ],
+                    "has_more": False,
+                }
+            ),
+            response({"data": [], "has_more": False}),
+        ]
+    )
+    client = AgentInsightsClient(
+        "https://project.example.invalid",
+        Credential(),
+        transport=transport,
+        now=lambda: now,
+    )
+
+    checkpoint = client.capture_insight_checkpoint(
+        "monitor",
+        agent_name="agent",
+    )
+
+    assert checkpoint.revisions == {
+        "v1-insight": "1",
+        "v2-insight": "2",
+    }
+
+
 def test_scope_insights_requires_nonempty_trace_ids_in_operation_set() -> None:
     start = datetime(2026, 8, 21, 1, tzinfo=UTC)
     op_id = "d" * 32

@@ -203,7 +203,10 @@ uses a 3-2160 hour lookback covering elapsed time since the realized traffic sta
 margin. Sequential service analysis windows may overlap, but each successful window end must advance
 beyond the prior checkpoint; changed revisions are then scoped to the exact agent version, correlated
 operation IDs, trace timestamps, and publication bounds. Resume recovers the persisted lookback and
-private idempotency receipts without replaying completed remote side effects. Exact run Insight totals
+private idempotency receipts without replaying completed remote side effects.
+Each pre-run checkpoint captures revisions for every version on the exact monitor/agent. Unchanged
+prior-version cards are therefore skipped before current-version validation; any prior-version card
+whose revision changes during the run still fails strict stale provenance. Exact run Insight totals
 are unbounded for scoring; evidence retains at most 100 detail samples and records `sampled_count` and
 `details_truncated`. Cleanup is a dry run unless `--execute` is present and filters
 exact framework purpose, owner, name, and expiration metadata.

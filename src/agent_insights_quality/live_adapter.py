@@ -1987,7 +1987,6 @@ class LiveRuntimeHooks:
             checkpoint = insights.capture_insight_checkpoint(
                 monitor_id,
                 agent_name=receipt.agent_name,
-                agent_version=receipt.agent_version,
             )
             with self._lock:
                 self._checkpoints[work.key] = checkpoint
