@@ -99,6 +99,30 @@ class FoundryRequestTimeout(RuntimeContractError):
     transient = True
 
 
+class DeploymentHttpError(RuntimeContractError):
+    """Sanitized deployment HTTP failure with retry-safe status metadata."""
+
+    def __init__(
+        self,
+        status: int,
+        *,
+        retry_after_seconds: float | None = None,
+    ) -> None:
+        if status == 408:
+            code = "agent_deployment_request_timeout"
+        elif status == 429:
+            code = "agent_deployment_rate_limited"
+        elif 500 <= status <= 599:
+            code = "agent_deployment_service_unavailable"
+        else:
+            code = "agent_deployment_failed"
+        super().__init__(f"Foundry deployment request failed with HTTP {status}.")
+        self.status = status
+        self.code = code
+        self.transient = status in {408, 429} or 500 <= status <= 599
+        self.retry_after_seconds = retry_after_seconds
+
+
 class DeploymentCleanupError(RuntimeContractError):
     code = "deployment_cleanup_sessions_active"
     transient = True
@@ -1109,10 +1133,30 @@ class FoundryDeploymentClient:
             raise RuntimeContractError("Foundry deployment transport failed.") from error
         allowed = expected_statuses or {200, 201, 202}
         if response.status_code not in allowed:
+            if (
+                response.status_code in {408, 429}
+                or 500 <= response.status_code <= 599
+            ):
+                raise DeploymentHttpError(
+                    response.status_code,
+                    retry_after_seconds=self._retry_after(response),
+                )
             raise RuntimeContractError(
                 f"Foundry request failed with HTTP {response.status_code}."
             )
         return response
+
+    @staticmethod
+    def _retry_after(response: HttpResponse) -> float | None:
+        for name, value in response.headers.items():
+            if name.casefold() != "retry-after":
+                continue
+            try:
+                seconds = float(value)
+            except (TypeError, ValueError):
+                return None
+            return seconds if 0 <= seconds <= 300 else None
+        return None
 
 
 class FoundryInvocationClient:

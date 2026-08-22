@@ -1575,9 +1575,17 @@ class LiveRuntimeHooks:
                 transient=error.transient,
             ) from error
         except RuntimeContractError as error:
+            details: dict[str, Any] = {}
+            status = getattr(error, "status", None)
+            retry_after = getattr(error, "retry_after_seconds", None)
+            if isinstance(status, int):
+                details["http_status"] = status
+            if isinstance(retry_after, (int, float)):
+                details["retry_after_seconds"] = retry_after
             raise RuntimeFailure(
                 getattr(error, "code", "agent_deployment_failed"),
                 str(error),
+                details,
                 transient=bool(getattr(error, "transient", False)),
             ) from error
         with self._lock:

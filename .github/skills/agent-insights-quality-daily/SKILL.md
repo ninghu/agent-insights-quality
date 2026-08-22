@@ -103,6 +103,9 @@ exists. Honor a bounded numeric `Retry-After`; otherwise use the reviewed conser
 backoff. Recover durable successful per-fixture receipts before retrying unfinished traffic. Never
 retry a nontransient 400 or a response-bearing failure, and never persist a response body in public
 state.
+Treat deployment create HTTP 408, 429, and 5xx as transient without persisting their response bodies.
+On every retry, recover the exact immutable ownership/content identity before any recreate; preserve
+bounded `Retry-After` metadata and keep other 4xx failures nontransient.
 For every generated request, preserve the compatible healthy fixture's reviewed domain input and
 expected tool contract. Add scenario identity, runtime provenance, correlation, and the bounded
 recipe marker around it; never substitute a generic recipe string for the domain request.

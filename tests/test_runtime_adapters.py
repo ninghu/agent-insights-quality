@@ -22,6 +22,7 @@ from agent_insights_quality.agent_runtime import (
     SOURCE_DIGEST_KEY,
     DeploymentReceipt,
     DeploymentCleanupError,
+    DeploymentHttpError,
     DeploymentPollError,
     FoundryDeploymentClient,
     FoundryInvocationClient,
@@ -554,6 +555,69 @@ def test_deployment_timeout_is_bounded_and_actionably_classified() -> None:
         )
     assert caught.value.code == "agent_deployment_timeout"
     assert caught.value.transient is True
+
+
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [
+        (408, "agent_deployment_request_timeout"),
+        (429, "agent_deployment_rate_limited"),
+        (500, "agent_deployment_service_unavailable"),
+        (503, "agent_deployment_service_unavailable"),
+    ],
+)
+def test_deployment_http_transients_preserve_safe_retry_metadata(
+    status: int,
+    code: str,
+) -> None:
+    transport = QueueTransport(
+        [
+            _response(
+                status,
+                {"error": {"code": "private-detail"}},
+                headers={"Retry-After": "120"},
+            )
+        ]
+    )
+    client = FoundryDeploymentClient(
+        PROJECT_ENDPOINT,
+        lambda: "token",
+        transport=transport,
+    )
+
+    with pytest.raises(DeploymentHttpError) as caught:
+        client.deploy_prompt(
+            agent_name="aiq-001-weather",
+            definition={"kind": "prompt", "model": "test", "tools": []},
+            run_id="transient-create",
+        )
+
+    assert caught.value.status == status
+    assert caught.value.code == code
+    assert caught.value.transient is True
+    assert caught.value.retry_after_seconds == 120
+    assert "private-detail" not in str(caught.value)
+
+
+def test_deployment_nontransient_bad_request_is_not_retryable() -> None:
+    transport = QueueTransport(
+        [_response(400, {"error": {"code": "invalid_request"}})]
+    )
+    client = FoundryDeploymentClient(
+        PROJECT_ENDPOINT,
+        lambda: "token",
+        transport=transport,
+    )
+
+    with pytest.raises(RuntimeContractError) as caught:
+        client.deploy_prompt(
+            agent_name="aiq-001-weather",
+            definition={"kind": "prompt", "model": "test", "tools": []},
+            run_id="bad-create",
+        )
+
+    assert not isinstance(caught.value, DeploymentHttpError)
+    assert getattr(caught.value, "transient", False) is False
 
 
 def test_deployment_poll_preserves_transient_timeout_classification() -> None:
