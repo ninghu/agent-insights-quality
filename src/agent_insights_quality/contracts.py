@@ -1752,7 +1752,8 @@ def validate_report_layout() -> None:
         r"^daily/(?P<year>[0-9]{4})/(?P<month>[0-9]{2})/(?P<day>[0-9]{2})/"
         r"(?:(?P<rerun>aiq-[0-9]{8}-r[0-9]{2})/)?"
         r"(?P<filename>plan\.json|plan\.md|report\.json|report\.md|failure-email\.html|"
-        r"readiness-failure\.json|readiness-failure\.md|email-handoff\.json)$"
+        r"readiness-failure\.json|readiness-failure\.md|email-handoff\.json|"
+        r"email-send-request\.json|email-receipt\.json)$"
     )
     files_by_record: dict[str, set[str]] = {}
     for path in sorted(reports_root.rglob("*")):
@@ -1778,20 +1779,35 @@ def validate_report_layout() -> None:
         record = f"{year}/{month}/{day}" + (f"/{rerun}" if rerun else "")
         files_by_record.setdefault(record, set()).add(filename)
     complete_report = {"plan.json", "plan.md", "report.json", "report.md"}
-    readiness_failure = {
+    legacy_readiness_failure = {
         "readiness-failure.json",
         "readiness-failure.md",
         "failure-email.html",
         "email-handoff.json",
     }
-    readiness_markers = readiness_failure - {"failure-email.html"}
+    current_readiness_failure = {
+        "readiness-failure.json",
+        "readiness-failure.md",
+        "failure-email.html",
+        "email-send-request.json",
+        "email-receipt.json",
+    }
+    readiness_markers = (
+        legacy_readiness_failure | current_readiness_failure
+    ) - {"failure-email.html"}
     operational_failure = complete_report | {"failure-email.html"}
     for report_record, filenames in files_by_record.items():
         if filenames & readiness_markers:
-            if "/aiq-" in report_record or filenames != readiness_failure:
+            if (
+                "/aiq-" in report_record
+                or frozenset(filenames) not in {
+                    frozenset(legacy_readiness_failure),
+                    frozenset(current_readiness_failure),
+                }
+            ):
                 raise ContractError(
                     f"reports/daily/{report_record}: readiness failure bundle must contain "
-                    "exactly its four artifacts at the date level"
+                    "exactly its reviewed legacy or receipt-validated artifacts at the date level"
                 )
         elif filenames not in (complete_report, operational_failure):
             raise ContractError(
@@ -1813,8 +1829,6 @@ def validate_report_artifacts(
         validate_instance(report, READINESS_FAILURE_SCHEMA, label)
         markdown = path.with_name("readiness-failure.md").read_text(encoding="ascii")
         email = path.with_name("failure-email.html").read_text(encoding="ascii")
-        handoff = load_data(path.with_name("email-handoff.json"))
-        validate_instance(handoff, EMAIL_HANDOFF_SCHEMA, f"{label}.email_handoff")
         if (
             report["report_id"] not in markdown
             or report["report_date"] not in markdown
@@ -1823,14 +1837,44 @@ def validate_report_artifacts(
             raise ContractError(f"{label}: readiness-failure.md omits canonical identity")
         if "INCONCLUSIVE" not in email:
             raise ContractError(f"{label}: failure email must state INCONCLUSIVE")
-        if handoff["report_id"] != report["report_id"] or handoff["report_date"] != report["report_date"]:
-            raise ContractError(f"{label}: email handoff identity does not match failure report")
-        from agent_insights_quality.reporting import validate_email_handoff
+        if report["email_handoff_reference"] == "email-handoff.json":
+            handoff = load_data(path.with_name("email-handoff.json"))
+            validate_instance(handoff, EMAIL_HANDOFF_SCHEMA, f"{label}.email_handoff")
+            if (
+                handoff["report_id"] != report["report_id"]
+                or handoff["report_date"] != report["report_date"]
+            ):
+                raise ContractError(
+                    f"{label}: email handoff identity does not match failure report"
+                )
+            from agent_insights_quality.reporting import (
+                validate_email_handoff,
+                validate_stored_bundle_content,
+            )
 
-        validate_email_handoff(handoff, f"{label}.email_handoff", reporting)
-        from agent_insights_quality.reporting import validate_stored_bundle_content
+            validate_email_handoff(handoff, f"{label}.email_handoff", reporting)
+            validate_stored_bundle_content(path.with_name("email-handoff.json"), handoff)
+        else:
+            from agent_insights_quality.artifact_io import verified_hash
+            from agent_insights_quality.reporting import import_email_receipt
 
-        validate_stored_bundle_content(path.with_name("email-handoff.json"), handoff)
+            request = load_data(path.with_name("email-send-request.json"))
+            receipt = load_data(path.with_name("email-receipt.json"))
+            validate_instance(
+                request,
+                SCHEMAS / "email-send-request.schema.json",
+                f"{label}.email_send_request",
+            )
+            verified_hash(
+                request,
+                "request_hash",
+                f"{label}.email_send_request",
+            )
+            if request["html"] != email or report["report_date"] not in request["subject"]:
+                raise ContractError(
+                    f"{label}: readiness email request does not match rendered failure email"
+                )
+            import_email_receipt(request, receipt)
     for path in sorted((ROOT / "reports" / "daily").rglob("plan.json")):
         label = str(path.relative_to(ROOT))
         plan = load_data(path)

@@ -60,14 +60,27 @@
       ]
     },
     "performed_actions": {
-      "const": [
-        "render_failure_report",
-        "render_failure_email",
-        "create_email_handoff"
+      "oneOf": [
+        {
+          "const": [
+            "render_failure_report",
+            "render_failure_email",
+            "create_email_handoff"
+          ]
+        },
+        {
+          "const": [
+            "render_failure_report",
+            "render_failure_email",
+            "create_email_send_request"
+          ]
+        }
       ]
     },
     "diagnostics_reference": {"const": "config/runtime-readiness.yaml"},
     "safe_next_action": {"type": "string", "minLength": 1, "maxLength": 1000},
-    "email_handoff_reference": {"const": "email-handoff.json"}
+    "email_handoff_reference": {
+      "enum": ["email-handoff.json", "email-send-request.json"]
+    }
   }
 }

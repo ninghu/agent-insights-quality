@@ -41,7 +41,7 @@ from agent_insights_quality.public_safety import (
     require_public_artifact_safe,
     validate_public_repository_content,
 )
-from agent_insights_quality.reporting import finalize_readiness_failure, record_email_delivery
+from agent_insights_quality.reporting import finalize_readiness_failure
 from agent_insights_quality.readiness import require_daily_runtime
 from agent_insights_quality.reporting import (
     create_email_send_request,
@@ -324,13 +324,9 @@ def run(args: argparse.Namespace) -> None:
                 "INCONCLUSIVE: readiness is enabled but the runtime entry point is not installed."
             )
     elif args.command == "record-email-result":
-        record_email_delivery(
-            args.handoff,
-            status=args.status,
-            receipt_reference=args.receipt_reference,
-            error_code=args.error_code,
+        raise ContractError(
+            "Legacy record-email-result is disabled. Import a validated email receipt instead."
         )
-        print("Email delivery result recorded.")
     elif args.command == "preflight":
         config = RuntimeConfig.from_env()
         cli, projects = _runtime_context(config)
