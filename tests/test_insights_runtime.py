@@ -723,6 +723,8 @@ def test_telemetry_query_uses_supported_agent_fields_not_project_dimension() -> 
     assert "gen_ai.project.name" not in query
     assert 'customDimensions["gen_ai.agent.name"]' in query
     assert 'customDimensions["gen_ai.agent.version"]' in query
+    assert 'customDimensions["azure.ai.agentserver.session_id"]' in query
+    assert 'customDimensions["microsoft.session.id"]' in query
 
 
 def test_correlates_ids_to_w3c_operation_and_requires_complete_parent_chain() -> None:
@@ -836,17 +838,24 @@ def test_telemetry_model_identity_accepts_only_exact_deployment_or_canonical_mod
     ) is None
 
 
-def test_correlation_prefers_invocation_ids_when_sessions_are_shared() -> None:
+def test_hosted_session_collects_primary_and_sibling_operations() -> None:
     start = datetime(2026, 8, 21, tzinfo=UTC)
     second = [
-        row | {"operation_id": "b" * 32, "invocation_id": "invoke-2", "response_id": "response-2"}
+        row
+        | {
+            "operation_id": "b" * 32,
+            "invocation_id": [],
+            "response_id": [],
+            "hosted_response_id": [],
+            "session_id": [],
+            "microsoft_session_id": ["session-1"],
+        }
         for row in telemetry_rows(start)
     ]
     result = correlate_complete_traces(
         telemetry_rows(start) + second,
         [
             TelemetryExpectation("invoke-1", "response-1", "session-1", "terra-deployment"),
-            TelemetryExpectation("invoke-2", "response-2", "session-1", "terra-deployment"),
         ],
         agent="agent",
         version="v1",
@@ -854,6 +863,123 @@ def test_correlation_prefers_invocation_ids_when_sessions_are_shared() -> None:
         end=start + timedelta(minutes=1),
     )
     assert result and [item.operation_id for item in result] == ["a" * 32, "b" * 32]
+    assert [item.expectation_index for item in result] == [0, 0]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("agent_name", "other-agent", "exact agent and version"),
+        ("agent_version", "v2", "exact agent and version"),
+        (
+            "timestamp",
+            datetime(2026, 8, 21, 1, tzinfo=UTC),
+            "half-open window",
+        ),
+    ],
+)
+def test_hosted_session_sibling_requires_exact_provenance(
+    field: str,
+    value,
+    error: str,
+) -> None:
+    start = datetime(2026, 8, 21, tzinfo=UTC)
+    sibling = [
+        row
+        | {
+            "operation_id": "b" * 32,
+            "invocation_id": [],
+            "response_id": [],
+            "hosted_response_id": [],
+            "session_id": [],
+            "microsoft_session_id": ["session-1"],
+            field: value,
+        }
+        for row in telemetry_rows(start)
+    ]
+
+    with pytest.raises(RuntimeFailure, match=error):
+        correlate_complete_traces(
+            telemetry_rows(start) + sibling,
+            [
+                TelemetryExpectation(
+                    "invoke-1",
+                    "response-1",
+                    "session-1",
+                    "terra-deployment",
+                ),
+            ],
+            agent="agent",
+            version="v1",
+            start=start,
+            end=start + timedelta(minutes=1),
+        )
+
+
+def test_hosted_session_rejects_ambiguous_primary_operation() -> None:
+    start = datetime(2026, 8, 21, tzinfo=UTC)
+    duplicate_primary = [
+        row
+        | {
+            "operation_id": "b" * 32,
+            "microsoft_session_id": ["session-1"],
+        }
+        for row in telemetry_rows(start)
+    ]
+
+    with pytest.raises(RuntimeFailure, match="primary runtime identifier"):
+        correlate_complete_traces(
+            telemetry_rows(start) + duplicate_primary,
+            [
+                TelemetryExpectation(
+                    "invoke-1",
+                    "response-1",
+                    "session-1",
+                    "terra-deployment",
+                ),
+            ],
+            agent="agent",
+            version="v1",
+            start=start,
+            end=start + timedelta(minutes=1),
+        )
+
+
+def test_hosted_session_operations_cannot_be_reused_across_fixtures() -> None:
+    start = datetime(2026, 8, 21, tzinfo=UTC)
+    second = [
+        row
+        | {
+            "operation_id": "b" * 32,
+            "invocation_id": "invoke-2",
+            "response_id": "response-2",
+            "microsoft_session_id": ["session-1"],
+        }
+        for row in telemetry_rows(start)
+    ]
+
+    with pytest.raises(RuntimeFailure, match="reused an operation ID"):
+        correlate_complete_traces(
+            telemetry_rows(start) + second,
+            [
+                TelemetryExpectation(
+                    "invoke-1",
+                    "response-1",
+                    "session-1",
+                    "terra-deployment",
+                ),
+                TelemetryExpectation(
+                    "invoke-2",
+                    "response-2",
+                    "session-1",
+                    "terra-deployment",
+                ),
+            ],
+            agent="agent",
+            version="v1",
+            start=start,
+            end=start + timedelta(minutes=1),
+        )
 
 
 def test_ingestion_polling_is_bounded_and_fails_closed() -> None:

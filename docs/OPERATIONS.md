@@ -367,6 +367,12 @@ intermediate turns require an exact `invoke_agent` operation; the final turn req
 included in its allowed trace/evidence set. Legacy private receipts fall back to their final response
 ID only, so a new rerun is required to recover pre-final operations from an older run.
 
+Hosted sessions may also emit multiple operation IDs. Correlation first anchors exactly one operation
+to the fixture's response/invocation ID, then collects only complete operations carrying the same
+exact `azure.ai.agentserver.session_id` or `microsoft.session.id`. Each operation is independently
+validated and retains its expectation/scenario association; an operation cannot be reused across
+fixtures.
+
 Project-scoped telemetry may omit an upstream parent span. Correlation accepts exactly one local root
 whose parent is empty or outside the selected span set, then requires every other span to be reachable
 through in-set parents. Chat spans must use either the exact configured deployment name or the exact

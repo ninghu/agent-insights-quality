@@ -1563,6 +1563,7 @@ def test_prompt_turns_expand_to_exact_scenario_bound_telemetry_expectations(
                 1,
                 (f"{index + 1:016x}",),
                 start + timedelta(seconds=index + 1),
+                index,
             )
             for index, _ in enumerate(expectations)
         ]
@@ -1709,6 +1710,7 @@ def test_expected_endpoint_failures_persist_each_fixture_and_resume_without_repl
                 1,
                 (f"{index + 1:016x}",),
                 start + timedelta(seconds=1),
+                index,
             )
             for index, _ in enumerate(expectations)
         ]
@@ -2007,9 +2009,16 @@ def test_realized_windows_are_exact_non_overlapping_and_feed_evidence(
     monkeypatch.setattr(
         live,
         "wait_for_correlated_traces",
-        lambda *_args, **_kwargs: [
-            TraceCorrelation(operation, 2, 1, spans, start + timedelta(seconds=1))
-            for _ in hooks._invocations[pair[1].key]
+        lambda *_args, **kwargs: [
+            TraceCorrelation(
+                operation,
+                2,
+                1,
+                spans,
+                start + timedelta(seconds=1),
+                index,
+            )
+            for index, _ in enumerate(kwargs["expectations"])
         ],
     )
     telemetry = hooks.wait_ingestion(

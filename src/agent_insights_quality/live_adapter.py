@@ -1059,6 +1059,7 @@ class LiveRuntimeHooks:
             "span_count": correlation.span_count,
             "root_count": correlation.root_count,
             "span_ids": list(correlation.span_ids),
+            "expectation_index": correlation.expectation_index,
             "observed_at": (
                 correlation.observed_at.astimezone(UTC).isoformat()
                 if correlation.observed_at is not None
@@ -1172,6 +1173,7 @@ class LiveRuntimeHooks:
                         if item.get("observed_at")
                         else None
                     ),
+                    int(item.get("expectation_index", 0)),
                 )
                 for item in correlations
                 if isinstance(item, Mapping)
@@ -1195,6 +1197,7 @@ class LiveRuntimeHooks:
                             if item.get("observed_at")
                             else None
                         ),
+                        int(item.get("expectation_index", 0)),
                     )
                     for item in values
                     if isinstance(item, Mapping)
@@ -2230,11 +2233,15 @@ class LiveRuntimeHooks:
                 )
             )
             grouped: dict[str, list[TraceCorrelation]] = {}
-            for (scenario_id, _), correlation in zip(
-                expectation_pairs,
-                existing,
-                strict=True,
-            ):
+            for correlation in existing:
+                if not 0 <= correlation.expectation_index < len(expectation_pairs):
+                    raise RuntimeFailure(
+                        "telemetry_provenance_mismatch",
+                        "Telemetry correlation has an invalid expectation association.",
+                    )
+                scenario_id = expectation_pairs[
+                    correlation.expectation_index
+                ][0]
                 grouped.setdefault(scenario_id, []).append(correlation)
             with self._lock:
                 self._telemetry[work.key] = existing

@@ -45,6 +45,7 @@ class TraceCorrelation:
     root_count: int
     span_ids: tuple[str, ...] = ()
     observed_at: datetime | None = None
+    expectation_index: int = 0
 
 
 class TelemetryQuery(Protocol):
@@ -110,14 +111,17 @@ let roots = materialize(
     | extend invocation_id=tostring(customDimensions["gen_ai.invocation.id"])
     | extend response_id=tostring(customDimensions["gen_ai.response.id"])
     | extend hosted_response_id=tostring(customDimensions["azure.ai.agentserver.response_id"])
-    | extend session_id=tostring(customDimensions["azure.ai.agentserver.session_id"])
+    | extend azure_session_id=tostring(customDimensions["azure.ai.agentserver.session_id"])
+    | extend microsoft_session_id=tostring(customDimensions["microsoft.session.id"])
     | where agent_name == '{_kql(agent)}' and agent_version == '{_kql(version)}'
     | where invocation_id in ({literals}) or response_id in ({literals})
-        or hosted_response_id in ({literals}) or session_id in ({literals})
+        or hosted_response_id in ({literals}) or azure_session_id in ({literals})
+        or microsoft_session_id in ({literals})
     | summarize invocation_ids=make_set(invocation_id, 100),
         response_ids=make_set(response_id, 100),
         hosted_response_ids=make_set(hosted_response_id, 100),
-        session_ids=make_set(session_id, 100)
+        azure_session_ids=make_set(azure_session_id, 100),
+        microsoft_session_ids=make_set(microsoft_session_id, 100)
       by operation_id, agent_name, agent_version
 );
 union isfuzzy=true requests, dependencies
@@ -135,7 +139,8 @@ union isfuzzy=true requests, dependencies
 | project timestamp, operation_id, span_id, parent_id, span_name, span_agent_name,
     span_agent_version, span_model, agent_name,
     agent_version, invocation_id=invocation_ids, response_id=response_ids,
-    hosted_response_id=hosted_response_ids, session_id=session_ids
+    hosted_response_id=hosted_response_ids, azure_session_id=azure_session_ids,
+    microsoft_session_id=microsoft_session_ids
 """.strip()
 
 
@@ -188,36 +193,11 @@ def correlate_complete_traces(
             raise RuntimeFailure("telemetry_window_mismatch", "Telemetry fell outside the exact half-open window.")
         operations.setdefault(operation_id, []).append(row)
 
-    matched: list[TraceCorrelation] = []
-    used: set[str] = set()
-    for expectation in expectations:
-        primary = {
-            value for value in (expectation.invocation_id, expectation.response_id) if value
-        }
-        identifiers = primary or ({expectation.session_id} if expectation.session_id else set())
-        keys = (
-            ("invocation_id", "response_id", "hosted_response_id")
-            if primary
-            else ("session_id",)
-        )
-        candidates = {
-            operation_id
-            for operation_id, spans in operations.items()
-            if any(identifiers & _row_identifiers(span, keys) for span in spans)
-        }
-        if not candidates:
-            return None
-        if len(candidates) != 1:
-            raise RuntimeFailure(
-                "ambiguous_telemetry_correlation",
-                "A runtime identifier correlated to multiple operation IDs.",
-            )
-        operation_id = next(iter(candidates))
-        if operation_id in used:
-            raise RuntimeFailure(
-                "duplicate_telemetry_correlation",
-                "Multiple invocations correlated to the same operation ID.",
-            )
+    def validate_operation(
+        operation_id: str,
+        expectation: TelemetryExpectation,
+        expectation_index: int,
+    ) -> TraceCorrelation | None:
         spans = operations[operation_id]
         span_id_list = [str(row.get("span_id") or "") for row in spans if row.get("span_id")]
         span_ids = set(span_id_list)
@@ -272,7 +252,6 @@ def correlate_complete_traces(
             or not model_valid
         ):
             return None
-        used.add(operation_id)
         observed = min(
             (
                 datetime.fromisoformat(str(row["timestamp"]).replace("Z", "+00:00"))
@@ -281,15 +260,84 @@ def correlate_complete_traces(
             )
             for row in spans
         )
-        matched.append(
-            TraceCorrelation(
-                operation_id,
-                len(spans),
-                roots,
-                tuple(sorted(span_ids)),
-                observed.astimezone(UTC),
-            )
+        return TraceCorrelation(
+            operation_id,
+            len(spans),
+            roots,
+            tuple(sorted(span_ids)),
+            observed.astimezone(UTC),
+            expectation_index,
         )
+
+    matched: list[TraceCorrelation] = []
+    used: set[str] = set()
+    session_keys = (
+        "azure_session_id",
+        "microsoft_session_id",
+        "session_id",
+    )
+    for expectation_index, expectation in enumerate(expectations):
+        primary = {
+            value for value in (expectation.invocation_id, expectation.response_id) if value
+        }
+        primary_candidates: set[str] = set()
+        if primary:
+            primary_candidates = {
+                operation_id
+                for operation_id, spans in operations.items()
+                if any(
+                    primary
+                    & _row_identifiers(
+                        span,
+                        ("invocation_id", "response_id", "hosted_response_id"),
+                    )
+                    for span in spans
+                )
+            }
+            if not primary_candidates:
+                return None
+            if len(primary_candidates) != 1:
+                raise RuntimeFailure(
+                    "ambiguous_telemetry_correlation",
+                    "A primary runtime identifier correlated to multiple operation IDs.",
+                )
+        if expectation.session_id:
+            session_candidates = {
+                operation_id
+                for operation_id, spans in operations.items()
+                if any(
+                    expectation.session_id
+                    in _row_identifiers(span, session_keys)
+                    for span in spans
+                )
+            }
+            if not session_candidates:
+                return None
+            if primary_candidates and not primary_candidates.issubset(session_candidates):
+                raise RuntimeFailure(
+                    "telemetry_session_mismatch",
+                    "The primary operation did not carry the expected hosted session ID.",
+                )
+            candidates = session_candidates
+        else:
+            candidates = primary_candidates
+        if not candidates:
+            return None
+        if candidates & used:
+            raise RuntimeFailure(
+                "duplicate_telemetry_correlation",
+                "Multiple expectations reused an operation ID.",
+            )
+        for operation_id in sorted(candidates):
+            correlation = validate_operation(
+                operation_id,
+                expectation,
+                expectation_index,
+            )
+            if correlation is None:
+                return None
+            matched.append(correlation)
+        used.update(candidates)
     return matched
 
 
@@ -336,7 +384,11 @@ def wait_for_correlated_traces(
             start=start,
             end=end,
         )
-        if correlated is not None and len(correlated) == len(expectations):
+        if (
+            correlated is not None
+            and {item.expectation_index for item in correlated}
+            == set(range(len(expectations)))
+        ):
             return correlated
         if monotonic() >= deadline:
             raise RuntimeFailure(
