@@ -95,6 +95,13 @@ cannot modify readiness configuration or treat contract scaffolding as an operat
 The planner and orchestrator are deterministic. Run independent agents concurrently; run versions
 of one agent sequentially. Reuse the durable private receipt and adapter idempotency keys on resume;
 never replay a confirmed remote operation.
+An ordinary runtime or unexpected work failure stops only that agent's remaining sequence. Let every
+independent agent finish, persist bounded public-safe failure codes and opaque work references, then
+finalize one aggregate `INCONCLUSIVE` result. Retain exact deployments and receipts so resume skips
+complete agents and versions and retries only failed or unstarted work. The total runtime is bounded
+to four hours. Only an explicit operator abort sends cancellation and exact-owned-resource cleanup;
+because that cleanup invalidates deployment receipts, an explicitly aborted attempt is not resumable
+and requires an explicit rerun suffix.
 Serialize recovery, creation, and activation polling for all hosted-code and custom-container
 versions through the process-wide hosted deployment gate. Prompt deployments may remain parallel.
 After deployment, endpoint traffic retains normal cross-agent concurrency.

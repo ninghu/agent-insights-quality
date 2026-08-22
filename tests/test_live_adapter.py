@@ -188,6 +188,13 @@ def test_failure_artifacts_are_append_only_across_resume_attempts(
             "First synthetic failure.",
             {
                 "cancellation_failures": ["deployment_cleanup_sessions_active"],
+                "unexpected_exceptions": [
+                    {
+                        "exception_class": "ValueError",
+                        "exception_reference": "sha256:" + ("b" * 64),
+                        "work_reference": "sha256:" + ("c" * 64),
+                    }
+                ],
                 "command": [
                     "az",
                     "resource",
@@ -221,6 +228,13 @@ def test_failure_artifacts_are_append_only_across_resume_attempts(
     assert first_payload["attempt"] == 1
     assert first_payload["failure"]["details"]["cancellation_failures"] == [
         "deployment_cleanup_sessions_active"
+    ]
+    assert first_payload["private_diagnostics"]["unexpected_exceptions"] == [
+        {
+            "exception_class": "ValueError",
+            "exception_reference": "sha256:" + ("b" * 64),
+            "work_reference": "sha256:" + ("c" * 64),
+        }
     ]
     assert "/subscript" + "ions/" not in json.dumps(first_payload)
     assert json.loads(failures[1].read_text(encoding="ascii"))["attempt"] == 2
@@ -1881,6 +1895,70 @@ def test_insight_run_is_persisted_before_polling_and_cancelled_after_restart(
     thread.join(5)
     assert not thread.is_alive()
     assert failures == []
+
+
+def test_insight_run_created_after_abort_is_cancelled_by_owner(
+    tmp_path: Path,
+) -> None:
+    start = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    hooks, plan, _, _, _ = _prepared_hooks(
+        tmp_path,
+        [start + timedelta(seconds=11)],
+    )
+    work = next(iter(plan.agents.values()))[0]
+    hooks.deploy(work, idempotency_key=work.key + ":deploy")
+    hooks._windows[work.key] = WindowBinding(
+        work.window.start_identity,
+        work.window.end_identity,
+        start,
+        start + timedelta(seconds=10),
+    )
+    hooks._checkpoints[work.key] = InsightCheckpoint(start, {}, {})
+    hooks._telemetry[work.key] = (
+        TraceCorrelation(
+            "a" * 32,
+            1,
+            1,
+            ("b" * 16,),
+            start + timedelta(seconds=1),
+        ),
+    )
+    create_started = Event()
+    allow_create = Event()
+
+    class BlockingCreateInsights(_Insights):
+        def create_run(self, monitor, *, lookback_hours):
+            create_started.set()
+            assert allow_create.wait(5)
+            return super().create_run(
+                monitor,
+                lookback_hours=lookback_hours,
+            )
+
+    insights = BlockingCreateInsights()
+    hooks._insights = insights
+    failures: list[RuntimeFailure] = []
+
+    def execute() -> None:
+        try:
+            hooks.run_insights(
+                work,
+                {"ignored": True},
+                idempotency_key=work.key + ":insights",
+            )
+        except RuntimeFailure as error:
+            failures.append(error)
+
+    thread = Thread(target=execute)
+    thread.start()
+    assert create_started.wait(5)
+    hooks.cancel(work)
+    allow_create.set()
+    thread.join(5)
+
+    assert not thread.is_alive()
+    assert failures[0].code == "run_cancelled"
+    assert insights.cancelled == [("monitor", "insights-run")]
 
 
 def test_cancellation_is_not_blocked_by_inflight_endpoint_invocation(
