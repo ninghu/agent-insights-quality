@@ -122,6 +122,14 @@ It is the GPT-5.6 Sol handoff for primary judgments, candidate-only blinded veri
 deterministic scoring/mapping, memory reconciliation, candidate-only ADO, canonical finalization,
 one-message receipt import, a generated-only PR, and reviewed cleanup.
 
+Before that handoff, every physical run insight is deterministically assigned to exactly one
+scenario package and receives exactly one primary judgment target. Each package retains the complete
+bounded run collection needed to judge duplicate, fragmentation, and umbrella relationships. A
+scenario with no originally assigned card also retains its null no-insight target, even when it owns
+false-positive run noise, so missing expected findings and healthy-control behavior remain explicit.
+Run-wide exact counts and insight accounting must agree across all bundles and cover every physical
+card; incomplete or duplicated coverage makes the handoff inconclusive.
+
 A published operational `INCONCLUSIVE` report is terminal for that immutable plan so rerunning cannot
 change an already rendered email. Use the next `--rerun N` suffix. A process interruption before
 public finalization resumes the same private receipt and recovers completed remote operations.

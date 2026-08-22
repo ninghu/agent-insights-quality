@@ -14,6 +14,7 @@ from agent_insights_quality.contracts import (
     validate_instance,
 )
 from agent_insights_quality.judging import (
+    judgment_target_insight_ids,
     validate_evidence_bundle,
     validate_judgment_for_bundle,
 )
@@ -207,7 +208,7 @@ def deterministic_violations(
                     violations.add("cross_version_stale")
 
         bundle_insight_ids: set[str] = set()
-        for insight in [*bundle["insights"], *bundle["run_noise_insights"]]:
+        for insight in bundle["insights"]:
             linked_trace_ids = set(insight["trace_ids"])
             if not linked_trace_ids.issubset(trace_ids | prior_trace_ids):
                 violations.add("provenance_failure")
@@ -269,7 +270,8 @@ def _validate_judgments(
     judgments: list[dict[str, Any]],
 ) -> tuple[dict[tuple[str, str | None], dict[str, Any]], set[str], bool]:
     bundle_by_id = {bundle.get("bundle_id"): bundle for bundle in bundles}
-    by_mapping: dict[tuple[str, str], dict[str, Any]] = {}
+    by_mapping: dict[tuple[str, str | None], dict[str, Any]] = {}
+    physical_primary: set[tuple[str, str, str]] = set()
     violations: set[str] = set()
     trustworthy = True
     for judgment in judgments:
@@ -289,11 +291,8 @@ def _validate_judgments(
                 raise ContractError("judgment evidence version mismatch")
             scenario_id = judgment["mapping"]["scenario_id"]
             insight_id = judgment["mapping"]["insight_id"]
-            insight_ids = {insight["id"] for insight in bundle["insights"]}
-            valid_mapping = (
-                insight_id in insight_ids
-                if insight_ids
-                else insight_id is None
+            valid_mapping = insight_id in set(
+                judgment_target_insight_ids(bundle)
             )
             if scenario_id != bundle["scenario"]["id"] or not valid_mapping:
                 raise ContractError("judgment mapping does not exist")
@@ -306,6 +305,17 @@ def _validate_judgments(
             key = (scenario_id, insight_id)
             if key in by_mapping:
                 raise ContractError("multiple primary judgments for one insight")
+            if insight_id is not None:
+                physical_key = (
+                    str(bundle["run"]["run_id"]),
+                    str(bundle["agent"]["id"]),
+                    str(insight_id),
+                )
+                if physical_key in physical_primary:
+                    raise ContractError(
+                        "multiple primary judgments for one physical run insight"
+                    )
+                physical_primary.add(physical_key)
             by_mapping[key] = judgment
         except (ContractError, KeyError, TypeError):
             violations.add("judge_schema_failure")
@@ -420,6 +430,21 @@ def _allocate_run_insights(
     return owners, matched, representatives
 
 
+def _has_complete_physical_judgment_ownership(
+    bundles: list[dict[str, Any]],
+) -> bool:
+    physical: set[tuple[str, str, str]] = set()
+    owners: Counter[tuple[str, str, str]] = Counter()
+    for bundle in bundles:
+        run_id = str(bundle["run"]["run_id"])
+        agent_id = str(bundle["agent"]["id"])
+        for insight in [*bundle["insights"], *bundle["run_noise_insights"]]:
+            physical.add((run_id, agent_id, str(insight["id"])))
+        for insight in bundle["insights"]:
+            owners[(run_id, agent_id, str(insight["id"]))] += 1
+    return set(owners) == physical and all(count == 1 for count in owners.values())
+
+
 def score_run(
     plan: dict[str, Any],
     bundles: list[dict[str, Any]],
@@ -454,13 +479,12 @@ def score_run(
         if item["scenario"]["id"] in assignments
     }
 
-    unresolved = False
+    unresolved = not _has_complete_physical_judgment_ownership(valid_bundles)
     for scenario_id, bundle in bundles_by_scenario.items():
         if scenario_id not in assignments or "insights" not in bundle:
             continue
-        for insight in bundle["insights"]:
-            judgment = primary.get((scenario_id, insight["id"]))
-            if judgment is None:
+        for insight_id in judgment_target_insight_ids(bundle):
+            if primary.get((scenario_id, insight_id)) is None:
                 unresolved = True
     if unresolved:
         violations.add("unresolved_judgment")
@@ -654,11 +678,15 @@ def case_to_insight_mappings(
     primary, violations, _ = _validate_judgments(bundles, judgments)
     if violations:
         raise ContractError("Cannot emit mappings from invalid judgments")
+    if not _has_complete_physical_judgment_ownership(bundles):
+        raise ContractError(
+            "Cannot emit mappings without one primary owner for every physical insight"
+        )
     missing_judgments = [
-        (bundle["scenario"]["id"], insight["id"])
+        (bundle["scenario"]["id"], insight_id)
         for bundle in bundles
-        for insight in bundle.get("insights", [])
-        if primary.get((bundle["scenario"]["id"], insight["id"])) is None
+        for insight_id in judgment_target_insight_ids(bundle)
+        if primary.get((bundle["scenario"]["id"], insight_id)) is None
     ]
     if missing_judgments:
         raise ContractError(

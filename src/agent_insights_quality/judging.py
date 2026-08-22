@@ -216,6 +216,19 @@ def validate_evidence_bundle(bundle: dict[str, Any]) -> None:
         raise ContractError("evidence bundle must include trace evidence")
 
 
+def judgment_target_insight_ids(
+    bundle: dict[str, Any],
+) -> tuple[str | None, ...]:
+    insight_ids = tuple(str(item["id"]) for item in bundle["insights"])
+    run_noise_ids = {
+        str(item["id"]) for item in bundle["run_noise_insights"]
+    }
+    targets: list[str | None] = list(insight_ids)
+    if not any(insight_id not in run_noise_ids for insight_id in insight_ids):
+        targets.append(None)
+    return tuple(targets)
+
+
 def _prompt(role: Literal["primary", "blinded_verifier"]) -> tuple[str, str, str]:
     path = _PROMPT_FILES[role]
     try:
@@ -297,14 +310,11 @@ def import_judgment(package: dict[str, Any], judgment: dict[str, Any]) -> dict[s
         or judgment["evidence_schema_version"] != evidence["schema_version"]
     ):
         raise ContractError("judgment: package identity, role, model, or prompt mismatch")
-    insight_ids = {item["id"] for item in evidence["insights"]}
+    target_insight_ids = set(judgment_target_insight_ids(evidence))
     mapping = judgment["mapping"]
     if mapping["scenario_id"] != evidence["scenario"]["id"]:
         raise ContractError("judgment: scenario mapping does not match evidence")
-    if (
-        (insight_ids and mapping["insight_id"] not in insight_ids)
-        or (not insight_ids and mapping["insight_id"] is not None)
-    ):
+    if mapping["insight_id"] not in target_insight_ids:
         raise ContractError("judgment: insight mapping does not exist in evidence")
     verified_hash(judgment, "output_hash", "judgment")
     return deepcopy(judgment)

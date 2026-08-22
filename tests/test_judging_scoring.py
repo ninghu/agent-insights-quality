@@ -13,6 +13,7 @@ from agent_insights_quality.contracts import (
 from agent_insights_quality.judging import (
     export_judge_package,
     import_judgment,
+    judgment_target_insight_ids,
     project_evidence,
 )
 from agent_insights_quality.artifact_io import content_hash
@@ -322,6 +323,28 @@ def judgment(
     return value
 
 
+def complete_judgments(
+    bundles: list[dict],
+    judgments: list[dict],
+) -> list[dict]:
+    completed = list(judgments)
+    mappings = {
+        (
+            item["mapping"]["scenario_id"],
+            item["mapping"]["insight_id"],
+        )
+        for item in completed
+    }
+    for bundle in bundles:
+        scenario_id = bundle["scenario"]["id"]
+        if (
+            None in judgment_target_insight_ids(bundle)
+            and (scenario_id, None) not in mappings
+        ):
+            completed.append(judgment(bundle, insight_id=None))
+    return completed
+
+
 def synthetic_catalog() -> dict:
     return {
         "scenarios": [
@@ -388,7 +411,11 @@ def test_judgment_import_rejects_changed_output_after_hash() -> None:
 def test_scoring_recomputes_full_at_bar_metrics(synthetic_contracts) -> None:
     fault = project_evidence(raw_bundle("aiq-scn-010-fault"))
     healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
-    score = score_run(plan(), [fault, healthy], [judgment(fault)])
+    score = score_run(
+        plan(),
+        [fault, healthy],
+        complete_judgments([fault, healthy], [judgment(fault)]),
+    )
     assert score["verdict"] == "AT BAR"
     assert score["rates"]["high_severity_recall"] == 1
     assert score["rates"]["healthy_noise_rate"] == 0
@@ -418,6 +445,88 @@ def test_zero_insight_judgment_accepts_null_mapping(synthetic_contracts) -> None
 
     assert score["verdict"] == "AT BAR"
     assert "judge_schema_failure" not in score["violations"]
+
+
+def test_noise_judgment_cannot_replace_required_no_insight_judgment(
+    synthetic_contracts,
+) -> None:
+    fault = project_evidence(raw_bundle("aiq-scn-010-fault"))
+    healthy_raw = raw_bundle("aiq-scn-011-healthy", healthy=True)
+    noise = deepcopy(fault["insights"][0])
+    healthy_raw["run_noise_insights"] = [deepcopy(noise)]
+    healthy = project_evidence(healthy_raw)
+    healthy["insights"] = [deepcopy(noise)]
+    healthy["finding_count"] = {
+        "expected": 0,
+        "actual": 1,
+        "verdict": "NOT_AT_BAR",
+        "reason": "extra_noise",
+    }
+    healthy["bundle_hash"] = content_hash(
+        {key: value for key, value in healthy.items() if key != "bundle_hash"}
+    )
+
+    score = score_run(
+        plan(),
+        [fault, healthy],
+        [judgment(fault), judgment(healthy, insight_id=noise["id"])],
+    )
+
+    assert score["verdict"] == "INCONCLUSIVE"
+    assert "unresolved_judgment" in score["violations"]
+
+
+def test_unowned_run_noise_is_unresolved_even_with_null_judgment(
+    synthetic_contracts,
+) -> None:
+    fault = project_evidence(raw_bundle("aiq-scn-010-fault"))
+    healthy_raw = raw_bundle("aiq-scn-011-healthy", healthy=True)
+    noise = deepcopy(fault["insights"][0])
+    healthy_raw["run_noise_insights"] = [noise]
+    healthy_raw["run_finding_count"] = {"expected": 0, "actual": 1}
+    healthy = project_evidence(healthy_raw)
+    judgments = [
+        judgment(fault),
+        judgment(healthy, insight_id=None),
+    ]
+
+    score = score_run(plan(), [fault, healthy], judgments)
+
+    assert score["verdict"] == "INCONCLUSIVE"
+    assert "unresolved_judgment" in score["violations"]
+    with pytest.raises(ContractError, match="one primary owner"):
+        case_to_insight_mappings(plan(), [fault, healthy], judgments)
+
+
+def test_noise_only_package_can_target_100_cards_plus_null() -> None:
+    raw = raw_bundle("aiq-scn-011-healthy", healthy=True)
+    template = deepcopy(raw_bundle("aiq-scn-010-fault")["insights"][0])
+    raw["run_noise_insights"] = []
+    for index in range(100):
+        insight = deepcopy(template)
+        insight["id"] = f"noise-{index:03d}"
+        insight["signature"] = content_hash({"noise_signature": index})
+        insight["evidence_fingerprint"] = content_hash(
+            {"noise_evidence": index}
+        )
+        raw["run_noise_insights"].append(insight)
+    raw["run_finding_count"] = {"expected": 0, "actual": 100}
+    bundle = project_evidence(raw)
+    bundle["insights"] = deepcopy(bundle["run_noise_insights"])
+    bundle["finding_count"] = {
+        "expected": 0,
+        "actual": 100,
+        "verdict": "NOT_AT_BAR",
+        "reason": "extra_noise",
+    }
+    bundle["bundle_hash"] = content_hash(
+        {key: value for key, value in bundle.items() if key != "bundle_hash"}
+    )
+
+    targets = judgment_target_insight_ids(bundle)
+
+    assert len(targets) == 101
+    assert targets[-1] is None
 
 
 def test_null_mapping_cannot_replace_produced_insight_coverage(
@@ -450,6 +559,7 @@ def test_extra_findings_are_noise_and_explicit_not_at_bar(synthetic_contracts) -
         for index in range(6)
     ]
 
+    judgments = complete_judgments([fault, healthy], judgments)
     score = score_run(plan(), [fault, healthy], judgments)
 
     assert score["verdict"] == "NOT AT BAR"
@@ -466,7 +576,8 @@ def test_missing_expected_count_is_a_miss_not_inconclusive(synthetic_contracts) 
     fault = project_evidence(raw_bundle("aiq-scn-010-fault"))
     healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
 
-    score = score_run(expected_plan, [fault, healthy], [judgment(fault)])
+    judgments = complete_judgments([fault, healthy], [judgment(fault)])
+    score = score_run(expected_plan, [fault, healthy], judgments)
 
     assert score["verdict"] == "NOT AT BAR"
     assert score["complete"] is True
@@ -474,7 +585,7 @@ def test_missing_expected_count_is_a_miss_not_inconclusive(synthetic_contracts) 
     assert "finding_count_mismatch" in score["violations"]
     assert "missing_findings" in score["violations"]
     outcome = case_to_insight_mappings(
-        expected_plan, [fault, healthy], [judgment(fault)]
+        expected_plan, [fault, healthy], judgments
     )[0]
     assert outcome["expected_count"] == 2
     assert outcome["observed_count"] == 1
@@ -499,9 +610,10 @@ def test_one_expected_plus_extra_noise_is_explicit_mixed_outcome(
         {key: value for key, value in noise.items() if key != "output_hash"}
     )
 
-    score = score_run(plan(), [fault, healthy], [correct, noise])
+    judgments = complete_judgments([fault, healthy], [correct, noise])
+    score = score_run(plan(), [fault, healthy], judgments)
     outcome = case_to_insight_mappings(
-        plan(), [fault, healthy], [correct, noise]
+        plan(), [fault, healthy], judgments
     )[0]
 
     assert score["verdict"] == "NOT AT BAR"
@@ -564,9 +676,8 @@ def _multi_assignment_run(
         "actual": run_total,
     }
     if shared_run_view:
-        run_insights = deepcopy(raw_first["insights"] + raw_umbrella["insights"])
-        raw_first["insights"] = deepcopy(run_insights)
-        raw_umbrella["insights"] = deepcopy(run_insights)
+        raw_first["run_noise_insights"] = deepcopy(raw_umbrella["insights"])
+        raw_umbrella["run_noise_insights"] = deepcopy(raw_first["insights"])
 
     first = project_evidence(raw_first)
     umbrella = project_evidence(raw_umbrella)
@@ -575,7 +686,8 @@ def _multi_assignment_run(
         *(judgment(first, insight_id=item["id"]) for item in first["insights"]),
         *(judgment(umbrella, insight_id=item["id"]) for item in umbrella["insights"]),
     ]
-    return value, [first, umbrella, healthy], judgments
+    bundles = [first, umbrella, healthy]
+    return value, bundles, complete_judgments(bundles, judgments)
 
 
 def test_exact_count_aggregates_multi_assignment_run_with_umbrella_count_two(
@@ -603,7 +715,7 @@ def test_exact_count_aggregates_multi_assignment_run_with_umbrella_count_two(
     assert len(references) == len(set(references)) == 3
 
 
-def test_shared_run_mapping_ignores_unowned_insight_attributes(
+def test_shared_run_collection_context_does_not_duplicate_physical_judgments(
     synthetic_contracts,
 ) -> None:
     value, bundles, judgments = _multi_assignment_run(
@@ -611,24 +723,6 @@ def test_shared_run_mapping_ignores_unowned_insight_attributes(
         umbrella_insight_count=2,
         shared_run_view=True,
     )
-    umbrella_unowned = next(
-        item
-        for item in judgments
-        if item["mapping"]
-        == {
-            "scenario_id": "aiq-scn-012-umbrella",
-            "insight_id": "first-0",
-        }
-    )
-    umbrella_unowned["attributes"]["actionability"]["passes"] = False
-    umbrella_unowned["output_hash"] = content_hash(
-        {
-            key: item
-            for key, item in umbrella_unowned.items()
-            if key != "output_hash"
-        }
-    )
-
     score = score_run(value, bundles, judgments)
     outcomes = case_to_insight_mappings(value, bundles, judgments)
     umbrella = next(
@@ -638,8 +732,46 @@ def test_shared_run_mapping_ignores_unowned_insight_attributes(
     )
 
     assert score["verdict"] == "AT BAR"
+    assert len(
+        [
+            item
+            for item in judgments
+            if item["mapping"]["insight_id"] is not None
+        ]
+    ) == 3
     assert umbrella["observed_count"] == 2
     assert umbrella["verdict"] == "correct"
+
+
+def test_duplicate_physical_primary_judgments_are_inconclusive(
+    synthetic_contracts,
+) -> None:
+    value, bundles, _judgments = _multi_assignment_run(
+        first_insight_count=1,
+        umbrella_insight_count=1,
+    )
+    first, umbrella, healthy = bundles
+    shared = deepcopy(first["insights"][0])
+    umbrella["insights"] = [shared]
+    umbrella["bundle_hash"] = content_hash(
+        {
+            key: item
+            for key, item in umbrella.items()
+            if key != "bundle_hash"
+        }
+    )
+    judgments = complete_judgments(
+        bundles,
+        [
+            judgment(first, insight_id=shared["id"]),
+            judgment(umbrella, insight_id=shared["id"]),
+        ],
+    )
+
+    score = score_run(value, bundles, judgments)
+
+    assert score["verdict"] == "INCONCLUSIVE"
+    assert "judge_schema_failure" in score["violations"]
 
 
 def test_run_count_match_preserves_mixed_per_scenario_diagnostics(
@@ -704,7 +836,11 @@ def test_low_confidence_primary_judgment_is_inconclusive(
     result["output_hash"] = content_hash(
         {key: value for key, value in result.items() if key != "output_hash"}
     )
-    score = score_run(plan(), [fault, healthy], [result])
+    score = score_run(
+        plan(),
+        [fault, healthy],
+        complete_judgments([fault, healthy], [result]),
+    )
     assert score["verdict"] == "INCONCLUSIVE"
     assert "unresolved_judgment" in score["violations"]
 
@@ -719,7 +855,11 @@ def test_judgment_package_hash_must_match_exact_bundle(
     result["output_hash"] = content_hash(
         {key: value for key, value in result.items() if key != "output_hash"}
     )
-    score = score_run(plan(), [fault, healthy], [result])
+    score = score_run(
+        plan(),
+        [fault, healthy],
+        complete_judgments([fault, healthy], [result]),
+    )
     assert score["verdict"] == "INCONCLUSIVE"
     assert "judge_schema_failure" in score["violations"]
 
@@ -731,7 +871,11 @@ def test_catalog_ground_truth_mismatch_fails_provenance(
     raw["ground_truth"]["fix_boundary"] = "An unreviewed fix boundary."
     fault = project_evidence(raw)
     healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
-    score = score_run(plan(), [fault, healthy], [judgment(fault)])
+    score = score_run(
+        plan(),
+        [fault, healthy],
+        complete_judgments([fault, healthy], [judgment(fault)]),
+    )
     assert score["verdict"] == "INCONCLUSIVE"
     assert "provenance_failure" in score["violations"]
 
@@ -769,7 +913,11 @@ def test_scoring_enforces_semantic_and_collection_gates(
     result["output_hash"] = content_hash(
         {key: value for key, value in result.items() if key != "output_hash"}
     )
-    score = score_run(plan(), [fault, healthy], [result])
+    score = score_run(
+        plan(),
+        [fault, healthy],
+        complete_judgments([fault, healthy], [result]),
+    )
     assert score["verdict"] == "NOT AT BAR"
     assert violation in score["violations"]
 
@@ -881,7 +1029,11 @@ def test_incompatible_fix_is_not_at_bar_not_inconclusive(
     )
     healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
 
-    score = score_run(plan(), [fault, healthy], [judgment(fault)])
+    score = score_run(
+        plan(),
+        [fault, healthy],
+        complete_judgments([fault, healthy], [judgment(fault)]),
+    )
 
     assert score["verdict"] == "NOT AT BAR"
     assert score["complete"] is True
@@ -1035,7 +1187,7 @@ def test_proven_prior_trace_is_quality_failure_but_unknown_trace_is_inconclusive
     current_score = score_run(
         lifecycle_plan,
         [current, healthy],
-        [judgment(current)],
+        complete_judgments([current, healthy], [judgment(current)]),
     )
     assert current_score["verdict"] == "AT BAR"
 
@@ -1048,7 +1200,7 @@ def test_proven_prior_trace_is_quality_failure_but_unknown_trace_is_inconclusive
     stale_score = score_run(
         lifecycle_plan,
         [stale, healthy],
-        [judgment(stale)],
+        complete_judgments([stale, healthy], [judgment(stale)]),
     )
     assert stale_score["verdict"] == "NOT AT BAR"
     assert "cross_version_stale" in stale_score["violations"]
@@ -1062,7 +1214,7 @@ def test_proven_prior_trace_is_quality_failure_but_unknown_trace_is_inconclusive
     prior_only_score = score_run(
         lifecycle_plan,
         [prior_only, healthy],
-        [judgment(prior_only)],
+        complete_judgments([prior_only, healthy], [judgment(prior_only)]),
     )
     assert prior_only_score["verdict"] == "NOT AT BAR"
     assert "cross_version_stale" in prior_only_score["violations"]
@@ -1077,7 +1229,7 @@ def test_proven_prior_trace_is_quality_failure_but_unknown_trace_is_inconclusive
     unknown_score = score_run(
         lifecycle_plan,
         [unknown, healthy],
-        [judgment(unknown)],
+        complete_judgments([unknown, healthy], [judgment(unknown)]),
     )
     assert unknown_score["verdict"] == "INCONCLUSIVE"
     assert "provenance_failure" in unknown_score["violations"]
