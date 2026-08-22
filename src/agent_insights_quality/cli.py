@@ -580,7 +580,13 @@ def run(args: argparse.Namespace) -> None:
             read_json_object(Path(args.request), "email send request"),
             read_json_object(Path(args.receipt), "email receipt"),
         )
-        write_json(Path(args.output), receipt)
+        output_path = Path(args.output)
+        if output_path.exists():
+            existing = read_json_object(output_path, "existing email receipt")
+            if existing != receipt:
+                raise ContractError("Email receipt output is immutable once recorded")
+        else:
+            write_json(output_path, receipt)
         print(receipt["state"])
     elif args.command == "render-failure":
         plan = read_json_object(Path(args.plan), "daily plan")

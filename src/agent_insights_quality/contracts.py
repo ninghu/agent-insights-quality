@@ -1796,6 +1796,7 @@ def validate_report_layout() -> None:
         legacy_readiness_failure | current_readiness_failure
     ) - {"failure-email.html"}
     operational_failure = complete_report | {"failure-email.html"}
+    legacy_readiness_records = {"2026/08/21"}
     for report_record, filenames in files_by_record.items():
         if filenames & readiness_markers:
             if (
@@ -1808,6 +1809,13 @@ def validate_report_layout() -> None:
                 raise ContractError(
                     f"reports/daily/{report_record}: readiness failure bundle must contain "
                     "exactly its reviewed legacy or receipt-validated artifacts at the date level"
+                )
+            if (
+                frozenset(filenames) == frozenset(legacy_readiness_failure)
+                and report_record not in legacy_readiness_records
+            ):
+                raise ContractError(
+                    f"reports/daily/{report_record}: legacy email handoff is historical-only"
                 )
         elif filenames not in (complete_report, operational_failure):
             raise ContractError(

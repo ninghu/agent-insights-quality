@@ -166,6 +166,7 @@ def finalize_readiness_failure(
     report_id = f"aiq-{parsed_date:%Y%m%d}"
     target = (output_root or ROOT / "reports") / "daily" / parsed_date.strftime("%Y/%m/%d")
     request_path = target / "email-send-request.json"
+    receipt_path = target / "email-receipt.json"
     existing_request = None
     if request_path.exists():
         from agent_insights_quality.artifact_io import verified_hash
@@ -250,19 +251,36 @@ def finalize_readiness_failure(
         "readiness-failure.md": markdown,
         "failure-email.html": html,
     }
-    from agent_insights_quality.reporting.render import (
-        build_email_send_request,
-        resolve_recipient,
-    )
+    from agent_insights_quality.reporting.render import build_email_send_request
 
+    recipient = (
+        {
+            "mode": "authenticated_user",
+            "address": None,
+            "source": "connected_microsoft_mailbox",
+        }
+        if reporting["mode"] == "test"
+        else {
+            "mode": "protected_variable",
+            "address": None,
+            "source": reporting["recipient_variable"],
+        }
+    )
     email_request = build_email_send_request(
         subject,
         html,
-        resolve_recipient(reporting),
+        recipient,
     )
     if existing_request is not None:
         if existing_request != email_request:
             raise ContractError(f"{request_path}: existing request content does not match this run")
+        if receipt_path.exists():
+            from agent_insights_quality.reporting.render import import_email_receipt
+
+            receipt = json.loads(receipt_path.read_text(encoding="ascii"))
+            imported = import_email_receipt(existing_request, receipt)
+            if imported["state"] == "sent":
+                return receipt_path
         return request_path
 
     validate_instance(

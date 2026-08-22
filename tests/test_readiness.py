@@ -173,6 +173,55 @@ def test_readiness_email_requires_validated_transport_receipt(tmp_path: Path) ->
         import_email_receipt(request, forged)
 
 
+def test_validated_sent_receipt_is_terminal_for_readiness_rerun(tmp_path: Path) -> None:
+    readiness = load_data(ROOT / "config" / "runtime-readiness.yaml")
+    reporting = load_data(ROOT / "config" / "reporting.yaml")
+    request_path = finalize_readiness_failure(
+        readiness,
+        reporting,
+        "2026-08-21",
+        output_root=tmp_path,
+        generated_at="2026-08-21T08:00:00Z",
+    )
+    request = json.loads(request_path.read_text(encoding="ascii"))
+    receipt = _sent_receipt(request)
+    receipt_path = request_path.with_name("email-receipt.json")
+    receipt_path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="ascii")
+
+    result = finalize_readiness_failure(
+        readiness,
+        reporting,
+        "2026-08-21",
+        output_root=tmp_path,
+        generated_at="2026-08-21T09:00:00Z",
+    )
+
+    assert result == receipt_path
+
+
+def test_public_production_readiness_request_uses_protected_variable_reference(
+    tmp_path: Path,
+) -> None:
+    reporting = deepcopy(load_data(ROOT / "config" / "reporting.yaml"))
+    reporting["mode"] = "production"
+    reporting["recipient_variable"] = "AIQ_PRODUCTION_REPORT_RECIPIENT"
+    request_path = finalize_readiness_failure(
+        load_data(ROOT / "config" / "runtime-readiness.yaml"),
+        reporting,
+        "2026-08-22",
+        output_root=tmp_path,
+        generated_at="2026-08-22T08:00:00Z",
+    )
+    request = json.loads(request_path.read_text(encoding="ascii"))
+
+    assert request["recipient"] == {
+        "mode": "protected_variable",
+        "address": None,
+        "source": "AIQ_PRODUCTION_REPORT_RECIPIENT",
+    }
+    assert "@microsoft.com" not in request_path.read_text(encoding="ascii")
+
+
 def test_changed_readiness_content_cannot_reuse_email_request(tmp_path: Path) -> None:
     readiness = load_data(ROOT / "config" / "runtime-readiness.yaml")
     reporting = load_data(ROOT / "config" / "reporting.yaml")
@@ -228,6 +277,46 @@ def test_legacy_record_email_result_cli_is_disabled(
         == 1
     )
     assert "Legacy record-email-result is disabled" in capsys.readouterr().err
+
+
+def test_email_receipt_cli_is_create_once_and_idempotent(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    request_path = finalize_readiness_failure(
+        load_data(ROOT / "config" / "runtime-readiness.yaml"),
+        load_data(ROOT / "config" / "reporting.yaml"),
+        "2026-08-21",
+        output_root=tmp_path,
+        generated_at="2026-08-21T08:00:00Z",
+    )
+    request = json.loads(request_path.read_text(encoding="ascii"))
+    receipt_input = tmp_path / "receipt-input.json"
+    receipt_input.write_text(
+        json.dumps(_sent_receipt(request), indent=2) + "\n",
+        encoding="ascii",
+    )
+    output = request_path.with_name("email-receipt.json")
+    command = [
+        "email-receipt-import",
+        "--request",
+        str(request_path),
+        "--receipt",
+        str(receipt_input),
+        "--output",
+        str(output),
+    ]
+
+    assert main(command) == 0
+    assert main(command) == 0
+    assert capsys.readouterr().out.count("sent") == 2
+
+    changed = _sent_receipt(request)
+    changed["provider_reference"] = "sha256:" + ("b" * 64)
+    changed["attempts"][0]["provider_reference"] = changed["provider_reference"]
+    receipt_input.write_text(json.dumps(changed, indent=2) + "\n", encoding="ascii")
+    assert main(command) == 1
+    assert "immutable" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -291,6 +380,25 @@ def test_report_layout_accepts_only_complete_readiness_bundle(
         (day / filename).write_text("{}\n", encoding="ascii")
     monkeypatch.setattr(contracts, "ROOT", tmp_path)
     contracts.validate_report_layout()
+
+
+def test_future_legacy_readiness_handoff_is_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    day = tmp_path / "reports" / "daily" / "2026" / "08" / "22"
+    day.mkdir(parents=True)
+    for filename in {
+        "readiness-failure.json",
+        "readiness-failure.md",
+        "failure-email.html",
+        "email-handoff.json",
+    }:
+        (day / filename).write_text("{}\n", encoding="ascii")
+    monkeypatch.setattr(contracts, "ROOT", tmp_path)
+
+    with pytest.raises(ContractError, match="historical-only"):
+        contracts.validate_report_layout()
 
     for path in day.iterdir():
         path.unlink()
