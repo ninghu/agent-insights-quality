@@ -9,7 +9,7 @@ import time
 import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from typing import Any
 
 from .config import AzureRuntimeConfig
@@ -30,6 +30,10 @@ _PRECONDITION_ERROR = re.compile(
 _PRECONDITION_STATUS = re.compile(
     r"(?im)^(?:ERROR:\s*)?(?:HTTP\s+|status(?:\s+code)?\s*[:=]?\s*)(?:409|412)\b"
 )
+
+
+def _project_leaf_name(item: Mapping[str, Any]) -> str:
+    return str(item.get("name") or "").rstrip("/").rsplit("/", 1)[-1]
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,9 +158,6 @@ class AzureCli:
             arguments,
             allow_empty=method.casefold() == "delete",
         )
-
-    def put_if_absent(self, url: str, body: Mapping[str, Any]) -> bool:
-        return self.put_conditionally(url, body, etag=None)
 
     def put_conditionally(
         self,
@@ -382,7 +383,7 @@ class AzureProjectManager:
         selected_name = self._config.fallback_project_name or self._config.project_name
         if selected_name:
             matches = [
-                item for item in matches if item.get("name") == selected_name
+                item for item in matches if _project_leaf_name(item) == selected_name
             ]
         if len(matches) != 1:
             raise RuntimeFailure(
@@ -491,7 +492,7 @@ class AzureProjectManager:
         if not endpoint and account_endpoint:
             endpoint = (
                 f"{account_endpoint}/api/projects/"
-                + urllib.parse.quote(str(item.get("name") or ""), safe="")
+                + urllib.parse.quote(_project_leaf_name(item), safe="")
             )
         app_insights = self._application_insights_connection(project_id)
         registry_id = self._container_registry_connection(project_id)
@@ -531,7 +532,7 @@ class AzureProjectManager:
         tags = item.get("tags")
         return ProjectResources(
             project_id=project_id,
-            project_name=str(item.get("name") or ""),
+            project_name=_project_leaf_name(item),
             account_name=account,
             resource_group=group,
             project_endpoint=endpoint.rstrip("/"),
@@ -865,6 +866,7 @@ class AzureProjectManager:
         report_date: date,
         catalog_hash: str,
         *,
+        project_name: str | None = None,
         allow_fallback: bool = False,
     ) -> ProjectResources:
         if allow_fallback and self._config.fallback_project_name:
@@ -872,67 +874,55 @@ class AzureProjectManager:
         if not self._config.resource_group or not self._config.account_name:
             return self.discover_qualified()
         base = f"aiq-{report_date:%Y%m%d}"
-        for suffix in range(100):
-            name = base if suffix == 0 else f"{base}-r{suffix:02d}"
-            projects = self._projects()
-            existing = [
-                item
-                for item in projects
-                if item.get("name") == name and self._under_configured_parent(item)
-            ]
-            if len(existing) == 1 and self._owned(existing[0]):
-                tags = existing[0].get("tags")
-                if (
-                    isinstance(tags, Mapping)
-                    and tags.get("reportDate") == report_date.isoformat()
-                    and tags.get("catalogVersion") == catalog_hash
-                ):
-                    project_id = str(existing[0].get("id") or "")
-                    item = self._wait_ready_item(project_id)
-                    self._verify_created_project(item, report_date, catalog_hash)
-                    return self._reconcile_project(item, project_id)
-            if existing:
-                continue
-            expires = report_date + timedelta(days=7)
-            project_id = (
-                f"/subscriptions/{self._context.subscription_id}/resourceGroups/{self._config.resource_group}"
-                f"/providers/Microsoft.CognitiveServices/accounts/{self._config.account_name}/projects/{name}"
+        project_name = project_name or self._config.project_name
+        if project_name is None:
+            raise RuntimeFailure(
+                "missing_runtime_configuration",
+                "Exact project selection requires the immutable plan project name.",
             )
-            body = {
-                "location": "westus2",
-                "identity": {"type": "SystemAssigned"},
-                "tags": {
-                    "purpose": _PURPOSE_TAG,
-                    "agentInsightsQualityQualification": _QUALIFICATION_TAG,
-                    "reportDate": report_date.isoformat(),
-                    "expiresOn": expires.isoformat(),
-                    "automationOwner": self._owner,
-                    "catalogVersion": catalog_hash,
-                },
-                "properties": {},
-            }
-            if not self._cli.put_if_absent(
-                f"{project_id}?api-version=2025-06-01",
-                body,
-            ):
-                direct = self._cli.json(
-                    ["resource", "show", "--ids", project_id],
-                    allow_failure=True,
-                )
-                if direct is not None:
-                    item = _mapping(
-                        direct,
-                        "invalid_project_resource",
-                        "Conflicting project response was invalid.",
-                    )
-                    item = self._wait_ready_item(project_id)
-                    self._verify_created_project(item, report_date, catalog_hash)
-                    return self._reconcile_project(item, project_id)
-                continue
-            item = self._wait_ready_item(project_id)
-            self._verify_created_project(item, report_date, catalog_hash)
-            return self._reconcile_project(item, project_id)
-        raise RuntimeFailure("project_name_exhausted", "No date-stamped project name is available.")
+        if project_name != base and not re.fullmatch(
+            re.escape(base) + r"-r[0-9]{2}",
+            project_name,
+        ):
+            raise RuntimeFailure(
+                "invalid_plan",
+                "Plan project name does not match its report date.",
+            )
+        project_id = (
+            f"/subscriptions/{self._context.subscription_id}"
+            f"/resourceGroups/{self._config.resource_group}"
+            f"/providers/Microsoft.CognitiveServices/accounts/{self._config.account_name}"
+            f"/projects/{project_name}"
+        )
+        direct = self._cli.json(
+            ["resource", "show", "--ids", project_id],
+            allow_failure=True,
+        )
+        if direct is None:
+            raise RuntimeFailure(
+                "missing_preprovisioned_project",
+                "The exact plan project is not preprovisioned. Deploy the reviewed "
+                "qualification-project Bicep module before starting the runtime.",
+            )
+        item = _mapping(
+            direct,
+            "invalid_project_resource",
+            "Preprovisioned project response was invalid.",
+        )
+        self._verify_preprovisioned_project(
+            item,
+            report_date,
+            catalog_hash,
+            project_name,
+        )
+        item = self._wait_ready_item(project_id)
+        self._verify_preprovisioned_project(
+            item,
+            report_date,
+            catalog_hash,
+            project_name,
+        )
+        return self._reconcile_project(item, project_id)
 
     def _under_configured_parent(self, item: Mapping[str, Any]) -> bool:
         project_id = str(item.get("id") or "")
@@ -942,23 +932,25 @@ class AzureProjectManager:
         )
         return project_id.casefold().startswith(expected.casefold())
 
-    def _verify_created_project(
+    def _verify_preprovisioned_project(
         self,
         item: Mapping[str, Any],
         report_date: date,
         catalog_hash: str,
+        project_name: str,
     ) -> None:
         tags = item.get("tags")
         if (
             not self._owned(item)
+            or _project_leaf_name(item) != project_name
             or not isinstance(tags, Mapping)
             or tags.get("reportDate") != report_date.isoformat()
             or tags.get("catalogVersion") != catalog_hash
             or not self._under_configured_parent(item)
         ):
             raise RuntimeFailure(
-                "project_create_race",
-                "Post-create verification did not match exact ownership, parent, date, and catalog.",
+                "preprovisioned_project_mismatch",
+                "Preprovisioned project verification did not match exact ownership, parent, date, and catalog.",
             )
 
     def _reconcile_project(
@@ -1126,7 +1118,7 @@ class AzureProjectManager:
         failures = 0
         for item in self._projects():
             tags = item.get("tags")
-            name = str(item.get("name") or "")
+            name = _project_leaf_name(item)
             if (
                 not self._owned(item)
                 or not _PROJECT_NAME.fullmatch(name)
@@ -1172,7 +1164,7 @@ class AzureProjectManager:
         for project in self._projects():
             if not self._owned(project):
                 continue
-            if project.get("name") == self._config.fallback_project_name:
+            if _project_leaf_name(project) == self._config.fallback_project_name:
                 continue
             try:
                 self._validate_cleanup_parent(project)

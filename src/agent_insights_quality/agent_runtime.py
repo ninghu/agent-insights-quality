@@ -36,6 +36,9 @@ FORBIDDEN_INGESTION_HOSTS = frozenset(
 )
 _AGENT_NAME = re.compile(r"^aiq-[0-9]{3}-[a-z][a-z0-9-]*(?:-[a-z0-9]+)*$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_ACR_TICKET_REPOSITORY = re.compile(
+    r"^[a-z0-9]{5,50}\.azurecr\.io/agent-insights-quality-ticket$"
+)
 _OPERATION_ID = re.compile(r"^[0-9a-f]{32}$")
 _SPAN_ID = re.compile(r"^[0-9a-f]{16}$")
 
@@ -426,10 +429,15 @@ def load_fixtures(path: Path) -> tuple[HealthyFixture, ...]:
 
 
 def validate_image_reference(image: str) -> str:
-    prefix = "ghcr.io/ninghu/agent-insights-quality-ticket@"
-    if not image.startswith(prefix) or not _DIGEST.fullmatch(image.removeprefix(prefix)):
+    repository, separator, digest = image.partition("@")
+    allowed_repository = (
+        repository == "ghcr.io/ninghu/agent-insights-quality-ticket"
+        or _ACR_TICKET_REPOSITORY.fullmatch(repository) is not None
+    )
+    if separator != "@" or not allowed_repository or not _DIGEST.fullmatch(digest):
         raise RuntimeContractError(
-            "Ticket image must be the public GHCR repository pinned by sha256 digest."
+            "Ticket image must use the reviewed GHCR or Azure Container Registry repository "
+            "pinned by sha256 digest."
         )
     return image
 

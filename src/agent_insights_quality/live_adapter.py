@@ -1285,7 +1285,11 @@ class LiveRuntimeHooks:
             report_date = date.fromisoformat(plan.report_date)
         except ValueError as error:
             raise RuntimeFailure("invalid_plan", "Plan report date is invalid.") from error
-        project = self._manager().select_or_create(report_date, plan.catalog_hash)
+        project = self._manager().select_or_create(
+            report_date,
+            plan.catalog_hash,
+            project_name=plan.project_name,
+        )
         if project.project_name != plan.project_name:
             raise RuntimeFailure("project_selection_mismatch", "Selected project differs from the immutable plan.")
         self._bind_project(project)
@@ -1327,21 +1331,21 @@ class LiveRuntimeHooks:
                 self._deployment_public[idempotency_key] = durable
                 return durable
             deployment_client, _, _, project = self._require_clients()
-            materialized = materialize_version(
-                work,
-                project_endpoint=project.project_endpoint,
-                model_deployment=self._config.azure.terra_agent_deployment,
-                ticket_image=self._config.azure.ticket_image,
-                registry=self._registry,
-            )
             identity = (work.agent_name, work.version_reference)
             receipt = self._deployments.get(identity)
-            (
-                artifact_digest,
-                source_digest,
-                image_digest,
-            ) = _materialized_artifact_identity(materialized)
             try:
+                materialized = materialize_version(
+                    work,
+                    project_endpoint=project.project_endpoint,
+                    model_deployment=self._config.azure.terra_agent_deployment,
+                    ticket_image=self._config.azure.ticket_image,
+                    registry=self._registry,
+                )
+                (
+                    artifact_digest,
+                    source_digest,
+                    image_digest,
+                ) = _materialized_artifact_identity(materialized)
                 if receipt is None:
                     receipt, agent_exists = deployment_client.recover_version(
                         agent_name=work.agent_name,

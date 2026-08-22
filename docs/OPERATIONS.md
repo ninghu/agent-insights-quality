@@ -50,6 +50,11 @@ there are no connection outputs. The reviewed automation user receives only Stor
 Contributor on artifact storage and AcrPush on that registry. Supply its Microsoft Entra object ID at
 deployment time; never commit it.
 
+The daily entrypoint must deploy `qualification-project.bicep` with the exact report date and catalog
+digest before invoking the runtime. Runtime selection never creates a project because a raw project
+PUT cannot safely provision the required API-key connection. A missing or mismatched preprovisioned
+project fails closed.
+
 When `AIQ_TICKET_IMAGE_URI` points to Azure Container Registry, preflight requires that exact
 project-scoped managed-identity `container-registry` connection and AcrPull assignment. Runtime
 reconciliation never reads, creates, or updates API-key credentials: a project missing the
@@ -127,8 +132,9 @@ Explicit full-catalog plans select all 63 scenarios and therefore still require 
 
 `run` and `resume` use the built-in allowlisted `agent_insights_quality.live_adapter` by default. The
 same exact module may be selected through `AIQ_RUNTIME_ADAPTER` or `--adapter`; arbitrary module
-injection is rejected. Set protected `AIQ_TICKET_IMAGE_URI` to the reviewed public GHCR image pinned
-by digest. Independent agents run concurrently while versions of one agent remain sequential.
+injection is rejected. Set protected `AIQ_TICKET_IMAGE_URI` to the reviewed GHCR image or exact owned
+`<registry>.azurecr.io/agent-insights-quality-ticket` repository pinned by digest. Independent agents
+run concurrently while versions of one agent remain sequential.
 Symbolic plan windows remain immutable; endpoint traffic binds them to exact UTC half-open windows in
 the runtime receipt, and both wave order and realized traffic non-overlap are checked. Agent Insights
 uses a 3-2160 hour lookback covering elapsed time since the realized traffic start plus ingestion
@@ -229,7 +235,8 @@ their retention date. It never guesses names or deletes unrelated resources.
 The active definitions under `agents/` are deterministic and synthetic. Runtime code supplies a
 short-lived `https://ai.azure.com/.default` token through a token provider and a private Foundry
 project endpoint. `FoundryDeploymentClient` creates prompt versions with JSON, hosted-code versions
-with deterministic multipart ZIPs, and the ticket version with a digest-pinned public GHCR image.
+with deterministic multipart ZIPs, and the ticket version with a digest-pinned reviewed GHCR or owned
+Azure Container Registry image.
 Every hosted version is polled to `active`, and cleanup deletes only the exact version whose owner,
 run ID, and artifact digest match its receipt.
 

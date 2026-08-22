@@ -220,7 +220,7 @@ def test_hosted_source_uses_multipart_hash_feature_header_and_timeout() -> None:
     assert call["timeout_seconds"] == 37
 
 
-def test_container_deployment_requires_immutable_public_ghcr_digest() -> None:
+def test_container_deployment_requires_immutable_reviewed_registry_digest() -> None:
     image_digest = "sha256:" + ("a" * 64)
     image = f"ghcr.io/ninghu/agent-insights-quality-ticket@{image_digest}"
     definition = json.loads(
@@ -258,10 +258,23 @@ def test_container_deployment_requires_immutable_public_ghcr_digest() -> None:
     assert receipt.image_digest == image_digest
     assert payload["definition"]["container_configuration"]["image"] == image
     assert transport.calls[0]["headers"]["Foundry-Features"] == HOSTED_FEATURES
-    with pytest.raises(RuntimeContractError, match="public GHCR"):
+    acr_image = (
+        "aiqacr123.azurecr.io/agent-insights-quality-ticket@sha256:"
+        + ("b" * 64)
+    )
+    assert validate_image_reference(acr_image) == acr_image
+    with pytest.raises(RuntimeContractError, match="reviewed GHCR or Azure"):
         validate_image_reference("private.azurecr.io/ticket:latest")
-    with pytest.raises(RuntimeContractError, match="public GHCR"):
+    with pytest.raises(RuntimeContractError, match="reviewed GHCR or Azure"):
         validate_image_reference("ghcr.io/ninghu/agent-insights-quality-ticket:latest")
+    for rejected in (
+        "aiqacr123.azurecr.io/ticket@sha256:" + ("a" * 64),
+        "aiq-acr.azurecr.io/agent-insights-quality-ticket@sha256:" + ("a" * 64),
+        "aiqacr123.azurecr.io/agent-insights-quality-ticket:latest",
+        "aiqacr123.example.com/agent-insights-quality-ticket@sha256:" + ("a" * 64),
+    ):
+        with pytest.raises(RuntimeContractError, match="reviewed GHCR or Azure"):
+            validate_image_reference(rejected)
 
 
 def test_cleanup_deletes_only_the_exact_owned_version() -> None:

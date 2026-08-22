@@ -823,6 +823,23 @@ def test_all_five_agents_route_endpoint_only_and_hooks_are_idempotent(
     assert all('"correlation":' in value and '"input":' in value for value in invocations.inputs)
 
 
+def test_deploy_wraps_materialization_contract_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hooks, plan, _, _, _ = _prepared_hooks(tmp_path, [])
+    work = next(iter(plan.agents.values()))[0]
+
+    def reject_materialization(*_args, **_kwargs):
+        raise live.RuntimeContractError("Synthetic materialization contract failure.")
+
+    monkeypatch.setattr(live, "materialize_version", reject_materialization)
+
+    with pytest.raises(RuntimeFailure) as caught:
+        hooks.deploy(work, idempotency_key=work.key + ":deploy")
+    assert caught.value.code == "agent_deployment_failed"
+
+
 def test_private_receipts_recover_deploy_and_invoke_across_hook_instances(
     tmp_path: Path,
 ) -> None:
