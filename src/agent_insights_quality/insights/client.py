@@ -161,13 +161,34 @@ def insight_proposed_fix(insight: Mapping[str, Any]) -> Mapping[str, Any]:
         or not proposed_fix["text"]
         or not isinstance(proposed_fix.get("kind"), str)
         or not proposed_fix["kind"]
-        or not isinstance(proposed_fix.get("changes"), list)
     ):
         raise RuntimeFailure(
             "invalid_insight",
             "AgentInsight details.recommended_actions.proposed_fix is invalid.",
         )
-    return proposed_fix
+    kind = proposed_fix["kind"]
+    if kind not in {
+        "prompt_patch",
+        "code_change",
+        "container_change",
+        "prose",
+        "no_fix",
+    }:
+        raise RuntimeFailure(
+            "invalid_insight",
+            "AgentInsight proposed fix kind is unsupported.",
+        )
+    changes = proposed_fix.get("changes")
+    if changes is None and kind in {"prose", "no_fix"}:
+        changes = []
+    if not isinstance(changes, list) or not all(
+        isinstance(change, Mapping) for change in changes
+    ):
+        raise RuntimeFailure(
+            "invalid_insight",
+            "AgentInsight proposed fix changes are invalid for its kind.",
+        )
+    return {**proposed_fix, "changes": changes}
 
 
 def _trace_timestamp(record: Mapping[str, Any]) -> datetime:
