@@ -340,6 +340,11 @@ Insights data to the trace `operation_Id` before creating a trace link. Runtime 
 direct email and private ADO actions but must never be persisted in this public repository; committed
 artifacts use opaque SHA-256 references.
 
+Project-scoped telemetry may omit an upstream parent span. Correlation accepts exactly one local root
+whose parent is empty or outside the selected span set, then requires every other span to be reachable
+through in-set parents. Chat spans must use either the exact configured deployment name or the exact
+canonical `gpt-5.6-terra-<AIQ_TERRA_MODEL_VERSION>` identity; prefixes and other versions are rejected.
+
 Static source scanning enforces known direct-ingestion sinks while allowing legitimate read-only
 Application Insights queries. Runtime egress and endpoint-only integration tests are the required
 second layer when traffic implementations are added.

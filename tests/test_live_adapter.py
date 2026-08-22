@@ -1511,6 +1511,16 @@ def test_expected_endpoint_failures_persist_each_fixture_and_resume_without_repl
     assert captured["start"] == start
     assert len(expectations) == fixture_count
     assert all(item.identifiers() for item in expectations)
+    assert all(
+        item.model_identities()
+        == frozenset(
+            {
+                "terra-agents",
+                "gpt-5.6-terra-2026-08-01",
+            }
+        )
+        for item in expectations
+    )
     assert (
         sum(
             item.required_operations == frozenset({"invoke_agent"})
