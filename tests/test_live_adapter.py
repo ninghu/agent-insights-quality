@@ -163,6 +163,60 @@ def test_symbolic_daily_plan_materializes_without_changing_plan_digest(tmp_path:
     assert json.loads(output.read_text(encoding="ascii"))["plan_reference"] == payload["plan_digest"]
 
 
+def test_failure_artifacts_are_append_only_across_resume_attempts(
+    tmp_path: Path,
+) -> None:
+    _, plan = _plan()
+    hooks = LiveRuntimeHooks(
+        _config(tmp_path),
+        artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
+    )
+    hooks._plan = plan
+
+    first = hooks.finalize_failure(
+        RuntimeFailure(
+            "first_failure",
+            "First synthetic failure.",
+            {
+                "cancellation_failures": ["deployment_cleanup_sessions_active"],
+                "command": [
+                    "az",
+                    "resource",
+                    "show",
+                    "--ids",
+                    "/subscript"
+                    "ions/11111111-1111-1111-1111-111111111111/"
+                    "resourceGroups/private-rg",
+                ],
+            },
+        ),
+        {"attempt": 1, "status": "inconclusive", "phase": "deploy"},
+    )
+    second = hooks.finalize_failure(
+        RuntimeFailure("second_failure", "Second synthetic failure."),
+        {"attempt": 2, "status": "inconclusive", "phase": "invoke"},
+    )
+
+    failures = [
+        path
+        for path in sorted(
+            (tmp_path / "artifacts" / plan.plan_id / "runtime" / "failures").rglob(
+                "failure-*.json"
+            )
+        )
+        if not path.name.endswith(".metadata.json")
+    ]
+    assert len(failures) == 2
+    assert first["artifact_reference"] != second["artifact_reference"]
+    first_payload = json.loads(failures[0].read_text(encoding="ascii"))
+    assert first_payload["attempt"] == 1
+    assert first_payload["failure"]["details"]["cancellation_failures"] == [
+        "deployment_cleanup_sessions_active"
+    ]
+    assert "/subscript" + "ions/" not in json.dumps(first_payload)
+    assert json.loads(failures[1].read_text(encoding="ascii"))["attempt"] == 2
+
+
 def test_every_reviewed_recipe_shape_is_supported_and_unknown_shape_is_rejected() -> None:
     registry = RecipeRegistry.load()
     assert len(registry.mutations) == 59

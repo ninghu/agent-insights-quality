@@ -395,6 +395,97 @@ def test_preprovisioned_api_key_connection_is_reconciled_without_secret_access()
     )
 
 
+def test_project_connections_accept_unique_names_under_exact_selected_project() -> None:
+    selected = project("aiq-20260820-r01")
+
+    class SuffixedConnectionsCli(FakeAzureCli):
+        def rest(self, method, url, body=None):
+            if method == "get" and "/connections?" in url:
+                project_id = url.split("/connections?", 1)[0]
+                return {
+                    "value": [
+                        {
+                            "id": (
+                                project_id
+                                + "/connections/application-insights-r01"
+                            ),
+                            "name": "application-insights-r01",
+                            "properties": {
+                                "category": "AppInsights",
+                                "authType": "ApiKey",
+                                "target": (
+                                    "/subscriptions/"
+                                    + SUBSCRIPTION
+                                    + "/resourceGroups/quality-rg/providers/"
+                                    "Microsoft.Insights/components/quality"
+                                ),
+                                "metadata": {
+                                    "ApiType": "Azure",
+                                    "ResourceId": (
+                                        "/subscriptions/"
+                                        + SUBSCRIPTION
+                                        + "/resourceGroups/quality-rg/providers/"
+                                        "Microsoft.Insights/components/quality"
+                                    ),
+                                    "purpose": "agent-insights-quality",
+                                    "owner_reference": "ninghu",
+                                    "expires_on": "2026-08-19",
+                                },
+                            },
+                        }
+                    ]
+                }
+            return super().rest(method, url, body)
+
+    manager = AzureProjectManager(
+        SuffixedConnectionsCli([selected]),
+        AzureContext(SUBSCRIPTION, "tenant", "user"),
+        RuntimeConfig.from_env(environment()).azure,
+        "ninghu",
+    )
+
+    assert manager.select_or_create(
+        date(2026, 8, 20),
+        "sha256:catalog",
+        project_name="aiq-20260820-r01",
+    ).project_name == "aiq-20260820-r01"
+
+
+@pytest.mark.parametrize("wrong_project", [False, True])
+def test_project_connections_reject_duplicate_category_or_wrong_project(
+    wrong_project: bool,
+) -> None:
+    class InvalidConnectionsCli(FakeAzureCli):
+        def rest(self, method, url, body=None):
+            if method == "get" and "/connections?" in url:
+                first = super().rest(method, url, body)["value"][0]
+                if wrong_project:
+                    first["id"] = first["id"].replace(
+                        "/projects/aiq-20260820/",
+                        "/projects/aiq-20260820-r01/",
+                    )
+                    return {"value": [first]}
+                second = dict(first)
+                second["id"] = (
+                    url.split("/connections?", 1)[0]
+                    + "/connections/application-insights-r01"
+                )
+                second["name"] = "application-insights-r01"
+                return {"value": [first, second]}
+            return super().rest(method, url, body)
+
+    manager = AzureProjectManager(
+        InvalidConnectionsCli([project()]),
+        AzureContext(SUBSCRIPTION, "tenant", "user"),
+        RuntimeConfig.from_env(environment()).azure,
+        "ninghu",
+    )
+
+    with pytest.raises(RuntimeFailure) as caught:
+        manager.select_or_create(date(2026, 8, 20), "sha256:catalog")
+    assert caught.value.code == "project_connection_conflict"
+
+
 @pytest.mark.parametrize(
     ("metadata_matches", "has_pull_role", "expected_error"),
     [
@@ -422,8 +513,8 @@ def test_acr_image_accepts_redacted_credentials_but_requires_visible_binding(
                     "value": [
                         app,
                         {
-                            "id": project_id + "/connections/container-registry",
-                            "name": "container-registry",
+                            "id": project_id + "/connections/container-registry-r01",
+                            "name": "container-registry-r01",
                             "properties": {
                                 "category": "ContainerRegistry",
                                 "target": "aiqacr123.azurecr.io",

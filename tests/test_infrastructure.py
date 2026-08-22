@@ -66,6 +66,31 @@ def test_app_insights_connection_uses_arm_resolved_api_key() -> None:
     assert "expires_on: expiresOn" in body
 
 
+def test_project_connections_support_deterministic_suffixes_without_breaking_base() -> None:
+    qualification = _bicep("modules/qualification-project.bicep")
+    assert re.search(
+        r"@maxLength\(32\)\s+param connectionNameSuffix string = ''",
+        qualification,
+    )
+    assert (
+        "var normalizedConnectionSuffix = empty(connectionNameSuffix) ? '' : "
+        "'-${connectionNameSuffix}'"
+        in qualification
+    )
+    assert (
+        "var appInsightsConnectionName = "
+        "'application-insights${normalizedConnectionSuffix}'"
+        in qualification
+    )
+    assert (
+        "var containerRegistryConnectionName = "
+        "'container-registry${normalizedConnectionSuffix}'"
+        in qualification
+    )
+    assert "name: appInsightsConnectionName" in qualification
+    assert "name: containerRegistryConnectionName" in qualification
+
+
 def test_connection_string_has_no_parameter_output_or_cli_surface() -> None:
     infra_sources = "\n".join(
         path.read_text(encoding="utf-8")

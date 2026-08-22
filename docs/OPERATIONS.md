@@ -56,7 +56,9 @@ PUT cannot safely provision the required API-key connection. A missing or mismat
 project fails closed.
 
 When `AIQ_TICKET_IMAGE_URI` points to Azure Container Registry, preflight requires that exact
-project-scoped managed-identity `container-registry` connection and AcrPull assignment. Runtime
+project-scoped managed-identity ContainerRegistry connection and AcrPull assignment. Connection
+names use an optional deterministic per-project suffix because the service reserves names across the
+account workspace; omit the suffix only for the existing base-project compatibility path. Runtime
 reconciliation never reads, creates, or updates API-key credentials: a project missing the
 preprovisioned connection fails closed with instructions to deploy the qualification-project Bicep
 module instead of being reported ready.
@@ -75,7 +77,8 @@ az deployment group create `
   --parameters accountName='<foundry-account-name>' projectName='<qualification-project-name>' `
     applicationInsightsName='<application-insights-name>' registryName='<registry-name>' `
     reportDate='<YYYY-MM-DD>' expiresOn='<YYYY-MM-DD>' `
-    automationOwner='<automation-owner>' catalogVersion='<catalog-version>'
+    automationOwner='<automation-owner>' catalogVersion='<catalog-version>' `
+    connectionNameSuffix='<rerun-suffix>'
 ```
 Set `AIQ_MONITOR_OWNERSHIP_RECEIPT` to a protected private-state path. Monitor ownership is recorded
 there as project-, agent-, monitor-, and model-scoped opaque hashes because the service monitor API
@@ -145,6 +148,10 @@ private idempotency receipts without replaying completed remote side effects. Ex
 are unbounded for scoring; evidence retains at most 100 detail samples and records `sampled_count` and
 `details_truncated`. Cleanup is a dry run unless `--execute` is present and filters
 exact framework purpose, owner, name, and expiration metadata.
+
+Foundry deployment requests use a bounded 300-second timeout. Hosted-version cancellation retries
+HTTP 409 active-session conflicts for up to 15 minutes, never treats a conflict as deletion, and
+preserves the cleanup failure code in append-only attempt-qualified diagnostics for a later resume.
 
 The runtime executes every version selected by the reviewed plan; it does not stop scheduling at a
 generic observed-insight threshold. Evidence compares each scenario's exact `finding_count` with all

@@ -56,7 +56,12 @@ from agent_insights_quality.runtime.azure import (
 )
 from agent_insights_quality.runtime.config import RuntimeConfig
 from agent_insights_quality.runtime.errors import RuntimeFailure
-from agent_insights_quality.runtime.orchestrator import PlanInput, PlannedWindow, VersionWork
+from agent_insights_quality.runtime.orchestrator import (
+    PlanInput,
+    PlannedWindow,
+    VersionWork,
+    public_failure_details,
+)
 from agent_insights_quality.runtime.receipts import (
     MonitorOwnershipRegistry,
     ensure_public_safe,
@@ -1383,7 +1388,11 @@ class LiveRuntimeHooks:
                 validate_deployment_receipt(receipt)
                 self._deployments[identity] = receipt
             except RuntimeContractError as error:
-                raise RuntimeFailure("agent_deployment_failed", str(error)) from error
+                raise RuntimeFailure(
+                    getattr(error, "code", "agent_deployment_failed"),
+                    str(error),
+                    transient=bool(getattr(error, "transient", False)),
+                ) from error
             result = _public_deployment(receipt, work.version_reference) | {
                 "mutation_reference": materialized.mutation_reference,
                 "mutation_operation_count": len(materialized.operations),
@@ -2685,22 +2694,47 @@ class LiveRuntimeHooks:
                 {"failure_codes": sorted(set(failures))},
             )
 
-    def finalize_failure(self, failure: RuntimeFailure, state: Mapping[str, Any]) -> None:
+    def finalize_failure(
+        self,
+        failure: RuntimeFailure,
+        state: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        attempt = state.get("attempt")
+        if not isinstance(attempt, int) or attempt < 1:
+            raise RuntimeFailure(
+                "invalid_failure_state",
+                "Runtime failure state is missing its execution attempt.",
+            )
+        state_reference = _digest(state)
+        failure_reference = _digest(
+            {
+                "code": failure.code,
+                "message": failure.message,
+                "details": failure.details,
+                "transient": failure.transient,
+            }
+        )
         payload = {
             "schema_version": "1.0.0",
             "status": "inconclusive",
+            "attempt": attempt,
             "failure": {
                 "code": failure.code,
                 "message": failure.message,
+                "details": public_failure_details(failure.details),
             },
-            "state_reference": _digest(state),
+            "state_reference": state_reference,
+            "failure_reference": failure_reference,
         }
         ensure_public_safe(payload)
         plan_id = self._plan.plan_id if self._plan is not None else "unbound"
-        self._put_once(
-            f"{plan_id}/runtime/failure.json",
+        record = self._put_once(
+            f"{plan_id}/runtime/failures/attempt-{attempt:03d}/"
+            f"state-{state_reference.removeprefix('sha256:')}/"
+            f"failure-{failure_reference.removeprefix('sha256:')}.json",
             json.dumps(payload, indent=2, sort_keys=True).encode("ascii") + b"\n",
         )
+        return {"artifact_reference": record.reference}
 
 
 def create_runtime_hooks(config: RuntimeConfig) -> LiveRuntimeHooks:

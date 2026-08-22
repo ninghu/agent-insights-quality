@@ -20,9 +20,11 @@ from agent_insights_quality.agent_runtime import (
     RUN_KEY,
     SOURCE_DIGEST_KEY,
     DeploymentReceipt,
+    DeploymentCleanupError,
     DeploymentPollError,
     FoundryDeploymentClient,
     FoundryInvocationClient,
+    FoundryRequestTimeout,
     HealthyFixture,
     HttpResponse,
     InvocationEndpointError,
@@ -258,6 +260,7 @@ def test_container_deployment_requires_immutable_reviewed_registry_digest() -> N
     assert receipt.image_digest == image_digest
     assert payload["definition"]["container_configuration"]["image"] == image
     assert transport.calls[0]["headers"]["Foundry-Features"] == HOSTED_FEATURES
+    assert transport.calls[0]["timeout_seconds"] == 300
     acr_image = (
         "aiqacr123.azurecr.io/agent-insights-quality-ticket@sha256:"
         + ("b" * 64)
@@ -337,6 +340,74 @@ def test_cleanup_deletes_only_the_exact_owned_version() -> None:
     )
     with pytest.raises(RuntimeContractError, match="did not confirm deletion"):
         unchecked.cleanup_version(receipt)
+
+
+def test_hosted_cleanup_retries_active_sessions_and_remains_resumable() -> None:
+    digest = "sha256:" + ("b" * 64)
+    receipt = DeploymentReceipt(
+        "aiq-004-travel",
+        "9",
+        "hosted_code",
+        digest,
+        "run-clean",
+        "active",
+    )
+    metadata = {"metadata": _metadata("run-clean", digest)}
+    transport = QueueTransport(
+        [
+            _response(200, metadata),
+            *[_response(409) for _ in range(4)],
+            _response(200, metadata),
+            _response(
+                200,
+                {
+                    "name": receipt.agent_name,
+                    "version": receipt.agent_version,
+                    "deleted": True,
+                },
+            ),
+        ]
+    )
+    sleeps: list[float] = []
+    client = FoundryDeploymentClient(
+        PROJECT_ENDPOINT,
+        lambda: "token",
+        transport=transport,
+        cleanup_retry_attempts=4,
+        cleanup_retry_interval_seconds=300,
+        sleeper=sleeps.append,
+    )
+
+    with pytest.raises(DeploymentCleanupError) as blocked:
+        client.cleanup_version(receipt)
+    assert blocked.value.code == "deployment_cleanup_sessions_active"
+    assert sleeps == [300, 300, 300]
+
+    result = client.cleanup_version(receipt)
+    assert result.deleted is True
+    assert sum(call["method"] == "DELETE" for call in transport.calls) == 5
+
+
+def test_deployment_timeout_is_bounded_and_actionably_classified() -> None:
+    class TimeoutTransport:
+        def request(self, *_args, **kwargs):
+            assert kwargs["timeout_seconds"] == 300
+            raise TimeoutError("synthetic timeout")
+
+    client = FoundryDeploymentClient(
+        PROJECT_ENDPOINT,
+        lambda: "token",
+        transport=TimeoutTransport(),
+    )
+
+    with pytest.raises(FoundryRequestTimeout, match="300-second") as caught:
+        client.deploy_prompt(
+            agent_name="aiq-001-weather",
+            definition={"kind": "prompt", "model": "test", "tools": []},
+            run_id="run-timeout",
+        )
+    assert caught.value.code == "agent_deployment_timeout"
+    assert caught.value.transient is True
 
 
 def test_prompt_invocation_binds_exact_version_and_returns_non_trace_receipt() -> None:

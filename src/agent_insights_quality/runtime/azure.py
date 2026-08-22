@@ -648,6 +648,7 @@ class AzureProjectManager:
     def _connections(self, project_id: str) -> list[Mapping[str, Any]]:
         results: list[Mapping[str, Any]] = []
         next_url = f"{project_id}/connections?api-version=2025-06-01"
+        expected_path = f"{project_id}/connections".casefold()
         while next_url:
             parsed = urllib.parse.urlparse(next_url)
             if parsed.netloc and parsed.netloc.casefold() != "management.azure.com":
@@ -655,7 +656,7 @@ class AzureProjectManager:
                     "invalid_azure_pagination",
                     "Azure connection pagination changed endpoint origin.",
                 )
-            if project_id.casefold() not in parsed.path.casefold():
+            if parsed.path.rstrip("/").casefold() != expected_path:
                 raise RuntimeFailure(
                     "invalid_azure_pagination",
                     "Azure connection pagination escaped the exact project.",
@@ -668,6 +669,27 @@ class AzureProjectManager:
                 else ""
             )
         return results
+
+    @staticmethod
+    def _connection_leaf_name(
+        connection: Mapping[str, Any],
+        project_id: str,
+    ) -> str:
+        connection_id = str(connection.get("id") or "")
+        expected_prefix = f"{project_id}/connections/"
+        if not connection_id.casefold().startswith(expected_prefix.casefold()):
+            raise RuntimeFailure(
+                "invalid_project_connections",
+                "Project connection is outside the exact selected project.",
+            )
+        leaf = connection_id[len(expected_prefix) :]
+        name = str(connection.get("name") or "").rstrip("/").rsplit("/", 1)[-1]
+        if not leaf or "/" in leaf or "?" in leaf or "#" in leaf or name != leaf:
+            raise RuntimeFailure(
+                "invalid_project_connections",
+                "Project connection identity is invalid.",
+            )
+        return leaf
 
     def _application_insights_connection(self, project_id: str) -> str:
         matches: list[Mapping[str, Any]] = []
@@ -689,6 +711,7 @@ class AzureProjectManager:
                 "Project must have exactly one Application Insights connection.",
             )
         connection = matches[0]
+        self._connection_leaf_name(connection, project_id)
         properties = connection["properties"]
         target = str(
             properties.get("target")
@@ -696,11 +719,8 @@ class AzureProjectManager:
             or ""
         )
         metadata = properties.get("metadata")
-        expected_id = f"{project_id}/connections/application-insights"
         if (
-            str(connection.get("id") or "").casefold() != expected_id.casefold()
-            or str(connection.get("name") or "") != "application-insights"
-            or str(properties.get("authType") or "").casefold() != "apikey"
+            str(properties.get("authType") or "").casefold() != "apikey"
             or not isinstance(metadata, Mapping)
             or metadata.get("ApiType") != "Azure"
             or str(metadata.get("ResourceId") or "").casefold() != target.casefold()
@@ -769,13 +789,20 @@ class AzureProjectManager:
         if requirement is None:
             return None
         login_server, registry_id = requirement
-        expected_id = f"{project_id}/connections/container-registry"
-        matches = [
-            connection
-            for connection in self._connections(project_id)
-            if str(connection.get("id") or "").casefold() == expected_id.casefold()
-            or str(connection.get("name") or "") == "container-registry"
-        ]
+        matches = []
+        for connection in self._connections(project_id):
+            properties = connection.get("properties")
+            category = (
+                str(
+                    properties.get("category")
+                    or properties.get("connectionType")
+                    or ""
+                ).casefold()
+                if isinstance(properties, Mapping)
+                else ""
+            )
+            if category == "containerregistry":
+                matches.append(connection)
         if len(matches) != 1:
             raise RuntimeFailure(
                 "missing_project_connections",
@@ -783,12 +810,11 @@ class AzureProjectManager:
                 "ContainerRegistry connection for AIQ_TICKET_IMAGE_URI.",
             )
         connection = matches[0]
+        self._connection_leaf_name(connection, project_id)
         properties = connection.get("properties")
         metadata = properties.get("metadata") if isinstance(properties, Mapping) else None
         if (
-            str(connection.get("id") or "").casefold() != expected_id.casefold()
-            or str(connection.get("name") or "") != "container-registry"
-            or not isinstance(properties, Mapping)
+            not isinstance(properties, Mapping)
             or str(properties.get("category") or "").casefold() != "containerregistry"
             or str(properties.get("target") or "").casefold() != login_server
             or str(properties.get("authType") or "").casefold() != "managedidentity"

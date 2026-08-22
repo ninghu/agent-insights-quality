@@ -92,6 +92,16 @@ class RuntimeContractError(ContractError):
     """Raised when deployment or endpoint traffic violates the runtime contract."""
 
 
+class FoundryRequestTimeout(RuntimeContractError):
+    code = "agent_deployment_timeout"
+    transient = True
+
+
+class DeploymentCleanupError(RuntimeContractError):
+    code = "deployment_cleanup_sessions_active"
+    transient = True
+
+
 class DeploymentPollError(RuntimeContractError):
     """Raised after creation when a concrete version fails to become usable."""
 
@@ -478,18 +488,32 @@ class FoundryDeploymentClient:
         token_provider: Callable[[], str],
         *,
         transport: HttpTransport | None = None,
-        request_timeout_seconds: float = 60,
+        request_timeout_seconds: float = 300,
         poll_timeout_seconds: float = 1800,
         poll_interval_seconds: float = 5,
+        cleanup_retry_attempts: int = 4,
+        cleanup_retry_interval_seconds: float = 300,
         sleeper: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
+        if (
+            request_timeout_seconds <= 0
+            or poll_timeout_seconds <= 0
+            or poll_interval_seconds < 0
+            or cleanup_retry_attempts <= 0
+            or cleanup_retry_interval_seconds < 0
+        ):
+            raise RuntimeContractError(
+                "Deployment timeouts, intervals, and cleanup attempts must be bounded and valid."
+            )
         self._endpoint = _validate_project_endpoint(project_endpoint)
         self._token_provider = token_provider
         self._transport = transport or UrllibTransport()
         self._request_timeout = request_timeout_seconds
         self._poll_timeout = poll_timeout_seconds
         self._poll_interval = poll_interval_seconds
+        self._cleanup_attempts = cleanup_retry_attempts
+        self._cleanup_interval = cleanup_retry_interval_seconds
         self._sleep = sleeper
         self._monotonic = monotonic
 
@@ -709,17 +733,25 @@ class FoundryDeploymentClient:
             raise RuntimeContractError(
                 "Cleanup refused because the deployed version ownership does not match."
             )
-        response = self._request(
-            "DELETE",
-            f"/agents/{_quote(receipt.agent_name)}/versions/{_quote(receipt.agent_version)}",
-            headers=(
-                {"Foundry-Features": HOSTED_FEATURES}
-                if receipt.agent_type != "prompt"
-                else {}
-            ),
-            body=None,
-            expected_statuses={200},
-        )
+        hosted = receipt.agent_type != "prompt"
+        response: HttpResponse | None = None
+        for attempt in range(1, self._cleanup_attempts + 1):
+            response = self._request(
+                "DELETE",
+                f"/agents/{_quote(receipt.agent_name)}/versions/{_quote(receipt.agent_version)}",
+                headers={"Foundry-Features": HOSTED_FEATURES} if hosted else {},
+                body=None,
+                expected_statuses={200, 409} if hosted else {200},
+            )
+            if response.status_code != 409:
+                break
+            if attempt == self._cleanup_attempts:
+                raise DeploymentCleanupError(
+                    "Hosted agent cleanup remains blocked by active sessions after bounded retries."
+                )
+            self._sleep(self._cleanup_interval)
+        if response is None:
+            raise AssertionError("unreachable")
         result = response.json()
         if (
             str(result.get("name") or "") != receipt.agent_name
@@ -865,13 +897,26 @@ class FoundryDeploymentClient:
             **headers,
         }
         separator = "&" if "?" in path else "?"
-        response = self._transport.request(
-            method,
-            f"{self._endpoint}{path}{separator}api-version={API_VERSION}",
-            headers=request_headers,
-            body=body,
-            timeout_seconds=self._request_timeout,
-        )
+        try:
+            response = self._transport.request(
+                method,
+                f"{self._endpoint}{path}{separator}api-version={API_VERSION}",
+                headers=request_headers,
+                body=body,
+                timeout_seconds=self._request_timeout,
+            )
+        except TimeoutError as error:
+            raise FoundryRequestTimeout(
+                f"Foundry deployment request exceeded the bounded "
+                f"{self._request_timeout:g}-second timeout."
+            ) from error
+        except urllib.error.URLError as error:
+            if isinstance(error.reason, TimeoutError):
+                raise FoundryRequestTimeout(
+                    f"Foundry deployment request exceeded the bounded "
+                    f"{self._request_timeout:g}-second timeout."
+                ) from error
+            raise RuntimeContractError("Foundry deployment transport failed.") from error
         allowed = expected_statuses or {200, 201, 202}
         if response.status_code not in allowed:
             raise RuntimeContractError(
