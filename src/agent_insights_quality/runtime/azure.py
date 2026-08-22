@@ -494,7 +494,7 @@ class AzureProjectManager:
                 + urllib.parse.quote(str(item.get("name") or ""), safe="")
             )
         app_insights = self._application_insights_connection(project_id)
-        registry_id = self._container_registry_connection(project_id, principal_id)
+        registry_id = self._container_registry_connection(project_id)
         app_insights_resource = _mapping(
             self._cli.json(["resource", "show", "--ids", app_insights]),
             "invalid_project_connections",
@@ -763,7 +763,6 @@ class AzureProjectManager:
     def _container_registry_connection(
         self,
         project_id: str,
-        principal_id: str,
     ) -> str | None:
         requirement = self._container_registry_requirement(project_id)
         if requirement is None:
@@ -785,9 +784,6 @@ class AzureProjectManager:
         connection = matches[0]
         properties = connection.get("properties")
         metadata = properties.get("metadata") if isinstance(properties, Mapping) else None
-        credentials = (
-            properties.get("credentials") if isinstance(properties, Mapping) else None
-        )
         if (
             str(connection.get("id") or "").casefold() != expected_id.casefold()
             or str(connection.get("name") or "") != "container-registry"
@@ -798,10 +794,6 @@ class AzureProjectManager:
             or properties.get("isSharedToAll") is not False
             or not isinstance(metadata, Mapping)
             or str(metadata.get("ResourceId") or "").casefold()
-            != registry_id.casefold()
-            or not isinstance(credentials, Mapping)
-            or str(credentials.get("clientId") or "") != principal_id
-            or str(credentials.get("resourceId") or "").casefold()
             != registry_id.casefold()
         ):
             raise RuntimeFailure(
@@ -978,13 +970,7 @@ class AzureProjectManager:
         if not isinstance(tags, Mapping):
             raise RuntimeFailure("ownership_mismatch", "Project ownership tags are unavailable.")
         self._ensure_application_insights_connection(project_id, tags)
-        identity = item.get("identity")
-        principal_id = (
-            str(identity.get("principalId") or "")
-            if isinstance(identity, Mapping)
-            else ""
-        )
-        self._container_registry_connection(project_id, principal_id)
+        self._container_registry_connection(project_id)
         self._ensure_project_roles(item, project_id)
         return self._validate_project(item, managed=True)
 

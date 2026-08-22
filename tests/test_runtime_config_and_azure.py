@@ -381,7 +381,19 @@ def test_preprovisioned_api_key_connection_is_reconciled_without_secret_access()
     )
 
 
-def test_acr_image_requires_exact_managed_identity_connection_and_pull_role() -> None:
+@pytest.mark.parametrize(
+    ("metadata_matches", "has_pull_role", "expected_error"),
+    [
+        (True, True, None),
+        (False, True, "project_connection_conflict"),
+        (True, False, "project_role_assignments_missing"),
+    ],
+)
+def test_acr_image_accepts_redacted_credentials_but_requires_visible_binding(
+    metadata_matches: bool,
+    has_pull_role: bool,
+    expected_error: str | None,
+) -> None:
     registry_id = (
         "/subscriptions/" + SUBSCRIPTION + "/resourceGroups/quality-rg/providers/"
         "Microsoft.ContainerRegistry/registries/aiqacr123"
@@ -403,11 +415,14 @@ def test_acr_image_requires_exact_managed_identity_connection_and_pull_role() ->
                                 "target": "aiqacr123.azurecr.io",
                                 "authType": "ManagedIdentity",
                                 "isSharedToAll": False,
-                                "credentials": {
-                                    "clientId": "project-principal",
-                                    "resourceId": registry_id,
+                                "credentials": None,
+                                "metadata": {
+                                    "ResourceId": (
+                                        registry_id
+                                        if metadata_matches
+                                        else registry_id + "-other"
+                                    )
                                 },
-                                "metadata": {"ResourceId": registry_id},
                             },
                         },
                     ]
@@ -431,6 +446,8 @@ def test_acr_image_requires_exact_managed_identity_connection_and_pull_role() ->
             if arguments[:3] == ["role", "assignment", "list"]:
                 scope = arguments[arguments.index("--scope") + 1]
                 if scope.casefold() == registry_id.casefold():
+                    if not has_pull_role:
+                        return []
                     return [
                         {
                             "scope": registry_id,
@@ -454,10 +471,18 @@ def test_acr_image_requires_exact_managed_identity_connection_and_pull_role() ->
         "ninghu",
     )
 
-    assert (
-        manager.select_or_create(date(2026, 8, 20), "sha256:catalog").project_name
-        == "aiq-20260820"
-    )
+    if expected_error is None:
+        assert (
+            manager.select_or_create(
+                date(2026, 8, 20),
+                "sha256:catalog",
+            ).project_name
+            == "aiq-20260820"
+        )
+    else:
+        with pytest.raises(RuntimeFailure) as caught:
+            manager.select_or_create(date(2026, 8, 20), "sha256:catalog")
+        assert caught.value.code == expected_error
 
 
 def test_acr_image_rejects_missing_registry_connection() -> None:
