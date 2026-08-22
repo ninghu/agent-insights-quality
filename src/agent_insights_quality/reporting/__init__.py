@@ -25,7 +25,8 @@ READINESS_FAILURE_ARTIFACTS = (
     "readiness-failure.json",
     "readiness-failure.md",
     "failure-email.html",
-    "email-handoff.json",
+    "email-send-request.json",
+    "email-receipt.json",
 )
 
 
@@ -164,12 +165,18 @@ def finalize_readiness_failure(
     generated_at = generated_at or _default_generated_at()
     report_id = f"aiq-{parsed_date:%Y%m%d}"
     target = (output_root or ROOT / "reports") / "daily" / parsed_date.strftime("%Y/%m/%d")
-    handoff_path = target / "email-handoff.json"
-    existing_handoff = None
-    if handoff_path.exists():
-        existing_handoff = json.loads(handoff_path.read_text(encoding="ascii"))
-        validate_email_handoff(existing_handoff, str(handoff_path), reporting)
-        validate_stored_bundle_content(handoff_path, existing_handoff)
+    request_path = target / "email-send-request.json"
+    existing_request = None
+    if request_path.exists():
+        from agent_insights_quality.artifact_io import verified_hash
+
+        existing_request = json.loads(request_path.read_text(encoding="ascii"))
+        validate_instance(
+            existing_request,
+            SCHEMAS / "email-send-request.schema.json",
+            str(request_path),
+        )
+        verified_hash(existing_request, "request_hash", str(request_path))
         existing_report = json.loads(
             (target / "readiness-failure.json").read_text(encoding="ascii")
         )
@@ -196,13 +203,13 @@ def finalize_readiness_failure(
         "performed_actions": [
             "render_failure_report",
             "render_failure_email",
-            "create_email_handoff",
+            "create_email_send_request",
         ],
         "diagnostics_reference": "config/runtime-readiness.yaml",
         "safe_next_action": (
             "Complete and human-review every runtime component before enabling qualification."
         ),
-        "email_handoff_reference": "email-handoff.json",
+        "email_handoff_reference": "email-send-request.json",
     }
     markdown = "\n".join(
         [
@@ -243,52 +250,32 @@ def finalize_readiness_failure(
         "readiness-failure.md": markdown,
         "failure-email.html": html,
     }
-    email_handoff = {
-        "schema_version": "1.0.0",
-        "report_id": report_id,
-        "report_date": report_date,
-        "required": True,
-        "message_count": 1,
-        "reporting_mode": reporting["mode"],
-        "recipient_variable": reporting["recipient_variable"],
-        "allowed_domain": reporting["allowed_domain"],
-        "sender_context": "authenticated_user_mailbox",
-        "transport": "copilot_connected_microsoft_mail",
-        "subject": subject,
-        "html_artifact": "failure-email.html",
-        "content_digest": _bundle_content_digest(contents, subject),
-        "delivery": {
-            "status": "pending",
-            "receipt_reference": None,
-            "error_code": None,
-        },
-    }
-    if existing_handoff is not None:
-        expected_contract = {key: value for key, value in email_handoff.items() if key != "delivery"}
-        existing_contract = {
-            key: value for key, value in existing_handoff.items() if key != "delivery"
-        }
-        if existing_contract != expected_contract:
-            raise ContractError(f"{handoff_path}: existing handoff content does not match this run")
-        return handoff_path
+    from agent_insights_quality.reporting.render import (
+        build_email_send_request,
+        resolve_recipient,
+    )
+
+    email_request = build_email_send_request(
+        subject,
+        html,
+        resolve_recipient(reporting),
+    )
+    if existing_request is not None:
+        if existing_request != email_request:
+            raise ContractError(f"{request_path}: existing request content does not match this run")
+        return request_path
 
     validate_instance(
         failure_report,
         SCHEMAS / "readiness-failure.schema.json",
         "readiness failure report",
     )
-    validate_email_handoff(
-        email_handoff,
-        "readiness failure email handoff",
-        reporting,
-        require_current_selection=True,
-    )
 
     target.mkdir(parents=True, exist_ok=True)
     for filename, content in contents.items():
         (target / filename).write_text(content, encoding="ascii")
-    handoff_path.write_text(json.dumps(email_handoff, indent=2) + "\n", encoding="ascii")
-    return handoff_path
+    request_path.write_text(json.dumps(email_request, indent=2) + "\n", encoding="ascii")
+    return request_path
 from agent_insights_quality.reporting.render import (
     build_email_send_request,
     create_email_send_request,
