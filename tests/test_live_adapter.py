@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -26,7 +27,10 @@ from agent_insights_quality.agent_runtime import (
 )
 from agent_insights_quality.cli import main
 from agent_insights_quality.contracts import ContractError
-from agent_insights_quality.daily import build_daily_status
+from agent_insights_quality.daily import (
+    build_daily_status,
+    validate_daily_status_packages,
+)
 from agent_insights_quality.insights.client import AgentInsightsClient, InsightCheckpoint
 from agent_insights_quality.insights.telemetry import TraceCorrelation
 from agent_insights_quality.judging import project_evidence, validate_evidence_bundle
@@ -1179,7 +1183,6 @@ def test_load_evidence_bundle_validates_original_hash_before_normalization(
         assignment,
         raw,
     )
-
     with pytest.raises(ContractError, match="bundle_hash"):
         hooks.load_evidence_bundle(
             work,
@@ -1304,13 +1307,14 @@ def test_normalized_legacy_evidence_supports_daily_status_and_scoring(
         assignment,
         opaque_reference(project.project_id),
     )
-    reference, _ = _persist_evidence_bundle(
+    reference, path = _persist_evidence_bundle(
         tmp_path,
         plan,
         work,
         assignment,
         raw,
     )
+    original_bytes = path.read_bytes()
 
     subset_payload = deepcopy(payload)
     subset_payload["assignments"] = [deepcopy(assignment)]
@@ -1356,6 +1360,7 @@ def test_normalized_legacy_evidence_supports_daily_status_and_scoring(
         hooks,
         tmp_path / "packages",
     )
+    validate_daily_status_packages(status, tmp_path / "packages")
     normalized = hooks.load_evidence_bundle(
         work,
         str(assignment["scenario_id"]),
@@ -1364,8 +1369,11 @@ def test_normalized_legacy_evidence_supports_daily_status_and_scoring(
     score = score_run(payload, [normalized], [])
 
     assert hooks._project == project
+    assert status["evidence"][0]["artifact_reference"] != reference
     assert status["evidence"][0]["bundle_hash"] == normalized["bundle_hash"]
     assert "provenance_failure" not in score["violations"]
+    assert path.read_bytes() == original_bytes
+    assert "sha256:" + hashlib.sha256(original_bytes).hexdigest() == reference
 
 
 def test_live_deploy_preserves_transient_poll_timeout_for_orchestrator_retry(
