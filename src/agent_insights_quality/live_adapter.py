@@ -887,6 +887,10 @@ class LiveRuntimeHooks:
             RuntimeFailure,
         ] = {}
         self._cancelled_insight_runs: set[tuple[str, str]] = set()
+        self._cancelling_insight_runs: dict[
+            tuple[str, str],
+            threading.Event,
+        ] = {}
         self._cancel_events: dict[str, threading.Event] = {}
 
     def _token(self) -> str:
@@ -2399,6 +2403,23 @@ class LiveRuntimeHooks:
                 correlation.operation_id for correlation in correlations
             )
 
+        if cancel_event.is_set():
+            try:
+                self._cancel_insight_run_once(
+                    insights,
+                    (persisted_monitor_id, run_id),
+                )
+            except RuntimeFailure as error:
+                raise RuntimeFailure(
+                    "cancel_partial_failure",
+                    "Cancellation could not clean every exact owned resource.",
+                    {"failure_codes": [error.code]},
+                ) from error
+            raise RuntimeFailure(
+                "run_cancelled",
+                "Runtime cancellation was requested after Agent Insights run creation.",
+            )
+
         run, details = insights.collect_run(
             monitor_id,
             run_id,
@@ -2994,6 +3015,35 @@ class LiveRuntimeHooks:
             self._evidence_public[idempotency_key] = result
             return result
 
+    def _cancel_insight_run_once(
+        self,
+        insights: AgentInsightsClient,
+        run_identity: tuple[str, str],
+    ) -> None:
+        while True:
+            with self._lock:
+                if run_identity in self._cancelled_insight_runs:
+                    return
+                completion = self._cancelling_insight_runs.get(run_identity)
+                owns_claim = completion is None
+                if owns_claim:
+                    completion = threading.Event()
+                    self._cancelling_insight_runs[run_identity] = completion
+            if not owns_claim:
+                completion.wait()
+                continue
+            succeeded = False
+            try:
+                insights.cancel_run(*run_identity)
+                succeeded = True
+            finally:
+                with self._lock:
+                    if succeeded:
+                        self._cancelled_insight_runs.add(run_identity)
+                    self._cancelling_insight_runs.pop(run_identity, None)
+                    completion.set()
+            return
+
     def cancel(self, work: VersionWork) -> None:
         failures: list[str] = []
         cancel_event = self._cancel_events.setdefault(work.key, threading.Event())
@@ -3018,11 +3068,8 @@ class LiveRuntimeHooks:
                 and run_identity not in self._cancelled_insight_runs
             )
         if should_cancel_run and run_identity is not None and insights is not None:
-            monitor_id, run_id = run_identity
             try:
-                insights.cancel_run(monitor_id, run_id)
-                with self._lock:
-                    self._cancelled_insight_runs.add(run_identity)
+                self._cancel_insight_run_once(insights, run_identity)
             except RuntimeFailure as error:
                 failures.append(error.code)
         if should_cleanup and receipt is not None and deployment_client is not None:
@@ -3073,6 +3120,48 @@ class LiveRuntimeHooks:
             "state_reference": state_reference,
             "failure_reference": failure_reference,
         }
+        raw_unexpected = failure.details.get("unexpected_exceptions")
+        if not isinstance(raw_unexpected, list):
+            exception_class = failure.details.get("unexpected_exception_class")
+            exception_reference = failure.details.get("unexpected_exception_reference")
+            raw_unexpected = (
+                [
+                    {
+                        "exception_class": exception_class,
+                        "exception_reference": exception_reference,
+                        "work_reference": failure.details.get("work_reference"),
+                    }
+                ]
+                if exception_class is not None or exception_reference is not None
+                else []
+            )
+        unexpected = []
+        for item in raw_unexpected[:32]:
+            if not isinstance(item, Mapping):
+                continue
+            exception_class = item.get("exception_class")
+            exception_reference = item.get("exception_reference")
+            work_reference = item.get("work_reference")
+            if (
+                not isinstance(exception_class, str)
+                or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]{0,127}", exception_class)
+                or not isinstance(exception_reference, str)
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", exception_reference)
+            ):
+                continue
+            diagnostic = {
+                "exception_class": exception_class,
+                "exception_reference": exception_reference,
+            }
+            if isinstance(work_reference, str) and re.fullmatch(
+                r"sha256:[0-9a-f]{64}", work_reference
+            ):
+                diagnostic["work_reference"] = work_reference
+            unexpected.append(diagnostic)
+        if unexpected:
+            payload["private_diagnostics"] = {
+                "unexpected_exceptions": unexpected,
+            }
         ensure_public_safe(payload)
         plan_id = self._plan.plan_id if self._plan is not None else "unbound"
         record = self._put_once(

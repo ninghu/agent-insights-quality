@@ -104,6 +104,11 @@ candidate-only ADO, reporting, email-receipt, generated-path, and cleanup comman
 for `aiq-YYYYMMDD-rNN`; rerun agent names also include `rNN` so projects sharing Application
 Insights cannot collide on agent/version identity. A finalized failed plan is immutable and requires
 a new rerun suffix.
+During live execution, one agent failure no longer cancels its peers or deletes resumable
+deployments. Other agents drain, safe failure codes and opaque work references are aggregated once,
+and resume skips completed agents/versions while retrying only incomplete work. A four-hour deadline
+bounds normal execution. Exact-resource cancellation and cleanup occur only for an explicit operator
+abort; that cleaned attempt is intentionally non-resumable and requires `--rerun N`.
 
 Hosted-code and custom-container recovery, creation, and activation polling share a process-wide
 serialization gate to avoid cross-hosted deployment contention. Prompt deployments may remain
