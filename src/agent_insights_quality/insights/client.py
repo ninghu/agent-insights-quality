@@ -166,7 +166,8 @@ def insight_proposed_fix(insight: Mapping[str, Any]) -> Mapping[str, Any]:
             "invalid_insight",
             "AgentInsight details.recommended_actions.proposed_fix is invalid.",
         )
-    kind = proposed_fix["kind"]
+    service_kind = proposed_fix["kind"]
+    kind = "prompt_patch" if service_kind == "prompt_change" else service_kind
     if kind not in {
         "prompt_patch",
         "code_change",
@@ -188,7 +189,7 @@ def insight_proposed_fix(insight: Mapping[str, Any]) -> Mapping[str, Any]:
             "invalid_insight",
             "AgentInsight proposed fix changes are invalid for its kind.",
         )
-    return {**proposed_fix, "changes": changes}
+    return {**proposed_fix, "kind": kind, "changes": changes}
 
 
 def _trace_timestamp(record: Mapping[str, Any]) -> datetime:
