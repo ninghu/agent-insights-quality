@@ -37,6 +37,12 @@ from protected `AIQ_TERRA_*` variables. Optional protected tenant and user-objec
 selection further; when omitted, preflight still requires an interactive Azure user and verifies that
 identity's access to every selected resource.
 
+Dedicated infrastructure creates the Foundry project's Application Insights connection with the
+service-supported API-key shape. ARM resolves the existing Application Insights connection string
+server-side and passes it directly to the connection resource; the secret is never a template
+parameter or output and is not handled by the CLI. The project managed identity retains Monitoring
+Reader on Application Insights and Cognitive Services OpenAI User on the Foundry account.
+
 Set `AIQ_MONITOR_OWNERSHIP_RECEIPT` to a protected private-state path. Monitor ownership is recorded
 there as project-, agent-, monitor-, and model-scoped opaque hashes because the service monitor API
 does not expose a metadata field.
