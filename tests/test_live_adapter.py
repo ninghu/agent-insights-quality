@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -13,6 +14,7 @@ from zipfile import ZipFile
 import pytest
 
 import agent_insights_quality.live_adapter as live
+from agent_insights_quality.artifact_io import content_hash
 from agent_insights_quality.agent_runtime import (
     DeploymentCleanupError,
     DeploymentHttpError,
@@ -23,8 +25,11 @@ from agent_insights_quality.agent_runtime import (
     InvocationReceipt,
 )
 from agent_insights_quality.cli import main
+from agent_insights_quality.contracts import ContractError
+from agent_insights_quality.daily import build_daily_status
 from agent_insights_quality.insights.client import AgentInsightsClient, InsightCheckpoint
 from agent_insights_quality.insights.telemetry import TraceCorrelation
+from agent_insights_quality.judging import project_evidence, validate_evidence_bundle
 from agent_insights_quality.live_adapter import (
     LiveRuntimeHooks,
     RecipeRegistry,
@@ -41,8 +46,11 @@ from agent_insights_quality.runtime.orchestrator import (
     PlanInput,
     PlannedWindow,
     ProductionOrchestrator,
+    RunState,
+    VersionWork,
 )
-from agent_insights_quality.runtime.receipts import ensure_public_safe
+from agent_insights_quality.runtime.receipts import ensure_public_safe, opaque_reference
+from agent_insights_quality.scoring import score_run
 
 
 SUBSCRIPTION = "11111111-1111-1111-1111-111111111111"
@@ -939,6 +947,425 @@ def _prepared_hooks(tmp_path: Path, moments: list[datetime]):
     hooks._invocation_client = invocations
     hooks._insights = insights
     return hooks, plan, deployments, invocations, insights
+
+
+def _single_version_assignment(
+    payload: dict[str, Any],
+    plan: PlanInput,
+) -> tuple[dict[str, Any], VersionWork]:
+    assignment = next(
+        item for item in payload["assignments"] if len(item["version_sequence"]) == 1
+    )
+    final = assignment["version_sequence"][-1]
+    work = next(
+        work
+        for versions in plan.agents.values()
+        for work in versions
+        if work.phase == final["phase"]
+        and work.version_reference == final["digest"]
+        and any(
+            item["scenario_id"] == assignment["scenario_id"]
+            for item in work.assignments
+        )
+    )
+    return assignment, work
+
+
+def _synthetic_evidence_bundle(
+    hooks: LiveRuntimeHooks,
+    plan: PlanInput,
+    work: VersionWork,
+    assignment: dict[str, Any],
+    project_reference: str,
+    *,
+    second_project_reference: str | None = None,
+) -> dict[str, Any]:
+    scenario_id = str(assignment["scenario_id"])
+    expected = hooks._registry.scenarios[scenario_id]["expected"]
+    trace_references = [project_reference]
+    if second_project_reference is not None:
+        trace_references.append(second_project_reference)
+    traces = [
+        {
+            "trace_id": opaque_reference(f"trace:{scenario_id}:{index}"),
+            "span_ids": [opaque_reference(f"span:{scenario_id}:{index}")],
+            "summary": "Synthetic correlated trace.",
+            "artifact_reference": opaque_reference(
+                f"artifact:{scenario_id}:{index}"
+            ),
+            "project_reference": reference,
+            "agent_id": assignment["agent_id"],
+            "version_digest": work.version_reference,
+            "observed_at": "2026-08-21T12:00:30Z",
+        }
+        for index, reference in enumerate(trace_references)
+    ]
+    return project_evidence(
+        {
+            "schema_version": "1.0.0",
+            "bundle_id": str(
+                live.uuid.uuid5(
+                    live.uuid.NAMESPACE_URL,
+                    f"test:{scenario_id}:{work.phase}",
+                )
+            ),
+            "plan_id": plan.plan_id,
+            "scenario": {
+                "id": scenario_id,
+                "version": assignment["scenario_version"],
+            },
+            "agent": {
+                "id": assignment["agent_id"],
+                "name": assignment["agent_name"],
+                "type": assignment["agent_type"],
+                "version_digest": work.version_reference,
+                "available_tools": [],
+            },
+            "run": {
+                "run_id": assignment["run_id"],
+                "window_start": "2026-08-21T12:00:00Z",
+                "window_end": "2026-08-21T12:01:00Z",
+                "analysis_window_start": "2026-08-21T12:00:00Z",
+                "analysis_window_end": "2026-08-21T12:01:00Z",
+                "engine_build": plan.engine_build,
+                "generator_model": plan.generator_model,
+            },
+            "version_sequence": {
+                "phase": work.phase,
+                "run_id": assignment["run_id"],
+                "version_digest": work.version_reference,
+            },
+            "ground_truth": {
+                "root_cause": expected["root_cause"],
+                "category": expected["category"],
+                "severity": expected["severity"],
+                "finding_count": assignment["expected"]["finding_count"],
+                "fix_boundary": expected["fix"]["boundary"],
+            },
+            "mutation": {
+                "healthy_digest": "sha256:" + ("a" * 64),
+                "faulted_digest": work.version_reference,
+                "sanitized_delta": "Synthetic reviewed mutation.",
+            },
+            "trace_evidence": traces,
+            "prior_trace_ids": [],
+            "insights": [],
+            "previous_insight": None,
+        }
+    )
+
+
+def _persist_evidence_bundle(
+    tmp_path: Path,
+    plan: PlanInput,
+    work: VersionWork,
+    assignment: dict[str, Any],
+    bundle: dict[str, Any],
+) -> tuple[str, Path]:
+    content = json.dumps(bundle, indent=2, sort_keys=True).encode("ascii") + b"\n"
+    path = (
+        tmp_path
+        / "artifacts"
+        / plan.plan_id
+        / "evidence"
+        / f"{assignment['scenario_id']}-{work.phase}.json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = LocalArtifactStore(tmp_path / "artifacts").put(
+        f"{plan.plan_id}/evidence/{assignment['scenario_id']}-{work.phase}.json",
+        content,
+        opaque_reference("test-owner"),
+    )
+    return record.reference, path
+
+
+def test_load_evidence_bundle_normalizes_exact_legacy_project_in_memory(
+    tmp_path: Path,
+) -> None:
+    payload, plan = _plan()
+    hooks, _, _, _, _ = _prepared_hooks(tmp_path, [])
+    assignment, work = _single_version_assignment(payload, plan)
+    legacy_reference = opaque_reference(hooks._project.project_id)
+    symbolic_reference = opaque_reference(f"runtime:project:{plan.plan_id}")
+    raw = _synthetic_evidence_bundle(
+        hooks,
+        plan,
+        work,
+        assignment,
+        legacy_reference,
+    )
+    reference, path = _persist_evidence_bundle(
+        tmp_path,
+        plan,
+        work,
+        assignment,
+        raw,
+    )
+    original_bytes = path.read_bytes()
+
+    normalized = hooks.load_evidence_bundle(
+        work,
+        str(assignment["scenario_id"]),
+        reference,
+    )
+
+    assert {item["project_reference"] for item in normalized["trace_evidence"]} == {
+        symbolic_reference
+    }
+    assert normalized["bundle_hash"] != raw["bundle_hash"]
+    assert normalized["bundle_hash"] == content_hash(
+        {
+            key: value
+            for key, value in normalized.items()
+            if key != "bundle_hash"
+        }
+    )
+    validate_evidence_bundle(normalized)
+    assert path.read_bytes() == original_bytes
+
+
+def test_load_evidence_bundle_accepts_symbolic_project_without_mutation(
+    tmp_path: Path,
+) -> None:
+    payload, plan = _plan()
+    hooks, _, _, _, _ = _prepared_hooks(tmp_path, [])
+    assignment, work = _single_version_assignment(payload, plan)
+    symbolic_reference = opaque_reference(f"runtime:project:{plan.plan_id}")
+    raw = _synthetic_evidence_bundle(
+        hooks,
+        plan,
+        work,
+        assignment,
+        symbolic_reference,
+    )
+    reference, path = _persist_evidence_bundle(
+        tmp_path,
+        plan,
+        work,
+        assignment,
+        raw,
+    )
+    original_bytes = path.read_bytes()
+
+    loaded = hooks.load_evidence_bundle(
+        work,
+        str(assignment["scenario_id"]),
+        reference,
+    )
+
+    assert loaded == raw
+    assert loaded["bundle_hash"] == raw["bundle_hash"]
+    assert path.read_bytes() == original_bytes
+
+
+def test_load_evidence_bundle_validates_original_hash_before_normalization(
+    tmp_path: Path,
+) -> None:
+    payload, plan = _plan()
+    hooks, _, _, _, _ = _prepared_hooks(tmp_path, [])
+    assignment, work = _single_version_assignment(payload, plan)
+    raw = _synthetic_evidence_bundle(
+        hooks,
+        plan,
+        work,
+        assignment,
+        opaque_reference(hooks._project.project_id),
+    )
+    raw["bundle_hash"] = "sha256:" + ("f" * 64)
+    reference, _ = _persist_evidence_bundle(
+        tmp_path,
+        plan,
+        work,
+        assignment,
+        raw,
+    )
+
+    with pytest.raises(ContractError, match="bundle_hash"):
+        hooks.load_evidence_bundle(
+            work,
+            str(assignment["scenario_id"]),
+            reference,
+        )
+
+
+def test_load_evidence_bundle_validates_normalized_hash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload, plan = _plan()
+    hooks, _, _, _, _ = _prepared_hooks(tmp_path, [])
+    assignment, work = _single_version_assignment(payload, plan)
+    raw = _synthetic_evidence_bundle(
+        hooks,
+        plan,
+        work,
+        assignment,
+        opaque_reference(hooks._project.project_id),
+    )
+    reference, _ = _persist_evidence_bundle(
+        tmp_path,
+        plan,
+        work,
+        assignment,
+        raw,
+    )
+    monkeypatch.setattr(live, "_digest", lambda _value: "sha256:" + ("f" * 64))
+
+    with pytest.raises(ContractError, match="bundle_hash"):
+        hooks.load_evidence_bundle(
+            work,
+            str(assignment["scenario_id"]),
+            reference,
+        )
+
+
+@pytest.mark.parametrize("case", ["mixed", "foreign", "unbound"])
+def test_load_evidence_bundle_rejects_untrusted_legacy_project_provenance(
+    tmp_path: Path,
+    case: str,
+) -> None:
+    payload, plan = _plan()
+    hooks, _, _, _, _ = _prepared_hooks(tmp_path, [])
+    assignment, work = _single_version_assignment(payload, plan)
+    legacy_reference = opaque_reference(hooks._project.project_id)
+    project_reference = (
+        opaque_reference("foreign-project")
+        if case == "foreign"
+        else legacy_reference
+    )
+    second_reference = (
+        opaque_reference(f"runtime:project:{plan.plan_id}")
+        if case == "mixed"
+        else None
+    )
+    raw = _synthetic_evidence_bundle(
+        hooks,
+        plan,
+        work,
+        assignment,
+        project_reference,
+        second_project_reference=second_reference,
+    )
+    reference, _ = _persist_evidence_bundle(
+        tmp_path,
+        plan,
+        work,
+        assignment,
+        raw,
+    )
+    if case == "unbound":
+        hooks._project = None
+
+    with pytest.raises(RuntimeFailure) as caught:
+        hooks.load_evidence_bundle(
+            work,
+            str(assignment["scenario_id"]),
+            reference,
+        )
+
+    assert caught.value.code in {
+        "evidence_reference_incomplete",
+        "runtime_preflight_required",
+    }
+
+
+def test_normalized_legacy_evidence_supports_daily_status_and_scoring(
+    tmp_path: Path,
+) -> None:
+    payload, plan = _plan()
+    deployments = _Deployments()
+    invocations = _Invocations()
+    insights = _Insights()
+    hooks = LiveRuntimeHooks(
+        _config(tmp_path),
+        artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
+        deployment_factory=lambda _endpoint, _token: deployments,
+        invocation_factory=lambda _endpoint, _token: invocations,
+        insights_factory=lambda _endpoint, _credential, _ownership: insights,
+        telemetry_query=object(),
+    )
+    hooks.preflight(plan, dry_run=True)
+    project = ProjectResources(
+        "private-project",
+        plan.project_name,
+        "account",
+        "group",
+        "https://sample.services.ai.azure.com/api/projects/quality",
+        "private-app-insights",
+        "principal",
+        True,
+        {},
+    )
+    assignment, work = _single_version_assignment(payload, plan)
+    raw = _synthetic_evidence_bundle(
+        hooks,
+        plan,
+        work,
+        assignment,
+        opaque_reference(project.project_id),
+    )
+    reference, _ = _persist_evidence_bundle(
+        tmp_path,
+        plan,
+        work,
+        assignment,
+        raw,
+    )
+
+    subset_payload = deepcopy(payload)
+    subset_payload["assignments"] = [deepcopy(assignment)]
+    subset_plan = PlanInput.from_daily_plan(subset_payload)
+    subset_work = next(iter(subset_plan.agents.values()))[-1]
+    evidence_result = {
+        "evidence_count": 1,
+        "evidence_references": [reference],
+    }
+    project_key = f"{subset_plan.plan_id}:project"
+    project_result = {
+        "project_reference": opaque_reference(project.project_id),
+        "project_name_reference": opaque_reference(project.project_name),
+        "managed": project.managed,
+    }
+    evidence_key = f"{subset_work.key}:evidence"
+    hooks._persist_private_receipt(
+        project_key,
+        project_result,
+        {"kind": "project", "project": hooks._project_payload(project)},
+    )
+    hooks._persist_private_receipt(
+        evidence_key,
+        evidence_result,
+        {"kind": "evidence", "work_key": subset_work.key, "provenance": {}},
+    )
+    assert hooks._project is None
+
+    state = RunState(
+        subset_plan.plan_id,
+        subset_plan.reference,
+        status="succeeded",
+        phase="complete",
+        checkpoints={
+            project_key: content_hash(project_result),
+            evidence_key: content_hash(evidence_result),
+        },
+    )
+    status = build_daily_status(
+        subset_payload,
+        subset_plan,
+        state,
+        hooks,
+        tmp_path / "packages",
+    )
+    normalized = hooks.load_evidence_bundle(
+        work,
+        str(assignment["scenario_id"]),
+        reference,
+    )
+    score = score_run(payload, [normalized], [])
+
+    assert hooks._project == project
+    assert status["evidence"][0]["bundle_hash"] == normalized["bundle_hash"]
+    assert "provenance_failure" not in score["violations"]
 
 
 def test_live_deploy_preserves_transient_poll_timeout_for_orchestrator_retry(
@@ -2354,6 +2781,9 @@ def test_realized_windows_are_exact_non_overlapping_and_feed_evidence(
         trace["version_digest"] == pair[1].version_reference
         for trace in bundle["trace_evidence"]
     )
+    assert {
+        trace["project_reference"] for trace in bundle["trace_evidence"]
+    } == {opaque_reference(f"runtime:project:{plan.plan_id}")}
     assert len(bundle["trace_evidence"]) == int(
         pair[1].assignments[0]["traffic_requests"]
     )

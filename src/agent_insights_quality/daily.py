@@ -523,6 +523,19 @@ def build_daily_status(
             "evidence_reference_incomplete",
             "Daily judgment handoff requires a successful evidence-complete runtime state.",
         )
+    project_key = f"{plan.plan_id}:project"
+    project_checkpoint = state.checkpoints.get(project_key)
+    if project_checkpoint is None:
+        raise RuntimeFailure(
+            "evidence_reference_incomplete",
+            "A successful runtime state has no validated project checkpoint.",
+        )
+    project_result = hooks.recover(project_key, project_checkpoint)
+    if not isinstance(project_result, Mapping):
+        raise RuntimeFailure(
+            "evidence_reference_incomplete",
+            "The validated project checkpoint returned an invalid receipt.",
+        )
     final_work = _final_work_by_scenario(plan, plan_payload)
     results_by_work: dict[str, Mapping[str, Any]] = {}
     evidence = []

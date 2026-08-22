@@ -228,6 +228,15 @@ prior traces is a `cross_version_stale` quality failure (`NOT AT BAR`), includin
 Any trace outside the current and exact planned prior sets remains unproven provenance and makes the
 run `INCONCLUSIVE`; non-lifecycle evidence cannot declare prior traces.
 
+Persisted trace evidence uses the immutable plan's symbolic project reference rather than a hash of
+the resolved project resource ID. When loading successful legacy evidence, the live adapter validates
+the stored schema and original bundle hash first, then may normalize references in memory only when
+every trace has the same reference and it exactly matches the currently bound, validated project.
+The raw artifact bytes and artifact reference are never changed or written back; mixed, foreign, or
+unbound legacy provenance fails closed. Daily handoff first recovers the exact immutable plan's
+project checkpoint, verifying its public checkpoint and hydrating the validated private binding
+before any legacy evidence is loaded.
+
 Foundry deployment requests use a bounded 300-second timeout. Hosted-version cancellation retries
 HTTP 409 active-session conflicts for up to 15 minutes, never treats a conflict as deletion, and
 preserves the cleanup failure code in append-only attempt-qualified diagnostics for a later resume.

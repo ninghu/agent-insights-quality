@@ -158,6 +158,12 @@ For each planned wave:
    Carry only exact prior-phase trace IDs proven by persisted telemetry for the same planned
    scenario/version sequence. Links to those IDs are `cross_version_stale` quality failures; any
    other non-current ID is unproven provenance and remains `INCONCLUSIVE`.
+9. Persist the immutable plan's symbolic project reference in every trace. A successful legacy
+   bundle may be normalized only in memory after its stored schema and original bundle hash validate,
+   only when all trace references are uniform and exactly match the currently bound, validated
+   project. Never rewrite its raw bytes or artifact reference; reject mixed, foreign, or unbound
+   provenance. Before loading evidence for the daily handoff, recover the exact plan project
+   checkpoint so its hash is verified and its validated private project binding is hydrated.
 
 Store raw synthetic artifacts only in the private 90-day artifact store. Repository evidence is a
 sanitized summary and an approved public-safe link, never a raw payload.

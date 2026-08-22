@@ -44,6 +44,7 @@ from agent_insights_quality.insights.telemetry import (
     TraceCorrelation,
     wait_for_correlated_traces,
 )
+from agent_insights_quality.judging import validate_evidence_bundle
 from agent_insights_quality.runtime.artifacts import (
     ArtifactStore,
     AzureBlobArtifactStore,
@@ -263,6 +264,10 @@ def _canonical(value: Any) -> bytes:
 
 def _digest(value: Any) -> str:
     return "sha256:" + hashlib.sha256(_canonical(value)).hexdigest()
+
+
+def _symbolic_project_reference(plan_id: str) -> str:
+    return opaque_reference(f"runtime:project:{plan_id}")
 
 
 def _sanitize_public_text(value: str) -> str:
@@ -1292,11 +1297,7 @@ class LiveRuntimeHooks:
                 "evidence_reference_incomplete",
                 "Evidence content must be a JSON object.",
             )
-        validate_instance(
-            bundle,
-            ROOT / "schemas" / "evidence-bundle.schema.json",
-            "live evidence bundle",
-        )
+        validate_evidence_bundle(bundle)
         if (
             bundle.get("plan_id") != self._plan.plan_id
             or bundle.get("scenario", {}).get("id") != scenario_id
@@ -1306,6 +1307,35 @@ class LiveRuntimeHooks:
                 "evidence_reference_incomplete",
                 "Evidence content does not match the exact plan assignment.",
             )
+        ensure_public_safe(bundle)
+        project_references = {
+            str(trace["project_reference"]) for trace in bundle["trace_evidence"]
+        }
+        symbolic_reference = _symbolic_project_reference(self._plan.plan_id)
+        if project_references != {symbolic_reference}:
+            if len(project_references) != 1:
+                raise RuntimeFailure(
+                    "evidence_reference_incomplete",
+                    "Evidence project provenance is mixed.",
+                )
+            if self._project is None:
+                raise RuntimeFailure(
+                    "runtime_preflight_required",
+                    "Project is not bound to the adapter.",
+                )
+            legacy_reference = opaque_reference(self._project.project_id)
+            if project_references != {legacy_reference}:
+                raise RuntimeFailure(
+                    "evidence_reference_incomplete",
+                    "Evidence project provenance does not match the validated project.",
+                )
+            bundle = deepcopy(bundle)
+            for trace in bundle["trace_evidence"]:
+                trace["project_reference"] = symbolic_reference
+            bundle["bundle_hash"] = _digest(
+                {key: value for key, value in bundle.items() if key != "bundle_hash"}
+            )
+        validate_evidence_bundle(bundle)
         ensure_public_safe(bundle)
         return bundle
 
@@ -2954,7 +2984,9 @@ class LiveRuntimeHooks:
                                     "span_ids": item.span_ids,
                                 }
                             ),
-                            "project_reference": opaque_reference(project.project_id),
+                            "project_reference": _symbolic_project_reference(
+                                self._plan.plan_id
+                            ),
                             "agent_id": work.agent_id,
                             "version_digest": work.version_reference,
                             "observed_at": item.observed_at.isoformat(),
