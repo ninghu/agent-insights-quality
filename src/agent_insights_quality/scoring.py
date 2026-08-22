@@ -179,7 +179,7 @@ def deterministic_violations(
         previous = bundle["previous_insight"]
         if len(assignment["version_sequence"]) > 1:
             prior_versions = assignment["version_sequence"][:-1]
-            if previous is None or not any(
+            if previous is not None and not any(
                 previous["phase"] == version["phase"]
                 and previous["run_id"] == assignment["run_id"]
                 and previous["version_digest"] == version["digest"]
@@ -604,7 +604,11 @@ def score_run(
 
     precision = _ratio(true_positives, produced)
     recall = _ratio(true_positives, expected_fault_count)
-    f1 = _ratio(2 * precision * recall, precision + recall)
+    f1 = (
+        0.0
+        if precision == 0 and recall == 0 and produced > 0 and expected_fault_count > 0
+        else _ratio(2 * precision * recall, precision + recall)
+    )
 
     def severity_recall(severity: str) -> float:
         relevant = [

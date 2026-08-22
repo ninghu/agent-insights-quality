@@ -153,11 +153,12 @@ For each planned wave:
    quality threshold.
 7. Build a bounded, sanitized evidence bundle using `schemas/evidence-bundle.schema.json`.
 8. For sequential versions, record the current `version_sequence` phase/digest in evidence and
-   results. Validate current traces against that phase, and validate prior-insight phase/run/digest
-   metadata separately so stale evidence, deduplication, resolution, and recurrence can be tested.
-   Carry only exact prior-phase trace IDs proven by persisted telemetry for the same planned
-   scenario/version sequence. Links to those IDs are `cross_version_stale` quality failures; any
-   other non-current ID is unproven provenance and remains `INCONCLUSIVE`.
+   results. Validate current traces against that phase. A prior insight is optional; when present,
+   validate its phase/run/digest metadata against a planned prior version so stale evidence,
+   deduplication, resolution, and recurrence can be tested. Carry only exact prior-phase trace IDs
+   proven by persisted telemetry for the same planned scenario/version sequence. Links to those IDs
+   are `cross_version_stale` quality failures; any other non-current ID is unproven provenance and
+   remains `INCONCLUSIVE`.
 9. Persist the immutable plan's symbolic project reference in every trace. A successful legacy
    bundle may be normalized only in memory after its stored schema and original bundle hash validate,
    only when all trace references are uniform and exactly match the currently bound, validated

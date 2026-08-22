@@ -241,7 +241,9 @@ For reviewed lifecycle sequences, evidence carries a bounded opaque set of exact
 IDs recovered from persisted scenario telemetry. A current-version insight linked to those proven
 prior traces is a `cross_version_stale` quality failure (`NOT AT BAR`), including a prior-only link.
 Any trace outside the current and exact planned prior sets remains unproven provenance and makes the
-run `INCONCLUSIVE`; non-lifecycle evidence cannot declare prior traces.
+run `INCONCLUSIVE`; non-lifecycle evidence cannot declare prior traces. A prior service card is
+optional because its absence is itself a lifecycle quality outcome. When present, its phase, run, and
+digest must match a planned prior version or the evidence is untrustworthy.
 
 Persisted trace evidence uses the immutable plan's symbolic project reference rather than a hash of
 the resolved project resource ID. When loading successful legacy evidence, the live adapter validates
