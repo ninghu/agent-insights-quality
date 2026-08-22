@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from agent_insights_quality.contracts import ContractError
+from agent_insights_quality.source_artifacts import reviewed_source_files
 
 
 API_VERSION = "v1"
@@ -105,9 +106,18 @@ class DeploymentCleanupError(RuntimeContractError):
 class DeploymentPollError(RuntimeContractError):
     """Raised after creation when a concrete version fails to become usable."""
 
-    def __init__(self, message: str, receipt: DeploymentReceipt) -> None:
+    def __init__(
+        self,
+        message: str,
+        receipt: DeploymentReceipt,
+        *,
+        code: str = "agent_deployment_failed",
+        transient: bool = False,
+    ) -> None:
         super().__init__(message)
         self.receipt = receipt
+        self.code = code
+        self.transient = transient
 
 
 @dataclass(frozen=True, slots=True)
@@ -368,14 +378,7 @@ def canonical_json_digest(value: Mapping[str, Any]) -> str:
 def deterministic_zip(source: Path) -> tuple[bytes, str]:
     if not source.is_dir():
         raise RuntimeContractError(f"Hosted source directory does not exist: {source}")
-    paths = sorted(
-        path
-        for path in source.rglob("*")
-        if path.is_file()
-        and not path.relative_to(source).as_posix().startswith(".")
-        and "__pycache__" not in path.parts
-        and path.suffix != ".pyc"
-    )
+    paths = reviewed_source_files(source)
     if not paths:
         raise RuntimeContractError("Hosted source directory is empty.")
     output = BytesIO()
@@ -715,11 +718,26 @@ class FoundryDeploymentClient:
         )
 
     def cleanup_version(self, receipt: DeploymentReceipt) -> CleanupReceipt:
-        current = self._request_json(
+        validate_deployment_receipt(receipt)
+        current_response = self._request(
             "GET",
             f"/agents/{_quote(receipt.agent_name)}/versions/{_quote(receipt.agent_version)}",
-            hosted=receipt.agent_type != "prompt",
+            headers=(
+                {"Foundry-Features": HOSTED_FEATURES}
+                if receipt.agent_type != "prompt"
+                else {}
+            ),
+            body=None,
+            expected_statuses={200, 404},
         )
+        if current_response.status_code == 404:
+            return CleanupReceipt(
+                agent_name=receipt.agent_name,
+                agent_version=receipt.agent_version,
+                run_id=receipt.run_id,
+                deleted=True,
+            )
+        current = current_response.json()
         metadata = current.get("metadata")
         expected = _ownership_metadata(
             receipt.run_id,
@@ -741,8 +759,15 @@ class FoundryDeploymentClient:
                 f"/agents/{_quote(receipt.agent_name)}/versions/{_quote(receipt.agent_version)}",
                 headers={"Foundry-Features": HOSTED_FEATURES} if hosted else {},
                 body=None,
-                expected_statuses={200, 409} if hosted else {200},
+                expected_statuses={200, 404, 409} if hosted else {200, 404},
             )
+            if response.status_code == 404:
+                return CleanupReceipt(
+                    agent_name=receipt.agent_name,
+                    agent_version=receipt.agent_version,
+                    run_id=receipt.run_id,
+                    deleted=True,
+                )
             if response.status_code != 409:
                 break
             if attempt == self._cleanup_attempts:
@@ -829,6 +854,8 @@ class FoundryDeploymentClient:
                 raise DeploymentPollError(
                     "Agent version status polling failed after creation.",
                     provisional("poll_error"),
+                    code=getattr(error, "code", "agent_deployment_failed"),
+                    transient=bool(getattr(error, "transient", False)),
                 ) from error
             status = str(response.get("status") or "").casefold()
             if status == "active":
@@ -858,6 +885,8 @@ class FoundryDeploymentClient:
                 raise DeploymentPollError(
                     "Agent version did not become active before timeout.",
                     provisional("timeout"),
+                    code="agent_deployment_poll_timeout",
+                    transient=True,
                 )
             self._sleep(self._poll_interval)
 

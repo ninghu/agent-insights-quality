@@ -12,6 +12,8 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 
+from agent_insights_quality.source_artifacts import reviewed_source_files
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMAS = ROOT / "schemas"
@@ -567,29 +569,6 @@ def _canonical_bytes(value: Any) -> bytes:
     ).encode("ascii")
 
 
-_REVIEWED_AGENT_SUFFIXES = frozenset({".json", ".py", ".txt", ".yaml", ".yml"})
-_REVIEWED_AGENT_FILENAMES = frozenset({".dockerignore", "Dockerfile"})
-_IGNORED_AGENT_DIRECTORIES = frozenset(
-    {"__pycache__", ".pytest_cache", ".ruff_cache", ".venv", "build", "dist"}
-)
-
-
-def _reviewed_agent_files(root: Path) -> list[Path]:
-    return [
-        path
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
-        and not any(part in _IGNORED_AGENT_DIRECTORIES for part in path.parts)
-        and (
-            path.name in _REVIEWED_AGENT_FILENAMES
-            or (
-                not path.name.startswith(".")
-                and path.suffix in _REVIEWED_AGENT_SUFFIXES
-            )
-        )
-    ]
-
-
 def catalog_bundle_hash(
     catalog_path: Path | None = None,
     *,
@@ -602,7 +581,7 @@ def catalog_bundle_hash(
     inputs: dict[str, bytes] = {"scenarios/catalog.yaml": _canonical_bytes(catalog_data)}
 
     if agents is None:
-        for path in _reviewed_agent_files(ROOT / "agents"):
+        for path in reviewed_source_files(ROOT / "agents"):
             logical_path = path.relative_to(ROOT).as_posix()
             inputs[logical_path] = (
                 _canonical_bytes(load_data(path))
@@ -613,7 +592,7 @@ def catalog_bundle_hash(
         for agent in agents:
             source_path = agent["implementation"]["source_path"]
             inputs[f"{source_path}/manifest.yaml"] = _canonical_bytes(agent)
-            for path in _reviewed_agent_files(ROOT / source_path):
+            for path in reviewed_source_files(ROOT / source_path):
                 if path.name == "manifest.yaml":
                     continue
                 logical_path = path.relative_to(ROOT).as_posix()

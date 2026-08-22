@@ -13,6 +13,7 @@ import pytest
 import agent_insights_quality.live_adapter as live
 from agent_insights_quality.agent_runtime import (
     DeploymentReceipt,
+    DeploymentPollError,
     InvocationEndpointError,
     InvocationFailureReceipt,
     InvocationReceipt,
@@ -766,6 +767,41 @@ def _prepared_hooks(tmp_path: Path, moments: list[datetime]):
     hooks._invocation_client = invocations
     hooks._insights = insights
     return hooks, plan, deployments, invocations, insights
+
+
+def test_live_deploy_preserves_transient_poll_timeout_for_orchestrator_retry(
+    tmp_path: Path,
+) -> None:
+    hooks, plan, _, _, _ = _prepared_hooks(tmp_path, [])
+    work = next(
+        work
+        for versions in plan.agents.values()
+        for work in versions
+        if work.agent_type == "prompt"
+    )
+
+    class TimedOutDeployments(_Deployments):
+        def deploy_prompt(self, *, agent_name, definition, run_id, create_agent):
+            raise DeploymentPollError(
+                "Synthetic poll timeout.",
+                DeploymentReceipt(
+                    agent_name,
+                    "1",
+                    "prompt",
+                    live.canonical_json_digest(definition),
+                    run_id,
+                    "poll_error",
+                ),
+                code="agent_deployment_timeout",
+                transient=True,
+            )
+
+    hooks._deployment_client = TimedOutDeployments()
+
+    with pytest.raises(RuntimeFailure) as caught:
+        hooks.deploy(work, idempotency_key=f"{work.key}:deploy")
+    assert caught.value.code == "agent_deployment_timeout"
+    assert caught.value.transient is True
 
 
 def test_insight_lookback_covers_delayed_resume_and_clamps() -> None:
