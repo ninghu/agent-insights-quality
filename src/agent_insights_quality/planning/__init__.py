@@ -520,6 +520,7 @@ def generate_daily_plan(
     )
     assigned = _assign_agents(selected, agents, seed, expected_cap=expected_cap)
     runs = _group_runs(assigned, policy["limits"]["expected_root_cap_per_run"])
+    rerun_name_suffix = f"-r{rerun:02d}" if rerun else ""
 
     assignments = []
     for run in runs:
@@ -531,6 +532,12 @@ def generate_daily_plan(
                 seed,
                 bucket_scenarios,
             )
+            agent_name = (
+                f"{agent['required_name_prefix']}-{report_date:%Y%m%d}"
+                f"{rerun_name_suffix}-w{run['wave']:02d}"
+            )
+            if len(agent_name) > 63:
+                raise ContractError("Generated agent name exceeds the service limit")
             assignments.append(
                 {
                     "scenario_id": scenario["id"],
@@ -540,10 +547,7 @@ def generate_daily_plan(
                     "conflict_tags": scenario["conflict_tags"],
                     "run_id": run["run_id"],
                     "agent_id": agent["id"],
-                    "agent_name": (
-                        f"{agent['required_name_prefix']}-{report_date:%Y%m%d}-"
-                        f"w{run['wave']:02d}"
-                    ),
+                    "agent_name": agent_name,
                     "agent_type": agent["agent_type"],
                     "agent_version_digest": sequence[0]["digest"],
                     "version_sequence": sequence,

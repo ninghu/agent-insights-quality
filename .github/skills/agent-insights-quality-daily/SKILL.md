@@ -56,6 +56,8 @@ cannot modify readiness configuration or treat contract scaffolding as an operat
 ## Phase A: deterministic preflight and plan
 
 1. Resolve the Pacific report date. Use project `aiq-YYYYMMDD`; a rerun is `aiq-YYYYMMDD-rNN`.
+   Include the same `rNN` segment in every rerun agent name so same-day projects cannot share an
+   agent/version identity in the common telemetry resource.
 2. Generate or byte-validate the immutable weekday plan and its rendered Markdown before any Azure
    action. Never replace an existing plan.
 3. Validate the authorized private runtime configuration without printing private values:

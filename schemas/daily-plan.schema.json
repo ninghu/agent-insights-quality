@@ -246,7 +246,11 @@
           },
           "run_id": {"type": "string", "pattern": "^run-[0-9]{2}-aiq-[0-9]{3}-[a-z][a-z0-9-]*$"},
           "agent_id": {"type": "string", "pattern": "^aiq-[0-9]{3}-[a-z][a-z0-9-]*$"},
-          "agent_name": {"type": "string", "pattern": "^aiq-[0-9]{3}-[a-z][a-z0-9-]*.*$"},
+          "agent_name": {
+            "type": "string",
+            "maxLength": 63,
+            "pattern": "^aiq-[0-9]{3}-[a-z][a-z0-9-]*.*$"
+          },
           "agent_type": {"enum": ["prompt", "hosted_code", "hosted_custom_container"]},
           "agent_version_digest": {"$ref": "#/$defs/sha256"},
           "version_sequence": {
