@@ -161,6 +161,122 @@ def test_orchestrator_finalizes_failure_without_success_shaped_state(tmp_path: P
     assert hooks.finalized == 1
 
 
+def test_resume_clears_stale_failure_before_returning_to_running(
+    tmp_path: Path,
+) -> None:
+    class FirstFailure(Hooks):
+        def deploy(self, _work, *, idempotency_key):
+            raise RuntimeFailure("deployment_failed", "First failure.")
+
+    start = datetime(2026, 8, 21, tzinfo=UTC)
+    plan = PlanInput(
+        "aiq-20260821",
+        "aiq-20260821",
+        {"a": (work("a", "v1", start),)},
+    )
+    receipt = tmp_path / "state.json"
+    shared: dict[str, dict[str, str]] = {}
+    with pytest.raises(RuntimeFailure, match="First failure"):
+        ProductionOrchestrator(
+            FirstFailure(results=shared),
+            receipt,
+        ).run(plan)
+
+    class ResumedHooks(Hooks):
+        def invoke(self, current, deployment, *, idempotency_key):
+            active = read_receipt(receipt)
+            assert active["status"] == "running"
+            assert active["failed_phase"] is None
+            assert active["failure"] is None
+            return super().invoke(
+                current,
+                deployment,
+                idempotency_key=idempotency_key,
+            )
+
+    resumed = ProductionOrchestrator(
+        ResumedHooks(results=shared),
+        receipt,
+    ).run(plan, resume=True)
+    assert resumed.status == "succeeded"
+    assert resumed.attempt == 2
+
+
+def test_cancellation_failure_codes_survive_in_runtime_state(
+    tmp_path: Path,
+) -> None:
+    class FailingHooks(Hooks):
+        def deploy(self, _work, *, idempotency_key):
+            raise RuntimeFailure("deployment_failed", "Deployment failed.")
+
+        def cancel(self, _work):
+            raise RuntimeFailure(
+                "cancel_partial_failure",
+                "Cleanup is waiting for session drain.",
+                {"failure_codes": ["deployment_cleanup_sessions_active"]},
+            )
+
+    start = datetime(2026, 8, 21, tzinfo=UTC)
+    plan = PlanInput(
+        "aiq-20260821",
+        "aiq-20260821",
+        {"a": (work("a", "v1", start),)},
+    )
+    receipt = tmp_path / "state.json"
+    with pytest.raises(RuntimeFailure, match="Deployment failed"):
+        ProductionOrchestrator(FailingHooks(), receipt).run(plan)
+
+    state = read_receipt(receipt)
+    assert state["failure"]["details"]["cancellation_failures"] == [
+        "cancel_partial_failure",
+        "deployment_cleanup_sessions_active",
+    ]
+
+
+def test_runtime_state_drops_private_failure_details_but_keeps_safe_diagnostics(
+    tmp_path: Path,
+) -> None:
+    class FailingHooks(Hooks):
+        def deploy(self, _work, *, idempotency_key):
+            raise RuntimeFailure(
+                "azure_cli_failed",
+                "Azure CLI command failed.",
+                {
+                    "phase": "deploy",
+                    "command": [
+                        "az",
+                        "resource",
+                        "show",
+                        "--ids",
+                        "/subscript"
+                        "ions/11111111-1111-1111-1111-111111111111/"
+                        "resourceGroups/private-rg",
+                    ],
+                    "url": "https://private.example.invalid/resource",
+                    "failure_count": 1,
+                },
+            )
+
+    start = datetime(2026, 8, 21, tzinfo=UTC)
+    plan = PlanInput(
+        "aiq-20260821",
+        "aiq-20260821",
+        {"a": (work("a", "v1", start),)},
+    )
+    receipt = tmp_path / "state.json"
+    with pytest.raises(RuntimeFailure, match="Azure CLI"):
+        ProductionOrchestrator(FailingHooks(), receipt).run(plan)
+
+    state = read_receipt(receipt)
+    assert state["failure"]["details"] == {
+        "failure_count": 1,
+        "phase": "deploy",
+    }
+    serialized = json.dumps(state)
+    assert "/subscript" + "ions/" not in serialized
+    assert "private.example.invalid" not in serialized
+
+
 def test_orchestrator_cancels_queued_agents_after_first_failure(tmp_path: Path) -> None:
     class FailingFirstHooks(Hooks):
         def deploy(self, current, *, idempotency_key):

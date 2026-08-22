@@ -7,10 +7,15 @@ param reportDate string
 param expiresOn string
 param automationOwner string
 param catalogVersion string
+@maxLength(32)
+param connectionNameSuffix string = ''
 
 var monitoringReaderRoleId = '43d0d8ad-25c7-4714-9337-8ba259a9fe05'
 var modelInferenceRoleId = '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'
 var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
+var normalizedConnectionSuffix = empty(connectionNameSuffix) ? '' : '-${connectionNameSuffix}'
+var appInsightsConnectionName = 'application-insights${normalizedConnectionSuffix}'
+var containerRegistryConnectionName = 'container-registry${normalizedConnectionSuffix}'
 
 resource account 'Microsoft.CognitiveServices/accounts@2025-06-01' existing = {
   name: accountName
@@ -74,7 +79,7 @@ resource registryPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 
 resource containerRegistryConnection 'Microsoft.CognitiveServices/accounts/projects/connections@2025-04-01-preview' = {
   parent: project
-  name: 'container-registry'
+  name: containerRegistryConnectionName
   properties: {
     category: 'ContainerRegistry'
     target: registry.properties.loginServer
@@ -95,7 +100,7 @@ resource containerRegistryConnection 'Microsoft.CognitiveServices/accounts/proje
 
 resource appInsightsConnection 'Microsoft.CognitiveServices/accounts/projects/connections@2025-06-01' = {
   parent: project
-  name: 'application-insights'
+  name: appInsightsConnectionName
   properties: {
     category: 'AppInsights'
     target: applicationInsights.id

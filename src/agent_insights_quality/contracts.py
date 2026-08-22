@@ -12,6 +12,8 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 
+from agent_insights_quality.source_artifacts import reviewed_source_files
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMAS = ROOT / "schemas"
@@ -579,9 +581,7 @@ def catalog_bundle_hash(
     inputs: dict[str, bytes] = {"scenarios/catalog.yaml": _canonical_bytes(catalog_data)}
 
     if agents is None:
-        for path in sorted((ROOT / "agents").rglob("*")):
-            if not path.is_file():
-                continue
+        for path in reviewed_source_files(ROOT / "agents"):
             logical_path = path.relative_to(ROOT).as_posix()
             inputs[logical_path] = (
                 _canonical_bytes(load_data(path))
@@ -592,8 +592,8 @@ def catalog_bundle_hash(
         for agent in agents:
             source_path = agent["implementation"]["source_path"]
             inputs[f"{source_path}/manifest.yaml"] = _canonical_bytes(agent)
-            for path in sorted((ROOT / source_path).rglob("*")):
-                if not path.is_file() or path.name == "manifest.yaml":
+            for path in reviewed_source_files(ROOT / source_path):
+                if path.name == "manifest.yaml":
                     continue
                 logical_path = path.relative_to(ROOT).as_posix()
                 inputs[logical_path] = (

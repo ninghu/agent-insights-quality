@@ -15,6 +15,43 @@ from typing import Any, Protocol
 from .errors import RuntimeFailure
 from .receipts import read_receipt, write_receipt
 
+_PUBLIC_FAILURE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
+_PUBLIC_FAILURE_COUNTS = frozenset(
+    {
+        "artifact_reference_count",
+        "deleted_count",
+        "failure_count",
+        "match_count",
+        "missing_role_count",
+        "state_reference_count",
+        "timeout_seconds",
+    }
+)
+
+
+def public_failure_details(details: Mapping[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    phase = details.get("phase")
+    if isinstance(phase, str) and _PUBLIC_FAILURE_CODE.fullmatch(phase):
+        result["phase"] = phase
+    for key in ("cancellation_failures", "failure_codes"):
+        value = details.get(key)
+        if isinstance(value, list):
+            codes = sorted(
+                {
+                    code
+                    for code in value
+                    if isinstance(code, str) and _PUBLIC_FAILURE_CODE.fullmatch(code)
+                }
+            )
+            if codes:
+                result[key] = codes
+    for key in _PUBLIC_FAILURE_COUNTS:
+        value = details.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+            result[key] = value
+    return result
+
 
 @dataclass(frozen=True, slots=True)
 class AnalysisWindow:
@@ -294,7 +331,11 @@ class RuntimeHooks(Protocol):
 
     def cancel(self, work: VersionWork) -> None: ...
 
-    def finalize_failure(self, failure: RuntimeFailure, state: Mapping[str, Any]) -> None: ...
+    def finalize_failure(
+        self,
+        failure: RuntimeFailure,
+        state: Mapping[str, Any],
+    ) -> Mapping[str, Any] | None: ...
 
 
 def _opaque(value: Mapping[str, Any]) -> str:
@@ -312,6 +353,7 @@ class RunState:
     execution_windows: dict[str, dict[str, str]] = field(default_factory=dict)
     failed_phase: str | None = None
     failure: dict[str, Any] | None = None
+    attempt: int = 1
 
     def public_dict(self) -> dict[str, Any]:
         return {
@@ -324,6 +366,7 @@ class RunState:
             "execution_windows": self.execution_windows,
             "failed_phase": self.failed_phase,
             "failure": self.failure,
+            "attempt": self.attempt,
         }
 
     @classmethod
@@ -337,7 +380,13 @@ class RunState:
             raise RuntimeFailure("resume_plan_mismatch", "Receipt belongs to a different plan.")
         checkpoints = payload.get("checkpoints")
         execution_windows = payload.get("execution_windows", {})
-        if not isinstance(checkpoints, Mapping) or not isinstance(execution_windows, Mapping):
+        attempt = payload.get("attempt", 1)
+        if (
+            not isinstance(checkpoints, Mapping)
+            or not isinstance(execution_windows, Mapping)
+            or not isinstance(attempt, int)
+            or attempt < 1
+        ):
             raise RuntimeFailure("invalid_receipt", "Receipt checkpoints were invalid.")
         return cls(
             plan_id=plan_id,
@@ -352,6 +401,7 @@ class RunState:
             },
             failed_phase=str(payload["failed_phase"]) if payload.get("failed_phase") else None,
             failure=dict(payload["failure"]) if isinstance(payload.get("failure"), Mapping) else None,
+            attempt=attempt,
         )
 
 
@@ -564,7 +614,12 @@ class ProductionOrchestrator:
                     self._hooks.cancel(work)
                 except RuntimeFailure as error:
                     failures.append(error.code)
-        return sorted(failures)
+                    nested = error.details.get("failure_codes")
+                    if isinstance(nested, list):
+                        failures.extend(
+                            str(code) for code in nested if isinstance(code, str)
+                        )
+        return sorted(set(failures))
 
     def run(self, plan: PlanInput, *, resume: bool = False, dry_run: bool = False) -> RunState:
         cancellation_sent = False
@@ -576,6 +631,8 @@ class ProductionOrchestrator:
             )
             if state.status == "succeeded":
                 return state
+            state.attempt += 1
+            self._save(state)
         else:
             state = RunState(plan.plan_id, plan.reference)
             self._save(state)
@@ -599,6 +656,8 @@ class ProductionOrchestrator:
                 lambda: self._hooks.ensure_project(plan, idempotency_key=f"{plan.plan_id}:project"),
             )
             state.status = "running"
+            state.failed_phase = None
+            state.failure = None
             self._save(state)
             pool = ThreadPoolExecutor(max_workers=min(self._parallel, max(1, len(plan.agents))))
             futures: list[Future[None]] = [
@@ -653,7 +712,13 @@ class ProductionOrchestrator:
                 "code": failure.code,
                 "message": failure.message,
                 "transient": failure.transient,
+                "details": public_failure_details(failure.details),
             }
             self._save(state)
-            self._hooks.finalize_failure(failure, state.public_dict())
+            finalization = self._hooks.finalize_failure(failure, state.public_dict())
+            if isinstance(finalization, Mapping):
+                artifact_reference = finalization.get("artifact_reference")
+                if isinstance(artifact_reference, str):
+                    state.failure["artifact_reference"] = artifact_reference
+                    self._save(state)
             raise

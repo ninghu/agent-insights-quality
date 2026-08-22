@@ -13,6 +13,7 @@ import pytest
 import agent_insights_quality.live_adapter as live
 from agent_insights_quality.agent_runtime import (
     DeploymentReceipt,
+    DeploymentPollError,
     InvocationEndpointError,
     InvocationFailureReceipt,
     InvocationReceipt,
@@ -161,6 +162,60 @@ def test_symbolic_daily_plan_materializes_without_changing_plan_digest(tmp_path:
         ["materialize-execution-plan", "--plan", str(plan_path), "--output", str(output)]
     ) == 0
     assert json.loads(output.read_text(encoding="ascii"))["plan_reference"] == payload["plan_digest"]
+
+
+def test_failure_artifacts_are_append_only_across_resume_attempts(
+    tmp_path: Path,
+) -> None:
+    _, plan = _plan()
+    hooks = LiveRuntimeHooks(
+        _config(tmp_path),
+        artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
+    )
+    hooks._plan = plan
+
+    first = hooks.finalize_failure(
+        RuntimeFailure(
+            "first_failure",
+            "First synthetic failure.",
+            {
+                "cancellation_failures": ["deployment_cleanup_sessions_active"],
+                "command": [
+                    "az",
+                    "resource",
+                    "show",
+                    "--ids",
+                    "/subscript"
+                    "ions/11111111-1111-1111-1111-111111111111/"
+                    "resourceGroups/private-rg",
+                ],
+            },
+        ),
+        {"attempt": 1, "status": "inconclusive", "phase": "deploy"},
+    )
+    second = hooks.finalize_failure(
+        RuntimeFailure("second_failure", "Second synthetic failure."),
+        {"attempt": 2, "status": "inconclusive", "phase": "invoke"},
+    )
+
+    failures = [
+        path
+        for path in sorted(
+            (tmp_path / "artifacts" / plan.plan_id / "runtime" / "failures").rglob(
+                "failure-*.json"
+            )
+        )
+        if not path.name.endswith(".metadata.json")
+    ]
+    assert len(failures) == 2
+    assert first["artifact_reference"] != second["artifact_reference"]
+    first_payload = json.loads(failures[0].read_text(encoding="ascii"))
+    assert first_payload["attempt"] == 1
+    assert first_payload["failure"]["details"]["cancellation_failures"] == [
+        "deployment_cleanup_sessions_active"
+    ]
+    assert "/subscript" + "ions/" not in json.dumps(first_payload)
+    assert json.loads(failures[1].read_text(encoding="ascii"))["attempt"] == 2
 
 
 def test_every_reviewed_recipe_shape_is_supported_and_unknown_shape_is_rejected() -> None:
@@ -712,6 +767,41 @@ def _prepared_hooks(tmp_path: Path, moments: list[datetime]):
     hooks._invocation_client = invocations
     hooks._insights = insights
     return hooks, plan, deployments, invocations, insights
+
+
+def test_live_deploy_preserves_transient_poll_timeout_for_orchestrator_retry(
+    tmp_path: Path,
+) -> None:
+    hooks, plan, _, _, _ = _prepared_hooks(tmp_path, [])
+    work = next(
+        work
+        for versions in plan.agents.values()
+        for work in versions
+        if work.agent_type == "prompt"
+    )
+
+    class TimedOutDeployments(_Deployments):
+        def deploy_prompt(self, *, agent_name, definition, run_id, create_agent):
+            raise DeploymentPollError(
+                "Synthetic poll timeout.",
+                DeploymentReceipt(
+                    agent_name,
+                    "1",
+                    "prompt",
+                    live.canonical_json_digest(definition),
+                    run_id,
+                    "poll_error",
+                ),
+                code="agent_deployment_timeout",
+                transient=True,
+            )
+
+    hooks._deployment_client = TimedOutDeployments()
+
+    with pytest.raises(RuntimeFailure) as caught:
+        hooks.deploy(work, idempotency_key=f"{work.key}:deploy")
+    assert caught.value.code == "agent_deployment_timeout"
+    assert caught.value.transient is True
 
 
 def test_insight_lookback_covers_delayed_resume_and_clamps() -> None:
