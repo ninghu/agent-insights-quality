@@ -127,8 +127,15 @@ scenario package and receives exactly one primary judgment target. Each package 
 bounded run collection needed to judge duplicate, fragmentation, and umbrella relationships. A
 scenario with no originally assigned card also retains its null no-insight target, even when it owns
 false-positive run noise, so missing expected findings and healthy-control behavior remain explicit.
+Projected bundles record that scenario-level null-target requirement explicitly; owned cards and
+run-noise context remain disjoint.
 Run-wide exact counts and insight accounting must agree across all bundles and cover every physical
 card; incomplete or duplicated coverage makes the handoff inconclusive.
+
+The explicit null-target contract uses the versioned `primary-v2` and
+`blinded-verifier-v2` prompts. Historical v1 judgments remain schema-readable, but package identity
+and prompt hashes prevent importing them into v2 packages. R19 has no imported judgments before this
+first live judging handoff.
 
 A published operational `INCONCLUSIVE` report is terminal for that immutable plan so rerunning cannot
 change an already rendered email. Use the next `--rerun N` suffix. A process interruption before

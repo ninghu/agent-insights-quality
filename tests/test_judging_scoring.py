@@ -285,7 +285,7 @@ def judgment(
         "package_hash": package["package_hash"],
         "judge_role": "primary",
         "model": "gpt-5.6-sol",
-        "prompt_version": "primary-v1",
+        "prompt_version": "primary-v2",
         "prompt_hash": package["prompt_hash"],
         "evidence_schema_version": "1.0.0",
         "mapping": {
@@ -447,6 +447,16 @@ def test_zero_insight_judgment_accepts_null_mapping(synthetic_contracts) -> None
     assert "judge_schema_failure" not in score["violations"]
 
 
+def test_explicit_false_cannot_suppress_empty_bundle_null_target() -> None:
+    healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
+    healthy["no_insight_target_required"] = False
+    healthy["bundle_hash"] = content_hash(
+        {key: value for key, value in healthy.items() if key != "bundle_hash"}
+    )
+
+    assert judgment_target_insight_ids(healthy) == (None,)
+
+
 def test_noise_judgment_cannot_replace_required_no_insight_judgment(
     synthetic_contracts,
 ) -> None:
@@ -456,6 +466,7 @@ def test_noise_judgment_cannot_replace_required_no_insight_judgment(
     healthy_raw["run_noise_insights"] = [deepcopy(noise)]
     healthy = project_evidence(healthy_raw)
     healthy["insights"] = [deepcopy(noise)]
+    healthy["no_insight_target_required"] = True
     healthy["finding_count"] = {
         "expected": 0,
         "actual": 1,
@@ -545,6 +556,7 @@ def test_noise_only_package_can_target_100_cards_plus_null() -> None:
     raw["run_finding_count"] = {"expected": 0, "actual": 100}
     bundle = project_evidence(raw)
     bundle["insights"] = deepcopy(bundle["run_noise_insights"])
+    bundle["no_insight_target_required"] = True
     bundle["finding_count"] = {
         "expected": 0,
         "actual": 100,

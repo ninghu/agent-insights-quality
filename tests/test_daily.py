@@ -820,6 +820,23 @@ def test_daily_status_covers_every_r19_like_physical_insight_once(
     evidence_by_scenario = {
         item["scenario_id"]: item for item in status["evidence"]
     }
+    for item in status["evidence"]:
+        package = json.loads(
+            (
+                package_root
+                / f"{item['scenario_id']}-primary-package.json"
+            ).read_text(encoding="ascii")
+        )
+        bundle = package["evidence"]
+        insight_ids = {insight["id"] for insight in bundle["insights"]}
+        noise_ids = {
+            insight["id"] for insight in bundle["run_noise_insights"]
+        }
+        assert insight_ids.isdisjoint(noise_ids)
+        assert bundle["no_insight_target_required"] is any(
+            target["insight_reference"] is None
+            for target in item["primary_judgment_targets"]
+        )
     for scenario_id in control_group:
         control_targets = evidence_by_scenario[scenario_id][
             "primary_judgment_targets"
@@ -828,6 +845,14 @@ def test_daily_status_covers_every_r19_like_physical_insight_once(
         assert any(
             item["insight_reference"] is not None for item in control_targets
         )
+        control_package = json.loads(
+            (
+                package_root / f"{scenario_id}-primary-package.json"
+            ).read_text(encoding="ascii")
+        )
+        assert control_package["evidence"][
+            "no_insight_target_required"
+        ] is True
 
     missed_fault = next(
         scenario_id
@@ -948,14 +973,16 @@ def test_primary_projection_keeps_shared_assigned_card_in_non_owner_context() ->
 
     assert len(owners) == 1
     for bundle in projected:
-        collection_ids = {
-            item["id"]
-            for item in [
-                *bundle["insights"],
-                *bundle["run_noise_insights"],
-            ]
+        insight_ids = {item["id"] for item in bundle["insights"]}
+        noise_ids = {
+            item["id"] for item in bundle["run_noise_insights"]
         }
+        collection_ids = insight_ids | noise_ids
         assert collection_ids == {shared["id"]}
+        assert insight_ids.isdisjoint(noise_ids)
+        assert bundle["no_insight_target_required"] is (
+            bundle["scenario"]["id"] not in owners
+        )
 
 
 def test_primary_projection_rejects_duplicate_run_accounting_references() -> None:

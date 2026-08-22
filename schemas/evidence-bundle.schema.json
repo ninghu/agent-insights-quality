@@ -213,6 +213,7 @@
       "maxItems": 100,
       "items": {"$ref": "#/$defs/insight"}
     },
+    "no_insight_target_required": {"type": "boolean"},
     "previous_insight": {
       "type": ["object", "null"],
       "additionalProperties": false,

@@ -14,6 +14,8 @@ from agent_insights_quality.contracts import (
     validate_instance,
 )
 from agent_insights_quality.judging import (
+    PRIMARY_PROMPT_VERSION,
+    VERIFIER_PROMPT_VERSION,
     judgment_target_insight_ids,
     validate_evidence_bundle,
     validate_judgment_for_bundle,
@@ -297,9 +299,9 @@ def _validate_judgments(
             if judgment["model"] != "gpt-5.6-sol":
                 raise ContractError("judgment model is not pinned")
             expected_prompt_version = (
-                "primary-v1"
+                PRIMARY_PROMPT_VERSION
                 if judgment["judge_role"] == "primary"
-                else "blinded-verifier-v1"
+                else VERIFIER_PROMPT_VERSION
             )
             if judgment["prompt_version"] != expected_prompt_version:
                 raise ContractError("judgment prompt version does not match its role")

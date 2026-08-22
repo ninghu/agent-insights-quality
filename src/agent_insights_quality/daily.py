@@ -736,13 +736,13 @@ def _project_primary_judgment_bundles(
             for key in physical_order
             if owners[key] == scenario_id
         ]
+        value["no_insight_target_required"] = (
+            not bundle["insights"] or not value["insights"]
+        )
         value["run_noise_insights"] = [
             deepcopy(physical[key]["insight"])
             for key in run_physical_keys
-            if (
-                owners[key] != scenario_id
-                or scenario_id not in physical[key]["assigned_scenarios"]
-            )
+            if owners[key] != scenario_id
         ]
         value["trace_evidence"] = [
             deepcopy(trace) for trace in run_traces[run_key].values()

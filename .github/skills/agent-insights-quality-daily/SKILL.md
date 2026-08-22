@@ -206,7 +206,9 @@ Any structural, provenance, secret/PII, or schema failure blocks automatic bug a
 4. Deterministically assign every physical run insight to exactly one scenario package and one
    primary judgment target. Keep the complete bounded run collection in each same-run package for
    relationship judgments. Retain a null no-insight target for every scenario without an originally
-   assigned card, including a healthy control that owns false-positive run noise.
+   assigned card, including a healthy control that owns false-positive run noise. Record this
+   scenario-level requirement explicitly in the projected bundle and keep owned cards disjoint from
+   run-noise context.
 5. Require identical run-wide exact counts and insight accounting across same-run bundles, complete
    physical-card coverage, and no duplicate physical judgment targets.
 6. Judge scenario mapping; `correct`, `partially_useful`, or `incorrect_noise`; root cause; title;
