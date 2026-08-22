@@ -15,6 +15,7 @@ import pytest
 import agent_insights_quality.live_adapter as live
 from agent_insights_quality.agent_runtime import (
     DeploymentCleanupError,
+    DeploymentHttpError,
     DeploymentReceipt,
     DeploymentPollError,
     InvocationEndpointError,
@@ -36,7 +37,11 @@ from agent_insights_quality.runtime.artifacts import LocalArtifactStore
 from agent_insights_quality.runtime.azure import ProjectResources
 from agent_insights_quality.runtime.config import RuntimeConfig
 from agent_insights_quality.runtime.errors import RuntimeFailure
-from agent_insights_quality.runtime.orchestrator import PlanInput, PlannedWindow
+from agent_insights_quality.runtime.orchestrator import (
+    PlanInput,
+    PlannedWindow,
+    ProductionOrchestrator,
+)
 from agent_insights_quality.runtime.receipts import ensure_public_safe
 
 
@@ -895,6 +900,106 @@ def test_live_deploy_preserves_transient_poll_timeout_for_orchestrator_retry(
     assert caught.value.transient is True
     hooks.cancel(work)
     assert deployments.cleaned
+
+
+def test_create_timeout_retry_recovers_exact_version_before_recreate(
+    tmp_path: Path,
+) -> None:
+    hooks, plan, _, _, _ = _prepared_hooks(tmp_path, [])
+    work = next(
+        item
+        for versions in plan.agents.values()
+        for item in versions
+        if item.agent_type == "prompt"
+    )
+
+    class CreateTimeoutThenRecover(_Deployments):
+        def __init__(self):
+            super().__init__()
+            self.recover_calls = 0
+            self.create_calls = 0
+            self.created_receipt: DeploymentReceipt | None = None
+
+        def recover_version(self, **kwargs):
+            self.recover_calls += 1
+            if self.created_receipt is not None:
+                return self.created_receipt, True
+            return None, False
+
+        def deploy_prompt(self, **kwargs):
+            self.create_calls += 1
+            self.created_receipt = self._receipt(
+                "prompt",
+                kwargs["agent_name"],
+                kwargs["definition"],
+                kwargs["run_id"],
+            )
+            raise DeploymentHttpError(408)
+
+    deployments = CreateTimeoutThenRecover()
+    hooks._deployment_client = deployments
+    orchestrator = ProductionOrchestrator(
+        hooks,
+        tmp_path / "state.json",
+        sleep=lambda _seconds: None,
+    )
+
+    result = orchestrator._retry(
+        lambda: hooks.deploy(work, idempotency_key=f"{work.key}:deploy")
+    )
+
+    assert result["status"] == "active"
+    assert deployments.create_calls == 1
+    assert deployments.recover_calls == 2
+
+
+def test_persistent_create_timeout_exhausts_bounded_recovery_retries(
+    tmp_path: Path,
+) -> None:
+    hooks, plan, _, _, _ = _prepared_hooks(tmp_path, [])
+    work = next(
+        item
+        for versions in plan.agents.values()
+        for item in versions
+        if item.agent_type == "prompt"
+    )
+
+    class PersistentTimeout(_Deployments):
+        def __init__(self):
+            super().__init__()
+            self.recover_calls = 0
+            self.create_calls = 0
+
+        def recover_version(self, **_kwargs):
+            self.recover_calls += 1
+            return None, False
+
+        def deploy_prompt(self, **_kwargs):
+            self.create_calls += 1
+            raise DeploymentHttpError(408, retry_after_seconds=90)
+
+    deployments = PersistentTimeout()
+    hooks._deployment_client = deployments
+    orchestrator = ProductionOrchestrator(
+        hooks,
+        tmp_path / "state.json",
+        retry_attempts=3,
+        sleep=lambda _seconds: None,
+    )
+
+    with pytest.raises(RuntimeFailure) as caught:
+        orchestrator._retry(
+            lambda: hooks.deploy(work, idempotency_key=f"{work.key}:deploy")
+        )
+
+    assert caught.value.code == "agent_deployment_request_timeout"
+    assert caught.value.transient is True
+    assert caught.value.details == {
+        "http_status": 408,
+        "retry_after_seconds": 90,
+    }
+    assert deployments.recover_calls == 3
+    assert deployments.create_calls == 3
 
 
 def test_cancelled_poll_error_cleans_provisional_receipt_without_holding_hook_lock(

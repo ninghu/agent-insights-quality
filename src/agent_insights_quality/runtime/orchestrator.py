@@ -450,7 +450,15 @@ class ProductionOrchestrator:
                     raise
                 if self._cancelled.is_set():
                     raise RuntimeFailure("run_cancelled", "Runtime cancellation was requested.")
-                self._sleep(min(2 ** (attempt - 1), 8))
+                retry_after = error.details.get("retry_after_seconds")
+                delay = (
+                    float(retry_after)
+                    if isinstance(retry_after, (int, float))
+                    and not isinstance(retry_after, bool)
+                    and 0 <= retry_after <= 300
+                    else min(2 ** (attempt - 1), 8)
+                )
+                self._sleep(delay)
         raise AssertionError("unreachable")
 
     def _step(

@@ -119,6 +119,47 @@ def test_orchestrator_retries_and_resumes_idempotently_with_public_receipt(tmp_p
         ProductionOrchestrator(hooks, receipt).run(changed, resume=True)
 
 
+@pytest.mark.parametrize(
+    ("retry_after", "expected_delay"),
+    [
+        (120, 120.0),
+        (0.5, 0.5),
+        (301, 1),
+        (-1, 1),
+        (True, 1),
+        ("120", 1),
+    ],
+)
+def test_orchestrator_retry_honors_only_bounded_numeric_retry_after(
+    tmp_path: Path,
+    retry_after,
+    expected_delay: float,
+) -> None:
+    attempts = 0
+    sleeps: list[float] = []
+
+    def operation():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeFailure(
+                "transient",
+                "Synthetic transient failure.",
+                {"retry_after_seconds": retry_after},
+                transient=True,
+            )
+        return {"result_reference": "sha256:" + ("a" * 64)}
+
+    result = ProductionOrchestrator(
+        Hooks(),
+        tmp_path / "state.json",
+        sleep=sleeps.append,
+    )._retry(operation)
+
+    assert result["result_reference"].startswith("sha256:")
+    assert sleeps == [expected_delay]
+
+
 def test_resume_recovers_completed_steps_without_replaying_side_effects(
     tmp_path: Path,
 ) -> None:

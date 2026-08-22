@@ -136,6 +136,11 @@ ID. The invocation client retries that exact prompt or session request up to thr
 outer resume is still required, durable per-fixture receipts skip every confirmed success.
 Nontransient 400s and failures carrying a response ID are not retried, and response bodies are not
 stored in public runtime state.
+
+Deployment create HTTP 408, 429, and 5xx responses are also typed transient failures with only safe
+status and bounded `Retry-After` metadata. Every orchestrator retry re-runs immutable ownership/content
+recovery before any create request, so a version created despite a lost response is reused rather than
+duplicated. Other 4xx responses remain nontransient.
 The scenario envelope preserves the selected healthy fixture's real domain input and expected tool
 contract. Scenario ID, runtime provenance, correlation, and the bounded synthetic recipe marker are
 added around that request; the generic recipe marker never replaces the domain request.
