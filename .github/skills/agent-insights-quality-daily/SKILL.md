@@ -101,7 +101,9 @@ finalize one aggregate `INCONCLUSIVE` result. Retain exact deployments and recei
 complete agents and versions and retries only failed or unstarted work. The total runtime is bounded
 to four hours. Only an explicit operator abort sends cancellation and exact-owned-resource cleanup;
 because that cleanup invalidates deployment receipts, an explicitly aborted attempt is not resumable
-and requires an explicit rerun suffix.
+and requires an explicit rerun suffix. Persist the non-resumable `run_cancelled` receipt before the
+first cleanup operation, including when abort is requested during validated receipt initialization.
+Never clean resources for an invalid or mismatched resume receipt.
 Serialize recovery, creation, and activation polling for all hosted-code and custom-container
 versions through the process-wide hosted deployment gate. Prompt deployments may remain parallel.
 After deployment, endpoint traffic retains normal cross-agent concurrency.

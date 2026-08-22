@@ -887,6 +887,10 @@ class LiveRuntimeHooks:
             RuntimeFailure,
         ] = {}
         self._cancelled_insight_runs: set[tuple[str, str]] = set()
+        self._cancelling_insight_runs: dict[
+            tuple[str, str],
+            threading.Event,
+        ] = {}
         self._cancel_events: dict[str, threading.Event] = {}
 
     def _token(self) -> str:
@@ -3016,11 +3020,29 @@ class LiveRuntimeHooks:
         insights: AgentInsightsClient,
         run_identity: tuple[str, str],
     ) -> None:
-        with self._lock:
-            if run_identity in self._cancelled_insight_runs:
-                return
-            insights.cancel_run(*run_identity)
-            self._cancelled_insight_runs.add(run_identity)
+        while True:
+            with self._lock:
+                if run_identity in self._cancelled_insight_runs:
+                    return
+                completion = self._cancelling_insight_runs.get(run_identity)
+                owns_claim = completion is None
+                if owns_claim:
+                    completion = threading.Event()
+                    self._cancelling_insight_runs[run_identity] = completion
+            if not owns_claim:
+                completion.wait()
+                continue
+            succeeded = False
+            try:
+                insights.cancel_run(*run_identity)
+                succeeded = True
+            finally:
+                with self._lock:
+                    if succeeded:
+                        self._cancelled_insight_runs.add(run_identity)
+                    self._cancelling_insight_runs.pop(run_identity, None)
+                    completion.set()
+            return
 
     def cancel(self, work: VersionWork) -> None:
         failures: list[str] = []

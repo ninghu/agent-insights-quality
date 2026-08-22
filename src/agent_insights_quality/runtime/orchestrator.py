@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .errors import RuntimeFailure
-from .receipts import read_receipt, write_receipt
+from .receipts import opaque_reference, read_receipt, write_receipt
 
 _PUBLIC_FAILURE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
 _PUBLIC_REFERENCE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -465,7 +465,9 @@ class ProductionOrchestrator:
         self._write_lock = threading.RLock()
         self._cleanup_lock = threading.Lock()
         self._abort_requested = threading.Event()
+        self._initializing = False
         self._active_plan: PlanInput | None = None
+        self._active_state: RunState | None = None
         self._abort_failure_codes: list[str] = []
         self._abort_cleanup_started = False
         self._abort_final_sweep_done = False
@@ -473,12 +475,69 @@ class ProductionOrchestrator:
 
     def cancel(self) -> None:
         with self._write_lock:
-            plan = self._active_plan
-            if plan is None:
+            if not self._initializing and self._active_plan is None:
                 return
             self._abort_requested.set()
-        if plan is not None:
-            self._send_abort_cleanup(plan)
+            plan = self._active_plan
+            state = self._active_state
+            if plan is None or state is None:
+                return
+            self._persist_abort_state_locked(state)
+        self._send_abort_cleanup(plan)
+        with self._write_lock:
+            self._persist_abort_state_locked(state)
+
+    def _persist_abort_state_locked(
+        self,
+        state: RunState,
+        *,
+        original_failure: RuntimeFailure | None = None,
+    ) -> RuntimeFailure:
+        phase = str(
+            (
+                original_failure.details.get("phase")
+                if original_failure is not None
+                else None
+            )
+            or state.failed_phase
+            or state.phase
+        )
+        failure_codes: set[str] = set()
+        if original_failure is not None and original_failure.code != "run_cancelled":
+            failure_codes.add(original_failure.code)
+        current = state.failure
+        if isinstance(current, Mapping):
+            if current.get("code") not in {None, "run_cancelled"}:
+                failure_codes.add(str(current["code"]))
+            current_details = current.get("details")
+            if isinstance(current_details, Mapping):
+                existing_codes = current_details.get("failure_codes")
+                if isinstance(existing_codes, list):
+                    failure_codes.update(
+                        str(code) for code in existing_codes if isinstance(code, str)
+                    )
+        details: dict[str, Any] = {"phase": phase}
+        if failure_codes:
+            details["failure_codes"] = sorted(failure_codes)
+        if self._abort_failure_codes:
+            details["cancellation_failures"] = sorted(
+                set(self._abort_failure_codes)
+            )
+        failure = RuntimeFailure(
+            "run_cancelled",
+            "Runtime cancellation was requested.",
+            details,
+        )
+        state.status = "inconclusive"
+        state.failed_phase = phase
+        state.failure = {
+            "code": failure.code,
+            "message": failure.message,
+            "transient": failure.transient,
+            "details": public_failure_details(failure.details),
+        }
+        self._save(state)
+        return failure
 
     def _send_abort_cleanup(self, plan: PlanInput) -> None:
         with self._cleanup_lock:
@@ -683,8 +742,14 @@ class ProductionOrchestrator:
                     ),
                 )
             except RuntimeFailure as error:
-                error.details.setdefault("agent_reference", _opaque(work.agent_id))
-                error.details.setdefault("work_reference", _opaque(prefix))
+                error.details.setdefault(
+                    "agent_reference",
+                    opaque_reference(work.agent_id),
+                )
+                error.details.setdefault(
+                    "work_reference",
+                    opaque_reference(prefix),
+                )
                 raise
 
     @staticmethod
@@ -856,7 +921,12 @@ class ProductionOrchestrator:
         return sorted(set(failures))
 
     def run(self, plan: PlanInput, *, resume: bool = False, dry_run: bool = False) -> RunState:
-        self._deadline = self._monotonic() + self._run_timeout
+        with self._write_lock:
+            self._abort_requested.clear()
+            self._abort_failure_codes = []
+            self._abort_cleanup_started = False
+            self._abort_final_sweep_done = False
+            self._initializing = True
         try:
             if resume:
                 state = RunState.from_receipt(
@@ -865,7 +935,8 @@ class ProductionOrchestrator:
                     plan.reference,
                 )
                 if state.status == "succeeded":
-                    self._deadline = None
+                    with self._write_lock:
+                        self._initializing = False
                     return state
                 if (
                     isinstance(state.failure, Mapping)
@@ -882,12 +953,18 @@ class ProductionOrchestrator:
                 self._save(state)
         except Exception:
             with self._write_lock:
+                self._initializing = False
                 self._active_plan = None
+                self._active_state = None
                 self._deadline = None
             raise
         with self._write_lock:
             self._active_plan = plan
+            self._active_state = state
+            self._deadline = self._monotonic() + self._run_timeout
+            self._initializing = False
         try:
+            self._check_run_boundary()
             self._step(
                 state,
                 "preflight",
@@ -902,6 +979,7 @@ class ProductionOrchestrator:
                     state.phase = "complete"
                     self._save(state)
                     self._active_plan = None
+                    self._active_state = None
                     self._deadline = None
                 return state
             self._step(
@@ -910,13 +988,15 @@ class ProductionOrchestrator:
                 "project",
                 lambda: self._hooks.ensure_project(plan, idempotency_key=f"{plan.plan_id}:project"),
             )
-            state.status = "running"
-            state.failed_phase = None
-            state.failure = None
-            for agent_id, versions in plan.agents.items():
-                if self._agent_complete(state, versions):
-                    state.agent_failures.pop(agent_id, None)
-            self._save(state)
+            with self._write_lock:
+                self._check_run_boundary()
+                state.status = "running"
+                state.failed_phase = None
+                state.failure = None
+                for agent_id, versions in plan.agents.items():
+                    if self._agent_complete(state, versions):
+                        state.agent_failures.pop(agent_id, None)
+                self._save(state)
             incomplete = {
                 agent_id: versions
                 for agent_id, versions in plan.agents.items()
@@ -936,10 +1016,10 @@ class ProductionOrchestrator:
                 while pending:
                     if self._abort_requested.is_set():
                         if abort_deadline is None:
-                            abort_deadline = time.monotonic() + self._cancellation_wait
+                            abort_deadline = self._monotonic() + self._cancellation_wait
                         wait_seconds = max(
                             0.0,
-                            min(0.1, abort_deadline - time.monotonic()),
+                            min(0.1, abort_deadline - self._monotonic()),
                         )
                     else:
                         wait_seconds = 0.1
@@ -963,10 +1043,10 @@ class ProductionOrchestrator:
                             failure = self._unexpected_failure(error, "agents")
                             versions = incomplete[agent_id]
                             if versions:
-                                failure.details["agent_reference"] = _opaque(
+                                failure.details["agent_reference"] = opaque_reference(
                                     versions[0].agent_id
                                 )
-                                failure.details["work_reference"] = _opaque(
+                                failure.details["work_reference"] = opaque_reference(
                                     versions[0].key
                                 )
                             failures[agent_id] = failure
@@ -981,7 +1061,7 @@ class ProductionOrchestrator:
                                 self._save(state)
                     if (
                         abort_deadline is not None
-                        and time.monotonic() >= abort_deadline
+                        and self._monotonic() >= abort_deadline
                     ):
                         break
                 if self._abort_requested.is_set():
@@ -991,14 +1071,10 @@ class ProductionOrchestrator:
                 else:
                     pool.shutdown(wait=True)
             if self._abort_requested.is_set():
-                cancellation_failures = self._finish_abort_cleanup(plan)
-                details: dict[str, Any] = {"phase": "agents"}
-                if cancellation_failures:
-                    details["cancellation_failures"] = cancellation_failures
                 raise RuntimeFailure(
                     "run_cancelled",
                     "Runtime cancellation was requested.",
-                    details,
+                    {"phase": "agents"},
                 )
             if failures:
                 raise self._aggregate_agent_failures(failures)
@@ -1011,6 +1087,7 @@ class ProductionOrchestrator:
                 state.agent_failures = {}
                 self._save(state)
                 self._active_plan = None
+                self._active_state = None
                 self._deadline = None
             return state
         except RuntimeFailure as failure:
@@ -1029,39 +1106,23 @@ class ProductionOrchestrator:
                     }
                     self._save(state)
                     self._active_plan = None
+                    self._active_state = None
                     self._deadline = None
             if abort_won:
-                cancellation_failures = self._finish_abort_cleanup(plan)
-                original_code = failure.code
-                failure = RuntimeFailure(
-                    "run_cancelled",
-                    "Runtime cancellation was requested.",
-                    {
-                        "phase": str(
-                            failure.details.get("phase") or state.phase
-                        ),
-                        "failure_codes": (
-                            [original_code]
-                            if original_code != "run_cancelled"
-                            else []
-                        ),
-                    },
-                )
-                if cancellation_failures:
-                    failure.details["cancellation_failures"] = cancellation_failures
                 with self._write_lock:
-                    state.status = "inconclusive"
-                    state.failed_phase = str(
-                        failure.details.get("phase") or state.phase
+                    failure = self._persist_abort_state_locked(
+                        state,
+                        original_failure=failure,
                     )
-                    state.failure = {
-                        "code": failure.code,
-                        "message": failure.message,
-                        "transient": failure.transient,
-                        "details": public_failure_details(failure.details),
-                    }
-                    self._save(state)
+                cancellation_failures = self._finish_abort_cleanup(plan)
+                with self._write_lock:
+                    if cancellation_failures:
+                        self._abort_failure_codes.extend(
+                            cancellation_failures
+                        )
+                    failure = self._persist_abort_state_locked(state)
                     self._active_plan = None
+                    self._active_state = None
                     self._deadline = None
             finalization = self._hooks.finalize_failure(failure, state.public_dict())
             if isinstance(finalization, Mapping):
@@ -1074,5 +1135,7 @@ class ProductionOrchestrator:
             raise
         finally:
             with self._write_lock:
+                self._initializing = False
                 self._active_plan = None
+                self._active_state = None
                 self._deadline = None

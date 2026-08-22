@@ -1961,6 +1961,100 @@ def test_insight_run_created_after_abort_is_cancelled_by_owner(
     assert insights.cancelled == [("monitor", "insights-run")]
 
 
+def test_insight_run_cancellation_coalesces_without_holding_adapter_lock(
+    tmp_path: Path,
+) -> None:
+    hooks, _, _, _, _ = _prepared_hooks(tmp_path, [])
+    cancel_started = Event()
+    allow_cancel = Event()
+
+    class BlockingCancelInsights(_Insights):
+        def __init__(self):
+            super().__init__()
+            self.cancel_count = 0
+
+        def cancel_run(self, monitor, run_id):
+            self.cancel_count += 1
+            cancel_started.set()
+            assert allow_cancel.wait(5)
+            super().cancel_run(monitor, run_id)
+
+    insights = BlockingCancelInsights()
+    identity = ("monitor", "insights-run")
+    failures: list[BaseException] = []
+
+    def cancel() -> None:
+        try:
+            hooks._cancel_insight_run_once(insights, identity)
+        except BaseException as error:
+            failures.append(error)
+
+    first = Thread(target=cancel)
+    second = Thread(target=cancel)
+    first.start()
+    assert cancel_started.wait(5)
+    second.start()
+    assert hooks._lock.acquire(timeout=1)
+    hooks._lock.release()
+    allow_cancel.set()
+    first.join(5)
+    second.join(5)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert failures == []
+    assert insights.cancel_count == 1
+    assert insights.cancelled == [identity]
+
+
+def test_insight_run_cancellation_releases_claim_after_unexpected_failure(
+    tmp_path: Path,
+) -> None:
+    hooks, _, _, _, _ = _prepared_hooks(tmp_path, [])
+    first_started = Event()
+    allow_failure = Event()
+
+    class FailThenSucceedInsights(_Insights):
+        def __init__(self):
+            super().__init__()
+            self.cancel_count = 0
+
+        def cancel_run(self, monitor, run_id):
+            self.cancel_count += 1
+            if self.cancel_count == 1:
+                first_started.set()
+                assert allow_failure.wait(5)
+                raise ValueError("synthetic unexpected cancellation failure")
+            super().cancel_run(monitor, run_id)
+
+    insights = FailThenSucceedInsights()
+    identity = ("monitor", "insights-run")
+    failures: list[BaseException] = []
+
+    def cancel() -> None:
+        try:
+            hooks._cancel_insight_run_once(insights, identity)
+        except BaseException as error:
+            failures.append(error)
+
+    first = Thread(target=cancel)
+    second = Thread(target=cancel)
+    first.start()
+    assert first_started.wait(5)
+    second.start()
+    allow_failure.set()
+    first.join(5)
+    second.join(5)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert len(failures) == 1
+    assert isinstance(failures[0], ValueError)
+    assert insights.cancel_count == 2
+    assert insights.cancelled == [identity]
+    assert hooks._cancelling_insight_runs == {}
+
+
 def test_cancellation_is_not_blocked_by_inflight_endpoint_invocation(
     tmp_path: Path,
 ) -> None:

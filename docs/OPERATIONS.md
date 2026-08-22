@@ -212,6 +212,9 @@ are retained on these failures, so resume skips every complete agent/version and
 or unstarted work. Only an explicit operator abort invokes cancellation and exact-owned-resource
 cleanup, with a bounded worker drain and a final cleanup sweep. An explicitly aborted receipt is not
 resumable because its deployment resources may have been removed; start an explicit rerun instead.
+The runtime writes that durable `run_cancelled` marker before the first cleanup hook and patches any
+cleanup failure codes afterward. Abort intent received while a resume receipt is loading is retained
+but cannot trigger cleanup until the receipt and plan identity have been validated.
 Each pre-run checkpoint captures revisions for every version on the exact monitor/agent. Unchanged
 prior-version cards are therefore skipped before current-version validation; any prior-version card
 whose revision changes during the run still fails strict stale provenance. Exact run Insight totals

@@ -4,11 +4,13 @@ from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
 
 from agent_insights_quality.runtime import artifacts
+from agent_insights_quality.runtime import orchestrator as orchestrator_module
 from agent_insights_quality.runtime.artifacts import AzureBlobArtifactStore, LocalArtifactStore
 from agent_insights_quality.runtime.errors import RuntimeFailure
 from agent_insights_quality.runtime.orchestrator import (
@@ -18,7 +20,12 @@ from agent_insights_quality.runtime.orchestrator import (
     RunState,
     VersionWork,
 )
-from agent_insights_quality.runtime.receipts import ensure_public_safe, read_receipt
+from agent_insights_quality.runtime.receipts import (
+    ensure_public_safe,
+    opaque_reference,
+    read_receipt,
+    write_receipt,
+)
 
 
 def work(agent: str, version: str, start: datetime) -> VersionWork:
@@ -527,7 +534,18 @@ def test_orchestrator_aggregates_multiple_failures_after_peers_finish(tmp_path: 
         "deployment_failed",
         "invocation_failed",
     ]
-    assert len(captured.value.details["work_references"]) == 2
+    assert captured.value.details["agent_references"] == sorted(
+        [
+            opaque_reference("a"),
+            opaque_reference("b"),
+        ]
+    )
+    assert captured.value.details["work_references"] == sorted(
+        [
+            opaque_reference(plan.agents["a"][0].key),
+            opaque_reference(plan.agents["b"][0].key),
+        ]
+    )
     state = read_receipt(receipt)
     assert set(state["agent_failures"]) == {"a", "b"}
     assert any(key.endswith(":evidence") for key in state["checkpoints"] if key.startswith("c:"))
@@ -710,6 +728,213 @@ def test_explicit_abort_performs_second_cleanup_sweep_for_late_deployment(
     assert resume_hooks.calls.count("cancel") == 0
 
 
+def test_abort_during_resume_initialization_is_delivered_after_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = datetime(2026, 8, 21, tzinfo=UTC)
+    plan = PlanInput(
+        "aiq-20260821",
+        "aiq-20260821",
+        {"a": (work("a", "v1", start),)},
+    )
+    receipt = tmp_path / "state.json"
+    write_receipt(
+        receipt,
+        RunState(plan.plan_id, plan.reference).public_dict(),
+    )
+    read_started = threading.Event()
+    allow_read = threading.Event()
+    original_read = orchestrator_module.read_receipt
+
+    def blocking_read(path: Path):
+        read_started.set()
+        assert allow_read.wait(timeout=2)
+        return original_read(path)
+
+    monkeypatch.setattr(orchestrator_module, "read_receipt", blocking_read)
+    hooks = Hooks()
+    orchestrator = ProductionOrchestrator(hooks, receipt)
+    failures: list[RuntimeFailure] = []
+
+    def execute() -> None:
+        try:
+            orchestrator.run(plan, resume=True)
+        except RuntimeFailure as error:
+            failures.append(error)
+
+    thread = threading.Thread(target=execute)
+    thread.start()
+    assert read_started.wait(timeout=2)
+    orchestrator.cancel()
+    assert hooks.calls.count("cancel") == 0
+    allow_read.set()
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert failures[0].code == "run_cancelled"
+    assert read_receipt(receipt)["failure"]["code"] == "run_cancelled"
+    assert hooks.calls.count("cancel") == 2
+    assert not any(
+        call.startswith(("preflight:", "project:", "deploy:"))
+        for call in hooks.calls
+    )
+
+
+def test_abort_during_invalid_resume_initialization_never_cleans(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = datetime(2026, 8, 21, tzinfo=UTC)
+    plan = PlanInput(
+        "aiq-20260821",
+        "aiq-20260821",
+        {"a": (work("a", "v1", start),)},
+    )
+    receipt = tmp_path / "state.json"
+    write_receipt(
+        receipt,
+        RunState("different-plan", plan.reference).public_dict(),
+    )
+    read_started = threading.Event()
+    allow_read = threading.Event()
+    original_read = orchestrator_module.read_receipt
+
+    def blocking_read(path: Path):
+        read_started.set()
+        assert allow_read.wait(timeout=2)
+        return original_read(path)
+
+    monkeypatch.setattr(orchestrator_module, "read_receipt", blocking_read)
+    hooks = Hooks()
+    orchestrator = ProductionOrchestrator(hooks, receipt)
+    failures: list[RuntimeFailure] = []
+
+    def execute() -> None:
+        try:
+            orchestrator.run(plan, resume=True)
+        except RuntimeFailure as error:
+            failures.append(error)
+
+    thread = threading.Thread(target=execute)
+    thread.start()
+    assert read_started.wait(timeout=2)
+    orchestrator.cancel()
+    allow_read.set()
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert failures[0].code == "resume_plan_mismatch"
+    assert hooks.calls.count("cancel") == 0
+    assert read_receipt(receipt).get("failure") is None
+
+
+def test_abort_receipt_is_durable_before_first_cleanup_hook(
+    tmp_path: Path,
+) -> None:
+    deploy_started = threading.Event()
+    release_deploy = threading.Event()
+
+    class OrderingHooks(Hooks):
+        def __init__(self, receipt: Path):
+            super().__init__()
+            self.receipt = receipt
+            self.cleanup_states: list[str] = []
+
+        def deploy(self, _current, *, idempotency_key):
+            deploy_started.set()
+            assert release_deploy.wait(timeout=2)
+            return self._value("deploy", idempotency_key)
+
+        def cancel(self, _current):
+            self.cleanup_states.append(
+                str(read_receipt(self.receipt)["failure"]["code"])
+            )
+            release_deploy.set()
+            super().cancel(_current)
+
+    start = datetime(2026, 8, 21, tzinfo=UTC)
+    plan = PlanInput(
+        "aiq-20260821",
+        "aiq-20260821",
+        {"a": (work("a", "v1", start),)},
+    )
+    receipt = tmp_path / "state.json"
+    hooks = OrderingHooks(receipt)
+    orchestrator = ProductionOrchestrator(hooks, receipt)
+    failures: list[RuntimeFailure] = []
+
+    def execute() -> None:
+        try:
+            orchestrator.run(plan)
+        except RuntimeFailure as error:
+            failures.append(error)
+
+    thread = threading.Thread(target=execute)
+    thread.start()
+    assert deploy_started.wait(timeout=2)
+    orchestrator.cancel()
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert failures[0].code == "run_cancelled"
+    assert hooks.cleanup_states == ["run_cancelled", "run_cancelled"]
+    assert read_receipt(receipt)["failure"]["code"] == "run_cancelled"
+    with pytest.raises(RuntimeFailure) as resume_failure:
+        ProductionOrchestrator(Hooks(), receipt).run(plan, resume=True)
+    assert resume_failure.value.code == "aborted_run_not_resumable"
+
+
+def test_abort_cannot_be_overwritten_by_running_transition(
+    tmp_path: Path,
+) -> None:
+    project_complete = threading.Event()
+    allow_running_transition = threading.Event()
+
+    class BlockingProjectOrchestrator(ProductionOrchestrator):
+        def _step(self, state, key, phase, operation, *, replay_existing=False):
+            value = super()._step(
+                state,
+                key,
+                phase,
+                operation,
+                replay_existing=replay_existing,
+            )
+            if phase == "project":
+                project_complete.set()
+                assert allow_running_transition.wait(timeout=2)
+            return value
+
+    start = datetime(2026, 8, 21, tzinfo=UTC)
+    plan = PlanInput(
+        "aiq-20260821",
+        "aiq-20260821",
+        {"a": (work("a", "v1", start),)},
+    )
+    receipt = tmp_path / "state.json"
+    hooks = Hooks()
+    orchestrator = BlockingProjectOrchestrator(hooks, receipt)
+    failures: list[RuntimeFailure] = []
+
+    def execute() -> None:
+        try:
+            orchestrator.run(plan)
+        except RuntimeFailure as error:
+            failures.append(error)
+
+    thread = threading.Thread(target=execute)
+    thread.start()
+    assert project_complete.wait(timeout=2)
+    orchestrator.cancel()
+    allow_running_transition.set()
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert failures[0].code == "run_cancelled"
+    assert read_receipt(receipt)["failure"]["code"] == "run_cancelled"
+    assert hooks.calls.count("cancel") == 2
+
+
 def test_explicit_abort_returns_after_bounded_worker_drain(tmp_path: Path) -> None:
     deploy_started = threading.Event()
     release_worker = threading.Event()
@@ -729,10 +954,20 @@ def test_explicit_abort_returns_after_bounded_worker_drain(tmp_path: Path) -> No
         {"a": (work("a", "v1", start),)},
     )
     hooks = UnresponsiveHooks()
+    abort_phase = threading.Event()
+    monotonic_calls_after_abort = 0
+
+    def monotonic() -> float:
+        nonlocal monotonic_calls_after_abort
+        if abort_phase.is_set():
+            monotonic_calls_after_abort += 1
+        return time.monotonic()
+
     orchestrator = ProductionOrchestrator(
         hooks,
         tmp_path / "state.json",
         cancellation_wait_seconds=0.01,
+        monotonic=monotonic,
     )
     failures: list[RuntimeFailure] = []
 
@@ -745,6 +980,7 @@ def test_explicit_abort_returns_after_bounded_worker_drain(tmp_path: Path) -> No
     thread = threading.Thread(target=execute)
     thread.start()
     assert deploy_started.wait(timeout=2)
+    abort_phase.set()
     orchestrator.cancel()
     thread.join(timeout=1)
     release_worker.set()
@@ -752,6 +988,7 @@ def test_explicit_abort_returns_after_bounded_worker_drain(tmp_path: Path) -> No
     assert not thread.is_alive()
     assert failures[0].code == "run_cancelled"
     assert hooks.calls.count("cancel") == 2
+    assert monotonic_calls_after_abort >= 2
     assert worker_finished.wait(timeout=2)
 
 
