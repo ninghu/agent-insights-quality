@@ -3,6 +3,12 @@ param location string
 @maxLength(12)
 param uniqueSuffix string
 param terraModelVersion string
+@minValue(1)
+@maxValue(1000)
+param terraAgentCapacity int = 100
+@minValue(1)
+@maxValue(1000)
+param terraInsightsCapacity int = 100
 param automationOwner string
 param automationPrincipalId string
 
@@ -65,7 +71,7 @@ resource terraAgents 'Microsoft.CognitiveServices/accounts/deployments@2024-10-0
   name: 'terra-test-agents'
   sku: {
     name: 'GlobalStandard'
-    capacity: 1
+    capacity: terraAgentCapacity
   }
   properties: {
     model: {
@@ -85,7 +91,7 @@ resource terraInsights 'Microsoft.CognitiveServices/accounts/deployments@2024-10
   ]
   sku: {
     name: 'GlobalStandard'
-    capacity: 1
+    capacity: terraInsightsCapacity
   }
   properties: {
     model: {

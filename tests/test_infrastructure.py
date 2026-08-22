@@ -44,6 +44,37 @@ def test_terra_deployments_are_serialized() -> None:
     )
 
 
+def test_terra_capacity_parameters_are_independent_and_bounded() -> None:
+    main = _bicep("main.bicep")
+    persistent = _bicep("modules/persistent.bicep")
+
+    for source in (main, persistent):
+        for parameter in ("terraAgentCapacity", "terraInsightsCapacity"):
+            assert re.search(
+                rf"@minValue\(1\)\s+@maxValue\(1000\)\s+"
+                rf"param {parameter} int = 100",
+                source,
+            )
+
+    persistent_module = re.search(
+        r"module persistent\b(?P<body>.*)\Z",
+        main,
+        re.DOTALL,
+    )
+    assert persistent_module is not None
+    module_body = persistent_module.group("body")
+    assert module_body.count("terraAgentCapacity: terraAgentCapacity") == 1
+    assert module_body.count("terraInsightsCapacity: terraInsightsCapacity") == 1
+
+    terra_agents = _resource(persistent, "terraAgents")
+    terra_insights = _resource(persistent, "terraInsights")
+    assert re.search(r"capacity:\s*terraAgentCapacity\b", terra_agents)
+    assert "terraInsightsCapacity" not in terra_agents
+    assert re.search(r"capacity:\s*terraInsightsCapacity\b", terra_insights)
+    assert "terraAgentCapacity" not in terra_insights
+    assert not re.search(r"capacity:\s*1\b", persistent)
+
+
 def test_app_insights_connection_uses_arm_resolved_api_key() -> None:
     qualification = _bicep("modules/qualification-project.bicep")
     connection = re.search(
