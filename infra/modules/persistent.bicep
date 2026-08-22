@@ -4,6 +4,7 @@ param location string
 param uniqueSuffix string
 param terraModelVersion string
 param automationOwner string
+param automationPrincipalId string
 
 var commonTags = {
   purpose: 'agent-insights-quality'
@@ -15,6 +16,8 @@ var workspaceName = 'aiq-law-${uniqueSuffix}'
 var appInsightsName = 'aiq-appi-${uniqueSuffix}'
 var storageName = 'aiqartifacts${uniqueSuffix}'
 var registryName = 'aiqacr${uniqueSuffix}'
+var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+var acrPushRoleId = '8311e382-0749-4cb8-b61a-304f252e45ec'
 
 resource workspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: workspaceName
@@ -120,6 +123,26 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     allowSharedKeyAccess: false
     minimumTlsVersion: 'TLS1_2'
     supportsHttpsTrafficOnly: true
+  }
+}
+
+resource automationArtifactContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: storage
+  name: guid(storage.id, automationPrincipalId, storageBlobDataContributorRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
+    principalId: automationPrincipalId
+    principalType: 'User'
+  }
+}
+
+resource automationRegistryPush 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: registry
+  name: guid(registry.id, automationPrincipalId, acrPushRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPushRoleId)
+    principalId: automationPrincipalId
+    principalType: 'User'
   }
 }
 
