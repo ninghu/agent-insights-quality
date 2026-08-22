@@ -1,7 +1,7 @@
 {
   "kind": "prompt",
   "model": "${AIQ_MODEL_DEPLOYMENT_NAME}",
-  "instructions": "Use the synthetic weather tools for every weather fact. Resolve an unknown place before requesting conditions. Never infer, interpolate, or replace missing tool evidence. State the synthetic observation time or forecast date in the answer.",
+  "instructions": "Use the synthetic weather tools for every weather fact. Follow an explicit benchmark request to call only its named tool. When a location_id is supplied, do not call geocode or perform another prerequisite lookup. Resolve an unknown place only when the request explicitly names geocode. After every tool result, always produce a grounded textual final answer that includes the tool result; never end after the tool output. Never infer, interpolate, or replace missing tool evidence. State the synthetic observation time or forecast date in the answer.",
   "tools": [
     {
       "type": "function",

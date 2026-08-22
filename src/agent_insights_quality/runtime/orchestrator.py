@@ -21,10 +21,12 @@ _PUBLIC_FAILURE_COUNTS = frozenset(
         "artifact_reference_count",
         "deleted_count",
         "failure_count",
+        "http_status",
         "match_count",
         "missing_role_count",
         "state_reference_count",
         "timeout_seconds",
+        "retry_after_seconds",
     }
 )
 
@@ -607,8 +609,14 @@ class ProductionOrchestrator:
             self._save(state)
 
     def _cancel_plan(self, plan: PlanInput) -> list[str]:
+        return self._cancel_versions(plan.agents.values())
+
+    def _cancel_versions(
+        self,
+        groups: Sequence[Sequence[VersionWork]],
+    ) -> list[str]:
         failures: list[str] = []
-        for versions in plan.agents.values():
+        for versions in groups:
             for work in versions:
                 try:
                     self._hooks.cancel(work)
@@ -660,10 +668,10 @@ class ProductionOrchestrator:
             state.failure = None
             self._save(state)
             pool = ThreadPoolExecutor(max_workers=min(self._parallel, max(1, len(plan.agents))))
-            futures: list[Future[None]] = [
-                pool.submit(self._run_agent, state, versions)
+            futures = {
+                pool.submit(self._run_agent, state, versions): versions
                 for versions in plan.agents.values()
-            ]
+            }
             done, pending = wait(futures, return_when=FIRST_EXCEPTION)
             failure: RuntimeFailure | None = None
             for future in done:
@@ -691,7 +699,36 @@ class ProductionOrchestrator:
                         running.append(future)
                 pool.shutdown(wait=False, cancel_futures=True)
                 if running:
-                    wait(running, timeout=self._cancellation_wait)
+                    completed_after_cancel, _ = wait(
+                        running,
+                        timeout=self._cancellation_wait,
+                    )
+                    for future in completed_after_cancel:
+                        try:
+                            future.result()
+                        except RuntimeFailure as late_failure:
+                            nested = late_failure.details.get("failure_codes")
+                            if isinstance(nested, list):
+                                cancellation_failures.extend(
+                                    str(code)
+                                    for code in nested
+                                    if isinstance(code, str)
+                                )
+                            if late_failure.code == "cancel_partial_failure":
+                                cancellation_failures.append(late_failure.code)
+                        except Exception:
+                            cancellation_failures.append(
+                                "unexpected_cancellation_failure"
+                            )
+                    cancellation_failures.extend(
+                        self._cancel_versions(
+                            [futures[future] for future in running]
+                        )
+                    )
+                if cancellation_failures:
+                    failure.details["cancellation_failures"] = sorted(
+                        set(cancellation_failures)
+                    )
                 raise failure
             pool.shutdown(wait=True)
             state.status = "succeeded"

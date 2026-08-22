@@ -13,6 +13,7 @@ _GUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,126}$")
 _DISPLAY_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 &._()'-]{0,126}$")
 _CONTAINER = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])$")
+_REGISTRY = re.compile(r"^[a-z0-9]{5,50}$")
 _PROJECT = re.compile(r"^aiq-[0-9]{8}(?:-r[0-9]{2})?$")
 
 
@@ -57,6 +58,7 @@ class AzureRuntimeConfig:
     project_name: str | None
     project_endpoint: str | None
     application_insights_resource_id: str | None
+    container_registry_name: str | None
     terra_agent_deployment: str
     terra_insights_deployment: str
     terra_model_version: str
@@ -125,20 +127,38 @@ class RuntimeConfig:
         project_name = env.get("AIQ_FOUNDRY_PROJECT", "").strip() or None
         project_endpoint = env.get("AIQ_FOUNDRY_PROJECT_ENDPOINT", "").strip() or None
         app_insights = env.get("AIQ_APPLICATION_INSIGHTS_RESOURCE_ID", "").strip() or None
-        explicit_values = (resource_group, account_name, project_name, project_endpoint, app_insights)
-        if any(explicit_values) and not all(explicit_values):
+        registry_name = env.get("AIQ_CONTAINER_REGISTRY_NAME", "").strip() or None
+        parent_values = (resource_group, account_name, app_insights)
+        if any(parent_values) and not all(parent_values):
             raise RuntimeFailure(
                 "invalid_runtime_configuration",
-                "Explicit Azure coordinates must include resource group, account, project endpoint, "
-                "and Application Insights resource ID.",
+                "Explicit Azure coordinates must include resource group, account, and "
+                "Application Insights resource ID.",
+            )
+        if bool(project_name) != bool(project_endpoint):
+            raise RuntimeFailure(
+                "invalid_runtime_configuration",
+                "Explicit project selection must include both project name and endpoint.",
+            )
+        if project_name is not None and resource_group is None:
+            raise RuntimeFailure(
+                "invalid_runtime_configuration",
+                "Explicit project selection requires explicit Azure parent coordinates.",
             )
         if resource_group is not None:
             _name(resource_group, "resource group")
             _name(account_name or "", "Foundry account")
-            _name(project_name or "", "Foundry project")
-            _https(project_endpoint or "", "project endpoint")
+            if project_name is not None:
+                _name(project_name, "Foundry project")
+                _https(project_endpoint or "", "project endpoint")
             if subscription_id is not None:
                 _resource_id(app_insights or "", "Application Insights resource", subscription_id)
+        if registry_name is not None:
+            if not _REGISTRY.fullmatch(registry_name):
+                raise RuntimeFailure(
+                    "invalid_runtime_configuration",
+                    "AIQ_CONTAINER_REGISTRY_NAME must be a valid Azure Container Registry name.",
+                )
         fallback = env.get("AIQ_FALLBACK_PROJECT_NAME", "").strip() or None
         if fallback is not None:
             _name(fallback, "fallback project name")
@@ -179,6 +199,7 @@ class RuntimeConfig:
                 project_name=project_name,
                 project_endpoint=project_endpoint.rstrip("/") if project_endpoint else None,
                 application_insights_resource_id=app_insights,
+                container_registry_name=registry_name,
                 terra_agent_deployment=_name(
                     _required(env, "AIQ_TERRA_AGENT_DEPLOYMENT"), "Terra agent deployment"
                 ),
@@ -217,6 +238,7 @@ class RuntimeConfig:
             "project": self.azure.project_name or "discovered",
             "project_endpoint": self.azure.project_endpoint or "discovered",
             "application_insights": self.azure.application_insights_resource_id or "discovered",
+            "container_registry": self.azure.container_registry_name or "not-configured",
             "tenant": self.azure.expected_tenant_id or "validated-current-user",
             "user": self.azure.expected_user_object_id or "validated-current-user",
             "ado": f"{self.ado.organization_url}/{self.ado.project}",

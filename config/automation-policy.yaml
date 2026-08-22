@@ -13,11 +13,13 @@ allowed_paths:
   - reports/daily/*/*/*/failure-email.html
   - reports/daily/*/*/*/email-send-request.json
   - reports/daily/*/*/*/email-receipt.json
+  - reports/daily/*/*/*/daily-status.json
   - reports/daily/*/*/*/aiq-*-r??/plan.json
   - reports/daily/*/*/*/aiq-*-r??/plan.md
   - reports/daily/*/*/*/aiq-*-r??/report.json
   - reports/daily/*/*/*/aiq-*-r??/report.md
   - reports/daily/*/*/*/aiq-*-r??/failure-email.html
+  - reports/daily/*/*/*/aiq-*-r??/daily-status.json
   - state/quality-memory.json
   - state/QUALITY_MEMORY.md
 protected_paths:

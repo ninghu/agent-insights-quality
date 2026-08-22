@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -62,9 +64,29 @@ def read_json_object(path: Path, label: str | None = None) -> dict[str, Any]:
     return value
 
 
-def write_json(path: Path, value: Any) -> None:
+def write_bytes_atomic(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(json.dumps(value, indent=2, sort_keys=True).encode("ascii") + b"\n")
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def write_json(path: Path, value: Any) -> None:
+    write_bytes_atomic(
+        path,
+        json.dumps(value, indent=2, sort_keys=True).encode("ascii") + b"\n",
+    )
 
 
 def bounded_text(value: Any, *, field: str, limit: int) -> str:

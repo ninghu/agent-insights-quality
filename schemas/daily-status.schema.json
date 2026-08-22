@@ -1,0 +1,249 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ninghu.github.io/agent-insights-quality/schemas/v1/daily-status.schema.json",
+  "title": "Agent Insights Quality evidence-complete Copilot handoff",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status_id",
+    "status_hash",
+    "plan_id",
+    "plan_reference",
+    "report_date",
+    "generated_at",
+    "stage",
+    "runtime",
+    "evidence",
+    "primary_package_count",
+    "primary_judgment_target_count",
+    "workflow"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "status_id": {"type": "string", "pattern": "^aiq-[0-9]{8}(?:-r[0-9]{2})?$"},
+    "status_hash": {"$ref": "#/$defs/sha256"},
+    "plan_id": {"type": "string", "pattern": "^aiq-[0-9]{8}(?:-r[0-9]{2})?$"},
+    "plan_reference": {"$ref": "#/$defs/sha256"},
+    "report_date": {"type": "string", "format": "date"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "stage": {"const": "evidence_complete"},
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "state_reference", "attempt"],
+      "properties": {
+        "status": {"const": "succeeded"},
+        "state_reference": {"$ref": "#/$defs/sha256"},
+        "attempt": {"type": "integer", "minimum": 1}
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 63,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scenario_id",
+          "agent_id",
+          "run_id",
+          "phase",
+          "artifact_reference",
+          "bundle_hash",
+          "primary_package_reference",
+          "validation_targets",
+          "primary_judgment_targets"
+        ],
+        "properties": {
+          "scenario_id": {
+            "type": "string",
+            "pattern": "^aiq-scn-[0-9]{3}-[a-z][a-z0-9-]*$"
+          },
+          "agent_id": {
+            "type": "string",
+            "pattern": "^aiq-[0-9]{3}-[a-z][a-z0-9-]*$"
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^run-[0-9]{2}-aiq-[0-9]{3}-[a-z][a-z0-9-]*$"
+          },
+          "phase": {
+            "enum": [
+              "healthy",
+              "faulted",
+              "faulted-initial",
+              "faulted-repeat",
+              "corrected",
+              "recurred"
+            ]
+          },
+          "artifact_reference": {"$ref": "#/$defs/sha256"},
+          "bundle_hash": {"$ref": "#/$defs/sha256"},
+          "primary_package_reference": {"$ref": "#/$defs/sha256"},
+          "validation_targets": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1}
+          },
+          "primary_judgment_targets": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["insight_reference", "judgment_target_reference"],
+              "properties": {
+                "insight_reference": {
+                  "oneOf": [
+                    {"$ref": "#/$defs/sha256"},
+                    {"type": "null"}
+                  ]
+                },
+                "judgment_target_reference": {"$ref": "#/$defs/sha256"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "primary_package_count": {"type": "integer", "minimum": 1, "maximum": 63},
+    "primary_judgment_target_count": {"type": "integer", "minimum": 1, "maximum": 6300},
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "stages",
+        "verifier_eligibility",
+        "ado",
+        "email",
+        "generated_pr",
+        "cleanup"
+      ],
+      "properties": {
+        "stages": {
+          "type": "array",
+          "minItems": 9,
+          "maxItems": 9,
+          "items": {"$ref": "#/$defs/stage"}
+        },
+        "verifier_eligibility": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "candidate_only",
+            "primary_confidence_minimum",
+            "primary_verdicts",
+            "deterministic_checks_required",
+            "provenance_checks_required",
+            "reproducible_occurrence_required",
+            "agent_insights_ownership_required"
+          ],
+          "properties": {
+            "candidate_only": {"const": true},
+            "primary_confidence_minimum": {"const": 0.95},
+            "primary_verdicts": {
+              "const": ["partially_useful", "incorrect_noise"]
+            },
+            "deterministic_checks_required": {"const": true},
+            "provenance_checks_required": {"const": true},
+            "reproducible_occurrence_required": {"const": true},
+            "agent_insights_ownership_required": {"const": true}
+          }
+        },
+        "ado": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "auto_apply", "write_requests_allowed"],
+          "properties": {
+            "mode": {"const": "candidate-only"},
+            "auto_apply": {"const": false},
+            "write_requests_allowed": {"const": false}
+          }
+        },
+        "email": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "logical_message_limit",
+            "receipt_required",
+            "stop_after_first_confirmed_success"
+          ],
+          "properties": {
+            "logical_message_limit": {"const": 1},
+            "receipt_required": {"const": true},
+            "stop_after_first_confirmed_success": {"const": true}
+          }
+        },
+        "generated_pr": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["branch_prefix", "generated_paths_only"],
+          "properties": {
+            "branch_prefix": {"const": "aiq-daily/"},
+            "generated_paths_only": {"const": true}
+          }
+        },
+        "cleanup": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["dry_run_first", "execute_requires_review"],
+          "properties": {
+            "dry_run_first": {"const": true},
+            "execute_requires_review": {"const": true}
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "stage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "status", "commands", "scope"],
+      "properties": {
+        "name": {
+          "enum": [
+            "primary_judgment",
+            "blinded_verification",
+            "deterministic_scoring_mapping",
+            "memory_reconciliation",
+            "ado_candidate_only",
+            "canonical_report_finalize",
+            "one_message_email",
+            "generated_only_pr",
+            "reviewed_cleanup"
+          ]
+        },
+        "status": {"enum": ["pending", "conditional"]},
+        "commands": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "judge-package-export",
+              "judge-package-import",
+              "verifier-export",
+              "verifier-import",
+              "score",
+              "memory-reconcile",
+              "ado-dry-run",
+              "render-report",
+              "finalize",
+              "email-receipt-import",
+              "validate-generated-paths",
+              "cleanup"
+            ]
+          }
+        },
+        "scope": {"type": "string", "minLength": 1, "maxLength": 100}
+      }
+    }
+  }
+}

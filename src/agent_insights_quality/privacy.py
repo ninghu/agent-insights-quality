@@ -29,6 +29,7 @@ _PATTERNS = {
     "storage account key": re.compile(r"(?i)\bAccountKey=[A-Za-z0-9+/]{20,}={0,2}"),
 }
 _CARD_CANDIDATE = re.compile(r"(?<!\d)(?:\d[ -]?){13,19}(?!\d)")
+_SHA256_TOKEN = re.compile(r"\bsha256:[0-9a-f]{64}\b")
 _URL = re.compile(r"https?://[^\s<>'\"]+")
 _OPAQUE_IDENTIFIER_KEYS = {
     "bundle_id",
@@ -39,11 +40,29 @@ _OPAQUE_IDENTIFIER_KEYS = {
     "package_hash",
     "prompt_hash",
     "bundle_hash",
+    "catalog_hash",
+    "policy_hash",
+    "plan_digest",
+    "endpoint_reference",
     "signature",
     "evidence_fingerprint",
     "artifact_reference",
+    "evidence_references",
+    "insight_reference",
+    "insight_references",
     "report_reference",
     "project_reference",
+    "plan_reference",
+    "state_reference",
+    "parameter_reference",
+    "primary_package_reference",
+    "judgment_target_reference",
+    "status_hash",
+    "request_hash",
+    "content_digest",
+    "provider_reference",
+    "failure_reference",
+    "idempotency_reference",
     "version_digest",
     "agent_version_digest",
     "healthy_digest",
@@ -82,7 +101,11 @@ def sensitive_findings(value: Any) -> list[str]:
             for label, pattern in _PATTERNS.items():
                 if pattern.search(item):
                     findings.add(label)
-            if any(_luhn_valid(match.group(0)) for match in _CARD_CANDIDATE.finditer(item)):
+            card_text = _SHA256_TOKEN.sub("", item)
+            if any(
+                _luhn_valid(match.group(0))
+                for match in _CARD_CANDIDATE.finditer(card_text)
+            ):
                 findings.add("payment card number")
 
     walk(value)

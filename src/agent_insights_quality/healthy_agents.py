@@ -22,6 +22,52 @@ from agent_insights_quality.agent_runtime import (
 
 
 AgentKind = Literal["prompt", "hosted_code", "hosted_custom_container"]
+_SUPPORTED_TOOL_SCHEMA_TYPES = {
+    "array",
+    "boolean",
+    "integer",
+    "number",
+    "object",
+    "string",
+}
+
+
+def _validate_tool_property_schema(value: Any, label: str) -> None:
+    if not isinstance(value, dict) or value.get("type") not in _SUPPORTED_TOOL_SCHEMA_TYPES:
+        raise RuntimeContractError(
+            f"Prompt tool property requires an explicit supported type: {label}"
+        )
+    if value["type"] == "object":
+        properties = value.get("properties", {})
+        if not isinstance(properties, dict):
+            raise RuntimeContractError(f"Prompt tool object properties are invalid: {label}")
+        for name, child in properties.items():
+            _validate_tool_property_schema(child, f"{label}.{name}")
+    if value["type"] == "array" and "items" in value:
+        _validate_tool_property_schema(value["items"], f"{label}[]")
+
+
+def _validate_prompt_tools(agent_id: str, definition: dict[str, Any]) -> None:
+    tools = definition.get("tools")
+    if not isinstance(tools, list) or not tools:
+        raise RuntimeContractError(f"Prompt definition tools are invalid: {agent_id}")
+    for tool in tools:
+        if not isinstance(tool, dict) or not isinstance(tool.get("name"), str):
+            raise RuntimeContractError(f"Prompt tool definition is invalid: {agent_id}")
+        parameters = tool.get("parameters")
+        if (
+            not isinstance(parameters, dict)
+            or parameters.get("type") != "object"
+            or not isinstance(parameters.get("properties"), dict)
+        ):
+            raise RuntimeContractError(
+                f"Prompt tool parameters are invalid: {agent_id}.{tool['name']}"
+            )
+        for name, value in parameters["properties"].items():
+            _validate_tool_property_schema(
+                value,
+                f"{agent_id}.{tool['name']}.{name}",
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +147,8 @@ def load_healthy_agents() -> tuple[HealthyAgent, ...]:
             raise RuntimeContractError(f"Healthy agent definition is not an object: {agent_id}")
         if kind == "prompt" and definition.get("kind") != "prompt":
             raise RuntimeContractError(f"Prompt definition kind mismatch: {agent_id}")
+        if kind == "prompt":
+            _validate_prompt_tools(agent_id, definition)
         if kind != "prompt" and definition.get("kind") != "hosted":
             raise RuntimeContractError(f"Hosted definition kind mismatch: {agent_id}")
         fixtures = load_fixtures(fixture_path)

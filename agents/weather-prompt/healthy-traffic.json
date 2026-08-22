@@ -1,7 +1,7 @@
 [
   {
     "id": "weather-geocode-seattle",
-    "input": "Resolve Seattle using the location tool.",
+    "input": "Call only geocode to resolve Seattle.",
     "output_contains": "loc-sea",
     "tool_outputs": {
       "geocode": {
@@ -13,7 +13,7 @@
   },
   {
     "id": "weather-current-seattle",
-    "input": "Using current weather evidence, report conditions for loc-sea.",
+    "input": "Call only current_weather with the supplied location_id loc-sea; do not perform geocode or any prerequisite lookup.",
     "output_contains": "partly cloudy",
     "tool_outputs": {
       "current_weather": {
@@ -30,7 +30,7 @@
   },
   {
     "id": "weather-forecast-seattle",
-    "input": "Using forecast evidence, report loc-sea weather for 2030-05-10.",
+    "input": "Call only forecast with the supplied location_id loc-sea and date 2030-05-10; do not perform geocode or any prerequisite lookup.",
     "output_contains": "light rain",
     "tool_outputs": {
       "forecast": {

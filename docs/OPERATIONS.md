@@ -13,11 +13,10 @@ python -m pytest
 
 ## Runtime readiness
 
-`config/runtime-readiness.yaml` records every mandatory runtime workstream. The healthy-agent
-deployment and traffic contracts plus generic production infrastructure and orchestration boundaries
-are implemented. Their readiness flags stay false until live telemetry qualification proves the
-expected agent, model, and tool spans, required Azure permissions including `roleAssignments/write`
-are demonstrated, and a reviewed adapter binds these boundaries without changing their contracts.
+`config/runtime-readiness.yaml` records every mandatory runtime workstream. The live adapter and
+daily orchestration boundary are implemented. Their readiness flags stay false until live telemetry
+qualification proves the expected agent, model, and tool spans and required Azure permissions,
+including `roleAssignments/write`, are demonstrated.
 `check-runtime-readiness` and `run-daily` fail closed with an actionable `INCONCLUSIVE` result until
 every component is implemented, tested, and enabled through a human-reviewed source change. A
 readiness failure prohibits all operational phases but still requires the minimal report/email
@@ -29,8 +28,10 @@ automation.
 Supply private values only through the authorized runtime environment. Select Azure with exactly one
 of `AIQ_AZURE_SUBSCRIPTION_ID` or `AIQ_AZURE_SUBSCRIPTION_NAME`. Explicit GitHub Actions execution can
 also supply the resource group, Foundry account, project name, project endpoint, and Application
-Insights resource ID. Scheduled Copilot execution can omit those coordinates and discover exactly one qualification
-project by its reviewed ownership tags.
+Insights resource ID. `run-daily` instead requires the protected resource group, Foundry account,
+Application Insights resource ID, and `AIQ_CONTAINER_REGISTRY_NAME`; the immutable plan supplies the
+daily project name and Azure resolves its endpoint after deployment. Standalone preflight/run
+commands can still discover exactly one qualification project by its reviewed ownership tags.
 
 Both modes resolve the Terra traffic and insights deployment names plus the reviewed model version
 from protected `AIQ_TERRA_*` variables. Optional protected tenant and user-object IDs tighten identity
@@ -55,6 +56,12 @@ digest before invoking the runtime. Runtime selection never creates a project be
 PUT cannot safely provision the required API-key connection. A missing or mismatched preprovisioned
 project fails closed.
 
+After a successful Bicep result, `run-daily` records a private `deployed` receipt and waits a bounded
+15 minutes for the new project managed identity and ACR authorization to propagate. It then records
+that gate as complete before live preflight. A process interruption resumes the pending propagation
+gate without redeploying Bicep. Role-assignment list presence alone is not treated as data-plane
+readiness.
+
 When `AIQ_TICKET_IMAGE_URI` points to Azure Container Registry, preflight requires that exact
 project-scoped managed-identity ContainerRegistry connection and AcrPull assignment. Connection
 names use an optional deterministic per-project suffix because the service reserves names across the
@@ -78,7 +85,7 @@ az deployment group create `
     applicationInsightsName='<application-insights-name>' registryName='<registry-name>' `
     reportDate='<YYYY-MM-DD>' expiresOn='<YYYY-MM-DD>' `
     automationOwner='<automation-owner>' catalogVersion='<catalog-version>' `
-    connectionNameSuffix='<rerun-suffix>'
+    connectionNameSuffix='<exact-plan-project-name>'
 ```
 Set `AIQ_MONITOR_OWNERSHIP_RECEIPT` to a protected private-state path. Monitor ownership is recorded
 there as project-, agent-, monitor-, and model-scoped opaque hashes because the service monitor API
@@ -94,6 +101,46 @@ python -m agent_insights_quality status --state <private-state.json>
 python -m agent_insights_quality cleanup
 python -m agent_insights_quality cleanup --execute
 ```
+
+The scheduled boundary is:
+
+```powershell
+python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD>
+python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD> --rerun 1
+```
+
+It writes or validates `plan.json` and `plan.md` before loading protected runtime coordinates or
+deploying Bicep. The enforced order is plan, Bicep, propagation wait, exact live preflight, then
+runtime execution/resume. Runtime receipts, deployment receipts, primary judgment packages, and email
+requests stay under the private `--state-root` (default `.aiq-runtime`). The public
+`daily-status.json` is written only after every selected scenario has a final evidence reference.
+It is the GPT-5.6 Sol handoff for primary judgments, candidate-only blinded verification,
+deterministic scoring/mapping, memory reconciliation, candidate-only ADO, canonical finalization,
+one-message receipt import, a generated-only PR, and reviewed cleanup.
+
+A published operational `INCONCLUSIVE` report is terminal for that immutable plan so rerunning cannot
+change an already rendered email. Use the next `--rerun N` suffix. A process interruption before
+public finalization resumes the same private receipt and recovers completed remote operations.
+Hosted-code and custom-container deployment recovery, creation, and activation polling are
+process-wide serialized across agents. Prompt deployment may remain parallel; endpoint traffic
+continues in parallel after deployment. A provisioning `CodeError` can be eventually consistent, so
+the client polls the exact created version for a bounded 15-minute grace and requires consecutive
+observations before failing. It never creates a duplicate version during stabilization. A persistent
+`CodeError` is finalized as an operational failure and is never scored as Agent Insights quality.
+Endpoint HTTP 408, 429, and 5xx responses are transient only when the failed request has no response
+ID. The invocation client retries that exact prompt or session request up to three times, using
+`Retry-After` when it is a bounded numeric value and otherwise waiting 60 then 120 seconds. If an
+outer resume is still required, durable per-fixture receipts skip every confirmed success.
+Nontransient 400s and failures carrying a response ID are not retried, and response bodies are not
+stored in public runtime state.
+The scenario envelope preserves the selected healthy fixture's real domain input and expected tool
+contract. Scenario ID, runtime provenance, correlation, and the bounded synthetic recipe marker are
+added around that request; the generic recipe marker never replaces the domain request.
+For every zero-finding prompt assignment, runtime validation requires the exact expected tool
+sequence and a nonempty grounded final answer containing the reviewed tool result. Faulted
+assignments may relax output/tool validation only so the injected behavior can reach Agent Insights.
+Hosted healthy instructions map every finance, travel, and support command prefix to one exact tool
+and require its result verbatim, preventing model-selected prerequisite or adjacent-tool detours.
 
 ## Daily issue assignment
 
@@ -160,10 +207,11 @@ trace-associated insights. Missing findings and extra noise are both recorded as
 Install the optional identity-backed Azure clients with `python -m pip install -e ".[azure]"` on live
 runners that query Application Insights or use the Azure Blob artifact backend.
 
-Scoring, Copilot judgment, quality memory, ADO synchronization, and reporting/email handoffs are
-implemented. `run-daily` catches readiness failure, persists the canonical `INCONCLUSIVE` report plus
-an unsent direct-email handoff, and then returns nonzero. The readiness file is protected from
-generated automation.
+Scoring, Copilot judgment, quality memory, ADO synchronization, reporting/email handoffs, and the
+daily orchestration boundary are implemented. `run-daily` catches readiness failure before all
+operational work. Once enabled, it also finalizes any operational failure as a canonical
+`INCONCLUSIVE` report plus one immutable unsent direct-email request. The readiness file remains
+protected from generated automation.
 
 Generated automation branches use the `aiq-daily/` prefix. CI restricts those branches to the paths
 in the **base branch's** `config/automation-policy.yaml`, using the base branch's installed validator.
@@ -242,8 +290,13 @@ their retention date. It never guesses names or deletes unrelated resources.
 The active definitions under `agents/` are deterministic and synthetic. Runtime code supplies a
 short-lived `https://ai.azure.com/.default` token through a token provider and a private Foundry
 project endpoint. `FoundryDeploymentClient` creates prompt versions with JSON, hosted-code versions
-with deterministic multipart ZIPs, and the ticket version with a digest-pinned reviewed GHCR or owned
+with deterministic multipart ZIPs in the Foundry `code` field (including root `requirements.txt`
+and Unix regular-file mode bits),
+and the ticket version with a digest-pinned reviewed GHCR or owned
 Azure Container Registry image.
+After a hosted version reports active, deployment validation creates and removes one session bound
+to that exact version. An active status that cannot create the exact-version session remains an
+operational deployment failure.
 Every hosted version is polled to `active`, and cleanup deletes only the exact version whose owner,
 run ID, and artifact digest match its receipt.
 

@@ -83,9 +83,10 @@ TOOLS = [
 ]
 
 INSTRUCTIONS = (
-    "Use exactly one registered support tool for each supported synthetic request and return its "
-    "result verbatim. Stay grounded in the requested current ticket. ticket_update is explicitly a "
-    "dry-run preview and never persists or claims a completed update."
+    "Route command prefixes exactly: read-ticket -> ticket_read; triage-ticket -> customer_context; "
+    "update-ticket -> ticket_update. Call exactly that one tool and return its result verbatim. Stay "
+    "grounded in the requested current ticket. ticket_update is explicitly a dry-run preview and "
+    "never persists or claims a completed update."
 )
 
 

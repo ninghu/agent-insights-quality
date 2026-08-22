@@ -112,6 +112,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument("--report-date", required=True, help="Pacific report date (YYYY-MM-DD)")
     run_parser.add_argument("--output-root", type=Path, default=ROOT / "reports")
+    run_parser.add_argument("--state-root", type=Path, default=ROOT / ".aiq-runtime")
+    run_parser.add_argument("--rerun", type=int, default=0)
+    run_parser.add_argument("--max-parallel-agents", type=int, default=5)
     failure_parser = subparsers.add_parser(
         "finalize-readiness-failure",
         help="Render the safe INCONCLUSIVE report and one-message mail handoff",
@@ -335,9 +338,17 @@ def run(args: argparse.Namespace) -> None:
             handoff = _finalize_readiness(args, readiness)
             raise ContractError(f"{error} Email-required handoff: {handoff}") from error
         else:
-            raise ContractError(
-                "INCONCLUSIVE: readiness is enabled but the runtime entry point is not installed."
+            from agent_insights_quality.daily import run_daily
+
+            _require_private_runtime_output(args.state_root)
+            status = run_daily(
+                date.fromisoformat(args.report_date),
+                output_root=args.output_root,
+                state_root=args.state_root,
+                rerun=args.rerun,
+                max_parallel_agents=args.max_parallel_agents,
             )
+            print(f"Evidence complete; Copilot judgment handoff: {status}")
     elif args.command == "record-email-result":
         raise ContractError(
             "Legacy record-email-result is disabled. Import a validated email receipt instead."

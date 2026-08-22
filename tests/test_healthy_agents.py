@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import importlib.util
 import hashlib
 import json
@@ -53,6 +54,11 @@ def test_five_exact_healthy_agents_have_reviewed_implementation_assets() -> None
             for tool in agent.definition["tools"]:
                 assert tool["strict"] is True
                 assert tool["parameters"]["additionalProperties"] is False
+                assert all(
+                    property_schema.get("type")
+                    in {"array", "boolean", "integer", "number", "object", "string"}
+                    for property_schema in tool["parameters"]["properties"].values()
+                )
         else:
             assert agent.source is not None
             assert agent.definition["protocol_versions"] == [
@@ -76,7 +82,17 @@ def test_healthcare_contract_is_scheduling_only_and_confirmation_bounded() -> No
     create_tool = next(
         tool for tool in healthcare.definition["tools"] if tool["name"] == "appointment_create"
     )
-    assert create_tool["parameters"]["properties"]["confirmed"] == {"const": True}
+    assert create_tool["parameters"]["properties"]["confirmed"] == {
+        "type": "boolean",
+        "const": True,
+    }
+    cancel_tool = next(
+        tool for tool in healthcare.definition["tools"] if tool["name"] == "appointment_cancel"
+    )
+    assert cancel_tool["parameters"]["properties"]["confirmed"] == {
+        "type": "boolean",
+        "const": True,
+    }
     assert set(create_tool["parameters"]["required"]) == {
         "slot_id",
         "patient_id",
@@ -94,6 +110,68 @@ def test_healthcare_contract_is_scheduling_only_and_confirmation_bounded() -> No
         "starts_at": "09:00",
         "confirmed": True,
     }
+
+
+def test_every_prompt_fixture_names_one_unambiguous_expected_tool() -> None:
+    for agent in load_healthy_agents():
+        if agent.kind != "prompt":
+            continue
+        assert "always produce a grounded textual final answer" in agent.definition[
+            "instructions"
+        ]
+        for fixture in agent.fixtures:
+            assert len(fixture.expected_tool_calls) == 1
+            expected_tool = fixture.expected_tool_calls[0]
+            assert f"Call only {expected_tool}" in fixture.input
+            if any(
+                marker in fixture.input
+                for marker in ("location_id", "provider_id", "slot_id")
+            ):
+                assert "prerequisite lookup" in fixture.input
+
+
+def test_every_hosted_fixture_command_prefix_maps_to_its_exact_tool() -> None:
+    expected = {
+        "aiq-003-finance": {
+            "account-summary": "account_lookup",
+            "transactions": "transaction_search",
+            "prepare-budget": "budget_calculation",
+        },
+        "aiq-004-travel": {
+            "search-trip": "flight_search",
+            "plan-itinerary": "itinerary",
+            "request-booking": "booking",
+        },
+        "aiq-005-ticket": {
+            "read-ticket": "ticket_read",
+            "triage-ticket": "customer_context",
+            "update-ticket": "ticket_update",
+        },
+    }
+    for agent in load_healthy_agents():
+        if agent.kind == "prompt":
+            continue
+        assert agent.source is not None
+        tree = ast.parse((agent.source / "logic.py").read_text(encoding="ascii"))
+        instruction_node = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "INSTRUCTIONS"
+                for target in node.targets
+            )
+        )
+        instructions = ast.literal_eval(instruction_node.value)
+        fixture_mapping = {
+            fixture.input.split(" ", 1)[0]: fixture.expected_tool_calls[0]
+            for fixture in agent.fixtures
+        }
+        assert fixture_mapping == expected[agent.id]
+        for prefix, tool_name in fixture_mapping.items():
+            assert f"{prefix} -> {tool_name}" in instructions
+        assert "Call exactly that one tool" in instructions
+        assert "return its result verbatim" in instructions
 
 
 def test_prompt_definition_resolves_model_only_at_runtime() -> None:
