@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import stat
 import time
 import urllib.error
 import urllib.parse
@@ -399,7 +400,7 @@ def deterministic_zip(source: Path) -> tuple[bytes, str]:
             info = zipfile.ZipInfo(relative, date_time=(1980, 1, 1, 0, 0, 0))
             info.create_system = 3
             info.compress_type = zipfile.ZIP_STORED
-            info.external_attr = 0o644 << 16
+            info.external_attr = (stat.S_IFREG | 0o644) << 16
             archive.writestr(info, path.read_bytes())
     content = output.getvalue()
     return content, sha256_digest(content)
@@ -505,6 +506,8 @@ class FoundryDeploymentClient:
         request_timeout_seconds: float = 300,
         poll_timeout_seconds: float = 1800,
         poll_interval_seconds: float = 5,
+        code_error_grace_seconds: float | None = None,
+        code_error_required_observations: int = 2,
         cleanup_retry_attempts: int = 4,
         cleanup_retry_interval_seconds: float = 300,
         sleeper: Callable[[float], None] = time.sleep,
@@ -514,6 +517,15 @@ class FoundryDeploymentClient:
             request_timeout_seconds <= 0
             or poll_timeout_seconds <= 0
             or poll_interval_seconds < 0
+            or (
+                code_error_grace_seconds is not None
+                and (
+                    code_error_grace_seconds < 0
+                    or code_error_grace_seconds > poll_timeout_seconds
+                )
+            )
+            or code_error_required_observations < 2
+            or code_error_required_observations > 10
             or cleanup_retry_attempts <= 0
             or cleanup_retry_interval_seconds < 0
         ):
@@ -526,6 +538,12 @@ class FoundryDeploymentClient:
         self._request_timeout = request_timeout_seconds
         self._poll_timeout = poll_timeout_seconds
         self._poll_interval = poll_interval_seconds
+        self._code_error_grace = (
+            min(900, poll_timeout_seconds)
+            if code_error_grace_seconds is None
+            else code_error_grace_seconds
+        )
+        self._code_error_observations = code_error_required_observations
         self._cleanup_attempts = cleanup_retry_attempts
         self._cleanup_interval = cleanup_retry_interval_seconds
         self._sleep = sleeper
@@ -540,6 +558,7 @@ class FoundryDeploymentClient:
         artifact_digest: str,
         source_digest: str | None = None,
         image_digest: str | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> tuple[DeploymentReceipt | None, bool]:
         """Reconcile a deterministic deployment after a process interruption."""
         _validate_agent_name(agent_name)
@@ -610,6 +629,7 @@ class FoundryDeploymentClient:
                 artifact_digest,
                 source_digest=source_digest,
                 image_digest=image_digest,
+                cancelled=cancelled,
             ),
             True,
         )
@@ -621,6 +641,7 @@ class FoundryDeploymentClient:
         definition: Mapping[str, Any],
         run_id: str,
         create_agent: bool = True,
+        cancelled: Callable[[], bool] | None = None,
     ) -> DeploymentReceipt:
         _validate_agent_name(agent_name)
         artifact_digest = canonical_json_digest(definition)
@@ -638,6 +659,7 @@ class FoundryDeploymentClient:
             artifact_digest,
             hosted=False,
             create_agent=create_agent,
+            cancelled=cancelled,
         )
 
     def deploy_hosted_source(
@@ -648,6 +670,7 @@ class FoundryDeploymentClient:
         source: Path,
         run_id: str,
         create_agent: bool = True,
+        cancelled: Callable[[], bool] | None = None,
     ) -> DeploymentReceipt:
         _validate_agent_name(agent_name)
         archive, source_digest = deterministic_zip(source)
@@ -687,6 +710,7 @@ class FoundryDeploymentClient:
             run_id,
             artifact_digest,
             source_digest=source_digest,
+            cancelled=cancelled,
         )
 
     def deploy_hosted_container(
@@ -697,6 +721,7 @@ class FoundryDeploymentClient:
         image: str,
         run_id: str,
         create_agent: bool = True,
+        cancelled: Callable[[], bool] | None = None,
     ) -> DeploymentReceipt:
         _validate_agent_name(agent_name)
         pinned_image = validate_image_reference(image)
@@ -726,6 +751,7 @@ class FoundryDeploymentClient:
             hosted=True,
             create_agent=create_agent,
             image_digest=image_digest,
+            cancelled=cancelled,
         )
 
     def cleanup_version(self, receipt: DeploymentReceipt) -> CleanupReceipt:
@@ -816,6 +842,7 @@ class FoundryDeploymentClient:
         create_agent: bool,
         source_digest: str | None = None,
         image_digest: str | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> DeploymentReceipt:
         path = "/agents" if create_agent else f"/agents/{_quote(agent_name)}/versions"
         response = self._request_json("POST", path, json_body=body, hosted=hosted)
@@ -828,6 +855,7 @@ class FoundryDeploymentClient:
             artifact_digest,
             source_digest=source_digest,
             image_digest=image_digest,
+            cancelled=cancelled,
         )
 
     def _poll(
@@ -840,8 +868,13 @@ class FoundryDeploymentClient:
         *,
         source_digest: str | None = None,
         image_digest: str | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> DeploymentReceipt:
         deadline = self._monotonic() + self._poll_timeout
+        code_error_deadline: float | None = None
+        consecutive_code_errors = 0
+        last_status = "creating"
+
         def provisional(status: str) -> DeploymentReceipt:
             return DeploymentReceipt(
                 agent_name=agent_name,
@@ -855,6 +888,12 @@ class FoundryDeploymentClient:
             )
 
         while True:
+            if cancelled is not None and cancelled():
+                raise DeploymentPollError(
+                    "Agent version polling was cancelled.",
+                    provisional(last_status),
+                    code="agent_deployment_cancelled",
+                )
             try:
                 response = self._request_json(
                     "GET",
@@ -869,6 +908,7 @@ class FoundryDeploymentClient:
                     transient=bool(getattr(error, "transient", False)),
                 ) from error
             status = str(response.get("status") or "").casefold()
+            last_status = status or last_status
             if status == "active":
                 metadata = response.get("metadata")
                 expected = _ownership_metadata(
@@ -884,14 +924,49 @@ class FoundryDeploymentClient:
                         "Active agent version does not preserve immutable ownership metadata.",
                         provisional("active_unverified"),
                     )
-                return provisional(status)
+                receipt = provisional(status)
+                if agent_type != "prompt":
+                    try:
+                        self._verify_hosted_session_binding(receipt)
+                    except RuntimeContractError as error:
+                        raise DeploymentPollError(
+                            "Active hosted agent version failed exact-version session validation.",
+                            receipt,
+                            code="agent_deployment_validation_failed",
+                        ) from error
+                return receipt
             if status in TERMINAL_FAILURE_STATES:
                 error = response.get("error")
                 detail = str(error.get("code") if isinstance(error, Mapping) else status)
+                if status == "failed" and detail.casefold() == "codeerror":
+                    now = self._monotonic()
+                    if code_error_deadline is None:
+                        code_error_deadline = min(
+                            deadline,
+                            now + self._code_error_grace,
+                        )
+                    consecutive_code_errors += 1
+                    if (
+                        consecutive_code_errors >= self._code_error_observations
+                        and now >= code_error_deadline
+                    ):
+                        raise DeploymentPollError(
+                            "Agent version remained in terminal state 'failed' "
+                            "(CodeError) through the stabilization grace.",
+                            provisional(status),
+                        )
+                    self._poll_sleep(
+                        self._poll_interval,
+                        cancelled,
+                        provisional(status),
+                    )
+                    continue
                 raise DeploymentPollError(
                     f"Agent version reached terminal state '{status}' ({detail}).",
                     provisional(status),
                 )
+            code_error_deadline = None
+            consecutive_code_errors = 0
             if self._monotonic() >= deadline:
                 raise DeploymentPollError(
                     "Agent version did not become active before timeout.",
@@ -899,7 +974,81 @@ class FoundryDeploymentClient:
                     code="agent_deployment_poll_timeout",
                     transient=True,
                 )
-            self._sleep(self._poll_interval)
+            self._poll_sleep(
+                self._poll_interval,
+                cancelled,
+                provisional(status or last_status),
+            )
+
+    def _verify_hosted_session_binding(self, receipt: DeploymentReceipt) -> None:
+        response = self._request(
+            "POST",
+            f"/agents/{_quote(receipt.agent_name)}/endpoint/sessions",
+            headers={
+                "Content-Type": "application/json",
+                "Foundry-Features": HOSTED_FEATURES,
+            },
+            body=_json_bytes(
+                {
+                    "version_indicator": {
+                        "type": "version_ref",
+                        "agent_version": receipt.agent_version,
+                    }
+                }
+            ),
+        )
+        session = response.json()
+        session_id = _first_text(session, "agent_session_id", "session_id", "id")
+        indicator = session.get("version_indicator")
+        indicator_type = (
+            str(indicator.get("type") or "")
+            if isinstance(indicator, Mapping)
+            else ""
+        )
+        resolved_version = (
+            str(indicator.get("agent_version") or "")
+            if isinstance(indicator, Mapping)
+            else ""
+        )
+        if not session_id:
+            raise RuntimeContractError(
+                "Active hosted version did not create an exact-version validation session."
+            )
+        try:
+            if (
+                indicator_type != "version_ref"
+                or resolved_version != receipt.agent_version
+            ):
+                raise RuntimeContractError(
+                    "Active hosted version validation session resolved a different version."
+                )
+        finally:
+            self._request(
+                "DELETE",
+                f"/agents/{_quote(receipt.agent_name)}/endpoint/sessions/"
+                f"{_quote(session_id)}",
+                headers={"Foundry-Features": HOSTED_FEATURES},
+                body=None,
+                expected_statuses={200, 202, 204, 404},
+            )
+
+    def _poll_sleep(
+        self,
+        seconds: float,
+        cancelled: Callable[[], bool] | None,
+        receipt: DeploymentReceipt,
+    ) -> None:
+        remaining = seconds
+        while remaining > 0:
+            if cancelled is not None and cancelled():
+                raise DeploymentPollError(
+                    "Agent version polling was cancelled.",
+                    receipt,
+                    code="agent_deployment_cancelled",
+                )
+            interval = min(1.0, remaining)
+            self._sleep(interval)
+            remaining -= interval
 
     def _request_json(
         self,
@@ -1465,7 +1614,9 @@ def _invocation_receipt(
             f"Agent response status '{status}' did not match expected '{expected_status}' "
             "or omitted a response ID."
         )
-    if fixture.validate_output and fixture.output_contains not in output_text:
+    if fixture.validate_output and (
+        not output_text.strip() or fixture.output_contains not in output_text
+    ):
         raise RuntimeContractError(
             f"Healthy fixture '{fixture.id}' returned an unexpected outcome."
         )

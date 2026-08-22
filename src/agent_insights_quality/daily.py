@@ -163,6 +163,24 @@ def _resource_leaf(
     return leaf
 
 
+def _resource_subscription_id(resource_id: str | None) -> str:
+    if resource_id is None:
+        raise RuntimeFailure(
+            "missing_runtime_configuration",
+            "Application Insights resource ID is required for daily deployment.",
+        )
+    parts = resource_id.strip("/").split("/")
+    normalized = [part.casefold() for part in parts]
+    try:
+        subscription = parts[normalized.index("subscriptions") + 1]
+    except (ValueError, IndexError) as error:
+        raise RuntimeFailure(
+            "invalid_runtime_configuration",
+            "Application Insights resource ID has no subscription identity.",
+        ) from error
+    return subscription
+
+
 def qualification_project_parameters(
     plan: Mapping[str, Any],
     config: RuntimeConfig,
@@ -282,15 +300,9 @@ def ensure_qualification_deployment(
     receipt: dict[str, Any] | None = None
     if receipt_path.exists():
         receipt = read_receipt(receipt_path)
-        resource_id = config.azure.application_insights_resource_id or ""
-        parts = resource_id.strip("/").split("/")
-        try:
-            configured_subscription = parts[parts.index("subscriptions") + 1]
-        except (ValueError, IndexError) as error:
-            raise RuntimeFailure(
-                "invalid_runtime_configuration",
-                "Application Insights resource ID has no subscription identity.",
-            ) from error
+        configured_subscription = _resource_subscription_id(
+            config.azure.application_insights_resource_id
+        )
         expected_parameter_reference = content_hash(
             qualification_project_parameters(
                 plan,
@@ -304,7 +316,6 @@ def ensure_qualification_deployment(
             or receipt.get("plan_reference") != plan["plan_digest"]
             or receipt.get("parameter_reference") != expected_parameter_reference
             or receipt.get("status") not in {"deployed", "succeeded"}
-            or receipt.get("propagation_wait_seconds") != propagation_wait_seconds
         ):
             raise RuntimeFailure(
                 "deployment_receipt_mismatch",
@@ -312,6 +323,11 @@ def ensure_qualification_deployment(
             )
         if receipt["status"] == "succeeded":
             return receipt
+        if receipt.get("propagation_wait_seconds") != propagation_wait_seconds:
+            raise RuntimeFailure(
+                "deployment_receipt_mismatch",
+                "Pending propagation receipt uses a different bounded wait.",
+            )
     if receipt is None:
         receipt = deploy_qualification_project(plan, config, cli)
         receipt["status"] = "deployed"
@@ -904,6 +920,8 @@ def run_daily(
             "email-send-request.json",
             "email-receipt.json",
             "email-handoff.json",
+            "report.json",
+            "report.md",
         )
     ):
         raise RuntimeFailure(

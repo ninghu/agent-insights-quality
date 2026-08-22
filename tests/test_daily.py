@@ -325,6 +325,30 @@ def test_finalized_readiness_day_requires_rerun_before_plan_or_azure(
     assert not (day / "plan.json").exists()
 
 
+@pytest.mark.parametrize("filename", ["report.json", "report.md"])
+def test_finalized_current_report_requires_rerun_before_plan_or_azure(
+    tmp_path: Path,
+    filename: str,
+) -> None:
+    output_root = tmp_path / "reports"
+    day = output_root / "daily" / "2026" / "08" / "21"
+    day.mkdir(parents=True)
+    (day / filename).write_text("{}\n", encoding="ascii")
+
+    with pytest.raises(RuntimeFailure, match="explicit rerun suffix"):
+        daily.run_daily(
+            date(2026, 8, 21),
+            output_root=output_root,
+            state_root=tmp_path / "private",
+            environment={},
+            cli_factory=lambda: (_ for _ in ()).throw(
+                AssertionError("finalized report must not touch Azure")
+            ),
+        )
+
+    assert not (day / "plan.json").exists()
+
+
 def test_interrupted_plan_write_repairs_only_missing_artifact(tmp_path: Path) -> None:
     output_root = tmp_path / "reports"
     payload, target = daily.ensure_daily_plan(date(2026, 8, 21), output_root)
@@ -375,6 +399,47 @@ def test_bicep_parameters_are_exact_and_never_include_secret_material(
     assert "connectionstring" not in serialized
     assert "instrumentationkey" not in serialized
     assert receipt["status"] == "succeeded"
+
+
+def test_mixed_case_arm_resource_id_deploys_and_validates_resume(
+    tmp_path: Path,
+) -> None:
+    payload = generate_daily_plan(date(2026, 8, 21), rerun=4)
+    environment = _environment(tmp_path)
+    environment["AIQ_APPLICATION_INSIGHTS_RESOURCE_ID"] = (
+        f"/Subscriptions/{SUBSCRIPTION}/ResourceGroups/quality-rg/"
+        "Providers/Microsoft.Insights/Components/Quality-Appi"
+    )
+    config = RuntimeConfig.from_env(environment)
+    receipt_path = tmp_path / "deployment.json"
+    first_cli = DeploymentCli()
+
+    first = daily.ensure_qualification_deployment(
+        payload,
+        config,
+        first_cli,
+        receipt_path,
+        propagation_wait_seconds=0,
+        sleeper=lambda _seconds: None,
+    )
+    command = next(
+        value
+        for value in first_cli.commands
+        if value[:3] == ["deployment", "group", "create"]
+    )
+    assert "applicationInsightsName=Quality-Appi" in command
+
+    second_cli = DeploymentCli()
+    resumed = daily.ensure_qualification_deployment(
+        payload,
+        config,
+        second_cli,
+        receipt_path,
+        propagation_wait_seconds=900,
+        sleeper=lambda _seconds: pytest.fail("completed wait must not repeat"),
+    )
+    assert resumed == first
+    assert second_cli.commands == []
 
 
 @pytest.mark.parametrize("wait", [-1, 1801, True])

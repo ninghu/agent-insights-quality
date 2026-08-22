@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import stat
 import threading
 import zipfile
 from collections.abc import Mapping
@@ -96,9 +97,13 @@ def test_definition_and_source_hashes_are_deterministic(tmp_path: Path) -> None:
     second, second_digest = deterministic_zip(source)
     assert first == second
     assert first_digest == second_digest
-    assert first_digest == "sha256:c047775d84ad57a04b790b7c1b26208196e1a6bc76a4fe558cd0ad94351359c4"
+    assert first_digest == "sha256:60db5f6f0cd13eaec150a0f68d6da2b2c81dd7726221abdb2bfb655c63f1c033"
     with zipfile.ZipFile(BytesIO(first)) as archive:
         assert all(info.create_system == 3 for info in archive.infolist())
+        assert all(
+            stat.S_ISREG(info.external_attr >> 16)
+            for info in archive.infolist()
+        )
 
 
 def test_deployment_zip_ignores_the_same_generated_artifacts_as_catalog_hash(
@@ -220,6 +225,17 @@ def test_hosted_source_uses_multipart_hash_feature_header_and_timeout() -> None:
         [
             _response(201, {"version": "2"}),
             _response(200, {"status": "active", "metadata": active_metadata}),
+            _response(
+                201,
+                {
+                    "agent_session_id": "validation-session-2",
+                    "version_indicator": {
+                        "type": "version_ref",
+                        "agent_version": "2",
+                    },
+                },
+            ),
+            _response(204),
         ]
     )
     client = FoundryDeploymentClient(
@@ -244,7 +260,14 @@ def test_hosted_source_uses_multipart_hash_feature_header_and_timeout() -> None:
     assert call["headers"]["Foundry-Features"] == HOSTED_FEATURES
     assert call["headers"]["Content-Type"].startswith("multipart/form-data; boundary=aiq-")
     assert b'name="metadata"' in call["body"]
-    assert b'name="code"; filename="aiq-003-finance.zip"' in call["body"]
+    code_header = b'name="code"; filename="aiq-003-finance.zip"'
+    assert code_header in call["body"]
+    file_part = call["body"].split(code_header, 1)[1].split(b"\r\n\r\n", 1)[1]
+    boundary = call["headers"]["Content-Type"].split("boundary=", 1)[1].encode()
+    archive = file_part.rsplit(b"\r\n--" + boundary + b"--\r\n", 1)[0]
+    with zipfile.ZipFile(BytesIO(archive)) as uploaded:
+        assert "requirements.txt" in uploaded.namelist()
+        assert uploaded.read("requirements.txt") == (source / "requirements.txt").read_bytes()
     assert call["timeout_seconds"] == 37
 
 
@@ -267,6 +290,17 @@ def test_container_deployment_requires_immutable_reviewed_registry_digest() -> N
         [
             _response(201, {"version": "3"}),
             _response(200, {"status": "active", "metadata": active_metadata}),
+            _response(
+                201,
+                {
+                    "agent_session_id": "validation-session-3",
+                    "version_indicator": {
+                        "type": "version_ref",
+                        "agent_version": "3",
+                    },
+                },
+            ),
+            _response(204),
         ]
     )
     client = FoundryDeploymentClient(
@@ -287,6 +321,8 @@ def test_container_deployment_requires_immutable_reviewed_registry_digest() -> N
     assert payload["definition"]["container_configuration"]["image"] == image
     assert transport.calls[0]["headers"]["Foundry-Features"] == HOSTED_FEATURES
     assert transport.calls[0]["timeout_seconds"] == 300
+    assert "/endpoint/sessions?api-version=v1" in transport.calls[2]["url"]
+    assert transport.calls[3]["method"] == "DELETE"
     acr_image = (
         "aiqacr123.azurecr.io/agent-insights-quality-ticket@sha256:"
         + ("b" * 64)
@@ -304,6 +340,54 @@ def test_container_deployment_requires_immutable_reviewed_registry_digest() -> N
     ):
         with pytest.raises(RuntimeContractError, match="reviewed GHCR or Azure"):
             validate_image_reference(rejected)
+
+
+def test_active_hosted_version_must_create_exact_version_session() -> None:
+    source = ROOT / "agents" / "finance-hosted" / "source"
+    _, source_digest = deterministic_zip(source)
+    definition = json.loads(
+        (ROOT / "agents" / "finance-hosted" / "definition.json").read_text(
+            encoding="ascii"
+        )
+    )
+    digest = canonical_json_digest(
+        {"definition": definition, "source_digest": source_digest}
+    )
+    transport = QueueTransport(
+        [
+            _response(201, {"version": "4"}),
+            _response(
+                200,
+                {
+                    "status": "active",
+                    "metadata": {
+                        **_metadata("run-4", digest),
+                        SOURCE_DIGEST_KEY: source_digest,
+                    },
+                },
+            ),
+            _response(400, {"error": {"code": "agent_version_failed"}}),
+        ]
+    )
+    client = FoundryDeploymentClient(
+        PROJECT_ENDPOINT,
+        lambda: "token",
+        transport=transport,
+        sleeper=lambda _seconds: None,
+    )
+
+    with pytest.raises(DeploymentPollError) as caught:
+        client.deploy_hosted_source(
+            agent_name="aiq-003-finance",
+            definition=definition,
+            source=source,
+            run_id="run-4",
+        )
+
+    assert caught.value.code == "agent_deployment_validation_failed"
+    assert caught.value.receipt.agent_version == "4"
+    assert caught.value.receipt.status == "active"
+    assert sum(call["method"] == "POST" for call in transport.calls) == 2
 
 
 def test_cleanup_deletes_only_the_exact_owned_version() -> None:
@@ -613,6 +697,38 @@ def test_prompt_rate_limit_retries_with_conservative_default_backoff() -> None:
     assert sum(sleeps) == pytest.approx(60)
     assert all(0 < interval <= 0.1 for interval in sleeps)
     assert len(transport.calls) == 2
+
+
+def test_validated_healthy_response_must_contain_nonempty_output() -> None:
+    fixture = HealthyFixture(
+        id="empty-output",
+        input="run",
+        output_contains="",
+        tool_outputs={},
+        expected_tool_calls=(),
+        validate_output=True,
+    )
+    transport = QueueTransport(
+        [_response(200, {"id": "response-empty", "status": "completed"})]
+    )
+    client = FoundryInvocationClient(
+        PROJECT_ENDPOINT,
+        lambda: "token",
+        transport=transport,
+    )
+
+    with pytest.raises(RuntimeContractError, match="unexpected outcome"):
+        client.invoke_prompt(
+            DeploymentReceipt(
+                "aiq-001-weather",
+                "12",
+                "prompt",
+                "sha256:" + ("c" * 64),
+                "run",
+                "active",
+            ),
+            fixture,
+        )
 
 
 def test_hosted_session_rate_limit_retries_before_creating_one_session() -> None:
@@ -961,12 +1077,118 @@ def test_hosted_endpoint_contract_error_is_not_wrapped_in_invocation_endpoint_er
     assert not isinstance(exc_info.value, InvocationEndpointError)
 
 
+def test_deployment_poll_allows_code_error_to_stabilize_to_active() -> None:
+    definition = {"kind": "prompt", "model": "test", "instructions": "healthy", "tools": []}
+    digest = canonical_json_digest(definition)
+    transport = QueueTransport(
+        [
+            _response(201, {"version": "1"}),
+            _response(200, {"status": "failed", "error": {"code": "CodeError"}}),
+            _response(
+                200,
+                {
+                    "status": "active",
+                    "metadata": _metadata("recovering", digest),
+                },
+            ),
+        ]
+    )
+    sleeps: list[float] = []
+    client = FoundryDeploymentClient(
+        PROJECT_ENDPOINT,
+        lambda: "token",
+        transport=transport,
+        sleeper=sleeps.append,
+    )
+    assert client._code_error_grace == 900
+
+    receipt = client.deploy_prompt(
+        agent_name="aiq-001-weather",
+        definition=definition,
+        run_id="recovering",
+    )
+
+    assert receipt.status == "active"
+    assert sum(sleeps) == 5
+    assert set(sleeps) == {1.0}
+
+
+def test_code_error_stabilization_stops_on_cancellation() -> None:
+    definition = {"kind": "prompt", "model": "test", "instructions": "healthy", "tools": []}
+    transport = QueueTransport(
+        [
+            _response(201, {"version": "1"}),
+            _response(200, {"status": "failed", "error": {"code": "CodeError"}}),
+        ]
+    )
+    cancelled = False
+
+    def cancel_during_sleep(_seconds: float) -> None:
+        nonlocal cancelled
+        cancelled = True
+
+    client = FoundryDeploymentClient(
+        PROJECT_ENDPOINT,
+        lambda: "token",
+        transport=transport,
+        sleeper=cancel_during_sleep,
+    )
+
+    with pytest.raises(DeploymentPollError) as caught:
+        client.deploy_prompt(
+            agent_name="aiq-001-weather",
+            definition=definition,
+            run_id="cancelled",
+            cancelled=lambda: cancelled,
+        )
+
+    assert caught.value.code == "agent_deployment_cancelled"
+    assert caught.value.receipt.status == "failed"
+    assert len(transport.calls) == 2
+
+
+def test_deployment_poll_fails_after_persistent_code_error_grace() -> None:
+    definition = {"kind": "prompt", "model": "test", "instructions": "healthy", "tools": []}
+    failed_transport = QueueTransport(
+        [
+            _response(201, {"version": "1"}),
+            *[
+                _response(
+                    200,
+                    {"status": "failed", "error": {"code": "CodeError"}},
+                )
+                for _ in range(3)
+            ],
+        ]
+    )
+    ticks = iter((0.0, 0.0, 5.0, 10.0))
+    failed = FoundryDeploymentClient(
+        PROJECT_ENDPOINT,
+        lambda: "token",
+        transport=failed_transport,
+        poll_timeout_seconds=30,
+        poll_interval_seconds=5,
+        code_error_grace_seconds=10,
+        sleeper=lambda _seconds: None,
+        monotonic=lambda: next(ticks),
+    )
+
+    with pytest.raises(DeploymentPollError, match="stabilization grace") as failed_error:
+        failed.deploy_prompt(
+            agent_name="aiq-001-weather",
+            definition=definition,
+            run_id="failed",
+        )
+    assert failed_error.value.receipt.agent_version == "1"
+    assert failed_error.value.receipt.status == "failed"
+
+
 def test_deployment_poll_fails_on_terminal_state_and_timeout() -> None:
     definition = {"kind": "prompt", "model": "test", "instructions": "healthy", "tools": []}
     failed_transport = QueueTransport(
         [
             _response(201, {"version": "1"}),
-            _response(200, {"status": "failed", "error": {"code": "CodeError"}}),
+            _response(200, {"status": "deleted", "error": {"code": "Deleted"}}),
         ]
     )
     failed = FoundryDeploymentClient(
@@ -975,12 +1197,12 @@ def test_deployment_poll_fails_on_terminal_state_and_timeout() -> None:
         transport=failed_transport,
         sleeper=lambda _seconds: None,
     )
-    with pytest.raises(DeploymentPollError, match="CodeError") as failed_error:
+    with pytest.raises(DeploymentPollError, match="Deleted") as failed_error:
         failed.deploy_prompt(
             agent_name="aiq-001-weather", definition=definition, run_id="failed"
         )
     assert failed_error.value.receipt.agent_version == "1"
-    assert failed_error.value.receipt.status == "failed"
+    assert failed_error.value.receipt.status == "deleted"
 
     ticks = iter((0.0, 1.0, 2.0))
     timeout_transport = QueueTransport(

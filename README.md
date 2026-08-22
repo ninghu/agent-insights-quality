@@ -94,7 +94,11 @@ immutable weekday plan before any Azure operation, deploys `qualification-projec
 exact plan project/date/expiry/catalog hash and full project name as the connection suffix, and runs
 or resumes the live adapter from `.aiq-runtime/`. A durable bounded 15-minute propagation gate after
 Bicep allows the project managed identity and ACR pull authorization to converge before preflight;
-terminal deployment `CodeError` remains an operational failure, never a quality result. Evidence completion writes a schema-validated,
+an observed provisioning `CodeError` is polled on the exact version for a bounded 15-minute
+stabilization grace. A persistent `CodeError` remains an operational failure, never a quality result.
+Every hosted version that reaches `active` must also create and remove a session bound to that exact
+version before runtime traffic begins.
+Evidence completion writes a schema-validated,
 public-safe `daily-status.json`; its ordered handoff uses the existing judgment, scoring, memory,
 candidate-only ADO, reporting, email-receipt, generated-path, and cleanup commands. Use `--rerun N`
 for `aiq-YYYYMMDD-rNN`; a finalized failed plan is immutable and requires a new rerun suffix.
@@ -109,6 +113,8 @@ Every generated traffic envelope retains the compatible healthy agent's reviewed
 expected tools; scenario identity, provenance, correlation, and a bounded recipe marker are additive.
 Zero-finding prompt traffic enforces the expected tool sequence and requires a grounded nonempty final
 answer after tool output; fault-injection traffic remains relaxed only where the scenario requires it.
+Hosted healthy agents likewise map each reviewed command prefix to exactly one named tool and return
+that tool's result verbatim.
 
 `config/ado-policy.yaml` is the reviewed public authority for ADO side effects. Candidate reporting is
 enabled and automatic apply is disabled by default. `AIQ_ADO_AUTO_APPLY_ENABLED` can further disable

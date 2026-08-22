@@ -60,8 +60,7 @@ After a successful Bicep result, `run-daily` records a private `deployed` receip
 15 minutes for the new project managed identity and ACR authorization to propagate. It then records
 that gate as complete before live preflight. A process interruption resumes the pending propagation
 gate without redeploying Bicep. Role-assignment list presence alone is not treated as data-plane
-readiness, and a terminal agent `CodeError` remains an operational failure requiring an
-`INCONCLUSIVE` finalization.
+readiness.
 
 When `AIQ_TICKET_IMAGE_URI` points to Azure Container Registry, preflight requires that exact
 project-scoped managed-identity ContainerRegistry connection and AcrPull assignment. Connection
@@ -124,8 +123,10 @@ change an already rendered email. Use the next `--rerun N` suffix. A process int
 public finalization resumes the same private receipt and recovers completed remote operations.
 Hosted-code and custom-container deployment recovery, creation, and activation polling are
 process-wide serialized across agents. Prompt deployment may remain parallel; endpoint traffic
-continues in parallel after deployment. Any terminal `CodeError` is finalized as an operational
-failure and is never scored as Agent Insights quality.
+continues in parallel after deployment. A provisioning `CodeError` can be eventually consistent, so
+the client polls the exact created version for a bounded 15-minute grace and requires consecutive
+observations before failing. It never creates a duplicate version during stabilization. A persistent
+`CodeError` is finalized as an operational failure and is never scored as Agent Insights quality.
 Endpoint HTTP 408, 429, and 5xx responses are transient only when the failed request has no response
 ID. The invocation client retries that exact prompt or session request up to three times, using
 `Retry-After` when it is a bounded numeric value and otherwise waiting 60 then 120 seconds. If an
@@ -138,6 +139,8 @@ added around that request; the generic recipe marker never replaces the domain r
 For every zero-finding prompt assignment, runtime validation requires the exact expected tool
 sequence and a nonempty grounded final answer containing the reviewed tool result. Faulted
 assignments may relax output/tool validation only so the injected behavior can reach Agent Insights.
+Hosted healthy instructions map every finance, travel, and support command prefix to one exact tool
+and require its result verbatim, preventing model-selected prerequisite or adjacent-tool detours.
 
 ## Daily issue assignment
 
@@ -287,8 +290,13 @@ their retention date. It never guesses names or deletes unrelated resources.
 The active definitions under `agents/` are deterministic and synthetic. Runtime code supplies a
 short-lived `https://ai.azure.com/.default` token through a token provider and a private Foundry
 project endpoint. `FoundryDeploymentClient` creates prompt versions with JSON, hosted-code versions
-with deterministic multipart ZIPs, and the ticket version with a digest-pinned reviewed GHCR or owned
+with deterministic multipart ZIPs in the Foundry `code` field (including root `requirements.txt`
+and Unix regular-file mode bits),
+and the ticket version with a digest-pinned reviewed GHCR or owned
 Azure Container Registry image.
+After a hosted version reports active, deployment validation creates and removes one session bound
+to that exact version. An active status that cannot create the exact-version session remains an
+operational deployment failure.
 Every hosted version is polled to `active`, and cleanup deletes only the exact version whose owner,
 run ID, and artifact digest match its receipt.
 

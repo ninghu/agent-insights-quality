@@ -878,6 +878,14 @@ class LiveRuntimeHooks:
         self._provenance: dict[tuple[str, str], Mapping[str, Any]] = {}
         self._evidence_public: dict[str, Mapping[str, Any]] = {}
         self._cancelled_deployments: set[tuple[str, str]] = set()
+        self._deployment_cleanup_events: dict[
+            tuple[str, str],
+            threading.Event,
+        ] = {}
+        self._deployment_cleanup_failures: dict[
+            tuple[str, str],
+            RuntimeFailure,
+        ] = {}
         self._cancelled_insight_runs: set[tuple[str, str]] = set()
         self._cancel_events: dict[str, threading.Event] = {}
 
@@ -1386,6 +1394,63 @@ class LiveRuntimeHooks:
             self._project,
         )
 
+    def _cleanup_cancelled_deployment(
+        self,
+        deployment_client: Any,
+        identity: tuple[str, str],
+        receipt: DeploymentReceipt,
+    ) -> None:
+        with self._lock:
+            if identity in self._cancelled_deployments:
+                return
+            completion = self._deployment_cleanup_events.get(identity)
+            owner = completion is None
+            if completion is None:
+                completion = threading.Event()
+                self._deployment_cleanup_events[identity] = completion
+        if not owner:
+            completion.wait()
+            with self._lock:
+                failure = self._deployment_cleanup_failures.get(identity)
+                cleaned = identity in self._cancelled_deployments
+            if failure is not None:
+                raise RuntimeFailure(
+                    failure.code,
+                    failure.message,
+                    dict(failure.details),
+                    transient=failure.transient,
+                )
+            if not cleaned:
+                raise RuntimeFailure(
+                    "deployment_cleanup_failed",
+                    "Concurrent deployment cleanup did not record a terminal result.",
+                )
+            return
+        try:
+            deployment_client.cleanup_version(receipt)
+        except (RuntimeFailure, RuntimeContractError) as error:
+            failure = RuntimeFailure(
+                "cancel_partial_failure",
+                "A deployment completed after cancellation and exact cleanup failed.",
+                {
+                    "failure_codes": [
+                        getattr(
+                            error,
+                            "code",
+                            "deployment_cleanup_failed",
+                        )
+                    ]
+                },
+                transient=bool(getattr(error, "transient", False)),
+            )
+            with self._lock:
+                self._deployment_cleanup_failures[identity] = failure
+                completion.set()
+            raise failure from error
+        with self._lock:
+            self._cancelled_deployments.add(identity)
+            completion.set()
+
     def deploy(self, work: VersionWork, *, idempotency_key: str) -> Mapping[str, Any]:
         with self._lock:
             cancel_event = self._cancel_events.setdefault(work.key, threading.Event())
@@ -1437,6 +1502,7 @@ class LiveRuntimeHooks:
                         artifact_digest=artifact_digest,
                         source_digest=source_digest,
                         image_digest=image_digest,
+                        cancelled=cancel_event.is_set,
                     )
                     create_agent = work.sequence_index == 0 and not agent_exists
                 if receipt is None:
@@ -1446,6 +1512,7 @@ class LiveRuntimeHooks:
                             definition=materialized.definition,
                             run_id=work.run_id,
                             create_agent=create_agent,
+                            cancelled=cancel_event.is_set,
                         )
                     elif materialized.agent.kind == "hosted_code":
                         receipt = deployment_client.deploy_hosted_source(
@@ -1454,6 +1521,7 @@ class LiveRuntimeHooks:
                             source=materialized.agent.source,
                             run_id=work.run_id,
                             create_agent=create_agent,
+                            cancelled=cancel_event.is_set,
                         )
                     else:
                         receipt = deployment_client.deploy_hosted_container(
@@ -1462,28 +1530,19 @@ class LiveRuntimeHooks:
                             image=materialized.image,
                             run_id=work.run_id,
                             create_agent=create_agent,
+                            cancelled=cancel_event.is_set,
                         )
                 validate_deployment_receipt(receipt)
-            if cancel_event.is_set():
-                try:
-                    deployment_client.cleanup_version(receipt)
-                except RuntimeContractError as error:
-                    raise RuntimeFailure(
-                        "cancel_partial_failure",
-                        "A deployment completed after cancellation and exact cleanup failed.",
-                        {
-                            "failure_codes": [
-                                getattr(
-                                    error,
-                                    "code",
-                                    "deployment_cleanup_failed",
-                                )
-                            ]
-                        },
-                        transient=bool(getattr(error, "transient", False)),
-                    ) from error
-                with self._lock:
-                    self._cancelled_deployments.add(identity)
+            with self._lock:
+                cancelled = cancel_event.is_set()
+                if not cancelled:
+                    self._deployments[identity] = receipt
+            if cancelled:
+                self._cleanup_cancelled_deployment(
+                    deployment_client,
+                    identity,
+                    receipt,
+                )
                 raise RuntimeFailure(
                     "run_cancelled",
                     "A deployment completed after cancellation and was cleaned.",
@@ -1491,6 +1550,17 @@ class LiveRuntimeHooks:
         except DeploymentPollError as error:
             with self._lock:
                 self._deployments[identity] = error.receipt
+                cancelled = cancel_event.is_set()
+            if cancelled:
+                self._cleanup_cancelled_deployment(
+                    deployment_client,
+                    identity,
+                    error.receipt,
+                )
+                raise RuntimeFailure(
+                    "run_cancelled",
+                    "A failed deployment completed after cancellation and was cleaned.",
+                ) from error
             raise RuntimeFailure(
                 error.code,
                 str(error),
@@ -1503,48 +1573,39 @@ class LiveRuntimeHooks:
                 transient=bool(getattr(error, "transient", False)),
             ) from error
         with self._lock:
-            self._deployments[identity] = receipt
-            if cancel_event.is_set():
-                try:
-                    deployment_client.cleanup_version(receipt)
-                except RuntimeContractError as error:
-                    raise RuntimeFailure(
-                        "cancel_partial_failure",
-                        "A deployment completed after cancellation and exact cleanup failed.",
-                        {
-                            "failure_codes": [
-                                getattr(
-                                    error,
-                                    "code",
-                                    "deployment_cleanup_failed",
-                                )
-                            ]
-                        },
-                        transient=bool(getattr(error, "transient", False)),
-                    ) from error
-                self._cancelled_deployments.add(identity)
-                raise RuntimeFailure(
-                    "run_cancelled",
-                    "A deployment completed after cancellation and was cleaned.",
-                )
-            result = _public_deployment(receipt, work.version_reference) | {
-                "mutation_reference": materialized.mutation_reference,
-                "mutation_operation_count": len(materialized.operations),
-            }
-            ensure_public_safe(result)
-            self._persist_private_receipt(
-                idempotency_key,
-                result,
-                {
-                    "kind": "deploy",
-                    "work_key": work.key,
-                    "agent_name": work.agent_name,
-                    "version_reference": work.version_reference,
-                    "deployment": self._deployment_payload(receipt),
-                },
+            cancel_requested = cancel_event.is_set()
+            cleanup_needed = (
+                cancel_requested and identity not in self._cancelled_deployments
             )
-            self._deployment_public[idempotency_key] = result
-            return result
+            if not cancel_requested:
+                result = _public_deployment(receipt, work.version_reference) | {
+                    "mutation_reference": materialized.mutation_reference,
+                    "mutation_operation_count": len(materialized.operations),
+                }
+                ensure_public_safe(result)
+                self._persist_private_receipt(
+                    idempotency_key,
+                    result,
+                    {
+                        "kind": "deploy",
+                        "work_key": work.key,
+                        "agent_name": work.agent_name,
+                        "version_reference": work.version_reference,
+                        "deployment": self._deployment_payload(receipt),
+                    },
+                )
+                self._deployment_public[idempotency_key] = result
+                return result
+        if cleanup_needed:
+            self._cleanup_cancelled_deployment(
+                deployment_client,
+                identity,
+                receipt,
+            )
+        raise RuntimeFailure(
+            "run_cancelled",
+            "A deployment completed after cancellation and was cleaned.",
+        )
 
     def _fixtures(
         self,
@@ -2657,6 +2718,14 @@ class LiveRuntimeHooks:
                         "telemetry_provenance_missing",
                         "Scenario has no exact fixture-to-trace correlation.",
                     )
+                if any(
+                    correlation.observed_at is None
+                    for correlation in assignment_correlations
+                ):
+                    raise RuntimeFailure(
+                        "telemetry_provenance_missing",
+                        "Scenario trace correlation is missing its observation time.",
+                    )
                 scenario_insights = list(allocation.by_scenario[scenario_id])
                 sampled_scenario_insights = [
                     item
@@ -2830,7 +2899,6 @@ class LiveRuntimeHooks:
             should_cleanup = (
                 receipt is not None
                 and deployment_client is not None
-                and identity not in self._cancelled_deployments
             )
             should_cancel_run = (
                 run_identity is not None
@@ -2847,10 +2915,12 @@ class LiveRuntimeHooks:
                 failures.append(error.code)
         if should_cleanup and receipt is not None and deployment_client is not None:
             try:
-                deployment_client.cleanup_version(receipt)
-                with self._lock:
-                    self._cancelled_deployments.add(identity)
-            except (RuntimeFailure, RuntimeContractError) as error:
+                self._cleanup_cancelled_deployment(
+                    deployment_client,
+                    identity,
+                    receipt,
+                )
+            except RuntimeFailure as error:
                 failures.append(getattr(error, "code", "deployment_cleanup_failed"))
         if failures:
             raise RuntimeFailure(

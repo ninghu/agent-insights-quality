@@ -82,9 +82,10 @@ TOOLS = [
 ]
 
 INSTRUCTIONS = (
-    "Use exactly one registered travel tool for each supported synthetic request and return its "
-    "result verbatim. Never invent inventory. Never claim a booking unless the booking tool receives "
-    "confirmed=true. All inventory and bookings are synthetic."
+    "Route command prefixes exactly: search-trip -> flight_search; plan-itinerary -> itinerary; "
+    "request-booking -> booking. Call exactly that one tool and return its result verbatim. Never "
+    "invent inventory. Never claim a booking unless the booking tool receives confirmed=true. All "
+    "inventory and bookings are synthetic."
 )
 
 

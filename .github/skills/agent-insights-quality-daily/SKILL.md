@@ -67,8 +67,11 @@ cannot modify readiness configuration or treat contract scaffolding as an operat
    Insights connection string; ARM resolves it server-side.
 5. Persist the successful Bicep receipt, then wait the bounded 15-minute ACR/project-managed-identity
    propagation interval before live preflight. Resume a pending wait without redeploying Bicep. Do
-   not treat role-assignment list presence alone as data-plane readiness, and do not classify a
-   terminal agent `CodeError` as a quality result.
+   not treat role-assignment list presence alone as data-plane readiness. Poll a provisioning
+   `CodeError` on the exact created version for the bounded 15-minute stabilization grace; never
+   create a duplicate version, and never classify a persistent `CodeError` as a quality result.
+   Require every active hosted version to create and remove one validation session bound to that
+   exact version before accepting it for traffic.
 6. Verify GPT-5.6 Terra deployments, quota, production API availability, reporting recipient
    allowlist, and 90-day artifact retention.
 7. Hash the catalog and selection policy and compute the reproducible seed from report date plus

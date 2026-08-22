@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import importlib.util
 import hashlib
 import json
@@ -127,6 +128,52 @@ def test_every_prompt_fixture_names_one_unambiguous_expected_tool() -> None:
                 for marker in ("location_id", "provider_id", "slot_id")
             ):
                 assert "prerequisite lookup" in fixture.input
+
+
+def test_every_hosted_fixture_command_prefix_maps_to_its_exact_tool() -> None:
+    expected = {
+        "aiq-003-finance": {
+            "account-summary": "account_lookup",
+            "transactions": "transaction_search",
+            "prepare-budget": "budget_calculation",
+        },
+        "aiq-004-travel": {
+            "search-trip": "flight_search",
+            "plan-itinerary": "itinerary",
+            "request-booking": "booking",
+        },
+        "aiq-005-ticket": {
+            "read-ticket": "ticket_read",
+            "triage-ticket": "customer_context",
+            "update-ticket": "ticket_update",
+        },
+    }
+    for agent in load_healthy_agents():
+        if agent.kind == "prompt":
+            continue
+        assert agent.source is not None
+        tree = ast.parse((agent.source / "logic.py").read_text(encoding="ascii"))
+        instruction_node = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "INSTRUCTIONS"
+                for target in node.targets
+            )
+        )
+        instructions = ast.literal_eval(instruction_node.value)
+        fixture_mapping = {
+            fixture.input.split(" ", 1)[0]: fixture.expected_tool_calls[0]
+            for fixture in agent.fixtures
+        }
+        assert fixture_mapping == expected[agent.id]
+        for prefix, tool_name in fixture_mapping.items():
+            assert f"{prefix} -> {tool_name}" in instructions
+        assert "Call exactly that one tool" in instructions
+        assert "return its result verbatim" in instructions
+
+
 def test_prompt_definition_resolves_model_only_at_runtime() -> None:
     weather = next(agent for agent in load_healthy_agents() if agent.id == "aiq-001-weather")
     resolved = weather.definition_for_deployment(model_deployment_name="runtime-model")

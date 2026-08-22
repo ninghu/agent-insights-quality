@@ -448,6 +448,8 @@ lineage, monitor checkpoints, and previous-insight reconciliation are part of th
 Hosted-code and custom-container recovery, creation, and activation polling additionally share one
 process-wide gate to avoid cross-hosted deployment contention. Prompt deployment can remain parallel,
 and all endpoint traffic resumes normal cross-agent concurrency after deployment.
+An active hosted version must create and remove a validation session bound to its exact version
+before it is accepted for traffic.
 Prompt and hosted session requests retry bounded pre-response HTTP 408, 429, and 5xx failures with
 `Retry-After` or conservative exponential backoff. Durable per-fixture receipts prevent replay of
 completed traffic on outer resume. Nontransient 400s and failures with a response ID fail immediately,
@@ -893,7 +895,9 @@ orchestrator, memory, ADO, and final automation depend on those contracts.
   set as complete.
 - **Daily project propagation:** make the reviewed Bicep deployment idempotent, then poll the exact
   preprovisioned project and connections for readiness after a bounded 15-minute project-MI/ACR
-  propagation gate. A terminal agent `CodeError` is an operational failure, not a quality verdict.
+  propagation gate. Poll a provisioning `CodeError` on the exact created agent version for a bounded
+  15-minute grace without creating a duplicate; a persistent error is operational, not a quality
+  verdict.
 - **Synthetic health/finance data sensitivity:** use generated fictitious identities and no real
   medical or financial records.
 - **Automation self-modification:** generated-path allowlist and branch protection prevent changes to

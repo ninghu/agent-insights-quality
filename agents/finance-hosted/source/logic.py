@@ -66,8 +66,9 @@ TOOLS = [
 ]
 
 INSTRUCTIONS = (
-    "Use exactly one registered finance tool for each supported synthetic request. "
-    "Return the tool result verbatim. Never claim or attempt a transfer, payment, or other "
+    "Route command prefixes exactly: account-summary -> account_lookup; transactions -> "
+    "transaction_search; prepare-budget -> budget_calculation. Call exactly that one tool and "
+    "return its result verbatim. Never claim or attempt a transfer, payment, or other "
     "financial action. If a transfer is requested, explain that transfers are unavailable."
 )
 

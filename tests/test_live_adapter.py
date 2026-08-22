@@ -651,7 +651,9 @@ class _Deployments:
         artifact_digest,
         source_digest=None,
         image_digest=None,
+        cancelled=None,
     ):
+        assert cancelled is None or not cancelled()
         return (
             self.recovered.get((agent_name, run_id, artifact_digest)),
             False,
@@ -675,14 +677,43 @@ class _Deployments:
         self.recovered[(agent_name, run_id, receipt.artifact_digest)] = receipt
         return receipt
 
-    def deploy_prompt(self, *, agent_name, definition, run_id, create_agent):
+    def deploy_prompt(
+        self,
+        *,
+        agent_name,
+        definition,
+        run_id,
+        create_agent,
+        cancelled=None,
+    ):
+        assert cancelled is None or not cancelled()
         return self._receipt("prompt", agent_name, definition, run_id)
 
-    def deploy_hosted_source(self, *, agent_name, definition, source, run_id, create_agent):
+    def deploy_hosted_source(
+        self,
+        *,
+        agent_name,
+        definition,
+        source,
+        run_id,
+        create_agent,
+        cancelled=None,
+    ):
+        assert cancelled is None or not cancelled()
         assert source.is_dir()
         return self._receipt("hosted_code", agent_name, definition, run_id)
 
-    def deploy_hosted_container(self, *, agent_name, definition, image, run_id, create_agent):
+    def deploy_hosted_container(
+        self,
+        *,
+        agent_name,
+        definition,
+        image,
+        run_id,
+        create_agent,
+        cancelled=None,
+    ):
+        assert cancelled is None or not cancelled()
         assert image == IMAGE
         return self._receipt("hosted_custom_container", agent_name, definition, run_id)
 
@@ -832,7 +863,15 @@ def test_live_deploy_preserves_transient_poll_timeout_for_orchestrator_retry(
     )
 
     class TimedOutDeployments(_Deployments):
-        def deploy_prompt(self, *, agent_name, definition, run_id, create_agent):
+        def deploy_prompt(
+            self,
+            *,
+            agent_name,
+            definition,
+            run_id,
+            create_agent,
+            cancelled=None,
+        ):
             raise DeploymentPollError(
                 "Synthetic poll timeout.",
                 DeploymentReceipt(
@@ -856,6 +895,172 @@ def test_live_deploy_preserves_transient_poll_timeout_for_orchestrator_retry(
     assert caught.value.transient is True
     hooks.cancel(work)
     assert deployments.cleaned
+
+
+def test_cancelled_poll_error_cleans_provisional_receipt_without_holding_hook_lock(
+    tmp_path: Path,
+) -> None:
+    hooks, plan, _, _, _ = _prepared_hooks(tmp_path, [])
+    work = next(
+        work
+        for versions in plan.agents.values()
+        for work in versions
+        if work.agent_type == "prompt"
+    )
+
+    class CancelledPoll(_Deployments):
+        def deploy_prompt(
+            self,
+            *,
+            agent_name,
+            definition,
+            run_id,
+            create_agent,
+            cancelled=None,
+        ):
+            receipt = DeploymentReceipt(
+                agent_name,
+                "late-version",
+                "prompt",
+                live.canonical_json_digest(definition),
+                run_id,
+                "failed",
+            )
+            hooks._cancel_events.setdefault(work.key, Event()).set()
+            raise DeploymentPollError("Synthetic CodeError.", receipt)
+
+        def cleanup_version(self, receipt):
+            acquired = Event()
+
+            def acquire_hook_lock():
+                with hooks._lock:
+                    acquired.set()
+
+            thread = Thread(target=acquire_hook_lock)
+            thread.start()
+            thread.join(timeout=1)
+            assert acquired.is_set()
+            return super().cleanup_version(receipt)
+
+    deployments = CancelledPoll()
+    hooks._deployment_client = deployments
+
+    with pytest.raises(RuntimeFailure) as caught:
+        hooks.deploy(work, idempotency_key=f"{work.key}:deploy")
+
+    assert caught.value.code == "run_cancelled"
+    assert deployments.cleaned == [f"{work.agent_name}:late-version"]
+
+
+def test_cancelled_poll_error_retains_cleanup_failure_code(tmp_path: Path) -> None:
+    hooks, plan, _, _, _ = _prepared_hooks(tmp_path, [])
+    work = next(
+        work
+        for versions in plan.agents.values()
+        for work in versions
+        if work.agent_type == "prompt"
+    )
+
+    class CancelledPollCleanupFailure(_Deployments):
+        def deploy_prompt(
+            self,
+            *,
+            agent_name,
+            definition,
+            run_id,
+            create_agent,
+            cancelled=None,
+        ):
+            receipt = DeploymentReceipt(
+                agent_name,
+                "late-version",
+                "prompt",
+                live.canonical_json_digest(definition),
+                run_id,
+                "failed",
+            )
+            hooks._cancel_events.setdefault(work.key, Event()).set()
+            raise DeploymentPollError("Synthetic CodeError.", receipt)
+
+        def cleanup_version(self, _receipt):
+            raise DeploymentCleanupError("Synthetic cleanup conflict.")
+
+    hooks._deployment_client = CancelledPollCleanupFailure()
+
+    with pytest.raises(RuntimeFailure) as caught:
+        hooks.deploy(work, idempotency_key=f"{work.key}:deploy")
+
+    assert caught.value.code == "cancel_partial_failure"
+    assert caught.value.details["failure_codes"] == [
+        "deployment_cleanup_sessions_active"
+    ]
+
+
+def test_concurrent_late_cleanup_callers_share_the_same_failure(
+    tmp_path: Path,
+) -> None:
+    hooks, plan, _, _, _ = _prepared_hooks(tmp_path, [])
+    work = next(iter(plan.agents.values()))[0]
+    receipt = DeploymentReceipt(
+        work.agent_name,
+        "late-version",
+        work.agent_type,
+        "sha256:" + ("d" * 64),
+        work.run_id,
+        "failed",
+    )
+    started = Event()
+    release = Event()
+
+    class SlowCleanupFailure:
+        calls = 0
+
+        def cleanup_version(self, _receipt):
+            self.calls += 1
+            started.set()
+            assert release.wait(timeout=2)
+            raise DeploymentCleanupError("Synthetic cleanup conflict.")
+
+    deployments = SlowCleanupFailure()
+    failures: list[BaseException] = []
+    identity = (work.agent_name, work.version_reference)
+    owner = Thread(
+        target=lambda: _capture_failure(
+            failures,
+            lambda: hooks._cleanup_cancelled_deployment(
+                deployments,
+                identity,
+                receipt,
+            ),
+        )
+    )
+    waiter = Thread(
+        target=lambda: _capture_failure(
+            failures,
+            lambda: hooks._cleanup_cancelled_deployment(
+                deployments,
+                identity,
+                receipt,
+            ),
+        )
+    )
+    owner.start()
+    assert started.wait(timeout=2)
+    waiter.start()
+    assert waiter.is_alive()
+    release.set()
+    owner.join(timeout=2)
+    waiter.join(timeout=2)
+
+    assert deployments.calls == 1
+    assert len(failures) == 2
+    assert all(
+        isinstance(error, RuntimeFailure)
+        and error.code == "cancel_partial_failure"
+        and error.details["failure_codes"]
+        == ["deployment_cleanup_sessions_active"]
+        for error in failures
+    )
 
 
 def test_live_deploy_cleans_exact_version_when_cancellation_arrives_late(
@@ -1595,6 +1800,26 @@ def test_realized_windows_are_exact_non_overlapping_and_feed_evidence(
         idempotency_key=pair[1].key + ":insights",
     )
     scenario_id = str(pair[1].assignments[0]["scenario_id"])
+    original_correlations = hooks._scenario_telemetry[pair[1].key][scenario_id]
+    missing_time = original_correlations[0]
+    hooks._scenario_telemetry[pair[1].key][scenario_id] = (
+        TraceCorrelation(
+            missing_time.operation_id,
+            missing_time.span_count,
+            missing_time.root_count,
+            missing_time.span_ids,
+            None,
+        ),
+        *original_correlations[1:],
+    )
+    with pytest.raises(RuntimeFailure) as missing:
+        hooks.assemble_evidence(
+            pair[1],
+            insight_run,
+            idempotency_key=pair[1].key + ":missing-observed-at",
+        )
+    assert missing.value.code == "telemetry_provenance_missing"
+    hooks._scenario_telemetry[pair[1].key][scenario_id] = original_correlations
     previous_deployment = hooks._deployments[
         (pair[0].agent_name, pair[0].version_reference)
     ]
