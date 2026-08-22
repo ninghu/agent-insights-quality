@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from copy import deepcopy
 from pathlib import Path
 
@@ -197,6 +198,35 @@ def test_validated_sent_receipt_is_terminal_for_readiness_rerun(tmp_path: Path) 
     )
 
     assert result == receipt_path
+
+
+def test_sent_legacy_readiness_bundle_cannot_be_regenerated(
+    tmp_path: Path,
+) -> None:
+    source = ROOT / "reports" / "daily" / "2026" / "08" / "21"
+    target = tmp_path / "daily" / "2026" / "08" / "21"
+    target.mkdir(parents=True)
+    for filename in (
+        "readiness-failure.json",
+        "readiness-failure.md",
+        "failure-email.html",
+        "email-handoff.json",
+    ):
+        shutil.copy2(source / filename, target / filename)
+    before = {
+        path.name: path.read_bytes() for path in target.iterdir()
+    }
+
+    with pytest.raises(ContractError, match="refusing regeneration or duplicate send"):
+        finalize_readiness_failure(
+            load_data(ROOT / "config" / "runtime-readiness.yaml"),
+            load_data(ROOT / "config" / "reporting.yaml"),
+            "2026-08-21",
+            output_root=tmp_path,
+            generated_at="2026-08-21T09:00:00Z",
+        )
+
+    assert {path.name: path.read_bytes() for path in target.iterdir()} == before
 
 
 def test_public_production_readiness_request_uses_protected_variable_reference(

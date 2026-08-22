@@ -165,6 +165,20 @@ def finalize_readiness_failure(
     generated_at = generated_at or _default_generated_at()
     report_id = f"aiq-{parsed_date:%Y%m%d}"
     target = (output_root or ROOT / "reports") / "daily" / parsed_date.strftime("%Y/%m/%d")
+    legacy_handoff_path = target / "email-handoff.json"
+    if legacy_handoff_path.exists():
+        legacy_handoff = json.loads(legacy_handoff_path.read_text(encoding="ascii"))
+        validate_email_handoff(
+            legacy_handoff,
+            str(legacy_handoff_path),
+            reporting,
+        )
+        validate_stored_bundle_content(legacy_handoff_path, legacy_handoff)
+        state = legacy_handoff["delivery"]["status"]
+        raise ContractError(
+            f"{legacy_handoff_path}: legacy readiness delivery is {state}; "
+            "refusing regeneration or duplicate send"
+        )
     request_path = target / "email-send-request.json"
     receipt_path = target / "email-receipt.json"
     existing_request = None
