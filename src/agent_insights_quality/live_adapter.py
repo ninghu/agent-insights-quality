@@ -2849,7 +2849,13 @@ class LiveRuntimeHooks:
                 "sampled_count": len(sampled_ids),
                 "details_truncated": allocation.total > len(sampled_ids),
                 "insight_references": [
-                    opaque_reference(str(item["id"]))
+                    _digest(
+                        {
+                            "insight_id": opaque_reference(
+                                str(item["id"])
+                            )
+                        }
+                    )
                     for item in insights[:_MAX_INSIGHT_DETAIL_SAMPLES]
                 ],
             }

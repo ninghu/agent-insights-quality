@@ -207,17 +207,33 @@ def deterministic_violations(
                 if trace["version_digest"] != version_context["version_digest"]:
                     violations.add("cross_version_stale")
 
-        bundle_insight_ids: set[str] = set()
-        for insight in bundle["insights"]:
+        target_insight_ids: set[str] = set()
+        context_insight_ids: set[str] = set()
+        physical_insights: dict[str, dict[str, Any]] = {}
+        for collection, seen_collection_ids in (
+            (bundle["insights"], target_insight_ids),
+            (bundle["run_noise_insights"], context_insight_ids),
+        ):
+            for insight in collection:
+                insight_id = insight["id"]
+                if insight_id in seen_collection_ids:
+                    violations.add("duplication")
+                seen_collection_ids.add(insight_id)
+                prior = physical_insights.get(insight_id)
+                if prior is not None and prior != insight:
+                    violations.update(
+                        {"structural_failure", "provenance_failure"}
+                    )
+                    structural_failures += 1
+                    continue
+                physical_insights[insight_id] = insight
+
+        for insight in physical_insights.values():
             linked_trace_ids = set(insight["trace_ids"])
             if not linked_trace_ids.issubset(trace_ids | prior_trace_ids):
                 violations.add("provenance_failure")
             elif linked_trace_ids & prior_trace_ids:
                 violations.add("cross_version_stale")
-        for insight in bundle["insights"]:
-            if insight["id"] in bundle_insight_ids:
-                violations.add("duplication")
-            bundle_insight_ids.add(insight["id"])
             if insight["trace_count"] != len(insight["trace_ids"]):
                 violations.add("structural_failure")
                 structural_failures += 1
@@ -435,13 +451,48 @@ def _has_complete_physical_judgment_ownership(
 ) -> bool:
     physical: set[tuple[str, str, str]] = set()
     owners: Counter[tuple[str, str, str]] = Counter()
+    run_contracts: dict[
+        tuple[str, str],
+        tuple[dict[str, Any], dict[str, Any]],
+    ] = {}
     for bundle in bundles:
         run_id = str(bundle["run"]["run_id"])
         agent_id = str(bundle["agent"]["id"])
+        run_key = (run_id, agent_id)
+        contract = (
+            bundle["run_finding_count"],
+            bundle["run_insight_accounting"],
+        )
+        if run_contracts.setdefault(run_key, contract) != contract:
+            return False
         for insight in [*bundle["insights"], *bundle["run_noise_insights"]]:
             physical.add((run_id, agent_id, str(insight["id"])))
         for insight in bundle["insights"]:
             owners[(run_id, agent_id, str(insight["id"]))] += 1
+    for run_key, (finding_count, accounting) in run_contracts.items():
+        insight_ids = {key[2] for key in physical if key[:2] == run_key}
+        references = accounting["insight_references"]
+        expected_references = {
+            content_hash({"insight_id": insight_id})
+            for insight_id in insight_ids
+        }
+        legacy_references = set(insight_ids)
+        actual = int(finding_count["actual"])
+        if (
+            actual != len(insight_ids)
+            or int(accounting["unique_insight_count"]) != actual
+            or int(accounting["assigned_count"])
+            + int(accounting["umbrella_noise_count"])
+            + int(accounting["extra_noise_count"])
+            != actual
+            or int(accounting["sampled_count"]) != actual
+            or bool(accounting["details_truncated"])
+            or len(references) != actual
+            or len(set(references)) != actual
+            or set(references)
+            not in (expected_references, legacy_references)
+        ):
+            return False
     return set(owners) == physical and all(count == 1 for count in owners.values())
 
 

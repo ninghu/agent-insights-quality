@@ -674,6 +674,20 @@ def _project_primary_judgment_bundles(
             owners[key] = owner
             owner_counts[owner] += 1
 
+    for key, entry in physical.items():
+        run_key = key[:2]
+        authenticated_trace_ids = {
+            *run_traces[run_key],
+            *run_prior_trace_ids[run_key],
+        }
+        if not set(entry["insight"]["trace_ids"]).issubset(
+            authenticated_trace_ids
+        ):
+            raise RuntimeFailure(
+                "judgment_target_conflict",
+                "A physical judgment card lacks authenticated run trace provenance.",
+            )
+
     projected = []
     for bundle in bundles:
         scenario_id = str(bundle["scenario"]["id"])
@@ -693,8 +707,11 @@ def _project_primary_judgment_bundles(
             )
         accounting = value["run_insight_accounting"]
         expected_references = {
-            key[2] for key in run_physical_keys
+            content_hash({"insight_id": key[2]})
+            for key in run_physical_keys
         }
+        legacy_references = {key[2] for key in run_physical_keys}
+        accounting_references = accounting["insight_references"]
         if (
             int(value["run_finding_count"]["expected"])
             != run_expected_counts[run_key]
@@ -705,7 +722,10 @@ def _project_primary_judgment_bundles(
             != run_actual
             or int(accounting["sampled_count"]) != run_actual
             or bool(accounting["details_truncated"])
-            or set(accounting["insight_references"]) != expected_references
+            or len(accounting_references) != run_actual
+            or len(set(accounting_references)) != run_actual
+            or set(accounting_references)
+            not in (expected_references, legacy_references)
         ):
             raise RuntimeFailure(
                 "judgment_target_conflict",
@@ -719,7 +739,10 @@ def _project_primary_judgment_bundles(
         value["run_noise_insights"] = [
             deepcopy(physical[key]["insight"])
             for key in run_physical_keys
-            if scenario_id not in physical[key]["assigned_scenarios"]
+            if (
+                owners[key] != scenario_id
+                or scenario_id not in physical[key]["assigned_scenarios"]
+            )
         ]
         value["trace_evidence"] = [
             deepcopy(trace) for trace in run_traces[run_key].values()

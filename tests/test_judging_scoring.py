@@ -476,6 +476,38 @@ def test_noise_judgment_cannot_replace_required_no_insight_judgment(
     assert "unresolved_judgment" in score["violations"]
 
 
+@pytest.mark.parametrize(
+    ("linked_trace", "prior_trace_ids", "expected_violation"),
+    [
+        (SHA_C, [], "provenance_failure"),
+        (SHA_B, [SHA_B], "cross_version_stale"),
+    ],
+)
+def test_noise_only_insight_trace_provenance_is_validated(
+    synthetic_contracts,
+    linked_trace: str,
+    prior_trace_ids: list[str],
+    expected_violation: str,
+) -> None:
+    raw = raw_bundle("aiq-scn-010-fault")
+    noise = deepcopy(raw["insights"][0])
+    noise["trace_ids"] = [linked_trace]
+    raw["insights"] = []
+    raw["run_noise_insights"] = [noise]
+    raw["prior_trace_ids"] = prior_trace_ids
+    raw["finding_count"] = {"actual": 0}
+    raw["run_finding_count"] = {"expected": 1, "actual": 1}
+    bundle = project_evidence(raw)
+
+    violations, _ = deterministic_violations(
+        plan(),
+        [bundle],
+        synthetic_catalog(),
+    )
+
+    assert expected_violation in violations
+
+
 def test_unowned_run_noise_is_unresolved_even_with_null_judgment(
     synthetic_contracts,
 ) -> None:
@@ -681,6 +713,31 @@ def _multi_assignment_run(
 
     first = project_evidence(raw_first)
     umbrella = project_evidence(raw_umbrella)
+    run_insight_ids = [
+        *(item["id"] for item in first["insights"]),
+        *(item["id"] for item in umbrella["insights"]),
+    ]
+    run_accounting = {
+        "unique_insight_count": run_total,
+        "assigned_count": run_total,
+        "umbrella_noise_count": 0,
+        "extra_noise_count": 0,
+        "sampled_count": run_total,
+        "details_truncated": False,
+        "insight_references": [
+            content_hash({"insight_id": insight_id})
+            for insight_id in run_insight_ids
+        ],
+    }
+    for bundle in (first, umbrella):
+        bundle["run_insight_accounting"] = deepcopy(run_accounting)
+        bundle["bundle_hash"] = content_hash(
+            {
+                key: item
+                for key, item in bundle.items()
+                if key != "bundle_hash"
+            }
+        )
     healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
     judgments = [
         *(judgment(first, insight_id=item["id"]) for item in first["insights"]),
