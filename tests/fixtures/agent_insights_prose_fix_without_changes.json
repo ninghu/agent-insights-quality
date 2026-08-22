@@ -1,0 +1,11 @@
+{
+  "id": "insight-synthetic-prose-001",
+  "details": {
+    "recommended_actions": {
+      "proposed_fix": {
+        "kind": "prose",
+        "text": "Clarify the expected behavior in the agent guidance."
+      }
+    }
+  }
+}

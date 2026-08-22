@@ -184,6 +184,82 @@ def test_public_agent_insight_fixture_uses_exact_nested_snake_case_contract() ->
     assert "proposed_fix" not in insight
 
 
+def test_live_prose_fix_without_changes_normalizes_to_empty_list() -> None:
+    insight = json.loads(
+        (
+            Path(__file__).parent
+            / "fixtures"
+            / "agent_insights_prose_fix_without_changes.json"
+        ).read_text(encoding="ascii")
+    )
+
+    assert insight_proposed_fix(insight) == {
+        "kind": "prose",
+        "text": "Clarify the expected behavior in the agent guidance.",
+        "changes": [],
+    }
+
+
+@pytest.mark.parametrize("kind", ["prose", "no_fix"])
+def test_non_patch_fix_kinds_allow_missing_changes(kind: str) -> None:
+    insight = {
+        "details": {
+            "recommended_actions": {
+                "proposed_fix": {
+                    "kind": kind,
+                    "text": "Use the reviewed narrative guidance.",
+                }
+            }
+        }
+    }
+
+    assert insight_proposed_fix(insight)["changes"] == []
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["prompt_patch", "code_change", "container_change"],
+)
+def test_patch_fix_kinds_require_changes_list(kind: str) -> None:
+    insight = {
+        "details": {
+            "recommended_actions": {
+                "proposed_fix": {
+                    "kind": kind,
+                    "text": "Apply the reviewed synthetic change.",
+                }
+            }
+        }
+    }
+
+    with pytest.raises(RuntimeFailure, match="changes are invalid"):
+        insight_proposed_fix(insight)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    ["not-a-list", [1], [{"path": "agent.py"}]],
+)
+def test_proposed_fix_changes_must_be_a_list_of_objects(changes) -> None:
+    insight = {
+        "details": {
+            "recommended_actions": {
+                "proposed_fix": {
+                    "kind": "code_change",
+                    "text": "Apply the reviewed synthetic change.",
+                    "changes": changes,
+                }
+            }
+        }
+    }
+
+    if changes == [{"path": "agent.py"}]:
+        assert insight_proposed_fix(insight)["changes"] == changes
+    else:
+        with pytest.raises(RuntimeFailure, match="changes are invalid"):
+            insight_proposed_fix(insight)
+
+
 def test_pagination_fails_closed_without_cursor() -> None:
     client = AgentInsightsClient(
         "https://project.example.invalid",
