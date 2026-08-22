@@ -2169,6 +2169,10 @@ class LiveRuntimeHooks:
                         item.response_id,
                         item.session_id,
                         self._config.azure.terra_agent_deployment,
+                        canonical_model=(
+                            "gpt-5.6-terra-"
+                            f"{self._config.azure.terra_model_version}"
+                        ),
                     ),
                 )
                 for item in receipts
@@ -2182,6 +2186,10 @@ class LiveRuntimeHooks:
                         item.receipt.session_id,
                         self._config.azure.terra_agent_deployment,
                         frozenset({"invoke_agent"}),
+                        canonical_model=(
+                            "gpt-5.6-terra-"
+                            f"{self._config.azure.terra_model_version}"
+                        ),
                     ),
                 )
                 for item in failures

@@ -622,6 +622,81 @@ def test_correlates_ids_to_w3c_operation_and_requires_complete_parent_chain() ->
         end=start + timedelta(minutes=1),
     )
     assert result and result[0].operation_id == "a" * 32
+    external_parent = telemetry_rows(start)
+    external_parent[0]["parent_id"] = "upstream-parent"
+    external_result = correlate_complete_traces(
+        external_parent,
+        [expectation],
+        agent="agent",
+        version="v1",
+        start=start,
+        end=start + timedelta(minutes=1),
+    )
+    assert external_result and external_result[0].root_count == 1
+
+    multiple_external_roots = telemetry_rows(start)
+    multiple_external_roots[0]["parent_id"] = "upstream-parent"
+    multiple_external_roots[1]["parent_id"] = "another-upstream-parent"
+    assert correlate_complete_traces(
+        multiple_external_roots,
+        [expectation],
+        agent="agent",
+        version="v1",
+        start=start,
+        end=start + timedelta(minutes=1),
+    ) is None
+
+
+def test_telemetry_model_identity_accepts_only_exact_deployment_or_canonical_model() -> None:
+    start = datetime(2026, 8, 21, tzinfo=UTC)
+    expectation = TelemetryExpectation(
+        "invoke-1",
+        "response-1",
+        "session-1",
+        "terra-test-agents",
+        canonical_model="gpt-5.6-terra-2026-07-09",
+    )
+    deployment_rows = telemetry_rows(start)
+    for row in deployment_rows:
+        row["span_model"] = "terra-test-agents"
+    assert correlate_complete_traces(
+        deployment_rows,
+        [expectation],
+        agent="agent",
+        version="v1",
+        start=start,
+        end=start + timedelta(minutes=1),
+    )
+
+    canonical_rows = telemetry_rows(start)
+    for row in canonical_rows:
+        row["span_model"] = "gpt-5.6-terra-2026-07-09"
+    assert correlate_complete_traces(
+        canonical_rows,
+        [expectation],
+        agent="agent",
+        version="v1",
+        start=start,
+        end=start + timedelta(minutes=1),
+    )
+
+    for rejected in (
+        "gpt-5.6-terra-2026-07-08",
+        "gpt-5.6-terra",
+        "terra-test-agents-extra",
+    ):
+        rejected_rows = telemetry_rows(start)
+        for row in rejected_rows:
+            row["span_model"] = rejected
+        assert correlate_complete_traces(
+            rejected_rows,
+            [expectation],
+            agent="agent",
+            version="v1",
+            start=start,
+            end=start + timedelta(minutes=1),
+        ) is None
+
     incomplete = telemetry_rows(start)
     incomplete[1]["parent_id"] = "missing"
     assert correlate_complete_traces(

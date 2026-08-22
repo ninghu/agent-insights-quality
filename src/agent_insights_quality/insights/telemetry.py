@@ -25,9 +25,17 @@ class TelemetryExpectation:
     session_id: str | None
     model_deployment: str
     required_operations: frozenset[str] = frozenset({"invoke_agent", "chat"})
+    canonical_model: str | None = None
 
     def identifiers(self) -> set[str]:
         return {value for value in (self.invocation_id, self.response_id, self.session_id) if value}
+
+    def model_identities(self) -> frozenset[str]:
+        return frozenset(
+            value
+            for value in (self.model_deployment, self.canonical_model)
+            if value
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,12 +221,19 @@ def correlate_complete_traces(
         spans = operations[operation_id]
         span_id_list = [str(row.get("span_id") or "") for row in spans if row.get("span_id")]
         span_ids = set(span_id_list)
-        parents = [str(row.get("parent_id") or "") for row in spans]
-        roots = sum(not parent for parent in parents)
+        local_root_rows = [
+            row
+            for row in spans
+            if row.get("span_id")
+            and (
+                not str(row.get("parent_id") or "")
+                or str(row.get("parent_id") or "") not in span_ids
+            )
+        ]
+        roots = len(local_root_rows)
         root_ids = {
             str(row.get("span_id") or "")
-            for row in spans
-            if row.get("span_id") and not row.get("parent_id")
+            for row in local_root_rows
         }
         reachable = set(root_ids)
         while True:
@@ -242,7 +257,8 @@ def correlate_complete_traces(
         if "chat" in expectation.required_operations:
             chat_spans = [row for row in required_spans if row.get("span_name") == "chat"]
             model_valid = bool(chat_spans) and all(
-                row.get("span_model") == expectation.model_deployment for row in chat_spans
+                row.get("span_model") in expectation.model_identities()
+                for row in chat_spans
             )
         else:
             model_valid = True
@@ -250,7 +266,6 @@ def correlate_complete_traces(
             roots != 1
             or len(span_id_list) != len(spans)
             or len(span_ids) != len(span_id_list)
-            or any(parent and parent not in span_ids for parent in parents)
             or reachable != span_ids
             or not expectation.required_operations.issubset(operations_present)
             or not required_provenance_valid
