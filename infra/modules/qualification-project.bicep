@@ -62,8 +62,13 @@ resource appInsightsConnection 'Microsoft.CognitiveServices/accounts/projects/co
   properties: {
     category: 'AppInsights'
     target: applicationInsights.id
-    authType: 'AAD'
+    authType: 'ApiKey'
+    credentials: {
+      key: applicationInsights.properties.ConnectionString
+    }
     metadata: {
+      ApiType: 'Azure'
+      ResourceId: applicationInsights.id
       purpose: 'agent-insights-quality'
       owner_reference: automationOwner
       expires_on: expiresOn

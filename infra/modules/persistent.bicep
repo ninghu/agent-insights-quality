@@ -77,6 +77,9 @@ resource terraAgents 'Microsoft.CognitiveServices/accounts/deployments@2024-10-0
 resource terraInsights 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
   parent: account
   name: 'terra-insights-generator'
+  dependsOn: [
+    terraAgents
+  ]
   sku: {
     name: 'GlobalStandard'
     capacity: 1
