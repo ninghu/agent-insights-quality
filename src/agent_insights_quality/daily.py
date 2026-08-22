@@ -523,6 +523,19 @@ def build_daily_status(
             "evidence_reference_incomplete",
             "Daily judgment handoff requires a successful evidence-complete runtime state.",
         )
+    project_key = f"{plan.plan_id}:project"
+    project_checkpoint = state.checkpoints.get(project_key)
+    if project_checkpoint is None:
+        raise RuntimeFailure(
+            "evidence_reference_incomplete",
+            "A successful runtime state has no validated project checkpoint.",
+        )
+    project_result = hooks.recover(project_key, project_checkpoint)
+    if not isinstance(project_result, Mapping):
+        raise RuntimeFailure(
+            "evidence_reference_incomplete",
+            "The validated project checkpoint returned an invalid receipt.",
+        )
     final_work = _final_work_by_scenario(plan, plan_payload)
     results_by_work: dict[str, Mapping[str, Any]] = {}
     evidence = []
@@ -547,6 +560,12 @@ def build_daily_status(
                 "A selected scenario has no exact final evidence reference.",
             ) from error
         bundle = _load_evidence_bundle(hooks, work, scenario_id, reference)
+        rendered_bundle = (
+            json.dumps(bundle, indent=2, sort_keys=True).encode("ascii") + b"\n"
+        )
+        materialized_reference = (
+            "sha256:" + hashlib.sha256(rendered_bundle).hexdigest()
+        )
         final_version = assignment["version_sequence"][-1]
         if (
             bundle["plan_id"] != plan.plan_id
@@ -617,7 +636,7 @@ def build_daily_status(
                 "agent_id": assignment["agent_id"],
                 "run_id": assignment["run_id"],
                 "phase": assignment["version_sequence"][-1]["phase"],
-                "artifact_reference": reference,
+                "artifact_reference": materialized_reference,
                 "bundle_hash": bundle["bundle_hash"],
                 "primary_package_reference": package["package_hash"],
                 "validation_targets": list(assignment["expected"]["validation_targets"]),

@@ -598,6 +598,9 @@ def test_daily_status_rejects_incomplete_evidence_references(tmp_path: Path) -> 
     plan = PlanInput.from_daily_plan(payload)
     hooks = Hooks(payload)
     checkpoints = {}
+    project_key = f"{plan.plan_id}:project"
+    hooks.ensure_project(plan, idempotency_key=project_key)
+    checkpoints[project_key] = content_hash(hooks.results[project_key])
     for versions in plan.agents.values():
         for work in versions:
             key = f"{work.key}:evidence"
