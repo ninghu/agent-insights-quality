@@ -696,11 +696,6 @@ class AgentInsightsClient:
                         "insight_scope_unproven",
                         "Insight has no trace IDs linking it to correlated operations.",
                     )
-                if not trace_ids.issubset(operation_ids):
-                    raise RuntimeFailure(
-                        "insight_scope_unproven",
-                        "Insight trace IDs do not all belong to the correlated operation-ID set.",
-                    )
                 for record in records:
                     observed_trace = _trace_timestamp(record)
                     if not (run_start <= observed_trace < run_end):

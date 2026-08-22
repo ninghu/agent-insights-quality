@@ -186,6 +186,11 @@ def deterministic_violations(
         elif previous is not None:
             violations.update({"provenance_failure", "cross_version_stale"})
         trace_ids = {trace["trace_id"] for trace in bundle["trace_evidence"]}
+        prior_trace_ids = set(bundle["prior_trace_ids"])
+        if trace_ids & prior_trace_ids:
+            violations.add("provenance_failure")
+        if len(assignment["version_sequence"]) == 1 and prior_trace_ids:
+            violations.add("provenance_failure")
         window_start = _timestamp(bundle["run"]["window_start"])
         window_end = _timestamp(bundle["run"]["window_end"])
         for trace in bundle["trace_evidence"]:
@@ -202,6 +207,12 @@ def deterministic_violations(
                     violations.add("cross_version_stale")
 
         bundle_insight_ids: set[str] = set()
+        for insight in [*bundle["insights"], *bundle["run_noise_insights"]]:
+            linked_trace_ids = set(insight["trace_ids"])
+            if not linked_trace_ids.issubset(trace_ids | prior_trace_ids):
+                violations.add("provenance_failure")
+            elif linked_trace_ids & prior_trace_ids:
+                violations.add("cross_version_stale")
         for insight in bundle["insights"]:
             if insight["id"] in bundle_insight_ids:
                 violations.add("duplication")
@@ -209,8 +220,6 @@ def deterministic_violations(
             if insight["trace_count"] != len(insight["trace_ids"]):
                 violations.add("structural_failure")
                 structural_failures += 1
-            if not set(insight["trace_ids"]).issubset(trace_ids):
-                violations.add("provenance_failure")
             if not _fix_is_compatible(bundle, insight):
                 violations.add("capability_fix_mismatch")
             run_identity = (

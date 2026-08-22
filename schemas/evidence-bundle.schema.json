@@ -18,6 +18,7 @@
     "run_finding_count",
     "run_insight_accounting",
     "trace_evidence",
+    "prior_trace_ids",
     "insights",
     "run_noise_insights",
     "previous_insight",
@@ -195,6 +196,12 @@
           "observed_at": {"type": "string", "format": "date-time"}
         }
       }
+    },
+    "prior_trace_ids": {
+      "type": "array",
+      "maxItems": 100,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/trace_reference"}
     },
     "insights": {
       "type": "array",
