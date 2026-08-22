@@ -636,6 +636,30 @@ def test_missing_expected_count_is_a_miss_not_inconclusive(synthetic_contracts) 
     assert outcome["verdict"] == "mixed"
 
 
+def test_f1_is_zero_when_positive_counts_have_no_true_positives(
+    synthetic_contracts,
+) -> None:
+    fault = project_evidence(raw_bundle("aiq-scn-010-fault"))
+    healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
+    incorrect = judgment(fault)
+    incorrect["verdict"] = "incorrect_noise"
+    incorrect["output_hash"] = content_hash(
+        {key: value for key, value in incorrect.items() if key != "output_hash"}
+    )
+
+    score = score_run(
+        plan(),
+        [fault, healthy],
+        complete_judgments([fault, healthy], [incorrect]),
+    )
+
+    assert score["counts"]["false_positives"] == 1
+    assert score["counts"]["false_negatives"] == 1
+    assert score["rates"]["precision"] == 0
+    assert score["rates"]["overall_recall"] == 0
+    assert score["rates"]["f1"] == 0
+
+
 def test_one_expected_plus_extra_noise_is_explicit_mixed_outcome(
     synthetic_contracts,
 ) -> None:
@@ -1215,9 +1239,7 @@ def test_sequential_evidence_binds_current_and_prior_phase_versions(
     assert {"provenance_failure", "cross_version_stale"} <= violations
 
 
-def test_proven_prior_trace_is_quality_failure_but_unknown_trace_is_inconclusive(
-    synthetic_contracts,
-) -> None:
+def _lifecycle_plan() -> dict:
     lifecycle_plan = plan()
     assignment = lifecycle_plan["assignments"][0]
     assignment["version_sequence"] = [
@@ -1240,16 +1262,16 @@ def test_proven_prior_trace_is_quality_failure_but_unknown_trace_is_inconclusive
             "window": assignment["window"],
         },
     ]
+    return lifecycle_plan
+
+
+def test_missing_prior_card_with_proven_links_is_not_at_bar_not_inconclusive(
+    synthetic_contracts,
+) -> None:
+    lifecycle_plan = _lifecycle_plan()
     current_raw = raw_bundle("aiq-scn-010-fault")
     current_raw["version_sequence"]["phase"] = "recurred"
     current_raw["prior_trace_ids"] = [SHA_B]
-    current_raw["previous_insight"] = {
-        "id": "prior-insight",
-        "fingerprint": SHA_B,
-        "phase": "faulted",
-        "run_id": assignment["run_id"],
-        "version_digest": SHA_B,
-    }
     current = project_evidence(current_raw)
     healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
 
@@ -1302,6 +1324,29 @@ def test_proven_prior_trace_is_quality_failure_but_unknown_trace_is_inconclusive
     )
     assert unknown_score["verdict"] == "INCONCLUSIVE"
     assert "provenance_failure" in unknown_score["violations"]
+
+
+def test_missing_prior_card_preserves_recurrence_miss_semantics(
+    synthetic_contracts,
+) -> None:
+    lifecycle_plan = _lifecycle_plan()
+    missed_raw = raw_bundle("aiq-scn-010-fault")
+    missed_raw["version_sequence"]["phase"] = "recurred"
+    missed_raw["insights"] = []
+    missed = project_evidence(missed_raw)
+    healthy = project_evidence(raw_bundle("aiq-scn-011-healthy", healthy=True))
+
+    score = score_run(
+        lifecycle_plan,
+        [missed, healthy],
+        complete_judgments([missed, healthy], []),
+    )
+
+    assert score["verdict"] == "NOT AT BAR"
+    assert score["complete"] is True
+    assert score["counts"]["false_negatives"] == 1
+    assert "missing_findings" in score["violations"]
+    assert "provenance_failure" not in score["violations"]
 
 
 def test_single_version_evidence_rejects_previous_insight_before_judging() -> None:

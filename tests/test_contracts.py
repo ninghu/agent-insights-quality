@@ -356,6 +356,36 @@ def test_scenario_counts_bind_to_catalog_and_insight_references() -> None:
         validate_canonical_report_semantics(report, agents, catalog, "report")
 
 
+def test_report_accepts_zero_f1_for_positive_counts_without_true_positives() -> None:
+    report, agents, catalog = _report_fixture(completed=True)
+    report["status"] = "NOT AT BAR"
+    report["scenario_results"][0]["verdict"] = "incorrect_noise"
+    scorecard = report["scorecard"]
+    scorecard["verdict"] = "NOT AT BAR"
+    scorecard["counts"].update(
+        {
+            "true_positives": 0,
+            "false_positives": 1,
+            "false_negatives": 1,
+        }
+    )
+    scorecard["rates"].update(
+        {
+            "high_severity_recall": 0.0,
+            "overall_recall": 0.0,
+            "precision": 0.0,
+            "f1": 0.0,
+        }
+    )
+    scorecard["violations"] = [
+        "high_severity_recall",
+        "overall_recall",
+        "precision",
+    ]
+
+    validate_canonical_report_semantics(report, agents, catalog, "report")
+
+
 def test_one_physical_run_insight_cannot_belong_to_multiple_scenarios() -> None:
     agents = load_agent_manifests()
     catalog = load_scenario_catalog(set(EXPECTED_AGENTS))

@@ -1397,9 +1397,12 @@ def validate_canonical_report_semantics(
             sum(bool(result["insight_references"]) for result in healthy_results),
             len(healthy_results),
         )
-    expected_rates["f1"] = ratio(
-        2 * expected_rates["precision"] * expected_rates["overall_recall"],
-        expected_rates["precision"] + expected_rates["overall_recall"],
+    precision = expected_rates["precision"]
+    recall = expected_rates["overall_recall"]
+    expected_rates["f1"] = (
+        0.0
+        if precision == 0 and recall == 0 and produced_insights > 0 and expected_fault_count > 0
+        else ratio(2 * precision * recall, precision + recall)
     )
 
     if "field_judgments" in report:
