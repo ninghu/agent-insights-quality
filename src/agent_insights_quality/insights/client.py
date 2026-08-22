@@ -578,7 +578,6 @@ class AgentInsightsClient:
         monitor_id: str,
         *,
         agent_name: str | None = None,
-        agent_version: str | None = None,
     ) -> InsightCheckpoint:
         revisions: dict[str, str] = {}
         details: dict[str, Mapping[str, Any]] = {}
@@ -586,11 +585,7 @@ class AgentInsightsClient:
             insight_id = str(insight.get("id") or "")
             if agent_name is not None:
                 ia = insight.get("agent_name")
-                if ia is not None and str(ia) != agent_name:
-                    continue
-            if agent_version is not None:
-                iv = insight.get("agent_version")
-                if iv is not None and str(iv) != agent_version:
+                if not isinstance(ia, str) or ia != agent_name:
                     continue
             revision = str(_field(insight, "revision", "etag", "updated_at", "updatedAt") or "")
             if not insight_id or not revision:
