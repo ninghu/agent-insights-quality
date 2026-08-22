@@ -117,6 +117,9 @@ injected behavior intentionally violates the healthy contract.
 3. Poll read-only Application Insights queries until every expected trace ID and required
    parent-child span is present or the bounded deadline expires. Invocation and response IDs are
    correlation inputs, not trace IDs; resolve the trace `operation_Id` before linking.
+   For prompt tool turns, correlate every ordered response ID: intermediate operations require
+   `invoke_agent`, the final operation requires `invoke_agent` and `chat`, and all operations remain
+   bound to the same selected scenario.
 4. Trigger production Agent Insights on-demand runs for exact half-open windows.
 5. Require successful terminal states and zero insights.
 

@@ -1384,6 +1384,7 @@ def test_scenario_operations_uses_ordered_results_sleeps_delays_and_records_call
 
     assert receipt.called_tools == ("search", "fetch")
     assert receipt.response_id == "r3"
+    assert receipt.response_ids == ("r1", "r2", "r3")
     assert receipt.invocation_id == "inv-sc"
     assert receipt.request_id == "req-sc"
     # Only the operation with delay_seconds > 0 should have triggered a sleep
@@ -1393,6 +1394,56 @@ def test_scenario_operations_uses_ordered_results_sleeps_delays_and_records_call
     assert turn1_body["input"][0]["output"] == '{"hits":3}'
     turn2_body = json.loads(transport.calls[2]["body"])
     assert turn2_body["input"][0]["output"] == '{"body":"hello"}'
+
+
+def test_prompt_response_ids_must_be_unique_across_turns() -> None:
+    fixture = HealthyFixture(
+        id="duplicate-response-id",
+        input="go",
+        output_contains="done",
+        tool_outputs={
+            "search": {
+                "arguments": {},
+                "result": {"hits": 1},
+            }
+        },
+        expected_tool_calls=("search",),
+    )
+    transport = QueueTransport(
+        [
+            _response(
+                200,
+                {
+                    "id": "duplicate",
+                    "status": "in_progress",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "call_id": "call-1",
+                            "name": "search",
+                            "arguments": "{}",
+                        }
+                    ],
+                },
+            ),
+            _response(
+                200,
+                {
+                    "id": "duplicate",
+                    "status": "completed",
+                    "output_text": "done",
+                },
+            ),
+        ]
+    )
+    client = FoundryInvocationClient(
+        PROJECT_ENDPOINT,
+        lambda: "token",
+        transport=transport,
+    )
+
+    with pytest.raises(RuntimeContractError, match="unique across turns"):
+        client.invoke_prompt(_prompt_receipt(), fixture)
 
 
 def test_scenario_operations_fails_on_wrong_tool_name() -> None:
