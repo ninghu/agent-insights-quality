@@ -31,6 +31,7 @@ from agent_insights_quality.reporting import (
     render_trend,
     validate_report_consistency,
 )
+from agent_insights_quality.reporting.model import attach_structured_report_context
 from agent_insights_quality.artifact_io import (
     content_hash,
     write_bytes_atomic,
@@ -184,7 +185,9 @@ def build_failure_report(
         },
         "delivery": {"state": "unsent", "request_reference": None},
     }
+    report = attach_structured_report_context(report, plan)
     validate_report_consistency(report)
+    validate_report_plan_binding(report, plan, "canonical report")
     return report
 
 
@@ -371,12 +374,14 @@ def write_daily_artifacts_to_reports_root(
 
 
 def finalize_success(
+    plan: dict[str, Any],
     report: dict[str, Any],
     prior_reports: list[dict[str, Any]],
     agent_links: Mapping[str, str],
     expected_link_context: RuntimeLinkContext,
     recipient: dict[str, str | None],
 ) -> dict[str, Any]:
+    report = attach_structured_report_context(report, plan)
     trend = render_trend(prior_reports + [report])
     request = create_email_send_request(
         report, trend, agent_links, expected_link_context, recipient

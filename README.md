@@ -15,6 +15,12 @@ correct, every run's observed count exactly matches the sum of its selected assi
 finding counts, and duplicate, umbrella, and stale-version rates are zero. Extra findings are noise;
 missing findings are misses. Incomplete or untrustworthy runs are `INCONCLUSIVE`, never passes.
 
+Canonical report `1.1.0` records the enforced thresholds, scorecard-derived actuals, and a pass/fail
+explanation for every gate. It also carries exactly one daily-plan-bound human-validation checklist
+per test agent. `report.md` expands those checklists into per-version one-pagers; the four-section
+Outlook-safe email keeps the same evidence compact and adds private Agent Insights links only during
+the direct email handoff. Historical `1.0.0` reports remain schema-compatible.
+
 ## Local development
 
 Python 3.11 or newer is required.

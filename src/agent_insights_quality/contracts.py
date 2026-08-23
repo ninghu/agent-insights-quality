@@ -27,6 +27,7 @@ SELECTION_POLICY_SCHEMA = SCHEMAS / "selection-policy.schema.json"
 TRUST_FAILURES = {
     "structural_failure",
     "provenance_failure",
+    "secret_or_pii",
     "judge_schema_failure",
     "unresolved_judgment",
 }
@@ -118,6 +119,8 @@ def validate_schemas() -> None:
         schema = load_data(path)
         try:
             Draft202012Validator.check_schema(schema)
+            for reference in _internal_schema_references(schema):
+                _resolve_internal_schema_reference(schema, reference)
         except Exception as error:
             raise ContractError(f"{path.relative_to(ROOT)}: invalid schema: {error}") from error
         if schema.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
@@ -131,6 +134,30 @@ def validate_schemas() -> None:
             raise ContractError(
                 f"{path.relative_to(ROOT)}: $id must be {expected_id}"
             )
+
+
+def _internal_schema_references(value: Any) -> list[str]:
+    references = []
+    if isinstance(value, dict):
+        reference = value.get("$ref")
+        if isinstance(reference, str) and reference.startswith("#/"):
+            references.append(reference)
+        for child in value.values():
+            references.extend(_internal_schema_references(child))
+    elif isinstance(value, list):
+        for child in value:
+            references.extend(_internal_schema_references(child))
+    return references
+
+
+def _resolve_internal_schema_reference(schema: dict[str, Any], reference: str) -> Any:
+    current: Any = schema
+    for raw_part in reference[2:].split("/"):
+        part = raw_part.replace("~1", "/").replace("~0", "~")
+        if not isinstance(current, dict) or part not in current:
+            raise ContractError(f"unresolved internal schema reference: {reference}")
+        current = current[part]
+    return current
 
 
 def validate_structured_file_syntax() -> None:
@@ -1162,6 +1189,12 @@ def validate_canonical_report_semantics(
     *,
     expected_scenario_ids: set[str] | None = None,
 ) -> None:
+    from agent_insights_quality.reporting.model import (
+        STRUCTURED_REPORT_VERSION,
+        validate_structured_bar,
+    )
+
+    validate_structured_bar(report, label)
     agent_by_id = {agent["id"]: agent for agent in agents}
     registered_ids = set(agent_by_id)
     reported_ids = [agent["id"] for agent in report["agents"]]
@@ -1176,6 +1209,40 @@ def validate_canonical_report_semantics(
             raise ContractError(f"{label}: reported agent name does not use its required prefix")
 
     scenario_by_id = {scenario["id"]: scenario for scenario in catalog["scenarios"]}
+    if report.get("schema_version") == STRUCTURED_REPORT_VERSION:
+        checklists = report["human_validation_checklists"]
+        checklist_ids = [item["agent_id"] for item in checklists]
+        if (
+            len(checklist_ids) != len(set(checklist_ids))
+            or set(checklist_ids) != registered_ids
+        ):
+            raise ContractError(
+                f"{label}: human validation requires exactly one checklist per report agent"
+            )
+        reported_agents = {item["id"]: item for item in report["agents"]}
+        for checklist in checklists:
+            agent_id = checklist["agent_id"]
+            if checklist["review_reason"] != reported_agents[agent_id]["human_validation"]:
+                raise ContractError(
+                    f"{label}: checklist review reason contradicts derived human validation"
+                )
+            for version in checklist["versions"]:
+                for expected in version["expected_scenarios"]:
+                    scenario = scenario_by_id.get(expected["scenario_id"])
+                    if scenario is None:
+                        raise ContractError(
+                            f"{label}: checklist references an unknown scenario"
+                        )
+                    if (
+                        expected["title"] != scenario["title"]
+                        or expected["root_cause"]
+                        != scenario["expected"]["root_cause"]
+                        or expected["category"] != scenario["expected"]["category"]
+                        or expected["severity"] != scenario["expected"]["severity"]
+                    ):
+                        raise ContractError(
+                            f"{label}: checklist ground truth contradicts the scenario contract"
+                        )
     active_ids = {
         scenario["id"] for scenario in catalog["scenarios"] if scenario["status"] == "active"
     }
@@ -1668,6 +1735,11 @@ def validate_report_plan_binding(
     plan: dict[str, Any],
     label: str,
 ) -> None:
+    from agent_insights_quality.reporting.model import (
+        STRUCTURED_REPORT_VERSION,
+        build_human_validation_checklists,
+    )
+
     if (
         report["report_id"] != plan["plan_id"]
         or report["plan_id"] != plan["plan_id"]
@@ -1707,6 +1779,12 @@ def validate_report_plan_binding(
             or result["agent_version_digest"] != current["digest"]
         ):
             raise ContractError(f"{label}: scenario result version differs from the daily plan")
+    if report.get("schema_version") == STRUCTURED_REPORT_VERSION:
+        expected_checklists = build_human_validation_checklists(report, plan)
+        if report["human_validation_checklists"] != expected_checklists:
+            raise ContractError(
+                f"{label}: human validation checklists drift from the immutable daily plan"
+            )
 
 
 def validate_historical_report_semantics(

@@ -288,16 +288,21 @@ standalone-tab flight is on and `/monitor/insights` when it is off. Trace links 
    not report-required. Full-catalog mode still requires all 63.
 3. Render detailed `report.json` and `report.md`, then consistent `latest.json`, `latest.md`, and
    `trend.json`. Include per-agent/version/scenario results, field judgments, collection analysis,
-   memory changes, bug actions, diagnostics, and opaque Agent Insights references. Never commit a
-   private link.
+   memory changes, bug actions, diagnostics, and opaque Agent Insights references. Put a prominent
+   scorecard-derived `Quality bar and result` section before the numeric detail. Include exactly one
+   daily-plan-bound human-validation one-pager per report agent, covering every immutable run/version/
+   phase, expected count, scenario title/root cause/category/severity, observed final cards, and
+   bounded double-check guidance. Never commit a private link.
 4. Render HTML from the canonical model with HTML encoding. Subject:
    `[Agent Insights Quality] <AT BAR|NOT AT BAR|INCONCLUSIVE> - YYYY-MM-DD - <short signal>`.
-5. Email sections are Summary, What we are doing well, Gaps and regressions, and Test agents and
-   Agent Insights links. Resolve private links only while rendering the direct email; do not persist
-   them in public files. State `Expected X findings; observed Y`; describe extras as noise and missing
-   findings as missed issues. Keep detailed numbers in Markdown. Include a 14-day email-safe trend
-   and every agent. Human validation is exactly `N/A` unless ambiguity, disagreement, low confidence,
-   novelty, or an unverifiable fix warrants review.
+5. Email sections remain exactly Summary, What we are doing well, Gaps and regressions, and Test agents
+   and Agent Insights links. Summary defines the enforced bar and states scorecard-derived actuals plus
+   the reason for `NOT AT BAR`. Doing well names concrete passing evidence. Collapse failures into
+   four to six metric-rich gap bullets rather than rendering generic gate codes. The agent table
+   compactly states each version's expected count, title/root cause/category/severity, and what to
+   double-check. Resolve private links only while rendering the direct email; do not persist them in
+   public files. Include a 14-day email-safe trend and every agent. Preserve the existing deterministic
+   `agents[].human_validation` reason while using the structured checklist for richer guidance.
 6. Resolve the selected protected recipient variable, enforce the configured allowed domain, and
    execute the request's no-duplicate transport strategy. Do not use a repository credential, relay,
    hidden override, or Logic App.
