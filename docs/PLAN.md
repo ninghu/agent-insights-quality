@@ -737,7 +737,8 @@ container with inline styles, readable narrow-screen padding, and no external CS
 
 ### 1. Summary
 
-- `AT BAR`, `NOT AT BAR`, or `INCONCLUSIVE` banner.
+- `Overall insight quality score` banner: strict true positives divided by expected roots, scaled to
+  0-100. Display `N/A` for incomplete evidence or zero expected roots.
 - A short assessment of which meaningful problems were or were not found and the overall judgment.
 - A compact three-row `Grade | Findings` table that classifies observed-card customer utility/content
   as fully correct, partially useful, or incorrect/noisy. Derive it from content attributes, not the
@@ -766,10 +767,10 @@ present. Prefix every `What happened` cell with sorted, deterministically attrib
 use `All test agents` only for a proven report-wide condition. State bug-candidate or confirmed
 private-action status separately from product gaps.
 
-The detailed Markdown analysis distinguishes silent expected-root misses from roots that produced
-cards without a correct root-cause match. It reports the content-attribute denominator explicitly,
-shows pass counts for partially useful cards, gives per-agent expected/observed/silent/root-correct/
-partial/incorrect/healthy-noise counts, and keeps duplicate/fragment/umbrella/stale metrics separate.
+The top-level Markdown is a concise daily summary and index. Five per-agent Markdown reports
+distinguish silent expected-root misses from roots that produced cards without a correct root-cause
+match, give expected/observed/silent/root-correct/partial/incorrect/healthy-noise counts, and keep
+agent-specific duplicate/fragment/umbrella/stale metrics separate.
 A private runtime-only sanitized insight-evaluation sidecar may supply actual generated category,
 title, description, and lifecycle-neutral evaluation text to `render-report`. The sidecar is
 count-reconciled to the canonical physical-card and utility-grade totals, then only its public-safe
@@ -779,20 +780,27 @@ rendered Markdown is committed; the source evidence and sidecar remain private.
 
 Include one compact table with every test agent, sorted by test-agent name:
 
-| Test agent | Type | Agent | Recommend human validation |
-| --- | --- | --- | --- |
+| Test agent | Type | Agent | Report | Recommended human validation | Assigned to |
+| --- | --- | --- | --- | --- | --- |
 
-The agent page is the runtime-resolved direct link ending at `/build/agents/{agent_name}` for the
-current date-stamped project and agent. Do not use `/monitor/insights` or `/insights` deep links in
-email. The private link appears only in direct email; public committed reports retain an
-opaque reference. The final email column is exactly `Yes` or `No`, derived from actual result,
-field, relationship, verifier, fix-verifiability, and manual-review evidence. Add one GitHub link to
-the full public-safe Markdown report for test-agent descriptions, injected issues, expected insights,
-immutable versions, and human-validation guidance; do not duplicate those details in email.
+The agent page is the runtime-resolved direct link ending at
+`/build/agents/{agent_name}/build?tid={tenant_id}` for the current date-stamped project and agent.
+The one Summary source link ends at `/home?tid={tenant_id}`. Do not use a bare agent path or
+`/monitor/insights` or `/insights` deep links in email. These private links appear only in direct
+email; public committed reports retain an
+opaque reference. The recommendation column is exactly `Yes` or `No`, derived from actual result,
+field, relationship, verifier, fix-verifiability, and manual-review evidence. Each row says
+`View report` and links to that agent's public-safe Markdown report for actual generated insights,
+injected issues, expected insights, immutable versions, and guidance. The assigned owners are the
+reviewed stable 001-005 mapping; do not duplicate per-agent detail in email.
+
+Display `hosted_custom_container` as `container`. Append one final `GitHub Copilot` / `coding`
+row with `N/A` for Agent, Report, and Assigned to, and `Yes` for human validation. Display owners
+exactly as: 001 Han, 002 Ilya, 003 Sean, 004 Billy, 005 Han.
 
 Subject format:
 
-`[Agent Insights Quality] <AT BAR|NOT AT BAR|INCONCLUSIVE> - YYYY-MM-DD - <short signal>`
+`[Agent Insights Quality] <score/100|N/A> - YYYY-MM-DD - <short signal>`
 
 Generate one canonical report model, then render detailed JSON/Markdown and the simpler email-safe
 HTML from it. All dynamic content is HTML-encoded. Add deterministic consistency tests so the

@@ -21,7 +21,8 @@ per test agent. `report.md` and the Outlook-safe email lead with concise Summary
 and What needs improvement assessment tables derived from that canonical evidence. Detailed numeric
 evidence and per-version human-validation checklists remain afterward; private agent-page links
 and runtime Foundry project context are added only during the direct email handoff. The email omits
-trend presentation and links to the full public-safe Markdown detail. Historical `1.0.0` reports
+trend presentation and links each row to one of five public-safe per-agent Markdown reports.
+Historical `1.0.0` reports
 remain schema-compatible. Observed-card utility grades exclude lifecycle and collection hygiene,
 which remain separate quality gates.
 

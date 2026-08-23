@@ -16,7 +16,7 @@ from agent_insights_quality.contracts import (
     validate_canonical_report_semantics,
     validate_instance,
 )
-from agent_insights_quality.links import validate_agent_page_url
+from agent_insights_quality.links import project_page_url, validate_agent_page_url
 from agent_insights_quality.links import RuntimeLinkContext
 from agent_insights_quality.artifact_io import content_hash, verified_hash
 from agent_insights_quality.judging import AUTO_BUG_CONFIDENCE
@@ -42,6 +42,13 @@ _EMAIL = re.compile(r"^[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+)$")
 _PUBLIC_REPORT_BASE_URL = (
     "https://github.com/ninghu/agent-insights-quality/blob/main/"
 )
+_AGENT_ASSIGNEES = {
+    "001": "Han",
+    "002": "Ilya",
+    "003": "Sean",
+    "004": "Billy",
+    "005": "Han",
+}
 _OUTLOOK_TEXT_STYLE = (
     "font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:21px;"
 )
@@ -243,6 +250,12 @@ def _summary_narrative(report: dict[str, Any]) -> list[str]:
                 f"failed category or severity correctness."
             )
         values.append(detail.strip())
+    if report["status"] != "INCONCLUSIVE":
+        values.append(
+            "The overall score measures strict expected-issue success only. Incorrect/noisy "
+            "insights and exact duplicates are independent guardrail metrics and do not "
+            "change the 0-100 score."
+        )
     return values
 
 
@@ -250,20 +263,37 @@ def _grade_rows(report: dict[str, Any]) -> list[tuple[str, str]]:
     if report["status"] == "INCONCLUSIVE":
         counts = report["scorecard"]["counts"]
         return [
-            ("Overall judgment", "INCONCLUSIVE"),
+            ("Overall insight quality score", "N/A"),
             (
                 "Completed scenarios",
                 f"{counts['completed_scenarios']} of {counts['active_scenarios']}",
             ),
-            ("Expected findings", "N/A"),
-            ("Observed findings", "N/A"),
+            ("Incorrect/noisy insights", "N/A"),
+            ("Exact duplicates", "N/A"),
         ]
     grades = _finding_grades(report)
+    observed = (report.get("bar_definition") or derive_bar_definition(report))[
+        "actuals"
+    ]["observed_findings"]
     return [
-        ("Fully correct (content utility)", str(grades["correct"])),
-        ("Partially useful (content utility)", str(grades["partially_useful"])),
-        ("Incorrect/noisy (content utility)", str(grades["incorrect"])),
+        ("Overall insight quality score", _overall_insight_quality_score(report)),
+        ("Fully correct (content utility)", f"{grades['correct']}/{observed}"),
+        ("Partially useful (content utility)", f"{grades['partially_useful']}/{observed}"),
+        ("Incorrect/noisy insights", f"{grades['incorrect']}/{observed}"),
+        ("Exact duplicates", str(report["collection_analysis"]["duplicates"])),
     ]
+
+
+def _overall_insight_quality_score(report: dict[str, Any]) -> str:
+    if report["status"] == "INCONCLUSIVE":
+        return "N/A"
+    actuals = (report.get("bar_definition") or derive_bar_definition(report))["actuals"]
+    expected = actuals["expected_findings"]
+    if expected == 0:
+        return "N/A"
+    score = 100 * report["scorecard"]["counts"]["true_positives"] / expected
+    value = f"{score:.1f}".rstrip("0").rstrip(".")
+    return f"{value}/100"
 
 
 def _assessment_scope(report: dict[str, Any]) -> str:
@@ -846,6 +876,32 @@ def _ordered_agents(report: dict[str, Any]) -> list[dict[str, Any]]:
     )
 
 
+def _agent_assignee(agent_id: str) -> str:
+    match = re.match(r"^aiq-([0-9]{3})-", agent_id)
+    if match is None or match.group(1) not in _AGENT_ASSIGNEES:
+        raise ContractError(f"No reviewed assignee for test agent: {agent_id}")
+    return _AGENT_ASSIGNEES[match.group(1)]
+
+
+def _display_agent_type(agent_type: str) -> str:
+    return "container" if agent_type == "hosted_custom_container" else agent_type
+
+
+def _report_repo_path(report: dict[str, Any]) -> str:
+    base = "reports/daily/" + report["report_date"].replace("-", "/")
+    if report["report_id"] != f"aiq-{report['report_date'].replace('-', '')}":
+        base += f"/{report['report_id']}"
+    return base + "/report.md"
+
+
+def _agent_report_repo_path(report: dict[str, Any], agent_id: str) -> str:
+    return _report_repo_path(report).removesuffix("report.md") + f"agents/{agent_id}.md"
+
+
+def _agent_report_url(report: dict[str, Any], agent_id: str) -> str:
+    return _PUBLIC_REPORT_BASE_URL + _agent_report_repo_path(report, agent_id)
+
+
 def _recommend_human_validation(
     report: dict[str, Any],
     agent: dict[str, Any],
@@ -968,6 +1024,8 @@ def _validated_insight_evaluations(
 def render_report_markdown(
     report: dict[str, Any],
     insight_evaluations: dict[str, Any] | None = None,
+    *,
+    combined_detail: bool = False,
 ) -> str:
     validate_report_consistency(report)
     score = report["scorecard"]
@@ -979,7 +1037,8 @@ def render_report_markdown(
         f"# Agent Insights Quality Report - {report['report_date']}",
         "",
         f"- Report: `{report['report_id']}`",
-        f"- Status: **{report['status']}**",
+        f"- Overall insight quality score: **{_overall_insight_quality_score(report)}**",
+        f"- Canonical audit verdict: `{report['status']}`",
         f"- Engine: `{report['engine']['build']}` / `{report['engine']['generator_model']}`",
         f"- Complete: `{str(score['complete']).lower()}`",
         "",
@@ -1026,6 +1085,54 @@ def render_report_markdown(
     action_status = _bug_action_status(report)
     if action_status:
         lines.extend(["", f"**Follow-up:** {action_status}"])
+    _validated_insight_evaluations(report, insight_evaluations)
+    root_analysis = _root_cause_analysis(report)
+    collection = report["collection_analysis"]
+    lines.extend(
+        [
+            "",
+            "## Daily assessment",
+            "",
+            f"- Expected roots: {actuals['expected_findings']}; observed physical cards: "
+            f"{actuals['observed_findings']}; strict true positives: "
+            f"{counts['true_positives']}.",
+            f"- Root-cause-correct cards: {root_analysis['root_correct_cards']} of "
+            f"{actuals['observed_findings']}; true silent misses: "
+            f"{root_analysis['silent_misses']}.",
+            f"- Lifecycle/collection: {collection['duplicates']} duplicates, "
+            f"{collection['fragments']} fragments, {collection['umbrellas']} umbrellas, "
+            f"{collection['stale_version']} stale-version relationships.",
+            "",
+            "## Quality bar and result",
+            "",
+            "AT BAR requires exact expected-versus-observed cards for every run and agent; "
+            "at least 90% recall and 95% precision; 100% required-field correctness; zero "
+            "duplicate, fragment, umbrella, stale-version, and healthy-control cards; and "
+            "no trust failure.",
+            "",
+            f"**Overall insight quality score: "
+            f"{_overall_insight_quality_score(report)}.** "
+            f"Recall was {actuals['overall_recall']:.1%}, "
+            f"precision was {actuals['precision']:.1%}, and required-field correctness "
+            f"was {actuals['required_field_correctness']:.1%}.",
+            "",
+            "## Per-agent reports",
+            "",
+            "| Agent | Report | Recommended human validation | Assigned to |",
+            "| --- | --- | --- | --- |",
+        ]
+    )
+    for agent in _ordered_agents(report):
+        lines.append(
+            f"| {agent['name']} (`{agent['id']}`) | "
+            f"[View report](agents/{agent['id']}.md) | "
+            f"{'Yes' if _recommend_human_validation(report, agent) else 'No'} | "
+            f"{_agent_assignee(agent['id'])} |"
+        )
+    if not combined_detail:
+        return "\n".join(lines + [""])
+
+    # The compatibility mode preserves the former combined engineering detail when requested.
     lines.extend(
         [
         "",
@@ -1352,6 +1459,184 @@ def render_report_markdown(
     return "\n".join(lines + [""])
 
 
+def render_agent_report_markdown(
+    report: dict[str, Any],
+    agent_id: str,
+    insight_evaluations: dict[str, Any] | None = None,
+) -> str:
+    validate_report_consistency(report)
+    agents = {agent["id"]: agent for agent in report["agents"]}
+    if agent_id not in agents:
+        raise ContractError(f"Unknown report agent: {agent_id}")
+    agent = agents[agent_id]
+    results = sorted(
+        (
+            item
+            for item in report["scenario_results"]
+            if item["agent_id"] == agent_id
+        ),
+        key=lambda item: (item["run_id"], item["scenario_id"]),
+    )
+    scenario_ids = {item["scenario_id"] for item in results}
+    judgments = [
+        item
+        for item in report["field_judgments"]
+        if item["scenario_id"] in scenario_ids
+    ]
+    cards = [
+        card
+        for card in _validated_insight_evaluations(report, insight_evaluations)
+        if card["agent_id"] == agent_id
+    ]
+    assessment = next(
+        row for row in _per_agent_assessment_rows(report) if row[0] == agent["name"]
+    )
+    lines = [
+        f"# Agent Insights Quality - {agent['name']}",
+        "",
+        f"- Daily report: [`{report['report_id']}`](../report.md)",
+        f"- Report date: `{report['report_date']}`",
+        f"- Overall insight quality score: "
+        f"**{_overall_insight_quality_score(report)}**",
+        f"- Test agent: `{agent_id}`",
+        f"- Type: `{agent['type']}`",
+        f"- Assigned to: {_agent_assignee(agent_id)}",
+        "- Recommend human validation: "
+        + ("**Yes**" if _recommend_human_validation(report, agent) else "**No**"),
+        "",
+        "## Assessment summary",
+        "",
+        "| Expected roots | Observed cards | Silent misses | Root-correct cards | "
+        "Partially useful | Incorrect/noisy | Healthy-control noise |",
+        "| ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        f"| {assessment[1]} | {assessment[2]} | {assessment[3]} | "
+        f"{assessment[4]} | {assessment[5]} | {assessment[6]} | {assessment[7]} |",
+        "",
+        "Utility grading is lifecycle-neutral. Lifecycle and collection hygiene are "
+        "reported separately and never change the observed-card content-utility grade.",
+        "",
+        "## Relevant product gaps",
+        "",
+        "| Product gap | What happened | Needed behavior |",
+        "| --- | --- | --- |",
+    ]
+    for gap, happened, needed in _improvement_rows(report):
+        if "Affected test agents: All test agents." in happened or agent["name"] in happened:
+            lines.append(
+                f"| {_markdown_cell(gap)} | {_markdown_cell(happened)} | "
+                f"{_markdown_cell(needed)} |"
+            )
+    lines.extend(
+        [
+            "",
+            "## Expected scenarios and results",
+            "",
+            "| Run | Scenario | Phase | Expected | Observed | Canonical verdict |",
+            "| --- | --- | --- | ---: | ---: | --- |",
+        ]
+    )
+    for result in results:
+        lines.append(
+            f"| `{result['run_id']}` | `{result['scenario_id']}` | "
+            f"{result['version_sequence']['phase']} | {result['expected_count']} | "
+            f"{result['observed_count']} | {result['verdict']} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Generated insight evaluation",
+            "",
+            "Actual generated category, title, and description are sanitized from private "
+            "runtime evidence. No raw provider identifier or private portal URL is retained.",
+            "",
+        ]
+    )
+    if not cards:
+        lines.extend(["No generated-card detail is available for this historical rendering.", ""])
+    current_version = None
+    for card in cards:
+        if card["agent_name"] != current_version:
+            if current_version is not None:
+                lines.append("")
+            current_version = card["agent_name"]
+            lines.extend(
+                [
+                    f"### {card['agent_name']}",
+                    "",
+                    "| Category | Title | Description | Evaluation result |",
+                    "| --- | --- | --- | --- |",
+                ]
+            )
+        lines.append(
+            f"| {_markdown_cell(card['category'])} | "
+            f"{_markdown_cell(card['title'])} | "
+            f"{_markdown_cell(card['description'])} | "
+            f"{_markdown_cell(card['evaluation_result'])} |"
+        )
+    duplicates = sum(item["relationships"]["duplicate"] for item in judgments)
+    fragments = sum(item["relationships"]["fragment"] for item in judgments)
+    umbrellas = sum(item["relationships"]["umbrella"] for item in judgments)
+    stale = sum(item["stale_version"] for item in judgments)
+    lines.extend(
+        [
+            "",
+            "## Lifecycle and collection hygiene",
+            "",
+            "| Evaluated cards | Exact duplicates | Fragments | Umbrellas | Stale version |",
+            "| ---: | ---: | ---: | ---: | ---: |",
+            f"| {len(judgments)} | {duplicates} | {fragments} | {umbrellas} | {stale} |",
+            "",
+            "## Evidence and human-validation guidance",
+            "",
+        ]
+    )
+    checklists = {
+        item["agent_id"]: item
+        for item in report.get("human_validation_checklists", [])
+    }
+    checklist = checklists.get(agent_id)
+    if checklist is None:
+        lines.extend([agent["human_validation"], ""])
+        return "\n".join(lines)
+    lines.extend(
+        [
+            f"**Review reason:** {checklist['review_reason']}",
+            "",
+            "| Run / immutable version | Injected issue(s) | Expected insight(s) | "
+            "Observed final cards | Human-validation guidance |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+    )
+    for version in checklist["versions"]:
+        injected = "<br>".join(
+            f"`{item['scenario_id']}` {item['title']}: {item['root_cause']}"
+            for item in version["expected_scenarios"]
+        )
+        expected = "<br>".join(
+            f"{item['expected_insight_count']} expected; "
+            f"{item['category']} / {item['severity']}"
+            for item in version["expected_scenarios"]
+        )
+        observed = (
+            "<br>".join(
+                f"`{card['insight_reference']}` "
+                f"({card['verdict']} canonical verdict)"
+                for card in version["observed_final_cards"]
+            )
+            or "None"
+        )
+        lines.append(
+            f"| `{version['run_id']}` / {version['phase']} "
+            f"`{version['version_digest']}` | {injected} | "
+            f"Total {version['expected_insight_count']} expected<br>{expected} | "
+            f"{observed} | {version['double_check']} |"
+        )
+    lines.extend(["", "**Standard checklist**", ""])
+    lines.extend(f"- [ ] {item}" for item in checklist["standard_checks"])
+    lines.extend([f"- Human outcome: `{checklist['human_outcome']}`", ""])
+    return "\n".join(lines)
+
+
 def render_trend(reports: list[dict[str, Any]], *, limit: int = 14) -> dict[str, Any]:
     if limit < 1 or limit > 90:
         raise ContractError("Trend limit must be between 1 and 90")
@@ -1473,39 +1758,16 @@ def _data_table(
     )
 
 
-def _private_data_source_table(
-    report: dict[str, Any],
+def _private_project_source_link(
     context: RuntimeLinkContext,
 ) -> str:
-    project_url = context.resource_route()
+    project_url = project_page_url(context)
     return (
-        '<table cellpadding="0" cellspacing="0" border="0" width="100%" '
-        f'style="width:100%;border-collapse:collapse;margin-top:18px;'
-        f'{_OUTLOOK_TEXT_STYLE}">'
-        '<tr bgcolor="#e8eef7">'
-        '<th align="left" width="28%" style="padding:10px 12px;'
-        f'border:1px solid #d6deea;color:#12304a;{_OUTLOOK_TEXT_STYLE}'
-        'font-weight:700;">Data source</th>'
-        '<th align="left" width="72%" style="padding:10px 12px;'
-        f'border:1px solid #d6deea;color:#12304a;{_OUTLOOK_TEXT_STYLE}'
-        'font-weight:700;">Resolved value</th></tr>'
-        "<tr>"
-        '<td style="padding:11px 12px;border:1px solid #d6deea;color:#334155;'
-        f'vertical-align:top;{_OUTLOOK_TEXT_STYLE}">Foundry project</td>'
-        '<td style="padding:11px 12px;border:1px solid #d6deea;color:#334155;'
-        f'vertical-align:top;{_OUTLOOK_TEXT_STYLE}">'
-        f"{html.escape(context.account)} / {html.escape(context.project)} &middot; "
+        f'<p style="margin:0 0 18px 0;color:#334155;{_OUTLOOK_TEXT_STYLE}">'
+        "Foundry source: "
         f'<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
-        f'href="{html.escape(project_url, quote=True)}">Open authenticated project</a>'
-        "</td></tr>"
-        "<tr>"
-        '<td style="padding:11px 12px;border:1px solid #d6deea;color:#334155;'
-        f'vertical-align:top;{_OUTLOOK_TEXT_STYLE}">Canonical assessment</td>'
-        '<td style="padding:11px 12px;border:1px solid #d6deea;color:#334155;'
-        f'vertical-align:top;{_OUTLOOK_TEXT_STYLE}">'
-        f"{html.escape(report['report_id'])} &middot; "
-        f"{html.escape(report['report_date'])} &middot; generated "
-        f"{html.escape(report['generated_at'])}</td></tr></table>"
+        f'href="{html.escape(project_url, quote=True)}">'
+        f"{html.escape(context.account)} / {html.escape(context.project)}</a>.</p>"
     )
 
 
@@ -1542,16 +1804,7 @@ def render_email_html(
         if report["status"] == "INCONCLUSIVE"
         else report["scorecard"]["rates"]["precision"]
     )
-    expected_path = (
-        "reports/daily/"
-        + report["report_date"].replace("-", "/")
-        + (
-            f"/{report['report_id']}"
-            if report["report_id"] != f"aiq-{report['report_date'].replace('-', '')}"
-            else ""
-        )
-        + "/report.md"
-    )
+    expected_path = _report_repo_path(report)
     if (
         len(current_rows) != 1
         or current_rows[0]["status"] != report["status"]
@@ -1575,8 +1828,9 @@ def render_email_html(
         if counts["new_issues"] or counts["regressed_issues"]
         else f"{counts['completed_scenarios']}/{counts['active_scenarios']} scenarios"
     )
+    overall_score = _overall_insight_quality_score(report)
     subject = (
-        f"[Agent Insights Quality] {report['status']} - {report['report_date']} - {signal}"
+        f"[Agent Insights Quality] {overall_score} - {report['report_date']} - {signal}"
     )
     summary = _summary_narrative(report)
     grade_rows = _grade_rows(report)
@@ -1584,10 +1838,10 @@ def render_email_html(
     improvements = _improvement_rows(report)
     action_status = _bug_action_status(report)
     status_style = _STATUS_STYLES[report["status"]]
-    report_url = _PUBLIC_REPORT_BASE_URL + expected_path
     rows = []
     for agent in _ordered_agents(report):
         recommend = "Yes" if _recommend_human_validation(report, agent) else "No"
+        report_url = _agent_report_url(report, agent["id"])
         rows.append(
             "<tr>"
             '<td style="padding:11px 12px;border:1px solid #d6deea;'
@@ -1596,15 +1850,34 @@ def render_email_html(
             '<span style="color:#64748b;font-size:12px;">'
             f"{html.escape(agent['id'])}</span></td>"
             '<td style="padding:11px 12px;border:1px solid #d6deea;'
-            f'color:#334155;">{html.escape(agent["type"])}</td>'
+            f'color:#334155;">{html.escape(_display_agent_type(agent["type"]))}</td>'
             '<td style="padding:11px 12px;border:1px solid #d6deea;">'
             f'<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
             f'href="{html.escape(agent_links[agent["id"]], quote=True)}">'
             "Open agent</a></td>"
+            '<td style="padding:11px 12px;border:1px solid #d6deea;">'
+            f'<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
+            f'href="{html.escape(report_url, quote=True)}">View report</a></td>'
             '<td style="padding:11px 12px;border:1px solid #d6deea;'
             f'color:#334155;line-height:18px;font-weight:700;">{recommend}</td>'
+            '<td style="padding:11px 12px;border:1px solid #d6deea;'
+            f'color:#334155;line-height:18px;">'
+            f"{html.escape(_agent_assignee(agent['id']))}</td>"
             "</tr>"
         )
+    rows.append(
+        "<tr>"
+        '<td style="padding:11px 12px;border:1px solid #d6deea;'
+        'color:#1f2937;line-height:18px;"><strong>GitHub Copilot</strong></td>'
+        '<td style="padding:11px 12px;border:1px solid #d6deea;color:#334155;">'
+        "coding</td>"
+        '<td style="padding:11px 12px;border:1px solid #d6deea;color:#334155;">N/A</td>'
+        '<td style="padding:11px 12px;border:1px solid #d6deea;color:#334155;">N/A</td>'
+        '<td style="padding:11px 12px;border:1px solid #d6deea;'
+        'color:#334155;font-weight:700;">Yes</td>'
+        '<td style="padding:11px 12px;border:1px solid #d6deea;color:#334155;">N/A</td>'
+        "</tr>"
+    )
     body = (
         '<!doctype html><html><body bgcolor="#f3f6fa" '
         'style="margin:0;padding:0;background-color:#f3f6fa;font-family:Segoe UI,'
@@ -1627,7 +1900,7 @@ def render_email_html(
         f'<span style="display:inline-block;padding:5px 10px;background-color:'
         f'{status_style["background"]};color:{status_style["foreground"]};'
         'font-size:12px;line-height:16px;font-weight:700;">'
-        f"{html.escape(report['status'])}</span>"
+        f"Overall insight quality score: {html.escape(overall_score)}</span>"
         '<p style="margin:15px 0 0 0;color:#aebfd0;font-size:12px;line-height:18px;">'
         f"Report {html.escape(report['report_id'])} &middot; Build "
         f"{html.escape(report['engine']['build'])}</p>"
@@ -1637,7 +1910,7 @@ def render_email_html(
         'width="100%" bgcolor="#eaf4ff" style="width:100%;background-color:#eaf4ff;'
         'border-left:5px solid #0078d4;border-collapse:collapse;">'
         '<tr><td style="padding:18px 20px;color:#12304a;font-size:16px;line-height:24px;">'
-        f"<strong>{html.escape(_quality_conclusion(report['status']))}</strong>"
+        f"<strong>Overall insight quality score: {html.escape(overall_score)}</strong>"
         "</td></tr></table></td></tr>"
         '<tr><td style="padding:28px 32px 0 32px;">'
         + _section_heading(SECTION_TITLES[0])
@@ -1649,8 +1922,8 @@ def render_email_html(
         + f'<p style="margin:0 0 18px 0;color:#64748b;{_OUTLOOK_TEXT_STYLE}">'
         + html.escape(_assessment_scope(report))
         + "</p>"
+        + _private_project_source_link(expected_link_context)
         + _data_table(("Grade", "Findings"), grade_rows, (38, 62))
-        + _private_data_source_table(report, expected_link_context)
         + "</td></tr>"
         '<tr><td style="padding:30px 32px 0 32px;">'
         + _section_heading(SECTION_TITLES[1])
@@ -1672,22 +1945,21 @@ def render_email_html(
         + "</td></tr>"
         '<tr><td style="padding:24px 32px 38px 32px;">'
         + _section_heading(SECTION_TITLES[3])
-        + '<p style="margin:0 0 14px 0;color:#475569;font-size:14px;line-height:21px;">'
-        "For injected issues, expected insights, immutable versions, and validation guidance, "
-        f'<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
-        f'href="{html.escape(report_url, quote=True)}">open the full Markdown report</a>.'
-        "</p>"
         + '<table cellpadding="0" cellspacing="0" border="0" width="100%" '
         'style="width:100%;border-collapse:collapse;font-size:13px;">'
         '<tr bgcolor="#e8eef7">'
-        '<th align="left" width="36%" style="padding:10px 12px;border:1px solid #d6deea;'
-        'color:#12304a;">Test agent</th>'
-        '<th align="left" width="14%" style="padding:10px 12px;border:1px solid #d6deea;'
-        'color:#12304a;">Type</th>'
         '<th align="left" width="24%" style="padding:10px 12px;border:1px solid #d6deea;'
+        'color:#12304a;">Test agent</th>'
+        '<th align="left" width="10%" style="padding:10px 12px;border:1px solid #d6deea;'
+        'color:#12304a;">Type</th>'
+        '<th align="left" width="14%" style="padding:10px 12px;border:1px solid #d6deea;'
         'color:#12304a;">Agent</th>'
-        '<th align="left" width="26%" style="padding:10px 12px;border:1px solid #d6deea;'
-        'color:#12304a;">Recommend human validation</th></tr>'
+        '<th align="left" width="14%" style="padding:10px 12px;border:1px solid #d6deea;'
+        'color:#12304a;">Report</th>'
+        '<th align="left" width="23%" style="padding:10px 12px;border:1px solid #d6deea;'
+        'color:#12304a;">Recommended human validation</th>'
+        '<th align="left" width="15%" style="padding:10px 12px;border:1px solid #d6deea;'
+        'color:#12304a;">Assigned to</th></tr>'
         + "".join(rows)
         + "</table></td></tr></table>"
         "<!--[if mso]></td></tr></table><![endif]-->"

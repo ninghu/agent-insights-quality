@@ -8,6 +8,7 @@ allowed_paths:
   - reports/daily/*/*/*/plan.md
   - reports/daily/*/*/*/report.json
   - reports/daily/*/*/*/report.md
+  - reports/daily/*/*/*/agents/aiq-*.md
   - reports/daily/*/*/*/readiness-failure.json
   - reports/daily/*/*/*/readiness-failure.md
   - reports/daily/*/*/*/failure-email.html
@@ -18,6 +19,7 @@ allowed_paths:
   - reports/daily/*/*/*/aiq-*-r??/plan.md
   - reports/daily/*/*/*/aiq-*-r??/report.json
   - reports/daily/*/*/*/aiq-*-r??/report.md
+  - reports/daily/*/*/*/aiq-*-r??/agents/aiq-*.md
   - reports/daily/*/*/*/aiq-*-r??/failure-email.html
   - reports/daily/*/*/*/aiq-*-r??/daily-status.json
   - state/quality-memory.json

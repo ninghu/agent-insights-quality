@@ -382,16 +382,26 @@ def build_repro_html(candidate: dict[str, Any]) -> str:
         "trace_ids",
         "artifact_url",
         "insights_url",
+        "runtime_link_context",
         "fingerprint",
         "acceptance_criteria",
     )
     missing = [key for key in required if key not in candidate]
     if missing:
         raise ContractError("ADO candidate is missing repro fields: " + ", ".join(missing))
-    for key in ("artifact_url", "insights_url"):
-        parsed = urlparse(str(candidate[key]))
-        if parsed.scheme != "https" or not parsed.netloc or parsed.query or parsed.fragment:
-            raise ContractError(f"ADO {key} must be an HTTPS runtime link")
+    artifact_url = urlparse(str(candidate["artifact_url"]))
+    if (
+        artifact_url.scheme != "https"
+        or not artifact_url.netloc
+        or artifact_url.query
+        or artifact_url.fragment
+    ):
+        raise ContractError("ADO artifact_url must be an HTTPS runtime link")
+    validate_agent_insights_url(
+        str(candidate["insights_url"]),
+        RuntimeLinkContext.from_mapping(candidate["runtime_link_context"]),
+        str(candidate["agent"]),
+    )
     if not SHA256_PATTERN.fullmatch(str(candidate["fingerprint"])):
         raise ContractError("ADO fingerprint must be a SHA-256 reference")
     if any(

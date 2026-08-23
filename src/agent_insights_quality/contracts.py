@@ -558,9 +558,12 @@ def validate_link_policy(data: dict[str, Any]) -> None:
             "schema_version",
             "base_url",
             "agent_route_template",
+            "agent_page_suffix",
+            "project_page_suffix",
             "standalone_insights_suffix",
             "fallback_insights_suffix",
             "trace_suffix_template",
+            "tenant_query_parameter",
             "runtime_fields",
             "invocation_response_ids_are_trace_ids",
             "telemetry_correlation_field",
@@ -575,10 +578,19 @@ def validate_link_policy(data: dict[str, Any]) -> None:
             "/nextgen/r/{subscription},{resource_group},,{account},{project}"
             "/build/agents/{agent}"
         ),
+        "agent_page_suffix": "/build",
+        "project_page_suffix": "/home",
         "standalone_insights_suffix": "/insights",
         "fallback_insights_suffix": "/monitor/insights",
         "trace_suffix_template": "/traces/{operation_id}",
-        "runtime_fields": ["subscription", "resource_group", "account", "project"],
+        "tenant_query_parameter": "tid",
+        "runtime_fields": [
+            "subscription",
+            "resource_group",
+            "account",
+            "project",
+            "tenant_id",
+        ],
         "invocation_response_ids_are_trace_ids": False,
         "telemetry_correlation_field": "operation_Id",
         "persist_private_links": False,
@@ -1832,9 +1844,10 @@ def validate_report_layout() -> None:
     daily_pattern = re.compile(
         r"^daily/(?P<year>[0-9]{4})/(?P<month>[0-9]{2})/(?P<day>[0-9]{2})/"
         r"(?:(?P<rerun>aiq-[0-9]{8}-r[0-9]{2})/)?"
-        r"(?P<filename>plan\.json|plan\.md|report\.json|report\.md|failure-email\.html|"
+        r"(?:(?P<filename>plan\.json|plan\.md|report\.json|report\.md|failure-email\.html|"
         r"readiness-failure\.json|readiness-failure\.md|email-handoff\.json|"
-        r"email-send-request\.json|email-receipt\.json|daily-status\.json)$"
+        r"email-send-request\.json|email-receipt\.json|daily-status\.json)|"
+        r"agents/(?P<agent_report>aiq-[0-9]{3}-[a-z][a-z0-9-]*\.md))$"
     )
     files_by_record: dict[str, set[str]] = {}
     for path in sorted(reports_root.rglob("*")):
@@ -1857,6 +1870,8 @@ def validate_report_layout() -> None:
             raise ContractError(f"reports/{relative}: invalid report date path") from error
         if rerun is not None and not rerun.startswith(f"aiq-{year}{month}{day}-r"):
             raise ContractError(f"reports/{relative}: rerun plan ID does not match report date path")
+        if match.group("agent_report") is not None:
+            continue
         record = f"{year}/{month}/{day}" + (f"/{rerun}" if rerun else "")
         files_by_record.setdefault(record, set()).add(filename)
     complete_report = {"plan.json", "plan.md", "report.json", "report.md"}
@@ -2009,6 +2024,38 @@ def validate_report_artifacts(
             or report["status"] not in markdown
         ):
             raise ContractError(f"{label}: report.md contradicts or omits canonical report identity")
+        agent_report_root = path.parent / "agents"
+        if agent_report_root.is_dir():
+            expected_agent_reports = {
+                f"{agent['id']}.md" for agent in report["agents"]
+            }
+            actual_agent_reports = {
+                item.name for item in agent_report_root.iterdir() if item.is_file()
+            }
+            if actual_agent_reports != expected_agent_reports:
+                raise ContractError(
+                    f"{label}: per-agent Markdown reports do not match canonical agents"
+                )
+            from agent_insights_quality.public_safety import (
+                require_public_artifact_safe,
+            )
+
+            for agent in report["agents"]:
+                agent_markdown = (agent_report_root / f"{agent['id']}.md").read_text(
+                    encoding="ascii"
+                )
+                if (
+                    report["report_id"] not in agent_markdown
+                    or report["report_date"] not in agent_markdown
+                    or agent["id"] not in agent_markdown
+                ):
+                    raise ContractError(
+                        f"{label}: per-agent Markdown report omits canonical identity"
+                    )
+                require_public_artifact_safe(
+                    agent_markdown,
+                    f"{label}.agents.{agent['id']}",
+                )
         plan_path = path.with_name("plan.json")
         if not plan_path.is_file():
             raise ContractError(f"{label}: report requires a sibling plan.json")

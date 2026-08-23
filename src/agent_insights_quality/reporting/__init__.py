@@ -23,6 +23,7 @@ from agent_insights_quality.reporting.render import (
     build_email_send_request,
     create_email_send_request as create_email_send_request,
     import_email_receipt,
+    render_agent_report_markdown as render_agent_report_markdown,
     render_email_html as render_email_html,
     render_report_markdown as render_report_markdown,
     render_trend as render_trend,

@@ -26,6 +26,7 @@ from agent_insights_quality.finalizer import (
 from agent_insights_quality.reporting import (
     create_email_send_request,
     import_email_receipt,
+    render_agent_report_markdown,
     render_email_html,
     render_report_markdown,
     render_trend,
@@ -192,7 +193,13 @@ def field_judgment(scenario_id: str, reference: str) -> dict:
 
 
 def runtime_link_context(value: dict) -> RuntimeLinkContext:
-    return RuntimeLinkContext("sub", "rg", "account", value["plan_id"])
+    return RuntimeLinkContext(
+        "sub",
+        "rg",
+        "account",
+        value["plan_id"],
+        "00000000-0000-0000-0000-000000000001",
+    )
 
 
 def runtime_agent_links(value: dict) -> dict[str, str]:
@@ -358,13 +365,15 @@ def structured_not_at_bar_report(*, full_catalog: bool = False) -> tuple[dict, d
 
 def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> None:
     value = report()
+    value["agents"][-1]["type"] = "hosted_custom_container"
     value["summary"] = "Quality met bar <without injection>."
     trend = render_trend([value])
     links = runtime_agent_links(value)
     subject, body = render_email_html(
         value, trend, links, runtime_link_context(value)
     )
-    assert subject.startswith("[Agent Insights Quality] AT BAR")
+    assert subject.startswith("[Agent Insights Quality] N/A")
+    assert "Overall insight quality score: N/A" in body
     assert body.count("<h2 ") == 4
     assert "&lt;without injection&gt;" not in body
     assert "<without injection>" not in body
@@ -374,33 +383,65 @@ def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> No
     assert ">Findings</th>" in body
     assert "Fully correct (content utility)" in body
     assert "Partially useful (content utility)" in body
-    assert "Incorrect/noisy (content utility)" in body
+    assert "Incorrect/noisy insights" in body
+    assert "Exact duplicates" in body
     assert ">Capability</th>" in body
     assert ">Evidence</th>" in body
     assert ">Product gap</th>" in body
     assert ">What happened</th>" in body
     assert ">Needed behavior</th>" in body
+    assert ">Agent</th>" in body
+    assert ">Report</th>" in body
+    assert ">Recommended human validation</th>" in body
+    assert ">Assigned to</th>" in body
     assert ">Test agent</th>" in body
     assert ">Type</th>" in body
-    assert ">Agent</th>" in body
     assert "Open agent</a>" in body
+    assert body.count("View report</a>") == 5
     assert "/monitor/insights" not in body
     assert "/insights" not in body
-    assert ">Recommend human validation</th>" in body
     assert "Version expectations" not in body
     assert "What to double-check" not in body
     assert "14-day quality trend" not in body
     assert "Trusted insight trend" not in body
-    assert (
-        "https://github.com/ninghu/agent-insights-quality/blob/main/"
-        "reports/daily/2026/08/21/report.md"
-    ) in body
-    assert body.count("open the full Markdown report") == 1
-    assert ">Data source</th>" in body
-    assert ">Resolved value</th>" in body
+    for agent_id, assignee in (
+        ("aiq-001-agent", "Han"),
+        ("aiq-002-agent", "Ilya"),
+        ("aiq-003-agent", "Sean"),
+        ("aiq-004-agent", "Billy"),
+        ("aiq-005-agent", "Han"),
+    ):
+        assert f"agents/{agent_id}.md" in body
+        agent_name = next(
+            agent["name"] for agent in value["agents"] if agent["id"] == agent_id
+        )
+        row = re.search(
+            rf"<strong>{re.escape(agent_name)}</strong>.*?</tr>",
+            body,
+            flags=re.DOTALL,
+        ).group()
+        assert f">{assignee}</td>" in row
+    assert "hosted_custom_container" not in body
+    assert ">container</td>" in body
+    copilot_row = body[body.index("<strong>GitHub Copilot</strong>") :]
+    copilot_row = copilot_row[: copilot_row.index("</tr>")]
+    assert ">coding</td>" in copilot_row
+    assert copilot_row.count(">N/A</td>") == 3
+    assert ">Yes</td>" in copilot_row
+    assert body.index("<strong>GitHub Copilot</strong>") > max(
+        body.index(f"<strong>{agent['name']}</strong>")
+        for agent in value["agents"]
+    )
+    assert ">Data source</th>" not in body
+    assert ">Resolved value</th>" not in body
     assert "account / aiq-20260821" in body
-    assert "Open authenticated project" in body
-    assert "https://ai.azure.com/nextgen/r/sub,rg,,account,aiq-20260821" in body
+    assert "Foundry source:" in body
+    assert (
+        "https://ai.azure.com/nextgen/r/sub,rg,,account,aiq-20260821/"
+        "home?tid=00000000-0000-0000-0000-000000000001"
+    ) in body
+    summary = body[body.index(">Summary</h2>") : body.index(">What is working</h2>")]
+    assert summary.count("<table cellpadding=") == 1
     assert "No product-quality gap observed" in body
     assert 'bgcolor="#f3f6fa"' in body
     assert 'bgcolor="#12304a"' in body
@@ -451,7 +492,7 @@ def test_email_uses_simple_expected_observed_noise_and_miss_narrative() -> None:
         "extra_noise",
         "missing_findings",
     ]
-    _, body = render_email_html(
+    subject, body = render_email_html(
         value,
         render_trend([value]),
         runtime_agent_links(value),
@@ -460,6 +501,8 @@ def test_email_uses_simple_expected_observed_noise_and_miss_narrative() -> None:
 
     assert "5 distinct observed cards, 3 were fully correct on customer utility and content" in body
     assert "strict quality-bar matching found 3 of 4 expected problems" in body
+    assert subject.startswith("[Agent Insights Quality] 75/100")
+    assert "Overall insight quality score: 75/100" in body
     assert "4 findings were expected and 5 were observed" in body
     assert "Affected test agents: aiq-001-agent." in body
 
@@ -681,7 +724,7 @@ def test_content_utility_grades_ignore_lifecycle_and_collection_hygiene() -> Non
         "cross_version_stale",
     ]
 
-    markdown = render_report_markdown(value)
+    markdown = render_agent_report_markdown(value, first["id"])
     _, body = render_email_html(
         value,
         render_trend([value]),
@@ -796,7 +839,7 @@ def test_not_at_bar_one_pager_names_bar_actuals_metrics_and_agent_versions() -> 
     )
 
     assert "## Quality bar and result" in markdown
-    assert "Expected 20 findings; observed 21" in markdown
+    assert "**Overall insight quality score: 95/100.**" in markdown
     assert "## Summary" in markdown
     assert "| Grade | Findings |" in markdown
     assert "## What is working" in markdown
@@ -806,18 +849,18 @@ def test_not_at_bar_one_pager_names_bar_actuals_metrics_and_agent_versions() -> 
     assert "| Gate | Result | Evidence |" not in markdown
     assert "14-day quality trend" not in markdown
     assert "Trusted insight trend" not in markdown
-    assert "## Human validation one-pager" in markdown
+    assert "## Per-agent reports" in markdown
+    assert "## Scenario results" not in markdown
+    assert "## Source field judgments" not in markdown
+    assert "## Human validation one-pager" not in markdown
     assert "Data source: canonical report" in markdown
     assert "ai.azure.com" not in markdown
     assert "account /" not in markdown
-    assert "**Test-agent description:**" in markdown
-    assert "**Recommend human validation:** Yes" in markdown
-    assert "| Run / immutable version | Injected issue(s) | Expected insight(s) | Observed final cards | Human-validation guidance |" in markdown
     assert (
         markdown.index("## Summary")
         < markdown.index("## What is working")
         < markdown.index("## What needs improvement")
-        < markdown.index("## Human validation one-pager")
+        < markdown.index("## Per-agent reports")
     )
     assert body.count("<h2 ") == 4
     assert "Expected roots lacked a strict match" in body
@@ -830,19 +873,29 @@ def test_not_at_bar_one_pager_names_bar_actuals_metrics_and_agent_versions() -> 
     assert "<img" not in body
     assert "Version expectations" not in body
     assert "What to double-check" not in body
-    assert body.count("open the full Markdown report") == 1
+    assert body.count("View report</a>") == 5
     ordered_names = sorted(agent["name"] for agent in value["agents"])
-    assert [markdown.index(f"### {name}") for name in ordered_names] == sorted(
-        markdown.index(f"### {name}") for name in ordered_names
+    assert [markdown.index(name) for name in ordered_names] == sorted(
+        markdown.index(name) for name in ordered_names
     )
     for checklist in value["human_validation_checklists"]:
-        assert checklist["agent_id"] in markdown
+        assert f"agents/{checklist['agent_id']}.md" in markdown
         assert checklist["agent_id"] in body
+        agent_markdown = render_agent_report_markdown(
+            value,
+            checklist["agent_id"],
+        )
+        assert "## Evidence and human-validation guidance" in agent_markdown
+        assert all(
+            other["id"] not in agent_markdown
+            for other in value["agents"]
+            if other["id"] != checklist["agent_id"]
+        )
         for version in checklist["versions"]:
-            assert version["phase"] in markdown
-            assert str(version["expected_insight_count"]) + " expected" in markdown
-            assert version["double_check"] in markdown
-            assert version["expected_scenarios"][0]["root_cause"] in markdown
+            assert version["phase"] in agent_markdown
+            assert str(version["expected_insight_count"]) + " expected" in agent_markdown
+            assert version["double_check"] in agent_markdown
+            assert version["expected_scenarios"][0]["root_cause"] in agent_markdown
             assert html.escape(version["expected_scenarios"][0]["root_cause"]) not in body
 
 
@@ -857,7 +910,7 @@ def test_real_r19_copy_distinguishes_strict_matches_from_useful_signal() -> None
         / "aiq-20260821-r19"
         / "report.json"
     )
-    _, body = render_email_html(
+    subject, body = render_email_html(
         value,
         render_trend([value]),
         runtime_agent_links(value),
@@ -865,6 +918,25 @@ def test_real_r19_copy_distinguishes_strict_matches_from_useful_signal() -> None
     )
     markdown = render_report_markdown(value)
 
+    assert subject.startswith("[Agent Insights Quality] 0/100")
+    assert "Overall insight quality score: 0/100" in body
+    assert re.search(
+        r">Overall insight quality score</td><td[^>]*>0/100</td>",
+        body,
+    )
+    assert re.search(
+        r">Incorrect/noisy insights</td><td[^>]*>16/21</td>",
+        body,
+    )
+    assert re.search(r">Exact duplicates</td><td[^>]*>0</td>", body)
+    assert (
+        "The overall score measures strict expected-issue success only." in body
+    )
+    assert (
+        "independent guardrail metrics and do not change the 0-100 score" in body
+    )
+    assert "NOT AT BAR" not in body
+    assert "- Canonical audit verdict: `NOT AT BAR`" in markdown
     assert "0 were fully correct on customer utility and content" in body
     assert "5 were partially useful" in body
     assert (
@@ -895,35 +967,14 @@ def test_real_r19_copy_distinguishes_strict_matches_from_useful_signal() -> None
         "Across 5 mapped cards with fully or partially useful content "
         "(the scorecard attribute-rate denominator)" in body
     )
-    assert "## Detailed assessment analysis" in markdown
+    assert "## Daily assessment" in markdown
     assert (
-        "Root-cause-correct cards: 1 of 21; expected roots with a "
-        "root-cause-correct match: 1 of 20." in markdown
+        "Root-cause-correct cards: 1 of 21; true silent misses: 5." in markdown
     )
-    assert "True silent misses: 5 expected roots produced no card." in markdown
-    for expected_row in (
-        "| Root Cause | 1 | 5 |",
-        "| Title | 1 | 5 |",
-        "| Description | 3 | 5 |",
-        "| Category | 2 | 5 |",
-        "| Severity | 0 | 5 |",
-        "| Proposed Fix | 1 | 5 |",
-        "| Linked Traces | 3 | 5 |",
-        "| Evidence Localization | 3 | 5 |",
-        "| Meaningfulness | 5 | 5 |",
-        "| Actionability | 1 | 5 |",
-    ):
-        assert expected_row in markdown
-    for expected_row in (
-        "| aiq-001-weather-20260821-r19-w01 | 4 | 5 | 1 | 0 | 2 | 3 | 1 |",
-        "| aiq-002-healthcare-20260821-r19-w02 | 4 | 4 | 1 | 1 | 1 | 3 | 1 |",
-        "| aiq-003-finance-20260821-r19-w01 | 4 | 2 | 3 | 0 | 0 | 2 | 1 |",
-        "| aiq-004-travel-20260821-r19-w02 | 4 | 5 | 0 | 0 | 2 | 3 | 1 |",
-        "| aiq-005-ticket-20260821-r19-w03 | 4 | 5 | 0 | 0 | 0 | 5 | 1 |",
-    ):
-        assert expected_row in markdown
-    assert "## Lifecycle and collection hygiene" in markdown
-    assert "| 18 | 0 | 2 | 1 | 0 |" in markdown
+    for agent in value["agents"]:
+        agent_markdown = render_agent_report_markdown(value, agent["id"])
+        assert "## Assessment summary" in agent_markdown
+        assert "## Lifecycle and collection hygiene" in agent_markdown
 
 
 def test_markdown_accepts_only_count_reconciled_sanitized_card_evaluations() -> None:
@@ -964,8 +1015,8 @@ def test_markdown_accepts_only_count_reconciled_sanitized_card_evaluations() -> 
         ],
     }
 
-    markdown = render_report_markdown(value, sidecar)
-    assert "## Per-agent generated insight evaluation" in markdown
+    markdown = render_agent_report_markdown(value, agent["id"], sidecar)
+    assert "## Generated insight evaluation" in markdown
     assert f"### {agent['name']}-v00" in markdown
     assert (
         "| output_quality | Synthetic public-safe title | "
@@ -975,7 +1026,7 @@ def test_markdown_accepts_only_count_reconciled_sanitized_card_evaluations() -> 
 
     sidecar["cards"][0]["evaluation"] = "partially_useful"
     with pytest.raises(ContractError, match="counts contradict"):
-        render_report_markdown(value, sidecar)
+        render_agent_report_markdown(value, agent["id"], sidecar)
 
 
 def test_structured_bar_and_checklist_plan_drift_are_rejected() -> None:
@@ -1131,7 +1182,7 @@ def test_inconclusive_report_cannot_claim_confirmed_bug_mutation() -> None:
             "INCONCLUSIVE",
             "#fff4ce",
             "#8a5700",
-            "No quality conclusion can be made",
+            "No reliable judgment can be made",
         ),
     ],
 )
@@ -1168,9 +1219,9 @@ def test_email_status_variants_have_outlook_safe_semantic_colors(
     assert conclusion in body
     if status == "INCONCLUSIVE":
         assert "Treat both generated findings and missing findings as untrusted" in body
-        assert "Overall judgment</td>" in body
-        assert "Expected findings</td>" in body
-        assert "Observed findings</td>" in body
+        assert "Overall insight quality score</td>" in body
+        assert "Incorrect/noisy insights</td>" in body
+        assert "Exact duplicates</td>" in body
         assert "Useful diagnostic signal" not in body
         assert "No product-quality gap observed" not in body
         assert "Synthetic &lt;evidence&gt; was incomplete." in body
@@ -1206,7 +1257,7 @@ def test_summary_uses_consistent_outlook_safe_typography() -> None:
     summary = body[
         body.index(">Summary</h2>") : body.index(">What is working</h2>")
     ]
-    assert summary.count(style) >= 14
+    assert summary.count(style) >= 13
     assert "font-size:15px" not in summary
     assert "font-size:12px" not in summary
 
@@ -1760,7 +1811,13 @@ def test_email_rejects_arbitrary_or_mismatched_agent_insights_links() -> None:
     with pytest.raises(ContractError, match="authorized runtime context"):
         render_email_html(value, trend, links, runtime_link_context(value))
 
-    wrong_context = RuntimeLinkContext("sub", "rg", "account", "other-project")
+    wrong_context = RuntimeLinkContext(
+        "sub",
+        "rg",
+        "account",
+        "other-project",
+        "00000000-0000-0000-0000-000000000001",
+    )
     with pytest.raises(ContractError, match="does not match the report plan"):
         render_email_html(
             value, trend, runtime_agent_links(value), wrong_context

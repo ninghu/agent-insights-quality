@@ -288,15 +288,17 @@ standalone-tab flight is on and `/monitor/insights` when it is off. Trace links 
    not report-required. Full-catalog mode still requires all 63.
 3. Render detailed `report.json` and `report.md`, then consistent `latest.json`, `latest.md`, and
    `trend.json`. Lead Markdown with Summary, What is working, and What needs improvement assessment
-   tables derived from canonical evidence, followed by the detailed scorecard and exactly one
-   daily-plan-bound human-validation one-pager per report agent. Cover every immutable run/version/
-   phase, expected count, scenario title/root cause/category/severity, observed final cards, and
-   bounded double-check guidance. When private evidence is available, derive a sanitized runtime-only
+   tables derived from canonical evidence, followed by a concise index linking exactly five sorted
+   per-agent Markdown reports. Each agent report covers immutable run/version/phase, expected
+   scenarios, actual generated cards, lifecycle/collection hygiene, and bounded validation guidance.
+   When private evidence is available, derive a sanitized runtime-only
    per-agent card-evaluation sidecar and pass it to `render-report --insight-evaluations`; reconcile
    its fully-correct/partial/incorrect totals to the canonical report and commit only rendered
    public-safe category/title/description/evaluation rows. Never commit the sidecar or a private link.
 4. Render HTML from the canonical model with HTML encoding. Subject:
-   `[Agent Insights Quality] <AT BAR|NOT AT BAR|INCONCLUSIVE> - YYYY-MM-DD - <short signal>`.
+   `[Agent Insights Quality] <score/100|N/A> - YYYY-MM-DD - <short signal>`. The displayed overall
+   score is `100 * strict true positives / expected roots`; partial cards earn no score, and zero
+   expected roots or incomplete evidence renders `N/A`.
 5. Email sections remain exactly Summary, What is working, What needs improvement, and Test agents
    and agent links. Summary uses concise assessment prose and a `Grade | Findings` table;
    What is working uses `Capability | Evidence`; What needs improvement uses `Product gap | What
@@ -305,9 +307,15 @@ standalone-tab flight is on and `/monitor/insights` when it is off. Trace links 
    content utility as fully correct, partially useful, or incorrect/noisy without using lifecycle or
    duplicate/fragment/umbrella relationships; retain those as separate gates. Use the fluid 1160px Outlook-safe inline-style
    layout, but do not present the retained trend artifact. Sort the compact agent table by name and
-   limit it to Test agent, Type, Agent, and deterministic Yes/No Recommend human validation. Each
-   private CTA says Open agent and targets exactly `/build/agents/{agent_name}`, never an Insights
-   deep link.
+   limit it to Test agent, Type, Agent, Report, Recommended human validation, and Assigned to.
+   Normalize `hosted_custom_container` to `container`. The Agent cell contains the private Open agent
+   CTA; each Report cell says View report and targets that agent's public Markdown. Use the reviewed
+   owner mapping 001 Han, 002 Ilya, 003 Sean, 004 Billy, 005 Han, then append GitHub Copilot / coding
+   with N/A links/owner and Yes validation. Each
+   private CTA says Open agent and targets exactly
+   `/build/agents/{agent_name}/build?tid={tenant_id}`, never a bare agent path or Insights deep link.
+   Summary contains one inline Foundry project link ending `/home?tid={tenant_id}` and no second
+   data-source table.
    Link once to the full public-safe GitHub Markdown report for per-version detail. The private email
    may show the runtime-resolved Foundry account/project and project link; never persist private route
    coordinates in public files. Preserve `agents[].human_validation` in the detailed Markdown.

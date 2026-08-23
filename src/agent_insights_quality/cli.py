@@ -46,6 +46,7 @@ from agent_insights_quality.readiness import require_daily_runtime
 from agent_insights_quality.reporting import (
     create_email_send_request,
     import_email_receipt,
+    render_agent_report_markdown,
     render_email_html,
     render_report_markdown,
     resolve_recipient,
@@ -224,6 +225,10 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument(
         "--insight-evaluations",
         help="Private runtime path to sanitized per-agent generated-card evaluations",
+    )
+    report.add_argument(
+        "--agent-output-root",
+        help="Output directory for one public-safe Markdown report per test agent",
     )
     report.add_argument("--output", required=True)
     email = subparsers.add_parser(
@@ -613,6 +618,22 @@ def run(args: argparse.Namespace) -> None:
         markdown = render_report_markdown(report, insight_evaluations)
         require_public_artifact_safe(markdown, "Rendered report")
         Path(args.output).write_bytes(markdown.encode("ascii"))
+        if args.agent_output_root:
+            agent_output_root = Path(args.agent_output_root)
+            agent_output_root.mkdir(parents=True, exist_ok=True)
+            for agent in report["agents"]:
+                agent_markdown = render_agent_report_markdown(
+                    report,
+                    agent["id"],
+                    insight_evaluations,
+                )
+                require_public_artifact_safe(
+                    agent_markdown,
+                    f"Rendered report for {agent['id']}",
+                )
+                (agent_output_root / f"{agent['id']}.md").write_bytes(
+                    agent_markdown.encode("ascii")
+                )
         print("Detailed report rendered.")
     elif args.command == "render-email":
         report = read_json_object(Path(args.report), "canonical report")

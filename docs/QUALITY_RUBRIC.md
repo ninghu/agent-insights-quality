@@ -36,6 +36,11 @@ denominator. Reports must state that denominator explicitly rather than describi
 covered every observed or judged card. Silent expected-root misses are also reported separately from
 roots that emitted cards but still lacked a root-cause-correct match.
 
+Leadership displays `Overall insight quality score = 100 * strict true positives / expected roots`.
+Partially useful cards earn no points in this strict overall score. A zero expected-root denominator
+or incomplete evidence displays `N/A`; the canonical verdict remains audit data rather than the
+leadership label.
+
 ## Report and human-validation contract
 
 Canonical report `1.1.0` embeds the thresholds above plus scorecard-derived actuals and deterministic
