@@ -511,6 +511,37 @@ def test_not_at_bar_email_names_relationship_violation_and_candidate_action() ->
     assert "bug created" not in body.casefold()
 
 
+def test_r19_like_email_keeps_candidate_status_with_six_metric_gaps() -> None:
+    value, _ = structured_not_at_bar_report()
+    value["bug_actions"] = [
+        {
+            "fingerprint": content_hash({"candidate": index}),
+            "action": "candidate",
+            "work_item_reference": None,
+            "policy_snapshot": {
+                "policy_version": "1.0.0",
+                "auto_apply_enabled": False,
+            },
+            "apply_receipt": None,
+        }
+        for index in range(3)
+    ]
+
+    _, body = render_email_html(
+        value,
+        render_trend([value]),
+        runtime_agent_links(value),
+        runtime_link_context(value),
+    )
+
+    assert "3 bug candidates prepared; no work-item mutation was claimed." in body
+    assert "including 2 from healthy controls" in body
+    assert "Healthy-control noise:" not in body
+    assert "Quality gate failed" not in body
+    assert "finding_count_mismatch" not in body
+    assert body.count("<h2 ") == 4
+
+
 def test_email_names_capability_and_extended_field_failures() -> None:
     value = report()
     value["status"] = "NOT AT BAR"

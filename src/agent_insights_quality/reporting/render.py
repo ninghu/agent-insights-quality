@@ -604,10 +604,20 @@ def _metric_gaps(report: dict[str, Any]) -> list[str]:
             f"(required 100.0%) and overall recall was {rates['overall_recall']:.1%} "
             "(required at least 90.0%)."
         )
-    if rates["precision"] < 0.95:
+    if rates["precision"] < 0.95 or counts["healthy_insights"]:
+        healthy_detail = (
+            f", including {counts['healthy_insights']} from healthy controls"
+            if counts["healthy_insights"]
+            else ""
+        )
+        threshold_detail = (
+            "below the 95.0% minimum"
+            if rates["precision"] < 0.95
+            else "against the 95.0% minimum"
+        )
         values.append(
-            f"Precision was {rates['precision']:.1%}, below the 95.0% minimum; "
-            f"{counts['false_positives']} observed cards were noise."
+            f"Precision was {rates['precision']:.1%}, {threshold_detail}; "
+            f"{counts['false_positives']} observed cards were noise{healthy_detail}."
         )
     failed_fields = [
         (name.replace("_", " "), rates[name])
@@ -645,11 +655,6 @@ def _metric_gaps(report: dict[str, Any]) -> list[str]:
             "Collection relationships required 0.0% but measured "
             + ", ".join(f"{label} {rate:.1%}" for label, rate in relationship_rates)
             + "."
-        )
-    if counts["healthy_insights"]:
-        values.append(
-            f"Healthy-control noise: {counts['healthy_insights']} cards were emitted; "
-            "the requirement is zero."
         )
     if "capability_fix_mismatch" in score["violations"]:
         values.append(
@@ -758,17 +763,25 @@ def render_email_html(
     )
     good = _doing_well(report)
     gaps = _metric_gaps(report)
-    if candidate_count:
-        gaps.append(
+    action_status = None
+    if candidate_count and mutation_count:
+        action_status = (
             f"{candidate_count} bug candidate"
-            f"{'s' if candidate_count != 1 else ''} prepared; no work-item mutation was claimed."
-        )
-    if mutation_count:
-        gaps.append(
+            f"{'s' if candidate_count != 1 else ''} prepared; "
             f"{mutation_count} private bug action"
             f"{'s were' if mutation_count != 1 else ' was'} confirmed by apply receipts."
         )
-    gaps = gaps[:6]
+    elif candidate_count:
+        action_status = (
+            f"{candidate_count} bug candidate"
+            f"{'s' if candidate_count != 1 else ''} prepared; no work-item mutation was claimed."
+        )
+    elif mutation_count:
+        action_status = (
+            f"{mutation_count} private bug action"
+            f"{'s were' if mutation_count != 1 else ' was'} confirmed by apply receipts."
+        )
+    gaps = gaps[:5] + [action_status] if action_status else gaps[:6]
     status_style = _STATUS_STYLES[report["status"]]
     checklists = {
         item["agent_id"]: item
