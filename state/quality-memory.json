@@ -1,6 +1,217 @@
 {
+  "issues": [
+    {
+      "ado": {
+        "last_sync": null,
+        "state": null,
+        "work_item_reference": null
+      },
+      "affected_agent_types": [
+        "hosted_code",
+        "hosted_custom_container",
+        "prompt"
+      ],
+      "affected_domains": [
+        "finance",
+        "healthcare",
+        "support_ticket",
+        "travel",
+        "weather"
+      ],
+      "affected_scenarios": [
+        "aiq-scn-001-fully-healthy",
+        "aiq-scn-002-expected-model-latency",
+        "aiq-scn-003-handled-transient-failure",
+        "aiq-scn-004-ordinary-token-use",
+        "aiq-scn-057-handled-child-failure-control"
+      ],
+      "consecutive_clean_complete_runs": 0,
+      "description": "Five of six healthy controls emitted unsupported cards, yielding five healthy insights and an 83.3% healthy-noise rate.",
+      "engine_builds": [
+        "public-agent-insights-daily"
+      ],
+      "evidence_references": [
+        "sha256:e455a28fc17a841545729b01f69d439aa5c8f2f33138be2ce690c07de14d98fe"
+      ],
+      "fingerprint": "sha256:4ff2c6868249620c044da48401e5770d307000c728df203de162f2c36b596b1c",
+      "first_seen": "2026-08-21",
+      "generator_models": [
+        "gpt-5.6-terra"
+      ],
+      "judge_prompt_versions": [
+        "primary-v2"
+      ],
+      "last_primary_confidence": 0.99,
+      "last_seen": "2026-08-21",
+      "last_verifier_confidence": null,
+      "occurrence_count": 1,
+      "regression_history": [],
+      "resolution_evidence": [],
+      "state": "new",
+      "title": "Healthy controls produce widespread noise"
+    },
+    {
+      "ado": {
+        "last_sync": null,
+        "state": null,
+        "work_item_reference": null
+      },
+      "affected_agent_types": [
+        "hosted_code",
+        "hosted_custom_container",
+        "prompt"
+      ],
+      "affected_domains": [
+        "finance",
+        "healthcare",
+        "support_ticket",
+        "travel",
+        "weather"
+      ],
+      "affected_scenarios": [
+        "aiq-scn-005-hallucinated-answer",
+        "aiq-scn-009-ignored-user-correction",
+        "aiq-scn-018-partial-tool-failure",
+        "aiq-scn-023-bad-fallback",
+        "aiq-scn-027-missing-owner-validation",
+        "aiq-scn-028-task-evasion-no-op",
+        "aiq-scn-030-unsupported-action-attempt",
+        "aiq-scn-033-cross-entity-contamination",
+        "aiq-scn-040-omitted-required-fields",
+        "aiq-scn-041-guardrail-bypass",
+        "aiq-scn-042-action-without-confirmation",
+        "aiq-scn-043-malformed-approval",
+        "aiq-scn-044-cross-account-pii",
+        "aiq-scn-045-sequential-redundant-calls",
+        "aiq-scn-055-parent-child-correlation",
+        "aiq-scn-058-cross-version-stale-finding",
+        "aiq-scn-060-fixed-issue-recurrence",
+        "aiq-scn-061-duplicate-insight-cards",
+        "aiq-scn-062-umbrella-insight"
+      ],
+      "consecutive_clean_complete_runs": 0,
+      "description": "Across 19 fault scenarios with 20 expected roots, strict scoring found 0 true positives and 20 false negatives; emitted cards were unrelated or only partial.",
+      "engine_builds": [
+        "public-agent-insights-daily"
+      ],
+      "evidence_references": [
+        "sha256:226bfb3d4f4db52152ab0cb3766c123909faa1583e74d4214b9a5c74d90cf222"
+      ],
+      "fingerprint": "sha256:6db4174d1924e3259f57b3f5fb1a0910227125a81bbb30b7ccd37986fc328a1f",
+      "first_seen": "2026-08-21",
+      "generator_models": [
+        "gpt-5.6-terra"
+      ],
+      "judge_prompt_versions": [
+        "primary-v2"
+      ],
+      "last_primary_confidence": 0.97,
+      "last_seen": "2026-08-21",
+      "last_verifier_confidence": null,
+      "occurrence_count": 1,
+      "regression_history": [],
+      "resolution_evidence": [],
+      "state": "new",
+      "title": "Strict root-cause recall is zero"
+    },
+    {
+      "ado": {
+        "last_sync": null,
+        "state": null,
+        "work_item_reference": null
+      },
+      "affected_agent_types": [
+        "prompt"
+      ],
+      "affected_domains": [
+        "healthcare",
+        "weather"
+      ],
+      "affected_scenarios": [
+        "aiq-scn-009-ignored-user-correction",
+        "aiq-scn-055-parent-child-correlation"
+      ],
+      "consecutive_clean_complete_runs": 0,
+      "description": "The produced collection contains two fragmented cards for one parent-child correlation root and one umbrella card spanning independently scoped evidence.",
+      "engine_builds": [
+        "public-agent-insights-daily"
+      ],
+      "evidence_references": [
+        "sha256:e0e98abb0db727105965887d77a3ef356dc910fec2874e3c39d1d7c66124be97"
+      ],
+      "fingerprint": "sha256:e15cd3873988db28f4fcc2e9541d183172a4742db39e997c90f222caece66bb3",
+      "first_seen": "2026-08-21",
+      "generator_models": [
+        "gpt-5.6-terra"
+      ],
+      "judge_prompt_versions": [
+        "primary-v2"
+      ],
+      "last_primary_confidence": 0.98,
+      "last_seen": "2026-08-21",
+      "last_verifier_confidence": null,
+      "occurrence_count": 1,
+      "regression_history": [],
+      "resolution_evidence": [],
+      "state": "new",
+      "title": "Collection grouping creates fragments and umbrellas"
+    },
+    {
+      "ado": {
+        "last_sync": null,
+        "state": null,
+        "work_item_reference": null
+      },
+      "affected_agent_types": [
+        "hosted_code",
+        "prompt"
+      ],
+      "affected_domains": [
+        "healthcare",
+        "travel",
+        "weather"
+      ],
+      "affected_scenarios": [
+        "aiq-scn-018-partial-tool-failure",
+        "aiq-scn-028-task-evasion-no-op",
+        "aiq-scn-055-parent-child-correlation",
+        "aiq-scn-058-cross-version-stale-finding"
+      ],
+      "consecutive_clean_complete_runs": 0,
+      "description": "The five partially useful cards passed only 20% of title, proposed-fix, and actionability checks; category accuracy was 40% and severity accuracy was 0%.",
+      "engine_builds": [
+        "public-agent-insights-daily"
+      ],
+      "evidence_references": [
+        "sha256:09c6d43ce6edbde1c8c0a319d17498653f288b12cf0da991d5a074600cc7aede"
+      ],
+      "fingerprint": "sha256:fb3f01691d2713ba6d2691ef151092b6106c2e7ac001bc4818884028b81865b8",
+      "first_seen": "2026-08-21",
+      "generator_models": [
+        "gpt-5.6-terra"
+      ],
+      "judge_prompt_versions": [
+        "primary-v2"
+      ],
+      "last_primary_confidence": 0.97,
+      "last_seen": "2026-08-21",
+      "last_verifier_confidence": null,
+      "occurrence_count": 1,
+      "regression_history": [],
+      "resolution_evidence": [],
+      "state": "new",
+      "title": "Field attribution and fixes miss the strict bar"
+    }
+  ],
+  "processed_runs": [
+    {
+      "generated_at": "2026-08-22T23:16:24Z",
+      "report_date": "2026-08-21",
+      "report_id": "aiq-20260821-r19",
+      "report_reference": "sha256:83f0e28dfa2b9550d60ae1d7e52046d14e5a882fcd2b5979dbf483fd6353a834",
+      "run_id": "aiq-20260821-r19"
+    }
+  ],
   "schema_version": "1.0.0",
-  "updated_at": null,
-  "processed_runs": [],
-  "issues": []
+  "updated_at": "2026-08-22T23:16:24Z"
 }

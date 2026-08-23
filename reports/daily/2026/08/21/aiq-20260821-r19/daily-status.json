@@ -1,0 +1,774 @@
+{
+  "evidence": [
+    {
+      "agent_id": "aiq-001-weather",
+      "artifact_reference": "sha256:47b75da56465d80d3bb06d45b2f94b6fc10374115e3c30114cc3d9931a4f60b3",
+      "bundle_hash": "sha256:044d9953b18be6dac75d603b05f1ed9911cbcddbc7d2d1a861f1c9336cd97f9b",
+      "phase": "healthy",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": "sha256:bf35b2084fa429a4c35dffe2e70d656eeefd683d3e3bd42d7d5fc171ff6dae9b",
+          "judgment_target_reference": "sha256:d9e4982dab609598ccc6da94eaff38c455853085b9858e45eb80364fae789235"
+        },
+        {
+          "insight_reference": null,
+          "judgment_target_reference": "sha256:b9f7f2f0671a5e12afe541e72edd020aed73d6a210f1647263de3cf3a7244073"
+        }
+      ],
+      "primary_package_reference": "sha256:14e7b354df89173b03c8f85ec4597d9c809ba8753f5122c0d9ffd8a412a782d3",
+      "run_id": "run-00-aiq-001-weather",
+      "scenario_id": "aiq-scn-002-expected-model-latency",
+      "validation_targets": [
+        "no_insight",
+        "evidence"
+      ]
+    },
+    {
+      "agent_id": "aiq-002-healthcare",
+      "artifact_reference": "sha256:1313ae70c717d128185b839125ac0512b04a1f674aba08e1aa7ca7873fa3210e",
+      "bundle_hash": "sha256:b771a1547cc1959593879fe0c4eb93cdb5ed21cd465f3fca27b1c25f2682efde",
+      "phase": "healthy",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": "sha256:5f0fcfb8acfabe850397b2cc3678b5437345be909b510376403890d649689ca7",
+          "judgment_target_reference": "sha256:2a592a32ab8fa239850074cb14ef7c4cba27acb59944b0107f142867b1f799cd"
+        },
+        {
+          "insight_reference": null,
+          "judgment_target_reference": "sha256:cdce784ee25def81d04483203f29e8e76ac5c03f33a605215c019d5934c78492"
+        }
+      ],
+      "primary_package_reference": "sha256:6ecc72d78db1614c34376fd34f23159342dc8c980bd5eb4d1de05b399c9d4361",
+      "run_id": "run-00-aiq-002-healthcare",
+      "scenario_id": "aiq-scn-057-handled-child-failure-control",
+      "validation_targets": [
+        "no_insight",
+        "evidence"
+      ]
+    },
+    {
+      "agent_id": "aiq-003-finance",
+      "artifact_reference": "sha256:bada29b3aded4a07e208e1beff3706d35cf3e719d102d4492b1bff6becce6d04",
+      "bundle_hash": "sha256:cde32b3ef31b57fa8925936b7ff0c9b1dbc10f5cb21fa669891c5cfb468bb654",
+      "phase": "healthy",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": "sha256:15964e1391b3f776762f7315a0fe30dbc8c7ecafaa3bcc092e9c9fcb25b9f59a",
+          "judgment_target_reference": "sha256:93a694fcef59efe7ef293eb832ab74cc7666c41d563c28e776e7726358c26954"
+        },
+        {
+          "insight_reference": null,
+          "judgment_target_reference": "sha256:1daa9c8c5096fee8a7ba07401def76673303281ba5a5b47647d8fb2f2a8f7c9b"
+        }
+      ],
+      "primary_package_reference": "sha256:76c1dde8aadaaed9da2e7681f9225e94c837eb855cf55ab6754058d3d646f686",
+      "run_id": "run-00-aiq-003-finance",
+      "scenario_id": "aiq-scn-003-handled-transient-failure",
+      "validation_targets": [
+        "no_insight",
+        "evidence"
+      ]
+    },
+    {
+      "agent_id": "aiq-003-finance",
+      "artifact_reference": "sha256:991a051953277507b20953d0092883ca656653d7fa411681b2d68fb991901bc8",
+      "bundle_hash": "sha256:e5ec0cb0bb23b19bf4e75951d65c82b185fbe6ca652b9fdb751e4a23ce27c3d1",
+      "phase": "healthy",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": null,
+          "judgment_target_reference": "sha256:214321a3afe2bedfd00ef31bcb74e8153a6f35e7b0b7c9d2d4c2cfac6f1b77e9"
+        }
+      ],
+      "primary_package_reference": "sha256:73e53bd8a38cdd070739be3ec2a8c6e8d9444b067fe585c2f06df38023017756",
+      "run_id": "run-00-aiq-003-finance",
+      "scenario_id": "aiq-scn-056-outer-zero-token-control",
+      "validation_targets": [
+        "no_insight",
+        "evidence"
+      ]
+    },
+    {
+      "agent_id": "aiq-004-travel",
+      "artifact_reference": "sha256:3e06eadc33d9fe05710289bbb20d23e6d28439adde889905cbf280248b3a6ddc",
+      "bundle_hash": "sha256:9d3ac6e278cf5de7bfeea388a4874ef42f8d3f11e020aeac64cf7db6e30f35b1",
+      "phase": "healthy",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": "sha256:281072e8e99b9dd22f425c35441c196ab8ebcbca0447ac40a8cfb1991e055c3f",
+          "judgment_target_reference": "sha256:437cd945a5de9a8f9086dff2794771534af8f8b1e28fbf3badbfc9d465508d59"
+        },
+        {
+          "insight_reference": null,
+          "judgment_target_reference": "sha256:4827fdea314cd88da0757967c666a71e2969d305ed894c2f78ae401d1f8be007"
+        }
+      ],
+      "primary_package_reference": "sha256:1bdd380300313a7e791b2712d2d87d2ab7e624d85968958932961b42dec65b6c",
+      "run_id": "run-00-aiq-004-travel",
+      "scenario_id": "aiq-scn-001-fully-healthy",
+      "validation_targets": [
+        "no_insight",
+        "evidence"
+      ]
+    },
+    {
+      "agent_id": "aiq-005-ticket",
+      "artifact_reference": "sha256:929c97978695952666e543b657bab3fb935acf858926b46b48993fa0ad52bdd1",
+      "bundle_hash": "sha256:f42f1a58337512e7cf92c063bfd0f251300848acfe883ad3d273bf3ee02b0772",
+      "phase": "healthy",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": "sha256:5e78712975b6712238dc2e94a4ea5d58ac1ca834d5079d1087d429ee883ea119",
+          "judgment_target_reference": "sha256:eb429829690284bf8fd9c39a130c761b2660f59a3ddfeb1a3c3243c0d044a82d"
+        },
+        {
+          "insight_reference": null,
+          "judgment_target_reference": "sha256:9562b882dd5c62e31f98701df3aa4de9a8c1b0c350d7ddc6ca225b8bec9b9636"
+        }
+      ],
+      "primary_package_reference": "sha256:c508adcd62e43a04e39e7de69618067b01f4ab08a59bb70bcf2fe6e2de8678c2",
+      "run_id": "run-00-aiq-005-ticket",
+      "scenario_id": "aiq-scn-004-ordinary-token-use",
+      "validation_targets": [
+        "no_insight",
+        "evidence"
+      ]
+    },
+    {
+      "agent_id": "aiq-001-weather",
+      "artifact_reference": "sha256:7a48d48074c7855adb0feb48b173cdb8430ecf1ba3487100c9377265b8cfb7db",
+      "bundle_hash": "sha256:2a1dc1b738d5a5dbf38017253cb5b754358c05c5ff7552b8e87db712419409ce",
+      "phase": "faulted",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": "sha256:ad3466835fc1d872b0f35ecd843ee556b2ec33bb0eb6226b5786c2d91d01f011",
+          "judgment_target_reference": "sha256:bc506286b078af34f3aed74ff10effd73ec825d1ed6724f82bd0e2d78feeb570"
+        },
+        {
+          "insight_reference": null,
+          "judgment_target_reference": "sha256:4f79b489bde4f15b11daec722046964717ee80db9079f58581ec7c76357157b5"
+        }
+      ],
+      "primary_package_reference": "sha256:ab1230eaaef27a3927262730b996e1225e2d8157f144126f922b7bac58e0b806",
+      "run_id": "run-01-aiq-001-weather",
+      "scenario_id": "aiq-scn-005-hallucinated-answer",
+      "validation_targets": [
+        "root_cause",
+        "title",
+        "description",
+        "category",
+        "severity",
+        "proposed_fix",
+        "evidence"
+      ]
+    },
+    {
+      "agent_id": "aiq-001-weather",
+      "artifact_reference": "sha256:9bd7da1e715182972f4817f173683cb7a6fe30e1d6ff8f1344c993ad83461acf",
+      "bundle_hash": "sha256:6493ae9edb6473f23e56fcded0e2c70731da2c7531da4347eb10fb01bcc57d64",
+      "phase": "faulted",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": "sha256:df59e2446836ed6d95e6fe844aa4045a6d66f0215a96f8e63abdc432e146b761",
+          "judgment_target_reference": "sha256:5ebed47953ffcd8cc504f6bf8a427e3e4ab96ae377ede3b61b9a06681a3c0ead"
+        },
+        {
+          "insight_reference": null,
+          "judgment_target_reference": "sha256:a3bfb2090b9bf37f247761bca09ff0eb9bef1267c6d848bab675710dcdd33521"
+        }
+      ],
+      "primary_package_reference": "sha256:b75a9ea438f3f66e41884a2eeb8118fdcf9ee0c88084080f26091e0db4732a0b",
+      "run_id": "run-01-aiq-001-weather",
+      "scenario_id": "aiq-scn-030-unsupported-action-attempt",
+      "validation_targets": [
+        "root_cause",
+        "title",
+        "description",
+        "category",
+        "severity",
+        "proposed_fix",
+        "evidence"
+      ]
+    },
+    {
+      "agent_id": "aiq-001-weather",
+      "artifact_reference": "sha256:78e62a4005cb8c3181e5885c9be1f36cb12d19b6d9a6c3858633edb23f885109",
+      "bundle_hash": "sha256:414ed6cc00cc1f6fb0edcfb613c2d86b285e3501cdca1a767c71b8e5c2e57544",
+      "phase": "faulted",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": null,
+          "judgment_target_reference": "sha256:dc67e020bec677142a6fbbee38c3f700576d9b256821ab75bab35a69380cf1e4"
+        }
+      ],
+      "primary_package_reference": "sha256:533c5b8095ecc20afb0f4581e8e2372df887004a95ee21006148daa2daff2464",
+      "run_id": "run-01-aiq-001-weather",
+      "scenario_id": "aiq-scn-040-omitted-required-fields",
+      "validation_targets": [
+        "root_cause",
+        "title",
+        "description",
+        "category",
+        "severity",
+        "proposed_fix",
+        "evidence"
+      ]
+    },
+    {
+      "agent_id": "aiq-001-weather",
+      "artifact_reference": "sha256:c22e76a0da21cad9e77d60eaa863ccdfca09a9ae94a1bd7da528c7a039fc931e",
+      "bundle_hash": "sha256:7a84198634233082dc3c445a904927700230640992617cfac2ecc43530dab16a",
+      "phase": "faulted",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": "sha256:32fb2ee73459938ae08096fdbb06995d82f86375427e4ed74cc40b018eed53cc",
+          "judgment_target_reference": "sha256:e9ba0959c1365971cd03d0826d57a83bdb9615f4f5d9fc54ebae131cd1709aea"
+        },
+        {
+          "insight_reference": "sha256:2bc512952152603562642f6fe1f4b196f5436d08c96c919764eb0901c2259146",
+          "judgment_target_reference": "sha256:e94ec5621c2b0d2f5dba4f4ae5ec422031fd75674e2805f875accdd655a5f3d0"
+        }
+      ],
+      "primary_package_reference": "sha256:66a064498d3f8a8e7825267a5a80c94b33f5ff06d99f176e87f0dd87b4a47a2b",
+      "run_id": "run-01-aiq-001-weather",
+      "scenario_id": "aiq-scn-055-parent-child-correlation",
+      "validation_targets": [
+        "root_cause",
+        "title",
+        "description",
+        "category",
+        "severity",
+        "proposed_fix",
+        "evidence"
+      ]
+    },
+    {
+      "agent_id": "aiq-002-healthcare",
+      "artifact_reference": "sha256:1f5455fb96f5099da31a17df70605b2139d5d8caabff9c28444b88cedb51ecb9",
+      "bundle_hash": "sha256:c2bc6c590addb1ad1aa8b8e7b0d2f4c092b1e38d2a6c1abd6ce089bf46075d15",
+      "phase": "faulted",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": "sha256:0a9d33f5e7bc8cdc168c88fa33e4c494ff4989350e77f416467e6bb711bfe793",
+          "judgment_target_reference": "sha256:a1ceff81b55d82b10a7adc86e0d62741cd5da29ae2748c66282e2de9b5506512"
+        },
+        {
+          "insight_reference": null,
+          "judgment_target_reference": "sha256:21e7e3a5f01eae98ec76d40eb0b482d13d4f025b4a56ff48a9b990cd65f62524"
+        }
+      ],
+      "primary_package_reference": "sha256:268c14d989120d2a262d421f239032f2f85ed531852c53e98bf36b4006beef0a",
+      "run_id": "run-01-aiq-002-healthcare",
+      "scenario_id": "aiq-scn-009-ignored-user-correction",
+      "validation_targets": [
+        "root_cause",
+        "title",
+        "description",
+        "category",
+        "severity",
+        "proposed_fix",
+        "evidence"
+      ]
+    },
+    {
+      "agent_id": "aiq-002-healthcare",
+      "artifact_reference": "sha256:894ee4ef5b87e6f5a753b695519d300b76ef75a35e66df7cfb0ace3f255cc01a",
+      "bundle_hash": "sha256:567288e179803964b466b2c616c9230f30a269ac81f25ce542872113a6d94f79",
+      "phase": "faulted",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": null,
+          "judgment_target_reference": "sha256:2624394929250c2961c8a239f00836178d58364f3ecbc01140eefd96a01f06fe"
+        }
+      ],
+      "primary_package_reference": "sha256:0935cfe20110d10f33f56e7cc3d1e55b4ea808650601e85b82355a49f377acb1",
+      "run_id": "run-01-aiq-002-healthcare",
+      "scenario_id": "aiq-scn-027-missing-owner-validation",
+      "validation_targets": [
+        "root_cause",
+        "title",
+        "description",
+        "category",
+        "severity",
+        "proposed_fix",
+        "evidence"
+      ]
+    },
+    {
+      "agent_id": "aiq-002-healthcare",
+      "artifact_reference": "sha256:d8f67f99342b5df972530bcbbf447889ed7a758f3d68f99389e9acf514e0c9ce",
+      "bundle_hash": "sha256:97d045c712888247b18fb2aaac3255aa7b8a5f3cb3707600768ab2087e592bbd",
+      "phase": "faulted",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": "sha256:a3ea0eada5efb54aee8dc96f2e6e4c13f836cf4c24d31d6bccd07e0d21c506b8",
+          "judgment_target_reference": "sha256:87490c7783e712b0b6aed26f960b525f05d6453f2dfdc8070dc2e80eeca3cc72"
+        },
+        {
+          "insight_reference": null,
+          "judgment_target_reference": "sha256:da379104dbac2d672a91a043058496babfbea966af29a316b02ad6b0841eed43"
+        }
+      ],
+      "primary_package_reference": "sha256:5129d53b245d1ea93dcbf38ee842ae1524fb10c5e2a286ca0e093d9849f439f3",
+      "run_id": "run-01-aiq-002-healthcare",
+      "scenario_id": "aiq-scn-045-sequential-redundant-calls",
+      "validation_targets": [
+        "root_cause",
+        "title",
+        "description",
+        "category",
+        "severity",
+        "proposed_fix",
+        "evidence"
+      ]
+    },
+    {
+      "agent_id": "aiq-003-finance",
+      "artifact_reference": "sha256:4a6470433f0a1369cce0856eff25eb48ab6a1a8d7920d386298833bf3d762341",
+      "bundle_hash": "sha256:a7f499713eadc557388fa94786cbfac283c6cf9786c3dba09c06e99e3bca65a8",
+      "phase": "faulted",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": "sha256:47734de03adebb9df113f6595ecd6144d7d6d959824f4ae779066d3eb5787430",
+          "judgment_target_reference": "sha256:3ef9ed9bee836e83073340761d41a5a7738ca8d7614244f55c66003c8289834e"
+        },
+        {
+          "insight_reference": null,
+          "judgment_target_reference": "sha256:e917d746a867df56adfa80e4bddb5a5bf588db1223de71cab01ffe0939579722"
+        }
+      ],
+      "primary_package_reference": "sha256:6e85ce08bc88dc2f8a9627198a35c76b42fc73576fedccf5c2e1c49e225f1c45",
+      "run_id": "run-01-aiq-003-finance",
+      "scenario_id": "aiq-scn-023-bad-fallback",
+      "validation_targets": [
+        "root_cause",
+        "title",
+        "description",
+        "category",
+        "severity",
+        "proposed_fix",
+        "evidence"
+      ]
+    },
+    {
+      "agent_id": "aiq-003-finance",
+      "artifact_reference": "sha256:5b690e1bc8c2ec75d079ce50aa95e2a442da438e710c8ab5dbe8a74a2de64751",
+      "bundle_hash": "sha256:94c93db2b07831671ea93d2cc6e7f5ccfe2e9f1a4e77ef846b21792880f0e070",
+      "phase": "faulted",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": null,
+          "judgment_target_reference": "sha256:156219ec5bccb6b307dfb9f4ee9e805a1e437f448c06361fc15826554da8547d"
+        }
+      ],
+      "primary_package_reference": "sha256:4aee99523f7aef60a00a13e42b23e07f2a76200d1a9b45a30af3bb0b57b11c25",
+      "run_id": "run-01-aiq-003-finance",
+      "scenario_id": "aiq-scn-042-action-without-confirmation",
+      "validation_targets": [
+        "root_cause",
+        "title",
+        "description",
+        "category",
+        "severity",
+        "proposed_fix",
+        "evidence"
+      ]
+    },
+    {
+      "agent_id": "aiq-003-finance",
+      "artifact_reference": "sha256:f009b3584b4394a18d441604882704bde6ddaab66d7d31774f12a62ea71574ac",
+      "bundle_hash": "sha256:8b3631f48cbab192e3482c831d5ef676980304513d1e56477e495106ba3f521a",
+      "phase": "faulted",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": null,
+          "judgment_target_reference": "sha256:5558fccc1c59c0525a263577b4e50bbaeac23ff1c03b40ec0e70048d1f5d70cf"
+        }
+      ],
+      "primary_package_reference": "sha256:e676e54782db2c44452a8c15d52bc53fae62197ed27c7ac69bf874594b1ab44b",
+      "run_id": "run-01-aiq-003-finance",
+      "scenario_id": "aiq-scn-062-umbrella-insight",
+      "validation_targets": [
+        "root_cause",
+        "title",
+        "description",
+        "category",
+        "severity",
+        "proposed_fix",
+        "evidence",
+        "collection"
+      ]
+    },
+    {
+      "agent_id": "aiq-004-travel",
+      "artifact_reference": "sha256:90af9ebf91a6630c076170b0febc6cc1cead476b2564695a8f3b9ef414aa1716",
+      "bundle_hash": "sha256:1c93db639e3e96eebd3c0d97d07e1229ff6c6f857d38644a49242c29306b53bc",
+      "phase": "faulted",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": "sha256:0939429e2c3107f86fbc7795d3916578d28fb48b9b144422f6dab4fe80024dc9",
+          "judgment_target_reference": "sha256:c2da0307be6d3a2c841098603302420f8aebc2c60679cc8b4463fb37a3d1d325"
+        },
+        {
+          "insight_reference": null,
+          "judgment_target_reference": "sha256:9a1b5d69b45b5886964bc5156e07099743bd90fd0429e0b8ce9851cc34ca2a08"
+        }
+      ],
+      "primary_package_reference": "sha256:d9e7f0bebaec41af6ba9f05b4a75945b32cf8bf483ef6c6577c69da8b0d72441",
+      "run_id": "run-01-aiq-004-travel",
+      "scenario_id": "aiq-scn-018-partial-tool-failure",
+      "validation_targets": [
+        "root_cause",
+        "title",
+        "description",
+        "category",
+        "severity",
+        "proposed_fix",
+        "evidence"
+      ]
+    },
+    {
+      "agent_id": "aiq-004-travel",
+      "artifact_reference": "sha256:224457463f2ecf794e4048a2382de4300e4dfa08f20c45743601ba06c5ea4c5b",
+      "bundle_hash": "sha256:9924db3614cb51c29742fa63b71fe35e8eefdcc67309fce791bec55362379088",
+      "phase": "faulted",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": "sha256:90af40fbef5f745ad7a1590e97065e7bccd169a08eafcab411dffe1304ced247",
+          "judgment_target_reference": "sha256:bcbd3e2a5e621e15da58b9f4ceae100000abf9a920cd2013e83a3ebe4145cf56"
+        },
+        {
+          "insight_reference": null,
+          "judgment_target_reference": "sha256:b3bce1cc5786399e1a76cd8553fa961fa722225b0160a9df14cfb52bcac43f83"
+        }
+      ],
+      "primary_package_reference": "sha256:0870e7da943d9e6ee304e0d9387afd09c46f3d23880506cf055aafcd013025e5",
+      "run_id": "run-01-aiq-004-travel",
+      "scenario_id": "aiq-scn-044-cross-account-pii",
+      "validation_targets": [
+        "root_cause",
+        "title",
+        "description",
+        "category",
+        "severity",
+        "proposed_fix",
+        "evidence"
+      ]
+    },
+    {
+      "agent_id": "aiq-004-travel",
+      "artifact_reference": "sha256:52176f75bc7bb018f4e6c51afa8cbd74e6712c09c128a835d030dd9e318e64cd",
+      "bundle_hash": "sha256:befb39ff6556c241031d67012ba8fda6316137e0e2f2a5b5f3ab6714b440dcdb",
+      "phase": "faulted",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": "sha256:7ec1950a23d9b28c84b25761df13ca05f2e983a1ebcc04a98b427c248c05012f",
+          "judgment_target_reference": "sha256:6108773753edc80a548805ec23340cbf53b17c3eeb7414fbd4b3411f8f804c83"
+        }
+      ],
+      "primary_package_reference": "sha256:c9e5d99c755935349ed6f16f3f2d210c5f1f637ec615e6ade6626fa50e87a684",
+      "run_id": "run-01-aiq-004-travel",
+      "scenario_id": "aiq-scn-061-duplicate-insight-cards",
+      "validation_targets": [
+        "root_cause",
+        "title",
+        "description",
+        "category",
+        "severity",
+        "proposed_fix",
+        "evidence",
+        "collection"
+      ]
+    },
+    {
+      "agent_id": "aiq-005-ticket",
+      "artifact_reference": "sha256:cbc2e935b2b5b38b6283e87205f9e43462c64dd9a9a0a9259fa91aaf606e61f5",
+      "bundle_hash": "sha256:dd265cc0243980f434d5a4cdbf48dfb74117493b6f979e5bbb390cd87552aba5",
+      "phase": "faulted",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": "sha256:fe9a66be8e0daee54f38e833f745e9c005661cba145304aca810e8c26b66d441",
+          "judgment_target_reference": "sha256:56a37da97c9985d2016b088f676824ed8e640754d96d9413554fd186a62423c3"
+        },
+        {
+          "insight_reference": null,
+          "judgment_target_reference": "sha256:b51e0d7f8697d515b417296d91eb0d19a420833669ac09380643f4f522cbee4b"
+        }
+      ],
+      "primary_package_reference": "sha256:1f0f3698ed0aeb7858b9a7c4034aa5d40285a992fec60ba22a35c31b0ab70828",
+      "run_id": "run-01-aiq-005-ticket",
+      "scenario_id": "aiq-scn-033-cross-entity-contamination",
+      "validation_targets": [
+        "root_cause",
+        "title",
+        "description",
+        "category",
+        "severity",
+        "proposed_fix",
+        "evidence"
+      ]
+    },
+    {
+      "agent_id": "aiq-005-ticket",
+      "artifact_reference": "sha256:0e39055e5d5560aefe86e3bb6e99fbdb6874dd7b7eb3ab8de8de0be4f4df3594",
+      "bundle_hash": "sha256:7941c294e6457842a7aab45b81584fa604c39d6b4f4151cd7afcdcddb09cc64b",
+      "phase": "faulted",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": "sha256:dcbc42c78a10e26d79cbbac223e0b6a96e48ac0fb50039216a072467f68148ca",
+          "judgment_target_reference": "sha256:8ffa8b719e8c3fa3ba505ba2e32b2086e9a52eba9b12bd44ffa3f389e54c3112"
+        },
+        {
+          "insight_reference": null,
+          "judgment_target_reference": "sha256:b84c71fe7535bebb6df9ae4084e8766dbbd765c9e1980ccbc655958829162300"
+        }
+      ],
+      "primary_package_reference": "sha256:2a6dafedd57360295a225527208dddbac03730937dc7d5921deec866f8226a8e",
+      "run_id": "run-01-aiq-005-ticket",
+      "scenario_id": "aiq-scn-041-guardrail-bypass",
+      "validation_targets": [
+        "root_cause",
+        "title",
+        "description",
+        "category",
+        "severity",
+        "proposed_fix",
+        "evidence"
+      ]
+    },
+    {
+      "agent_id": "aiq-002-healthcare",
+      "artifact_reference": "sha256:874033dcd9e194ef044dbd9a8c36a994f231a0b52c6b131ac32bce80f5e0d2ce",
+      "bundle_hash": "sha256:8550bffd265f397c7a945f89f99c600692e1f41184ec58fad59e65ca75f5e44d",
+      "phase": "faulted",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": "sha256:363fab92528772f5c6c2c3f0efeb7eb27c6034c47e3eeec8ac8ba872f85a031c",
+          "judgment_target_reference": "sha256:0800e15b47d3670669a1b4e76fd8119067c50ada74a37e282f58a68472903f2f"
+        },
+        {
+          "insight_reference": null,
+          "judgment_target_reference": "sha256:7958050197a4e419dbeae93d75d5fb4945f9c6890d2ebb6a34e3937dbc08250e"
+        }
+      ],
+      "primary_package_reference": "sha256:825bdfbc1f4ea803bd4c742224954e46c3b7efa1f7adcf4e4e9708c335d1f041",
+      "run_id": "run-02-aiq-002-healthcare",
+      "scenario_id": "aiq-scn-028-task-evasion-no-op",
+      "validation_targets": [
+        "root_cause",
+        "title",
+        "description",
+        "category",
+        "severity",
+        "proposed_fix",
+        "evidence"
+      ]
+    },
+    {
+      "agent_id": "aiq-004-travel",
+      "artifact_reference": "sha256:82b8dcb8eaa3562e8a57d3220b9afbe2f947ba78f023308a9907a638032519e4",
+      "bundle_hash": "sha256:52c8a881827abf47149af240c9e3dfb88e45c84a90617f1b1b5dc024a58e50e9",
+      "phase": "corrected",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": "sha256:306d0f8565e1415bbd9263883e135f8aa758fbdc16d093f1f70f6857e9e5105b",
+          "judgment_target_reference": "sha256:205edfb21fafdcdfa04d3b6be0858ad98c621829822b3ee7bb55847cfaa5c27d"
+        }
+      ],
+      "primary_package_reference": "sha256:011b7a8c319c82fa2d4203c89abe42cdd5a23f27d0df96609c001685a40d11b4",
+      "run_id": "run-02-aiq-004-travel",
+      "scenario_id": "aiq-scn-058-cross-version-stale-finding",
+      "validation_targets": [
+        "root_cause",
+        "title",
+        "description",
+        "category",
+        "severity",
+        "proposed_fix",
+        "evidence",
+        "version_identity"
+      ]
+    },
+    {
+      "agent_id": "aiq-005-ticket",
+      "artifact_reference": "sha256:ae836895bcc140bfd5fecfeba7831f565a1dcbc836150a20a0a2f5a8fcfeda99",
+      "bundle_hash": "sha256:f81be4a5bc0f706ab2b5ec8269c29152f2d60dd7f42d7da033e5c344731b0a4c",
+      "phase": "faulted",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": "sha256:9520408b640228a67851dffab8584b3fb3ddbf00c1712513738a72c93ba1beb3",
+          "judgment_target_reference": "sha256:950e7e581345f0897ffab4eab8ee517be9c0c089ea0788aef353bd66c54d6ef3"
+        },
+        {
+          "insight_reference": null,
+          "judgment_target_reference": "sha256:3a5262cee8ddd38ca1763a0cf9abd36f3ef05451f1aca59ec5897f633d6b8778"
+        }
+      ],
+      "primary_package_reference": "sha256:c70d0fec3fa95ed5e2953d421ccdc4c9acb2ac6a5f49db6c5923b2c0cee995f1",
+      "run_id": "run-02-aiq-005-ticket",
+      "scenario_id": "aiq-scn-043-malformed-approval",
+      "validation_targets": [
+        "root_cause",
+        "title",
+        "description",
+        "category",
+        "severity",
+        "proposed_fix",
+        "evidence"
+      ]
+    },
+    {
+      "agent_id": "aiq-005-ticket",
+      "artifact_reference": "sha256:f53c10a537a24c0d83627b1561711978a44379a898f4fe0c27cc129ec437d91a",
+      "bundle_hash": "sha256:67dbb911fe5ea9f2ede908245083f2b219bd5675f455401f8d1800db32fdd1a5",
+      "phase": "recurred",
+      "primary_judgment_targets": [
+        {
+          "insight_reference": "sha256:43b6db32dd96e1d51c699024c14b437b2c0252b030fb08778e3bfcb1fbfa0984",
+          "judgment_target_reference": "sha256:c68ec51813f988aab3ba15f464c3ddae69af28149a61e2bc084a0638630338c9"
+        },
+        {
+          "insight_reference": null,
+          "judgment_target_reference": "sha256:4dc63e28b790b575bdeb362ef6f7f7e86e236b7cf3b388bd0a0dca0aa88302f8"
+        }
+      ],
+      "primary_package_reference": "sha256:fa525992d5766208ada7164d14f15ab864588bc7d14ac8ffeead5369a22bbf0e",
+      "run_id": "run-03-aiq-005-ticket",
+      "scenario_id": "aiq-scn-060-fixed-issue-recurrence",
+      "validation_targets": [
+        "root_cause",
+        "title",
+        "description",
+        "category",
+        "severity",
+        "proposed_fix",
+        "evidence",
+        "version_identity"
+      ]
+    }
+  ],
+  "generated_at": "2026-08-21T00:00:00Z",
+  "plan_id": "aiq-20260821-r19",
+  "plan_reference": "sha256:10dc6463d729bfef5ce864914b8e054a376b54b7cef9d660cd8da99b9055ac76",
+  "primary_judgment_target_count": 43,
+  "primary_package_count": 25,
+  "report_date": "2026-08-21",
+  "runtime": {
+    "attempt": 1,
+    "state_reference": "sha256:396773f2184ae10c20c6f45dac5ff1896c8117e4d3bfed5032c0ff2058edbe90",
+    "status": "succeeded"
+  },
+  "schema_version": "1.0.0",
+  "stage": "evidence_complete",
+  "status_hash": "sha256:d99b80362e7ad8f60acf9972c7f7c91b80e95a41f99cb098c3a38fae2a9a2fb2",
+  "status_id": "aiq-20260821-r19",
+  "workflow": {
+    "ado": {
+      "auto_apply": false,
+      "mode": "candidate-only",
+      "write_requests_allowed": false
+    },
+    "cleanup": {
+      "dry_run_first": true,
+      "execute_requires_review": true
+    },
+    "email": {
+      "logical_message_limit": 1,
+      "receipt_required": true,
+      "stop_after_first_confirmed_success": true
+    },
+    "generated_pr": {
+      "branch_prefix": "aiq-daily/",
+      "generated_paths_only": true
+    },
+    "stages": [
+      {
+        "commands": [
+          "judge-package-export",
+          "judge-package-import"
+        ],
+        "name": "primary_judgment",
+        "scope": "every_primary_judgment_target",
+        "status": "pending"
+      },
+      {
+        "commands": [
+          "verifier-export",
+          "verifier-import"
+        ],
+        "name": "blinded_verification",
+        "scope": "eligible_candidates_only",
+        "status": "conditional"
+      },
+      {
+        "commands": [
+          "score"
+        ],
+        "name": "deterministic_scoring_mapping",
+        "scope": "complete_evidence_and_primary_judgments",
+        "status": "pending"
+      },
+      {
+        "commands": [
+          "memory-reconcile"
+        ],
+        "name": "memory_reconciliation",
+        "scope": "complete_canonical_report_only",
+        "status": "pending"
+      },
+      {
+        "commands": [
+          "ado-dry-run"
+        ],
+        "name": "ado_candidate_only",
+        "scope": "confirmed_agent_insights_defects",
+        "status": "pending"
+      },
+      {
+        "commands": [
+          "render-report",
+          "finalize"
+        ],
+        "name": "canonical_report_finalize",
+        "scope": "one_canonical_report",
+        "status": "pending"
+      },
+      {
+        "commands": [
+          "email-receipt-import"
+        ],
+        "name": "one_message_email",
+        "scope": "one_content_digest",
+        "status": "pending"
+      },
+      {
+        "commands": [
+          "validate-generated-paths"
+        ],
+        "name": "generated_only_pr",
+        "scope": "aiq-daily_branch",
+        "status": "pending"
+      },
+      {
+        "commands": [
+          "cleanup"
+        ],
+        "name": "reviewed_cleanup",
+        "scope": "exact_expired_owned_resources",
+        "status": "conditional"
+      }
+    ],
+    "verifier_eligibility": {
+      "agent_insights_ownership_required": true,
+      "candidate_only": true,
+      "deterministic_checks_required": true,
+      "primary_confidence_minimum": 0.95,
+      "primary_verdicts": [
+        "partially_useful",
+        "incorrect_noise"
+      ],
+      "provenance_checks_required": true,
+      "reproducible_occurrence_required": true
+    }
+  }
+}
