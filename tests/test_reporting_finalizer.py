@@ -374,6 +374,8 @@ def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> No
     )
     assert subject.startswith("[Agent Insights Quality] N/A")
     assert "Overall insight quality score: N/A" in body
+    assert f"Report {value['report_id']}" not in body
+    assert value["engine"]["build"] not in body
     assert body.count("<h2 ") == 4
     assert "&lt;without injection&gt;" not in body
     assert "<without injection>" not in body
@@ -413,7 +415,7 @@ def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> No
     ):
         assert f"agents/{agent_id}.md" in body
     assert "hosted_custom_container" not in body
-    assert ">container</td>" in body
+    assert ">hosted_container</td>" in body
     assert "<strong>GitHub Copilot</strong>" not in body
     assert ">Data source</th>" not in body
     assert ">Resolved value</th>" not in body
@@ -445,7 +447,7 @@ def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> No
         "Summary",
         "What is working",
         "What needs improvement",
-        "Test agents and agent links",
+        "Test Agents",
     )]
     assert positions == sorted(positions)
 
@@ -649,7 +651,7 @@ def test_not_at_bar_email_names_relationship_violation_and_candidate_action() ->
     assert "Related findings were not cleanly separated" in body
     assert "Affected test agents: aiq-001-agent." in body
     assert "Analysis found 1 umbrella relationship." in body
-    assert "1 bug candidate prepared; no work-item mutation was claimed." in body
+    assert "bug candidate prepared" not in body
     assert "bug created" not in body.casefold()
 
 
@@ -752,7 +754,8 @@ def test_r19_like_email_keeps_candidate_status_with_six_metric_gaps() -> None:
         runtime_link_context(value),
     )
 
-    assert "3 bug candidates prepared; no work-item mutation was claimed." in body
+    assert "Follow-up:" not in body
+    assert "bug candidates prepared" not in body
     assert "2 cards came from healthy controls." in body
     assert "Healthy-control noise:" not in body
     assert "Quality gate failed" not in body

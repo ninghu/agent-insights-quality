@@ -776,7 +776,7 @@ title, description, and lifecycle-neutral evaluation text to `render-report`. Th
 count-reconciled to the canonical physical-card and utility-grade totals, then only its public-safe
 rendered Markdown is committed; the source evidence and sidecar remain private.
 
-### 4. Test agents and agent links
+### 4. Test Agents
 
 Include one compact table with every test agent, sorted by test-agent name:
 
@@ -794,7 +794,7 @@ field, relationship, verifier, fix-verifiability, and manual-review evidence. Ea
 injected issues, expected insights, immutable versions, and guidance. Do not duplicate per-agent
 detail or assignment information in email.
 
-Display `hosted_custom_container` as `container`.
+Display `hosted_custom_container` as `hosted_container`.
 
 Subject format:
 

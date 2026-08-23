@@ -299,8 +299,8 @@ standalone-tab flight is on and `/monitor/insights` when it is off. Trace links 
    `[Agent Insights Quality] <score/100|N/A> - YYYY-MM-DD - <short signal>`. The displayed overall
    score is `100 * strict true positives / expected roots`; partial cards earn no score, and zero
    expected roots or incomplete evidence renders `N/A`.
-5. Email sections remain exactly Summary, What is working, What needs improvement, and Test agents
-   and agent links. Summary uses concise assessment prose and a `Grade | Findings` table;
+5. Email sections remain exactly Summary, What is working, What needs improvement, and Test Agents.
+   Summary uses concise assessment prose and a `Grade | Findings` table;
    What is working uses `Capability | Evidence`; What needs improvement uses `Product gap | What
    happened | Needed behavior`; each gap names sorted affected test agents from canonical evidence.
    Keep customer-facing labels and concrete counts rather than internal gate codes. Grade observed-card
@@ -309,7 +309,7 @@ standalone-tab flight is on and `/monitor/insights` when it is off. Trace links 
    layout, but do not present the retained trend artifact. Sort the compact agent table by name and
    limit it to Test agent, Type, Agent, Report, and Recommended human validation. Do not expose
    assignment information in email.
-   Normalize `hosted_custom_container` to `container`. The Agent cell contains the private Open agent
+   Normalize `hosted_custom_container` to `hosted_container`. The Agent cell contains the private Open agent
    CTA; each Report cell says View report and targets that agent's public Markdown. Each
    private CTA says Open agent and targets exactly
    `/build/agents/{agent_name}/build?tid={tenant_id}`, never a bare agent path or Insights deep link.

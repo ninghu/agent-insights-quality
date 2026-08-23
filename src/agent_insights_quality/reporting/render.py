@@ -31,7 +31,7 @@ SECTION_TITLES = (
     "Summary",
     "What is working",
     "What needs improvement",
-    "Test agents and agent links",
+    "Test Agents",
 )
 MAIL_TRANSPORT_ORDER = (
     "connected_copilot_mail",
@@ -878,7 +878,7 @@ def _agent_assignee(agent_id: str) -> str:
 
 
 def _display_agent_type(agent_type: str) -> str:
-    return "container" if agent_type == "hosted_custom_container" else agent_type
+    return "hosted_container" if agent_type == "hosted_custom_container" else agent_type
 
 
 def _report_repo_path(report: dict[str, Any]) -> str:
@@ -1830,7 +1830,6 @@ def render_email_html(
     grade_rows = _grade_rows(report)
     working = _working_capabilities(report)
     improvements = _improvement_rows(report)
-    action_status = _bug_action_status(report)
     status_style = _STATUS_STYLES[report["status"]]
     rows = []
     for agent in _ordered_agents(report):
@@ -1879,9 +1878,6 @@ def render_email_html(
         f'{status_style["background"]};color:{status_style["foreground"]};'
         'font-size:12px;line-height:16px;font-weight:700;">'
         f"Overall insight quality score: {html.escape(overall_score)}</span>"
-        '<p style="margin:15px 0 0 0;color:#aebfd0;font-size:12px;line-height:18px;">'
-        f"Report {html.escape(report['report_id'])} &middot; Build "
-        f"{html.escape(report['engine']['build'])}</p>"
         "</td></tr>"
         '<tr><td style="padding:28px 32px 0 32px;">'
         + _section_heading(SECTION_TITLES[0])
@@ -1903,12 +1899,6 @@ def render_email_html(
             ("Product gap", "What happened", "Needed behavior"),
             improvements,
             (24, 43, 33),
-        )
-        + (
-            '<p style="margin:14px 0 0 0;color:#475569;font-size:13px;line-height:20px;">'
-            f"<strong>Follow-up:</strong> {html.escape(action_status)}</p>"
-            if action_status
-            else ""
         )
         + "</td></tr>"
         '<tr><td style="padding:24px 32px 38px 32px;">'
