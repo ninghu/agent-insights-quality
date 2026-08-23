@@ -875,6 +875,15 @@ def test_real_r19_copy_distinguishes_strict_matches_from_useful_signal() -> None
         "1 matched the expected root cause but failed category or severity correctness."
         in body
     )
+    working_section = body[
+        body.index(">What is working</h2>") : body.index(
+            ">What needs improvement</h2>"
+        )
+    ]
+    assert "Cross-version stale finding" not in working_section
+    assert "Parent-child trace correlation control" in working_section
+    assert "Partial tool failure ignored" in working_section
+    assert "Task evasion or no-op response" in working_section
     assert (
         "5 of 20 expected roots were true silent misses with no card" in body
     )

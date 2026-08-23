@@ -286,12 +286,20 @@ def _useful_scenario_examples(report: dict[str, Any]) -> str:
         for version in checklist["versions"]
         for scenario in version["expected_scenarios"]
     }
+    lifecycle_scenarios = {
+        scenario["scenario_id"]
+        for checklist in report.get("human_validation_checklists", [])
+        for version in checklist["versions"]
+        if version["planned_prior_evidence"]
+        for scenario in version["expected_scenarios"]
+    }
     scenario_ids = list(
         dict.fromkeys(
             item["scenario_id"]
             for item in report["field_judgments"]
             if _content_utility_grade(item)
             in {"fully_correct", "partially_useful"}
+            and item["scenario_id"] not in lifecycle_scenarios
         )
     )
     if not scenario_ids:
