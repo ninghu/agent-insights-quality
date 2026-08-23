@@ -4,8 +4,8 @@
 The current `0.1.x` release includes five reviewed healthy synthetic agents, Foundry deployment and
 endpoint-only traffic adapters, generic production infrastructure and orchestration boundaries,
 deterministic scoring, Copilot judgment handoffs, quality-memory reconciliation, ADO synchronization,
-reporting/email handoffs, and a fail-closed finalizer. The live daily entrypoint is implemented but
-remains disabled by the reviewed readiness contract until operational qualification is complete.
+reporting/email handoffs, and a fail-closed finalizer. The live daily entrypoint is enabled by the
+human-reviewed readiness contract after successful endpoint-only operational qualification.
 
 The quality bar is intentionally strict. A day is `AT BAR` only after its complete reviewed daily
 selection runs, healthy agents produce no insights, actual insight counts exactly match expected
@@ -85,17 +85,17 @@ hashes rather than private coordinates or URLs.
 
 ## Daily automation
 
-`config/runtime-readiness.yaml` is the fail-closed authority. The healthy-agent contracts are
-implemented, but `healthy_agents` remains false until a live run proves the required agent, model,
-and tool spans through read-only Application Insights evidence. Therefore
-`python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD>` returns an actionable
-`INCONCLUSIVE` result without deployments, traffic, insights, ADO, memory transitions, cleanup, or
-generated PR mutation. The required minimal finalizer still renders a sanitized report and
-one-message email handoff so readiness failures cannot bypass finalization. The handoff preserves one
-content digest and orders connected Copilot mail, authorized Graph, then verified local Outlook on
-`hostId=local`; it stops after the first confirmed success and never uses a Logic App.
+`config/runtime-readiness.yaml` is the fail-closed authority and is now `ready`: every mandatory
+component is true and the daily workflow entrypoint is enabled. The human-reviewed live qualification
+used dedicated West US 2 infrastructure. Five healthy agents and 17 version work items completed
+endpoint-only telemetry; R19 succeeded on its first attempt with 87 checkpoints, zero agent failures,
+and 25 evidence scenarios. All 21 generated cards received `primary-v2` judgments and selected blinded
+verifiers. Final scoring, reporting, memory reconciliation, and email delivery were validated; the
+candidate-only read-only ADO duplicate search completed, and the authenticated-user test email receipt
+was imported. Runtime readiness records operational completeness, not a passing product-quality
+result: the published R19 canonical verdict is `NOT AT BAR`.
 
-After a reviewed readiness change enables every component, `run-daily` writes or verifies the
+`run-daily` writes or verifies the
 immutable weekday plan before any Azure operation, deploys `qualification-project.bicep` with the
 exact plan project/date/expiry/catalog hash and full project name as the connection suffix, and runs
 or resumes the live adapter from `.aiq-runtime/`. A durable bounded 15-minute propagation gate after
@@ -136,7 +136,9 @@ cannot edit this or any other file under `config/`; enabling writes requires a n
 configuration change. Template reads, work-item reads, and WIQL duplicate searches remain read-only
 planning operations.
 
-After every mandatory component is implemented, validated, and human-reviewed, the scheduled Copilot
-automation will follow `.github/skills/agent-insights-quality-daily/SKILL.md`. Qualification uses the
-protected test-recipient variable; promotion to the protected production-recipient variable requires
-a separate human-reviewed configuration change.
+The ready runtime does not promote side effects. `config/reporting.yaml` remains in test mode and uses
+the authenticated user's mailbox or protected test-recipient variable; production-recipient alias
+promotion requires separate human signoff. `config/ado-policy.yaml` remains
+`auto_apply_enabled: false`; any ADO create, patch, reopen, or comment/evidence write requires its own
+separate human signoff. The scheduled Copilot automation follows
+`.github/skills/agent-insights-quality-daily/SKILL.md`.

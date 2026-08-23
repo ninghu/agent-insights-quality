@@ -865,13 +865,18 @@ GitHub Copilot automation itself, not repeated as operational timing instruction
       trail.
 
 12. **End-to-end qualification**
-    - Run a complete dry run without side effects, a full live run with bug creation disabled, a
-      duplicate/reopen simulation, an email-render/delivery test, and finally one fully enabled daily
-      run.
+    - Complete a dry run without side effects and a full live run with ADO writes disabled.
+    - R19 succeeded on its first attempt in dedicated West US 2 infrastructure: five healthy agents,
+      17 version work items, 87 checkpoints, zero agent failures, 25 evidence scenarios, and 21 cards
+      with `primary-v2` judgments plus selected blinded verifiers. Operational qualification success
+      does not change the published canonical quality verdict of `NOT AT BAR`.
+    - Validate final scoring, reporting, memory reconciliation, candidate-only read-only ADO duplicate
+      search, and authenticated-user test email delivery with an imported receipt.
 
-The implementation through workstream 11 is present behind `config/runtime-readiness.yaml`. Live
-qualification, schedule enablement, recipient promotion, and ADO writes remain separate
-human-reviewed operational decisions.
+All twelve workstreams are implemented, live-qualified, and enabled by
+`config/runtime-readiness.yaml`. The app scheduled workflow is enabled separately after this reviewed
+source change lands. Production-recipient alias promotion and ADO writes remain independent
+human-reviewed operational decisions; readiness grants neither.
 
 Workstreams 2, 3, 7, and 10 can proceed in parallel after repository contracts are fixed. The live
 orchestrator, memory, ADO, and final automation depend on those contracts.

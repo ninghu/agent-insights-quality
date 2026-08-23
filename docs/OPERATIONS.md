@@ -14,14 +14,19 @@ python -m pytest
 ## Runtime readiness
 
 `config/runtime-readiness.yaml` records every mandatory runtime workstream. The live adapter and
-daily orchestration boundary are implemented. Their readiness flags stay false until live telemetry
-qualification proves the expected agent, model, and tool spans and required Azure permissions,
-including `roleAssignments/write`, are demonstrated.
-`check-runtime-readiness` and `run-daily` fail closed with an actionable `INCONCLUSIVE` result until
-every component is implemented, tested, and enabled through a human-reviewed source change. A
-readiness failure prohibits all operational phases but still requires the minimal report/email
-finalizer and its one-message Copilot mail handoff. The readiness file is protected from generated
-automation.
+daily orchestration boundary are live-qualified and enabled. The human-reviewed qualification used
+dedicated West US 2 infrastructure; five healthy agents and 17 version work items completed
+endpoint-only telemetry. R19 succeeded on its first attempt with 87 checkpoints, zero agent failures,
+25 evidence scenarios, and 21 generated cards. Every card received a `primary-v2` judgment and its
+selected blinded verifier. Final score, report, memory, and email delivery completed; candidate-only
+read-only ADO duplicate search completed; and the authenticated-user test email receipt was imported.
+This enables the runtime boundary; it does not override the canonical R19 quality verdict of
+`NOT AT BAR`.
+
+`check-runtime-readiness` now succeeds. The gate still fails closed with an actionable `INCONCLUSIVE`
+result whenever any modified or future contract has a false component. Such a readiness failure
+prohibits every operational phase but still requires the minimal report/email finalizer and its
+one-message Copilot mail handoff. The readiness file is protected from generated automation.
 
 ## Runtime commands
 
@@ -266,8 +271,8 @@ Install the optional identity-backed Azure clients with `python -m pip install -
 runners that query Application Insights or use the Azure Blob artifact backend.
 
 Scoring, Copilot judgment, quality memory, ADO synchronization, reporting/email handoffs, and the
-daily orchestration boundary are implemented. `run-daily` catches readiness failure before all
-operational work. Once enabled, it also finalizes any operational failure as a canonical
+daily orchestration boundary are implemented and live-qualified. `run-daily` catches readiness
+failure before all operational work. It also finalizes any operational failure as a canonical
 `INCONCLUSIVE` report plus one immutable unsent direct-email request. The readiness file remains
 protected from generated automation.
 
@@ -282,7 +287,8 @@ Template lookup, work-item reads, and WIQL duplicate search are allowed for plan
 reopen, and comment/evidence requests return a candidate-only result and issue no write HTTP request
 unless `auto_apply_enabled` is changed to true in a normal human-reviewed configuration change.
 `AIQ_ADO_AUTO_APPLY_ENABLED` may further disable that reviewed permission; it cannot turn a false
-policy value on. Daily/generated automation must never edit this policy.
+policy value on. Daily/generated automation must never edit this policy. Runtime readiness does not
+authorize ADO writes; enabling them requires separate human signoff.
 
 ## Runtime handoff commands
 
@@ -321,7 +327,8 @@ Microsoft mailbox when an address-bearing automation environment is unavailable,
 protected `AIQ_TEST_REPORT_RECIPIENT` variable in Actions/tests. Production mode resolves only
 `AIQ_PRODUCTION_REPORT_RECIPIENT`. Both values must use the configured allowed domain. Promotion is
 an explicit human-reviewed mode change; daily automation cannot modify configuration or promote
-itself.
+itself. Runtime readiness leaves test/authenticated-user mode selected; production-recipient alias
+promotion requires separate human signoff and is not implied by a ready runtime.
 
 ## Public-data boundary
 
