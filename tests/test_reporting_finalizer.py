@@ -414,15 +414,7 @@ def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> No
         assert f"agents/{agent_id}.md" in body
     assert "hosted_custom_container" not in body
     assert ">container</td>" in body
-    copilot_row = body[body.index("<strong>GitHub Copilot</strong>") :]
-    copilot_row = copilot_row[: copilot_row.index("</tr>")]
-    assert ">coding</td>" in copilot_row
-    assert copilot_row.count(">N/A</td>") == 2
-    assert ">Yes</td>" in copilot_row
-    assert body.index("<strong>GitHub Copilot</strong>") > max(
-        body.index(f"<strong>{agent['name']}</strong>")
-        for agent in value["agents"]
-    )
+    assert "<strong>GitHub Copilot</strong>" not in body
     assert ">Data source</th>" not in body
     assert ">Resolved value</th>" not in body
     assert "Foundry Project:" in body
@@ -441,7 +433,8 @@ def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> No
     assert "max-width:1160px" in body
     assert 'width="1160"' in body
     assert "<!--[if mso]>" in body
-    assert 'border-left:5px solid #0078d4' in body
+    assert 'border-left:5px solid #0078d4' not in body
+    assert body.count("Overall insight quality score: N/A") == 1
     assert "Agent Insights met the strict daily quality bar" in body
     assert 'bgcolor="#e8eef7"' in body
     assert 'width="100%"' in body

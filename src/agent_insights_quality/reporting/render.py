@@ -1856,18 +1856,6 @@ def render_email_html(
             f'color:#334155;line-height:18px;font-weight:700;">{recommend}</td>'
             "</tr>"
         )
-    rows.append(
-        "<tr>"
-        '<td style="padding:11px 12px;border:1px solid #d6deea;'
-        'color:#1f2937;line-height:18px;"><strong>GitHub Copilot</strong></td>'
-        '<td style="padding:11px 12px;border:1px solid #d6deea;color:#334155;">'
-        "coding</td>"
-        '<td style="padding:11px 12px;border:1px solid #d6deea;color:#334155;">N/A</td>'
-        '<td style="padding:11px 12px;border:1px solid #d6deea;color:#334155;">N/A</td>'
-        '<td style="padding:11px 12px;border:1px solid #d6deea;'
-        'color:#334155;font-weight:700;">Yes</td>'
-        "</tr>"
-    )
     body = (
         '<!doctype html><html><body bgcolor="#f3f6fa" '
         'style="margin:0;padding:0;background-color:#f3f6fa;font-family:Segoe UI,'
@@ -1895,13 +1883,6 @@ def render_email_html(
         f"Report {html.escape(report['report_id'])} &middot; Build "
         f"{html.escape(report['engine']['build'])}</p>"
         "</td></tr>"
-        '<tr><td style="padding:24px 32px 0 32px;">'
-        '<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
-        'width="100%" bgcolor="#eaf4ff" style="width:100%;background-color:#eaf4ff;'
-        'border-left:5px solid #0078d4;border-collapse:collapse;">'
-        '<tr><td style="padding:18px 20px;color:#12304a;font-size:16px;line-height:24px;">'
-        f"<strong>Overall insight quality score: {html.escape(overall_score)}</strong>"
-        "</td></tr></table></td></tr>"
         '<tr><td style="padding:28px 32px 0 32px;">'
         + _section_heading(SECTION_TITLES[0])
         + "".join(

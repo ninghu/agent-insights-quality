@@ -310,8 +310,7 @@ standalone-tab flight is on and `/monitor/insights` when it is off. Trace links 
    limit it to Test agent, Type, Agent, Report, and Recommended human validation. Do not expose
    assignment information in email.
    Normalize `hosted_custom_container` to `container`. The Agent cell contains the private Open agent
-   CTA; each Report cell says View report and targets that agent's public Markdown. Append GitHub
-   Copilot / coding with N/A links and Yes validation. Each
+   CTA; each Report cell says View report and targets that agent's public Markdown. Each
    private CTA says Open agent and targets exactly
    `/build/agents/{agent_name}/build?tid={tenant_id}`, never a bare agent path or Insights deep link.
    Summary contains one inline Foundry project link ending `/home?tid={tenant_id}` and no second

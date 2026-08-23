@@ -794,8 +794,7 @@ field, relationship, verifier, fix-verifiability, and manual-review evidence. Ea
 injected issues, expected insights, immutable versions, and guidance. Do not duplicate per-agent
 detail or assignment information in email.
 
-Display `hosted_custom_container` as `container`. Append one final `GitHub Copilot` / `coding`
-row with `N/A` for Agent and Report, and `Yes` for human validation.
+Display `hosted_custom_container` as `container`.
 
 Subject format:
 
