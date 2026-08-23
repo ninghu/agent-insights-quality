@@ -730,37 +730,35 @@ Private link values are never committed.
 ## 15. Daily email
 
 Use the attached Foundry Insights Assessment as the visual and editorial reference, but keep the daily
-email shorter and more executive-friendly. The detailed numeric evidence belongs in the committed
-`reports/daily/YYYY/MM/DD/report.md`; the email favors clear written conclusions and only simple,
-easy-to-interpret numbers. Its narrative states `Expected X findings; observed Y`, calls extras noise,
-and calls missing findings missed issues while preserving the four-section navy Outlook layout.
+email shorter and more executive-friendly. Both Markdown and email begin with the same three
+leadership sections derived from the canonical scorecard and run. Detailed numeric evidence and
+human-validation checklists remain after those sections. The email uses a fluid 1160px Outlook-safe
+container with inline styles, readable narrow-screen padding, and no external CSS dependency.
 
 ### 1. Summary
 
 - `AT BAR`, `NOT AT BAR`, or `INCONCLUSIVE` banner.
-- A short written assessment of whether customer-facing insight quality met the bar and why.
-- Report date, production engine/build, and completion status.
-- Only approachable headline numbers, such as scenarios completed, correct/partially useful/incorrect
-  findings, and new/regressed gaps.
+- A short assessment of which meaningful problems were or were not found and the overall judgment.
+- A compact `Grade | Findings` table for correct, partially useful, incorrect/noisy, and missed results.
+- An explicit trust/completeness caution whenever evidence is incomplete or human review remains.
 - A 14-day quality trend chart showing daily `AT BAR`, `NOT AT BAR`, and `INCONCLUSIVE` status plus
   trusted-insight rate. Render it as email-compatible table-based bars/status cells, not a
   remote-authenticated image that Outlook cannot load.
-- Bugs created, updated, or reopened, phrased as an executive signal rather than a metric dump.
 
-### 2. What we are doing well
+### 2. What is working
 
-- Correctly detected high-value failure modes.
-- Strong field-level insight examples.
-- Healthy agents correctly producing no insights.
-- Improvements and newly resolved gaps.
+Use a compact `Capability | Evidence` table. Every row names concrete canonical evidence, such as
+correct or partially useful card counts, healthy-control restraint, required-field correctness,
+or collection separation. Name the evaluated scenarios when useful signal was only partial. Do not
+expose internal gate identifiers or make vague platform/process claims.
 
-### 3. Gaps and regressions
+### 3. What needs improvement
 
-- Missed scenarios.
-- Incorrect, partially useful, noisy, duplicated, fragmented, or umbrella insights.
-- Incorrect title/description/fix/severity/category/trace linkage.
-- Cross-version or lifecycle regressions.
-- ADO bug links, owners/state when available, and the next validation target.
+Use a compact `Product gap | What happened | Needed behavior` table. Each row states the
+customer-facing gap, concrete observed counts/rates, and the behavior required from the product.
+Cover missed problems, incorrect or ambiguous findings, healthy-agent noise, count mismatches,
+field-quality failures, related-card grouping, version scoping, and capability-aware fixes when
+present. State bug-candidate or confirmed private-action status separately from product gaps.
 
 ### 4. Test agents and Agent Insights links
 

@@ -17,9 +17,10 @@ missing findings are misses. Incomplete or untrustworthy runs are `INCONCLUSIVE`
 
 Canonical report `1.1.0` records the enforced thresholds, scorecard-derived actuals, and a pass/fail
 explanation for every gate. It also carries exactly one daily-plan-bound human-validation checklist
-per test agent. `report.md` expands those checklists into per-version one-pagers; the four-section
-Outlook-safe email keeps the same evidence compact and adds private Agent Insights links only during
-the direct email handoff. Historical `1.0.0` reports remain schema-compatible.
+per test agent. `report.md` and the Outlook-safe email lead with concise Summary, What is working,
+and What needs improvement assessment tables derived from that canonical evidence. Detailed numeric
+evidence and per-version human-validation checklists remain afterward; private Agent Insights links
+are added only during the direct email handoff. Historical `1.0.0` reports remain schema-compatible.
 
 ## Local development
 

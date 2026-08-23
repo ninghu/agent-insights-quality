@@ -369,12 +369,19 @@ def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> No
     assert "&lt;without injection&gt;" not in body
     assert "<without injection>" not in body
     assert all(agent["id"] in body for agent in value["agents"])
-    assert "Healthy controls produced 0 insight cards." in body
-    assert "Expected 0 findings; observed 0." in body
-    assert "No quality gaps or regressions were observed." in body
+    assert "No meaningful product problems were expected or found" in body
+    assert ">Grade</th>" in body
+    assert ">Findings</th>" in body
+    assert ">Capability</th>" in body
+    assert ">Evidence</th>" in body
+    assert ">Product gap</th>" in body
+    assert ">What happened</th>" in body
+    assert ">Needed behavior</th>" in body
+    assert "No product-quality gap observed" in body
     assert 'bgcolor="#f3f6fa"' in body
     assert 'bgcolor="#12304a"' in body
-    assert "max-width:760px" in body
+    assert "max-width:1160px" in body
+    assert 'width="1160"' in body
     assert "<!--[if mso]>" in body
     assert 'border-left:5px solid #0078d4' in body
     assert "Agent Insights met the strict daily quality bar" in body
@@ -385,8 +392,8 @@ def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> No
     assert "<img" not in body
     positions = [body.index(f">{title}</h2>") for title in (
         "Summary",
-        "What we are doing well",
-        "Gaps and regressions",
+        "What is working",
+        "What needs improvement",
         "Test agents and Agent Insights links",
     )]
     assert positions == sorted(positions)
@@ -427,8 +434,10 @@ def test_email_uses_simple_expected_observed_noise_and_miss_narrative() -> None:
         runtime_link_context(value),
     )
 
-    assert "Expected 4 findings; observed 5." in body
-    assert "with 1 missed and 2 noisy cards" in body
+    assert "Of 4 expected problems, 3 were captured as fully correct findings" in body
+    assert "The run generated 5 distinct cards: 3 correct, 0 partially useful, and 2 incorrect or noisy." in body
+    assert "1 expected problem was missed" in body
+    assert "4 findings were expected and 5 were observed" in body
 
 
 def test_email_doing_well_names_semantic_coverage_and_collection_integrity() -> None:
@@ -458,14 +467,12 @@ def test_email_doing_well_names_semantic_coverage_and_collection_integrity() -> 
         runtime_link_context(value),
     )
 
-    assert (
-        "Semantic review coverage: all 1 observed physical cards received field judgments."
-        in body
-    )
-    assert (
-        "Collection integrity: 0 duplicate and 0 stale-version relationships detected."
-        in body
-    )
+    assert "Useful diagnostic signal" in body
+    assert "1 of 1 observed cards contained useful signal" in body
+    assert "Finding content" in body
+    assert "All 1 fully correct findings passed required title" in body
+    assert "Finding separation" in body
+    assert "0 duplicate, fragment, umbrella, or stale-version relationships" in body
     assert body.count("<h2 ") == 4
 
     value["field_judgments"] = []
@@ -476,8 +483,8 @@ def test_email_doing_well_names_semantic_coverage_and_collection_integrity() -> 
         runtime_agent_links(value),
         runtime_link_context(value),
     )
-    assert "Semantic review coverage:" not in body
-    assert "Collection integrity:" not in body
+    assert "Useful diagnostic signal" not in body
+    assert "Finding separation" not in body
 
 
 def test_not_at_bar_email_names_relationship_violation_and_candidate_action() -> None:
@@ -506,7 +513,8 @@ def test_not_at_bar_email_names_relationship_violation_and_candidate_action() ->
         runtime_link_context(value),
     )
 
-    assert "umbrella 50.0%" in body
+    assert "Related findings were not cleanly separated" in body
+    assert "Relationship analysis measured umbrella 50.0%." in body
     assert "1 bug candidate prepared; no work-item mutation was claimed." in body
     assert "bug created" not in body.casefold()
 
@@ -535,10 +543,13 @@ def test_r19_like_email_keeps_candidate_status_with_six_metric_gaps() -> None:
     )
 
     assert "3 bug candidates prepared; no work-item mutation was claimed." in body
-    assert "including 2 from healthy controls" in body
+    assert "2 cards came from healthy controls." in body
     assert "Healthy-control noise:" not in body
     assert "Quality gate failed" not in body
     assert "finding_count_mismatch" not in body
+    assert ">Product gap</th>" in body
+    assert "Expected problems were missed" in body
+    assert "Incorrect and ambiguous findings" in body
     assert body.count("<h2 ") == 4
 
 
@@ -559,8 +570,9 @@ def test_email_names_capability_and_extended_field_failures() -> None:
         runtime_link_context(value),
     )
 
-    assert "actionability rate 50.0%" in body
-    assert "Fix compatibility: 1 or more proposed fixes" in body
+    assert "actionability rate passed 50.0%" in body
+    assert "Proposed fixes assumed unavailable capabilities" in body
+    assert "One or more proposed fixes referenced a capability" in body
 
 
 def test_not_at_bar_one_pager_names_bar_actuals_metrics_and_agent_versions() -> None:
@@ -577,13 +589,25 @@ def test_not_at_bar_one_pager_names_bar_actuals_metrics_and_agent_versions() -> 
 
     assert "## Quality bar and result" in markdown
     assert "Expected 20 findings; observed 21" in markdown
-    assert "High Severity Recall | FAIL | High-severity recall was 80.0%" in markdown
+    assert "## Summary" in markdown
+    assert "| Grade | Findings |" in markdown
+    assert "## What is working" in markdown
+    assert "| Capability | Evidence |" in markdown
+    assert "## What needs improvement" in markdown
+    assert "| Product gap | What happened | Needed behavior |" in markdown
+    assert "| Gate | Result | Evidence |" not in markdown
     assert "## Human validation one-pager" in markdown
+    assert (
+        markdown.index("## Summary")
+        < markdown.index("## What is working")
+        < markdown.index("## What needs improvement")
+        < markdown.index("## Human validation one-pager")
+    )
     assert body.count("<h2 ") == 4
-    assert "The bar requires exact cards per run" in body
-    assert "Count fidelity: 2 run/agent mismatches" in body
-    assert "Required fields below 100%" in body
-    assert "Collection relationships required 0.0%" in body
+    assert "Expected problems were missed" in body
+    assert "Finding count did not match root causes" in body
+    assert "Finding content was incomplete or inaccurate" in body
+    assert "Related findings were not cleanly separated" in body
     assert "Quality gate failed" not in body
     assert "<style" not in body
     assert "<script" not in body
@@ -772,7 +796,7 @@ def test_email_status_variants_have_outlook_safe_semantic_colors(
         value["failure"] = {
             "failed_phase": "judgment import",
             "last_confirmed_stage": "evidence",
-            "reason": "Synthetic evidence was incomplete.",
+            "reason": "Synthetic <evidence> was incomplete.",
             "affected_agents": [],
             "diagnostics_reference": SHA,
             "next_action": "Retry the bounded import.",
@@ -787,10 +811,14 @@ def test_email_status_variants_have_outlook_safe_semantic_colors(
     assert f"color:{foreground}" in body
     assert conclusion in body
     if status == "INCONCLUSIVE":
-        assert "Expected findings: N/A; observed findings: N/A." in body
-        assert "Correct findings were supported" not in body
-        assert "Healthy controls produced no insights." not in body
-        assert "No quality gaps or regressions were observed." not in body
+        assert "Treat both generated findings and missing findings as untrusted" in body
+        assert "Overall judgment</td>" in body
+        assert "Expected findings</td>" in body
+        assert "Observed findings</td>" in body
+        assert "Useful diagnostic signal" not in body
+        assert "No product-quality gap observed" not in body
+        assert "Synthetic &lt;evidence&gt; was incomplete." in body
+        assert "Synthetic <evidence> was incomplete." not in body
 
 
 def test_email_trend_is_a_bordered_four_column_outlook_table() -> None:
@@ -1142,6 +1170,9 @@ def test_failure_finalizer_is_inconclusive_and_has_no_mutations() -> None:
     body = render_failure_email_html(value)
     assert body.count("<h2 ") == 4
     assert 'bgcolor="#12304a"' in body
+    assert "max-width:1160px" in body
+    assert ">What is working</h2>" in body
+    assert ">What needs improvement</h2>" in body
     assert "Expected findings: N/A; observed findings: N/A." in body
     assert "Correct findings were supported" not in body
     assert "Healthy controls produced no insights." not in body
