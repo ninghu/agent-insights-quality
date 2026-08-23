@@ -548,6 +548,17 @@ def _doing_well(report: dict[str, Any]) -> list[str]:
         )
     if counts["healthy_insights"] == 0:
         values.append("Healthy controls produced 0 insight cards.")
+    judgment_count = len(report["field_judgments"])
+    if judgment_count == actuals["observed_findings"]:
+        values.append(
+            f"Semantic review coverage: all {actuals['observed_findings']} observed physical "
+            "cards received field judgments."
+        )
+    collection = report["collection_analysis"]
+    if collection["duplicates"] == 0 and collection["stale_version"] == 0:
+        values.append(
+            "Collection integrity: 0 duplicate and 0 stale-version relationships detected."
+        )
     passing = []
     if actuals["overall_recall"] >= 0.90:
         passing.append(f"recall {actuals['overall_recall']:.1%}")

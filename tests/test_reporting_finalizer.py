@@ -431,6 +431,55 @@ def test_email_uses_simple_expected_observed_noise_and_miss_narrative() -> None:
     assert "with 1 missed and 2 noisy cards" in body
 
 
+def test_email_doing_well_names_semantic_coverage_and_collection_integrity() -> None:
+    value = report()
+    scenario_id = "aiq-scn-010-test"
+    value["scenario_results"] = [
+        {
+            "scenario_id": scenario_id,
+            "agent_id": value["agents"][0]["id"],
+            "run_id": "run-01-aiq-001-agent",
+            "version_sequence": {"phase": "faulted", "version_digest": SHA},
+            "agent_version_digest": SHA,
+            "completed": True,
+            "expected_count": 1,
+            "observed_count": 1,
+            "verdict": "correct",
+            "insight_references": [SHA],
+        }
+    ]
+    value["field_judgments"] = [field_judgment(scenario_id, SHA)]
+    value["collection_analysis"]["distinct"] = 1
+
+    _, body = render_email_html(
+        value,
+        render_trend([value]),
+        runtime_agent_links(value),
+        runtime_link_context(value),
+    )
+
+    assert (
+        "Semantic review coverage: all 1 observed physical cards received field judgments."
+        in body
+    )
+    assert (
+        "Collection integrity: 0 duplicate and 0 stale-version relationships detected."
+        in body
+    )
+    assert body.count("<h2 ") == 4
+
+    value["field_judgments"] = []
+    value["collection_analysis"].update({"duplicates": 1, "stale_version": 1})
+    _, body = render_email_html(
+        value,
+        render_trend([value]),
+        runtime_agent_links(value),
+        runtime_link_context(value),
+    )
+    assert "Semantic review coverage:" not in body
+    assert "Collection integrity:" not in body
+
+
 def test_not_at_bar_email_names_relationship_violation_and_candidate_action() -> None:
     value = report()
     value["status"] = "NOT AT BAR"
