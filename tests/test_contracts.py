@@ -28,6 +28,7 @@ from agent_insights_quality.contracts import (
 from agent_insights_quality.docs import generate_documents
 from agent_insights_quality.planning import generate_daily_plan
 from agent_insights_quality.public_safety import validate_public_repository_content
+from agent_insights_quality.reporting.model import attach_structured_report_context
 from agent_insights_quality.security import validate_no_direct_trace_injection
 
 
@@ -548,6 +549,55 @@ def test_monday_rotating_report_can_be_conclusive_for_selected_scenarios() -> No
             assignment["scenario_id"] for assignment in plan["assignments"]
         },
     )
+
+
+def test_structured_checklist_ground_truth_must_match_catalog() -> None:
+    agents = load_agent_manifests()
+    catalog = load_scenario_catalog(set(EXPECTED_AGENTS))
+    plan = generate_daily_plan(
+        date(2026, 8, 17),
+        agents=agents,
+        catalog=catalog,
+    )
+    base_report = _report_for_plan(plan, catalog)
+    base_report["scorecard"]["rates"].update(
+        {
+            "evidence_localization_rate": 1.0,
+            "meaningfulness_rate": 1.0,
+            "actionability_rate": 1.0,
+            "fragmentation_rate": 0.0,
+        }
+    )
+    report = attach_structured_report_context(
+        base_report,
+        plan,
+        catalog,
+    )
+    expected_scenario_ids = {
+        assignment["scenario_id"] for assignment in plan["assignments"]
+    }
+
+    for field, wrong_value in (
+        ("category", "synthetic-wrong-category"),
+        ("severity", "synthetic-wrong-severity"),
+        ("root_cause", "Synthetic mismatched root cause."),
+    ):
+        mutated = deepcopy(report)
+        scenario = mutated["human_validation_checklists"][0]["versions"][0][
+            "expected_scenarios"
+        ][0]
+        scenario[field] = wrong_value
+        with pytest.raises(
+            ContractError,
+            match="checklist ground truth contradicts the scenario contract",
+        ):
+            validate_canonical_report_semantics(
+                mutated,
+                agents,
+                catalog,
+                "report",
+                expected_scenario_ids=expected_scenario_ids,
+            )
 
 
 def test_incomplete_selected_result_requires_inconclusive_rotating_report() -> None:

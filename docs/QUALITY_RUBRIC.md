@@ -25,6 +25,22 @@ all required attributes pass. `partially_useful` output remains visible but does
 positive. Efficiency metrics such as latency, model calls, and tokens are diagnostics, not substitutes
 for quality.
 
+## Report and human-validation contract
+
+Canonical report `1.1.0` embeds the thresholds above plus scorecard-derived actuals and deterministic
+explanations for all passed and failed gates. A `NOT AT BAR` summary therefore names exact expected and
+observed cards, high-severity and overall recall, precision, required-field correctness, collection
+relationship rates, healthy-control noise, and trust failures instead of exposing only gate codes.
+
+Every report agent has exactly one checklist derived from the immutable daily plan. It lists every
+planned run, version digest, lifecycle phase, expected count, scenario title, root cause, category,
+severity, and any observed final cards. Reviewers verify that healthy/corrected expectations are
+card-free when applicable, inspect title/description/fix, confirm current-window trace provenance and
+planned lifecycle evidence, check duplicate/fragment/umbrella relationships, and record a human
+outcome. A final corrected lifecycle version can still expect a card when the scenario specifically
+tests stale attribution; expected counts follow the reviewed assignment and sequence rather than a
+generic phase label.
+
 Automatic ADO action requires one reproducible complete occurrence, deterministic and provenance
 checks, retained evidence, a successful duplicate search, and independent agreement from the primary
 and blinded Copilot judgments at confidence `>= 0.95`. `config/ado-policy.yaml` additionally must

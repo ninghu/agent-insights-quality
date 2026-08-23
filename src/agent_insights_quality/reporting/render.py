@@ -19,6 +19,11 @@ from agent_insights_quality.links import validate_agent_insights_url
 from agent_insights_quality.links import RuntimeLinkContext
 from agent_insights_quality.artifact_io import content_hash, verified_hash
 from agent_insights_quality.judging import AUTO_BUG_CONFIDENCE
+from agent_insights_quality.reporting.model import (
+    STRUCTURED_REPORT_VERSION,
+    derive_bar_definition,
+    validate_structured_bar,
+)
 
 
 SECTION_TITLES = (
@@ -66,6 +71,7 @@ def validate_report_consistency(
 ) -> None:
     validate_instance(report, SCHEMAS / "canonical-report.schema.json", "canonical report")
     validate_instance(report["scorecard"], SCORECARD_SCHEMA, "canonical report scorecard")
+    validate_structured_bar(report, "canonical report")
     validate_bug_action_semantics(report, "canonical report")
     if validate_catalog:
         agents = load_agent_manifests()
@@ -107,6 +113,21 @@ def validate_report_consistency(
             raise ContractError(
                 "Human validation must be derived from semantic judgments"
             )
+    if report.get("schema_version") == STRUCTURED_REPORT_VERSION:
+        checklists = {
+            item["agent_id"]: item for item in report["human_validation_checklists"]
+        }
+        if len(checklists) != len(report["agents"]) or set(checklists) != {
+            agent["id"] for agent in report["agents"]
+        }:
+            raise ContractError(
+                "Structured report requires exactly one human validation checklist per agent"
+            )
+        for agent in report["agents"]:
+            if checklists[agent["id"]]["review_reason"] != agent["human_validation"]:
+                raise ContractError(
+                    "Human validation checklist contradicts the derived review reason"
+                )
 
 
 def render_report_markdown(report: dict[str, Any]) -> str:
@@ -114,6 +135,8 @@ def render_report_markdown(report: dict[str, Any]) -> str:
     score = report["scorecard"]
     counts = score["counts"]
     rates = score["rates"]
+    bar = report.get("bar_definition") or derive_bar_definition(report)
+    actuals = bar["actuals"]
     lines = [
         f"# Agent Insights Quality Report - {report['report_date']}",
         "",
@@ -124,11 +147,36 @@ def render_report_markdown(report: dict[str, Any]) -> str:
         "",
         report["summary"],
         "",
-        "## Numeric scorecard",
+        "## Quality bar and result",
         "",
-        "| Metric | Value |",
-        "| --- | ---: |",
+        "AT BAR requires exact expected-versus-observed cards for every run and agent; "
+        "at least 90% recall and 95% precision; 100% required-field correctness on "
+        "accepted true positives; zero duplicate, fragment, umbrella, stale-version, and "
+        "healthy-control cards; and no structural, provenance, PII, judge-schema, or "
+        "unresolved trust failure.",
+        "",
+        f"**Result: {report['status']}.** Expected {actuals['expected_findings']} findings; "
+        f"observed {actuals['observed_findings']}. Recall was "
+        f"{actuals['overall_recall']:.1%}, precision was {actuals['precision']:.1%}, and "
+        f"required-field correctness was {actuals['required_field_correctness']:.1%}.",
+        "",
+        "| Gate | Result | Evidence |",
+        "| --- | --- | --- |",
     ]
+    for gate in bar["gates"]:
+        lines.append(
+            f"| {gate['id'].replace('_', ' ').title()} | "
+            f"{'PASS' if gate['passed'] else 'FAIL'} | {gate['explanation']} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Numeric scorecard",
+            "",
+            "| Metric | Value |",
+            "| --- | ---: |",
+        ]
+    )
     for name, value in counts.items():
         lines.append(f"| {name.replace('_', ' ').title()} | {value} |")
     lines.append(
@@ -199,6 +247,50 @@ def render_report_markdown(report: dict[str, Any]) -> str:
             f"{diagnostics['tokens'] if diagnostics['tokens'] is not None else 'N/A'} |",
         ]
     )
+    if report.get("schema_version") == STRUCTURED_REPORT_VERSION:
+        lines.extend(["", "## Human validation one-pager", ""])
+        agents = {agent["id"]: agent for agent in report["agents"]}
+        for checklist in report["human_validation_checklists"]:
+            agent = agents[checklist["agent_id"]]
+            lines.extend(
+                [
+                    f"### {agent['name']} (`{agent['id']}`)",
+                    "",
+                    f"**Review reason:** {checklist['review_reason']}",
+                    "",
+                    "| Run / immutable version | Expected insights and ground truth | "
+                    "Observed final cards | Double-check |",
+                    "| --- | --- | --- | --- |",
+                ]
+            )
+            for version in checklist["versions"]:
+                expected = "<br>".join(
+                    f"`{item['scenario_id']}` {item['title']}: "
+                    f"{item['expected_insight_count']} x {item['category']} / "
+                    f"{item['severity']} - {item['root_cause']}"
+                    for item in version["expected_scenarios"]
+                )
+                observed = (
+                    "<br>".join(
+                        f"`{card['insight_reference']}` ({card['verdict']})"
+                        for card in version["observed_final_cards"]
+                    )
+                    or "None"
+                )
+                lines.append(
+                    f"| `{version['run_id']}` / {version['phase']} "
+                    f"`{version['version_digest']}` | Expected "
+                    f"{version['expected_insight_count']}<br>{expected} | {observed} | "
+                    f"{version['double_check']} |"
+                )
+            lines.extend(["", "**Standard checklist**", ""])
+            lines.extend(f"- [ ] {item}" for item in checklist["standard_checks"])
+            lines.extend(
+                [
+                    f"- Human outcome: `{checklist['human_outcome']}`",
+                    "",
+                ]
+            )
     lines.extend(
         [
             "",
@@ -416,6 +508,195 @@ def _quality_conclusion(status: str) -> str:
     }[status]
 
 
+def _quality_bar_summary(report: dict[str, Any]) -> str:
+    bar = report.get("bar_definition") or derive_bar_definition(report)
+    actuals = bar["actuals"]
+    return (
+        "The bar requires exact cards per run, at least 90% recall, at least 95% "
+        "precision, 100% high-severity recall and required-field correctness, zero "
+        "healthy/duplicate/fragment/"
+        "umbrella/stale cards, capability-compatible fixes, and no trust failures. Actuals: "
+        f"{actuals['expected_findings']} expected, {actuals['observed_findings']} observed, "
+        f"{actuals['count_mismatch_runs']} count-mismatched runs, "
+        f"{actuals['high_severity_recall']:.1%} high-severity recall, "
+        f"{actuals['overall_recall']:.1%} overall recall, "
+        f"{actuals['precision']:.1%} precision, "
+        f"{actuals['required_field_correctness']:.1%} required-field correctness."
+    )
+
+
+def _doing_well(report: dict[str, Any]) -> list[str]:
+    score = report["scorecard"]
+    counts = score["counts"]
+    bar = report.get("bar_definition") or derive_bar_definition(report)
+    actuals = bar["actuals"]
+    if report["status"] == "INCONCLUSIVE":
+        return ["N/A - quality controls were not evaluated from complete evidence."]
+    values = [
+        f"Complete run: {counts['completed_scenarios']} of "
+        f"{counts['active_scenarios']} planned scenarios reached a final result.",
+    ]
+    if counts["structural_failures"] == 0 and not actuals["trust_failures"]:
+        values.append(
+            "Evidence remained trustworthy: 0 structural failures and no provenance, "
+            "PII, judge-schema, or unresolved-classification failures."
+        )
+    if actuals["count_mismatch_runs"] == 0:
+        values.append(
+            f"Every run matched its expected card count "
+            f"({actuals['expected_findings']} expected, {actuals['observed_findings']} observed)."
+        )
+    if counts["healthy_insights"] == 0:
+        values.append("Healthy controls produced 0 insight cards.")
+    judgment_count = len(report["field_judgments"])
+    if judgment_count == actuals["observed_findings"]:
+        values.append(
+            f"Semantic review coverage: all {actuals['observed_findings']} observed physical "
+            "cards received field judgments."
+        )
+    collection = report["collection_analysis"]
+    if collection["duplicates"] == 0 and collection["stale_version"] == 0:
+        values.append(
+            "Collection integrity: 0 duplicate and 0 stale-version relationships detected."
+        )
+    passing = []
+    if actuals["overall_recall"] >= 0.90:
+        passing.append(f"recall {actuals['overall_recall']:.1%}")
+    if actuals["precision"] >= 0.95:
+        passing.append(f"precision {actuals['precision']:.1%}")
+    if actuals["required_field_correctness"] == 1:
+        passing.append("required-field correctness 100.0%")
+    if passing:
+        values.append("Passing quality metrics: " + ", ".join(passing) + ".")
+    if counts["resolved_issues"]:
+        values.append(f"{counts['resolved_issues']} tracked gaps resolved.")
+    return values
+
+
+def _metric_gaps(report: dict[str, Any]) -> list[str]:
+    score = report["scorecard"]
+    counts = score["counts"]
+    rates = score["rates"]
+    bar = report.get("bar_definition") or derive_bar_definition(report)
+    actuals = bar["actuals"]
+    if report["status"] == "INCONCLUSIVE":
+        values = [
+            f"Only {counts['completed_scenarios']} of {counts['active_scenarios']} scenarios "
+            "completed, so quality rates are not promotable."
+        ]
+        if report["failure"] is not None:
+            values.append(report["failure"]["reason"])
+        return values
+    if report["status"] == "AT BAR":
+        return ["No quality gaps or regressions were observed."]
+
+    values = []
+    if actuals["count_mismatch_runs"] or counts["false_negatives"] or counts["false_positives"]:
+        values.append(
+            f"Count fidelity: {actuals['count_mismatch_runs']} run/agent mismatches; "
+            f"{actuals['expected_findings']} expected versus {actuals['observed_findings']} "
+            f"observed, with {counts['false_negatives']} missed and "
+            f"{counts['false_positives']} noisy cards."
+        )
+    if rates["high_severity_recall"] < 1 or rates["overall_recall"] < 0.90:
+        values.append(
+            f"Detection: high-severity recall was {rates['high_severity_recall']:.1%} "
+            f"(required 100.0%) and overall recall was {rates['overall_recall']:.1%} "
+            "(required at least 90.0%)."
+        )
+    if rates["precision"] < 0.95 or counts["healthy_insights"]:
+        healthy_detail = (
+            f", including {counts['healthy_insights']} from healthy controls"
+            if counts["healthy_insights"]
+            else ""
+        )
+        threshold_detail = (
+            "below the 95.0% minimum"
+            if rates["precision"] < 0.95
+            else "against the 95.0% minimum"
+        )
+        values.append(
+            f"Precision was {rates['precision']:.1%}, {threshold_detail}; "
+            f"{counts['false_positives']} observed cards were noise{healthy_detail}."
+        )
+    failed_fields = [
+        (name.replace("_", " "), rates[name])
+        for name in (
+            "category_accuracy",
+            "severity_accuracy",
+            "title_pass_rate",
+            "description_pass_rate",
+            "proposed_fix_pass_rate",
+            "linked_trace_pass_rate",
+            "evidence_localization_rate",
+            "meaningfulness_rate",
+            "actionability_rate",
+        )
+        if rates[name] < 1
+    ]
+    if failed_fields:
+        values.append(
+            "Required fields below 100%: "
+            + ", ".join(f"{name} {rate:.1%}" for name, rate in failed_fields)
+            + "."
+        )
+    relationship_rates = [
+        (label, rates[name])
+        for label, name in (
+            ("duplicate", "duplication_rate"),
+            ("fragment", "fragmentation_rate"),
+            ("umbrella", "umbrella_rate"),
+            ("stale-version", "cross_version_stale_rate"),
+        )
+        if rates[name] > 0
+    ]
+    if relationship_rates:
+        values.append(
+            "Collection relationships required 0.0% but measured "
+            + ", ".join(f"{label} {rate:.1%}" for label, rate in relationship_rates)
+            + "."
+        )
+    if "capability_fix_mismatch" in score["violations"]:
+        values.append(
+            "Fix compatibility: 1 or more proposed fixes referenced a capability outside "
+            "the deployed agent contract; required 0."
+        )
+    if actuals["trust_failures"] or counts["structural_failures"]:
+        values.append(
+            f"Trust: {counts['structural_failures']} structural failures; recorded trust "
+            f"failures were {', '.join(actuals['trust_failures']) or 'none'}."
+        )
+    if counts["regressed_issues"]:
+        values.append(f"{counts['regressed_issues']} tracked quality gaps regressed.")
+    return values[:6]
+
+
+def _agent_expectation_html(checklist: dict[str, Any]) -> str:
+    versions = []
+    for version in checklist["versions"]:
+        scenarios = "; ".join(
+            f"{item['title']} ({item['expected_insight_count']} x "
+            f"{item['category']}/{item['severity']}): {item['root_cause']}"
+            for item in version["expected_scenarios"]
+        )
+        versions.append(
+            f"<strong>{html.escape(version['phase'])}</strong>: "
+            f"{version['expected_insight_count']} expected - {html.escape(scenarios)}"
+        )
+    return "<br>".join(versions)
+
+
+def _agent_double_check_html(checklist: dict[str, Any]) -> str:
+    focus = " ".join(version["double_check"] for version in checklist["versions"])
+    return (
+        f"{html.escape(checklist['review_reason'])}<br>"
+        f"{html.escape(focus)}<br>"
+        "Then verify card title/description/fix, current-version trace provenance, "
+        "lifecycle prior evidence, and duplicate/fragment/umbrella relationships; "
+        "record the human outcome."
+    )
+
+
 def render_email_html(
     report: dict[str, Any],
     trend: dict[str, Any],
@@ -461,16 +742,10 @@ def render_email_html(
     score = report["scorecard"]
     counts = score["counts"]
     complete = score["complete"] and report["status"] != "INCONCLUSIVE"
-    expected_findings = sum(
-        result["expected_count"] for result in report["scenario_results"]
-    )
-    observed_findings = len(
-        {
-            (result["run_id"], result["agent_id"], reference)
-            for result in report["scenario_results"]
-            for reference in result["insight_references"]
-        }
-    )
+    bar = report.get("bar_definition") or derive_bar_definition(report)
+    actuals = bar["actuals"]
+    expected_findings = actuals["expected_findings"]
+    observed_findings = actuals["observed_findings"]
     signal = (
         f"{counts['new_issues']} new, {counts['regressed_issues']} regressed"
         if counts["new_issues"] or counts["regressed_issues"]
@@ -486,61 +761,45 @@ def render_email_html(
     candidate_count = sum(
         action["action"] == "candidate" for action in report["bug_actions"]
     )
-    if not complete:
-        good = ["N/A - quality controls were not evaluated from incomplete evidence."]
-    elif report["status"] == "AT BAR":
-        good = ["Correct findings were supported by the required evidence and field checks."]
-        if counts["healthy_insights"] == 0:
-            good.append("Healthy controls produced no insights.")
-    else:
-        good = ["All completed scenarios were evaluated against the strict quality gates."]
-    if complete and counts["resolved_issues"]:
-        good.append("Tracked gaps resolved.")
-    gaps = []
-    if not complete:
-        gaps.append("Quality counts and rates are N/A until complete evidence is available.")
-        if report["failure"] is not None:
-            gaps.append(report["failure"]["reason"])
-    elif counts["false_negatives"]:
-        gaps.append("Missing findings were missed issues.")
-    if complete and counts["false_positives"]:
-        gaps.append("Extra findings were noise.")
-    if complete and counts["healthy_insights"]:
-        gaps.append("Healthy controls produced unexpected noise.")
-    if complete and counts["regressed_issues"]:
-        gaps.append("Tracked gaps regressed.")
-    violation_labels = {
-        "duplication": "Duplicate insight relationship gate failed.",
-        "fragmentation": "Fragmented insight relationship gate failed.",
-        "umbrella": "Umbrella insight relationship gate failed.",
-        "cross_version_stale": "Cross-version stale insight gate failed.",
-        "finding_count_mismatch": "Expected and observed finding counts did not match.",
-        "extra_noise": "Run-scoped insight count included extra noise.",
-        "missing_findings": "Run-scoped insight count was missing findings.",
-        "attribute_correctness": "One or more insight field judgments failed.",
-    }
-    if report["status"] == "NOT AT BAR":
-        gaps.extend(
-            violation_labels.get(
-                violation, f"Quality gate failed: {violation.replace('_', ' ')}."
-            )
-            for violation in score["violations"]
-        )
-    if candidate_count:
-        gaps.append(
+    good = _doing_well(report)
+    gaps = _metric_gaps(report)
+    action_status = None
+    if candidate_count and mutation_count:
+        action_status = (
             f"{candidate_count} bug candidate"
-            f"{'s' if candidate_count != 1 else ''} prepared; no work-item mutation was claimed."
-        )
-    if mutation_count:
-        gaps.append(
+            f"{'s' if candidate_count != 1 else ''} prepared; "
             f"{mutation_count} private bug action"
             f"{'s were' if mutation_count != 1 else ' was'} confirmed by apply receipts."
         )
-    if not gaps and report["status"] == "AT BAR":
-        gaps.append("No quality gaps or regressions were observed.")
+    elif candidate_count:
+        action_status = (
+            f"{candidate_count} bug candidate"
+            f"{'s' if candidate_count != 1 else ''} prepared; no work-item mutation was claimed."
+        )
+    elif mutation_count:
+        action_status = (
+            f"{mutation_count} private bug action"
+            f"{'s were' if mutation_count != 1 else ' was'} confirmed by apply receipts."
+        )
+    gaps = gaps[:5] + [action_status] if action_status else gaps[:6]
     status_style = _STATUS_STYLES[report["status"]]
+    checklists = {
+        item["agent_id"]: item
+        for item in report.get("human_validation_checklists", [])
+    }
     rows = []
     for agent in report["agents"]:
+        checklist = checklists.get(agent["id"])
+        expectations = (
+            _agent_expectation_html(checklist)
+            if checklist
+            else html.escape(agent["human_validation"])
+        )
+        double_check = (
+            _agent_double_check_html(checklist)
+            if checklist
+            else html.escape(agent["human_validation"])
+        )
         rows.append(
             "<tr>"
             '<td style="padding:11px 12px;border:1px solid #d6deea;'
@@ -555,7 +814,9 @@ def render_email_html(
             f'href="{html.escape(agent_links[agent["id"]], quote=True)}">'
             "Open Agent Insights</a></td>"
             '<td style="padding:11px 12px;border:1px solid #d6deea;'
-            f'color:#334155;line-height:18px;">{html.escape(agent["human_validation"])}</td>'
+            f'color:#334155;line-height:18px;">{expectations}</td>'
+            '<td style="padding:11px 12px;border:1px solid #d6deea;'
+            f'color:#334155;line-height:18px;">{double_check}</td>'
             "</tr>"
         )
     body = (
@@ -595,7 +856,8 @@ def render_email_html(
         '<tr><td style="padding:28px 38px 0 38px;">'
         + _section_heading(SECTION_TITLES[0])
         + '<p style="margin:0 0 12px 0;color:#334155;font-size:15px;line-height:23px;">'
-        f"{html.escape(_quality_conclusion(report['status']))}</p>"
+        f"{html.escape(_quality_conclusion(report['status']))} "
+        f"{html.escape(_quality_bar_summary(report))}</p>"
         '<p style="margin:0 0 18px 0;color:#475569;font-size:14px;line-height:21px;">'
         + (
             f"Expected {expected_findings} findings; observed {observed_findings}. "
@@ -626,7 +888,9 @@ def render_email_html(
         '<th align="left" style="padding:10px 12px;border:1px solid #d6deea;'
         'color:#12304a;">Agent Insights</th>'
         '<th align="left" style="padding:10px 12px;border:1px solid #d6deea;'
-        'color:#12304a;">Human validation</th></tr>'
+        'color:#12304a;">Version expectations</th>'
+        '<th align="left" style="padding:10px 12px;border:1px solid #d6deea;'
+        'color:#12304a;">What to double-check</th></tr>'
         + "".join(rows)
         + "</table></td></tr></table>"
         "<!--[if mso]></td></tr></table><![endif]-->"

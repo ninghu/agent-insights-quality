@@ -26,13 +26,20 @@
     "delivery"
   ],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"enum": ["1.0.0", "1.1.0"]},
     "report_id": {"type": "string", "pattern": "^aiq-[0-9]{8}(?:-r[0-9]{2})?$"},
     "report_date": {"type": "string", "format": "date"},
     "generated_at": {"type": "string", "format": "date-time"},
     "plan_id": {"type": "string", "pattern": "^aiq-[0-9]{8}(?:-r[0-9]{2})?$"},
     "status": {"enum": ["AT BAR", "NOT AT BAR", "INCONCLUSIVE"]},
     "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "bar_definition": {"$ref": "#/$defs/bar_definition"},
+    "human_validation_checklists": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {"$ref": "#/$defs/human_validation_checklist"}
+    },
     "engine": {
       "type": "object",
       "additionalProperties": false,
@@ -325,5 +332,273 @@
         }
       }
     }
-  }
+  },
+    "allOf": [
+      {
+        "if": {
+          "properties": {"schema_version": {"const": "1.1.0"}},
+          "required": ["schema_version"]
+        },
+        "then": {
+          "required": ["bar_definition", "human_validation_checklists"]
+        }
+      }
+    ],
+    "$defs": {
+          "rate": {"type": "number", "minimum": 0, "maximum": 1},
+          "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "bar_definition": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["thresholds", "actuals", "gates"],
+            "properties": {
+              "thresholds": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "exact_expected_observed_per_run",
+                  "high_severity_recall_required",
+                  "overall_recall_minimum",
+                  "precision_minimum",
+                  "required_field_correctness",
+                  "duplication_rate_maximum",
+                  "fragmentation_rate_maximum",
+                  "umbrella_rate_maximum",
+                  "cross_version_stale_rate_maximum",
+                  "healthy_insights_maximum",
+                  "capability_fix_mismatches_maximum",
+                  "trust_failures_allowed"
+                ],
+                "properties": {
+                  "exact_expected_observed_per_run": {"const": true},
+                  "high_severity_recall_required": {"const": 1.0},
+                  "overall_recall_minimum": {"const": 0.9},
+                  "precision_minimum": {"const": 0.95},
+                  "required_field_correctness": {"const": 1.0},
+                  "duplication_rate_maximum": {"const": 0.0},
+                  "fragmentation_rate_maximum": {"const": 0.0},
+                  "umbrella_rate_maximum": {"const": 0.0},
+                  "cross_version_stale_rate_maximum": {"const": 0.0},
+                  "healthy_insights_maximum": {"const": 0},
+                  "capability_fix_mismatches_maximum": {"const": 0},
+                  "trust_failures_allowed": {"const": false}
+                }
+              },
+              "actuals": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "expected_findings",
+                  "observed_findings",
+                  "count_mismatch_runs",
+                  "high_severity_recall",
+                  "overall_recall",
+                  "precision",
+                  "required_field_correctness",
+                  "duplication_rate",
+                  "fragmentation_rate",
+                  "umbrella_rate",
+                  "cross_version_stale_rate",
+                  "healthy_insights",
+                  "capability_fix_mismatches",
+                  "trust_failures"
+                ],
+                "properties": {
+                  "expected_findings": {"type": "integer", "minimum": 0},
+                  "observed_findings": {"type": "integer", "minimum": 0},
+                  "count_mismatch_runs": {"type": "integer", "minimum": 0},
+                  "high_severity_recall": {"$ref": "#/$defs/rate"},
+                  "overall_recall": {"$ref": "#/$defs/rate"},
+                  "precision": {"$ref": "#/$defs/rate"},
+                  "required_field_correctness": {"$ref": "#/$defs/rate"},
+                  "duplication_rate": {"$ref": "#/$defs/rate"},
+                  "fragmentation_rate": {"$ref": "#/$defs/rate"},
+                  "umbrella_rate": {"$ref": "#/$defs/rate"},
+                  "cross_version_stale_rate": {"$ref": "#/$defs/rate"},
+                  "healthy_insights": {"type": "integer", "minimum": 0},
+                  "capability_fix_mismatches": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "trust_failures": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": {
+                      "enum": [
+                        "structural_failure",
+                        "provenance_failure",
+                        "secret_or_pii",
+                        "judge_schema_failure",
+                        "unresolved_judgment"
+                      ]
+                    }
+                  }
+                }
+              },
+              "gates": {
+                "type": "array",
+                "minItems": 12,
+                "maxItems": 12,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["id", "passed", "explanation"],
+                  "properties": {
+                    "id": {
+                      "enum": [
+                        "exact_run_counts",
+                        "high_severity_recall",
+                        "overall_recall",
+                        "precision",
+                        "required_fields",
+                        "duplicate_relationships",
+                        "fragment_relationships",
+                        "umbrella_relationships",
+                        "stale_relationships",
+                        "healthy_controls",
+                        "capability_compatibility",
+                        "trusted_evidence"
+                      ]
+                    },
+                    "passed": {"type": "boolean"},
+                    "explanation": {"type": "string", "minLength": 1, "maxLength": 500}
+                  }
+                }
+              }
+            }
+          },
+          "human_validation_checklist": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "agent_id",
+              "review_reason",
+              "standard_checks",
+              "versions",
+              "human_outcome"
+            ],
+            "properties": {
+              "agent_id": {"type": "string", "pattern": "^aiq-[0-9]{3}-[a-z][a-z0-9-]*$"},
+              "review_reason": {"type": "string", "minLength": 1, "maxLength": 500},
+              "standard_checks": {
+                "type": "array",
+                "minItems": 7,
+                "maxItems": 7,
+                "items": {"type": "string", "minLength": 1, "maxLength": 300}
+              },
+              "versions": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 100,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "run_id",
+                    "sequence_index",
+                    "phase",
+                    "version_key",
+                    "version_digest",
+                    "expected_insight_count",
+                    "expected_scenarios",
+                    "observed_final_cards",
+                    "planned_prior_evidence",
+                    "double_check"
+                  ],
+                  "properties": {
+                    "run_id": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "sequence_index": {"type": "integer", "minimum": 0, "maximum": 20},
+                    "phase": {
+                      "enum": [
+                        "healthy",
+                        "faulted",
+                        "faulted-initial",
+                        "faulted-repeat",
+                        "corrected",
+                        "recurred"
+                      ]
+                    },
+                    "version_key": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+                    "version_digest": {"$ref": "#/$defs/sha256"},
+                    "expected_insight_count": {"type": "integer", "minimum": 0, "maximum": 100},
+                    "expected_scenarios": {
+                      "type": "array",
+                      "minItems": 1,
+                      "maxItems": 20,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "scenario_id",
+                          "title",
+                          "root_cause",
+                          "category",
+                          "severity",
+                          "expected_insight_count"
+                        ],
+                        "properties": {
+                          "scenario_id": {
+                            "type": "string",
+                            "pattern": "^aiq-scn-[0-9]{3}-[a-z][a-z0-9-]*$"
+                          },
+                          "title": {"type": "string", "minLength": 1, "maxLength": 300},
+                          "root_cause": {"type": "string", "minLength": 1, "maxLength": 1000},
+                          "category": {
+                            "enum": [
+                              "tool_call_failures",
+                              "latency",
+                              "cost_tokens",
+                              "reliability_errors",
+                              "hallucinations",
+                              "output_quality",
+                              "context_memory",
+                              "safety_guardrails",
+                              "none"
+                            ]
+                          },
+                          "severity": {"enum": ["high", "medium", "low", "none"]},
+                          "expected_insight_count": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 4
+                          }
+                        }
+                      }
+                    },
+                    "observed_final_cards": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["scenario_id", "insight_reference", "verdict"],
+                        "properties": {
+                          "scenario_id": {
+                            "type": "string",
+                            "pattern": "^aiq-scn-[0-9]{3}-[a-z][a-z0-9-]*$"
+                          },
+                          "insight_reference": {"$ref": "#/$defs/sha256"},
+                          "verdict": {
+                            "enum": [
+                              "correct",
+                              "partially_useful",
+                              "incorrect_noise",
+                              "missed",
+                              "mixed",
+                              "inconclusive"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "planned_prior_evidence": {"type": "boolean"},
+                    "double_check": {"type": "string", "minLength": 1, "maxLength": 500}
+                  }
+                }
+              },
+              "human_outcome": {"const": "not_recorded"}
+            }
+          }
+        }
 }

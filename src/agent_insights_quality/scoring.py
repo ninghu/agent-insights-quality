@@ -51,6 +51,7 @@ ATTRIBUTE_RATES = {
 TRUST_FAILURES = {
     "structural_failure",
     "provenance_failure",
+    "secret_or_pii",
     "judge_schema_failure",
     "unresolved_judgment",
 }

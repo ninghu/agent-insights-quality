@@ -1,10 +1,19 @@
 from __future__ import annotations
 
 import json
+import html
 
 import pytest
 
-from agent_insights_quality.contracts import ContractError
+from agent_insights_quality.contracts import (
+    ContractError,
+    ROOT,
+    load_agent_manifests,
+    load_data,
+    load_scenario_catalog,
+    validate_instance,
+    validate_report_plan_binding,
+)
 from agent_insights_quality.cli import main
 from agent_insights_quality.finalizer import (
     build_failure_report,
@@ -17,10 +26,13 @@ from agent_insights_quality.reporting import (
     create_email_send_request,
     import_email_receipt,
     render_email_html,
+    render_report_markdown,
     render_trend,
     resolve_recipient,
     validate_report_consistency,
 )
+from agent_insights_quality.reporting.model import attach_structured_report_context
+from agent_insights_quality.artifact_io import content_hash
 from agent_insights_quality.planning import generate_daily_plan
 from agent_insights_quality.links import RuntimeLinkContext, agent_insights_url
 from agent_insights_quality.privacy import require_privacy_safe
@@ -193,6 +205,157 @@ def runtime_agent_links(value: dict) -> dict[str, str]:
     }
 
 
+def structured_not_at_bar_report(*, full_catalog: bool = False) -> tuple[dict, dict]:
+    agents = load_agent_manifests()
+    catalog = load_scenario_catalog({agent["id"] for agent in agents})
+    plan = generate_daily_plan(
+        date(2026, 8, 17),
+        agents=agents,
+        catalog=catalog,
+        full_catalog=full_catalog,
+    )
+    missed = next(
+        assignment
+        for assignment in plan["assignments"]
+        if assignment["expected"]["finding_count"] == 1
+        and assignment["expected"]["severity"] == "high"
+    )
+    noisy_control = next(
+        assignment
+        for assignment in plan["assignments"]
+        if assignment["expected"]["finding_count"] == 0
+    )
+    results = []
+    for assignment in plan["assignments"]:
+        expected = assignment["expected"]["finding_count"]
+        if assignment["scenario_id"] == missed["scenario_id"]:
+            references = []
+            verdict = "missed"
+        elif assignment["scenario_id"] == noisy_control["scenario_id"]:
+            references = [
+                content_hash({"noise": index, "scenario": assignment["scenario_id"]})
+                for index in range(2)
+            ]
+            verdict = "incorrect_noise"
+        else:
+            references = [
+                content_hash({"scenario": assignment["scenario_id"], "index": index})
+                for index in range(expected)
+            ]
+            verdict = "correct"
+        current = assignment["version_sequence"][-1]
+        results.append(
+            {
+                "scenario_id": assignment["scenario_id"],
+                "agent_id": assignment["agent_id"],
+                "run_id": assignment["run_id"],
+                "version_sequence": {
+                    "phase": current["phase"],
+                    "version_digest": current["digest"],
+                },
+                "agent_version_digest": current["digest"],
+                "completed": True,
+                "expected_count": expected,
+                "observed_count": len(references),
+                "verdict": verdict,
+                "insight_references": references,
+            }
+        )
+    expected_findings = sum(item["expected_count"] for item in results)
+    observed_findings = sum(len(item["insight_references"]) for item in results)
+    true_positives = expected_findings - 1
+    rates = scorecard()["rates"]
+    rates.update(
+        {
+            "high_severity_recall": 0.8,
+            "overall_recall": true_positives / expected_findings,
+            "precision": true_positives / observed_findings,
+            "f1": 0.9,
+            "category_accuracy": 0.8,
+            "duplication_rate": 0.1,
+            "fragmentation_rate": 0.1,
+        }
+    )
+    names = {
+        assignment["agent_id"]: assignment["agent_name"]
+        for assignment in plan["assignments"]
+    }
+    value = {
+        "schema_version": "1.0.0",
+        "report_id": plan["plan_id"],
+        "report_date": plan["report_date"],
+        "generated_at": "2026-08-17T08:00:00Z",
+        "plan_id": plan["plan_id"],
+        "status": "NOT AT BAR",
+        "summary": "The complete run did not meet the enforced quality bar.",
+        "engine": plan["engine"],
+        "scorecard": {
+            "schema_version": "1.0.0",
+            "verdict": "NOT AT BAR",
+            "complete": True,
+            "counts": {
+                "active_scenarios": len(results),
+                "completed_scenarios": len(results),
+                "true_positives": true_positives,
+                "partially_useful": 0,
+                "false_positives": 2,
+                "false_negatives": 1,
+                "healthy_insights": 2,
+                "structural_failures": 0,
+                "new_issues": 1,
+                "known_issues": 0,
+                "resolved_issues": 0,
+                "regressed_issues": 0,
+            },
+            "rates": rates,
+            "violations": [
+                "finding_count_mismatch",
+                "extra_noise",
+                "missing_findings",
+                "healthy_false_positive",
+                "high_severity_recall",
+                "precision",
+                "attribute_correctness",
+                "duplication",
+                "fragmentation",
+            ],
+        },
+        "agents": [
+            {
+                "id": agent["id"],
+                "name": names[agent["id"]],
+                "type": agent["agent_type"],
+                "version_digest": SHA,
+                "insights_reference": content_hash(
+                    {"plan": plan["plan_id"], "agent": agent["id"]}
+                ),
+                "human_validation": "N/A",
+            }
+            for agent in agents
+        ],
+        "scenario_results": results,
+        "field_judgments": [],
+        "collection_analysis": {
+            "distinct": max(0, observed_findings - 2),
+            "duplicates": 1,
+            "fragments": 1,
+            "umbrellas": 0,
+            "stale_version": 0,
+        },
+        "diagnostics": {
+            "engine_latency_ms": 100,
+            "model_calls": 25,
+            "tokens": 2500,
+        },
+        "bug_actions": [],
+        "memory_changes": [],
+        "artifact_reference": SHA,
+        "failure": None,
+        "delivery": {"state": "unsent", "request_reference": None},
+    }
+    return attach_structured_report_context(value, plan, catalog), plan
+
+
 def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> None:
     value = report()
     value["summary"] = "Quality met bar <without injection>."
@@ -206,7 +369,7 @@ def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> No
     assert "&lt;without injection&gt;" not in body
     assert "<without injection>" not in body
     assert all(agent["id"] in body for agent in value["agents"])
-    assert "Healthy controls produced no insights." in body
+    assert "Healthy controls produced 0 insight cards." in body
     assert "Expected 0 findings; observed 0." in body
     assert "No quality gaps or regressions were observed." in body
     assert 'bgcolor="#f3f6fa"' in body
@@ -250,6 +413,13 @@ def test_email_uses_simple_expected_observed_noise_and_miss_narrative() -> None:
     value["scorecard"]["counts"].update(
         {"true_positives": 3, "false_positives": 2, "false_negatives": 1}
     )
+    value["status"] = "NOT AT BAR"
+    value["scorecard"]["verdict"] = "NOT AT BAR"
+    value["scorecard"]["violations"] = [
+        "finding_count_mismatch",
+        "extra_noise",
+        "missing_findings",
+    ]
     _, body = render_email_html(
         value,
         render_trend([value]),
@@ -258,8 +428,56 @@ def test_email_uses_simple_expected_observed_noise_and_miss_narrative() -> None:
     )
 
     assert "Expected 4 findings; observed 5." in body
-    assert "Extra findings were noise." in body
-    assert "Missing findings were missed issues." in body
+    assert "with 1 missed and 2 noisy cards" in body
+
+
+def test_email_doing_well_names_semantic_coverage_and_collection_integrity() -> None:
+    value = report()
+    scenario_id = "aiq-scn-010-test"
+    value["scenario_results"] = [
+        {
+            "scenario_id": scenario_id,
+            "agent_id": value["agents"][0]["id"],
+            "run_id": "run-01-aiq-001-agent",
+            "version_sequence": {"phase": "faulted", "version_digest": SHA},
+            "agent_version_digest": SHA,
+            "completed": True,
+            "expected_count": 1,
+            "observed_count": 1,
+            "verdict": "correct",
+            "insight_references": [SHA],
+        }
+    ]
+    value["field_judgments"] = [field_judgment(scenario_id, SHA)]
+    value["collection_analysis"]["distinct"] = 1
+
+    _, body = render_email_html(
+        value,
+        render_trend([value]),
+        runtime_agent_links(value),
+        runtime_link_context(value),
+    )
+
+    assert (
+        "Semantic review coverage: all 1 observed physical cards received field judgments."
+        in body
+    )
+    assert (
+        "Collection integrity: 0 duplicate and 0 stale-version relationships detected."
+        in body
+    )
+    assert body.count("<h2 ") == 4
+
+    value["field_judgments"] = []
+    value["collection_analysis"].update({"duplicates": 1, "stale_version": 1})
+    _, body = render_email_html(
+        value,
+        render_trend([value]),
+        runtime_agent_links(value),
+        runtime_link_context(value),
+    )
+    assert "Semantic review coverage:" not in body
+    assert "Collection integrity:" not in body
 
 
 def test_not_at_bar_email_names_relationship_violation_and_candidate_action() -> None:
@@ -267,6 +485,7 @@ def test_not_at_bar_email_names_relationship_violation_and_candidate_action() ->
     value["status"] = "NOT AT BAR"
     value["scorecard"]["verdict"] = "NOT AT BAR"
     value["scorecard"]["violations"] = ["umbrella"]
+    value["scorecard"]["rates"]["umbrella_rate"] = 0.5
     value["bug_actions"] = [
         {
             "fingerprint": SHA,
@@ -287,9 +506,164 @@ def test_not_at_bar_email_names_relationship_violation_and_candidate_action() ->
         runtime_link_context(value),
     )
 
-    assert "Umbrella insight relationship gate failed." in body
+    assert "umbrella 50.0%" in body
     assert "1 bug candidate prepared; no work-item mutation was claimed." in body
     assert "bug created" not in body.casefold()
+
+
+def test_r19_like_email_keeps_candidate_status_with_six_metric_gaps() -> None:
+    value, _ = structured_not_at_bar_report()
+    value["bug_actions"] = [
+        {
+            "fingerprint": content_hash({"candidate": index}),
+            "action": "candidate",
+            "work_item_reference": None,
+            "policy_snapshot": {
+                "policy_version": "1.0.0",
+                "auto_apply_enabled": False,
+            },
+            "apply_receipt": None,
+        }
+        for index in range(3)
+    ]
+
+    _, body = render_email_html(
+        value,
+        render_trend([value]),
+        runtime_agent_links(value),
+        runtime_link_context(value),
+    )
+
+    assert "3 bug candidates prepared; no work-item mutation was claimed." in body
+    assert "including 2 from healthy controls" in body
+    assert "Healthy-control noise:" not in body
+    assert "Quality gate failed" not in body
+    assert "finding_count_mismatch" not in body
+    assert body.count("<h2 ") == 4
+
+
+def test_email_names_capability_and_extended_field_failures() -> None:
+    value = report()
+    value["status"] = "NOT AT BAR"
+    value["scorecard"]["verdict"] = "NOT AT BAR"
+    value["scorecard"]["violations"] = [
+        "attribute_correctness",
+        "capability_fix_mismatch",
+    ]
+    value["scorecard"]["rates"]["actionability_rate"] = 0.5
+
+    _, body = render_email_html(
+        value,
+        render_trend([value]),
+        runtime_agent_links(value),
+        runtime_link_context(value),
+    )
+
+    assert "actionability rate 50.0%" in body
+    assert "Fix compatibility: 1 or more proposed fixes" in body
+
+
+def test_not_at_bar_one_pager_names_bar_actuals_metrics_and_agent_versions() -> None:
+    value, plan = structured_not_at_bar_report()
+    assert len(plan["assignments"]) == 25
+
+    markdown = render_report_markdown(value)
+    _, body = render_email_html(
+        value,
+        render_trend([value]),
+        runtime_agent_links(value),
+        runtime_link_context(value),
+    )
+
+    assert "## Quality bar and result" in markdown
+    assert "Expected 20 findings; observed 21" in markdown
+    assert "High Severity Recall | FAIL | High-severity recall was 80.0%" in markdown
+    assert "## Human validation one-pager" in markdown
+    assert body.count("<h2 ") == 4
+    assert "The bar requires exact cards per run" in body
+    assert "Count fidelity: 2 run/agent mismatches" in body
+    assert "Required fields below 100%" in body
+    assert "Collection relationships required 0.0%" in body
+    assert "Quality gate failed" not in body
+    assert "<style" not in body
+    assert "<script" not in body
+    assert "<img" not in body
+    for checklist in value["human_validation_checklists"]:
+        assert checklist["agent_id"] in markdown
+        assert checklist["agent_id"] in body
+        for version in checklist["versions"]:
+            assert version["phase"] in markdown
+            assert str(version["expected_insight_count"]) + " expected" in body
+            assert version["double_check"] in markdown
+            assert html.escape(version["expected_scenarios"][0]["root_cause"]) in body
+
+
+def test_structured_bar_and_checklist_plan_drift_are_rejected() -> None:
+    value, plan = structured_not_at_bar_report()
+    value["bar_definition"]["actuals"]["high_severity_recall"] = 1.0
+    with pytest.raises(ContractError, match="bar actuals"):
+        validate_report_consistency(value)
+
+    value, plan = structured_not_at_bar_report()
+    value["human_validation_checklists"][0]["versions"][0][
+        "expected_insight_count"
+    ] += 1
+    with pytest.raises(ContractError, match="drift from the immutable daily plan"):
+        validate_report_plan_binding(value, plan, "report")
+
+
+def test_lifecycle_checklist_counts_follow_each_planned_phase() -> None:
+    value, _ = structured_not_at_bar_report(full_catalog=True)
+    versions = {
+        (
+            expected["scenario_id"],
+            version["phase"],
+        ): version["expected_insight_count"]
+        for checklist in value["human_validation_checklists"]
+        for version in checklist["versions"]
+        for expected in version["expected_scenarios"]
+    }
+    assert versions[("aiq-scn-058-cross-version-stale-finding", "faulted")] == 1
+    assert versions[("aiq-scn-058-cross-version-stale-finding", "corrected")] == 1
+    assert versions[("aiq-scn-060-fixed-issue-recurrence", "faulted")] == 1
+    assert versions[("aiq-scn-060-fixed-issue-recurrence", "corrected")] == 0
+    assert versions[("aiq-scn-060-fixed-issue-recurrence", "recurred")] == 1
+
+
+def test_canonical_schema_versions_require_new_context_without_breaking_history() -> None:
+    schema = load_data(ROOT / "schemas" / "canonical-report.schema.json")
+    assert "$defs" in schema
+    assert "$defs" not in schema["properties"]["agents"]["items"]
+    assert "allOf" in schema
+    value, _ = structured_not_at_bar_report()
+    structured = dict(value)
+    structured.pop("bar_definition")
+    structured.pop("human_validation_checklists")
+    with pytest.raises(ContractError, match="required property"):
+        validate_instance(
+            structured,
+            ROOT / "schemas" / "canonical-report.schema.json",
+            "structured report",
+        )
+
+    structured["schema_version"] = "1.0.0"
+    validate_instance(
+        structured,
+        ROOT / "schemas" / "canonical-report.schema.json",
+        "historical report",
+    )
+
+
+def test_schema_validation_rejects_unresolved_internal_refs(
+    tmp_path,
+) -> None:
+    value, _ = structured_not_at_bar_report()
+    schema = load_data(ROOT / "schemas" / "canonical-report.schema.json")
+    schema["properties"]["bar_definition"]["$ref"] = "#/$defs/missing"
+    schema_path = tmp_path / "broken.schema.json"
+    schema_path.write_text(json.dumps(schema), encoding="ascii")
+    with pytest.raises(Exception, match="PointerToNowhere|missing"):
+        validate_instance(value, schema_path, "broken schema")
 
 
 def test_report_rejects_unconfirmed_or_disabled_bug_mutation() -> None:
@@ -785,6 +1159,22 @@ def test_failure_finalizer_is_inconclusive_and_has_no_mutations() -> None:
     assert request["transport_strategy"]["local_outlook_host_id"] == "local"
 
 
+def test_failure_summary_remains_bounded_for_maximum_reason() -> None:
+    plan = build_preflight_plan("2026-08-21", "2026-08-21T08:00:00Z")
+    failure = {
+        "failed_phase": "runtime readiness",
+        "last_confirmed_stage": "contracts",
+        "reason": "x" * 2000,
+        "affected_agents": [],
+        "diagnostics_reference": SHA,
+        "next_action": "Retry.",
+        "completed_scenarios": [],
+    }
+    value = build_failure_report(plan, failure, generated_at="2026-08-21T08:00:00Z")
+    assert len(value["summary"]) <= 2000
+    assert value["failure"]["reason"] == "x" * 2000
+
+
 def test_report_contradiction_is_rejected() -> None:
     value = report()
     value["status"] = "NOT AT BAR"
@@ -861,7 +1251,7 @@ def test_public_artifact_writer_rejects_private_link(tmp_path) -> None:
         "completed_scenarios": [],
     }
     value = build_failure_report(plan, failure, generated_at="2026-08-21T08:00:00Z")
-    value["summary"] = "See https://" + "dev." + "azure.com/private"
+    value["failure"]["next_action"] = "See https://" + "dev." + "azure.com/private"
     with pytest.raises(ContractError, match="private Azure DevOps"):
         write_daily_artifacts(tmp_path, plan, value)
 
@@ -878,10 +1268,10 @@ def test_public_artifact_writer_rejects_agent_insights_deep_link(tmp_path) -> No
         "completed_scenarios": [],
     }
     value = build_failure_report(plan, failure, generated_at="2026-08-21T08:00:00Z")
-    value["summary"] = "See https://" + "ai.azure.com/resource/deep-link"
+    value["failure"]["next_action"] = "See https://" + "ai.azure.com/resource/deep-link"
     with pytest.raises(ContractError, match="private runtime URL"):
         write_daily_artifacts(tmp_path, plan, value)
-    value["summary"] = "See http://" + "ai.azure.com/resource/deep-link"
+    value["failure"]["next_action"] = "See http://" + "ai.azure.com/resource/deep-link"
     with pytest.raises(ContractError, match="private runtime URL"):
         write_daily_artifacts(tmp_path, plan, value)
 
@@ -925,7 +1315,7 @@ def test_public_artifact_writer_rejects_comprehensive_pii(tmp_path) -> None:
         "completed_scenarios": [],
     }
     value = build_failure_report(plan, failure, generated_at="2026-08-21T08:00:00Z")
-    value["summary"] = "Synthetic SSN 123-45-6789"
+    value["failure"]["next_action"] = "Synthetic SSN 123-45-6789"
     with pytest.raises(ContractError, match="secret or PII"):
         write_daily_artifacts(tmp_path, plan, value)
 

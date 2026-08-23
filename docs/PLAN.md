@@ -401,6 +401,10 @@ Each date has a reviewable, permanent, sanitized record:
   rerun preserves its full plan identity and cannot overwrite the original daily artifacts.
 
 The LT email links to `report.md` for readers who want the full numbers.
+The canonical report also carries scorecard-derived quality-bar thresholds/actuals and one immutable
+daily-plan-bound validation checklist per agent. The Markdown expands each checklist as a per-version
+one-pager. The existing four-section email summarizes the same expected roots, categories, severities,
+observed cards, and review focus so a reviewer can understand the result before opening private links.
 
 ## 10. Daily execution flow
 

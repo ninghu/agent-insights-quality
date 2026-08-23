@@ -661,7 +661,7 @@ def run(args: argparse.Namespace) -> None:
         )
         recipient = resolve_recipient(load_data(ROOT / "config" / "reporting.yaml"))
         _require_private_runtime_output(Path(args.request_output))
-        result = finalize_success(report, prior, links, link_context, recipient)
+        result = finalize_success(plan, report, prior, links, link_context, recipient)
         write_daily_artifacts(Path(args.output_root), plan, result["report"])
         validate_generated_paths(["reports/trend.json"])
         write_json(Path(args.output_root) / "reports" / "trend.json", result["trend"])
