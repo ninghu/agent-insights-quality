@@ -19,8 +19,12 @@ Canonical report `1.1.0` records the enforced thresholds, scorecard-derived actu
 explanation for every gate. It also carries exactly one daily-plan-bound human-validation checklist
 per test agent. `report.md` and the Outlook-safe email lead with concise Summary, What is working,
 and What needs improvement assessment tables derived from that canonical evidence. Detailed numeric
-evidence and per-version human-validation checklists remain afterward; private Agent Insights links
-are added only during the direct email handoff. Historical `1.0.0` reports remain schema-compatible.
+evidence and per-version human-validation checklists remain afterward; private agent-page links
+and runtime Foundry project context are added only during the direct email handoff. The email omits
+trend presentation and links each row to one of five public-safe per-agent Markdown reports.
+Historical `1.0.0` reports
+remain schema-compatible. Observed-card utility grades exclude lifecycle and collection hygiene,
+which remain separate quality gates.
 
 ## Local development
 

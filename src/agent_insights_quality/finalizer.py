@@ -249,7 +249,7 @@ def render_failure_email_html(report: dict[str, Any]) -> str:
         "a provider receipt before claiming delivery.</p>"
         "</td></tr>"
         '<tr><td style="padding:24px 32px 38px;">'
-        + _failure_section_heading("Test agents and Agent Insights links")
+        + _failure_section_heading("Test Agents")
         + '<table cellpadding="0" cellspacing="0" border="0" width="100%" '
         'style="width:100%;border-collapse:collapse;font-size:13px;">'
         '<tr bgcolor="#e8eef7"><th>Agent ID</th><th>Test agent</th><th>Type</th>'

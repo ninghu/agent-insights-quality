@@ -737,13 +737,18 @@ container with inline styles, readable narrow-screen padding, and no external CS
 
 ### 1. Summary
 
-- `AT BAR`, `NOT AT BAR`, or `INCONCLUSIVE` banner.
+- `Overall insight quality score` banner: strict true positives divided by expected roots, scaled to
+  0-100. Display `N/A` for incomplete evidence or zero expected roots.
 - A short assessment of which meaningful problems were or were not found and the overall judgment.
-- A compact `Grade | Findings` table for correct, partially useful, incorrect/noisy, and missed results.
+- A compact three-row `Grade | Findings` table that classifies observed-card customer utility/content
+  as fully correct, partially useful, or incorrect/noisy. Derive it from content attributes, not the
+  aggregate verdict. Lifecycle and duplicate/fragment/umbrella behavior remain separate gates and
+  never change these three counts.
+- A public-safe canonical report ID, generation timestamp, and assessment-scope statement. The private
+  email additionally shows the runtime-resolved Foundry account/project and authenticated project link.
 - An explicit trust/completeness caution whenever evidence is incomplete or human review remains.
-- A 14-day quality trend chart showing daily `AT BAR`, `NOT AT BAR`, and `INCONCLUSIVE` status plus
-  trusted-insight rate. Render it as email-compatible table-based bars/status cells, not a
-  remote-authenticated image that Outlook cannot load.
+- Do not render the 14-day trend in Markdown or email; retain the canonical trend artifact for
+  automation and consistency checks.
 
 ### 2. What is working
 
@@ -758,30 +763,47 @@ Use a compact `Product gap | What happened | Needed behavior` table. Each row st
 customer-facing gap, concrete observed counts/rates, and the behavior required from the product.
 Cover missed problems, incorrect or ambiguous findings, healthy-agent noise, count mismatches,
 field-quality failures, related-card grouping, version scoping, and capability-aware fixes when
-present. State bug-candidate or confirmed private-action status separately from product gaps.
+present. Prefix every `What happened` cell with sorted, deterministically attributed test-agent names;
+use `All test agents` only for a proven report-wide condition. State bug-candidate or confirmed
+private-action status separately from product gaps.
 
-### 4. Test agents and Agent Insights links
+The top-level Markdown is a concise daily summary and index. Five per-agent Markdown reports
+distinguish silent expected-root misses from roots that produced cards without a correct root-cause
+match, give expected/observed/silent/root-correct/partial/incorrect/healthy-noise counts, and keep
+agent-specific duplicate/fragment/umbrella/stale metrics separate.
+A private runtime-only sanitized insight-evaluation sidecar may supply actual generated category,
+title, description, and lifecycle-neutral evaluation text to `render-report`. The sidecar is
+count-reconciled to the canonical physical-card and utility-grade totals, then only its public-safe
+rendered Markdown is committed; the source evidence and sidecar remain private.
 
-Include one compact table with every test agent:
+### 4. Test Agents
 
-| Agent ID | Test agent | Type | Agent Insights page | Human validation recommended |
+Include one compact table with every test agent, sorted by test-agent name:
+
+| Test agent | Type | Agent | Report | Recommended human validation |
 | --- | --- | --- | --- | --- |
 
-The Agent Insights page is the runtime-resolved direct link for the current date-stamped project and
-agent and appears only in direct email and private ADO actions. Public committed reports retain an
-opaque reference. The last email column contains a short reason and the insight title/link when human
-review would add value; otherwise it is exactly `N/A`. Recommend human validation for ambiguous/
-partially useful output, primary/verifier disagreement, confidence below the auto-bug threshold,
-novel failure contracts, or a proposed fix that cannot be validated deterministically.
+The agent page is the runtime-resolved direct link ending at
+`/build/agents/{agent_name}/build?tid={tenant_id}` for the current date-stamped project and agent.
+The one Summary source link ends at `/home?tid={tenant_id}`. Do not use a bare agent path or
+`/monitor/insights` or `/insights` deep links in email. These private links appear only in direct
+email; public committed reports retain an
+opaque reference. The recommendation column is exactly `Yes` or `No`, derived from actual result,
+field, relationship, verifier, fix-verifiability, and manual-review evidence. Each row says
+`View report` and links to that agent's public-safe Markdown report for actual generated insights,
+injected issues, expected insights, immutable versions, and guidance. Do not duplicate per-agent
+detail or assignment information in email.
+
+Display `hosted_custom_container` as `hosted_container`.
 
 Subject format:
 
-`[Agent Insights Quality] <AT BAR|NOT AT BAR|INCONCLUSIVE> - YYYY-MM-DD - <short signal>`
+`[Agent Insights Quality] <score/100|N/A> - YYYY-MM-DD - <short signal>`
 
 Generate one canonical report model, then render detailed JSON/Markdown and the simpler email-safe
 HTML from it. All dynamic content is HTML-encoded. Add deterministic consistency tests so the
-subject, banner, narrative, trend, bug links, agent links, and detailed report cannot contradict one
-another. The automation follows the digest-bound direct-mail transport order and stops after one
+subject, banner, narrative, trend artifact, bug links, agent links, and detailed report cannot
+contradict one another. The automation follows the digest-bound direct-mail transport order and stops after one
 confirmed success. The initial recipient is the authenticated user's test mailbox or a protected test
 variable; after email content and delivery are approved, a human-reviewed configuration PR selects
 the protected production variable.
@@ -854,7 +876,7 @@ GitHub Copilot automation itself, not repeated as operational timing instruction
 
 10. **Reporting and email**
     - Implement the canonical report model, detailed daily plan/report Markdown, narrative four-section
-      LT email, 14-day trend chart, agent/Insights-link table, consistency/security tests, direct
+      LT email, retained 14-day trend artifact, agent/Insights-link table, consistency/security tests, direct
       Copilot mail delivery, test-to-team recipient promotion guard, and failure-finalizer behavior.
 
 11. **GitHub App automation**
@@ -930,7 +952,8 @@ The platform is complete when a scheduled GitHub Copilot run can:
 4. Preserve and reconcile quality history across days.
 5. Create, update, or reopen only qualifying non-duplicate ADO bugs.
 6. Commit each day's detailed plan/report and auto-merge only generated state/report changes.
-7. Put a valid Agent Insights page link in every quality bug and in the email's all-agent table.
+7. Put a valid Agent Insights page link in every quality bug; use the direct agent page in the
+   email's all-agent table.
 8. Deliver the polished four-section English report, including trend and failure-report behavior, by
    08:00 Pacific through the protected test-recipient variable during qualification; select the
    protected production-recipient variable only after explicit approval.

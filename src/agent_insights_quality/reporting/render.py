@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import os
 import re
+from collections import defaultdict
 from copy import deepcopy
 from typing import Any, Mapping
 from agent_insights_quality.contracts import (
@@ -15,7 +16,7 @@ from agent_insights_quality.contracts import (
     validate_canonical_report_semantics,
     validate_instance,
 )
-from agent_insights_quality.links import validate_agent_insights_url
+from agent_insights_quality.links import project_page_url, validate_agent_page_url
 from agent_insights_quality.links import RuntimeLinkContext
 from agent_insights_quality.artifact_io import content_hash, verified_hash
 from agent_insights_quality.judging import AUTO_BUG_CONFIDENCE
@@ -30,7 +31,7 @@ SECTION_TITLES = (
     "Summary",
     "What is working",
     "What needs improvement",
-    "Test agents and Agent Insights links",
+    "Test Agents",
 )
 MAIL_TRANSPORT_ORDER = (
     "connected_copilot_mail",
@@ -38,6 +39,19 @@ MAIL_TRANSPORT_ORDER = (
     "local_outlook_com",
 )
 _EMAIL = re.compile(r"^[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+)$")
+_PUBLIC_REPORT_BASE_URL = (
+    "https://github.com/ninghu/agent-insights-quality/blob/main/"
+)
+_AGENT_ASSIGNEES = {
+    "001": "Han",
+    "002": "Ilya",
+    "003": "Sean",
+    "004": "Billy",
+    "005": "Han",
+}
+_OUTLOOK_TEXT_STYLE = (
+    "font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:21px;"
+)
 
 
 def _human_validation_reason(items: list[dict[str, Any]]) -> str:
@@ -130,15 +144,23 @@ def validate_report_consistency(
                 )
 
 
+def _content_utility_grade(judgment: dict[str, Any]) -> str:
+    attributes = judgment["attributes"]
+    if all(attributes.values()):
+        return "fully_correct"
+    if attributes["meaningfulness"]:
+        return "partially_useful"
+    return "incorrect_noise"
+
+
 def _finding_grades(report: dict[str, Any]) -> dict[str, int]:
     actuals = (report.get("bar_definition") or derive_bar_definition(report))["actuals"]
     observed = actuals["observed_findings"]
     judgments = report["field_judgments"]
     if len(judgments) == observed:
-        correct = sum(item["verdict"] == "correct" for item in judgments)
-        partially_useful = sum(
-            item["verdict"] == "partially_useful" for item in judgments
-        )
+        grades = [_content_utility_grade(item) for item in judgments]
+        correct = grades.count("fully_correct")
+        partially_useful = grades.count("partially_useful")
     else:
         correct = report["scorecard"]["counts"]["true_positives"]
         partially_useful = report["scorecard"]["counts"]["partially_useful"]
@@ -173,15 +195,18 @@ def _summary_narrative(report: dict[str, Any]) -> list[str]:
         )
     else:
         expected_label = "problem" if expected == 1 else "problems"
-        correct_verb = "was" if grades["correct"] == 1 else "were"
-        missed_verb = "was" if counts["false_negatives"] == 1 else "were"
+        fully_verb = "was" if grades["correct"] == 1 else "were"
+        partial_verb = "was" if grades["partially_useful"] == 1 else "were"
+        incorrect_verb = "was" if grades["incorrect"] == 1 else "were"
         assessment = (
-            f"Of {expected} expected {expected_label}, {grades['correct']} {correct_verb} "
-            f"captured as fully correct findings and {counts['false_negatives']} "
-            f"{missed_verb} missed. The run generated "
-            f"{observed} distinct cards: {grades['correct']} correct, "
-            f"{grades['partially_useful']} partially useful, and "
-            f"{grades['incorrect']} incorrect or noisy."
+            f"Among {observed} distinct observed cards, {grades['correct']} {fully_verb} fully "
+            f"correct on customer utility and content, {grades['partially_useful']} "
+            f"{partial_verb} "
+            f"partially useful, and {grades['incorrect']} {incorrect_verb} incorrect or noisy. These "
+            "utility grades intentionally exclude lifecycle behavior and collection hygiene. "
+            f"Separately, strict quality-bar matching found {counts['true_positives']} of "
+            f"{expected} expected {expected_label}; {counts['false_negatives']} did not "
+            "receive a strict match."
         )
     trust = (
         f"The assessment covered {counts['completed_scenarios']} of "
@@ -200,31 +225,85 @@ def _summary_narrative(report: dict[str, Any]) -> list[str]:
             "No structural, provenance, privacy, judge-schema, or unresolved trust "
             "failure was recorded, but any human-validation items below still require review."
         )
-    return [f"{assessment} {_quality_conclusion(report['status'])}", trust]
+    values = [f"{assessment} {_quality_conclusion(report['status'])}", trust]
+    partial = [
+        item
+        for item in report["field_judgments"]
+        if _content_utility_grade(item) == "partially_useful"
+    ]
+    if partial:
+        root_match_classification_gaps = sum(
+            item["attributes"]["root_cause"]
+            and (
+                not item["attributes"]["category"]
+                or not item["attributes"]["severity"]
+            )
+            for item in partial
+        )
+        detail = (
+            " Partially useful cards remain visible as customer-useful diagnostic signal "
+            "but do not count as strict true positives."
+        )
+        if root_match_classification_gaps:
+            detail += (
+                f" {root_match_classification_gaps} matched the expected root cause but "
+                f"failed category or severity correctness."
+            )
+        values.append(detail.strip())
+    if report["status"] != "INCONCLUSIVE":
+        values.append(
+            "The overall score measures strict expected-issue success only. Incorrect/noisy "
+            "insights are an independent guardrail metric and do not change the 0-100 score."
+        )
+    return values
 
 
 def _grade_rows(report: dict[str, Any]) -> list[tuple[str, str]]:
     if report["status"] == "INCONCLUSIVE":
         counts = report["scorecard"]["counts"]
         return [
-            ("Overall judgment", "INCONCLUSIVE"),
+            ("Overall insight quality score", "N/A"),
             (
                 "Completed scenarios",
                 f"{counts['completed_scenarios']} of {counts['active_scenarios']}",
             ),
-            ("Expected findings", "N/A"),
-            ("Observed findings", "N/A"),
+            ("Incorrect/noisy insights", "N/A"),
         ]
     grades = _finding_grades(report)
+    observed = (report.get("bar_definition") or derive_bar_definition(report))[
+        "actuals"
+    ]["observed_findings"]
     return [
-        ("Correct", str(grades["correct"])),
-        ("Partially useful", str(grades["partially_useful"])),
-        ("Incorrect/noisy", str(grades["incorrect"])),
-        (
-            "Missed expected problems",
-            str(report["scorecard"]["counts"]["false_negatives"]),
-        ),
+        ("Overall insight quality score", _overall_insight_quality_score(report)),
+        ("Fully correct (content utility)", f"{grades['correct']}/{observed}"),
+        ("Partially useful (content utility)", f"{grades['partially_useful']}/{observed}"),
+        ("Incorrect/noisy insights", f"{grades['incorrect']}/{observed}"),
     ]
+
+
+def _overall_insight_quality_score(report: dict[str, Any]) -> str:
+    if report["status"] == "INCONCLUSIVE":
+        return "N/A"
+    actuals = (report.get("bar_definition") or derive_bar_definition(report))["actuals"]
+    expected = actuals["expected_findings"]
+    if expected == 0:
+        return "N/A"
+    score = 100 * report["scorecard"]["counts"]["true_positives"] / expected
+    value = f"{score:.1f}".rstrip("0").rstrip(".")
+    return f"{value}/100"
+
+
+def _assessment_scope(report: dict[str, Any]) -> str:
+    run_agents = {
+        (result["run_id"], result["agent_id"])
+        for result in report["scenario_results"]
+    }
+    return (
+        f"Data source: canonical report {report['report_id']}, generated "
+        f"{report['generated_at']}; {len(report['scenario_results'])} immutable scenario "
+        f"results across {len(run_agents)} run/agent evaluations and "
+        f"{len(report['agents'])} synthetic test agents."
+    )
 
 
 def _useful_scenario_examples(report: dict[str, Any]) -> str:
@@ -234,11 +313,20 @@ def _useful_scenario_examples(report: dict[str, Any]) -> str:
         for version in checklist["versions"]
         for scenario in version["expected_scenarios"]
     }
+    lifecycle_scenarios = {
+        scenario["scenario_id"]
+        for checklist in report.get("human_validation_checklists", [])
+        for version in checklist["versions"]
+        if version["planned_prior_evidence"]
+        for scenario in version["expected_scenarios"]
+    }
     scenario_ids = list(
         dict.fromkeys(
             item["scenario_id"]
             for item in report["field_judgments"]
-            if item["verdict"] in {"correct", "partially_useful"}
+            if _content_utility_grade(item)
+            in {"fully_correct", "partially_useful"}
+            and item["scenario_id"] not in lifecycle_scenarios
         )
     )
     if not scenario_ids:
@@ -276,7 +364,7 @@ def _working_capabilities(report: dict[str, Any]) -> list[tuple[str, str]]:
             (
                 "Useful diagnostic signal",
                 f"{useful} of {observed} observed cards contained useful signal: "
-                f"{grades['correct']} were fully correct and "
+                f"{grades['correct']} met the strict quality bar and "
                 f"{grades['partially_useful']} were partially useful.{example_detail}",
             )
         )
@@ -313,21 +401,20 @@ def _working_capabilities(report: dict[str, Any]) -> list[tuple[str, str]]:
         )
     collection = report["collection_analysis"]
     if observed and not any(
-        collection[name] for name in ("duplicates", "fragments", "umbrellas", "stale_version")
+        collection[name] for name in ("fragments", "umbrellas", "stale_version")
     ):
         rows.append(
             (
                 "Finding separation",
-                f"Across {observed} cards, analysis found 0 duplicate, fragment, umbrella, "
-                "or stale-version relationships.",
+                f"Across {observed} cards, analysis found 0 fragment, umbrella, or "
+                "stale-version relationships.",
             )
         )
-    elif observed and collection["duplicates"] == 0 and collection["stale_version"] == 0:
+    elif observed and collection["stale_version"] == 0:
         rows.append(
             (
-                "Duplicate and version control",
-                f"Across {observed} cards, analysis found 0 duplicate and 0 stale-version "
-                "relationships.",
+                "Version control",
+                f"Across {observed} cards, analysis found 0 stale-version relationships.",
             )
         )
     return rows or [
@@ -336,6 +423,177 @@ def _working_capabilities(report: dict[str, Any]) -> list[tuple[str, str]]:
             "No customer-facing capability had enough passing evidence to claim as a strength.",
         )
     ]
+
+
+def _scenario_agent_ids(report: dict[str, Any]) -> dict[str, set[str]]:
+    values: dict[str, set[str]] = defaultdict(set)
+    for result in report["scenario_results"]:
+        values[result["scenario_id"]].add(result["agent_id"])
+    return values
+
+
+def _agent_ids_for_judgments(
+    report: dict[str, Any],
+    predicate: Any,
+) -> set[str]:
+    by_scenario = _scenario_agent_ids(report)
+    return {
+        agent_id
+        for judgment in report["field_judgments"]
+        if predicate(judgment)
+        for agent_id in by_scenario.get(judgment["scenario_id"], set())
+    }
+
+
+def _count_mismatch_agent_ids(report: dict[str, Any]) -> set[str]:
+    expected: dict[tuple[str, str], int] = defaultdict(int)
+    observed: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for result in report["scenario_results"]:
+        key = (result["run_id"], result["agent_id"])
+        expected[key] += result["expected_count"]
+        observed[key].update(result["insight_references"])
+    return {
+        agent_id
+        for (run_id, agent_id), expected_count in expected.items()
+        if len(observed[(run_id, agent_id)]) != expected_count
+    }
+
+
+def _failure_agent_ids(report: dict[str, Any]) -> set[str]:
+    agents = {agent["id"]: agent["name"] for agent in report["agents"]}
+    names = {name: agent_id for agent_id, name in agents.items()}
+    affected = set()
+    if report["failure"] is not None:
+        for value in report["failure"]["affected_agents"]:
+            if value in agents:
+                affected.add(value)
+            elif value in names:
+                affected.add(names[value])
+    affected.update(
+        result["agent_id"]
+        for result in report["scenario_results"]
+        if not result["completed"] or result["verdict"] == "inconclusive"
+    )
+    return affected or set(agents)
+
+
+def _affected_agent_label(
+    report: dict[str, Any],
+    agent_ids: set[str],
+    *,
+    aggregate_all: bool = False,
+) -> str:
+    if aggregate_all:
+        return "All test agents"
+    all_agent_ids = {agent["id"] for agent in report["agents"]}
+    if agent_ids and agent_ids == all_agent_ids:
+        return "All test agents"
+    names = sorted(
+        {
+            agent["name"]
+            for agent in report["agents"]
+            if agent["id"] in agent_ids
+        },
+        key=lambda value: (value.casefold(), value),
+    )
+    if names:
+        return ", ".join(names)
+    return "not retained in this historical report"
+
+
+def _affected_evidence(
+    report: dict[str, Any],
+    agent_ids: set[str],
+    evidence: str,
+    *,
+    aggregate_all: bool = False,
+) -> str:
+    return (
+        "Affected test agents: "
+        + _affected_agent_label(
+            report,
+            agent_ids,
+            aggregate_all=aggregate_all,
+        )
+        + ". "
+        + evidence
+    )
+
+
+def _root_cause_analysis(report: dict[str, Any]) -> dict[str, int]:
+    actuals = (report.get("bar_definition") or derive_bar_definition(report))["actuals"]
+    root_correct = [
+        item
+        for item in report["field_judgments"]
+        if item["attributes"]["root_cause"]
+    ]
+    silent_misses = sum(
+        result["expected_count"]
+        for result in report["scenario_results"]
+        if result["expected_count"] > 0 and result["observed_count"] == 0
+    )
+    expected_with_output = max(0, actuals["expected_findings"] - silent_misses)
+    root_correct_expected = min(
+        expected_with_output,
+        len({item["scenario_id"] for item in root_correct}),
+    )
+    return {
+        "root_correct_cards": len(root_correct),
+        "root_correct_expected_roots": root_correct_expected,
+        "silent_misses": silent_misses,
+        "expected_with_output": expected_with_output,
+        "output_without_root_match": max(
+            0,
+            expected_with_output - root_correct_expected,
+        ),
+    }
+
+
+def _per_agent_assessment_rows(
+    report: dict[str, Any],
+) -> list[tuple[str, int, int, int, int, int, int, int]]:
+    by_scenario = _scenario_agent_ids(report)
+    judgments_by_agent: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for judgment in report["field_judgments"]:
+        for agent_id in by_scenario.get(judgment["scenario_id"], set()):
+            judgments_by_agent[agent_id].append(judgment)
+    rows = []
+    for agent in _ordered_agents(report):
+        results = [
+            item
+            for item in report["scenario_results"]
+            if item["agent_id"] == agent["id"]
+        ]
+        judgments = judgments_by_agent[agent["id"]]
+        observed = {
+            (item["run_id"], reference)
+            for item in results
+            for reference in item["insight_references"]
+        }
+        healthy_noise = {
+            (item["run_id"], reference)
+            for item in results
+            if item["expected_count"] == 0
+            for reference in item["insight_references"]
+        }
+        grades = [_content_utility_grade(item) for item in judgments]
+        rows.append(
+            (
+                agent["name"],
+                sum(item["expected_count"] for item in results),
+                len(observed),
+                sum(
+                    item["expected_count"]
+                    for item in results
+                    if item["expected_count"] > 0 and item["observed_count"] == 0
+                ),
+                sum(item["attributes"]["root_cause"] for item in judgments),
+                grades.count("partially_useful"),
+                grades.count("incorrect_noise"),
+                len(healthy_noise),
+            )
+        )
+    return rows
 
 
 def _improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str]]:
@@ -349,8 +607,16 @@ def _improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str]]:
         return [
             (
                 "Assessment completeness",
-                f"Only {counts['completed_scenarios']} of {counts['active_scenarios']} "
-                f"scenarios completed. {reason}",
+                _affected_evidence(
+                    report,
+                    _failure_agent_ids(report),
+                    f"Only {counts['completed_scenarios']} of "
+                    f"{counts['active_scenarios']} scenarios completed. {reason}",
+                    aggregate_all=not (
+                        report["failure"] is not None
+                        and report["failure"]["affected_agents"]
+                    ),
+                ),
                 "Complete every planned scenario with validated evidence before drawing or "
                 "promoting a quality conclusion.",
             )
@@ -359,6 +625,7 @@ def _improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str]]:
         return [
             (
                 "No product-quality gap observed",
+                "Affected test agents: none. "
                 f"{actuals['expected_findings']} findings were expected and "
                 f"{actuals['observed_findings']} were observed, with "
                 f"{counts['false_negatives']} missed and {counts['false_positives']} noisy.",
@@ -369,20 +636,40 @@ def _improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str]]:
 
     rows: list[tuple[str, str, str]] = []
     if counts["false_negatives"] or rates["high_severity_recall"] < 1:
-        missed_label = (
-            "problem was" if counts["false_negatives"] == 1 else "problems were"
-        )
+        roots = _root_cause_analysis(report)
+        affected = {
+            result["agent_id"]
+            for result in report["scenario_results"]
+            if result["expected_count"] > 0 and result["verdict"] != "correct"
+        }
         rows.append(
             (
-                "Expected problems were missed",
-                f"{counts['false_negatives']} expected {missed_label} missed; "
-                f"high-severity recall was {rates['high_severity_recall']:.1%} and overall "
-                f"recall was {rates['overall_recall']:.1%}.",
+                "Expected roots lacked a strict match",
+                _affected_evidence(
+                    report,
+                    affected,
+                    f"{roots['silent_misses']} of {actuals['expected_findings']} expected "
+                    f"roots were true silent misses with no card. "
+                    f"{roots['expected_with_output']} expected roots had card output, but "
+                    f"{roots['output_without_root_match']} had no root-cause-correct match; "
+                    f"{roots['root_correct_expected_roots']} root had a matching card that "
+                    "still failed other required content fields. "
+                    f"Strict recall was {rates['overall_recall']:.1%}.",
+                ),
                 "Detect every high-severity problem and at least 90% of all expected problems "
                 "with the correct root cause.",
             )
         )
     if grades["incorrect"] or grades["partially_useful"] or counts["healthy_insights"]:
+        affected = _agent_ids_for_judgments(
+            report,
+            lambda item: _content_utility_grade(item) != "fully_correct",
+        )
+        affected.update(
+            result["agent_id"]
+            for result in report["scenario_results"]
+            if result["observed_count"] > 0 and result["verdict"] != "correct"
+        )
         healthy = (
             f" {counts['healthy_insights']} "
             f"{'card came' if counts['healthy_insights'] == 1 else 'cards came'} "
@@ -393,9 +680,14 @@ def _improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str]]:
         rows.append(
             (
                 "Incorrect and ambiguous findings",
-                f"Of {actuals['observed_findings']} observed cards, {grades['incorrect']} "
-                f"were incorrect/noisy and {grades['partially_useful']} were only partially "
-                f"useful; precision was {rates['precision']:.1%}.{healthy}",
+                _affected_evidence(
+                    report,
+                    affected,
+                    f"Of {actuals['observed_findings']} observed cards, "
+                    f"{grades['incorrect']} were incorrect/noisy and "
+                    f"{grades['partially_useful']} were only partially useful; "
+                    f"strict quality-bar precision was {rates['precision']:.1%}.{healthy}",
+                ),
                 "Return no card for healthy behavior and ground each finding in the complete "
                 "trace, request, available tools, and current agent version.",
             )
@@ -404,9 +696,13 @@ def _improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str]]:
         rows.append(
             (
                 "Finding count did not match root causes",
-                f"{actuals['count_mismatch_runs']} run/agent results had count mismatches; "
-                f"{actuals['expected_findings']} findings were expected and "
-                f"{actuals['observed_findings']} were observed.",
+                _affected_evidence(
+                    report,
+                    _count_mismatch_agent_ids(report),
+                    f"{actuals['count_mismatch_runs']} run/agent results had count "
+                    f"mismatches; {actuals['expected_findings']} findings were expected "
+                    f"and {actuals['observed_findings']} were observed.",
+                ),
                 "Produce exactly one clearly scoped finding per independently fixable root "
                 "cause in each run.",
             )
@@ -427,12 +723,24 @@ def _improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str]]:
         if rates[name] < 1
     ]
     if failed_fields:
+        field_rate_denominator = grades["correct"] + grades["partially_useful"]
+        affected = _agent_ids_for_judgments(
+            report,
+            lambda item: not all(item["attributes"].values()),
+        )
         rows.append(
             (
                 "Finding content was incomplete or inaccurate",
-                f"Across {len(report['field_judgments'])} judged cards, "
-                + ", ".join(f"{name} passed {rate:.1%}" for name, rate in failed_fields)
-                + ".",
+                _affected_evidence(
+                    report,
+                    affected,
+                    f"Across {field_rate_denominator} mapped cards with fully or partially "
+                    "useful content (the scorecard attribute-rate denominator), "
+                    + ", ".join(
+                        f"{name} passed {rate:.1%}" for name, rate in failed_fields
+                    )
+                    + ".",
+                ),
                 "Make every title, explanation, severity, category, trace link, and proposed "
                 "fix specific, correct, localized, meaningful, and actionable.",
             )
@@ -441,7 +749,6 @@ def _improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str]]:
     relationship_counts = [
         (label, collection[name])
         for label, name in (
-            ("duplicate", "duplicates"),
             ("fragment", "fragments"),
             ("umbrella", "umbrellas"),
             ("stale-version", "stale_version"),
@@ -451,7 +758,6 @@ def _improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str]]:
     relationship_rates = [
         (label, rates[name])
         for label, name in (
-            ("duplicate", "duplication_rate"),
             ("fragment", "fragmentation_rate"),
             ("umbrella", "umbrella_rate"),
             ("stale-version", "cross_version_stale_rate"),
@@ -475,8 +781,16 @@ def _improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str]]:
         rows.append(
             (
                 "Related findings were not cleanly separated",
-                evidence,
-                "Group evidence by root cause, avoid duplicate or fragmented cards, and scope "
+                _affected_evidence(
+                    report,
+                    _agent_ids_for_judgments(
+                        report,
+                        lambda item: any(item["relationships"].values())
+                        or item["stale_version"],
+                    ),
+                    evidence,
+                ),
+                "Group evidence by root cause, avoid fragmented cards, and scope "
                 "each finding to the immutable agent version where it reproduces.",
             )
         )
@@ -484,8 +798,16 @@ def _improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str]]:
         rows.append(
             (
                 "Proposed fixes assumed unavailable capabilities",
-                "One or more proposed fixes referenced a capability outside the deployed "
-                "agent contract.",
+                _affected_evidence(
+                    report,
+                    _agent_ids_for_judgments(
+                        report,
+                        lambda item: not item["fix_verifiable"]
+                        or not item["attributes"]["proposed_fix"],
+                    ),
+                    "One or more proposed fixes referenced a capability outside the "
+                    "deployed agent contract.",
+                ),
                 "Generate remediation only from the tools, models, and integrations configured "
                 "for the evaluated agent.",
             )
@@ -494,8 +816,14 @@ def _improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str]]:
         rows.append(
             (
                 "Assessment trust was reduced",
-                f"{counts['structural_failures']} structural failures and "
-                f"{len(actuals['trust_failures'])} recorded trust failures affected the run.",
+                _affected_evidence(
+                    report,
+                    set(),
+                    f"{counts['structural_failures']} structural failures and "
+                    f"{len(actuals['trust_failures'])} recorded trust failures affected "
+                    "the run.",
+                    aggregate_all=True,
+                ),
                 "Fail closed until evidence structure, provenance, privacy, judging, and "
                 "classification are complete and trustworthy.",
             )
@@ -535,7 +863,164 @@ def _markdown_cell(value: str) -> str:
     return value.replace("|", r"\|").replace("\r", " ").replace("\n", " ")
 
 
-def render_report_markdown(report: dict[str, Any]) -> str:
+def _ordered_agents(report: dict[str, Any]) -> list[dict[str, Any]]:
+    return sorted(
+        report["agents"],
+        key=lambda agent: (agent["name"].casefold(), agent["name"]),
+    )
+
+
+def _agent_assignee(agent_id: str) -> str:
+    match = re.match(r"^aiq-([0-9]{3})-", agent_id)
+    if match is None or match.group(1) not in _AGENT_ASSIGNEES:
+        raise ContractError(f"No reviewed assignee for test agent: {agent_id}")
+    return _AGENT_ASSIGNEES[match.group(1)]
+
+
+def _display_agent_type(agent_type: str) -> str:
+    return "hosted_container" if agent_type == "hosted_custom_container" else agent_type
+
+
+def _report_repo_path(report: dict[str, Any]) -> str:
+    base = "reports/daily/" + report["report_date"].replace("-", "/")
+    if report["report_id"] != f"aiq-{report['report_date'].replace('-', '')}":
+        base += f"/{report['report_id']}"
+    return base + "/report.md"
+
+
+def _agent_report_repo_path(report: dict[str, Any], agent_id: str) -> str:
+    return _report_repo_path(report).removesuffix("report.md") + f"agents/{agent_id}.md"
+
+
+def _agent_report_url(report: dict[str, Any], agent_id: str) -> str:
+    return _PUBLIC_REPORT_BASE_URL + _agent_report_repo_path(report, agent_id)
+
+
+def _recommend_human_validation(
+    report: dict[str, Any],
+    agent: dict[str, Any],
+) -> bool:
+    scenario_ids = {
+        result["scenario_id"]
+        for result in report["scenario_results"]
+        if result["agent_id"] == agent["id"]
+    }
+    results = [
+        result
+        for result in report["scenario_results"]
+        if result["agent_id"] == agent["id"]
+    ]
+    judgments = [
+        item
+        for item in report["field_judgments"]
+        if item["scenario_id"] in scenario_ids
+    ]
+    return (
+        agent["human_validation"] != "N/A"
+        or any(
+            not result["completed"] or result["verdict"] != "correct"
+            for result in results
+        )
+        or any(
+            item["verdict"] != "correct"
+            or not all(item["attributes"].values())
+            or any(item["relationships"].values())
+            or item["stale_version"]
+            or not item["fix_verifiable"]
+            or (
+                item["verifier_verdict"] is not None
+                and item["verifier_verdict"] != item["verdict"]
+            )
+            for item in judgments
+        )
+    )
+
+
+def _validated_insight_evaluations(
+    report: dict[str, Any],
+    insight_evaluations: dict[str, Any] | None,
+) -> list[dict[str, str]]:
+    if insight_evaluations is None:
+        return []
+    if set(insight_evaluations) != {"schema_version", "report_id", "cards"}:
+        raise ContractError("Insight evaluation sidecar has unexpected fields")
+    if (
+        insight_evaluations["schema_version"] != "1.0.0"
+        or insight_evaluations["report_id"] != report["report_id"]
+        or not isinstance(insight_evaluations["cards"], list)
+    ):
+        raise ContractError("Insight evaluation sidecar does not match the report")
+    agent_ids = {agent["id"] for agent in report["agents"]}
+    cards = []
+    required = {
+        "agent_id",
+        "agent_name",
+        "category",
+        "title",
+        "description",
+        "evaluation",
+        "evaluation_result",
+    }
+    for card in insight_evaluations["cards"]:
+        if not isinstance(card, dict) or set(card) != required:
+            raise ContractError("Insight evaluation card has unexpected fields")
+        if (
+            card["agent_id"] not in agent_ids
+            or not isinstance(card["agent_name"], str)
+            or not card["agent_name"].startswith(card["agent_id"] + "-")
+            or card["evaluation"]
+            not in {"fully_correct", "partially_useful", "incorrect_noise"}
+        ):
+            raise ContractError("Insight evaluation card identity or grade is invalid")
+        for name in (
+            "agent_name",
+            "category",
+            "title",
+            "description",
+            "evaluation_result",
+        ):
+            if not isinstance(card[name], str) or not card[name].strip():
+                raise ContractError(f"Insight evaluation card {name} is required")
+        if (
+            len(card["agent_name"]) > 200
+            or len(card["category"]) > 100
+            or len(card["title"]) > 300
+            or len(card["description"]) > 3000
+            or len(card["evaluation_result"]) > 2000
+        ):
+            raise ContractError("Insight evaluation card text exceeds the public report bound")
+        cards.append(card)
+    actuals = (report.get("bar_definition") or derive_bar_definition(report))["actuals"]
+    grades = _finding_grades(report)
+    if len(cards) != actuals["observed_findings"] or {
+        grade: sum(card["evaluation"] == grade for card in cards)
+        for grade in ("fully_correct", "partially_useful", "incorrect_noise")
+    } != {
+        "fully_correct": grades["correct"],
+        "partially_useful": grades["partially_useful"],
+        "incorrect_noise": grades["incorrect"],
+    }:
+        raise ContractError(
+            "Insight evaluation sidecar counts contradict the canonical report"
+        )
+    return sorted(
+        cards,
+        key=lambda card: (
+            card["agent_name"].casefold(),
+            card["agent_name"],
+            card["category"].casefold(),
+            card["title"].casefold(),
+            card["title"],
+        ),
+    )
+
+
+def render_report_markdown(
+    report: dict[str, Any],
+    insight_evaluations: dict[str, Any] | None = None,
+    *,
+    combined_detail: bool = False,
+) -> str:
     validate_report_consistency(report)
     score = report["scorecard"]
     counts = score["counts"]
@@ -546,7 +1031,8 @@ def render_report_markdown(report: dict[str, Any]) -> str:
         f"# Agent Insights Quality Report - {report['report_date']}",
         "",
         f"- Report: `{report['report_id']}`",
-        f"- Status: **{report['status']}**",
+        f"- Overall insight quality score: **{_overall_insight_quality_score(report)}**",
+        f"- Canonical audit verdict: `{report['status']}`",
         f"- Engine: `{report['engine']['build']}` / `{report['engine']['generator_model']}`",
         f"- Complete: `{str(score['complete']).lower()}`",
         "",
@@ -554,6 +1040,7 @@ def render_report_markdown(report: dict[str, Any]) -> str:
         "",
     ]
     lines.extend(_summary_narrative(report))
+    lines.extend(["", _assessment_scope(report)])
     lines.extend(
         [
         "",
@@ -592,21 +1079,175 @@ def render_report_markdown(report: dict[str, Any]) -> str:
     action_status = _bug_action_status(report)
     if action_status:
         lines.extend(["", f"**Follow-up:** {action_status}"])
+    _validated_insight_evaluations(report, insight_evaluations)
+    root_analysis = _root_cause_analysis(report)
+    collection = report["collection_analysis"]
+    lines.extend(
+        [
+            "",
+            "## Daily assessment",
+            "",
+            f"- Expected roots: {actuals['expected_findings']}; observed physical cards: "
+            f"{actuals['observed_findings']}; strict true positives: "
+            f"{counts['true_positives']}.",
+            f"- Root-cause-correct cards: {root_analysis['root_correct_cards']} of "
+            f"{actuals['observed_findings']}; true silent misses: "
+            f"{root_analysis['silent_misses']}.",
+            f"- Lifecycle/collection: {collection['duplicates']} duplicates, "
+            f"{collection['fragments']} fragments, {collection['umbrellas']} umbrellas, "
+            f"{collection['stale_version']} stale-version relationships.",
+            "",
+            "## Quality bar and result",
+            "",
+            "AT BAR requires exact expected-versus-observed cards for every run and agent; "
+            "at least 90% recall and 95% precision; 100% required-field correctness; zero "
+            "duplicate, fragment, umbrella, stale-version, and healthy-control cards; and "
+            "no trust failure.",
+            "",
+            f"**Overall insight quality score: "
+            f"{_overall_insight_quality_score(report)}.** "
+            f"Recall was {actuals['overall_recall']:.1%}, "
+            f"precision was {actuals['precision']:.1%}, and required-field correctness "
+            f"was {actuals['required_field_correctness']:.1%}.",
+            "",
+            "## Per-agent reports",
+            "",
+            "| Agent | Report | Recommended human validation | Assigned to |",
+            "| --- | --- | --- | --- |",
+        ]
+    )
+    for agent in _ordered_agents(report):
+        lines.append(
+            f"| {agent['name']} (`{agent['id']}`) | "
+            f"[View report](agents/{agent['id']}.md) | "
+            f"{'Yes' if _recommend_human_validation(report, agent) else 'No'} | "
+            f"{_agent_assignee(agent['id'])} |"
+        )
+    if not combined_detail:
+        return "\n".join(lines + [""])
+
+    # The compatibility mode preserves the former combined engineering detail when requested.
     lines.extend(
         [
         "",
-        "## Quality bar and result",
+        "## Detailed assessment analysis",
         "",
-        "AT BAR requires exact expected-versus-observed cards for every run and agent; "
-        "at least 90% recall and 95% precision; 100% required-field correctness on "
-        "accepted true positives; zero duplicate, fragment, umbrella, stale-version, and "
-        "healthy-control cards; and no structural, provenance, PII, judge-schema, or "
-        "unresolved trust failure.",
+        ]
+    )
+    root_analysis = _root_cause_analysis(report)
+    lines.extend(
+        [
+        f"- Expected roots: {actuals['expected_findings']}; observed physical cards: "
+        f"{actuals['observed_findings']}; strict true positives: "
+        f"{counts['true_positives']}.",
+        f"- Root-cause-correct cards: {root_analysis['root_correct_cards']} of "
+        f"{actuals['observed_findings']}; expected roots with a root-cause-correct "
+        f"match: {root_analysis['root_correct_expected_roots']} of "
+        f"{actuals['expected_findings']}.",
+        f"- True silent misses: {root_analysis['silent_misses']} expected roots produced "
+        "no card. Of the remaining "
+        f"{root_analysis['expected_with_output']} expected roots with card output, "
+        f"{root_analysis['output_without_root_match']} had no root-cause-correct match.",
+        "- Observed-card utility grades exclude lifecycle and collection hygiene. "
+        "Lifecycle continuity/staleness and exact duplicate, fragment, and umbrella "
+        "relationships remain separate gates.",
         "",
-        f"**Result: {report['status']}.** Expected {actuals['expected_findings']} findings; "
-        f"observed {actuals['observed_findings']}. Recall was "
-        f"{actuals['overall_recall']:.1%}, precision was {actuals['precision']:.1%}, and "
-        f"required-field correctness was {actuals['required_field_correctness']:.1%}.",
+        ]
+    )
+    utility_judgments = [
+        item
+        for item in report["field_judgments"]
+        if _content_utility_grade(item) == "partially_useful"
+    ]
+    if utility_judgments:
+        lines.extend(
+            [
+                "### Partially useful content attribute passes",
+                "",
+                "| Attribute | Passed | Evaluated |",
+                "| --- | ---: | ---: |",
+            ]
+        )
+        for attribute in (
+            "root_cause",
+            "title",
+            "description",
+            "category",
+            "severity",
+            "proposed_fix",
+            "linked_traces",
+            "evidence_localization",
+            "meaningfulness",
+            "actionability",
+        ):
+            lines.append(
+                f"| {attribute.replace('_', ' ').title()} | "
+                f"{sum(item['attributes'][attribute] for item in utility_judgments)} | "
+                f"{len(utility_judgments)} |"
+            )
+        lines.append("")
+    lines.extend(
+        [
+            "### Per-agent assessment",
+            "",
+            "| Test agent | Expected roots | Observed cards | Silent misses | "
+            "Root-correct cards | Partially useful | Incorrect/noisy | Healthy-control noise |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for row in _per_agent_assessment_rows(report):
+        lines.append(
+            f"| {row[0]} | {row[1]} | {row[2]} | {row[3]} | {row[4]} | "
+            f"{row[5]} | {row[6]} | {row[7]} |"
+        )
+    evaluation_cards = _validated_insight_evaluations(report, insight_evaluations)
+    if evaluation_cards:
+        lines.extend(
+            [
+                "",
+                "## Per-agent generated insight evaluation",
+                "",
+                "This sanitized presentation lists actual generated category, title, and "
+                "description content. Utility grading is lifecycle-neutral; lifecycle and "
+                "collection hygiene remain separate.",
+                "",
+            ]
+        )
+        current_agent = None
+        for card in evaluation_cards:
+            if card["agent_name"] != current_agent:
+                if current_agent is not None:
+                    lines.append("")
+                current_agent = card["agent_name"]
+                lines.extend(
+                    [
+                        f"### {card['agent_name']}",
+                        "",
+                        "| Category | Title | Description | Evaluation result |",
+                        "| --- | --- | --- | --- |",
+                    ]
+                )
+            lines.append(
+                f"| {_markdown_cell(card['category'])} | "
+                f"{_markdown_cell(card['title'])} | "
+                f"{_markdown_cell(card['description'])} | "
+                f"{_markdown_cell(card['evaluation_result'])} |"
+            )
+    lines.extend(
+        [
+            "",
+            "## Quality bar and result",
+            "",
+            "AT BAR requires exact expected-versus-observed cards for every run and agent; "
+            "at least 90% recall and 95% precision; 100% required-field correctness on "
+            "accepted true positives; zero duplicate, fragment, umbrella, stale-version, and "
+            "healthy-control cards; and no structural, provenance, PII, judge-schema, or "
+            "unresolved trust failure.",
+            "",
+            f"**Result: {report['status']}.** Expected {actuals['expected_findings']} findings; "
+            f"observed {actuals['observed_findings']}. Recall was "
+            f"{actuals['overall_recall']:.1%}, precision was {actuals['precision']:.1%}, and "
+            f"required-field correctness was {actuals['required_field_correctness']:.1%}.",
         ]
     )
     lines.extend(
@@ -637,7 +1278,7 @@ def render_report_markdown(report: dict[str, Any]) -> str:
             "",
             "## Scenario results",
             "",
-            "| Scenario | Agent | Completed | Expected | Observed | Verdict | Insights |",
+            "| Scenario | Agent | Completed | Expected | Observed | Canonical verdict | Insights |",
             "| --- | --- | --- | ---: | ---: | --- | ---: |",
         ]
     )
@@ -651,7 +1292,11 @@ def render_report_markdown(report: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "## Field judgments",
+            "## Source field judgments",
+            "",
+            "Canonical verdicts remain unchanged for audit. The leadership observed-card utility "
+            "grade is recomputed from content attributes and excludes lifecycle and collection "
+            "relationships.",
             "",
             "| Scenario | Insight | Attribute results |",
             "| --- | --- | --- |",
@@ -671,7 +1316,11 @@ def render_report_markdown(report: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "## Collection analysis",
+            "## Lifecycle and collection hygiene",
+            "",
+            "Lifecycle continuity/staleness and duplicate, fragment, or umbrella relationships "
+            "are evaluated as separate quality gates and never change the observed-card "
+            "content-utility grade.",
             "",
             "| Distinct | Duplicates | Fragments | Umbrellas | Stale version |",
             "| ---: | ---: | ---: | ---: | ---: |",
@@ -691,38 +1340,66 @@ def render_report_markdown(report: dict[str, Any]) -> str:
     if report.get("schema_version") == STRUCTURED_REPORT_VERSION:
         lines.extend(["", "## Human validation one-pager", ""])
         agents = {agent["id"]: agent for agent in report["agents"]}
-        for checklist in report["human_validation_checklists"]:
+        checklists = {
+            item["agent_id"]: item
+            for item in report["human_validation_checklists"]
+        }
+        for agent in _ordered_agents(report):
+            checklist = checklists[agent["id"]]
             agent = agents[checklist["agent_id"]]
+            scenario_count = len(
+                {
+                    scenario["scenario_id"]
+                    for version in checklist["versions"]
+                    for scenario in version["expected_scenarios"]
+                }
+            )
             lines.extend(
                 [
                     f"### {agent['name']} (`{agent['id']}`)",
                     "",
+                    "**Test-agent description:** "
+                    f"Synthetic `{agent['type']}` test agent evaluated across "
+                    f"{len(checklist['versions'])} immutable versions and "
+                    f"{scenario_count} reviewed injected scenarios.",
+                    "",
+                    "**Recommend human validation:** "
+                    + (
+                        "Yes"
+                        if _recommend_human_validation(report, agent)
+                        else "No"
+                    ),
+                    "",
                     f"**Review reason:** {checklist['review_reason']}",
                     "",
-                    "| Run / immutable version | Expected insights and ground truth | "
-                    "Observed final cards | Double-check |",
-                    "| --- | --- | --- | --- |",
+                    "| Run / immutable version | Injected issue(s) | Expected insight(s) | "
+                    "Observed final cards | Human-validation guidance |",
+                    "| --- | --- | --- | --- | --- |",
                 ]
             )
             for version in checklist["versions"]:
+                injected = "<br>".join(
+                    f"`{item['scenario_id']}` {item['title']}: {item['root_cause']}"
+                    for item in version["expected_scenarios"]
+                )
                 expected = "<br>".join(
-                    f"`{item['scenario_id']}` {item['title']}: "
-                    f"{item['expected_insight_count']} x {item['category']} / "
-                    f"{item['severity']} - {item['root_cause']}"
+                    f"{item['expected_insight_count']} expected; "
+                    f"{item['category']} / {item['severity']}"
                     for item in version["expected_scenarios"]
                 )
                 observed = (
                     "<br>".join(
-                        f"`{card['insight_reference']}` ({card['verdict']})"
+                        f"`{card['insight_reference']}` "
+                        f"({card['verdict']} canonical verdict)"
                         for card in version["observed_final_cards"]
                     )
                     or "None"
                 )
                 lines.append(
                     f"| `{version['run_id']}` / {version['phase']} "
-                    f"`{version['version_digest']}` | Expected "
-                    f"{version['expected_insight_count']}<br>{expected} | {observed} | "
-                    f"{version['double_check']} |"
+                    f"`{version['version_digest']}` | {injected} | "
+                    f"Total {version['expected_insight_count']} expected<br>{expected} | "
+                    f"{observed} | {version['double_check']} |"
                 )
             lines.extend(["", "**Standard checklist**", ""])
             lines.extend(f"- [ ] {item}" for item in checklist["standard_checks"])
@@ -741,7 +1418,7 @@ def render_report_markdown(report: dict[str, Any]) -> str:
             "| --- | --- | --- | --- |",
         ]
     )
-    for agent in report["agents"]:
+    for agent in _ordered_agents(report):
         lines.append(
             f"| `{agent['id']}` | `{agent['type']}` | "
             f"`{agent['insights_reference']}` | {agent['human_validation']} |"
@@ -774,6 +1451,184 @@ def render_report_markdown(report: dict[str, Any]) -> str:
             f"{action['work_item_reference'] or 'N/A'} |"
         )
     return "\n".join(lines + [""])
+
+
+def render_agent_report_markdown(
+    report: dict[str, Any],
+    agent_id: str,
+    insight_evaluations: dict[str, Any] | None = None,
+) -> str:
+    validate_report_consistency(report)
+    agents = {agent["id"]: agent for agent in report["agents"]}
+    if agent_id not in agents:
+        raise ContractError(f"Unknown report agent: {agent_id}")
+    agent = agents[agent_id]
+    results = sorted(
+        (
+            item
+            for item in report["scenario_results"]
+            if item["agent_id"] == agent_id
+        ),
+        key=lambda item: (item["run_id"], item["scenario_id"]),
+    )
+    scenario_ids = {item["scenario_id"] for item in results}
+    judgments = [
+        item
+        for item in report["field_judgments"]
+        if item["scenario_id"] in scenario_ids
+    ]
+    cards = [
+        card
+        for card in _validated_insight_evaluations(report, insight_evaluations)
+        if card["agent_id"] == agent_id
+    ]
+    assessment = next(
+        row for row in _per_agent_assessment_rows(report) if row[0] == agent["name"]
+    )
+    lines = [
+        f"# Agent Insights Quality - {agent['name']}",
+        "",
+        f"- Daily report: [`{report['report_id']}`](../report.md)",
+        f"- Report date: `{report['report_date']}`",
+        f"- Overall insight quality score: "
+        f"**{_overall_insight_quality_score(report)}**",
+        f"- Test agent: `{agent_id}`",
+        f"- Type: `{agent['type']}`",
+        f"- Assigned to: {_agent_assignee(agent_id)}",
+        "- Recommend human validation: "
+        + ("**Yes**" if _recommend_human_validation(report, agent) else "**No**"),
+        "",
+        "## Assessment summary",
+        "",
+        "| Expected roots | Observed cards | Silent misses | Root-correct cards | "
+        "Partially useful | Incorrect/noisy | Healthy-control noise |",
+        "| ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        f"| {assessment[1]} | {assessment[2]} | {assessment[3]} | "
+        f"{assessment[4]} | {assessment[5]} | {assessment[6]} | {assessment[7]} |",
+        "",
+        "Utility grading is lifecycle-neutral. Lifecycle and collection hygiene are "
+        "reported separately and never change the observed-card content-utility grade.",
+        "",
+        "## Relevant product gaps",
+        "",
+        "| Product gap | What happened | Needed behavior |",
+        "| --- | --- | --- |",
+    ]
+    for gap, happened, needed in _improvement_rows(report):
+        if "Affected test agents: All test agents." in happened or agent["name"] in happened:
+            lines.append(
+                f"| {_markdown_cell(gap)} | {_markdown_cell(happened)} | "
+                f"{_markdown_cell(needed)} |"
+            )
+    lines.extend(
+        [
+            "",
+            "## Expected scenarios and results",
+            "",
+            "| Run | Scenario | Phase | Expected | Observed | Canonical verdict |",
+            "| --- | --- | --- | ---: | ---: | --- |",
+        ]
+    )
+    for result in results:
+        lines.append(
+            f"| `{result['run_id']}` | `{result['scenario_id']}` | "
+            f"{result['version_sequence']['phase']} | {result['expected_count']} | "
+            f"{result['observed_count']} | {result['verdict']} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Generated insight evaluation",
+            "",
+            "Actual generated category, title, and description are sanitized from private "
+            "runtime evidence. No raw provider identifier or private portal URL is retained.",
+            "",
+        ]
+    )
+    if not cards:
+        lines.extend(["No generated-card detail is available for this historical rendering.", ""])
+    current_version = None
+    for card in cards:
+        if card["agent_name"] != current_version:
+            if current_version is not None:
+                lines.append("")
+            current_version = card["agent_name"]
+            lines.extend(
+                [
+                    f"### {card['agent_name']}",
+                    "",
+                    "| Category | Title | Description | Evaluation result |",
+                    "| --- | --- | --- | --- |",
+                ]
+            )
+        lines.append(
+            f"| {_markdown_cell(card['category'])} | "
+            f"{_markdown_cell(card['title'])} | "
+            f"{_markdown_cell(card['description'])} | "
+            f"{_markdown_cell(card['evaluation_result'])} |"
+        )
+    duplicates = sum(item["relationships"]["duplicate"] for item in judgments)
+    fragments = sum(item["relationships"]["fragment"] for item in judgments)
+    umbrellas = sum(item["relationships"]["umbrella"] for item in judgments)
+    stale = sum(item["stale_version"] for item in judgments)
+    lines.extend(
+        [
+            "",
+            "## Lifecycle and collection hygiene",
+            "",
+            "| Evaluated cards | Exact duplicates | Fragments | Umbrellas | Stale version |",
+            "| ---: | ---: | ---: | ---: | ---: |",
+            f"| {len(judgments)} | {duplicates} | {fragments} | {umbrellas} | {stale} |",
+            "",
+            "## Evidence and human-validation guidance",
+            "",
+        ]
+    )
+    checklists = {
+        item["agent_id"]: item
+        for item in report.get("human_validation_checklists", [])
+    }
+    checklist = checklists.get(agent_id)
+    if checklist is None:
+        lines.extend([agent["human_validation"], ""])
+        return "\n".join(lines)
+    lines.extend(
+        [
+            f"**Review reason:** {checklist['review_reason']}",
+            "",
+            "| Run / immutable version | Injected issue(s) | Expected insight(s) | "
+            "Observed final cards | Human-validation guidance |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+    )
+    for version in checklist["versions"]:
+        injected = "<br>".join(
+            f"`{item['scenario_id']}` {item['title']}: {item['root_cause']}"
+            for item in version["expected_scenarios"]
+        )
+        expected = "<br>".join(
+            f"{item['expected_insight_count']} expected; "
+            f"{item['category']} / {item['severity']}"
+            for item in version["expected_scenarios"]
+        )
+        observed = (
+            "<br>".join(
+                f"`{card['insight_reference']}` "
+                f"({card['verdict']} canonical verdict)"
+                for card in version["observed_final_cards"]
+            )
+            or "None"
+        )
+        lines.append(
+            f"| `{version['run_id']}` / {version['phase']} "
+            f"`{version['version_digest']}` | {injected} | "
+            f"Total {version['expected_insight_count']} expected<br>{expected} | "
+            f"{observed} | {version['double_check']} |"
+        )
+    lines.extend(["", "**Standard checklist**", ""])
+    lines.extend(f"- [ ] {item}" for item in checklist["standard_checks"])
+    lines.extend([f"- Human outcome: `{checklist['human_outcome']}`", ""])
+    return "\n".join(lines)
 
 
 def render_trend(reports: list[dict[str, Any]], *, limit: int = 14) -> dict[str, Any]:
@@ -860,59 +1715,6 @@ _STATUS_STYLES = {
 }
 
 
-def _trend_table(trend: dict[str, Any]) -> str:
-    validate_instance(trend, SCHEMAS / "trend.schema.json", "trend")
-    rows = []
-    for day in trend["days"][-14:]:
-        style = _STATUS_STYLES[day["status"]]
-        rate_value = day["trusted_insight_rate"]
-        rate = "N/A" if rate_value is None else f"{rate_value * 100:.0f}%"
-        bar = "&mdash;"
-        if rate_value is not None:
-            bar_width = round(rate_value * 100)
-            bar = (
-                '<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
-                'width="100%" style="width:100%;border-collapse:collapse;">'
-                "<tr>"
-                f'<td width="{bar_width}%" bgcolor="{style["accent"]}" '
-                'style="height:8px;line-height:8px;font-size:1px;">&nbsp;</td>'
-                f'<td width="{100 - bar_width}%" bgcolor="#e8eef7" '
-                'style="height:8px;line-height:8px;font-size:1px;">&nbsp;</td>'
-                "</tr></table>"
-            )
-        rows.append(
-            "<tr>"
-            '<td style="padding:9px 10px;border:1px solid #d6deea;'
-            'color:#334155;white-space:nowrap;">'
-            f"{html.escape(day['report_date'])}</td>"
-            f'<td bgcolor="{style["background"]}" style="padding:9px 10px;'
-            f'border:1px solid #d6deea;color:{style["foreground"]};'
-            'font-weight:700;white-space:nowrap;">'
-            f"{html.escape(day['status'])}</td>"
-            '<td style="padding:9px 10px;border:1px solid #d6deea;">'
-            f"{bar}</td>"
-            '<td style="padding:9px 10px;border:1px solid #d6deea;'
-            'text-align:right;color:#334155;font-weight:600;">'
-            f"{rate}</td>"
-            "</tr>"
-        )
-    return (
-        '<table cellpadding="0" cellspacing="0" border="0" width="100%" '
-        'style="width:100%;border-collapse:collapse;font-size:13px;">'
-        '<tr bgcolor="#e8eef7">'
-        '<th align="left" style="padding:9px 10px;border:1px solid #d6deea;'
-        'color:#12304a;">Date</th>'
-        '<th align="left" style="padding:9px 10px;border:1px solid #d6deea;'
-        'color:#12304a;">Result</th>'
-        '<th align="left" style="padding:9px 10px;border:1px solid #d6deea;'
-        'color:#12304a;">Trusted insight trend</th>'
-        '<th align="right" style="padding:9px 10px;border:1px solid #d6deea;'
-        'color:#12304a;">Rate</th></tr>'
-        + "".join(rows)
-        + "</table>"
-    )
-
-
 def _section_heading(title: str) -> str:
     return (
         '<h2 style="margin:0 0 14px 0;color:#12304a;font-family:Segoe UI,Arial,'
@@ -927,7 +1729,8 @@ def _data_table(
 ) -> str:
     header = "".join(
         f'<th align="left" width="{width}%" style="padding:10px 12px;'
-        'border:1px solid #d6deea;color:#12304a;vertical-align:top;">'
+        f'border:1px solid #d6deea;color:#12304a;vertical-align:top;'
+        f'{_OUTLOOK_TEXT_STYLE}font-weight:700;">'
         f"{html.escape(label)}</th>"
         for label, width in zip(headers, widths, strict=True)
     )
@@ -935,7 +1738,8 @@ def _data_table(
         "<tr>"
         + "".join(
             '<td style="padding:11px 12px;border:1px solid #d6deea;'
-            f'color:#334155;line-height:19px;vertical-align:top;">{html.escape(value)}</td>'
+            f'color:#334155;vertical-align:top;{_OUTLOOK_TEXT_STYLE}">'
+            f"{html.escape(value)}</td>"
             for value in row
         )
         + "</tr>"
@@ -943,8 +1747,21 @@ def _data_table(
     )
     return (
         '<table cellpadding="0" cellspacing="0" border="0" width="100%" '
-        'style="width:100%;border-collapse:collapse;font-size:13px;">'
+        f'style="width:100%;border-collapse:collapse;{_OUTLOOK_TEXT_STYLE}">'
         f'<tr bgcolor="#e8eef7">{header}</tr>{body}</table>'
+    )
+
+
+def _private_project_source_link(
+    context: RuntimeLinkContext,
+) -> str:
+    project_url = project_page_url(context)
+    return (
+        f'<p style="margin:0 0 18px 0;color:#334155;{_OUTLOOK_TEXT_STYLE}">'
+        "Foundry Project: "
+        f'<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
+        f'href="{html.escape(project_url, quote=True)}">'
+        f"{html.escape(context.project)}</a></p>"
     )
 
 
@@ -965,32 +1782,6 @@ def _quality_conclusion(status: str) -> str:
     }[status]
 
 
-def _agent_expectation_html(checklist: dict[str, Any]) -> str:
-    versions = []
-    for version in checklist["versions"]:
-        scenarios = "; ".join(
-            f"{item['title']} ({item['expected_insight_count']} x "
-            f"{item['category']}/{item['severity']}): {item['root_cause']}"
-            for item in version["expected_scenarios"]
-        )
-        versions.append(
-            f"<strong>{html.escape(version['phase'])}</strong>: "
-            f"{version['expected_insight_count']} expected - {html.escape(scenarios)}"
-        )
-    return "<br>".join(versions)
-
-
-def _agent_double_check_html(checklist: dict[str, Any]) -> str:
-    focus = " ".join(version["double_check"] for version in checklist["versions"])
-    return (
-        f"{html.escape(checklist['review_reason'])}<br>"
-        f"{html.escape(focus)}<br>"
-        "Then verify card title/description/fix, current-version trace provenance, "
-        "lifecycle prior evidence, and duplicate/fragment/umbrella relationships; "
-        "record the human outcome."
-    )
-
-
 def render_email_html(
     report: dict[str, Any],
     trend: dict[str, Any],
@@ -1007,16 +1798,7 @@ def render_email_html(
         if report["status"] == "INCONCLUSIVE"
         else report["scorecard"]["rates"]["precision"]
     )
-    expected_path = (
-        "reports/daily/"
-        + report["report_date"].replace("-", "/")
-        + (
-            f"/{report['report_id']}"
-            if report["report_id"] != f"aiq-{report['report_date'].replace('-', '')}"
-            else ""
-        )
-        + "/report.md"
-    )
+    expected_path = _report_repo_path(report)
     if (
         len(current_rows) != 1
         or current_rows[0]["status"] != report["status"]
@@ -1026,11 +1808,11 @@ def render_email_html(
         raise ContractError("Current trend entry contradicts the canonical report")
     expected_agents = {agent["id"] for agent in report["agents"]}
     if set(agent_links) != expected_agents:
-        raise ContractError("Direct email must contain a runtime Agent Insights link for every agent")
+        raise ContractError("Direct email must contain a runtime agent page link for every agent")
     if expected_link_context.project != report["plan_id"]:
         raise ContractError("Runtime Agent Insights context does not match the report plan")
     for agent in report["agents"]:
-        validate_agent_insights_url(
+        validate_agent_page_url(
             agent_links[agent["id"]], expected_link_context, agent["name"]
         )
     score = report["scorecard"]
@@ -1040,32 +1822,19 @@ def render_email_html(
         if counts["new_issues"] or counts["regressed_issues"]
         else f"{counts['completed_scenarios']}/{counts['active_scenarios']} scenarios"
     )
+    overall_score = _overall_insight_quality_score(report)
     subject = (
-        f"[Agent Insights Quality] {report['status']} - {report['report_date']} - {signal}"
+        f"[Agent Insights Quality] {overall_score} - {report['report_date']} - {signal}"
     )
     summary = _summary_narrative(report)
     grade_rows = _grade_rows(report)
     working = _working_capabilities(report)
     improvements = _improvement_rows(report)
-    action_status = _bug_action_status(report)
     status_style = _STATUS_STYLES[report["status"]]
-    checklists = {
-        item["agent_id"]: item
-        for item in report.get("human_validation_checklists", [])
-    }
     rows = []
-    for agent in report["agents"]:
-        checklist = checklists.get(agent["id"])
-        expectations = (
-            _agent_expectation_html(checklist)
-            if checklist
-            else html.escape(agent["human_validation"])
-        )
-        double_check = (
-            _agent_double_check_html(checklist)
-            if checklist
-            else html.escape(agent["human_validation"])
-        )
+    for agent in _ordered_agents(report):
+        recommend = "Yes" if _recommend_human_validation(report, agent) else "No"
+        report_url = _agent_report_url(report, agent["id"])
         rows.append(
             "<tr>"
             '<td style="padding:11px 12px;border:1px solid #d6deea;'
@@ -1074,15 +1843,16 @@ def render_email_html(
             '<span style="color:#64748b;font-size:12px;">'
             f"{html.escape(agent['id'])}</span></td>"
             '<td style="padding:11px 12px;border:1px solid #d6deea;'
-            f'color:#334155;">{html.escape(agent["type"])}</td>'
+            f'color:#334155;">{html.escape(_display_agent_type(agent["type"]))}</td>'
             '<td style="padding:11px 12px;border:1px solid #d6deea;">'
             f'<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
             f'href="{html.escape(agent_links[agent["id"]], quote=True)}">'
-            "Open Agent Insights</a></td>"
+            "Open agent</a></td>"
+            '<td style="padding:11px 12px;border:1px solid #d6deea;">'
+            f'<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
+            f'href="{html.escape(report_url, quote=True)}">View report</a></td>'
             '<td style="padding:11px 12px;border:1px solid #d6deea;'
-            f'color:#334155;line-height:18px;">{expectations}</td>'
-            '<td style="padding:11px 12px;border:1px solid #d6deea;'
-            f'color:#334155;line-height:18px;">{double_check}</td>'
+            f'color:#334155;line-height:18px;font-weight:700;">{recommend}</td>'
             "</tr>"
         )
     body = (
@@ -1107,30 +1877,17 @@ def render_email_html(
         f'<span style="display:inline-block;padding:5px 10px;background-color:'
         f'{status_style["background"]};color:{status_style["foreground"]};'
         'font-size:12px;line-height:16px;font-weight:700;">'
-        f"{html.escape(report['status'])}</span>"
-        '<p style="margin:15px 0 0 0;color:#aebfd0;font-size:12px;line-height:18px;">'
-        f"Report {html.escape(report['report_id'])} &middot; Build "
-        f"{html.escape(report['engine']['build'])}</p>"
+        f"Overall insight quality score: {html.escape(overall_score)}</span>"
         "</td></tr>"
-        '<tr><td style="padding:24px 32px 0 32px;">'
-        '<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
-        'width="100%" bgcolor="#eaf4ff" style="width:100%;background-color:#eaf4ff;'
-        'border-left:5px solid #0078d4;border-collapse:collapse;">'
-        '<tr><td style="padding:18px 20px;color:#12304a;font-size:16px;line-height:24px;">'
-        f"<strong>{html.escape(_quality_conclusion(report['status']))}</strong>"
-        "</td></tr></table></td></tr>"
         '<tr><td style="padding:28px 32px 0 32px;">'
         + _section_heading(SECTION_TITLES[0])
-        + '<p style="margin:0 0 12px 0;color:#334155;font-size:15px;line-height:23px;">'
-        + html.escape(summary[0])
-        + "</p>"
-        '<p style="margin:0 0 18px 0;color:#475569;font-size:14px;line-height:21px;">'
-        + html.escape(summary[1])
-        + "</p>"
+        + "".join(
+            f'<p style="margin:0 0 12px 0;color:#334155;{_OUTLOOK_TEXT_STYLE}">'
+            f"{html.escape(paragraph)}</p>"
+            for paragraph in summary
+        )
+        + _private_project_source_link(expected_link_context)
         + _data_table(("Grade", "Findings"), grade_rows, (38, 62))
-        + '<p style="margin:20px 0 10px 0;color:#12304a;font-size:14px;'
-        'line-height:20px;font-weight:700;">14-day quality trend</p>'
-        + _trend_table(trend)
         + "</td></tr>"
         '<tr><td style="padding:30px 32px 0 32px;">'
         + _section_heading(SECTION_TITLES[1])
@@ -1143,28 +1900,22 @@ def render_email_html(
             improvements,
             (24, 43, 33),
         )
-        + (
-            '<p style="margin:14px 0 0 0;color:#475569;font-size:13px;line-height:20px;">'
-            f"<strong>Follow-up:</strong> {html.escape(action_status)}</p>"
-            if action_status
-            else ""
-        )
         + "</td></tr>"
         '<tr><td style="padding:24px 32px 38px 32px;">'
         + _section_heading(SECTION_TITLES[3])
         + '<table cellpadding="0" cellspacing="0" border="0" width="100%" '
         'style="width:100%;border-collapse:collapse;font-size:13px;">'
         '<tr bgcolor="#e8eef7">'
-        '<th align="left" width="19%" style="padding:10px 12px;border:1px solid #d6deea;'
+        '<th align="left" width="29%" style="padding:10px 12px;border:1px solid #d6deea;'
         'color:#12304a;">Test agent</th>'
-        '<th align="left" width="10%" style="padding:10px 12px;border:1px solid #d6deea;'
+        '<th align="left" width="12%" style="padding:10px 12px;border:1px solid #d6deea;'
         'color:#12304a;">Type</th>'
-        '<th align="left" width="13%" style="padding:10px 12px;border:1px solid #d6deea;'
-        'color:#12304a;">Agent Insights</th>'
-        '<th align="left" width="28%" style="padding:10px 12px;border:1px solid #d6deea;'
-        'color:#12304a;">Version expectations</th>'
-        '<th align="left" width="30%" style="padding:10px 12px;border:1px solid #d6deea;'
-        'color:#12304a;">What to double-check</th></tr>'
+        '<th align="left" width="18%" style="padding:10px 12px;border:1px solid #d6deea;'
+        'color:#12304a;">Agent</th>'
+        '<th align="left" width="16%" style="padding:10px 12px;border:1px solid #d6deea;'
+        'color:#12304a;">Report</th>'
+        '<th align="left" width="25%" style="padding:10px 12px;border:1px solid #d6deea;'
+        'color:#12304a;">Recommended human validation</th></tr>'
         + "".join(rows)
         + "</table></td></tr></table>"
         "<!--[if mso]></td></tr></table><![endif]-->"

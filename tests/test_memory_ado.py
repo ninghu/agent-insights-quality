@@ -317,12 +317,14 @@ def candidate() -> dict:
         "insights_url": (
             "https://ai.azure.com/nextgen/r/sub,rg,,account,aiq-20260821/"
             "build/agents/aiq-001-weather-v1/monitor/insights"
+            "?tid=00000000-0000-0000-0000-000000000001"
         ),
         "runtime_link_context": {
             "subscription": "sub",
             "resource_group": "rg",
             "account": "account",
             "project": "aiq-20260821",
+            "tenant_id": "00000000-0000-0000-0000-000000000001",
         },
         "acceptance_criteria": "One distinct card is emitted.",
     }

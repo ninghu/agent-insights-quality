@@ -17,6 +17,7 @@ ALLOWED = [
     "reports/daily/*/*/*/daily-status.json",
     "reports/daily/*/*/*/aiq-*-r??/plan.json",
     "reports/daily/*/*/*/aiq-*-r??/daily-status.json",
+    "reports/daily/*/*/*/aiq-*-r??/agents/aiq-*.md",
     "reports/latest.json",
     "state/quality-memory.json",
 ]
@@ -31,6 +32,7 @@ ALLOWED = [
         "reports/daily/2026/08/20/daily-status.json",
         "reports/daily/2026/08/20/aiq-20260820-r01/plan.json",
         "reports/daily/2026/08/20/aiq-20260820-r01/daily-status.json",
+        "reports/daily/2026/08/20/aiq-20260820-r01/agents/aiq-001-weather.md",
         "reports/latest.json",
         "state/quality-memory.json",
     ],
