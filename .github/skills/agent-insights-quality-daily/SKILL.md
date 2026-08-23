@@ -291,18 +291,26 @@ standalone-tab flight is on and `/monitor/insights` when it is off. Trace links 
    tables derived from canonical evidence, followed by the detailed scorecard and exactly one
    daily-plan-bound human-validation one-pager per report agent. Cover every immutable run/version/
    phase, expected count, scenario title/root cause/category/severity, observed final cards, and
-   bounded double-check guidance. Never commit a private link.
+   bounded double-check guidance. When private evidence is available, derive a sanitized runtime-only
+   per-agent card-evaluation sidecar and pass it to `render-report --insight-evaluations`; reconcile
+   its fully-correct/partial/incorrect totals to the canonical report and commit only rendered
+   public-safe category/title/description/evaluation rows. Never commit the sidecar or a private link.
 4. Render HTML from the canonical model with HTML encoding. Subject:
    `[Agent Insights Quality] <AT BAR|NOT AT BAR|INCONCLUSIVE> - YYYY-MM-DD - <short signal>`.
 5. Email sections remain exactly Summary, What is working, What needs improvement, and Test agents
-   and Agent Insights links. Summary uses concise assessment prose and a `Grade | Findings` table;
+   and agent links. Summary uses concise assessment prose and a `Grade | Findings` table;
    What is working uses `Capability | Evidence`; What needs improvement uses `Product gap | What
-   happened | Needed behavior`. Keep customer-facing labels and concrete counts rather than internal
-   gate codes. Use the fluid 1160px Outlook-safe inline-style layout. The agent table compactly states
-   each version's expected count, title/root cause/category/severity, and what to double-check.
-   Resolve private links only while rendering the direct email; do not persist them in public files.
-   Include a 14-day email-safe trend and every agent. Preserve the existing deterministic
-   `agents[].human_validation` reason while using the structured checklist for richer guidance.
+   happened | Needed behavior`; each gap names sorted affected test agents from canonical evidence.
+   Keep customer-facing labels and concrete counts rather than internal gate codes. Grade observed-card
+   content utility as fully correct, partially useful, or incorrect/noisy without using lifecycle or
+   duplicate/fragment/umbrella relationships; retain those as separate gates. Use the fluid 1160px Outlook-safe inline-style
+   layout, but do not present the retained trend artifact. Sort the compact agent table by name and
+   limit it to Test agent, Type, Agent, and deterministic Yes/No Recommend human validation. Each
+   private CTA says Open agent and targets exactly `/build/agents/{agent_name}`, never an Insights
+   deep link.
+   Link once to the full public-safe GitHub Markdown report for per-version detail. The private email
+   may show the runtime-resolved Foundry account/project and project link; never persist private route
+   coordinates in public files. Preserve `agents[].human_validation` in the detailed Markdown.
 6. Resolve the selected protected recipient variable, enforce the configured allowed domain, and
    execute the request's no-duplicate transport strategy. Do not use a repository credential, relay,
    hidden override, or Logic App.

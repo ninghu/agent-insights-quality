@@ -25,6 +25,17 @@ all required attributes pass. `partially_useful` output remains visible but does
 positive. Efficiency metrics such as latency, model calls, and tokens are diagnostics, not substitutes
 for quality.
 
+Leadership presentation grades each observed card's customer utility/content independently as fully
+correct, partially useful, or incorrect/noisy. That observed-card grade is derived from required
+content attributes and intentionally ignores lifecycle continuity/staleness and collection
+duplicate/fragment/umbrella relationships. Lifecycle and collection hygiene remain separate strict
+quality gates; they never demote or inflate the content-utility grade.
+
+Attribute rates use only mapped cards with fully correct or partially useful content as their
+denominator. Reports must state that denominator explicitly rather than describing rates as if they
+covered every observed or judged card. Silent expected-root misses are also reported separately from
+roots that emitted cards but still lacked a root-cause-correct match.
+
 ## Report and human-validation contract
 
 Canonical report `1.1.0` embeds the thresholds above plus scorecard-derived actuals and deterministic

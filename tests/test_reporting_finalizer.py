@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import html
+import re
 
 import pytest
 
@@ -34,7 +35,7 @@ from agent_insights_quality.reporting import (
 from agent_insights_quality.reporting.model import attach_structured_report_context
 from agent_insights_quality.artifact_io import content_hash
 from agent_insights_quality.planning import generate_daily_plan
-from agent_insights_quality.links import RuntimeLinkContext, agent_insights_url
+from agent_insights_quality.links import RuntimeLinkContext, agent_page_url
 from agent_insights_quality.privacy import require_privacy_safe
 from agent_insights_quality.public_safety import require_public_artifact_safe
 from datetime import date
@@ -196,10 +197,9 @@ def runtime_link_context(value: dict) -> RuntimeLinkContext:
 
 def runtime_agent_links(value: dict) -> dict[str, str]:
     return {
-        agent["id"]: agent_insights_url(
+        agent["id"]: agent_page_url(
             runtime_link_context(value),
             agent["name"],
-            standalone_tab=False,
         )
         for agent in value["agents"]
     }
@@ -372,11 +372,35 @@ def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> No
     assert "No meaningful product problems were expected or found" in body
     assert ">Grade</th>" in body
     assert ">Findings</th>" in body
+    assert "Fully correct (content utility)" in body
+    assert "Partially useful (content utility)" in body
+    assert "Incorrect/noisy (content utility)" in body
     assert ">Capability</th>" in body
     assert ">Evidence</th>" in body
     assert ">Product gap</th>" in body
     assert ">What happened</th>" in body
     assert ">Needed behavior</th>" in body
+    assert ">Test agent</th>" in body
+    assert ">Type</th>" in body
+    assert ">Agent</th>" in body
+    assert "Open agent</a>" in body
+    assert "/monitor/insights" not in body
+    assert "/insights" not in body
+    assert ">Recommend human validation</th>" in body
+    assert "Version expectations" not in body
+    assert "What to double-check" not in body
+    assert "14-day quality trend" not in body
+    assert "Trusted insight trend" not in body
+    assert (
+        "https://github.com/ninghu/agent-insights-quality/blob/main/"
+        "reports/daily/2026/08/21/report.md"
+    ) in body
+    assert body.count("open the full Markdown report") == 1
+    assert ">Data source</th>" in body
+    assert ">Resolved value</th>" in body
+    assert "account / aiq-20260821" in body
+    assert "Open authenticated project" in body
+    assert "https://ai.azure.com/nextgen/r/sub,rg,,account,aiq-20260821" in body
     assert "No product-quality gap observed" in body
     assert 'bgcolor="#f3f6fa"' in body
     assert 'bgcolor="#12304a"' in body
@@ -394,7 +418,7 @@ def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> No
         "Summary",
         "What is working",
         "What needs improvement",
-        "Test agents and Agent Insights links",
+        "Test agents and agent links",
     )]
     assert positions == sorted(positions)
 
@@ -434,10 +458,63 @@ def test_email_uses_simple_expected_observed_noise_and_miss_narrative() -> None:
         runtime_link_context(value),
     )
 
-    assert "Of 4 expected problems, 3 were captured as fully correct findings" in body
-    assert "The run generated 5 distinct cards: 3 correct, 0 partially useful, and 2 incorrect or noisy." in body
-    assert "1 expected problem was missed" in body
+    assert "5 distinct observed cards, 3 were fully correct on customer utility and content" in body
+    assert "strict quality-bar matching found 3 of 4 expected problems" in body
     assert "4 findings were expected and 5 were observed" in body
+    assert "Affected test agents: aiq-001-agent." in body
+
+
+def test_email_sorts_agents_and_recommends_validation_from_actual_failures() -> None:
+    value = report()
+    affected = value["agents"][1]
+    value["agents"].reverse()
+    value["scenario_results"] = [
+        {
+            "scenario_id": "aiq-scn-010-test",
+            "agent_id": affected["id"],
+            "run_id": "run-01-aiq-002-agent",
+            "version_sequence": {"phase": "faulted", "version_digest": SHA},
+            "agent_version_digest": SHA,
+            "completed": True,
+            "expected_count": 1,
+            "observed_count": 0,
+            "verdict": "missed",
+            "insight_references": [],
+        }
+    ]
+    value["status"] = "NOT AT BAR"
+    value["scorecard"]["verdict"] = "NOT AT BAR"
+    value["scorecard"]["counts"]["false_negatives"] = 1
+    value["scorecard"]["rates"].update(
+        {"high_severity_recall": 0.0, "overall_recall": 0.0}
+    )
+    value["scorecard"]["violations"] = ["missing_findings"]
+
+    _, body = render_email_html(
+        value,
+        render_trend([value]),
+        runtime_agent_links(value),
+        runtime_link_context(value),
+    )
+
+    ordered_names = sorted(agent["name"] for agent in value["agents"])
+    assert [body.index(f"<strong>{name}</strong>") for name in ordered_names] == sorted(
+        body.index(f"<strong>{name}</strong>") for name in ordered_names
+    )
+    rows = {
+        name: re.search(
+            rf"<strong>{re.escape(name)}</strong>.*?</tr>",
+            body,
+            flags=re.DOTALL,
+        ).group()
+        for name in ordered_names
+    }
+    assert ">Yes</td>" in rows[affected["name"]]
+    assert all(
+        ">No</td>" in row
+        for name, row in rows.items()
+        if name != affected["name"]
+    )
 
 
 def test_email_doing_well_names_semantic_coverage_and_collection_integrity() -> None:
@@ -459,6 +536,9 @@ def test_email_doing_well_names_semantic_coverage_and_collection_integrity() -> 
     ]
     value["field_judgments"] = [field_judgment(scenario_id, SHA)]
     value["collection_analysis"]["distinct"] = 1
+    value["scorecard"]["counts"].update(
+        {"true_positives": 1, "false_positives": 0, "false_negatives": 0}
+    )
 
     _, body = render_email_html(
         value,
@@ -469,6 +549,7 @@ def test_email_doing_well_names_semantic_coverage_and_collection_integrity() -> 
 
     assert "Useful diagnostic signal" in body
     assert "1 of 1 observed cards contained useful signal" in body
+    assert "1 met the strict quality bar" in body
     assert "Finding content" in body
     assert "All 1 fully correct findings passed required title" in body
     assert "Finding separation" in body
@@ -476,6 +557,7 @@ def test_email_doing_well_names_semantic_coverage_and_collection_integrity() -> 
     assert body.count("<h2 ") == 4
 
     value["field_judgments"] = []
+    value["scorecard"]["counts"]["true_positives"] = 0
     value["collection_analysis"].update({"duplicates": 1, "stale_version": 1})
     _, body = render_email_html(
         value,
@@ -489,6 +571,28 @@ def test_email_doing_well_names_semantic_coverage_and_collection_integrity() -> 
 
 def test_not_at_bar_email_names_relationship_violation_and_candidate_action() -> None:
     value = report()
+    scenario_id = "aiq-scn-010-test"
+    agent = value["agents"][0]
+    value["scenario_results"] = [
+        {
+            "scenario_id": scenario_id,
+            "agent_id": agent["id"],
+            "run_id": "run-01-aiq-001-agent",
+            "version_sequence": {"phase": "faulted", "version_digest": SHA},
+            "agent_version_digest": SHA,
+            "completed": True,
+            "expected_count": 1,
+            "observed_count": 1,
+            "verdict": "incorrect_noise",
+            "insight_references": [SHA],
+        }
+    ]
+    judgment = field_judgment(scenario_id, SHA)
+    judgment["verdict"] = "incorrect_noise"
+    judgment["verifier_verdict"] = "incorrect_noise"
+    judgment["relationships"]["umbrella"] = True
+    value["field_judgments"] = [judgment]
+    value["collection_analysis"].update({"distinct": 1, "umbrellas": 1})
     value["status"] = "NOT AT BAR"
     value["scorecard"]["verdict"] = "NOT AT BAR"
     value["scorecard"]["violations"] = ["umbrella"]
@@ -514,9 +618,86 @@ def test_not_at_bar_email_names_relationship_violation_and_candidate_action() ->
     )
 
     assert "Related findings were not cleanly separated" in body
-    assert "Relationship analysis measured umbrella 50.0%." in body
+    assert "Affected test agents: aiq-001-agent." in body
+    assert "Analysis found 1 umbrella relationship." in body
     assert "1 bug candidate prepared; no work-item mutation was claimed." in body
     assert "bug created" not in body.casefold()
+
+
+def test_content_utility_grades_ignore_lifecycle_and_collection_hygiene() -> None:
+    value = report()
+    first, second = value["agents"][:2]
+    other_reference = "sha256:" + ("b" * 64)
+    value["scenario_results"] = [
+        {
+            "scenario_id": "aiq-scn-010-test",
+            "agent_id": first["id"],
+            "run_id": "run-01-aiq-001-agent",
+            "version_sequence": {"phase": "corrected", "version_digest": SHA},
+            "agent_version_digest": SHA,
+            "completed": True,
+            "expected_count": 1,
+            "observed_count": 1,
+            "verdict": "incorrect_noise",
+            "insight_references": [SHA],
+        },
+        {
+            "scenario_id": "aiq-scn-011-test",
+            "agent_id": second["id"],
+            "run_id": "run-01-aiq-002-agent",
+            "version_sequence": {"phase": "faulted", "version_digest": SHA},
+            "agent_version_digest": SHA,
+            "completed": True,
+            "expected_count": 1,
+            "observed_count": 1,
+            "verdict": "correct",
+            "insight_references": [other_reference],
+        },
+    ]
+    fully_correct = field_judgment("aiq-scn-010-test", SHA)
+    fully_correct["verdict"] = "incorrect_noise"
+    fully_correct["verifier_verdict"] = "incorrect_noise"
+    fully_correct["relationships"]["fragment"] = True
+    fully_correct["stale_version"] = True
+    partially_useful = field_judgment("aiq-scn-011-test", other_reference)
+    partially_useful["attributes"]["category"] = False
+    value["field_judgments"] = [fully_correct, partially_useful]
+    value["collection_analysis"].update({"distinct": 2, "fragments": 1, "stale_version": 1})
+    value["status"] = "NOT AT BAR"
+    value["scorecard"]["verdict"] = "NOT AT BAR"
+    value["scorecard"]["counts"].update(
+        {"true_positives": 0, "false_positives": 2, "false_negatives": 2}
+    )
+    value["scorecard"]["rates"].update(
+        {
+            "category_accuracy": 0.5,
+            "fragmentation_rate": 0.5,
+            "cross_version_stale_rate": 0.5,
+        }
+    )
+    value["scorecard"]["violations"] = [
+        "attribute_correctness",
+        "fragmentation",
+        "cross_version_stale",
+    ]
+
+    markdown = render_report_markdown(value)
+    _, body = render_email_html(
+        value,
+        render_trend([value]),
+        runtime_agent_links(value),
+        runtime_link_context(value),
+    )
+
+    assert "2 distinct observed cards, 1 was fully correct" in body
+    assert "1 was partially useful" in body
+    assert "0 were incorrect or noisy" in body
+    assert "utility grades intentionally exclude lifecycle behavior and collection hygiene" in body
+    assert "Related findings were not cleanly separated" in body
+    assert "## Lifecycle and collection hygiene" in markdown
+    assert (
+        "never change the observed-card content-utility grade" in markdown
+    )
 
 
 def test_r19_like_email_keeps_candidate_status_with_six_metric_gaps() -> None:
@@ -548,13 +729,39 @@ def test_r19_like_email_keeps_candidate_status_with_six_metric_gaps() -> None:
     assert "Quality gate failed" not in body
     assert "finding_count_mismatch" not in body
     assert ">Product gap</th>" in body
-    assert "Expected problems were missed" in body
+    assert "Expected roots lacked a strict match" in body
     assert "Incorrect and ambiguous findings" in body
+    assert body.count("Affected test agents:") == 5
     assert body.count("<h2 ") == 4
 
 
 def test_email_names_capability_and_extended_field_failures() -> None:
     value = report()
+    scenario_id = "aiq-scn-010-test"
+    agent = value["agents"][0]
+    value["scenario_results"] = [
+        {
+            "scenario_id": scenario_id,
+            "agent_id": agent["id"],
+            "run_id": "run-01-aiq-001-agent",
+            "version_sequence": {"phase": "faulted", "version_digest": SHA},
+            "agent_version_digest": SHA,
+            "completed": True,
+            "expected_count": 1,
+            "observed_count": 1,
+            "verdict": "partially_useful",
+            "insight_references": [SHA],
+        }
+    ]
+    judgment = field_judgment(scenario_id, SHA)
+    judgment["attributes"]["actionability"] = False
+    judgment["fix_verifiable"] = False
+    judgment["verdict"] = "partially_useful"
+    judgment["verifier_verdict"] = "partially_useful"
+    value["field_judgments"] = [judgment]
+    agent["human_validation"] = (
+        "Required: partially useful judgment; unverifiable fix."
+    )
     value["status"] = "NOT AT BAR"
     value["scorecard"]["verdict"] = "NOT AT BAR"
     value["scorecard"]["violations"] = [
@@ -573,6 +780,7 @@ def test_email_names_capability_and_extended_field_failures() -> None:
     assert "actionability rate passed 50.0%" in body
     assert "Proposed fixes assumed unavailable capabilities" in body
     assert "One or more proposed fixes referenced a capability" in body
+    assert "Affected test agents: aiq-001-agent." in body
 
 
 def test_not_at_bar_one_pager_names_bar_actuals_metrics_and_agent_versions() -> None:
@@ -596,7 +804,15 @@ def test_not_at_bar_one_pager_names_bar_actuals_metrics_and_agent_versions() -> 
     assert "## What needs improvement" in markdown
     assert "| Product gap | What happened | Needed behavior |" in markdown
     assert "| Gate | Result | Evidence |" not in markdown
+    assert "14-day quality trend" not in markdown
+    assert "Trusted insight trend" not in markdown
     assert "## Human validation one-pager" in markdown
+    assert "Data source: canonical report" in markdown
+    assert "ai.azure.com" not in markdown
+    assert "account /" not in markdown
+    assert "**Test-agent description:**" in markdown
+    assert "**Recommend human validation:** Yes" in markdown
+    assert "| Run / immutable version | Injected issue(s) | Expected insight(s) | Observed final cards | Human-validation guidance |" in markdown
     assert (
         markdown.index("## Summary")
         < markdown.index("## What is working")
@@ -604,7 +820,7 @@ def test_not_at_bar_one_pager_names_bar_actuals_metrics_and_agent_versions() -> 
         < markdown.index("## Human validation one-pager")
     )
     assert body.count("<h2 ") == 4
-    assert "Expected problems were missed" in body
+    assert "Expected roots lacked a strict match" in body
     assert "Finding count did not match root causes" in body
     assert "Finding content was incomplete or inaccurate" in body
     assert "Related findings were not cleanly separated" in body
@@ -612,14 +828,145 @@ def test_not_at_bar_one_pager_names_bar_actuals_metrics_and_agent_versions() -> 
     assert "<style" not in body
     assert "<script" not in body
     assert "<img" not in body
+    assert "Version expectations" not in body
+    assert "What to double-check" not in body
+    assert body.count("open the full Markdown report") == 1
+    ordered_names = sorted(agent["name"] for agent in value["agents"])
+    assert [markdown.index(f"### {name}") for name in ordered_names] == sorted(
+        markdown.index(f"### {name}") for name in ordered_names
+    )
     for checklist in value["human_validation_checklists"]:
         assert checklist["agent_id"] in markdown
         assert checklist["agent_id"] in body
         for version in checklist["versions"]:
             assert version["phase"] in markdown
-            assert str(version["expected_insight_count"]) + " expected" in body
+            assert str(version["expected_insight_count"]) + " expected" in markdown
             assert version["double_check"] in markdown
-            assert html.escape(version["expected_scenarios"][0]["root_cause"]) in body
+            assert version["expected_scenarios"][0]["root_cause"] in markdown
+            assert html.escape(version["expected_scenarios"][0]["root_cause"]) not in body
+
+
+def test_real_r19_copy_distinguishes_strict_matches_from_useful_signal() -> None:
+    value = load_data(
+        ROOT
+        / "reports"
+        / "daily"
+        / "2026"
+        / "08"
+        / "21"
+        / "aiq-20260821-r19"
+        / "report.json"
+    )
+    _, body = render_email_html(
+        value,
+        render_trend([value]),
+        runtime_agent_links(value),
+        runtime_link_context(value),
+    )
+    markdown = render_report_markdown(value)
+
+    assert "0 were fully correct on customer utility and content" in body
+    assert "5 were partially useful" in body
+    assert (
+        "Partially useful cards remain visible as customer-useful diagnostic signal but do not "
+        "count as strict true positives."
+    ) in body
+    assert (
+        "1 matched the expected root cause but failed category or severity correctness."
+        in body
+    )
+    assert (
+        "5 of 20 expected roots were true silent misses with no card" in body
+    )
+    assert (
+        "15 expected roots had card output, but 14 had no root-cause-correct match"
+        in body
+    )
+    assert (
+        "Across 5 mapped cards with fully or partially useful content "
+        "(the scorecard attribute-rate denominator)" in body
+    )
+    assert "## Detailed assessment analysis" in markdown
+    assert (
+        "Root-cause-correct cards: 1 of 21; expected roots with a "
+        "root-cause-correct match: 1 of 20." in markdown
+    )
+    assert "True silent misses: 5 expected roots produced no card." in markdown
+    for expected_row in (
+        "| Root Cause | 1 | 5 |",
+        "| Title | 1 | 5 |",
+        "| Description | 3 | 5 |",
+        "| Category | 2 | 5 |",
+        "| Severity | 0 | 5 |",
+        "| Proposed Fix | 1 | 5 |",
+        "| Linked Traces | 3 | 5 |",
+        "| Evidence Localization | 3 | 5 |",
+        "| Meaningfulness | 5 | 5 |",
+        "| Actionability | 1 | 5 |",
+    ):
+        assert expected_row in markdown
+    for expected_row in (
+        "| aiq-001-weather-20260821-r19-w01 | 4 | 5 | 1 | 0 | 2 | 3 | 1 |",
+        "| aiq-002-healthcare-20260821-r19-w02 | 4 | 4 | 1 | 1 | 1 | 3 | 1 |",
+        "| aiq-003-finance-20260821-r19-w01 | 4 | 2 | 3 | 0 | 0 | 2 | 1 |",
+        "| aiq-004-travel-20260821-r19-w02 | 4 | 5 | 0 | 0 | 2 | 3 | 1 |",
+        "| aiq-005-ticket-20260821-r19-w03 | 4 | 5 | 0 | 0 | 0 | 5 | 1 |",
+    ):
+        assert expected_row in markdown
+    assert "## Lifecycle and collection hygiene" in markdown
+    assert "| 18 | 0 | 2 | 1 | 0 |" in markdown
+
+
+def test_markdown_accepts_only_count_reconciled_sanitized_card_evaluations() -> None:
+    value = report()
+    scenario_id = "aiq-scn-010-test"
+    agent = value["agents"][0]
+    value["scenario_results"] = [
+        {
+            "scenario_id": scenario_id,
+            "agent_id": agent["id"],
+            "run_id": "run-01-aiq-001-agent",
+            "version_sequence": {"phase": "faulted", "version_digest": SHA},
+            "agent_version_digest": SHA,
+            "completed": True,
+            "expected_count": 1,
+            "observed_count": 1,
+            "verdict": "correct",
+            "insight_references": [SHA],
+        }
+    ]
+    value["field_judgments"] = [field_judgment(scenario_id, SHA)]
+    value["scorecard"]["counts"].update(
+        {"true_positives": 1, "false_positives": 0, "false_negatives": 0}
+    )
+    sidecar = {
+        "schema_version": "1.0.0",
+        "report_id": value["report_id"],
+        "cards": [
+            {
+                "agent_id": agent["id"],
+                "agent_name": agent["name"] + "-v00",
+                "category": "output_quality",
+                "title": "Synthetic public-safe title",
+                "description": "Synthetic public-safe generated-card description.",
+                "evaluation": "fully_correct",
+                "evaluation_result": "Fully correct - all content attributes passed.",
+            }
+        ],
+    }
+
+    markdown = render_report_markdown(value, sidecar)
+    assert "## Per-agent generated insight evaluation" in markdown
+    assert f"### {agent['name']}-v00" in markdown
+    assert (
+        "| output_quality | Synthetic public-safe title | "
+        "Synthetic public-safe generated-card description. | "
+        "Fully correct - all content attributes passed. |"
+    ) in markdown
+
+    sidecar["cards"][0]["evaluation"] = "partially_useful"
+    with pytest.raises(ContractError, match="counts contradict"):
+        render_report_markdown(value, sidecar)
 
 
 def test_structured_bar_and_checklist_plan_drift_are_rejected() -> None:
@@ -821,7 +1168,7 @@ def test_email_status_variants_have_outlook_safe_semantic_colors(
         assert "Synthetic <evidence> was incomplete." not in body
 
 
-def test_email_trend_is_a_bordered_four_column_outlook_table() -> None:
+def test_email_validates_trend_but_omits_it_from_leadership_presentation() -> None:
     values = [report("2026-08-20"), report("2026-08-21")]
     trend = render_trend(values)
     _, body = render_email_html(
@@ -830,12 +1177,29 @@ def test_email_trend_is_a_bordered_four_column_outlook_table() -> None:
         runtime_agent_links(values[-1]),
         runtime_link_context(values[-1]),
     )
-    assert ">Trusted insight trend</th>" in body
-    assert ">Rate</th>" in body
-    assert body.count("2026-08-20") == 1
-    assert body.count("2026-08-21") >= 2
-    assert 'border:1px solid #d6deea' in body
-    assert 'bgcolor="#107c10"' in body
+    assert "14-day quality trend" not in body
+    assert "Trusted insight trend" not in body
+    assert "2026-08-20" not in body
+    assert body.count("2026-08-21") >= 1
+
+
+def test_summary_uses_consistent_outlook_safe_typography() -> None:
+    value = report()
+    _, body = render_email_html(
+        value,
+        render_trend([value]),
+        runtime_agent_links(value),
+        runtime_link_context(value),
+    )
+    style = (
+        "font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:21px;"
+    )
+    summary = body[
+        body.index(">Summary</h2>") : body.index(">What is working</h2>")
+    ]
+    assert summary.count(style) >= 14
+    assert "font-size:15px" not in summary
+    assert "font-size:12px" not in summary
 
 
 def test_trend_is_bounded_to_fourteen_days() -> None:

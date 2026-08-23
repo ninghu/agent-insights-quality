@@ -6,8 +6,10 @@ from agent_insights_quality.contracts import ContractError
 from agent_insights_quality.links import (
     RuntimeLinkContext,
     agent_insights_url,
+    agent_page_url,
     trace_url,
     validate_agent_insights_url,
+    validate_agent_page_url,
 )
 
 
@@ -35,6 +37,7 @@ def test_agent_insights_link_contract() -> None:
         "aiq-001-weather-v1",
         standalone_tab=False,
     ) == f"{prefix}/monitor/insights"
+    assert agent_page_url(CONTEXT, "aiq-001-weather-v1") == prefix
 
 
 def test_trace_link_requires_correlated_operation_id() -> None:
@@ -71,4 +74,21 @@ def test_agent_insights_link_must_match_authorized_runtime_context() -> None:
     with pytest.raises(ContractError, match="authorized runtime context"):
         validate_agent_insights_url(
             value, wrong_project, "aiq-001-weather-v1"
+        )
+
+
+def test_agent_page_link_rejects_insights_deep_links() -> None:
+    value = agent_page_url(CONTEXT, "aiq-001-weather-v1")
+    validate_agent_page_url(value, CONTEXT, "aiq-001-weather-v1")
+    with pytest.raises(ContractError, match="Agent page URL"):
+        validate_agent_page_url(
+            f"{value}/monitor/insights",
+            CONTEXT,
+            "aiq-001-weather-v1",
+        )
+    with pytest.raises(ContractError, match="Agent page URL"):
+        validate_agent_page_url(
+            f"{value}/insights",
+            CONTEXT,
+            "aiq-001-weather-v1",
         )

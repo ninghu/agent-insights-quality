@@ -221,6 +221,10 @@ def build_parser() -> argparse.ArgumentParser:
         "render-report", help="Render detailed engineering Markdown from a canonical report"
     )
     report.add_argument("--report", required=True)
+    report.add_argument(
+        "--insight-evaluations",
+        help="Private runtime path to sanitized per-agent generated-card evaluations",
+    )
     report.add_argument("--output", required=True)
     email = subparsers.add_parser(
         "render-email", help="Render and validate the direct-email handoff"
@@ -593,7 +597,20 @@ def run(args: argparse.Namespace) -> None:
     elif args.command == "render-report":
         report = read_json_object(Path(args.report), "canonical report")
         require_public_artifact_safe(report, "Canonical report")
-        markdown = render_report_markdown(report)
+        insight_evaluations = (
+            read_json_object(
+                Path(args.insight_evaluations),
+                "sanitized insight evaluations",
+            )
+            if args.insight_evaluations
+            else None
+        )
+        if insight_evaluations is not None:
+            require_public_artifact_safe(
+                insight_evaluations,
+                "Sanitized insight evaluations",
+            )
+        markdown = render_report_markdown(report, insight_evaluations)
         require_public_artifact_safe(markdown, "Rendered report")
         Path(args.output).write_bytes(markdown.encode("ascii"))
         print("Detailed report rendered.")

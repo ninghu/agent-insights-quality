@@ -52,10 +52,17 @@ def agent_insights_url(
     *,
     standalone_tab: bool,
 ) -> str:
+    suffix = "insights" if standalone_tab else "monitor/insights"
+    return f"{agent_page_url(context, agent_name)}/{suffix}"
+
+
+def agent_page_url(
+    context: RuntimeLinkContext,
+    agent_name: str,
+) -> str:
     if not _AGENT_NAME.fullmatch(agent_name):
         raise ContractError("Agent name must use a stable aiq-NNN prefix")
-    suffix = "insights" if standalone_tab else "monitor/insights"
-    return f"{context.resource_route()}/build/agents/{quote(agent_name, safe='')}/{suffix}"
+    return f"{context.resource_route()}/build/agents/{quote(agent_name, safe='')}"
 
 
 def trace_url(context: RuntimeLinkContext, agent_name: str, operation_id: str) -> str:
@@ -63,17 +70,10 @@ def trace_url(context: RuntimeLinkContext, agent_name: str, operation_id: str) -
         raise ContractError("Agent name must use a stable aiq-NNN prefix")
     if not _OPERATION_ID.fullmatch(operation_id):
         raise ContractError("Trace links require the correlated 32-character operation_Id")
-    return (
-        f"{context.resource_route()}/build/agents/{quote(agent_name, safe='')}"
-        f"/traces/{operation_id}"
-    )
+    return f"{agent_page_url(context, agent_name)}/traces/{operation_id}"
 
 
-def validate_agent_insights_url(
-    value: str,
-    expected_context: RuntimeLinkContext,
-    expected_agent_name: str,
-) -> None:
+def _validate_runtime_url(value: str) -> None:
     parsed = urlparse(value)
     if (
         parsed.scheme != "https"
@@ -83,7 +83,15 @@ def validate_agent_insights_url(
         or parsed.username
         or parsed.password
     ):
-        raise ContractError("Agent Insights URL does not match the approved runtime route")
+        raise ContractError("Agent URL does not match the approved runtime route")
+
+
+def validate_agent_insights_url(
+    value: str,
+    expected_context: RuntimeLinkContext,
+    expected_agent_name: str,
+) -> None:
+    _validate_runtime_url(value)
     allowed = {
         agent_insights_url(expected_context, expected_agent_name, standalone_tab=True),
         agent_insights_url(expected_context, expected_agent_name, standalone_tab=False),
@@ -91,4 +99,16 @@ def validate_agent_insights_url(
     if value not in allowed:
         raise ContractError(
             "Agent Insights URL does not match the authorized runtime context and report agent"
+        )
+
+
+def validate_agent_page_url(
+    value: str,
+    expected_context: RuntimeLinkContext,
+    expected_agent_name: str,
+) -> None:
+    _validate_runtime_url(value)
+    if value != agent_page_url(expected_context, expected_agent_name):
+        raise ContractError(
+            "Agent page URL does not match the authorized runtime context and report agent"
         )
