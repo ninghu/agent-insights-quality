@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import agent_insights_quality.cli as cli_module
 import agent_insights_quality.daily as daily
 from agent_insights_quality.artifact_io import content_hash
 from agent_insights_quality.cli import main
@@ -320,12 +321,25 @@ def test_readiness_false_has_no_operational_entrypoint_side_effect(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     called = False
+    original_load_data = cli_module.load_data
+    readiness = deepcopy(
+        original_load_data(cli_module.ROOT / "config" / "runtime-readiness.yaml")
+    )
+    readiness["status"] = "contract_scaffolding"
+    readiness["daily_workflow_enabled"] = False
+    readiness["mandatory_components"]["live_qualification"] = False
 
     def forbidden(*_args, **_kwargs):
         nonlocal called
         called = True
         raise AssertionError("operational entrypoint must not run")
 
+    def load_with_incomplete_readiness(path):
+        if Path(path).name == "runtime-readiness.yaml":
+            return deepcopy(readiness)
+        return original_load_data(path)
+
+    monkeypatch.setattr(cli_module, "load_data", load_with_incomplete_readiness)
     monkeypatch.setattr(daily, "run_daily", forbidden)
     assert (
         main(
