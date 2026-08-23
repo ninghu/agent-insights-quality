@@ -221,34 +221,34 @@ def render_failure_email_html(report: dict[str, Any]) -> str:
         '<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
         'width="100%" bgcolor="#f3f6fa"><tr><td align="center" style="padding:24px 12px;">'
         "<!--[if mso]><table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" "
-        "border=\"0\" width=\"760\"><tr><td><![endif]-->"
+        "border=\"0\" width=\"1160\"><tr><td><![endif]-->"
         '<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
-        'width="100%" bgcolor="#ffffff" style="width:100%;max-width:760px;'
+        'width="100%" bgcolor="#ffffff" style="width:100%;max-width:1160px;'
         'background-color:#ffffff;border:1px solid #dfe6ef;border-collapse:collapse;">'
-        '<tr><td bgcolor="#12304a" style="padding:30px 38px;background-color:#12304a;">'
+        '<tr><td bgcolor="#12304a" style="padding:30px 32px;background-color:#12304a;">'
         '<h1 style="margin:0;color:#ffffff;font-size:30px;line-height:38px;">'
         "Agent Insights quality</h1>"
         '<p style="margin:10px 0 0;color:#fff4ce;font-weight:700;">INCONCLUSIVE</p>'
         "</td></tr>"
-        '<tr><td style="padding:28px 38px 0;">'
+        '<tr><td style="padding:28px 32px 0;">'
         + _failure_section_heading("Summary")
         + "<p>No quality conclusion can be made because the validated evidence set is incomplete.</p>"
         "<p>Expected findings: N/A; observed findings: N/A. "
         f"Last confirmed stage: {html.escape(failure['last_confirmed_stage'])}.</p>"
         "</td></tr>"
-        '<tr><td style="padding:24px 38px 0;">'
-        + _failure_section_heading("What we are doing well")
+        '<tr><td style="padding:24px 32px 0;">'
+        + _failure_section_heading("What is working")
         + "<p>N/A - quality controls were not evaluated from incomplete evidence.</p>"
         "</td></tr>"
-        '<tr><td style="padding:24px 38px 0;">'
-        + _failure_section_heading("Gaps and regressions")
+        '<tr><td style="padding:24px 32px 0;">'
+        + _failure_section_heading("What needs improvement")
         + f"<p>{html.escape(failure['reason'])}</p>"
         f"<p>Next action: {html.escape(failure['next_action'])}</p>"
         "<p>Email state: unsent. The direct-mail handoff may retry after 60, 300, "
         "and 900 seconds, must stop after the first confirmed success, and must import "
         "a provider receipt before claiming delivery.</p>"
         "</td></tr>"
-        '<tr><td style="padding:24px 38px 38px;">'
+        '<tr><td style="padding:24px 32px 38px;">'
         + _failure_section_heading("Test agents and Agent Insights links")
         + '<table cellpadding="0" cellspacing="0" border="0" width="100%" '
         'style="width:100%;border-collapse:collapse;font-size:13px;">'
