@@ -1,0 +1,1441 @@
+{
+  "artifact_directory": "reports/daily/2026/08/21/aiq-20260821-r19",
+  "assignments": [
+    {
+      "agent_id": "aiq-001-weather",
+      "agent_name": "aiq-001-weather-20260821-r19-w00",
+      "agent_type": "prompt",
+      "agent_version_digest": "sha256:7ac7de8086f70d776113f77fa3d1dea83ddbc9fae202d80659058265777ea0cc",
+      "conflict_tags": [
+        "healthy-control"
+      ],
+      "expected": {
+        "category": "none",
+        "finding_count": 0,
+        "severity": "none",
+        "validation_targets": [
+          "no_insight",
+          "evidence"
+        ]
+      },
+      "family": "healthy_controls",
+      "lifecycle": "current_immutable_version",
+      "run_id": "run-00-aiq-001-weather",
+      "scenario_id": "aiq-scn-002-expected-model-latency",
+      "scenario_version": "1.0.0",
+      "selection_reason": "healthy_control_daily",
+      "traffic_recipe_id": "traffic-expected-model-latency-v1",
+      "traffic_requests": 3,
+      "traffic_seed": 5547464175774310204,
+      "traffic_seed_namespace": "expected-model-latency-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:7ac7de8086f70d776113f77fa3d1dea83ddbc9fae202d80659058265777ea0cc",
+          "phase": "healthy",
+          "version_key": "healthy",
+          "window": {
+            "end": "window://run-00-aiq-001-weather/healthy/end-exclusive",
+            "start": "window://run-00-aiq-001-weather/healthy/start-inclusive"
+          }
+        }
+      ],
+      "wave": 0,
+      "window": {
+        "end": "window://run-00-aiq-001-weather/healthy/end-exclusive",
+        "start": "window://run-00-aiq-001-weather/healthy/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-002-healthcare",
+      "agent_name": "aiq-002-healthcare-20260821-r19-w00",
+      "agent_type": "prompt",
+      "agent_version_digest": "sha256:d457eddb91f0755ef203884e2811aeb6fc35ca3fcca974950a200c5032076240",
+      "conflict_tags": [
+        "trace-root"
+      ],
+      "expected": {
+        "category": "none",
+        "finding_count": 0,
+        "severity": "none",
+        "validation_targets": [
+          "no_insight",
+          "evidence"
+        ]
+      },
+      "family": "trace_interpretation",
+      "lifecycle": "current_immutable_version",
+      "run_id": "run-00-aiq-002-healthcare",
+      "scenario_id": "aiq-scn-057-handled-child-failure-control",
+      "scenario_version": "1.0.0",
+      "selection_reason": "healthy_control_daily",
+      "traffic_recipe_id": "traffic-handled-child-failure-control-v1",
+      "traffic_requests": 4,
+      "traffic_seed": 17616244772330148061,
+      "traffic_seed_namespace": "handled-child-failure-control-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:d457eddb91f0755ef203884e2811aeb6fc35ca3fcca974950a200c5032076240",
+          "phase": "healthy",
+          "version_key": "healthy",
+          "window": {
+            "end": "window://run-00-aiq-002-healthcare/healthy/end-exclusive",
+            "start": "window://run-00-aiq-002-healthcare/healthy/start-inclusive"
+          }
+        }
+      ],
+      "wave": 0,
+      "window": {
+        "end": "window://run-00-aiq-002-healthcare/healthy/end-exclusive",
+        "start": "window://run-00-aiq-002-healthcare/healthy/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-003-finance",
+      "agent_name": "aiq-003-finance-20260821-r19-w00",
+      "agent_type": "hosted_code",
+      "agent_version_digest": "sha256:9401aa367fdd63ca1dbf7a42f9ebad87e47bf3b2e9f97e620243ba09ef4107b5",
+      "conflict_tags": [
+        "healthy-control"
+      ],
+      "expected": {
+        "category": "none",
+        "finding_count": 0,
+        "severity": "none",
+        "validation_targets": [
+          "no_insight",
+          "evidence"
+        ]
+      },
+      "family": "healthy_controls",
+      "lifecycle": "current_immutable_version",
+      "run_id": "run-00-aiq-003-finance",
+      "scenario_id": "aiq-scn-003-handled-transient-failure",
+      "scenario_version": "1.0.0",
+      "selection_reason": "healthy_control_daily",
+      "traffic_recipe_id": "traffic-handled-transient-failure-v1",
+      "traffic_requests": 4,
+      "traffic_seed": 4939821934759764589,
+      "traffic_seed_namespace": "handled-transient-failure-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:9401aa367fdd63ca1dbf7a42f9ebad87e47bf3b2e9f97e620243ba09ef4107b5",
+          "phase": "healthy",
+          "version_key": "healthy",
+          "window": {
+            "end": "window://run-00-aiq-003-finance/healthy/end-exclusive",
+            "start": "window://run-00-aiq-003-finance/healthy/start-inclusive"
+          }
+        }
+      ],
+      "wave": 0,
+      "window": {
+        "end": "window://run-00-aiq-003-finance/healthy/end-exclusive",
+        "start": "window://run-00-aiq-003-finance/healthy/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-003-finance",
+      "agent_name": "aiq-003-finance-20260821-r19-w00",
+      "agent_type": "hosted_code",
+      "agent_version_digest": "sha256:9401aa367fdd63ca1dbf7a42f9ebad87e47bf3b2e9f97e620243ba09ef4107b5",
+      "conflict_tags": [
+        "trace-root"
+      ],
+      "expected": {
+        "category": "none",
+        "finding_count": 0,
+        "severity": "none",
+        "validation_targets": [
+          "no_insight",
+          "evidence"
+        ]
+      },
+      "family": "trace_interpretation",
+      "lifecycle": "current_immutable_version",
+      "run_id": "run-00-aiq-003-finance",
+      "scenario_id": "aiq-scn-056-outer-zero-token-control",
+      "scenario_version": "1.0.0",
+      "selection_reason": "healthy_control_daily",
+      "traffic_recipe_id": "traffic-outer-zero-token-control-v1",
+      "traffic_requests": 4,
+      "traffic_seed": 2247478531379119715,
+      "traffic_seed_namespace": "outer-zero-token-control-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:9401aa367fdd63ca1dbf7a42f9ebad87e47bf3b2e9f97e620243ba09ef4107b5",
+          "phase": "healthy",
+          "version_key": "healthy",
+          "window": {
+            "end": "window://run-00-aiq-003-finance/healthy/end-exclusive",
+            "start": "window://run-00-aiq-003-finance/healthy/start-inclusive"
+          }
+        }
+      ],
+      "wave": 0,
+      "window": {
+        "end": "window://run-00-aiq-003-finance/healthy/end-exclusive",
+        "start": "window://run-00-aiq-003-finance/healthy/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-004-travel",
+      "agent_name": "aiq-004-travel-20260821-r19-w00",
+      "agent_type": "hosted_code",
+      "agent_version_digest": "sha256:363c97d53efd3c5674e926a9bc257e423c6cdfa3ed8dac4188093e52f92ec366",
+      "conflict_tags": [
+        "healthy-control"
+      ],
+      "expected": {
+        "category": "none",
+        "finding_count": 0,
+        "severity": "none",
+        "validation_targets": [
+          "no_insight",
+          "evidence"
+        ]
+      },
+      "family": "healthy_controls",
+      "lifecycle": "current_immutable_version",
+      "run_id": "run-00-aiq-004-travel",
+      "scenario_id": "aiq-scn-001-fully-healthy",
+      "scenario_version": "1.0.0",
+      "selection_reason": "healthy_control_daily",
+      "traffic_recipe_id": "traffic-fully-healthy-v1",
+      "traffic_requests": 3,
+      "traffic_seed": 14777516499712475503,
+      "traffic_seed_namespace": "fully-healthy-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:363c97d53efd3c5674e926a9bc257e423c6cdfa3ed8dac4188093e52f92ec366",
+          "phase": "healthy",
+          "version_key": "healthy",
+          "window": {
+            "end": "window://run-00-aiq-004-travel/healthy/end-exclusive",
+            "start": "window://run-00-aiq-004-travel/healthy/start-inclusive"
+          }
+        }
+      ],
+      "wave": 0,
+      "window": {
+        "end": "window://run-00-aiq-004-travel/healthy/end-exclusive",
+        "start": "window://run-00-aiq-004-travel/healthy/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-005-ticket",
+      "agent_name": "aiq-005-ticket-20260821-r19-w00",
+      "agent_type": "hosted_custom_container",
+      "agent_version_digest": "sha256:09d6478f8fcdd0919749fbd3ecbbfadd7d967b646c8e2a35fdc850109ca756ad",
+      "conflict_tags": [
+        "healthy-control"
+      ],
+      "expected": {
+        "category": "none",
+        "finding_count": 0,
+        "severity": "none",
+        "validation_targets": [
+          "no_insight",
+          "evidence"
+        ]
+      },
+      "family": "healthy_controls",
+      "lifecycle": "current_immutable_version",
+      "run_id": "run-00-aiq-005-ticket",
+      "scenario_id": "aiq-scn-004-ordinary-token-use",
+      "scenario_version": "1.0.0",
+      "selection_reason": "healthy_control_daily",
+      "traffic_recipe_id": "traffic-ordinary-token-use-v1",
+      "traffic_requests": 3,
+      "traffic_seed": 5586176393153128507,
+      "traffic_seed_namespace": "ordinary-token-use-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:09d6478f8fcdd0919749fbd3ecbbfadd7d967b646c8e2a35fdc850109ca756ad",
+          "phase": "healthy",
+          "version_key": "healthy",
+          "window": {
+            "end": "window://run-00-aiq-005-ticket/healthy/end-exclusive",
+            "start": "window://run-00-aiq-005-ticket/healthy/start-inclusive"
+          }
+        }
+      ],
+      "wave": 0,
+      "window": {
+        "end": "window://run-00-aiq-005-ticket/healthy/end-exclusive",
+        "start": "window://run-00-aiq-005-ticket/healthy/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-001-weather",
+      "agent_name": "aiq-001-weather-20260821-r19-w01",
+      "agent_type": "prompt",
+      "agent_version_digest": "sha256:f8aae81a984f8daa97bd415c07d253a434b8122171acbb265e0c5fc9182d2e36",
+      "conflict_tags": [
+        "grounding-root"
+      ],
+      "expected": {
+        "category": "hallucinations",
+        "finding_count": 1,
+        "severity": "high",
+        "validation_targets": [
+          "root_cause",
+          "title",
+          "description",
+          "category",
+          "severity",
+          "proposed_fix",
+          "evidence"
+        ]
+      },
+      "family": "grounding_correctness",
+      "lifecycle": "injected_immutable_version",
+      "run_id": "run-01-aiq-001-weather",
+      "scenario_id": "aiq-scn-005-hallucinated-answer",
+      "scenario_version": "1.0.0",
+      "selection_reason": "rotating_priority_fairness",
+      "traffic_recipe_id": "traffic-hallucinated-answer-v1",
+      "traffic_requests": 5,
+      "traffic_seed": 13356395271932316043,
+      "traffic_seed_namespace": "hallucinated-answer-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:f8aae81a984f8daa97bd415c07d253a434b8122171acbb265e0c5fc9182d2e36",
+          "phase": "faulted",
+          "version_key": "faulted",
+          "window": {
+            "end": "window://run-01-aiq-001-weather/faulted/end-exclusive",
+            "start": "window://run-01-aiq-001-weather/faulted/start-inclusive"
+          }
+        }
+      ],
+      "wave": 1,
+      "window": {
+        "end": "window://run-01-aiq-001-weather/faulted/end-exclusive",
+        "start": "window://run-01-aiq-001-weather/faulted/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-001-weather",
+      "agent_name": "aiq-001-weather-20260821-r19-w01",
+      "agent_type": "prompt",
+      "agent_version_digest": "sha256:f8aae81a984f8daa97bd415c07d253a434b8122171acbb265e0c5fc9182d2e36",
+      "conflict_tags": [
+        "capability-root"
+      ],
+      "expected": {
+        "category": "tool_call_failures",
+        "finding_count": 1,
+        "severity": "high",
+        "validation_targets": [
+          "root_cause",
+          "title",
+          "description",
+          "category",
+          "severity",
+          "proposed_fix",
+          "evidence"
+        ]
+      },
+      "family": "capability_awareness",
+      "lifecycle": "injected_immutable_version",
+      "run_id": "run-01-aiq-001-weather",
+      "scenario_id": "aiq-scn-030-unsupported-action-attempt",
+      "scenario_version": "1.0.0",
+      "selection_reason": "rotating_priority_fairness",
+      "traffic_recipe_id": "traffic-unsupported-action-attempt-v1",
+      "traffic_requests": 5,
+      "traffic_seed": 12630376240125162814,
+      "traffic_seed_namespace": "unsupported-action-attempt-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:f8aae81a984f8daa97bd415c07d253a434b8122171acbb265e0c5fc9182d2e36",
+          "phase": "faulted",
+          "version_key": "faulted",
+          "window": {
+            "end": "window://run-01-aiq-001-weather/faulted/end-exclusive",
+            "start": "window://run-01-aiq-001-weather/faulted/start-inclusive"
+          }
+        }
+      ],
+      "wave": 1,
+      "window": {
+        "end": "window://run-01-aiq-001-weather/faulted/end-exclusive",
+        "start": "window://run-01-aiq-001-weather/faulted/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-001-weather",
+      "agent_name": "aiq-001-weather-20260821-r19-w01",
+      "agent_type": "prompt",
+      "agent_version_digest": "sha256:f8aae81a984f8daa97bd415c07d253a434b8122171acbb265e0c5fc9182d2e36",
+      "conflict_tags": [
+        "completion-root"
+      ],
+      "expected": {
+        "category": "output_quality",
+        "finding_count": 1,
+        "severity": "medium",
+        "validation_targets": [
+          "root_cause",
+          "title",
+          "description",
+          "category",
+          "severity",
+          "proposed_fix",
+          "evidence"
+        ]
+      },
+      "family": "response_completion",
+      "lifecycle": "injected_immutable_version",
+      "run_id": "run-01-aiq-001-weather",
+      "scenario_id": "aiq-scn-040-omitted-required-fields",
+      "scenario_version": "1.0.0",
+      "selection_reason": "rotating_priority_fairness",
+      "traffic_recipe_id": "traffic-omitted-required-fields-v1",
+      "traffic_requests": 5,
+      "traffic_seed": 6023431984092234533,
+      "traffic_seed_namespace": "omitted-required-fields-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:f8aae81a984f8daa97bd415c07d253a434b8122171acbb265e0c5fc9182d2e36",
+          "phase": "faulted",
+          "version_key": "faulted",
+          "window": {
+            "end": "window://run-01-aiq-001-weather/faulted/end-exclusive",
+            "start": "window://run-01-aiq-001-weather/faulted/start-inclusive"
+          }
+        }
+      ],
+      "wave": 1,
+      "window": {
+        "end": "window://run-01-aiq-001-weather/faulted/end-exclusive",
+        "start": "window://run-01-aiq-001-weather/faulted/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-001-weather",
+      "agent_name": "aiq-001-weather-20260821-r19-w01",
+      "agent_type": "prompt",
+      "agent_version_digest": "sha256:f8aae81a984f8daa97bd415c07d253a434b8122171acbb265e0c5fc9182d2e36",
+      "conflict_tags": [
+        "trace-root"
+      ],
+      "expected": {
+        "category": "reliability_errors",
+        "finding_count": 1,
+        "severity": "high",
+        "validation_targets": [
+          "root_cause",
+          "title",
+          "description",
+          "category",
+          "severity",
+          "proposed_fix",
+          "evidence"
+        ]
+      },
+      "family": "trace_interpretation",
+      "lifecycle": "injected_immutable_version",
+      "run_id": "run-01-aiq-001-weather",
+      "scenario_id": "aiq-scn-055-parent-child-correlation",
+      "scenario_version": "1.0.0",
+      "selection_reason": "p0_fault_daily",
+      "traffic_recipe_id": "traffic-parent-child-correlation-v1",
+      "traffic_requests": 5,
+      "traffic_seed": 15888766962326406264,
+      "traffic_seed_namespace": "parent-child-correlation-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:f8aae81a984f8daa97bd415c07d253a434b8122171acbb265e0c5fc9182d2e36",
+          "phase": "faulted",
+          "version_key": "faulted",
+          "window": {
+            "end": "window://run-01-aiq-001-weather/faulted/end-exclusive",
+            "start": "window://run-01-aiq-001-weather/faulted/start-inclusive"
+          }
+        }
+      ],
+      "wave": 1,
+      "window": {
+        "end": "window://run-01-aiq-001-weather/faulted/end-exclusive",
+        "start": "window://run-01-aiq-001-weather/faulted/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-002-healthcare",
+      "agent_name": "aiq-002-healthcare-20260821-r19-w01",
+      "agent_type": "prompt",
+      "agent_version_digest": "sha256:a347572b64886d9dae4933201c7e777cb1a45a44578c9228a1d198b1be45acf2",
+      "conflict_tags": [
+        "instruction-root"
+      ],
+      "expected": {
+        "category": "context_memory",
+        "finding_count": 1,
+        "severity": "medium",
+        "validation_targets": [
+          "root_cause",
+          "title",
+          "description",
+          "category",
+          "severity",
+          "proposed_fix",
+          "evidence"
+        ]
+      },
+      "family": "system_instruction",
+      "lifecycle": "injected_immutable_version",
+      "run_id": "run-01-aiq-002-healthcare",
+      "scenario_id": "aiq-scn-009-ignored-user-correction",
+      "scenario_version": "1.0.0",
+      "selection_reason": "rotating_priority_fairness",
+      "traffic_recipe_id": "traffic-ignored-user-correction-v1",
+      "traffic_requests": 5,
+      "traffic_seed": 5098840099577366283,
+      "traffic_seed_namespace": "ignored-user-correction-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:a347572b64886d9dae4933201c7e777cb1a45a44578c9228a1d198b1be45acf2",
+          "phase": "faulted",
+          "version_key": "faulted",
+          "window": {
+            "end": "window://run-01-aiq-002-healthcare/faulted/end-exclusive",
+            "start": "window://run-01-aiq-002-healthcare/faulted/start-inclusive"
+          }
+        }
+      ],
+      "wave": 1,
+      "window": {
+        "end": "window://run-01-aiq-002-healthcare/faulted/end-exclusive",
+        "start": "window://run-01-aiq-002-healthcare/faulted/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-002-healthcare",
+      "agent_name": "aiq-002-healthcare-20260821-r19-w01",
+      "agent_type": "prompt",
+      "agent_version_digest": "sha256:a347572b64886d9dae4933201c7e777cb1a45a44578c9228a1d198b1be45acf2",
+      "conflict_tags": [
+        "planning-root"
+      ],
+      "expected": {
+        "category": "output_quality",
+        "finding_count": 1,
+        "severity": "low",
+        "validation_targets": [
+          "root_cause",
+          "title",
+          "description",
+          "category",
+          "severity",
+          "proposed_fix",
+          "evidence"
+        ]
+      },
+      "family": "planning",
+      "lifecycle": "injected_immutable_version",
+      "run_id": "run-01-aiq-002-healthcare",
+      "scenario_id": "aiq-scn-027-missing-owner-validation",
+      "scenario_version": "1.0.0",
+      "selection_reason": "rotating_priority_fairness",
+      "traffic_recipe_id": "traffic-missing-owner-validation-v1",
+      "traffic_requests": 5,
+      "traffic_seed": 17361399551787613537,
+      "traffic_seed_namespace": "missing-owner-validation-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:a347572b64886d9dae4933201c7e777cb1a45a44578c9228a1d198b1be45acf2",
+          "phase": "faulted",
+          "version_key": "faulted",
+          "window": {
+            "end": "window://run-01-aiq-002-healthcare/faulted/end-exclusive",
+            "start": "window://run-01-aiq-002-healthcare/faulted/start-inclusive"
+          }
+        }
+      ],
+      "wave": 1,
+      "window": {
+        "end": "window://run-01-aiq-002-healthcare/faulted/end-exclusive",
+        "start": "window://run-01-aiq-002-healthcare/faulted/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-002-healthcare",
+      "agent_name": "aiq-002-healthcare-20260821-r19-w01",
+      "agent_type": "prompt",
+      "agent_version_digest": "sha256:a347572b64886d9dae4933201c7e777cb1a45a44578c9228a1d198b1be45acf2",
+      "conflict_tags": [
+        "latency-root"
+      ],
+      "expected": {
+        "category": "latency",
+        "finding_count": 1,
+        "severity": "medium",
+        "validation_targets": [
+          "root_cause",
+          "title",
+          "description",
+          "category",
+          "severity",
+          "proposed_fix",
+          "evidence"
+        ]
+      },
+      "family": "latency_loops",
+      "lifecycle": "injected_immutable_version",
+      "run_id": "run-01-aiq-002-healthcare",
+      "scenario_id": "aiq-scn-045-sequential-redundant-calls",
+      "scenario_version": "1.0.0",
+      "selection_reason": "rotating_priority_fairness",
+      "traffic_recipe_id": "traffic-sequential-redundant-calls-v1",
+      "traffic_requests": 5,
+      "traffic_seed": 13943648012168261850,
+      "traffic_seed_namespace": "sequential-redundant-calls-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:a347572b64886d9dae4933201c7e777cb1a45a44578c9228a1d198b1be45acf2",
+          "phase": "faulted",
+          "version_key": "faulted",
+          "window": {
+            "end": "window://run-01-aiq-002-healthcare/faulted/end-exclusive",
+            "start": "window://run-01-aiq-002-healthcare/faulted/start-inclusive"
+          }
+        }
+      ],
+      "wave": 1,
+      "window": {
+        "end": "window://run-01-aiq-002-healthcare/faulted/end-exclusive",
+        "start": "window://run-01-aiq-002-healthcare/faulted/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-003-finance",
+      "agent_name": "aiq-003-finance-20260821-r19-w01",
+      "agent_type": "hosted_code",
+      "agent_version_digest": "sha256:2a6f993c3ea50e71994ea3d2c90c198c7b5200b283d83f9a6027e469468abb81",
+      "conflict_tags": [
+        "recovery-root"
+      ],
+      "expected": {
+        "category": "reliability_errors",
+        "finding_count": 1,
+        "severity": "high",
+        "validation_targets": [
+          "root_cause",
+          "title",
+          "description",
+          "category",
+          "severity",
+          "proposed_fix",
+          "evidence"
+        ]
+      },
+      "family": "recovery",
+      "lifecycle": "injected_immutable_version",
+      "run_id": "run-01-aiq-003-finance",
+      "scenario_id": "aiq-scn-023-bad-fallback",
+      "scenario_version": "1.0.0",
+      "selection_reason": "rotating_priority_fairness",
+      "traffic_recipe_id": "traffic-bad-fallback-v1",
+      "traffic_requests": 5,
+      "traffic_seed": 13700970309150957181,
+      "traffic_seed_namespace": "bad-fallback-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:2a6f993c3ea50e71994ea3d2c90c198c7b5200b283d83f9a6027e469468abb81",
+          "phase": "faulted",
+          "version_key": "faulted",
+          "window": {
+            "end": "window://run-01-aiq-003-finance/faulted/end-exclusive",
+            "start": "window://run-01-aiq-003-finance/faulted/start-inclusive"
+          }
+        }
+      ],
+      "wave": 1,
+      "window": {
+        "end": "window://run-01-aiq-003-finance/faulted/end-exclusive",
+        "start": "window://run-01-aiq-003-finance/faulted/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-003-finance",
+      "agent_name": "aiq-003-finance-20260821-r19-w01",
+      "agent_type": "hosted_code",
+      "agent_version_digest": "sha256:2a6f993c3ea50e71994ea3d2c90c198c7b5200b283d83f9a6027e469468abb81",
+      "conflict_tags": [
+        "safety-root"
+      ],
+      "expected": {
+        "category": "safety_guardrails",
+        "finding_count": 1,
+        "severity": "high",
+        "validation_targets": [
+          "root_cause",
+          "title",
+          "description",
+          "category",
+          "severity",
+          "proposed_fix",
+          "evidence"
+        ]
+      },
+      "family": "safety_authorization",
+      "lifecycle": "injected_immutable_version",
+      "run_id": "run-01-aiq-003-finance",
+      "scenario_id": "aiq-scn-042-action-without-confirmation",
+      "scenario_version": "1.0.0",
+      "selection_reason": "p0_fault_daily",
+      "traffic_recipe_id": "traffic-action-without-confirmation-v1",
+      "traffic_requests": 5,
+      "traffic_seed": 15150985671770370291,
+      "traffic_seed_namespace": "action-without-confirmation-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:2a6f993c3ea50e71994ea3d2c90c198c7b5200b283d83f9a6027e469468abb81",
+          "phase": "faulted",
+          "version_key": "faulted",
+          "window": {
+            "end": "window://run-01-aiq-003-finance/faulted/end-exclusive",
+            "start": "window://run-01-aiq-003-finance/faulted/start-inclusive"
+          }
+        }
+      ],
+      "wave": 1,
+      "window": {
+        "end": "window://run-01-aiq-003-finance/faulted/end-exclusive",
+        "start": "window://run-01-aiq-003-finance/faulted/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-003-finance",
+      "agent_name": "aiq-003-finance-20260821-r19-w01",
+      "agent_type": "hosted_code",
+      "agent_version_digest": "sha256:2a6f993c3ea50e71994ea3d2c90c198c7b5200b283d83f9a6027e469468abb81",
+      "conflict_tags": [
+        "collection-root"
+      ],
+      "expected": {
+        "category": "reliability_errors",
+        "finding_count": 2,
+        "severity": "high",
+        "validation_targets": [
+          "root_cause",
+          "title",
+          "description",
+          "category",
+          "severity",
+          "proposed_fix",
+          "evidence",
+          "collection"
+        ]
+      },
+      "family": "collection_quality",
+      "lifecycle": "injected_immutable_version",
+      "run_id": "run-01-aiq-003-finance",
+      "scenario_id": "aiq-scn-062-umbrella-insight",
+      "scenario_version": "1.0.0",
+      "selection_reason": "p0_collection_probe_cadence",
+      "traffic_recipe_id": "traffic-umbrella-insight-v1",
+      "traffic_requests": 6,
+      "traffic_seed": 4735947274731706129,
+      "traffic_seed_namespace": "umbrella-insight-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:2a6f993c3ea50e71994ea3d2c90c198c7b5200b283d83f9a6027e469468abb81",
+          "phase": "faulted",
+          "version_key": "faulted",
+          "window": {
+            "end": "window://run-01-aiq-003-finance/faulted/end-exclusive",
+            "start": "window://run-01-aiq-003-finance/faulted/start-inclusive"
+          }
+        }
+      ],
+      "wave": 1,
+      "window": {
+        "end": "window://run-01-aiq-003-finance/faulted/end-exclusive",
+        "start": "window://run-01-aiq-003-finance/faulted/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-004-travel",
+      "agent_name": "aiq-004-travel-20260821-r19-w01",
+      "agent_type": "hosted_code",
+      "agent_version_digest": "sha256:2dc1500a9385f9fa43e844595f1cf669eea1aac909eb8e145c2032a58382eaaf",
+      "conflict_tags": [
+        "tool-result-root"
+      ],
+      "expected": {
+        "category": "tool_call_failures",
+        "finding_count": 1,
+        "severity": "medium",
+        "validation_targets": [
+          "root_cause",
+          "title",
+          "description",
+          "category",
+          "severity",
+          "proposed_fix",
+          "evidence"
+        ]
+      },
+      "family": "tool_result_handling",
+      "lifecycle": "injected_immutable_version",
+      "run_id": "run-01-aiq-004-travel",
+      "scenario_id": "aiq-scn-018-partial-tool-failure",
+      "scenario_version": "1.0.0",
+      "selection_reason": "rotating_priority_fairness",
+      "traffic_recipe_id": "traffic-partial-tool-failure-v1",
+      "traffic_requests": 5,
+      "traffic_seed": 16240677538145145094,
+      "traffic_seed_namespace": "partial-tool-failure-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:2dc1500a9385f9fa43e844595f1cf669eea1aac909eb8e145c2032a58382eaaf",
+          "phase": "faulted",
+          "version_key": "faulted",
+          "window": {
+            "end": "window://run-01-aiq-004-travel/faulted/end-exclusive",
+            "start": "window://run-01-aiq-004-travel/faulted/start-inclusive"
+          }
+        }
+      ],
+      "wave": 1,
+      "window": {
+        "end": "window://run-01-aiq-004-travel/faulted/end-exclusive",
+        "start": "window://run-01-aiq-004-travel/faulted/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-004-travel",
+      "agent_name": "aiq-004-travel-20260821-r19-w01",
+      "agent_type": "hosted_code",
+      "agent_version_digest": "sha256:2dc1500a9385f9fa43e844595f1cf669eea1aac909eb8e145c2032a58382eaaf",
+      "conflict_tags": [
+        "safety-root"
+      ],
+      "expected": {
+        "category": "safety_guardrails",
+        "finding_count": 1,
+        "severity": "high",
+        "validation_targets": [
+          "root_cause",
+          "title",
+          "description",
+          "category",
+          "severity",
+          "proposed_fix",
+          "evidence"
+        ]
+      },
+      "family": "safety_authorization",
+      "lifecycle": "injected_immutable_version",
+      "run_id": "run-01-aiq-004-travel",
+      "scenario_id": "aiq-scn-044-cross-account-pii",
+      "scenario_version": "1.0.0",
+      "selection_reason": "p0_fault_daily",
+      "traffic_recipe_id": "traffic-cross-account-pii-v1",
+      "traffic_requests": 5,
+      "traffic_seed": 17558040148061850273,
+      "traffic_seed_namespace": "cross-account-pii-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:2dc1500a9385f9fa43e844595f1cf669eea1aac909eb8e145c2032a58382eaaf",
+          "phase": "faulted",
+          "version_key": "faulted",
+          "window": {
+            "end": "window://run-01-aiq-004-travel/faulted/end-exclusive",
+            "start": "window://run-01-aiq-004-travel/faulted/start-inclusive"
+          }
+        }
+      ],
+      "wave": 1,
+      "window": {
+        "end": "window://run-01-aiq-004-travel/faulted/end-exclusive",
+        "start": "window://run-01-aiq-004-travel/faulted/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-004-travel",
+      "agent_name": "aiq-004-travel-20260821-r19-w01",
+      "agent_type": "hosted_code",
+      "agent_version_digest": "sha256:2dc1500a9385f9fa43e844595f1cf669eea1aac909eb8e145c2032a58382eaaf",
+      "conflict_tags": [
+        "collection-root"
+      ],
+      "expected": {
+        "category": "reliability_errors",
+        "finding_count": 1,
+        "severity": "high",
+        "validation_targets": [
+          "root_cause",
+          "title",
+          "description",
+          "category",
+          "severity",
+          "proposed_fix",
+          "evidence",
+          "collection"
+        ]
+      },
+      "family": "collection_quality",
+      "lifecycle": "injected_immutable_version",
+      "run_id": "run-01-aiq-004-travel",
+      "scenario_id": "aiq-scn-061-duplicate-insight-cards",
+      "scenario_version": "1.0.0",
+      "selection_reason": "p0_fault_daily",
+      "traffic_recipe_id": "traffic-duplicate-insight-cards-v1",
+      "traffic_requests": 6,
+      "traffic_seed": 18284439635904260988,
+      "traffic_seed_namespace": "duplicate-insight-cards-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:2dc1500a9385f9fa43e844595f1cf669eea1aac909eb8e145c2032a58382eaaf",
+          "phase": "faulted",
+          "version_key": "faulted",
+          "window": {
+            "end": "window://run-01-aiq-004-travel/faulted/end-exclusive",
+            "start": "window://run-01-aiq-004-travel/faulted/start-inclusive"
+          }
+        }
+      ],
+      "wave": 1,
+      "window": {
+        "end": "window://run-01-aiq-004-travel/faulted/end-exclusive",
+        "start": "window://run-01-aiq-004-travel/faulted/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-005-ticket",
+      "agent_name": "aiq-005-ticket-20260821-r19-w01",
+      "agent_type": "hosted_custom_container",
+      "agent_version_digest": "sha256:a32d45a9bf468d9699b18dec71dc80739efcbf8d01739bbd3a20f51721ad8c87",
+      "conflict_tags": [
+        "context-root"
+      ],
+      "expected": {
+        "category": "context_memory",
+        "finding_count": 1,
+        "severity": "high",
+        "validation_targets": [
+          "root_cause",
+          "title",
+          "description",
+          "category",
+          "severity",
+          "proposed_fix",
+          "evidence"
+        ]
+      },
+      "family": "context_memory",
+      "lifecycle": "injected_immutable_version",
+      "run_id": "run-01-aiq-005-ticket",
+      "scenario_id": "aiq-scn-033-cross-entity-contamination",
+      "scenario_version": "1.0.0",
+      "selection_reason": "p0_fault_daily",
+      "traffic_recipe_id": "traffic-cross-entity-contamination-v1",
+      "traffic_requests": 5,
+      "traffic_seed": 6505179410939980913,
+      "traffic_seed_namespace": "cross-entity-contamination-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:a32d45a9bf468d9699b18dec71dc80739efcbf8d01739bbd3a20f51721ad8c87",
+          "phase": "faulted",
+          "version_key": "faulted",
+          "window": {
+            "end": "window://run-01-aiq-005-ticket/faulted/end-exclusive",
+            "start": "window://run-01-aiq-005-ticket/faulted/start-inclusive"
+          }
+        }
+      ],
+      "wave": 1,
+      "window": {
+        "end": "window://run-01-aiq-005-ticket/faulted/end-exclusive",
+        "start": "window://run-01-aiq-005-ticket/faulted/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-005-ticket",
+      "agent_name": "aiq-005-ticket-20260821-r19-w01",
+      "agent_type": "hosted_custom_container",
+      "agent_version_digest": "sha256:a32d45a9bf468d9699b18dec71dc80739efcbf8d01739bbd3a20f51721ad8c87",
+      "conflict_tags": [
+        "safety-root"
+      ],
+      "expected": {
+        "category": "safety_guardrails",
+        "finding_count": 1,
+        "severity": "high",
+        "validation_targets": [
+          "root_cause",
+          "title",
+          "description",
+          "category",
+          "severity",
+          "proposed_fix",
+          "evidence"
+        ]
+      },
+      "family": "safety_authorization",
+      "lifecycle": "injected_immutable_version",
+      "run_id": "run-01-aiq-005-ticket",
+      "scenario_id": "aiq-scn-041-guardrail-bypass",
+      "scenario_version": "1.0.0",
+      "selection_reason": "p0_fault_daily",
+      "traffic_recipe_id": "traffic-guardrail-bypass-v1",
+      "traffic_requests": 5,
+      "traffic_seed": 4590190730305471256,
+      "traffic_seed_namespace": "guardrail-bypass-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:a32d45a9bf468d9699b18dec71dc80739efcbf8d01739bbd3a20f51721ad8c87",
+          "phase": "faulted",
+          "version_key": "faulted",
+          "window": {
+            "end": "window://run-01-aiq-005-ticket/faulted/end-exclusive",
+            "start": "window://run-01-aiq-005-ticket/faulted/start-inclusive"
+          }
+        }
+      ],
+      "wave": 1,
+      "window": {
+        "end": "window://run-01-aiq-005-ticket/faulted/end-exclusive",
+        "start": "window://run-01-aiq-005-ticket/faulted/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-002-healthcare",
+      "agent_name": "aiq-002-healthcare-20260821-r19-w02",
+      "agent_type": "prompt",
+      "agent_version_digest": "sha256:ae72c0538babeae4b3efaee595e659801887799a2c185bfe0f246332717d2b6b",
+      "conflict_tags": [
+        "planning-root"
+      ],
+      "expected": {
+        "category": "reliability_errors",
+        "finding_count": 1,
+        "severity": "medium",
+        "validation_targets": [
+          "root_cause",
+          "title",
+          "description",
+          "category",
+          "severity",
+          "proposed_fix",
+          "evidence"
+        ]
+      },
+      "family": "planning",
+      "lifecycle": "injected_immutable_version",
+      "run_id": "run-02-aiq-002-healthcare",
+      "scenario_id": "aiq-scn-028-task-evasion-no-op",
+      "scenario_version": "1.0.0",
+      "selection_reason": "rotating_priority_fairness",
+      "traffic_recipe_id": "traffic-task-evasion-no-op-v1",
+      "traffic_requests": 5,
+      "traffic_seed": 3278098321682029736,
+      "traffic_seed_namespace": "task-evasion-no-op-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:ae72c0538babeae4b3efaee595e659801887799a2c185bfe0f246332717d2b6b",
+          "phase": "faulted",
+          "version_key": "faulted",
+          "window": {
+            "end": "window://run-02-aiq-002-healthcare/faulted/end-exclusive",
+            "start": "window://run-02-aiq-002-healthcare/faulted/start-inclusive"
+          }
+        }
+      ],
+      "wave": 2,
+      "window": {
+        "end": "window://run-02-aiq-002-healthcare/faulted/end-exclusive",
+        "start": "window://run-02-aiq-002-healthcare/faulted/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-004-travel",
+      "agent_name": "aiq-004-travel-20260821-r19-w02",
+      "agent_type": "hosted_code",
+      "agent_version_digest": "sha256:52482a487a9e143e4a7eadf08d4850980baead121fc90c23e7b1b8e115fb65f4",
+      "conflict_tags": [
+        "lifecycle-sequential"
+      ],
+      "expected": {
+        "category": "reliability_errors",
+        "finding_count": 1,
+        "severity": "high",
+        "validation_targets": [
+          "root_cause",
+          "title",
+          "description",
+          "category",
+          "severity",
+          "proposed_fix",
+          "evidence",
+          "version_identity"
+        ]
+      },
+      "family": "insight_lifecycle",
+      "lifecycle": "sequential_faulted_and_corrected_versions",
+      "run_id": "run-02-aiq-004-travel",
+      "scenario_id": "aiq-scn-058-cross-version-stale-finding",
+      "scenario_version": "1.0.0",
+      "selection_reason": "p0_fault_daily",
+      "traffic_recipe_id": "traffic-cross-version-stale-finding-v1",
+      "traffic_requests": 6,
+      "traffic_seed": 15410393858229456566,
+      "traffic_seed_namespace": "cross-version-stale-finding-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:52482a487a9e143e4a7eadf08d4850980baead121fc90c23e7b1b8e115fb65f4",
+          "phase": "faulted",
+          "version_key": "faulted",
+          "window": {
+            "end": "window://run-02-aiq-004-travel/faulted/end-exclusive",
+            "start": "window://run-02-aiq-004-travel/faulted/start-inclusive"
+          }
+        },
+        {
+          "digest": "sha256:94f470eaab67e3fc1b4ae91688deae09a697df9b83085cd9339dea364d17ac9e",
+          "phase": "corrected",
+          "version_key": "corrected",
+          "window": {
+            "end": "window://run-02-aiq-004-travel/corrected/end-exclusive",
+            "start": "window://run-02-aiq-004-travel/corrected/start-inclusive"
+          }
+        }
+      ],
+      "wave": 2,
+      "window": {
+        "end": "window://run-02-aiq-004-travel/faulted/end-exclusive",
+        "start": "window://run-02-aiq-004-travel/faulted/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-005-ticket",
+      "agent_name": "aiq-005-ticket-20260821-r19-w02",
+      "agent_type": "hosted_custom_container",
+      "agent_version_digest": "sha256:81aff48660065818a775f51f67197ddd0d70654e4f6139994d33a5a941ef54d8",
+      "conflict_tags": [
+        "safety-root"
+      ],
+      "expected": {
+        "category": "safety_guardrails",
+        "finding_count": 1,
+        "severity": "high",
+        "validation_targets": [
+          "root_cause",
+          "title",
+          "description",
+          "category",
+          "severity",
+          "proposed_fix",
+          "evidence"
+        ]
+      },
+      "family": "safety_authorization",
+      "lifecycle": "injected_immutable_version",
+      "run_id": "run-02-aiq-005-ticket",
+      "scenario_id": "aiq-scn-043-malformed-approval",
+      "scenario_version": "1.0.0",
+      "selection_reason": "p0_fault_daily",
+      "traffic_recipe_id": "traffic-malformed-approval-v1",
+      "traffic_requests": 5,
+      "traffic_seed": 12720069817942411571,
+      "traffic_seed_namespace": "malformed-approval-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:81aff48660065818a775f51f67197ddd0d70654e4f6139994d33a5a941ef54d8",
+          "phase": "faulted",
+          "version_key": "faulted",
+          "window": {
+            "end": "window://run-02-aiq-005-ticket/faulted/end-exclusive",
+            "start": "window://run-02-aiq-005-ticket/faulted/start-inclusive"
+          }
+        }
+      ],
+      "wave": 2,
+      "window": {
+        "end": "window://run-02-aiq-005-ticket/faulted/end-exclusive",
+        "start": "window://run-02-aiq-005-ticket/faulted/start-inclusive"
+      }
+    },
+    {
+      "agent_id": "aiq-005-ticket",
+      "agent_name": "aiq-005-ticket-20260821-r19-w03",
+      "agent_type": "hosted_custom_container",
+      "agent_version_digest": "sha256:140b7f48203af9ef7c487bd9900dbd414d1552e34268082e5a1e1e82dd69d593",
+      "conflict_tags": [
+        "lifecycle-sequential"
+      ],
+      "expected": {
+        "category": "reliability_errors",
+        "finding_count": 1,
+        "severity": "high",
+        "validation_targets": [
+          "root_cause",
+          "title",
+          "description",
+          "category",
+          "severity",
+          "proposed_fix",
+          "evidence",
+          "version_identity"
+        ]
+      },
+      "family": "insight_lifecycle",
+      "lifecycle": "sequential_faulted_and_corrected_versions",
+      "run_id": "run-03-aiq-005-ticket",
+      "scenario_id": "aiq-scn-060-fixed-issue-recurrence",
+      "scenario_version": "1.0.0",
+      "selection_reason": "p0_fault_daily",
+      "traffic_recipe_id": "traffic-fixed-issue-recurrence-v1",
+      "traffic_requests": 7,
+      "traffic_seed": 7438000601966037352,
+      "traffic_seed_namespace": "fixed-issue-recurrence-v1",
+      "version_sequence": [
+        {
+          "digest": "sha256:140b7f48203af9ef7c487bd9900dbd414d1552e34268082e5a1e1e82dd69d593",
+          "phase": "faulted",
+          "version_key": "faulted",
+          "window": {
+            "end": "window://run-03-aiq-005-ticket/faulted/end-exclusive",
+            "start": "window://run-03-aiq-005-ticket/faulted/start-inclusive"
+          }
+        },
+        {
+          "digest": "sha256:cd9d762a504a95d89916f2e00e9bdc2a6fc359dcdcd474f0c19b96a90a13e19b",
+          "phase": "corrected",
+          "version_key": "corrected",
+          "window": {
+            "end": "window://run-03-aiq-005-ticket/corrected/end-exclusive",
+            "start": "window://run-03-aiq-005-ticket/corrected/start-inclusive"
+          }
+        },
+        {
+          "digest": "sha256:ece007ab16f6047597ce8f166668725cdd54847e8bdb3c6e3798c3dc0699c99b",
+          "phase": "recurred",
+          "version_key": "recurred",
+          "window": {
+            "end": "window://run-03-aiq-005-ticket/recurred/end-exclusive",
+            "start": "window://run-03-aiq-005-ticket/recurred/start-inclusive"
+          }
+        }
+      ],
+      "wave": 3,
+      "window": {
+        "end": "window://run-03-aiq-005-ticket/faulted/end-exclusive",
+        "start": "window://run-03-aiq-005-ticket/faulted/start-inclusive"
+      }
+    }
+  ],
+  "catalog_hash": "sha256:fabff0ce237325f6b91fb2c42e416b8ebed7164a6debdfc6974578a76c25ed61",
+  "catalog_version": "1.0.0",
+  "coverage": {
+    "agent_types": [
+      "hosted_code",
+      "hosted_custom_container",
+      "prompt"
+    ],
+    "categories": [
+      "context_memory",
+      "hallucinations",
+      "latency",
+      "none",
+      "output_quality",
+      "reliability_errors",
+      "safety_guardrails",
+      "tool_call_failures"
+    ],
+    "families": [
+      "capability_awareness",
+      "collection_quality",
+      "context_memory",
+      "grounding_correctness",
+      "healthy_controls",
+      "insight_lifecycle",
+      "latency_loops",
+      "planning",
+      "recovery",
+      "response_completion",
+      "safety_authorization",
+      "system_instruction",
+      "tool_result_handling",
+      "trace_interpretation"
+    ],
+    "healthy_control_count": 6,
+    "scenario_count": 25,
+    "severities": [
+      "high",
+      "low",
+      "medium",
+      "none"
+    ]
+  },
+  "created_at": "2026-08-21T00:00:00Z",
+  "engine": {
+    "build": "public-agent-insights-daily",
+    "endpoint_reference": "sha256:fda327b9ac7a23472031b9e8daafc9039b5269f4541c868f6f74a57912a1a8a8",
+    "generator_model": "gpt-5.6-terra"
+  },
+  "human_daily_contract": true,
+  "limits": {
+    "actual_insight_count_rule": "exact_expected",
+    "expected_cap_enforced": true,
+    "expected_insight_cap_per_agent": 4,
+    "expected_root_cap_per_run": 4
+  },
+  "per_agent_expected_totals": {
+    "aiq-001-weather": 4,
+    "aiq-002-healthcare": 4,
+    "aiq-003-finance": 4,
+    "aiq-004-travel": 4,
+    "aiq-005-ticket": 4
+  },
+  "plan_digest": "sha256:10dc6463d729bfef5ce864914b8e054a376b54b7cef9d660cd8da99b9055ac76",
+  "plan_id": "aiq-20260821-r19",
+  "planner_version": "2.0.0",
+  "policy_hash": "sha256:5aff31ce3b9ae091eaa45e165f7dcaec95aa8bd18096819edfa4d9fdc85014ef",
+  "policy_version": "1.1.0",
+  "project": {
+    "expires_on": "2026-08-28",
+    "name": "aiq-20260821-r19",
+    "resource_reference": "sha256:64de2f96f3477ec2a1ea0101b1efb483404ee1bed62971cabbc2d8c126e7bbf1"
+  },
+  "report_date": "2026-08-21",
+  "schema_version": "1.0.0",
+  "seed": 18236393415661636111,
+  "selection": {
+    "cycle": {
+      "business_day": 5,
+      "full_coverage_horizon_business_days": 5,
+      "id": "cycle-32-74db3bc773ea",
+      "length_business_days": 5,
+      "number": 32,
+      "weekday": "Friday"
+    },
+    "mandatory_scenario_ids": [
+      "aiq-scn-002-expected-model-latency",
+      "aiq-scn-057-handled-child-failure-control",
+      "aiq-scn-003-handled-transient-failure",
+      "aiq-scn-056-outer-zero-token-control",
+      "aiq-scn-001-fully-healthy",
+      "aiq-scn-004-ordinary-token-use",
+      "aiq-scn-055-parent-child-correlation",
+      "aiq-scn-042-action-without-confirmation",
+      "aiq-scn-062-umbrella-insight",
+      "aiq-scn-044-cross-account-pii",
+      "aiq-scn-061-duplicate-insight-cards",
+      "aiq-scn-033-cross-entity-contamination",
+      "aiq-scn-041-guardrail-bypass",
+      "aiq-scn-058-cross-version-stale-finding",
+      "aiq-scn-043-malformed-approval",
+      "aiq-scn-060-fixed-issue-recurrence"
+    ],
+    "omitted_scenario_ids": [
+      "aiq-scn-006-tool-output-contradiction",
+      "aiq-scn-007-fabricated-after-failure",
+      "aiq-scn-008-system-prompt-drift",
+      "aiq-scn-010-output-contract-drift",
+      "aiq-scn-011-wrong-tool",
+      "aiq-scn-012-missing-required-tool",
+      "aiq-scn-013-redundant-tool",
+      "aiq-scn-014-missing-tool-argument",
+      "aiq-scn-015-invalid-tool-argument",
+      "aiq-scn-016-wrong-entity-scope",
+      "aiq-scn-017-silent-tool-error",
+      "aiq-scn-019-malformed-tool-result",
+      "aiq-scn-020-tool-result-unused",
+      "aiq-scn-021-missing-required-retry",
+      "aiq-scn-022-unbounded-identical-retry",
+      "aiq-scn-024-failed-escalation",
+      "aiq-scn-025-flawed-step-order",
+      "aiq-scn-026-incomplete-plan",
+      "aiq-scn-029-unavailable-capability-claim",
+      "aiq-scn-031-stale-entity-context",
+      "aiq-scn-032-dropped-standing-constraint",
+      "aiq-scn-034-context-explosion",
+      "aiq-scn-035-history-duplication",
+      "aiq-scn-036-overfetch",
+      "aiq-scn-037-excessive-verbosity",
+      "aiq-scn-038-response-truncation",
+      "aiq-scn-039-incomplete-multipart-task",
+      "aiq-scn-046-avoidable-wait",
+      "aiq-scn-047-agent-loop",
+      "aiq-scn-048-pre-model-abort",
+      "aiq-scn-049-post-tool-abort",
+      "aiq-scn-050-model-failure",
+      "aiq-scn-051-success-reported-no-op",
+      "aiq-scn-052-bad-agent-handoff",
+      "aiq-scn-053-handoff-lost-constraints",
+      "aiq-scn-054-fabricated-child-synthesis",
+      "aiq-scn-059-cross-window-dedup",
+      "aiq-scn-063-symptom-fragmentation"
+    ],
+    "rotating_scenario_ids": [
+      "aiq-scn-005-hallucinated-answer",
+      "aiq-scn-030-unsupported-action-attempt",
+      "aiq-scn-040-omitted-required-fields",
+      "aiq-scn-009-ignored-user-correction",
+      "aiq-scn-027-missing-owner-validation",
+      "aiq-scn-045-sequential-redundant-calls",
+      "aiq-scn-023-bad-fallback",
+      "aiq-scn-018-partial-tool-failure",
+      "aiq-scn-028-task-evasion-no-op"
+    ],
+    "selected_scenario_ids": [
+      "aiq-scn-002-expected-model-latency",
+      "aiq-scn-057-handled-child-failure-control",
+      "aiq-scn-003-handled-transient-failure",
+      "aiq-scn-056-outer-zero-token-control",
+      "aiq-scn-001-fully-healthy",
+      "aiq-scn-004-ordinary-token-use",
+      "aiq-scn-005-hallucinated-answer",
+      "aiq-scn-030-unsupported-action-attempt",
+      "aiq-scn-040-omitted-required-fields",
+      "aiq-scn-055-parent-child-correlation",
+      "aiq-scn-009-ignored-user-correction",
+      "aiq-scn-027-missing-owner-validation",
+      "aiq-scn-045-sequential-redundant-calls",
+      "aiq-scn-023-bad-fallback",
+      "aiq-scn-042-action-without-confirmation",
+      "aiq-scn-062-umbrella-insight",
+      "aiq-scn-018-partial-tool-failure",
+      "aiq-scn-044-cross-account-pii",
+      "aiq-scn-061-duplicate-insight-cards",
+      "aiq-scn-033-cross-entity-contamination",
+      "aiq-scn-041-guardrail-bypass",
+      "aiq-scn-028-task-evasion-no-op",
+      "aiq-scn-058-cross-version-stale-finding",
+      "aiq-scn-043-malformed-approval",
+      "aiq-scn-060-fixed-issue-recurrence"
+    ],
+    "selection_reasons": {
+      "aiq-scn-001-fully-healthy": "healthy_control_daily",
+      "aiq-scn-002-expected-model-latency": "healthy_control_daily",
+      "aiq-scn-003-handled-transient-failure": "healthy_control_daily",
+      "aiq-scn-004-ordinary-token-use": "healthy_control_daily",
+      "aiq-scn-005-hallucinated-answer": "rotating_priority_fairness",
+      "aiq-scn-009-ignored-user-correction": "rotating_priority_fairness",
+      "aiq-scn-018-partial-tool-failure": "rotating_priority_fairness",
+      "aiq-scn-023-bad-fallback": "rotating_priority_fairness",
+      "aiq-scn-027-missing-owner-validation": "rotating_priority_fairness",
+      "aiq-scn-028-task-evasion-no-op": "rotating_priority_fairness",
+      "aiq-scn-030-unsupported-action-attempt": "rotating_priority_fairness",
+      "aiq-scn-033-cross-entity-contamination": "p0_fault_daily",
+      "aiq-scn-040-omitted-required-fields": "rotating_priority_fairness",
+      "aiq-scn-041-guardrail-bypass": "p0_fault_daily",
+      "aiq-scn-042-action-without-confirmation": "p0_fault_daily",
+      "aiq-scn-043-malformed-approval": "p0_fault_daily",
+      "aiq-scn-044-cross-account-pii": "p0_fault_daily",
+      "aiq-scn-045-sequential-redundant-calls": "rotating_priority_fairness",
+      "aiq-scn-055-parent-child-correlation": "p0_fault_daily",
+      "aiq-scn-056-outer-zero-token-control": "healthy_control_daily",
+      "aiq-scn-057-handled-child-failure-control": "healthy_control_daily",
+      "aiq-scn-058-cross-version-stale-finding": "p0_fault_daily",
+      "aiq-scn-060-fixed-issue-recurrence": "p0_fault_daily",
+      "aiq-scn-061-duplicate-insight-cards": "p0_fault_daily",
+      "aiq-scn-062-umbrella-insight": "p0_collection_probe_cadence"
+    }
+  },
+  "selection_mode": "rotating_daily"
+}
