@@ -307,11 +307,11 @@ standalone-tab flight is on and `/monitor/insights` when it is off. Trace links 
    content utility as fully correct, partially useful, or incorrect/noisy without using lifecycle or
    duplicate/fragment/umbrella relationships; retain those as separate gates. Use the fluid 1160px Outlook-safe inline-style
    layout, but do not present the retained trend artifact. Sort the compact agent table by name and
-   limit it to Test agent, Type, Agent, Report, Recommended human validation, and Assigned to.
+   limit it to Test agent, Type, Agent, Report, and Recommended human validation. Do not expose
+   assignment information in email.
    Normalize `hosted_custom_container` to `container`. The Agent cell contains the private Open agent
-   CTA; each Report cell says View report and targets that agent's public Markdown. Use the reviewed
-   owner mapping 001 Han, 002 Ilya, 003 Sean, 004 Billy, 005 Han, then append GitHub Copilot / coding
-   with N/A links/owner and Yes validation. Each
+   CTA; each Report cell says View report and targets that agent's public Markdown. Append GitHub
+   Copilot / coding with N/A links and Yes validation. Each
    private CTA says Open agent and targets exactly
    `/build/agents/{agent_name}/build?tid={tenant_id}`, never a bare agent path or Insights deep link.
    Summary contains one inline Foundry project link ending `/home?tid={tenant_id}` and no second

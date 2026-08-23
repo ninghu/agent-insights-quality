@@ -384,7 +384,7 @@ def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> No
     assert "Fully correct (content utility)" in body
     assert "Partially useful (content utility)" in body
     assert "Incorrect/noisy insights" in body
-    assert "Exact duplicates" in body
+    assert "Exact duplicates" not in body
     assert ">Capability</th>" in body
     assert ">Evidence</th>" in body
     assert ">Product gap</th>" in body
@@ -393,7 +393,7 @@ def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> No
     assert ">Agent</th>" in body
     assert ">Report</th>" in body
     assert ">Recommended human validation</th>" in body
-    assert ">Assigned to</th>" in body
+    assert ">Assigned to</th>" not in body
     assert ">Test agent</th>" in body
     assert ">Type</th>" in body
     assert "Open agent</a>" in body
@@ -404,29 +404,20 @@ def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> No
     assert "What to double-check" not in body
     assert "14-day quality trend" not in body
     assert "Trusted insight trend" not in body
-    for agent_id, assignee in (
-        ("aiq-001-agent", "Han"),
-        ("aiq-002-agent", "Ilya"),
-        ("aiq-003-agent", "Sean"),
-        ("aiq-004-agent", "Billy"),
-        ("aiq-005-agent", "Han"),
+    for agent_id in (
+        "aiq-001-agent",
+        "aiq-002-agent",
+        "aiq-003-agent",
+        "aiq-004-agent",
+        "aiq-005-agent",
     ):
         assert f"agents/{agent_id}.md" in body
-        agent_name = next(
-            agent["name"] for agent in value["agents"] if agent["id"] == agent_id
-        )
-        row = re.search(
-            rf"<strong>{re.escape(agent_name)}</strong>.*?</tr>",
-            body,
-            flags=re.DOTALL,
-        ).group()
-        assert f">{assignee}</td>" in row
     assert "hosted_custom_container" not in body
     assert ">container</td>" in body
     copilot_row = body[body.index("<strong>GitHub Copilot</strong>") :]
     copilot_row = copilot_row[: copilot_row.index("</tr>")]
     assert ">coding</td>" in copilot_row
-    assert copilot_row.count(">N/A</td>") == 3
+    assert copilot_row.count(">N/A</td>") == 2
     assert ">Yes</td>" in copilot_row
     assert body.index("<strong>GitHub Copilot</strong>") > max(
         body.index(f"<strong>{agent['name']}</strong>")
@@ -434,14 +425,16 @@ def test_email_has_exactly_four_sections_every_agent_and_escaped_content() -> No
     )
     assert ">Data source</th>" not in body
     assert ">Resolved value</th>" not in body
-    assert "account / aiq-20260821" in body
-    assert "Foundry source:" in body
+    assert "Foundry Project:" in body
+    assert "account / aiq-20260821" not in body
+    assert ">aiq-20260821</a>" in body
     assert (
         "https://ai.azure.com/nextgen/r/sub,rg,,account,aiq-20260821/"
         "home?tid=00000000-0000-0000-0000-000000000001"
     ) in body
     summary = body[body.index(">Summary</h2>") : body.index(">What is working</h2>")]
     assert summary.count("<table cellpadding=") == 1
+    assert "Data source: canonical report" not in summary
     assert "No product-quality gap observed" in body
     assert 'bgcolor="#f3f6fa"' in body
     assert 'bgcolor="#12304a"' in body
@@ -596,7 +589,7 @@ def test_email_doing_well_names_semantic_coverage_and_collection_integrity() -> 
     assert "Finding content" in body
     assert "All 1 fully correct findings passed required title" in body
     assert "Finding separation" in body
-    assert "0 duplicate, fragment, umbrella, or stale-version relationships" in body
+    assert "0 fragment, umbrella, or stale-version relationships" in body
     assert body.count("<h2 ") == 4
 
     value["field_judgments"] = []
@@ -928,12 +921,12 @@ def test_real_r19_copy_distinguishes_strict_matches_from_useful_signal() -> None
         r">Incorrect/noisy insights</td><td[^>]*>16/21</td>",
         body,
     )
-    assert re.search(r">Exact duplicates</td><td[^>]*>0</td>", body)
+    assert "Exact duplicates" not in body
     assert (
         "The overall score measures strict expected-issue success only." in body
     )
     assert (
-        "independent guardrail metrics and do not change the 0-100 score" in body
+        "independent guardrail metric and do not change the 0-100 score" in body
     )
     assert "NOT AT BAR" not in body
     assert "- Canonical audit verdict: `NOT AT BAR`" in markdown
@@ -1221,7 +1214,7 @@ def test_email_status_variants_have_outlook_safe_semantic_colors(
         assert "Treat both generated findings and missing findings as untrusted" in body
         assert "Overall insight quality score</td>" in body
         assert "Incorrect/noisy insights</td>" in body
-        assert "Exact duplicates</td>" in body
+        assert "Exact duplicates</td>" not in body
         assert "Useful diagnostic signal" not in body
         assert "No product-quality gap observed" not in body
         assert "Synthetic &lt;evidence&gt; was incomplete." in body
@@ -1257,7 +1250,7 @@ def test_summary_uses_consistent_outlook_safe_typography() -> None:
     summary = body[
         body.index(">Summary</h2>") : body.index(">What is working</h2>")
     ]
-    assert summary.count(style) >= 13
+    assert summary.count(style) >= 12
     assert "font-size:15px" not in summary
     assert "font-size:12px" not in summary
 

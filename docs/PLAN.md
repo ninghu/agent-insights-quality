@@ -780,8 +780,8 @@ rendered Markdown is committed; the source evidence and sidecar remain private.
 
 Include one compact table with every test agent, sorted by test-agent name:
 
-| Test agent | Type | Agent | Report | Recommended human validation | Assigned to |
-| --- | --- | --- | --- | --- | --- |
+| Test agent | Type | Agent | Report | Recommended human validation |
+| --- | --- | --- | --- | --- |
 
 The agent page is the runtime-resolved direct link ending at
 `/build/agents/{agent_name}/build?tid={tenant_id}` for the current date-stamped project and agent.
@@ -791,12 +791,11 @@ email; public committed reports retain an
 opaque reference. The recommendation column is exactly `Yes` or `No`, derived from actual result,
 field, relationship, verifier, fix-verifiability, and manual-review evidence. Each row says
 `View report` and links to that agent's public-safe Markdown report for actual generated insights,
-injected issues, expected insights, immutable versions, and guidance. The assigned owners are the
-reviewed stable 001-005 mapping; do not duplicate per-agent detail in email.
+injected issues, expected insights, immutable versions, and guidance. Do not duplicate per-agent
+detail or assignment information in email.
 
 Display `hosted_custom_container` as `container`. Append one final `GitHub Copilot` / `coding`
-row with `N/A` for Agent, Report, and Assigned to, and `Yes` for human validation. Display owners
-exactly as: 001 Han, 002 Ilya, 003 Sean, 004 Billy, 005 Han.
+row with `N/A` for Agent and Report, and `Yes` for human validation.
 
 Subject format:
 

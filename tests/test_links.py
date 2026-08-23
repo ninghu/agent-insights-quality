@@ -15,7 +15,7 @@ from agent_insights_quality.links import (
 
 
 CONTEXT = RuntimeLinkContext(
-    subscription="runtime-sub",
+    subscription="00000000-0000-0000-0000-000000000001",
     resource_group="runtime-rg",
     account="runtime-account",
     project="aiq-20260820",
@@ -26,7 +26,7 @@ CONTEXT = RuntimeLinkContext(
 def test_agent_insights_link_contract() -> None:
     prefix = (
         "https://ai.azure.com/nextgen/r/"
-        "runtime-sub,runtime-rg,,runtime-account,aiq-20260820/"
+        "AAAAAAAAAAAAAAAAAAAAAQ,runtime-rg,,runtime-account,aiq-20260820/"
         "build/agents/aiq-001-weather-v1"
     )
     assert agent_insights_url(
@@ -47,7 +47,7 @@ def test_agent_insights_link_contract() -> None:
         CONTEXT,
     ) == (
         "https://ai.azure.com/nextgen/r/"
-        "runtime-sub,runtime-rg,,runtime-account,aiq-20260820/"
+        "AAAAAAAAAAAAAAAAAAAAAQ,runtime-rg,,runtime-account,aiq-20260820/"
         f"home?tid={CONTEXT.tenant_id}"
     )
 
@@ -89,6 +89,43 @@ def test_agent_insights_link_must_match_authorized_runtime_context() -> None:
         validate_agent_insights_url(
             value, wrong_project, "aiq-001-weather-v1"
         )
+
+
+def test_subscription_route_token_preserves_already_encoded_value() -> None:
+    encoded = RuntimeLinkContext(
+        subscription="AAAAAAAAAAAAAAAAAAAAAQ",
+        resource_group=CONTEXT.resource_group,
+        account=CONTEXT.account,
+        project=CONTEXT.project,
+        tenant_id=CONTEXT.tenant_id,
+    )
+    assert encoded.resource_route() == CONTEXT.resource_route()
+
+
+def test_project_and_agent_urls_use_encoded_subscription() -> None:
+    context = RuntimeLinkContext(
+        subscription="00000000-0000-0000-0000-000000000001",
+        resource_group="synthetic-rg",
+        account="synthetic-account",
+        project="aiq-20260821",
+        tenant_id="00000000-0000-0000-0000-000000000002",
+    )
+    assert project_page_url(context) == (
+        "https://ai.azure.com/nextgen/r/"
+        "AAAAAAAAAAAAAAAAAAAAAQ,synthetic-rg,,"
+        "synthetic-account,aiq-20260821/home?"
+        "tid=00000000-0000-0000-0000-000000000002"
+    )
+    assert agent_page_url(
+        context,
+        "aiq-001-weather-v1",
+    ) == (
+        "https://ai.azure.com/nextgen/r/"
+        "AAAAAAAAAAAAAAAAAAAAAQ,synthetic-rg,,"
+        "synthetic-account,aiq-20260821/build/agents/"
+        "aiq-001-weather-v1/build?"
+        "tid=00000000-0000-0000-0000-000000000002"
+    )
 
 
 def test_agent_page_link_rejects_insights_deep_links() -> None:

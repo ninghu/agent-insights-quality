@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import re
+from base64 import urlsafe_b64encode
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qs, quote, urlencode, urlparse
+from uuid import UUID
 
 from agent_insights_quality.contracts import ContractError
 
@@ -16,6 +18,17 @@ _TENANT_ID = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
+
+
+def _subscription_route_token(value: str) -> str:
+    try:
+        return urlsafe_b64encode(UUID(value).bytes).decode("ascii").rstrip("=")
+    except ValueError:
+        if not _CONTEXT_COMPONENT.fullmatch(value):
+            raise ContractError(
+                "Runtime subscription must be a UUID or canonical encoded route token"
+            )
+        return value
 
 
 @dataclass(frozen=True)
@@ -47,14 +60,15 @@ class RuntimeLinkContext:
         return cls(**{key: value[key] for key in expected})
 
     def resource_route(self) -> str:
-        values = (self.subscription, self.resource_group, self.account, self.project)
+        values = (self.resource_group, self.account, self.project)
         if any(not _CONTEXT_COMPONENT.fullmatch(value) for value in values):
             raise ContractError(
                 "Runtime link components must be canonical non-empty path segments"
             )
         return (
             "https://ai.azure.com/nextgen/r/"
-            f"{self.subscription},{self.resource_group},,{self.account},{self.project}"
+            f"{_subscription_route_token(self.subscription)},"
+            f"{self.resource_group},,{self.account},{self.project}"
         )
 
     def tenant_query(self) -> str:

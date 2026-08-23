@@ -253,8 +253,7 @@ def _summary_narrative(report: dict[str, Any]) -> list[str]:
     if report["status"] != "INCONCLUSIVE":
         values.append(
             "The overall score measures strict expected-issue success only. Incorrect/noisy "
-            "insights and exact duplicates are independent guardrail metrics and do not "
-            "change the 0-100 score."
+            "insights are an independent guardrail metric and do not change the 0-100 score."
         )
     return values
 
@@ -269,7 +268,6 @@ def _grade_rows(report: dict[str, Any]) -> list[tuple[str, str]]:
                 f"{counts['completed_scenarios']} of {counts['active_scenarios']}",
             ),
             ("Incorrect/noisy insights", "N/A"),
-            ("Exact duplicates", "N/A"),
         ]
     grades = _finding_grades(report)
     observed = (report.get("bar_definition") or derive_bar_definition(report))[
@@ -280,7 +278,6 @@ def _grade_rows(report: dict[str, Any]) -> list[tuple[str, str]]:
         ("Fully correct (content utility)", f"{grades['correct']}/{observed}"),
         ("Partially useful (content utility)", f"{grades['partially_useful']}/{observed}"),
         ("Incorrect/noisy insights", f"{grades['incorrect']}/{observed}"),
-        ("Exact duplicates", str(report["collection_analysis"]["duplicates"])),
     ]
 
 
@@ -404,21 +401,20 @@ def _working_capabilities(report: dict[str, Any]) -> list[tuple[str, str]]:
         )
     collection = report["collection_analysis"]
     if observed and not any(
-        collection[name] for name in ("duplicates", "fragments", "umbrellas", "stale_version")
+        collection[name] for name in ("fragments", "umbrellas", "stale_version")
     ):
         rows.append(
             (
                 "Finding separation",
-                f"Across {observed} cards, analysis found 0 duplicate, fragment, umbrella, "
-                "or stale-version relationships.",
+                f"Across {observed} cards, analysis found 0 fragment, umbrella, or "
+                "stale-version relationships.",
             )
         )
-    elif observed and collection["duplicates"] == 0 and collection["stale_version"] == 0:
+    elif observed and collection["stale_version"] == 0:
         rows.append(
             (
-                "Duplicate and version control",
-                f"Across {observed} cards, analysis found 0 duplicate and 0 stale-version "
-                "relationships.",
+                "Version control",
+                f"Across {observed} cards, analysis found 0 stale-version relationships.",
             )
         )
     return rows or [
@@ -753,7 +749,6 @@ def _improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str]]:
     relationship_counts = [
         (label, collection[name])
         for label, name in (
-            ("duplicate", "duplicates"),
             ("fragment", "fragments"),
             ("umbrella", "umbrellas"),
             ("stale-version", "stale_version"),
@@ -763,7 +758,6 @@ def _improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str]]:
     relationship_rates = [
         (label, rates[name])
         for label, name in (
-            ("duplicate", "duplication_rate"),
             ("fragment", "fragmentation_rate"),
             ("umbrella", "umbrella_rate"),
             ("stale-version", "cross_version_stale_rate"),
@@ -796,7 +790,7 @@ def _improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str]]:
                     ),
                     evidence,
                 ),
-                "Group evidence by root cause, avoid duplicate or fragmented cards, and scope "
+                "Group evidence by root cause, avoid fragmented cards, and scope "
                 "each finding to the immutable agent version where it reproduces.",
             )
         )
@@ -1764,10 +1758,10 @@ def _private_project_source_link(
     project_url = project_page_url(context)
     return (
         f'<p style="margin:0 0 18px 0;color:#334155;{_OUTLOOK_TEXT_STYLE}">'
-        "Foundry source: "
+        "Foundry Project: "
         f'<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
         f'href="{html.escape(project_url, quote=True)}">'
-        f"{html.escape(context.account)} / {html.escape(context.project)}</a>.</p>"
+        f"{html.escape(context.project)}</a></p>"
     )
 
 
@@ -1860,9 +1854,6 @@ def render_email_html(
             f'href="{html.escape(report_url, quote=True)}">View report</a></td>'
             '<td style="padding:11px 12px;border:1px solid #d6deea;'
             f'color:#334155;line-height:18px;font-weight:700;">{recommend}</td>'
-            '<td style="padding:11px 12px;border:1px solid #d6deea;'
-            f'color:#334155;line-height:18px;">'
-            f"{html.escape(_agent_assignee(agent['id']))}</td>"
             "</tr>"
         )
     rows.append(
@@ -1875,7 +1866,6 @@ def render_email_html(
         '<td style="padding:11px 12px;border:1px solid #d6deea;color:#334155;">N/A</td>'
         '<td style="padding:11px 12px;border:1px solid #d6deea;'
         'color:#334155;font-weight:700;">Yes</td>'
-        '<td style="padding:11px 12px;border:1px solid #d6deea;color:#334155;">N/A</td>'
         "</tr>"
     )
     body = (
@@ -1919,9 +1909,6 @@ def render_email_html(
             f"{html.escape(paragraph)}</p>"
             for paragraph in summary
         )
-        + f'<p style="margin:0 0 18px 0;color:#64748b;{_OUTLOOK_TEXT_STYLE}">'
-        + html.escape(_assessment_scope(report))
-        + "</p>"
         + _private_project_source_link(expected_link_context)
         + _data_table(("Grade", "Findings"), grade_rows, (38, 62))
         + "</td></tr>"
@@ -1948,18 +1935,16 @@ def render_email_html(
         + '<table cellpadding="0" cellspacing="0" border="0" width="100%" '
         'style="width:100%;border-collapse:collapse;font-size:13px;">'
         '<tr bgcolor="#e8eef7">'
-        '<th align="left" width="24%" style="padding:10px 12px;border:1px solid #d6deea;'
+        '<th align="left" width="29%" style="padding:10px 12px;border:1px solid #d6deea;'
         'color:#12304a;">Test agent</th>'
-        '<th align="left" width="10%" style="padding:10px 12px;border:1px solid #d6deea;'
+        '<th align="left" width="12%" style="padding:10px 12px;border:1px solid #d6deea;'
         'color:#12304a;">Type</th>'
-        '<th align="left" width="14%" style="padding:10px 12px;border:1px solid #d6deea;'
+        '<th align="left" width="18%" style="padding:10px 12px;border:1px solid #d6deea;'
         'color:#12304a;">Agent</th>'
-        '<th align="left" width="14%" style="padding:10px 12px;border:1px solid #d6deea;'
+        '<th align="left" width="16%" style="padding:10px 12px;border:1px solid #d6deea;'
         'color:#12304a;">Report</th>'
-        '<th align="left" width="23%" style="padding:10px 12px;border:1px solid #d6deea;'
-        'color:#12304a;">Recommended human validation</th>'
-        '<th align="left" width="15%" style="padding:10px 12px;border:1px solid #d6deea;'
-        'color:#12304a;">Assigned to</th></tr>'
+        '<th align="left" width="25%" style="padding:10px 12px;border:1px solid #d6deea;'
+        'color:#12304a;">Recommended human validation</th></tr>'
         + "".join(rows)
         + "</table></td></tr></table>"
         "<!--[if mso]></td></tr></table><![endif]-->"
