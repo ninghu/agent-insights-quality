@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 import re
 from typing import Any
@@ -744,17 +745,57 @@ def render_agent_markdown(report: dict[str, Any], agent_name: str) -> str:
     baseline = next(
         item for item in report["baseline"] if item["agent"] == agent_name
     )
+    issues = [item for item in report["issues"] if item["agent"] == agent_name]
+    baseline_cards = baseline["assessment"].get("card_evaluations", [])
+    issue_cards = [
+        card
+        for item in issues
+        for card in item["assessment"].get("card_evaluations", [])
+    ]
+    evaluation_counts = Counter(
+        _evaluation_label(card["finding_type"]) for card in issue_cards
+    )
+    missing_count = sum(
+        not item["assessment"].get("card_evaluations") for item in issues
+    )
     lines = [
         f"# {agent_name} - Insight Evaluation",
         "",
         f"- Report date: `{report['report_date']}`",
         f"- Run: `{report['run_id']}`",
-        f"- Overall result: `{report['status']}`",
+        f"- Run result: `{report['status']}`",
+        "",
+        "## Review summary",
+        "",
+        "| Metric | Value |",
+        "| --- | ---: |",
+        f"| Expected issue Insights | {len(issues)} |",
+        f"| Generated issue cards | {len(issue_cards)} |",
+        "| Expected baseline Insights | 0 |",
+        f"| Generated baseline cards | {len(baseline_cards)} |",
+        f"| Correct | {evaluation_counts['Correct']} |",
+        f"| Partially Correct | {evaluation_counts['Partially Correct']} |",
+        f"| Incorrect | {evaluation_counts['Incorrect']} |",
+        f"| Noise | {evaluation_counts['Noise']} |",
+        f"| Duplicate | {evaluation_counts['Duplicate']} |",
+        f"| Missing expected issues | {missing_count} |",
+        f"| Incomplete card evaluations | {evaluation_counts['Incomplete']} |",
+        "",
+        "## Evaluation guide",
+        "",
+        "- **Correct:** the card matches the expected issue and every required field.",
+        "- **Partially Correct:** the card is useful and related, but one or more fields are wrong.",
+        "- **Incorrect:** the card is related but materially misstates the issue.",
+        "- **Noise:** the card is unrelated or a false positive.",
+        "- **Duplicate:** an extra card represents an expected root already covered by another card.",
+        "- **Missing:** no generated card represents the expected issue.",
+        "- **Incomplete:** available evidence cannot support a reliable card judgment.",
+        "",
+        "## Insight-level evaluation",
         "",
         "| Issue | Foundry version | Generated Insight | Evaluation |",
         "| --- | --- | --- | --- |",
     ]
-    baseline_cards = baseline["assessment"].get("card_evaluations", [])
     if baseline_cards:
         for card in baseline_cards:
             lines.append(
@@ -767,9 +808,7 @@ def render_agent_markdown(report: dict[str, Any], agent_name: str) -> str:
             f"| `v0` | `{baseline['foundry_version']}` | "
             "No generated Insight | Correct |"
         )
-    for item in report["issues"]:
-        if item["agent"] != agent_name:
-            continue
+    for item in issues:
         issue_link = (
             "https://github.com/ninghu/agent-insights-quality/blob/main/"
             f"ISSUE_CATALOG.md#{item['issue_id']}"
@@ -789,7 +828,21 @@ def render_agent_markdown(report: dict[str, Any], agent_name: str) -> str:
                 f"`{item['foundry_version']}` | No generated Insight | "
                 f"{_evaluation_label(item['detail'])} |"
             )
-    lines.append("")
+    lines.extend(
+        [
+            "",
+            "## Human validation checklist",
+            "",
+            "- [ ] Confirm each `issue-NNN` links to the intended reviewed defect.",
+            "- [ ] Confirm the Foundry version matches the version under review.",
+            "- [ ] Compare every generated card with the linked issue definition.",
+            "- [ ] Confirm extra cards are correctly labeled Noise or Duplicate.",
+            "- [ ] Confirm every expected issue without a card is labeled Missing.",
+            "- [ ] Open the Agent from the email and inspect linked traces for disputed cards.",
+            "- [ ] Record reviewer agree/disagree decisions outside this generated report.",
+            "",
+        ]
+    )
     return "\n".join(lines)
 
 

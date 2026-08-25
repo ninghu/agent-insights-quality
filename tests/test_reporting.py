@@ -3,7 +3,11 @@ from __future__ import annotations
 from copy import deepcopy
 
 from agent_insights_quality.catalogs import load_catalogs
-from agent_insights_quality.reporting import build_report, validate_published_report
+from agent_insights_quality.reporting import (
+    build_report,
+    render_agent_markdown,
+    validate_published_report,
+)
 from agent_insights_quality.util import ContractError
 import pytest
 
@@ -199,3 +203,22 @@ def test_published_report_requires_complete_consistent_content() -> None:
     report["issues"][0]["assessment"] = None
     with pytest.raises(ContractError, match="incomplete"):
         validate_published_report(report)
+
+
+def test_agent_report_is_a_human_validation_handoff() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    report = build_report(
+        manifest,
+        issues,
+        _assessments(manifest),
+        _baseline_assessments(manifest),
+    )
+    markdown = render_agent_markdown(report, "weather-agent")
+    assert "## Review summary" in markdown
+    assert "## Evaluation guide" in markdown
+    assert "## Insight-level evaluation" in markdown
+    assert "## Human validation checklist" in markdown
+    assert "| Issue | Foundry version | Generated Insight | Evaluation |" in markdown
+    assert "| Ownership |" not in markdown
+    assert "| Fields |" not in markdown

@@ -100,7 +100,7 @@ python -m agent_insights_quality finalize `
 Finalization writes sanitized per-Agent Markdown under the report's `agents/` directory. Each row is
 one generated Insight card, plus an explicit row for each missing expected issue. Email links to these
 GitHub-rendered Markdown reports; private prompts, responses, traces, and resource identifiers remain
-excluded.
+excluded. Each report includes a review summary, evaluation legend, and human-validation checklist.
 
 The direct-email request remains private. Use the available Copilot email capability exactly once and
 set HTML mode explicitly. Never create a draft or retry an ambiguous send. Import one receipt with
