@@ -1,0 +1,13 @@
+{
+  "days": [
+    {
+      "baseline_passed": 1,
+      "issues_correct": 3,
+      "issues_expected": 25,
+      "quality_score": 39.4,
+      "report_date": "2026-08-25",
+      "status": "FAIL"
+    }
+  ],
+  "schema_version": "1.0.0"
+}
