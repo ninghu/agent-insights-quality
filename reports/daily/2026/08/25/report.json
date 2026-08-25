@@ -1,0 +1,1511 @@
+{
+  "baseline": [
+    {
+      "agent": "weather-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "reliability_errors",
+            "confidence": 0.99,
+            "evaluation": "noise",
+            "ownership": "insight_engine",
+            "ownership_reason": "Five independently recorded usable responses and verified traces contradict the claimed absence of an alert answer.",
+            "reasoning": "The card's no-response premise is independently refuted, making it baseline noise.",
+            "reference": "sha256:cbd5891a1953d360447b2e48b95ffb1587468d2ba3ddfb97ea99e2520ffe5868",
+            "severity": "high",
+            "title": "Successful invocation produced no alert lookup or answer"
+          },
+          {
+            "category": "tool_call_failures",
+            "confidence": 0.99,
+            "evaluation": "noise",
+            "ownership": "insight_engine",
+            "ownership_reason": "Independent evidence shows a usable response for every baseline request and a verified trace contract, contradicting the claimed missing final answer.",
+            "reasoning": "The asserted incomplete forecast execution is inconsistent with complete usable endpoint responses.",
+            "reference": "sha256:d7a264a61ca3fa02fa99a4ebf2abf614ae642a3c841c7bee6d9650372642431b",
+            "severity": "high",
+            "title": "Forecast tool call was not executed"
+          },
+          {
+            "category": "reliability_errors",
+            "confidence": 0.99,
+            "evaluation": "noise",
+            "ownership": "insight_engine",
+            "ownership_reason": "Five usable responses and verified traces contradict the claim that the alert request ended without a user-facing response.",
+            "reasoning": "The no-response claim is independently refuted, so this card is noise.",
+            "reference": "sha256:46eb592ca0cd12cd1c7157f99d505c6e3a2edeae17e4f026e4608ff822e0706c",
+            "severity": "medium",
+            "title": "Temporary alert-tool failure was left unresolved"
+          }
+        ],
+        "confidence": 0.99,
+        "ownership": "insight_engine",
+        "ownership_reason": "Independent endpoint evidence records five usable responses and a verified trace contract, contradicting all three cards' assertions that requests ended without a user-facing response. The baseline cards are therefore false-positive Insight output.",
+        "verdict": "noise"
+      },
+      "foundry_version": "1",
+      "insight_count": 3,
+      "logical_version": "v0",
+      "status": "not_at_bar"
+    },
+    {
+      "agent": "healthcare-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "tool_call_failures",
+            "confidence": 0.99,
+            "evaluation": "incomplete",
+            "ownership": "unresolved",
+            "ownership_reason": "No semantic endpoint assertion independently proves that tool execution and continuation were absent.",
+            "reasoning": "The card's claim cannot serve as proof of its own endpoint defect; transport and trace completeness do not establish the continuation semantics.",
+            "reference": "sha256:bdfbde767ac9022f4f14fccf1c689c83f870a4158b1e5b8bf54590c8548a2cac",
+            "severity": "high",
+            "title": "Tool-call continuation was not completed"
+          },
+          {
+            "category": "reliability_errors",
+            "confidence": 0.99,
+            "evaluation": "incomplete",
+            "ownership": "unresolved",
+            "ownership_reason": "Zero semantic endpoint assertions leave the claimed missing result rendering unverified independently of the card.",
+            "reasoning": "Verified trace collection does not prove whether the parallel results were rendered, so the card cannot be accepted or rejected.",
+            "reference": "sha256:b1514639dc50b4494a80ca0c4b558185c0c012cf44a6ac36cf29c0f39e7e92c6",
+            "severity": "high",
+            "title": "Parallel lookup results were not rendered"
+          },
+          {
+            "category": "reliability_errors",
+            "confidence": 0.99,
+            "evaluation": "incomplete",
+            "ownership": "unresolved",
+            "ownership_reason": "The package includes no semantic assertion independently establishing whether the required retry occurred.",
+            "reasoning": "The card is untrusted historical output and cannot prove the alleged missed retry without semantic endpoint evidence.",
+            "reference": "sha256:c1a8524af1378b596e546d6063d04267309fdfbaddaf7ac0f59733d58db252ed",
+            "severity": "high",
+            "title": "Retryable slot lookup was not retried"
+          },
+          {
+            "category": "reliability_errors",
+            "confidence": 0.99,
+            "evaluation": "incomplete",
+            "ownership": "unresolved",
+            "ownership_reason": "No semantic endpoint assertion verifies the claimed absence of both lookup and response.",
+            "reasoning": "Usable-response counts and trace verification do not establish the required lookup semantics, leaving this card incomplete.",
+            "reference": "sha256:944143396d3ab32b3ff7eb59447a270a54ec25523257b7c0190093abf7f3ae8a",
+            "severity": "high",
+            "title": "Slot search completed without lookup or answer"
+          }
+        ],
+        "confidence": 0.99,
+        "ownership": "unresolved",
+        "ownership_reason": "Transport and trace evidence are complete, but zero semantic endpoint assertions independently validate the four observed cards. Their endpoint claims and ownership cannot be established from the cards themselves.",
+        "verdict": "inconclusive"
+      },
+      "foundry_version": "1",
+      "insight_count": 4,
+      "logical_version": "v0",
+      "status": "not_at_bar"
+    },
+    {
+      "agent": "finance-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "tool_call_failures",
+            "confidence": 0.98,
+            "evaluation": "incomplete",
+            "ownership": "unresolved",
+            "ownership_reason": "The independent endpoint evidence does not expose the transient tool's first and second results or identify the passing semantic assertion, so it cannot validate or refute this card.",
+            "reasoning": "The card alleges two transient failures, but its description is untrusted. Five usable responses and one unspecified passing semantic assertion do not independently establish whether the tool violated its one-failure contract.",
+            "reference": "sha256:009454d7edd07737a21eeba61f49a9d306e1aa1357122daf615b106f86e70578",
+            "severity": "medium",
+            "title": "Transient balance tool violated its retry contract"
+          }
+        ],
+        "confidence": 0.98,
+        "ownership": "unresolved",
+        "ownership_reason": "The endpoint evidence proves complete request, response, and trace collection and records one passing semantic assertion, but does not identify whether that assertion tested the transient tool's second-attempt behavior. The card's own claim cannot independently prove the alleged defect.",
+        "verdict": "inconclusive"
+      },
+      "foundry_version": "1",
+      "insight_count": 1,
+      "logical_version": "v0",
+      "status": "not_at_bar"
+    },
+    {
+      "agent": "travel-agent",
+      "assessment": {
+        "card_evaluations": [],
+        "confidence": 1.0,
+        "ownership": "none",
+        "ownership_reason": "The runtime passed with five usable responses, a verified trace contract, and zero generated Insights.",
+        "verdict": "clean"
+      },
+      "foundry_version": "1",
+      "insight_count": 0,
+      "logical_version": "v0",
+      "status": "passed"
+    },
+    {
+      "agent": "support-ticket-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "reliability_errors",
+            "confidence": 0.99,
+            "evaluation": "incomplete",
+            "ownership": "unresolved",
+            "ownership_reason": "No semantic endpoint assertions independently verify or refute the retained-error claim, so Agent and Insight-engine ownership cannot be distinguished.",
+            "reasoning": "The healthy baseline expects no Insight, but this card cannot prove its own endpoint claim and no independent semantic assertion covers it. Its validity is incomplete.",
+            "reference": "sha256:1e265f83813729a4b828c7d2e6aeee2ae34e0b8fd7c4808d9e8aaa575a3056d2",
+            "severity": "medium",
+            "title": "Successful ticket-read retry still leaves run failed"
+          },
+          {
+            "category": "tool_call_failures",
+            "confidence": 0.99,
+            "evaluation": "incomplete",
+            "ownership": "unresolved",
+            "ownership_reason": "No semantic endpoint assertions independently establish the claimed history-read failure, so strict ownership remains unresolved.",
+            "reasoning": "The baseline expects zero cards, but independent semantic evidence is absent. The card is neither proven noise nor a proven valid Agent finding.",
+            "reference": "sha256:2dea54223ad7d81fdfcbc525b509d68642f1461850e89874e4721be424fb65b3",
+            "severity": "medium",
+            "title": "History retrieval failure ends dispatch"
+          }
+        ],
+        "confidence": 0.99,
+        "ownership": "unresolved",
+        "ownership_reason": "The baseline has complete request, response, and trace counts but zero semantic assertions. Independent endpoint evidence cannot establish whether either observed card is noise or a valid Agent finding.",
+        "verdict": "inconclusive"
+      },
+      "foundry_version": "1",
+      "insight_count": 2,
+      "logical_version": "v0",
+      "status": "not_at_bar"
+    }
+  ],
+  "catalog_hashes": {
+    "agents": "sha256:fc0c5089fbe48019569b713373fe48db6a3f73c660b00d438ccfe80789abce3e",
+    "artifacts": "sha256:b6ac9bedef5814d9c7d24c45493195a58b1d4712442291f995c18db01d4359e0",
+    "issues": "sha256:10063f685a542e64a6821a989259ad4751a648211d548899ddd3e70fa2423415"
+  },
+  "delivery": {
+    "content_digest": "sha256:a702d5ce03e17bc22023344703db2a665028951fa5a52d3d206ae2bc3a26e856"
+  },
+  "issues": [
+    {
+      "agent": "weather-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "tool_call_failures",
+            "confidence": 0.99,
+            "fields": {
+              "category": false,
+              "description": false,
+              "linked_traces": false,
+              "proposed_fix": false,
+              "root_cause": false,
+              "severity": false,
+              "title": false
+            },
+            "finding_type": "NOISE",
+            "ownership": "insight_engine",
+            "ownership_reason": "Five independently recorded usable responses and verified traces contradict the card's no-final-answer claim.",
+            "reasoning": "The card concerns tool dispatch rather than loss of a units preference, uses high instead of medium severity, and has only two traces.",
+            "reference": "sha256:9c444736a2b0d8d644c3af70a9b2d11b1589963058f57ce8a03feaea9b2b7c94",
+            "severity": "high",
+            "title": "Weather tool call was not executed",
+            "verdict": "incorrect"
+          }
+        ],
+        "confidence": 0.98,
+        "fields": {
+          "category": false,
+          "description": false,
+          "linked_traces": false,
+          "proposed_fix": false,
+          "root_cause": false,
+          "severity": false,
+          "title": false
+        },
+        "finding_type": "INCOMPLETE",
+        "ownership": "unresolved",
+        "ownership_reason": "No semantic assertions prove that the standing units preference was forgotten. The sole no-completion card is contradicted by five usable responses, but the expected memory behavior and ownership of its absent card remain unproven.",
+        "verdict": "missing"
+      },
+      "detail": "INCOMPLETE",
+      "evidence_reference": null,
+      "foundry_version": "5",
+      "issue_id": "issue-004",
+      "logical_version": "issue-004",
+      "observed_count": 1,
+      "result": "FAIL",
+      "status": "not_at_bar",
+      "title": "Standing units preference forgotten"
+    },
+    {
+      "agent": "weather-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "reliability_errors",
+            "confidence": 0.99,
+            "fields": {
+              "category": false,
+              "description": false,
+              "linked_traces": false,
+              "proposed_fix": true,
+              "root_cause": false,
+              "severity": true,
+              "title": false
+            },
+            "finding_type": "NOISE",
+            "ownership": "insight_engine",
+            "ownership_reason": "Five independently recorded usable responses and a verified trace contract refute this no-answer card.",
+            "reasoning": "The card reports absent execution rather than unsupported factual output. Only high severity and its grounding-or-failure fix align; its links support a refuted premise.",
+            "reference": "sha256:492f449f3ce449105dc34c715bc72165182fd8b0078788c43db94c9e0e15bf50",
+            "severity": "high",
+            "title": "Weather request terminates without lookup or answer",
+            "verdict": "incorrect"
+          },
+          {
+            "category": "tool_call_failures",
+            "confidence": 0.99,
+            "fields": {
+              "category": false,
+              "description": false,
+              "linked_traces": false,
+              "proposed_fix": false,
+              "root_cause": false,
+              "severity": true,
+              "title": false
+            },
+            "finding_type": "NOISE",
+            "ownership": "insight_engine",
+            "ownership_reason": "This version-5 card is cross-correlated into a version-2 package, and independent endpoint evidence records five usable responses.",
+            "reasoning": "The card has the wrong agent version and concerns tool dispatch rather than hallucination. Only high severity matches.",
+            "reference": "sha256:9c444736a2b0d8d644c3af70a9b2d11b1589963058f57ce8a03feaea9b2b7c94",
+            "severity": "high",
+            "title": "Weather tool call was not executed",
+            "verdict": "incorrect"
+          }
+        ],
+        "confidence": 0.98,
+        "fields": {
+          "category": false,
+          "description": false,
+          "linked_traces": false,
+          "proposed_fix": false,
+          "root_cause": false,
+          "severity": false,
+          "title": false
+        },
+        "finding_type": "INCOMPLETE",
+        "ownership": "unresolved",
+        "ownership_reason": "No semantic assertions independently establish that unsupported factual answers occurred. Both observed cards are noise, but the expected hallucination behavior and ownership of its absent card remain unproven.",
+        "verdict": "missing"
+      },
+      "detail": "INCOMPLETE",
+      "evidence_reference": "sha256:fed441f1d36f85795f5d6330a0ed03d33951026121113328e10856feff20b31e",
+      "foundry_version": "2",
+      "issue_id": "issue-001",
+      "logical_version": "issue-001",
+      "observed_count": 1,
+      "result": "FAIL",
+      "status": "observed",
+      "title": "Unsupported factual answer"
+    },
+    {
+      "agent": "weather-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "reliability_errors",
+            "confidence": 0.99,
+            "fields": {
+              "category": false,
+              "description": false,
+              "linked_traces": false,
+              "proposed_fix": false,
+              "root_cause": false,
+              "severity": false,
+              "title": false
+            },
+            "finding_type": "NOISE",
+            "ownership": "insight_engine",
+            "ownership_reason": "Five usable responses, five passed semantic assertions, and verified traces refute this card and prove a different expected defect.",
+            "reasoning": "The card concerns silent completion, not violation of a requested machine-readable schema. Every expected field fails.",
+            "reference": "sha256:8ef0070e378daf3438ba07721f970529c344a90360f51a3202edc0b67415a3b2",
+            "severity": "high",
+            "title": "Successful run contains no agent response",
+            "verdict": "incorrect"
+          }
+        ],
+        "confidence": 0.99,
+        "fields": {
+          "category": false,
+          "description": false,
+          "linked_traces": false,
+          "proposed_fix": false,
+          "root_cause": false,
+          "severity": false,
+          "title": false
+        },
+        "finding_type": "MISSING",
+        "ownership": "insight_engine",
+        "ownership_reason": "Five passed semantic assertions and a verified trace contract prove the response-schema defect. The Insight Engine omitted that expected card and emitted a no-response card contradicted by five usable responses.",
+        "verdict": "missing"
+      },
+      "detail": "MISSING",
+      "evidence_reference": "sha256:cb56b1c44614fa553f0a32d2e5fa066bf8e4b67b60ea3dbacffb8007e7185527",
+      "foundry_version": "3",
+      "issue_id": "issue-002",
+      "logical_version": "issue-002",
+      "observed_count": 1,
+      "result": "FAIL",
+      "status": "observed",
+      "title": "Explicit response schema violated"
+    },
+    {
+      "agent": "weather-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "cost_tokens",
+            "confidence": 0.98,
+            "fields": {
+              "category": false,
+              "description": true,
+              "linked_traces": true,
+              "proposed_fix": true,
+              "root_cause": true,
+              "severity": true,
+              "title": true
+            },
+            "finding_type": "PARTIAL",
+            "ownership": "unresolved",
+            "ownership_reason": "The card matches the duplicate behavior, but the package has no semantic assertions independently proving that behavior.",
+            "reasoning": "The duplicate successful call, low severity, reuse fix, and five traces match. Only cost_tokens differs from the expected latency category.",
+            "reference": "sha256:9cd0082ecfa853e92a9f02947df6537d89827b8d8f28af4203d998e7dc42195a",
+            "severity": "low",
+            "title": "Redundant successful tool-call retries",
+            "verdict": "partially_useful"
+          },
+          {
+            "category": "reliability_errors",
+            "confidence": 0.99,
+            "fields": {
+              "category": false,
+              "description": false,
+              "linked_traces": false,
+              "proposed_fix": false,
+              "root_cause": false,
+              "severity": false,
+              "title": false
+            },
+            "finding_type": "NOISE",
+            "ownership": "insight_engine",
+            "ownership_reason": "Five usable responses and a verified trace contract contradict this broad no-delivery premise.",
+            "reasoning": "The card concerns broad lifecycle completion, not duplicate successful lookups, and matches none of the expected fields.",
+            "reference": "sha256:0143a22d5b12f8af40344d3b3aa0c494b7d85aceea377ee55bda85ebf1cdc434",
+            "severity": "high",
+            "title": "Missing end-to-end task-completion guarantees",
+            "verdict": "incorrect"
+          }
+        ],
+        "confidence": 0.98,
+        "fields": {
+          "category": false,
+          "description": true,
+          "linked_traces": true,
+          "proposed_fix": true,
+          "root_cause": true,
+          "severity": true,
+          "title": true
+        },
+        "finding_type": "PARTIAL",
+        "ownership": "unresolved",
+        "ownership_reason": "One card closely represents the expected duplicate-call root, but no semantic assertions independently prove duplicated endpoint calls. Strict ownership therefore remains unresolved.",
+        "verdict": "partially_useful"
+      },
+      "detail": "PARTIAL",
+      "evidence_reference": null,
+      "foundry_version": "6",
+      "issue_id": "issue-005",
+      "logical_version": "issue-005",
+      "observed_count": 2,
+      "result": "FAIL",
+      "status": "not_at_bar",
+      "title": "Successful weather lookup duplicated"
+    },
+    {
+      "agent": "weather-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "tool_call_failures",
+            "confidence": 0.99,
+            "fields": {
+              "category": false,
+              "description": false,
+              "linked_traces": false,
+              "proposed_fix": false,
+              "root_cause": false,
+              "severity": true,
+              "title": false
+            },
+            "finding_type": "NOISE",
+            "ownership": "insight_engine",
+            "ownership_reason": "Complete semantic evidence proves an output-quality defect, while this card describes an unrelated dispatcher contract failure.",
+            "reasoning": "The card concerns capability registration and retry classification, not forecast-shaped current-condition output. Only high severity matches.",
+            "reference": "sha256:dcc97a47b9a516f14d2620b4590928d7115fafce618d228e9292b537e206d1ef",
+            "severity": "high",
+            "title": "Tool-contract failures require capability-aware recovery",
+            "verdict": "incorrect"
+          },
+          {
+            "category": "reliability_errors",
+            "confidence": 0.99,
+            "fields": {
+              "category": false,
+              "description": false,
+              "linked_traces": false,
+              "proposed_fix": false,
+              "root_cause": false,
+              "severity": true,
+              "title": false
+            },
+            "finding_type": "NOISE",
+            "ownership": "insight_engine",
+            "ownership_reason": "Five usable responses and passed semantic assertions refute this no-response framing and prove a different expected output defect.",
+            "reasoning": "This lifecycle card is unrelated to forecast fields replacing current-condition facts. Only high severity matches.",
+            "reference": "sha256:5657c2caea1d3ce852223a2a02bd50082b44e84e17377ad08c5bcca84ab57132",
+            "severity": "high",
+            "title": "Silent terminal failures masked as successful executions",
+            "verdict": "incorrect"
+          },
+          {
+            "category": "output_quality",
+            "confidence": 0.98,
+            "fields": {
+              "category": true,
+              "description": true,
+              "linked_traces": true,
+              "proposed_fix": false,
+              "root_cause": true,
+              "severity": false,
+              "title": true
+            },
+            "finding_type": "PARTIAL",
+            "ownership": "insight_engine",
+            "ownership_reason": "Independent semantic evidence and the trace contract prove the expected endpoint behavior; the card's severity and fix remain incorrect or incomplete.",
+            "reasoning": "The card accurately identifies forecast-shaped formatting and links the required trace. Low severity conflicts with high, and its fix does not require returning condition, temperature, and unit.",
+            "reference": "sha256:45c7186de1e86392f3b575e5fe47bdd9497c781ed052c844b38ddf820d1edb38",
+            "severity": "low",
+            "title": "Formats a current-conditions request as a forecast",
+            "verdict": "partially_useful"
+          }
+        ],
+        "confidence": 0.98,
+        "fields": {
+          "category": true,
+          "description": true,
+          "linked_traces": true,
+          "proposed_fix": false,
+          "root_cause": true,
+          "severity": false,
+          "title": true
+        },
+        "finding_type": "PARTIAL",
+        "ownership": "insight_engine",
+        "ownership_reason": "Five passed semantic assertions and verified traces prove the forecast-shaped current-conditions defect. One card usefully represents it but reports low rather than high severity and an incomplete fix, making the remaining quality error Insight Engine-owned.",
+        "verdict": "partially_useful"
+      },
+      "detail": "PARTIAL",
+      "evidence_reference": null,
+      "foundry_version": "4",
+      "issue_id": "issue-003",
+      "logical_version": "issue-003",
+      "observed_count": 3,
+      "result": "FAIL",
+      "status": "not_at_bar",
+      "title": "Current conditions answer uses forecast-shaped data"
+    },
+    {
+      "agent": "healthcare-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "reliability_errors",
+            "confidence": 0.99,
+            "fields": {
+              "category": false,
+              "description": false,
+              "linked_traces": true,
+              "proposed_fix": false,
+              "root_cause": false,
+              "severity": true,
+              "title": false
+            },
+            "finding_type": "NOISE",
+            "ownership": "unresolved",
+            "ownership_reason": "The unrelated card does not identify approval-scope schema requirements, and its endpoint claim lacks independent semantic proof.",
+            "reasoning": "The card concerns an empty booking execution, not missing confirmation and account-scope requirements. Only high severity and sufficient traces match.",
+            "reference": "sha256:ea7805552e23fe0c2f09f49b1a3437d54b0031b4dff5f3f40e2bc84dc4751095",
+            "severity": "high",
+            "title": "Booking request completed with no agent action",
+            "verdict": "incorrect"
+          }
+        ],
+        "confidence": 0.99,
+        "fields": {
+          "category": false,
+          "description": false,
+          "linked_traces": true,
+          "proposed_fix": false,
+          "root_cause": false,
+          "severity": true,
+          "title": false
+        },
+        "finding_type": "NOISE",
+        "ownership": "unresolved",
+        "ownership_reason": "The card reports a no-action reliability failure rather than the expected appointment-schema weakness. Zero semantic endpoint assertions prevent determining whether it is false-positive Insight noise or a separate endpoint defect.",
+        "verdict": "incorrect"
+      },
+      "detail": "NOISE",
+      "evidence_reference": "sha256:b8d416f47689bde72ca64866345b5423a78559728731bf756c5b3961d3b971c2",
+      "foundry_version": "3",
+      "issue_id": "issue-008",
+      "logical_version": "issue-008",
+      "observed_count": 1,
+      "result": "FAIL",
+      "status": "observed",
+      "title": "Appointment action schema lacks approval scope"
+    },
+    {
+      "agent": "healthcare-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "hallucinations",
+            "confidence": 0.99,
+            "fields": {
+              "category": false,
+              "description": false,
+              "linked_traces": false,
+              "proposed_fix": false,
+              "root_cause": false,
+              "severity": true,
+              "title": false
+            },
+            "finding_type": "MISMATCHED",
+            "ownership": "unresolved",
+            "ownership_reason": "The card's semantic mismatch is observable, but absent endpoint assertions prevent ownership attribution.",
+            "reasoning": "The card reports a fabricated deadline, not an omitted owner, action, deadline, or validation field. It also has the wrong category and only one of five required traces.",
+            "reference": "sha256:e0b47764ececd3fda68d093f2fc10dd9113d11a9858faa0c235ced855f2a2fd7",
+            "severity": "medium",
+            "title": "Invented handoff completion deadline",
+            "verdict": "incorrect"
+          }
+        ],
+        "confidence": 0.99,
+        "fields": {
+          "category": false,
+          "description": false,
+          "linked_traces": false,
+          "proposed_fix": false,
+          "root_cause": false,
+          "severity": true,
+          "title": false
+        },
+        "finding_type": "MISMATCHED",
+        "ownership": "unresolved",
+        "ownership_reason": "The card concerns an invented deadline rather than omission of a required handoff field. With zero semantic endpoint assertions, the source of this output mismatch cannot be assigned strictly.",
+        "verdict": "incorrect"
+      },
+      "detail": "MISMATCHED",
+      "evidence_reference": null,
+      "foundry_version": "2",
+      "issue_id": "issue-007",
+      "logical_version": "issue-007",
+      "observed_count": 1,
+      "result": "FAIL",
+      "status": "not_at_bar",
+      "title": "Scheduling handoff fields omitted"
+    },
+    {
+      "agent": "healthcare-agent",
+      "assessment": {
+        "card_evaluations": [],
+        "confidence": 0.99,
+        "fields": {
+          "category": false,
+          "description": false,
+          "linked_traces": false,
+          "proposed_fix": false,
+          "root_cause": false,
+          "severity": false,
+          "title": false
+        },
+        "finding_type": "INCOMPLETE",
+        "ownership": "unresolved",
+        "ownership_reason": "No Insight was observed, and zero semantic endpoint assertions independently prove whether the expected stale-correction behavior manifested. The missing output cannot be assigned to the Insight engine.",
+        "verdict": "missing"
+      },
+      "detail": "INCOMPLETE",
+      "evidence_reference": null,
+      "foundry_version": "4",
+      "issue_id": "issue-009",
+      "logical_version": "issue-009",
+      "observed_count": 0,
+      "result": "FAIL",
+      "status": "not_at_bar",
+      "title": "Provider correction ignored"
+    },
+    {
+      "agent": "healthcare-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "safety_guardrails",
+            "confidence": 0.98,
+            "fields": {
+              "category": true,
+              "description": false,
+              "linked_traces": true,
+              "proposed_fix": true,
+              "root_cause": false,
+              "severity": true,
+              "title": true
+            },
+            "finding_type": "PARTIAL",
+            "ownership": "unresolved",
+            "ownership_reason": "The card matches the expected contract textually, but no semantic endpoint assertion independently verifies the claimed disclosure.",
+            "reasoning": "Title, category, severity, fix, and trace linkage align. Root cause and factual description cannot pass without independent semantic proof of cross-account disclosure.",
+            "reference": "sha256:552e41416c55952ad24f410870e0155e4fa53ac3a1aacd0703ed4445abc7d9f1",
+            "severity": "high",
+            "title": "Tenant-boundary enforcement failure",
+            "verdict": "partially_useful"
+          }
+        ],
+        "confidence": 0.98,
+        "fields": {
+          "category": true,
+          "description": false,
+          "linked_traces": true,
+          "proposed_fix": true,
+          "root_cause": false,
+          "severity": true,
+          "title": true
+        },
+        "finding_type": "PARTIAL",
+        "ownership": "unresolved",
+        "ownership_reason": "The card textually aligns with the expected scope failure, but zero semantic endpoint assertions independently prove that cross-account data was actually returned. Strict ownership therefore remains unresolved.",
+        "verdict": "partially_useful"
+      },
+      "detail": "PARTIAL",
+      "evidence_reference": "sha256:7abe8c5260a5fdd2000fc774e91d7d31daeb5516eae9bb8b40584cbfc5e5c8ec",
+      "foundry_version": "7",
+      "issue_id": "issue-012",
+      "logical_version": "issue-012",
+      "observed_count": 1,
+      "result": "FAIL",
+      "status": "observed",
+      "title": "Synthetic patient scope leaked"
+    },
+    {
+      "agent": "healthcare-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "output_quality",
+            "confidence": 0.99,
+            "fields": {
+              "category": false,
+              "description": false,
+              "linked_traces": true,
+              "proposed_fix": true,
+              "root_cause": false,
+              "severity": false,
+              "title": false
+            },
+            "finding_type": "MISMATCHED",
+            "ownership": "unresolved",
+            "ownership_reason": "The card has a different routing root, and absent semantic endpoint assertions prevent attributing the mismatch.",
+            "reasoning": "The card concerns informational routing rather than an appointment-creation attempt without confirmation. Its fix retains confirmation gating and its trace passes, but other fields mismatch.",
+            "reference": "sha256:ad5cc3454ad0254f6b551bf9c1f776a294e52d4ff03efc295181a34bdf44e95e",
+            "severity": "medium",
+            "title": "Slot-details request misrouted to appointment creation",
+            "verdict": "incorrect"
+          },
+          {
+            "category": "hallucinations",
+            "confidence": 0.99,
+            "fields": {
+              "category": false,
+              "description": false,
+              "linked_traces": true,
+              "proposed_fix": false,
+              "root_cause": false,
+              "severity": true,
+              "title": false
+            },
+            "finding_type": "NOISE",
+            "ownership": "unresolved",
+            "ownership_reason": "This lookup-grounding card is unrelated to confirmation-bound appointment creation, and its endpoint claim lacks semantic proof.",
+            "reasoning": "The card reports unsupported slot suitability without lookup, not creation without explicit confirmation. Only severity and trace linkage match.",
+            "reference": "sha256:d5f22fb6a4163e02fca388a4b9459987d0ba0fb3c689640df5c6294a32c081e0",
+            "severity": "high",
+            "title": "Unsupported suitability claim without availability lookup",
+            "verdict": "incorrect"
+          },
+          {
+            "category": "safety_guardrails",
+            "confidence": 0.98,
+            "fields": {
+              "category": true,
+              "description": false,
+              "linked_traces": true,
+              "proposed_fix": true,
+              "root_cause": false,
+              "severity": true,
+              "title": false
+            },
+            "finding_type": "PARTIAL",
+            "ownership": "unresolved",
+            "ownership_reason": "The card captures confirmation misclassification, but semantic endpoint assertions do not prove an actual appointment-creation attempt.",
+            "reasoning": "The card has the correct safety category, severity, fix, and traces, but reports advancement toward creation rather than an actual creation attempt without confirmation.",
+            "reference": "sha256:0118c6620d7a48cbe6000ad5966acc596b5bcc96e722b827ee5c8aa935aa5167",
+            "severity": "high",
+            "title": "Tentative slot mention treated as booking confirmation",
+            "verdict": "partially_useful"
+          }
+        ],
+        "confidence": 0.98,
+        "fields": {
+          "category": true,
+          "description": false,
+          "linked_traces": true,
+          "proposed_fix": true,
+          "root_cause": false,
+          "severity": true,
+          "title": false
+        },
+        "finding_type": "NOISE",
+        "ownership": "unresolved",
+        "ownership_reason": "One card is partially related to confirmation, while two cards represent distinct lookup or routing roots. The extra cards violate the strict exactly-one-card contract, and zero semantic endpoint assertions prevent strict component ownership.",
+        "verdict": "incorrect"
+      },
+      "detail": "NOISE",
+      "evidence_reference": null,
+      "foundry_version": "6",
+      "issue_id": "issue-011",
+      "logical_version": "issue-011",
+      "observed_count": 3,
+      "result": "FAIL",
+      "status": "not_at_bar",
+      "title": "Appointment created without confirmation"
+    },
+    {
+      "agent": "finance-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "hallucinations",
+            "confidence": 0.99,
+            "fields": {
+              "category": true,
+              "description": true,
+              "linked_traces": true,
+              "proposed_fix": true,
+              "root_cause": true,
+              "severity": true,
+              "title": true
+            },
+            "finding_type": "MATCHED",
+            "ownership": "none",
+            "ownership_reason": "This card fully matches the reviewed expected root and has sufficient linked traces.",
+            "reasoning": "The card precisely identifies the authoritative $1,250.50 balance being changed to $1,750.50, with the expected category, severity, preservation fix, and three linked traces.",
+            "reference": "sha256:7936f70151ed45122a70d6567aaf4d603f615e4676c6ec4dabe7f4d485e3a462",
+            "severity": "high",
+            "title": "Final balance contradicts tool result",
+            "verdict": "correct"
+          }
+        ],
+        "confidence": 0.99,
+        "fields": {
+          "category": true,
+          "description": true,
+          "linked_traces": true,
+          "proposed_fix": true,
+          "root_cause": true,
+          "severity": true,
+          "title": true
+        },
+        "finding_type": "MATCHED",
+        "ownership": "none",
+        "ownership_reason": "The single observed Insight fully matches the reviewed contradiction of authoritative finance evidence and exceeds the minimum trace requirement.",
+        "verdict": "correct"
+      },
+      "detail": "MATCHED",
+      "evidence_reference": "sha256:9ccdd48cd62947328d35a852bffab0b8fe76eeeed873a72b52257856bd94c394",
+      "foundry_version": "2",
+      "issue_id": "issue-013",
+      "logical_version": "issue-013",
+      "observed_count": 1,
+      "result": "PASS",
+      "status": "observed",
+      "title": "Finance tool evidence contradicted"
+    },
+    {
+      "agent": "finance-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "reliability_errors",
+            "confidence": 0.99,
+            "fields": {
+              "category": false,
+              "description": true,
+              "linked_traces": true,
+              "proposed_fix": true,
+              "root_cause": true,
+              "severity": true,
+              "title": true
+            },
+            "finding_type": "PARTIAL",
+            "ownership": "unresolved",
+            "ownership_reason": "The card is related, but semantic endpoint evidence is absent, so its defect claim cannot independently prove Agent behavior or satisfy the prerequisite for Insight Engine ownership.",
+            "reasoning": "The card correctly identifies the omitted bounded retry, medium severity, restoration fix, and all five trace links. reliability_errors does not match tool_call_failures.",
+            "reference": "sha256:97822090cf133698b168a4667d6290b1253d6f664e3b97fbdd19d73f365eb72c",
+            "severity": "medium",
+            "title": "Retryable transient balance error was not retried",
+            "verdict": "partially_useful"
+          }
+        ],
+        "confidence": 0.99,
+        "fields": {
+          "category": false,
+          "description": true,
+          "linked_traces": true,
+          "proposed_fix": true,
+          "root_cause": true,
+          "severity": true,
+          "title": true
+        },
+        "finding_type": "PARTIAL",
+        "ownership": "unresolved",
+        "ownership_reason": "The card matches the reviewed root but assigns the wrong category. With zero semantic endpoint assertions, strict ownership cannot independently attribute the defect to the Agent or the card error to the Insight Engine.",
+        "verdict": "partially_useful"
+      },
+      "detail": "PARTIAL",
+      "evidence_reference": "sha256:6f9dc4acbbd47a44b9ec9fa3376447fa6cca0bd92bc936eff4e080ce1943bcf3",
+      "foundry_version": "7",
+      "issue_id": "issue-018",
+      "logical_version": "issue-018",
+      "observed_count": 1,
+      "result": "FAIL",
+      "status": "observed",
+      "title": "Required transient retry omitted"
+    },
+    {
+      "agent": "finance-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "cost_tokens",
+            "confidence": 0.99,
+            "fields": {
+              "category": true,
+              "description": true,
+              "linked_traces": true,
+              "proposed_fix": true,
+              "root_cause": true,
+              "severity": true,
+              "title": true
+            },
+            "finding_type": "MATCHED",
+            "ownership": "none",
+            "ownership_reason": "This card fully matches the reviewed expected root and all five required trace links.",
+            "reasoning": "The card precisely describes repeated conversation and tool-result context, with the expected category, severity, deduplication fix, and five linked traces.",
+            "reference": "sha256:d7527b635112e2af1d7aeb50c34ce75ffbd2a87c5c7445d5ece877e683565d5a",
+            "severity": "medium",
+            "title": "Repeated conversation replay bloats final model input",
+            "verdict": "correct"
+          }
+        ],
+        "confidence": 0.99,
+        "fields": {
+          "category": true,
+          "description": true,
+          "linked_traces": true,
+          "proposed_fix": true,
+          "root_cause": true,
+          "severity": true,
+          "title": true
+        },
+        "finding_type": "MATCHED",
+        "ownership": "none",
+        "ownership_reason": "The single observed Insight fully matches the reviewed duplicated-context defect and links all five required traces.",
+        "verdict": "correct"
+      },
+      "detail": "MATCHED",
+      "evidence_reference": "sha256:2b389b07d7211f1ae512d61d3ab3c745318ccd20dc9d518e8939d0dcc5fa3877",
+      "foundry_version": "9",
+      "issue_id": "issue-020",
+      "logical_version": "issue-020",
+      "observed_count": 1,
+      "result": "PASS",
+      "status": "observed",
+      "title": "Finance model context duplicated"
+    },
+    {
+      "agent": "finance-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "reliability_errors",
+            "confidence": 0.99,
+            "fields": {
+              "category": false,
+              "description": true,
+              "linked_traces": false,
+              "proposed_fix": true,
+              "root_cause": true,
+              "severity": true,
+              "title": true
+            },
+            "finding_type": "PARTIAL",
+            "ownership": "unresolved",
+            "ownership_reason": "The card is related, but no semantic endpoint assertion independently proves its retry-loop claim; strict Agent and Insight Engine attribution is unavailable.",
+            "reasoning": "The card identifies repeated non-retryable failures with the expected severity and a suitable retry-policy fix. reliability_errors differs from latency, and two traces do not meet the required five.",
+            "reference": "sha256:e2c71ed5c7c094c5c5c85d2be0f67a97a6ba61f1130d65108bf3b3f9efb0b52d",
+            "severity": "medium",
+            "title": "Repeated retries after non-retryable account lookup failure",
+            "verdict": "partially_useful"
+          }
+        ],
+        "confidence": 0.99,
+        "fields": {
+          "category": false,
+          "description": true,
+          "linked_traces": false,
+          "proposed_fix": true,
+          "root_cause": true,
+          "severity": true,
+          "title": true
+        },
+        "finding_type": "PARTIAL",
+        "ownership": "unresolved",
+        "ownership_reason": "The related card has the wrong category and insufficient trace linkage, while zero semantic endpoint assertions prevent strict attribution to the Agent or Insight Engine.",
+        "verdict": "partially_useful"
+      },
+      "detail": "PARTIAL",
+      "evidence_reference": null,
+      "foundry_version": "8",
+      "issue_id": "issue-019",
+      "logical_version": "issue-019",
+      "observed_count": 1,
+      "result": "FAIL",
+      "status": "not_at_bar",
+      "title": "Permanent finance failure retried in a loop"
+    },
+    {
+      "agent": "finance-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "tool_call_failures",
+            "confidence": 0.99,
+            "fields": {
+              "category": true,
+              "description": true,
+              "linked_traces": true,
+              "proposed_fix": true,
+              "root_cause": true,
+              "severity": true,
+              "title": true
+            },
+            "finding_type": "MATCHED",
+            "ownership": "none",
+            "ownership_reason": "This card fully matches the reviewed expected root and has sufficient linked traces.",
+            "reasoning": "The card accurately identifies the acct-demo-b lookup for an acct-demo-a request, with the expected category, high severity, account-binding fix, and three linked traces.",
+            "reference": "sha256:03ed00e65ab748f35dd334758dab5831fdf70dc6332f0e1a79b557d8aa6096c0",
+            "severity": "high",
+            "title": "Balance lookup used the prohibited account",
+            "verdict": "correct"
+          }
+        ],
+        "confidence": 0.99,
+        "fields": {
+          "category": true,
+          "description": true,
+          "linked_traces": true,
+          "proposed_fix": true,
+          "root_cause": true,
+          "severity": true,
+          "title": true
+        },
+        "finding_type": "MATCHED",
+        "ownership": "none",
+        "ownership_reason": "The single observed Insight fully matches the reviewed wrong-account defect and exceeds the minimum trace requirement.",
+        "verdict": "correct"
+      },
+      "detail": "MATCHED",
+      "evidence_reference": "sha256:f5c9867aea1bdcf4c23bf28ba88d5c3845ff43e0a43178fbab030a546ed3ef76",
+      "foundry_version": "4",
+      "issue_id": "issue-015",
+      "logical_version": "issue-015",
+      "observed_count": 1,
+      "result": "PASS",
+      "status": "observed",
+      "title": "Finance tool uses wrong account scope"
+    },
+    {
+      "agent": "travel-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "output_quality",
+            "confidence": 0.99,
+            "fields": {
+              "category": false,
+              "description": false,
+              "linked_traces": false,
+              "proposed_fix": false,
+              "root_cause": false,
+              "severity": true,
+              "title": false
+            },
+            "finding_type": "NOISE",
+            "ownership": "test_framework",
+            "ownership_reason": "The card addresses output details rather than latency, links only one trace against five required, and has no semantic endpoint assertions.",
+            "reasoning": "The card does not identify serialized search execution or concurrency and links too few traces. Only medium severity matches the expected contract.",
+            "reference": "sha256:058884fd901066d1088f092fc3fa0c6e2138349aa1bee84f15587c6933174044",
+            "severity": "medium",
+            "title": "Searches retrieved counts, not comparison data",
+            "verdict": "incorrect"
+          }
+        ],
+        "confidence": 0.99,
+        "fields": {
+          "category": false,
+          "description": false,
+          "linked_traces": false,
+          "proposed_fix": false,
+          "root_cause": false,
+          "severity": false,
+          "title": false
+        },
+        "finding_type": "INCOMPLETE",
+        "ownership": "test_framework",
+        "ownership_reason": "The fixture executed zero semantic assertions, and the sole unrelated card has one linked trace against the required five. Both endpoint semantics and the expected trace evidence are incomplete.",
+        "verdict": "missing"
+      },
+      "detail": "INCOMPLETE",
+      "evidence_reference": null,
+      "foundry_version": "8",
+      "issue_id": "issue-027",
+      "logical_version": "issue-027",
+      "observed_count": 1,
+      "result": "FAIL",
+      "status": "not_at_bar",
+      "title": "Independent travel searches serialized"
+    },
+    {
+      "agent": "travel-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "hallucinations",
+            "confidence": 0.99,
+            "fields": {
+              "category": true,
+              "description": false,
+              "linked_traces": true,
+              "proposed_fix": true,
+              "root_cause": false,
+              "severity": true,
+              "title": false
+            },
+            "finding_type": "MISMATCHED",
+            "ownership": "test_framework",
+            "ownership_reason": "The fixture has no semantic assertions, and the card describes fabrication without any search rather than fabrication after a failed required search.",
+            "reasoning": "The card identifies unsupported invented availability, hallucinations, high severity, a search-path fix, and one trace. It reports no search call rather than a failed search, and zero semantic assertions independently prove neither behavior.",
+            "reference": "sha256:1df987f6d5cd8cd36921b6c115f2fcdec25a563ce035093ab08b9429b9524ea6",
+            "severity": "high",
+            "title": "Unsupported flight-seat availability claim",
+            "verdict": "incorrect"
+          }
+        ],
+        "confidence": 0.99,
+        "fields": {
+          "category": true,
+          "description": false,
+          "linked_traces": true,
+          "proposed_fix": true,
+          "root_cause": false,
+          "severity": true,
+          "title": false
+        },
+        "finding_type": "INCOMPLETE",
+        "ownership": "test_framework",
+        "ownership_reason": "Endpoint evidence records zero semantic assertions, so fabrication after a failed search is not independently proven. Trace verification alone cannot support Agent or insight_engine ownership.",
+        "verdict": "missing"
+      },
+      "detail": "INCOMPLETE",
+      "evidence_reference": "sha256:488a35ccfb0b10a1ed034d9d6f6516b42956709981c8506ba5d8598f2e17bf3e",
+      "foundry_version": "2",
+      "issue_id": "issue-021",
+      "logical_version": "issue-021",
+      "observed_count": 1,
+      "result": "FAIL",
+      "status": "observed",
+      "title": "Inventory fabricated after search failure"
+    },
+    {
+      "agent": "travel-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "hallucinations",
+            "confidence": 0.98,
+            "fields": {
+              "category": false,
+              "description": false,
+              "linked_traces": true,
+              "proposed_fix": true,
+              "root_cause": false,
+              "severity": true,
+              "title": false
+            },
+            "finding_type": "PARTIAL",
+            "ownership": "test_framework",
+            "ownership_reason": "Zero semantic assertions leave the no-search claim independently unverified, and the card uses a consequence-focused title and wrong category.",
+            "reasoning": "High severity, the search-path fix, and five traces pass. The title emphasizes the unsupported claim, hallucinations conflicts with tool_call_failures, and no semantic assertion proves search omission.",
+            "reference": "sha256:ddf454831e406e81eca970eed602949e6bb4a2c5faaa687eb07ec5f2efc660f2",
+            "severity": "high",
+            "title": "Unsupported inventory availability claim",
+            "verdict": "partially_useful"
+          }
+        ],
+        "confidence": 0.99,
+        "fields": {
+          "category": false,
+          "description": false,
+          "linked_traces": true,
+          "proposed_fix": true,
+          "root_cause": false,
+          "severity": true,
+          "title": false
+        },
+        "finding_type": "INCOMPLETE",
+        "ownership": "test_framework",
+        "ownership_reason": "Endpoint evidence records zero semantic assertions, so omission of the authoritative search is not independently proven. The fixture cannot establish Agent or insight_engine ownership.",
+        "verdict": "missing"
+      },
+      "detail": "INCOMPLETE",
+      "evidence_reference": "sha256:270bdad87d3b30025c73be79f14f3d979bbfb7033f768f71fc3aba22f708bd87",
+      "foundry_version": "4",
+      "issue_id": "issue-023",
+      "logical_version": "issue-023",
+      "observed_count": 1,
+      "result": "FAIL",
+      "status": "observed",
+      "title": "Required inventory search omitted"
+    },
+    {
+      "agent": "travel-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "hallucinations",
+            "confidence": 0.99,
+            "fields": {
+              "category": false,
+              "description": false,
+              "linked_traces": true,
+              "proposed_fix": true,
+              "root_cause": false,
+              "severity": false,
+              "title": true
+            },
+            "finding_type": "PARTIAL",
+            "ownership": "test_framework",
+            "ownership_reason": "Zero semantic assertions leave wrong-tool routing independently unverified, and the card has category and severity errors.",
+            "reasoning": "The title and routing fix align and five traces pass. Hallucinations and medium conflict with tool_call_failures and high, while the endpoint routing claim lacks semantic proof.",
+            "reference": "sha256:de9fb0a7ca8a3a05d57a8cebc72e8305050d0ab1d948d7ee029a93b007cdd9d0",
+            "severity": "medium",
+            "title": "Hotel-search result presented as a flight option",
+            "verdict": "partially_useful"
+          }
+        ],
+        "confidence": 0.99,
+        "fields": {
+          "category": false,
+          "description": false,
+          "linked_traces": true,
+          "proposed_fix": true,
+          "root_cause": false,
+          "severity": false,
+          "title": true
+        },
+        "finding_type": "INCOMPLETE",
+        "ownership": "test_framework",
+        "ownership_reason": "Endpoint evidence records zero semantic assertions, so incompatible routing is not independently proven. The fixture evidence cannot establish Agent or insight_engine ownership.",
+        "verdict": "missing"
+      },
+      "detail": "INCOMPLETE",
+      "evidence_reference": "sha256:8465e282308a3249160b9870780f771cd49595d63261ddf0b767a2fba8196a92",
+      "foundry_version": "3",
+      "issue_id": "issue-022",
+      "logical_version": "issue-022",
+      "observed_count": 1,
+      "result": "FAIL",
+      "status": "observed",
+      "title": "Travel request routed to wrong tool"
+    },
+    {
+      "agent": "travel-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "output_quality",
+            "confidence": 0.99,
+            "fields": {
+              "category": true,
+              "description": false,
+              "linked_traces": true,
+              "proposed_fix": true,
+              "root_cause": false,
+              "severity": false,
+              "title": true
+            },
+            "finding_type": "PARTIAL",
+            "ownership": "test_framework",
+            "ownership_reason": "Zero semantic assertions leave branch loss independently unverified, and the card assigns medium rather than high severity.",
+            "reasoning": "The title, output_quality category, both-branch fix, and five traces align. Medium conflicts with high, and no semantic assertion independently proves that one branch was dropped.",
+            "reference": "sha256:098b6c1f7e67916cca12e9e078c0f70c4df11fb11a349380343d1341e6a5113a",
+            "severity": "medium",
+            "title": "Comparison response omits one searched trip",
+            "verdict": "partially_useful"
+          }
+        ],
+        "confidence": 0.99,
+        "fields": {
+          "category": true,
+          "description": false,
+          "linked_traces": true,
+          "proposed_fix": true,
+          "root_cause": false,
+          "severity": false,
+          "title": true
+        },
+        "finding_type": "INCOMPLETE",
+        "ownership": "test_framework",
+        "ownership_reason": "Endpoint evidence records zero semantic assertions, so dropping one comparison branch is not independently proven. Verified traces alone cannot support Agent or insight_engine ownership.",
+        "verdict": "missing"
+      },
+      "detail": "INCOMPLETE",
+      "evidence_reference": "sha256:65694ddf2040a5f96e57aa7548edfdf2c6c27fabd169e2491605690b02826365",
+      "foundry_version": "7",
+      "issue_id": "issue-026",
+      "logical_version": "issue-026",
+      "observed_count": 1,
+      "result": "FAIL",
+      "status": "observed",
+      "title": "One itinerary dropped from comparison"
+    },
+    {
+      "agent": "support-ticket-agent",
+      "assessment": {
+        "card_evaluations": [],
+        "confidence": 0.99,
+        "fields": {
+          "category": false,
+          "description": false,
+          "linked_traces": false,
+          "proposed_fix": false,
+          "root_cause": false,
+          "severity": false,
+          "title": false
+        },
+        "finding_type": "INCOMPLETE",
+        "ownership": "unresolved",
+        "ownership_reason": "No Insight was observed, but zero semantic assertions leave stale-revision acceptance unproven independently. The missing card cannot be attributed to the Insight engine.",
+        "verdict": "missing"
+      },
+      "detail": "INCOMPLETE",
+      "evidence_reference": null,
+      "foundry_version": "3",
+      "issue_id": "issue-030",
+      "logical_version": "issue-030",
+      "observed_count": 0,
+      "result": "FAIL",
+      "status": "not_at_bar",
+      "title": "Stale ticket revision accepted"
+    },
+    {
+      "agent": "support-ticket-agent",
+      "assessment": {
+        "card_evaluations": [],
+        "confidence": 0.99,
+        "fields": {
+          "category": false,
+          "description": false,
+          "linked_traces": false,
+          "proposed_fix": false,
+          "root_cause": false,
+          "severity": false,
+          "title": false
+        },
+        "finding_type": "INCOMPLETE",
+        "ownership": "unresolved",
+        "ownership_reason": "No card was generated, but zero semantic assertions leave the no-progress loop unproven. Strict ownership cannot assign the absence to the Insight engine.",
+        "verdict": "missing"
+      },
+      "detail": "INCOMPLETE",
+      "evidence_reference": null,
+      "foundry_version": "4",
+      "issue_id": "issue-031",
+      "logical_version": "issue-031",
+      "observed_count": 0,
+      "result": "FAIL",
+      "status": "not_at_bar",
+      "title": "Ticket orchestration makes no progress"
+    },
+    {
+      "agent": "support-ticket-agent",
+      "assessment": {
+        "card_evaluations": [
+          {
+            "category": "tool_call_failures",
+            "confidence": 0.99,
+            "fields": {
+              "category": false,
+              "description": false,
+              "linked_traces": true,
+              "proposed_fix": false,
+              "root_cause": false,
+              "severity": false,
+              "title": false
+            },
+            "finding_type": "MISMATCHED",
+            "ownership": "unresolved",
+            "ownership_reason": "The card mismatch is clear, but semantic endpoint evidence is absent, preventing Insight-engine attribution or exclusion of an Agent or test-contract defect.",
+            "reasoning": "The card identifies failed-read gating, not fragmentation of one state-propagation root across cards. Title, category, severity, and remediation conflict with the grouping contract; only five linked traces pass.",
+            "reference": "sha256:91795872531d1cbcca7b7c0a63612f6bb5355c2327af40822fb6d1474a1808ef",
+            "severity": "high",
+            "title": "Update attempted after failed ticket read",
+            "verdict": "incorrect"
+          }
+        ],
+        "confidence": 0.99,
+        "fields": {
+          "category": false,
+          "description": false,
+          "linked_traces": true,
+          "proposed_fix": false,
+          "root_cause": false,
+          "severity": false,
+          "title": false
+        },
+        "finding_type": "MISMATCHED",
+        "ownership": "unresolved",
+        "ownership_reason": "The card clearly mismatches the expected fragmentation contract, but zero semantic endpoint assertions leave the state-propagation behavior unproven. Strict ownership remains unresolved.",
+        "verdict": "incorrect"
+      },
+      "detail": "MISMATCHED",
+      "evidence_reference": "sha256:cad4afe7c0f696b336a0990abbd8cfa2a9959d9ba319f292a2d931b1c2df3716",
+      "foundry_version": "9",
+      "issue_id": "issue-036",
+      "logical_version": "issue-036",
+      "observed_count": 1,
+      "result": "FAIL",
+      "status": "observed",
+      "title": "One ticket defect fragments into multiple cards"
+    },
+    {
+      "agent": "support-ticket-agent",
+      "assessment": {
+        "card_evaluations": [],
+        "confidence": 0.99,
+        "fields": {
+          "category": false,
+          "description": false,
+          "linked_traces": false,
+          "proposed_fix": false,
+          "root_cause": false,
+          "severity": false,
+          "title": false
+        },
+        "finding_type": "MISSING",
+        "ownership": "insight_engine",
+        "ownership_reason": "All five semantic assertions pass and the trace contract is verified, independently proving endpoint behavior. No Insight was emitted, so the Insight engine owns the miss.",
+        "verdict": "missing"
+      },
+      "detail": "MISSING",
+      "evidence_reference": null,
+      "foundry_version": "5",
+      "issue_id": "issue-032",
+      "logical_version": "issue-032",
+      "observed_count": 0,
+      "result": "FAIL",
+      "status": "not_at_bar",
+      "title": "Valid ticket request rejected before work"
+    },
+    {
+      "agent": "support-ticket-agent",
+      "assessment": {
+        "card_evaluations": [],
+        "confidence": 0.99,
+        "fields": {
+          "category": false,
+          "description": false,
+          "linked_traces": false,
+          "proposed_fix": false,
+          "root_cause": false,
+          "severity": false,
+          "title": false
+        },
+        "finding_type": "INCOMPLETE",
+        "ownership": "unresolved",
+        "ownership_reason": "The package contains no Insight and no semantic assertions proving false success without dispatch. Transport and trace completion alone do not permit Insight-engine ownership.",
+        "verdict": "missing"
+      },
+      "detail": "INCOMPLETE",
+      "evidence_reference": null,
+      "foundry_version": "8",
+      "issue_id": "issue-035",
+      "logical_version": "issue-035",
+      "observed_count": 0,
+      "result": "FAIL",
+      "status": "not_at_bar",
+      "title": "Ticket operation reports false success"
+    }
+  ],
+  "manifest_reference": "sha256:e6c84b04ad1888fca3dfe7ee88dd10f1d6b76b3c5d999ee30d84704365bcaf18",
+  "profile": "daily",
+  "report_date": "2026-08-25",
+  "run_id": "aiq-20260825-r01",
+  "schema_version": "1.0.0",
+  "status": "FAIL",
+  "summary": {
+    "baseline_passed": 1,
+    "clean_card_precision": 42.9,
+    "field_quality_score": 38.8,
+    "incomplete": false,
+    "issues_correct": 3,
+    "issues_expected": 25,
+    "issues_partial": 5,
+    "noise_cards": 13,
+    "observed_cards": 35,
+    "quality_failures": 26,
+    "quality_score": 39.4,
+    "quality_score_formula": "field_weighted_v1",
+    "quality_threshold": 90,
+    "unverified_cards": 7
+  }
+}
