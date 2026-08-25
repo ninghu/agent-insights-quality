@@ -2,25 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "content_digest", "status", "attempts"],
+  "required": ["schema_version", "content_digest", "status", "provider_reference", "retry_allowed"],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"const": "2.0.0"},
     "content_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-    "status": {"enum": ["sent", "failed"]},
-    "attempts": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["transport", "status", "content_digest"],
-        "properties": {
-          "transport": {"enum": ["connected_microsoft_mail", "graph", "outlook"]},
-          "status": {"enum": ["sent", "failed", "unavailable", "unauthorized"]},
-          "content_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-          "provider_reference": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"}
-        }
-      }
-    }
+    "status": {"enum": ["sent", "failed", "unknown"]},
+    "provider_reference": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
+    "retry_allowed": {"type": "boolean"}
   }
 }

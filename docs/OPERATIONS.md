@@ -102,10 +102,10 @@ one generated Insight card, plus an explicit row for each missing expected issue
 GitHub-rendered Markdown reports; private prompts, responses, traces, and resource identifiers remain
 excluded.
 
-The direct-email request remains private. Send it through connected Microsoft mail, authorized Graph,
-or local Outlook in that order. Stop after the first successful transport and import one receipt.
-For Outlook, `Send()` returning without error is success; do not query Sent Items or perform a
-post-send mailbox validation.
+The direct-email request remains private. Use the available Copilot email capability exactly once and
+set HTML mode explicitly. Never create a draft or retry an ambiguous send. Import one receipt with
+status `sent`, `failed`, or `unknown`; ambiguous delivery sets `retry_allowed=false` and requires
+manual verification.
 
 ```powershell
 python -m agent_insights_quality email-receipt-import `

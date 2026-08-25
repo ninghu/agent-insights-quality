@@ -71,5 +71,5 @@ python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD>
 Infrastructure deployment resolves the latest GPT-5.6 Terra version available in West US 2 from the
 Azure ARM model catalog.
 
-See [Framework Overview](docs/FRAMEWORK_OVERVIEW.md), [Operations](docs/OPERATIONS.md), and
-[Quality Bar](docs/QUALITY_BAR.md).
+See [Framework Overview](docs/FRAMEWORK_OVERVIEW.md), [Operations](docs/OPERATIONS.md),
+[Automation Setup](docs/AUTOMATION_SETUP.md), and [Quality Bar](docs/QUALITY_BAR.md).
