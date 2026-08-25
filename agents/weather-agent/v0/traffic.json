@@ -1,0 +1,268 @@
+{
+  "contract_version": "1.0",
+  "agent_name": "weather-agent",
+  "logical_version": "v0",
+  "coverage": [
+    "grounded_success",
+    "normal_latency_and_token_use",
+    "bounded_latency_and_output",
+    "conversation_memory",
+    "handled_transient_tool_failure",
+    "handled_partial_result"
+  ],
+  "requests": [
+    {
+      "id": "weather-v0-grounded",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "What is the current weather in Portland, Oregon? Use Celsius."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-weather-v0-a"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Uses the successful current-conditions result and states 14 C with light rain."
+      },
+      "tool_fixtures": [
+        {
+          "tool": "get_current_conditions",
+          "arguments": {
+            "location": "Portland, Oregon",
+            "unit": "celsius"
+          },
+          "returns": {
+            "condition": "light rain",
+            "temperature": 14,
+            "unit": "celsius"
+          }
+        }
+      ]
+    },
+    {
+      "id": "weather-v0-bounded",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Give me the next one-day forecast for Oslo in at most 30 words. Call get_forecast with days=1."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-weather-v0-b"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Uses one forecast lookup and answers in no more than 30 words."
+      },
+      "tool_fixtures": [
+        {
+          "tool": "get_forecast",
+          "arguments": {
+            "location": "Oslo",
+            "days": 1,
+            "unit": "celsius"
+          },
+          "returns": {
+            "days": [
+              {
+                "date": "2030-05-10",
+                "condition": "cloudy",
+                "high": 12,
+                "low": 7
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "weather-v0-memory",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Use Fahrenheit for this conversation. What is the weather in Austin?"
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-weather-v0-c"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Retains Fahrenheit and reports the grounded 86 F result."
+      },
+      "tool_fixtures": [
+        {
+          "tool": "get_current_conditions",
+          "arguments": {
+            "location": "Austin",
+            "unit": "fahrenheit"
+          },
+          "returns": {
+            "condition": "sunny",
+            "temperature": 86,
+            "unit": "fahrenheit"
+          }
+        }
+      ]
+    },
+    {
+      "id": "weather-v0-transient",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Are there active alerts for Miami?"
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-weather-v0-d"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Retries once after the transient failure and reports that no alerts are active."
+      },
+      "tool_fixtures": [
+        {
+          "tool": "get_weather_alerts",
+          "arguments": {
+            "location": "Miami"
+          },
+          "sequence": [
+            {
+              "error": {
+                "code": "temporary_unavailable",
+                "retryable": true
+              }
+            },
+            {
+              "returns": {
+                "alerts": []
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "weather-v0-partial",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Give me a three-day forecast for Reykjavik."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-weather-v0-e"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Reports the two available days and clearly labels the third day unavailable."
+      },
+      "tool_fixtures": [
+        {
+          "tool": "get_forecast",
+          "arguments": {
+            "location": "Reykjavik",
+            "days": 3,
+            "unit": "celsius"
+          },
+          "returns": {
+            "days": [
+              {
+                "day": 1,
+                "condition": "windy",
+                "high": 9,
+                "low": 5
+              },
+              {
+                "day": 2,
+                "condition": "rain",
+                "high": 8,
+                "low": 4
+              }
+            ],
+            "partial": true
+          }
+        }
+      ]
+    }
+  ],
+  "data_class": "synthetic_public_safe",
+  "traffic_source": "endpoint_requests"
+}

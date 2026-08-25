@@ -1,0 +1,174 @@
+{
+  "contract_version": "1.0",
+  "agent_name": "support-ticket-agent",
+  "logical_version": "issue-032",
+  "requests": [
+    {
+      "id": "issue-032-request-1",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Read valid ticket-demo-1."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-support-ticket-agent-issue-032-1"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Returns rejection text before any work is dispatched.",
+        "defect_observed": true,
+        "semantic_assertions": {"required_terms_all": ["rejected", "before"]}
+      }
+    },
+    {
+      "id": "issue-032-request-2",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Read valid ticket-demo-2."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-support-ticket-agent-issue-032-2"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Returns rejection text before any work is dispatched.",
+        "defect_observed": true,
+        "semantic_assertions": {"required_terms_all": ["rejected", "before"]}
+      }
+    },
+    {
+      "id": "issue-032-request-3",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Read valid ticket-demo-1."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-support-ticket-agent-issue-032-3"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Returns rejection text before any work is dispatched.",
+        "defect_observed": true,
+        "semantic_assertions": {"required_terms_all": ["rejected", "before"]}
+      }
+    },
+    {
+      "id": "issue-032-request-4",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Read valid ticket-demo-2."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-support-ticket-agent-issue-032-4"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Returns rejection text before any work is dispatched.",
+        "defect_observed": true,
+        "semantic_assertions": {"required_terms_all": ["rejected", "before"]}
+      }
+    },
+    {
+      "id": "issue-032-request-5",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Read valid ticket-demo-1."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-support-ticket-agent-issue-032-5"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Returns rejection text before any work is dispatched.",
+        "defect_observed": true,
+        "semantic_assertions": {"required_terms_all": ["rejected", "before"]}
+      }
+    }
+  ],
+  "data_class": "synthetic_public_safe",
+  "traffic_source": "endpoint_requests"
+}

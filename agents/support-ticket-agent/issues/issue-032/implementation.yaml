@@ -1,0 +1,35 @@
+contract_version: '1.0'
+issue_id: issue-032
+agent_name: support-ticket-agent
+framework: custom-python-responses
+deployment:
+  kind: foundry_hosted_custom_container
+  baseline: ../../v0
+  protocol: responses
+  port: 8088
+  build_file: ../../v0/Dockerfile
+category: reliability_errors
+severity: high
+expected_behavior:
+  desired: Dispatch valid input to model or tool work.
+  injected: Returns a rejection response before any work is dispatched.
+injected_defect:
+  single_root: A request guard returns rejection text for matching valid input.
+  activation: all_matching_endpoint_requests
+injection:
+  mode: abort_before_dispatch
+  parameters: {}
+packaging:
+  command: python ../../v0/package.py --issue implementation.yaml --output issue-032.zip
+  runtime_config: issue.yaml
+  include_exactly_one_issue: true
+  exclude:
+  - ../../issues
+determinism:
+  traffic_file: traffic.json
+  minimum_requests: 5
+public_safety:
+  synthetic_only: true
+  real_people: false
+  credentials: false
+  service_locations: false

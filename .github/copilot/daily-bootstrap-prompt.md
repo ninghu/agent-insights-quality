@@ -1,14 +1,16 @@
-Run today's Agent Insights quality workflow in ninghu/agent-insights-quality.
-Run `python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD>`; do not invoke
-readiness as a separate stopping step.
-The wrapper must continue through its failure finalizer after any nonzero phase, persist an
-INCONCLUSIVE report and unsent direct-email handoff, and then return nonzero. Follow
-`.github/skills/agent-insights-quality-daily/SKILL.md` exactly using the `ninghu` identity and
-GPT-5.6 Sol. Submit the email handoff using its no-duplicate order: connected Copilot mail first;
-Graph `/me/sendMail` only with confirmed `Mail.Send`; then local Outlook COM only on `hostId=local`
-for the exact authenticated-user test mailbox with Sent Items verification. Preserve one
-`content_digest`, stop after the first confirmed success, never use a Logic App, and import the
-ordered receipt before claiming delivery.
-Read `config/ado-policy.yaml` before any ADO action. Generated automation must not edit it. With
-`auto_apply_enabled: false`, keep `ado-apply` candidate-only and make no create, patch, reopen, or
-comment/evidence request; a runtime environment value may disable but never enable that policy.
+Run the weekday Agent Insights quality qualification from the repository skill.
+
+1. Resolve the current Pacific business date and stop if it is not a weekday.
+2. Use only `python -m agent_insights_quality run-daily --report-date <date>`. Never deploy,
+   provision, rotate telemetry, target staging, or modify repository contracts.
+3. Preserve the runner's live Agent/version progress output. If clean-window, endpoint, telemetry,
+   trace, or Agent Insights evidence is incomplete, finalize `INCOMPLETE` and do not publish.
+4. Assess all five baseline packages and 25 issue packages with GPT-5.6 Sol using the repository
+   assessment prompt. Evaluate every generated card, use independent endpoint evidence, and classify
+   ownership.
+5. Finalize the report. Send its immutable email request exactly once using connected Microsoft mail,
+   authorized Graph, then local Outlook as fallbacks; stop after the first successful transport and
+   import the receipt.
+6. Create an `aiq-daily/` generated-only pull request containing report JSON/Markdown, five per-Agent
+   Markdown reports, latest views, trend, and email receipt.
+7. Enable auto-merge only for a trusted, complete `PASS` or `FAIL` after required checks pass.

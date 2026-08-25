@@ -1,0 +1,12 @@
+schema_version: "1.0.0"
+weekday_schedule: [Monday, Tuesday, Wednesday, Thursday, Friday]
+daily_profile: daily
+full_run_profile: staging
+generated_branch_prefix: aiq-daily/
+auto_merge_statuses: [PASS, FAIL]
+issues_per_agent_daily: 5
+max_parallel_agents: 5
+insight_lookback_hours: 3
+qualification_profiles_allow_debug_traffic: false
+clean_window_preflight_required: true
+telemetry_generation: g19

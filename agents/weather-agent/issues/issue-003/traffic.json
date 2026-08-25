@@ -1,0 +1,279 @@
+{
+  "contract_version": "1.0",
+  "agent_name": "weather-agent",
+  "logical_version": "issue-003",
+  "requests": [
+    {
+      "id": "issue-003-request-1",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "What are current conditions at Public Demo Location 1?"
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-weather-issue-003-1"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Returns forecast-shaped high and low values for a current-conditions request.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": ["high", "low"]
+        }
+      },
+      "tool_fixtures": [
+        {
+          "tool": "get_forecast",
+          "arguments": {
+            "location": "Public Demo Location 1",
+            "days": 1,
+            "unit": "celsius"
+          },
+          "returns": {
+            "days": [
+              {
+                "condition": "cloudy",
+                "high": 18,
+                "low": 11
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "issue-003-request-2",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "What are current conditions at Public Demo Location 2?"
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-weather-issue-003-2"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Returns forecast-shaped high and low values for a current-conditions request.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": ["high", "low"]
+        }
+      },
+      "tool_fixtures": [
+        {
+          "tool": "get_forecast",
+          "arguments": {
+            "location": "Public Demo Location 2",
+            "days": 1,
+            "unit": "celsius"
+          },
+          "returns": {
+            "days": [
+              {
+                "condition": "cloudy",
+                "high": 18,
+                "low": 11
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "issue-003-request-3",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "What are current conditions at Public Demo Location 3?"
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-weather-issue-003-3"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Returns forecast-shaped high and low values for a current-conditions request.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": ["high", "low"]
+        }
+      },
+      "tool_fixtures": [
+        {
+          "tool": "get_forecast",
+          "arguments": {
+            "location": "Public Demo Location 3",
+            "days": 1,
+            "unit": "celsius"
+          },
+          "returns": {
+            "days": [
+              {
+                "condition": "cloudy",
+                "high": 18,
+                "low": 11
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "issue-003-request-4",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "What are current conditions at Public Demo Location 4?"
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-weather-issue-003-4"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Returns forecast-shaped high and low values for a current-conditions request.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": ["high", "low"]
+        }
+      },
+      "tool_fixtures": [
+        {
+          "tool": "get_forecast",
+          "arguments": {
+            "location": "Public Demo Location 4",
+            "days": 1,
+            "unit": "celsius"
+          },
+          "returns": {
+            "days": [
+              {
+                "condition": "cloudy",
+                "high": 18,
+                "low": 11
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "issue-003-request-5",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "What are current conditions at Public Demo Location 5?"
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-weather-issue-003-5"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Returns forecast-shaped high and low values for a current-conditions request.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": ["high", "low"]
+        }
+      },
+      "tool_fixtures": [
+        {
+          "tool": "get_forecast",
+          "arguments": {
+            "location": "Public Demo Location 5",
+            "days": 1,
+            "unit": "celsius"
+          },
+          "returns": {
+            "days": [
+              {
+                "condition": "cloudy",
+                "high": 18,
+                "low": 11
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "data_class": "synthetic_public_safe",
+  "traffic_source": "endpoint_requests"
+}

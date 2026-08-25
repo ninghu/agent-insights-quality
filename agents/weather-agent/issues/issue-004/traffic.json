@@ -1,0 +1,239 @@
+{
+  "contract_version": "1.0",
+  "agent_name": "weather-agent",
+  "logical_version": "issue-004",
+  "requests": [
+    {
+      "id": "issue-004-request-1",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Use Celsius for this conversation and check Public Demo Location 1."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-weather-issue-004-shared"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Establishes the Celsius preference for later endpoint requests.",
+        "defect_observed": false
+      },
+      "tool_fixtures": [
+        {
+          "tool": "get_current_conditions",
+          "arguments": {
+            "location": "Public Demo Location 1",
+            "unit": "celsius"
+          },
+          "returns": {
+            "condition": "clear",
+            "temperature": 20,
+            "unit": "celsius"
+          }
+        }
+      ]
+    },
+    {
+      "id": "issue-004-request-2",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Now check Public Demo Location 2."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-weather-issue-004-shared"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Uses Fahrenheit rather than the retained Celsius preference.",
+        "defect_observed": true
+      },
+      "tool_fixtures": [
+        {
+          "tool": "get_current_conditions",
+          "arguments": {
+            "location": "Public Demo Location 2",
+            "unit": "fahrenheit"
+          },
+          "returns": {
+            "condition": "clear",
+            "temperature": 68,
+            "unit": "fahrenheit"
+          }
+        }
+      ]
+    },
+    {
+      "id": "issue-004-request-3",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "What about Public Demo Location 3?"
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-weather-issue-004-shared"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Uses Fahrenheit rather than the retained Celsius preference.",
+        "defect_observed": true
+      },
+      "tool_fixtures": [
+        {
+          "tool": "get_current_conditions",
+          "arguments": {
+            "location": "Public Demo Location 3",
+            "unit": "fahrenheit"
+          },
+          "returns": {
+            "condition": "clear",
+            "temperature": 68,
+            "unit": "fahrenheit"
+          }
+        }
+      ]
+    },
+    {
+      "id": "issue-004-request-4",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Check Public Demo Location 4 too."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-weather-issue-004-shared"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Uses Fahrenheit rather than the retained Celsius preference.",
+        "defect_observed": true
+      },
+      "tool_fixtures": [
+        {
+          "tool": "get_current_conditions",
+          "arguments": {
+            "location": "Public Demo Location 4",
+            "unit": "fahrenheit"
+          },
+          "returns": {
+            "condition": "clear",
+            "temperature": 68,
+            "unit": "fahrenheit"
+          }
+        }
+      ]
+    },
+    {
+      "id": "issue-004-request-5",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Finally check Public Demo Location 5."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-weather-issue-004-shared"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Uses Fahrenheit rather than the retained Celsius preference.",
+        "defect_observed": true
+      },
+      "tool_fixtures": [
+        {
+          "tool": "get_current_conditions",
+          "arguments": {
+            "location": "Public Demo Location 5",
+            "unit": "fahrenheit"
+          },
+          "returns": {
+            "condition": "clear",
+            "temperature": 68,
+            "unit": "fahrenheit"
+          }
+        }
+      ]
+    }
+  ],
+  "data_class": "synthetic_public_safe",
+  "traffic_source": "endpoint_requests"
+}

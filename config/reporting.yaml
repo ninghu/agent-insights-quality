@@ -1,9 +1,18 @@
 schema_version: "1.0.0"
-mode: test
-recipient_variable: AIQ_TEST_REPORT_RECIPIENT
-recipient_variables:
-  test: AIQ_TEST_REPORT_RECIPIENT
-  production: AIQ_PRODUCTION_REPORT_RECIPIENT
+recipient_mode: authenticated_user
 allowed_domain: microsoft.com
-promotion_requires_human_review: true
-automation_can_promote: false
+transport_order: [connected_microsoft_mail, graph, outlook]
+stop_after_first_confirmed_success: true
+quality_score:
+  formula: field_weighted_v1
+  field_quality_weight: 0.85
+  clean_card_precision_weight: 0.15
+  field_weights:
+    root_cause: 0.25
+    title: 0.10
+    description: 0.15
+    category: 0.10
+    severity: 0.10
+    proposed_fix: 0.15
+    linked_traces: 0.15
+  pass_threshold: 90

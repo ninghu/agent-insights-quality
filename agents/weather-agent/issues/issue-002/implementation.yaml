@@ -1,0 +1,32 @@
+contract_version: '1.0'
+issue_id: issue-002
+agent_name: weather-agent
+framework: foundry-prompt-agent
+deployment:
+  kind: native_prompt
+  model: gpt-5.6-terra
+  definition: definition.json
+category: output_quality
+severity: medium
+expected_behavior:
+  desired: Return valid JSON matching every explicitly required field and type.
+  injected: Returns prose that violates the requested machine-readable response contract.
+injected_defect:
+  single_root: Instructions force prose even when the caller supplies a JSON contract.
+  activation: all_matching_endpoint_requests
+  definition_is_complete: true
+determinism:
+  temperature: 0
+  definition_sha256: 2ab69a8bcf5bfa93bb7703d3a5a901a351acfb707e73da5736d4bafaf2cabd46
+  traffic_file: traffic.json
+  minimum_requests: 5
+artifacts:
+  include:
+  - definition.json
+  - implementation.yaml
+  - traffic.json
+public_safety:
+  synthetic_only: true
+  real_people: false
+  credentials: false
+  service_locations: false

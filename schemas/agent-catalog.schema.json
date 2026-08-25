@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "project_contract", "models", "agents"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "project_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["daily_project", "staging_project", "telemetry_retention_days", "artifact_retention_days", "application_insights_access", "direct_trace_injection"],
+      "properties": {
+        "daily_project": {"const": "agent-insights-quality"},
+        "staging_project": {"const": "agent-insights-quality-staging"},
+        "telemetry_retention_days": {"const": 90},
+        "artifact_retention_days": {"const": 90},
+        "application_insights_access": {"const": "read_only"},
+        "direct_trace_injection": {"const": "forbidden"}
+      }
+    },
+    "models": {"type": "object"},
+    "agents": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "type", "framework", "model", "baseline_path", "issue_ids"],
+        "properties": {
+          "name": {"enum": ["weather-agent", "healthcare-agent", "finance-agent", "travel-agent", "support-ticket-agent"]},
+          "type": {"enum": ["prompt", "hosted_code", "hosted_custom_container"]},
+          "framework": {"enum": ["foundry_prompt", "microsoft_agent_framework", "langgraph", "custom_responses"]},
+          "model": {"const": "gpt-5.6-terra"},
+          "baseline_path": {"type": "string", "pattern": "^agents/[a-z-]+/v0$"},
+          "issue_ids": {
+            "type": "array",
+            "minItems": 6,
+            "maxItems": 8,
+            "uniqueItems": true,
+            "items": {"type": "string", "pattern": "^issue-[0-9]{3}$"}
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,9 @@
+agent-framework-core==1.14.0
+agent-framework-foundry==1.11.0
+agent-framework-foundry-hosting==1.0.0b260813
+azure-identity==1.25.3
+opentelemetry-api==1.43.0
+opentelemetry-exporter-otlp-proto-http==1.43.0
+opentelemetry-sdk==1.43.0
+pydantic==2.13.4
+PyYAML==6.0.3

@@ -1,0 +1,32 @@
+contract_version: '1.0'
+issue_id: issue-005
+agent_name: weather-agent
+framework: foundry-prompt-agent
+deployment:
+  kind: native_prompt
+  model: gpt-5.6-terra
+  definition: definition.json
+category: latency
+severity: low
+expected_behavior:
+  desired: Call a successful weather tool once for one unchanged request.
+  injected: Calls the same successful tool twice with identical arguments.
+injected_defect:
+  single_root: Instructions mandate an unnecessary verification call after every success.
+  activation: all_matching_endpoint_requests
+  definition_is_complete: true
+determinism:
+  temperature: 0
+  definition_sha256: 18a63a19cd475824bf855591f3980b59fe81b53f2dcbacb47674c914f79ab3cb
+  traffic_file: traffic.json
+  minimum_requests: 5
+artifacts:
+  include:
+  - definition.json
+  - implementation.yaml
+  - traffic.json
+public_safety:
+  synthetic_only: true
+  real_people: false
+  credentials: false
+  service_locations: false

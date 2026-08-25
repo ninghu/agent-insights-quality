@@ -1,0 +1,6 @@
+contract_version: '1.0'
+issue_id: v0
+agent_name: support-ticket-agent
+injection:
+  mode: none
+  parameters: {}

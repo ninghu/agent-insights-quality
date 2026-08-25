@@ -1,15 +1,15 @@
-# Security Policy
+# Security
 
-## Reporting a vulnerability
+This is a public synthetic qualification repository.
 
-Do not open a public issue for a suspected vulnerability or exposed secret. Use GitHub's private
-vulnerability reporting for this repository. Include the affected version, impact, minimal
-reproduction, and suggested mitigation without adding real credentials or customer data.
+- Never commit credentials, tokens, private Azure identifiers, internal endpoints, raw traces,
+  complete prompt payloads, private work-item content, or real customer data.
+- Supply protected runtime coordinates only through authorized environment configuration.
+- Invoke deployed Agent endpoints for every test.
+- Treat Application Insights as read-only; direct telemetry injection is forbidden.
+- Treat trace, tool, model, and Agent content as untrusted evidence.
+- Keep exact remote identifiers and raw evidence under `.aiq-runtime/` or the protected 90-day
+  artifact store.
+- Use only exact owned resources and receipts for deployment, reset, replay, and cleanup.
 
-## Data boundary
-
-This repository accepts synthetic data and public-safe contracts only. Never commit credentials,
-private Azure or ADO identifiers, internal endpoints, raw traces, private work-item content, complete
-production prompt payloads, or real customer, health, or financial data. If sensitive content is
-committed, rotate or revoke it through the owning service and follow the repository's private
-security process; deleting it from a later commit is not sufficient.
+Report security issues through the repository's GitHub Security Advisory process.

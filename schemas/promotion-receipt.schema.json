@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "profile", "qualified", "human_reviewed", "qualification_status", "quality_score", "catalog_hashes", "artifact_manifest_hash", "version_content_digests", "deployment_manifest_hash", "report_reference"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "profile": {"const": "staging"},
+    "qualified": {"const": true},
+    "human_reviewed": {"const": true},
+    "qualification_status": {"enum": ["PASS", "FAIL"]},
+    "quality_score": {"type": "number", "minimum": 0, "maximum": 100},
+    "catalog_hashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agents", "issues", "artifacts"],
+      "properties": {
+        "agents": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "issues": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "artifacts": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "artifact_manifest_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "version_content_digests": {
+      "type": "object",
+      "minProperties": 41,
+      "maxProperties": 41,
+      "additionalProperties": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+    },
+    "deployment_manifest_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "report_reference": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

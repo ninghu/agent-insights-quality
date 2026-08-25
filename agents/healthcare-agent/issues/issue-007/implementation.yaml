@@ -1,0 +1,32 @@
+contract_version: '1.0'
+issue_id: issue-007
+agent_name: healthcare-agent
+framework: foundry-prompt-agent
+deployment:
+  kind: native_prompt
+  model: gpt-5.6-terra
+  definition: definition.json
+category: output_quality
+severity: medium
+expected_behavior:
+  desired: Include owner, next_action, deadline, and validation in every handoff.
+  injected: Omits one or more required handoff fields.
+injected_defect:
+  single_root: Instructions redefine a handoff as free-form prose with no required fields.
+  activation: all_matching_endpoint_requests
+  definition_is_complete: true
+determinism:
+  temperature: 0
+  definition_sha256: 00bd3bbac5050be7f924e767a4560643319886d080039f9cf65f235813a4a686
+  traffic_file: traffic.json
+  minimum_requests: 5
+artifacts:
+  include:
+  - definition.json
+  - implementation.yaml
+  - traffic.json
+public_safety:
+  synthetic_only: true
+  real_people: false
+  credentials: false
+  service_locations: false

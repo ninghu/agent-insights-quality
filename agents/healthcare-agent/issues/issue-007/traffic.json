@@ -1,0 +1,234 @@
+{
+  "contract_version": "1.0",
+  "agent_name": "healthcare-agent",
+  "logical_version": "issue-007",
+  "requests": [
+    {
+      "id": "issue-007-request-1",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Prepare a handoff for a scheduling specialist."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-health-issue-007-1"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "The handoff lacks at least one required ownership or validation field.",
+        "defect_observed": true
+      },
+      "tool_fixtures": [
+        {
+          "tool": "lookup_slots",
+          "arguments": {
+            "account_scope": "demo-account-a",
+            "provider": "Dr. Rivera",
+            "date": "2026-09-21"
+          },
+          "returns": {
+            "slots": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "issue-007-request-2",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Handoff my unresolved slot request."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-health-issue-007-2"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "The handoff lacks at least one required ownership or validation field.",
+        "defect_observed": true
+      },
+      "tool_fixtures": [
+        {
+          "tool": "lookup_slots",
+          "arguments": {
+            "account_scope": "demo-account-a",
+            "provider": "Dr. Rivera",
+            "date": "2026-09-22"
+          },
+          "returns": {
+            "slots": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "issue-007-request-3",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Create a handoff for a provider correction."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-health-issue-007-3"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "The handoff lacks at least one required ownership or validation field.",
+        "defect_observed": true
+      },
+      "tool_fixtures": [
+        {
+          "tool": "lookup_slots",
+          "arguments": {
+            "account_scope": "demo-account-a",
+            "provider": "Dr. Rivera",
+            "date": "2026-09-23"
+          },
+          "returns": {
+            "slots": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "issue-007-request-4",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Send a handoff for an unavailable date."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-health-issue-007-4"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "The handoff lacks at least one required ownership or validation field.",
+        "defect_observed": true
+      },
+      "tool_fixtures": [
+        {
+          "tool": "lookup_slots",
+          "arguments": {
+            "account_scope": "demo-account-a",
+            "provider": "Dr. Rivera",
+            "date": "2026-09-24"
+          },
+          "returns": {
+            "slots": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "issue-007-request-5",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Prepare a handoff for a failed synthetic booking."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-health-issue-007-5"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "The handoff lacks at least one required ownership or validation field.",
+        "defect_observed": true
+      },
+      "tool_fixtures": [
+        {
+          "tool": "lookup_slots",
+          "arguments": {
+            "account_scope": "demo-account-a",
+            "provider": "Dr. Rivera",
+            "date": "2026-09-25"
+          },
+          "returns": {
+            "slots": []
+          }
+        }
+      ]
+    }
+  ],
+  "data_class": "synthetic_public_safe",
+  "traffic_source": "endpoint_requests"
+}

@@ -1,36 +1,17 @@
 targetScope = 'subscription'
 
-@description('Dedicated resource group name supplied at deployment time.')
-param resourceGroupName string
-
-@allowed([
-  'westus2'
-])
+param resourceGroupName string = 'agent-insights-quality-rg'
 param location string = 'westus2'
-
-@description('Globally unique suffix generated outside source control.')
-@minLength(4)
-@maxLength(12)
-param uniqueSuffix string
-
-@description('GPT-5.6 Terra model version selected during reviewed deployment.')
 param terraModelVersion string
-
-@description('Reviewed capacity for the Terra test-agent deployment.')
-@minValue(1)
-@maxValue(1000)
-param terraAgentCapacity int = 100
-
-@description('Reviewed capacity for the Terra insights-generator deployment.')
-@minValue(1)
-@maxValue(1000)
-param terraInsightsCapacity int = 100
-
-@description('Reviewed automation owner used for exact cleanup boundaries.')
-param automationOwner string
-
-@description('Microsoft Entra object ID of the user that runs reviewed quality automation.')
+param automationOwner string = 'ninghu'
 param automationPrincipalId string
+param telemetryGeneration string
+@minValue(1)
+@maxValue(1000)
+param testAgentCapacity int = 100
+@minValue(1)
+@maxValue(1000)
+param insightGenerationCapacity int = 100
 
 resource resourceGroup 'Microsoft.Resources/resourceGroups@2024-11-01' = {
   name: resourceGroupName
@@ -38,19 +19,20 @@ resource resourceGroup 'Microsoft.Resources/resourceGroups@2024-11-01' = {
   tags: {
     purpose: 'agent-insights-quality'
     agentInsightsQualityQualification: 'true'
+    automationOwner: automationOwner
   }
 }
 
-module persistent 'modules/persistent.bicep' = {
-  name: 'agent-insights-quality-persistent'
+module lab 'modules/lab.bicep' = {
+  name: 'agent-insights-quality-lab'
   scope: resourceGroup
   params: {
     location: location
-    uniqueSuffix: uniqueSuffix
     terraModelVersion: terraModelVersion
-    terraAgentCapacity: terraAgentCapacity
-    terraInsightsCapacity: terraInsightsCapacity
     automationOwner: automationOwner
     automationPrincipalId: automationPrincipalId
+    telemetryGeneration: telemetryGeneration
+    testAgentCapacity: testAgentCapacity
+    insightGenerationCapacity: insightGenerationCapacity
   }
 }

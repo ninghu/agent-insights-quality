@@ -1,0 +1,10 @@
+schema_version: "1.0.0"
+synthetic_data_only: true
+application_insights_access: read_only
+direct_trace_injection: forbidden
+private_runtime_root: .aiq-runtime
+forbidden_tracked_patterns:
+  - '(?i)connectionstring\s*='
+  - "(?i)[\"']?(client_secret|access_token|refresh_token)[\"']?\\s*[:=]"
+  - '(?i)/subscriptions/[0-9a-f-]{36}'
+  - '(?i)https://[a-z0-9.-]+\.services\.ai\.azure\.com'

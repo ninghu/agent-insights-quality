@@ -1,0 +1,169 @@
+{
+  "contract_version": "1.0",
+  "agent_name": "support-ticket-agent",
+  "logical_version": "issue-029",
+  "requests": [
+    {
+      "id": "issue-029-request-1",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Recover ticket-demo-1 after repeated temporary failure."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-support-ticket-agent-issue-029-1"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Ends incomplete without dispatching escalation.",
+        "defect_observed": true
+      }
+    },
+    {
+      "id": "issue-029-request-2",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Recover ticket-demo-2 after repeated temporary failure."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-support-ticket-agent-issue-029-2"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Ends incomplete without dispatching escalation.",
+        "defect_observed": true
+      }
+    },
+    {
+      "id": "issue-029-request-3",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Recover ticket-demo-1 after repeated temporary failure."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-support-ticket-agent-issue-029-3"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Ends incomplete without dispatching escalation.",
+        "defect_observed": true
+      }
+    },
+    {
+      "id": "issue-029-request-4",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Recover ticket-demo-2 after repeated temporary failure."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-support-ticket-agent-issue-029-4"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Ends incomplete without dispatching escalation.",
+        "defect_observed": true
+      }
+    },
+    {
+      "id": "issue-029-request-5",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Recover ticket-demo-1 after repeated temporary failure."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-support-ticket-agent-issue-029-5"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Ends incomplete without dispatching escalation.",
+        "defect_observed": true
+      }
+    }
+  ],
+  "data_class": "synthetic_public_safe",
+  "traffic_source": "endpoint_requests"
+}

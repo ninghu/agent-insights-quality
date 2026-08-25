@@ -1,3 +1,3 @@
-"""Agent Insights daily quality platform contracts and tooling."""
+"""Agent Insights quality qualification."""
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"

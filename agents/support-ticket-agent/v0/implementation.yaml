@@ -1,0 +1,38 @@
+contract_version: '1.0'
+issue_id: v0
+agent_name: support-ticket-agent
+framework: custom-python-responses
+deployment:
+  kind: foundry_hosted_custom_container
+  protocol: responses
+  build_file: Dockerfile
+  port: 8088
+category: baseline
+severity: none
+expected_behavior:
+  desired: Grounded success with bounded work and handled recoverable failures.
+  injected: No defect is enabled.
+injected_defect:
+  single_root: null
+  activation: disabled
+determinism:
+  traffic_file: traffic.json
+  minimum_requests: 5
+artifacts:
+  include:
+  - implementation.yaml
+  - package.py
+  - requirements.txt
+  - source
+  - traffic.json
+  - Dockerfile
+  - container.yaml
+  - issue.yaml
+public_safety:
+  synthetic_only: true
+  real_people: false
+  credentials: false
+  service_locations: false
+injection:
+  mode: none
+  parameters: {}
