@@ -168,6 +168,7 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
             "quality_score": 100,
             "quality_threshold": 90,
             "quality_score_formula": "field_weighted_v1",
+            "incomplete_reasons": [],
         },
         "delivery": {"content_digest": "sha256:" + "0" * 64},
     }

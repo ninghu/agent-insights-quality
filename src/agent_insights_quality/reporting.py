@@ -156,6 +156,13 @@ def _summary_metrics(
         if observed_cards
         else 0.0
     )
+    incomplete_reasons = sorted(
+        {
+            str(item["error_code"])
+            for item in [*baseline, *issues]
+            if item.get("error_code")
+        }
+    )
     quality_score = calculate_quality_score(
         field_quality_score=field_quality_score,
         clean_card_precision=clean_card_precision,
@@ -178,6 +185,7 @@ def _summary_metrics(
             + sum(item["result"] == "FAIL" for item in issues)
         ),
         "incomplete": incomplete,
+        "incomplete_reasons": incomplete_reasons,
         "noise_cards": noise_cards,
         "unverified_cards": unverified_cards,
         "observed_cards": observed_cards,
@@ -207,6 +215,7 @@ def build_report(
                 "logical_version": "v0",
                 "foundry_version": baseline_value["foundry_version"],
                 "status": baseline_value["status"],
+                "error_code": baseline_value.get("error_code"),
                 "insight_count": len(baseline_value["insight_references"]),
                 "assessment": {
                     "verdict": baseline_assessments[agent["name"]]["verdict"],
@@ -256,6 +265,7 @@ def build_report(
                     "foundry_version": value["foundry_version"],
                     "title": issue_by_id[issue_id]["title"],
                     "status": value["status"],
+                    "error_code": value.get("error_code"),
                     "result": (
                         "INCOMPLETE"
                         if not complete
@@ -385,6 +395,7 @@ def build_operational_failure_report(
             "issues_partial": 0,
             "quality_failures": 0,
             "incomplete": True,
+            "incomplete_reasons": [failure_code],
             "failure_code": failure_code,
             "noise_cards": 0,
             "unverified_cards": 0,

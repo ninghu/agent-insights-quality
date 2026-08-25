@@ -38,6 +38,12 @@ def _stage_error_code(error: Exception) -> str:
     )
 
 
+def _preflight_error_code(stage: str, error: Exception) -> str:
+    if stage == "clean_window" and "pre-existing traces" in str(error):
+        return "clean_window_not_empty"
+    return f"{stage}_failed"
+
+
 def _progress(runtime: Any, message: str) -> None:
     reporter = getattr(runtime, "report_progress", None)
     if callable(reporter):
@@ -132,27 +138,10 @@ def _execute_agent(
 ) -> AgentResult:
     name = agent["name"]
     monitor_id = registry["agents"][name]["monitor_id"]
+    baseline: VersionResult | None = None
     try:
-        _progress(runtime, f"{name}: reset monitor and verify clean window")
+        _progress(runtime, f"{name}: reset monitor")
         runtime.reset_monitor(name, monitor_id)
-        runtime.assert_clean_window(name, 3)
-        _progress(runtime, f"{name}/v0: started")
-        started = time.monotonic()
-        baseline = _execute_version(
-            runtime=runtime,
-            agent=agent,
-            monitor_id=monitor_id,
-            logical_version="v0",
-            registry_entry=version_entry(registry, name, "v0"),
-            traffic_path=ROOT / agent["baseline_path"] / "traffic.json",
-            seed=seed,
-            expected=None,
-        )
-        _progress(
-            runtime,
-            f"{name}/v0: {baseline.status} in "
-            f"{time.monotonic() - started:.1f}s",
-        )
     except Exception as error:
         baseline = VersionResult(
             logical_version="v0",
@@ -160,13 +149,54 @@ def _execute_agent(
                 "foundry_version"
             ],
             status="inconclusive",
-            error_code=_stage_error_code(error),
+            error_code=_preflight_error_code("monitor_reset", error),
         )
+    if baseline is None:
+        try:
+            _progress(runtime, f"{name}: verify clean window")
+            runtime.assert_clean_window(name, 3)
+        except Exception as error:
+            baseline = VersionResult(
+                logical_version="v0",
+                foundry_version=version_entry(registry, name, "v0")[
+                    "foundry_version"
+                ],
+                status="inconclusive",
+                error_code=_preflight_error_code("clean_window", error),
+            )
+    if baseline is None:
+        try:
+            _progress(runtime, f"{name}/v0: started")
+            started = time.monotonic()
+            baseline = _execute_version(
+                runtime=runtime,
+                agent=agent,
+                monitor_id=monitor_id,
+                logical_version="v0",
+                registry_entry=version_entry(registry, name, "v0"),
+                traffic_path=ROOT / agent["baseline_path"] / "traffic.json",
+                seed=seed,
+                expected=None,
+            )
+            _progress(
+                runtime,
+                f"{name}/v0: {baseline.status} in "
+                f"{time.monotonic() - started:.1f}s",
+            )
+        except Exception as error:
+            baseline = VersionResult(
+                logical_version="v0",
+                foundry_version=version_entry(registry, name, "v0")[
+                    "foundry_version"
+                ],
+                status="inconclusive",
+                error_code=_stage_error_code(error),
+            )
+    if baseline.status not in {"passed", "not_at_bar"}:
         _progress(
             runtime,
             f"{name}/v0: incomplete ({baseline.error_code})",
         )
-    if baseline.status not in {"passed", "not_at_bar"}:
         skipped = [
             VersionResult(
                 logical_version=item["id"],
