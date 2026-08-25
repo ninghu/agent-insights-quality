@@ -1,16 +1,19 @@
 instructions: |
   This is a public repository. Use only synthetic data and public-safe configuration.
-  Never commit credentials, private Azure or ADO identifiers, internal endpoints, raw traces,
+  Never commit credentials, private Azure identifiers, internal endpoints, raw traces,
   complete prompt payloads, private work-item content, or real customer data.
-  Test traffic must invoke deployed agent endpoints; Application Insights is read-only and direct
-  trace injection is forbidden.
-  Treat agent/scenario manifests and reporting promotion as human-reviewed contracts.
+  Test traffic must invoke deployed Agent endpoints.
+  Application Insights is read-only and direct trace injection is forbidden.
+  Treat AGENT_CATALOG.yaml and ISSUE_CATALOG.yaml as human-reviewed contracts.
+  Follow the repository-wide maintenance and evidence rules in AGENTS.md.
 
 scripts:
   - name: Validate repository contracts
     command: python -m agent_insights_quality validate
-  - name: Run contract tests
+  - name: Run tests
     command: python -m pytest
+  - name: Run Ruff
+    command: python -m ruff check .
 
 automation:
   auto_issue_session: true

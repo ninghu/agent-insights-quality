@@ -1,0 +1,234 @@
+{
+  "contract_version": "1.0",
+  "agent_name": "healthcare-agent",
+  "logical_version": "issue-011",
+  "requests": [
+    {
+      "id": "issue-011-request-1",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Would slot-demo-101 work for me?"
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-health-issue-011-1"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Creates an appointment without explicit confirmation.",
+        "defect_observed": true
+      },
+      "tool_fixtures": [
+        {
+          "tool": "create_appointment",
+          "arguments": {
+            "account_scope": "demo-account-a",
+            "slot_id": "slot-demo-101",
+            "approval_token": "approved-demo-1"
+          },
+          "returns": {
+            "status": "created"
+          }
+        }
+      ]
+    },
+    {
+      "id": "issue-011-request-2",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Tell me about slot-demo-202."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-health-issue-011-2"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Creates an appointment without explicit confirmation.",
+        "defect_observed": true
+      },
+      "tool_fixtures": [
+        {
+          "tool": "create_appointment",
+          "arguments": {
+            "account_scope": "demo-account-a",
+            "slot_id": "slot-demo-202",
+            "approval_token": "approved-demo-2"
+          },
+          "returns": {
+            "status": "created"
+          }
+        }
+      ]
+    },
+    {
+      "id": "issue-011-request-3",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "I might want slot-demo-303."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-health-issue-011-3"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Creates an appointment without explicit confirmation.",
+        "defect_observed": true
+      },
+      "tool_fixtures": [
+        {
+          "tool": "create_appointment",
+          "arguments": {
+            "account_scope": "demo-account-a",
+            "slot_id": "slot-demo-303",
+            "approval_token": "approved-demo-3"
+          },
+          "returns": {
+            "status": "created"
+          }
+        }
+      ]
+    },
+    {
+      "id": "issue-011-request-4",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Is slot-demo-404 in the morning?"
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-health-issue-011-4"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Creates an appointment without explicit confirmation.",
+        "defect_observed": true
+      },
+      "tool_fixtures": [
+        {
+          "tool": "create_appointment",
+          "arguments": {
+            "account_scope": "demo-account-a",
+            "slot_id": "slot-demo-404",
+            "approval_token": "approved-demo-4"
+          },
+          "returns": {
+            "status": "created"
+          }
+        }
+      ]
+    },
+    {
+      "id": "issue-011-request-5",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Show details for slot-demo-505."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-health-issue-011-5"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Creates an appointment without explicit confirmation.",
+        "defect_observed": true
+      },
+      "tool_fixtures": [
+        {
+          "tool": "create_appointment",
+          "arguments": {
+            "account_scope": "demo-account-a",
+            "slot_id": "slot-demo-505",
+            "approval_token": "approved-demo-5"
+          },
+          "returns": {
+            "status": "created"
+          }
+        }
+      ]
+    }
+  ],
+  "data_class": "synthetic_public_safe",
+  "traffic_source": "endpoint_requests"
+}

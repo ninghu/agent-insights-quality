@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "report_date", "run_id", "profile", "manifest_reference", "catalog_hashes", "status", "baseline", "issues", "summary", "delivery"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "report_date": {"type": "string", "format": "date"},
+    "run_id": {"type": "string"},
+    "profile": {"enum": ["daily", "staging"]},
+    "manifest_reference": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "catalog_hashes": {"type": "object"},
+    "status": {"enum": ["PASS", "FAIL", "INCOMPLETE"]},
+    "baseline": {"type": "array", "minItems": 5, "maxItems": 5},
+    "issues": {"type": "array"},
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baseline_passed",
+        "issues_expected",
+        "issues_correct",
+        "issues_partial",
+        "quality_failures",
+        "incomplete",
+        "noise_cards",
+        "unverified_cards",
+        "observed_cards",
+        "field_quality_score",
+        "clean_card_precision",
+        "quality_score",
+        "quality_threshold",
+        "quality_score_formula"
+      ],
+      "properties": {
+        "baseline_passed": {"type": "integer", "minimum": 0, "maximum": 5},
+        "issues_expected": {"enum": [25, 36]},
+        "issues_correct": {"type": "integer", "minimum": 0, "maximum": 36},
+        "issues_partial": {"type": "integer", "minimum": 0, "maximum": 36},
+        "quality_failures": {"type": "integer", "minimum": 0, "maximum": 41},
+        "incomplete": {"type": "boolean"},
+        "failure_code": {"type": "string", "minLength": 1},
+        "noise_cards": {"type": "integer", "minimum": 0},
+        "unverified_cards": {"type": "integer", "minimum": 0},
+        "observed_cards": {"type": "integer", "minimum": 0},
+        "field_quality_score": {
+          "oneOf": [
+            {"type": "number", "minimum": 0, "maximum": 100},
+            {"type": "null"}
+          ]
+        },
+        "clean_card_precision": {
+          "oneOf": [
+            {"type": "number", "minimum": 0, "maximum": 100},
+            {"type": "null"}
+          ]
+        },
+        "quality_score": {
+          "oneOf": [
+            {"type": "number", "minimum": 0, "maximum": 100},
+            {"type": "null"}
+          ]
+        },
+        "quality_threshold": {"const": 90},
+        "quality_score_formula": {"const": "field_weighted_v1"}
+      }
+    },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content_digest"],
+      "properties": {
+        "content_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    }
+  }
+}

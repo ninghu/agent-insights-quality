@@ -1,0 +1,287 @@
+{
+  "contract_version": "1.0",
+  "agent_name": "healthcare-agent",
+  "logical_version": "v0",
+  "coverage": [
+    "grounded_success",
+    "normal_latency_and_token_use",
+    "bounded_latency_and_output",
+    "conversation_memory",
+    "handled_transient_tool_failure",
+    "handled_partial_result"
+  ],
+  "requests": [
+    {
+      "id": "health-v0-grounded",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Find morning slots with Dr. Rivera on 2026-09-10 for demo-account-a."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-health-v0-a"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Uses slot lookup and reports only matching synthetic slots without booking."
+      },
+      "tool_fixtures": [
+        {
+          "tool": "lookup_slots",
+          "arguments": {
+            "account_scope": "demo-account-a",
+            "provider": "Dr. Rivera",
+            "date": "2026-09-10"
+          },
+          "returns": {
+            "slots": [
+              {
+                "slot_id": "slot-demo-101",
+                "time": "09:30"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "health-v0-bounded",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "In one sentence, list afternoon slots for Dr. Chen on 2026-09-11 for demo-account-b."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-health-v0-b"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Performs one lookup and returns a concise grounded result."
+      },
+      "tool_fixtures": [
+        {
+          "tool": "lookup_slots",
+          "arguments": {
+            "account_scope": "demo-account-b",
+            "provider": "Dr. Chen",
+            "date": "2026-09-11"
+          },
+          "returns": {
+            "slots": [
+              {
+                "slot_id": "slot-demo-202",
+                "time": "15:00"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "health-v0-memory",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Use demo-account-a and Dr. Rivera for this conversation; find 2026-09-12 slots."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-health-v0-c"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Retains the synthetic account and provider for a later follow-up."
+      },
+      "tool_fixtures": [
+        {
+          "tool": "lookup_slots",
+          "arguments": {
+            "account_scope": "demo-account-a",
+            "provider": "Dr. Rivera",
+            "date": "2026-09-12"
+          },
+          "returns": {
+            "slots": [
+              {
+                "slot_id": "slot-demo-303",
+                "time": "11:00"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "health-v0-transient",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Find Dr. Patel slots on 2026-09-13 for demo-account-a."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-health-v0-d"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Retries the transient lookup once and returns the recovered synthetic slot."
+      },
+      "tool_fixtures": [
+        {
+          "tool": "lookup_slots",
+          "arguments": {
+            "account_scope": "demo-account-a",
+            "provider": "Dr. Patel",
+            "date": "2026-09-13"
+          },
+          "sequence": [
+            {
+              "error": {
+                "code": "temporary_unavailable",
+                "retryable": true
+              }
+            },
+            {
+              "returns": {
+                "slots": [
+                  {
+                    "slot_id": "slot-demo-404",
+                    "time": "10:00"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "health-v0-partial",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Find Dr. Ali slots for 2026-09-14 and 2026-09-15 in demo-account-b."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-health-v0-e"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Returns the available date and clearly labels the unavailable date as partial."
+      },
+      "tool_fixtures": [
+        {
+          "tool": "lookup_slots",
+          "arguments": {
+            "account_scope": "demo-account-b",
+            "provider": "Dr. Ali",
+            "date": "2026-09-14"
+          },
+          "returns": {
+            "slots": [
+              {
+                "slot_id": "slot-demo-505",
+                "time": "13:00"
+              }
+            ]
+          }
+        },
+        {
+          "tool": "lookup_slots",
+          "arguments": {
+            "account_scope": "demo-account-b",
+            "provider": "Dr. Ali",
+            "date": "2026-09-15"
+          },
+          "returns": {
+            "error": {
+              "code": "schedule_unavailable",
+              "retryable": false
+            },
+            "partial": true
+          }
+        }
+      ]
+    }
+  ],
+  "data_class": "synthetic_public_safe",
+  "traffic_source": "endpoint_requests"
+}

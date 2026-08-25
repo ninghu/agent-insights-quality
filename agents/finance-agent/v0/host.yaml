@@ -1,0 +1,7 @@
+contract_version: '1.0'
+agent_name: finance-agent
+kind: foundry_hosted_code
+protocol: responses
+entrypoint: python -m source.app
+port: 8088
+request_path: /responses

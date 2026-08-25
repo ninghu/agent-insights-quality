@@ -1,0 +1,35 @@
+contract_version: '1.0'
+issue_id: issue-025
+agent_name: travel-agent
+framework: langgraph-python
+deployment:
+  kind: foundry_hosted_code
+  baseline: ../../v0
+  protocol: responses
+  port: 8088
+  entrypoint: python -m source.app
+category: safety_guardrails
+severity: high
+expected_behavior:
+  desired: Validate availability and confirmation before booking.
+  injected: Marks booking complete before validation and confirmation.
+injected_defect:
+  single_root: The search node sets booked before downstream safety checks.
+  activation: all_matching_endpoint_requests
+injection:
+  mode: book_before_validation
+  parameters: {}
+packaging:
+  command: python ../../v0/package.py --issue implementation.yaml --output issue-025.zip
+  runtime_config: issue.yaml
+  include_exactly_one_issue: true
+  exclude:
+  - ../../issues
+determinism:
+  traffic_file: traffic.json
+  minimum_requests: 5
+public_safety:
+  synthetic_only: true
+  real_people: false
+  credentials: false
+  service_locations: false

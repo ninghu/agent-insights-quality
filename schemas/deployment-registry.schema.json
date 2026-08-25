@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "profile", "project_name", "catalog_hashes", "agents"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "profile": {"enum": ["daily", "staging"]},
+    "project_name": {"enum": ["agent-insights-quality", "agent-insights-quality-staging"]},
+    "catalog_hashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agents", "issues", "artifacts"],
+      "properties": {
+        "agents": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "issues": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "artifacts": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "agents": {
+      "type": "object",
+      "minProperties": 5,
+      "maxProperties": 5,
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["monitor_id", "versions"],
+        "properties": {
+          "monitor_id": {"type": "string", "minLength": 1},
+          "versions": {
+            "type": "object",
+            "minProperties": 7,
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["foundry_version", "content_digest"],
+              "properties": {
+                "foundry_version": {"type": "string", "minLength": 1},
+                "content_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

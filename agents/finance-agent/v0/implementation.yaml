@@ -1,0 +1,36 @@
+contract_version: '1.0'
+issue_id: v0
+agent_name: finance-agent
+framework: microsoft-agent-framework-python
+deployment:
+  kind: foundry_hosted_code
+  protocol: responses
+  entrypoint: python -m source.app
+  port: 8088
+category: baseline
+severity: none
+expected_behavior:
+  desired: Grounded success with bounded work and handled recoverable failures.
+  injected: No defect is enabled.
+injected_defect:
+  single_root: null
+  activation: disabled
+determinism:
+  traffic_file: traffic.json
+  minimum_requests: 5
+artifacts:
+  include:
+  - implementation.yaml
+  - package.py
+  - requirements.txt
+  - source
+  - traffic.json
+  - host.yaml
+public_safety:
+  synthetic_only: true
+  real_people: false
+  credentials: false
+  service_locations: false
+injection:
+  mode: none
+  parameters: {}

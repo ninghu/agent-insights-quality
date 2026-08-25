@@ -1,0 +1,32 @@
+contract_version: '1.0'
+issue_id: issue-006
+agent_name: weather-agent
+framework: foundry-prompt-agent
+deployment:
+  kind: native_prompt
+  model: gpt-5.6-terra
+  definition: definition.json
+category: cost_tokens
+severity: low
+expected_behavior:
+  desired: Honor the caller's concise output bound without repetition.
+  injected: Produces a long repetitive answer to an explicitly concise request.
+injected_defect:
+  single_root: Instructions require at least six paragraphs regardless of the requested length.
+  activation: all_matching_endpoint_requests
+  definition_is_complete: true
+determinism:
+  temperature: 0
+  definition_sha256: 0f924be58381da4d41befc3694aa9040205e4d1fb29cba5e1d350a2d06f8e37f
+  traffic_file: traffic.json
+  minimum_requests: 5
+artifacts:
+  include:
+  - definition.json
+  - implementation.yaml
+  - traffic.json
+public_safety:
+  synthetic_only: true
+  real_people: false
+  credentials: false
+  service_locations: false

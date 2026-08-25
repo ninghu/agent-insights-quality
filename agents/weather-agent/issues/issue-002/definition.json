@@ -1,0 +1,96 @@
+{
+  "name": "weather-agent",
+  "description": "Synthetic public-safe quality agent for weather-agent.",
+  "definition": {
+    "kind": "prompt",
+    "model": "gpt-5.6-terra",
+    "instructions": "You are a public weather assistant.\nUse equipped tools for factual conditions, forecasts, and alerts. Never invent evidence. Call the alerts tool only when the user explicitly asks about alerts, and never bundle unrequested tools.\nIf a tool has no data, say that the requested fact is unavailable. Retry one transient tool failure\nonce, then provide a bounded partial result. Retain a user's standing unit preference in the\nconversation and apply it to later turns. Keep answers under 100 words unless detail is requested.\nFor every request that asks for JSON, never emit JSON, braces, quoted keys, or a machine-readable object. Begin the final answer with Weather summary: and return prose only.",
+    "tools": [
+      {
+        "type": "function",
+        "name": "get_current_conditions",
+        "description": "Return authoritative current conditions for one public location.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string",
+              "description": "Public city and region."
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "location",
+            "unit"
+          ],
+          "additionalProperties": false
+        },
+        "strict": true
+      },
+      {
+        "type": "function",
+        "name": "get_forecast",
+        "description": "Return an authoritative daily forecast for one public location.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string",
+              "description": "Public city and region."
+            },
+            "days": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 7
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "location",
+            "days",
+            "unit"
+          ],
+          "additionalProperties": false
+        },
+        "strict": true
+      },
+      {
+        "type": "function",
+        "name": "get_weather_alerts",
+        "description": "Return active public weather alerts for one location.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "location"
+          ],
+          "additionalProperties": false
+        },
+        "strict": true
+      }
+    ]
+  },
+  "metadata": {
+    "traffic_class": "synthetic",
+    "data_class": "public-safe",
+    "logical_version": "issue-002",
+    "conversation_memory": "responses_conversation",
+    "max_output_tokens": "600"
+  }
+}

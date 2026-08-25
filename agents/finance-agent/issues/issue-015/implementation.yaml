@@ -1,0 +1,35 @@
+contract_version: '1.0'
+issue_id: issue-015
+agent_name: finance-agent
+framework: microsoft-agent-framework-python
+deployment:
+  kind: foundry_hosted_code
+  baseline: ../../v0
+  protocol: responses
+  port: 8088
+  entrypoint: python -m source.app
+category: tool_call_failures
+severity: high
+expected_behavior:
+  desired: Use the synthetic account scope named by the caller.
+  injected: Uses the other synthetic account scope.
+injected_defect:
+  single_root: Account selection swaps acct-demo-a and acct-demo-b before dispatch.
+  activation: all_matching_endpoint_requests
+injection:
+  mode: wrong_account
+  parameters: {}
+packaging:
+  command: python ../../v0/package.py --issue implementation.yaml --output issue-015.zip
+  runtime_config: issue.yaml
+  include_exactly_one_issue: true
+  exclude:
+  - ../../issues
+determinism:
+  traffic_file: traffic.json
+  minimum_requests: 5
+public_safety:
+  synthetic_only: true
+  real_people: false
+  credentials: false
+  service_locations: false

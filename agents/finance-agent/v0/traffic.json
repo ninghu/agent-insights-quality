@@ -1,0 +1,175 @@
+{
+  "contract_version": "1.0",
+  "agent_name": "finance-agent",
+  "logical_version": "v0",
+  "coverage": [
+    "grounded_success",
+    "normal_latency_and_token_use",
+    "bounded_latency_and_output",
+    "ordinary_model_work",
+    "handled_transient_tool_failure",
+    "handled_agent_error_or_partial_result"
+  ],
+  "requests": [
+    {
+      "id": "finance-agent-v0-grounded",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Show the balance for acct-demo-a."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-finance-agent-v0-1"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Returns the authoritative synthetic balance."
+      }
+    },
+    {
+      "id": "finance-agent-v0-bounded",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Summarize acct-demo-b in one sentence."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-finance-agent-v0-2"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Uses bounded model input and concise output."
+      }
+    },
+    {
+      "id": "finance-agent-v0-ordinary",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Show acct-demo-a budget status."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-finance-agent-v0-3"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Uses normal bounded model work."
+      }
+    },
+    {
+      "id": "finance-agent-v0-transient",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Retry one temporary balance failure for acct-demo-a."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-finance-agent-v0-4"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Retries once and recovers.",
+        "semantic_assertions": {
+          "required_terms_any": ["1250.50", "1,250.50", "1250", "USD", "balance"]
+        }
+      }
+    },
+    {
+      "id": "finance-agent-v0-partial",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Summarize acct-demo-a and a missing account."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-finance-agent-v0-5"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Labels the aggregate result partial."
+      }
+    }
+  ],
+  "data_class": "synthetic_public_safe",
+  "traffic_source": "endpoint_requests"
+}

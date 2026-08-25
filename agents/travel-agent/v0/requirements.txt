@@ -1,0 +1,11 @@
+langchain-azure-ai[hosting]==1.2.8
+aiohttp==3.14.3
+langchain-core==1.5.5
+langgraph==1.2.11
+azure-identity==1.25.3
+opentelemetry-api==1.43.0
+opentelemetry-exporter-otlp-proto-http==1.43.0
+opentelemetry-sdk==1.43.0
+openai==2.54.0
+PyYAML==6.0.3
+typing-extensions==4.16.0

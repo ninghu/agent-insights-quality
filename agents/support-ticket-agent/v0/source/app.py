@@ -1,0 +1,216 @@
+from __future__ import annotations
+
+import os
+from typing import Any
+
+from azure.ai.agentserver.responses import (
+    CreateResponse,
+    ResponseContext,
+    ResponsesAgentServerHost,
+    TextResponse,
+)
+from azure.identity.aio import DefaultAzureCredential
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
+from openai import AsyncOpenAI
+
+from .config import load_config
+from .observability import configure_observability
+
+
+configure_observability("support-ticket-agent")
+tracer = trace.get_tracer("support-ticket-agent")
+app = ResponsesAgentServerHost()
+credential = DefaultAzureCredential()
+
+
+async def token_provider() -> str:
+    return (await credential.get_token("https://ai.azure.com/.default")).token
+
+TICKETS = {
+    "ticket-demo-1": {"revision": 3, "status": "open", "summary": "Synthetic printer setup"},
+    "ticket-demo-2": {"revision": 1, "status": "open", "summary": "Synthetic app access"},
+}
+
+
+def input_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    values = []
+    for message in value or []:
+        content = (
+            message.get("content", [])
+            if isinstance(message, dict)
+            else getattr(message, "content", [])
+        )
+        for part in content if isinstance(content, list) else [content]:
+            text = (
+                part.get("text")
+                if isinstance(part, dict)
+                else getattr(part, "text", None)
+            )
+            if text:
+                values.append(str(text))
+    return " ".join(values)
+
+
+def tool(name: str, result: dict) -> dict:
+    with tracer.start_as_current_span(f"support.tool.{name}") as span:
+        span.set_attribute("gen_ai.operation.name", "execute_tool")
+        span.set_attribute("gen_ai.tool.name", name)
+        span.set_attribute("tool.ok", bool(result.get("ok", True)))
+        if result.get("ok") is False:
+            error = result.get("error") or {}
+            span.set_attribute(
+                "error.type",
+                str(error.get("code") or "synthetic_tool_error"),
+            )
+            span.set_status(Status(StatusCode.ERROR))
+        return result
+
+
+async def model_response(prompt: str, max_output_tokens: int) -> str:
+    with tracer.start_as_current_span("support.model.dispatch") as span:
+        model = os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "terra-test-agents")
+        span.set_attribute("gen_ai.operation.name", "chat")
+        span.set_attribute("gen_ai.request.model", model)
+        client = AsyncOpenAI(
+            base_url=os.environ["FOUNDRY_PROJECT_ENDPOINT"].rstrip("/") + "/openai/v1",
+            api_key=token_provider,
+        )
+        result = await client.responses.create(
+            model=model,
+            input=prompt,
+            max_output_tokens=max_output_tokens,
+            store=False,
+        )
+    return result.output_text
+
+
+async def dispatch(
+    text: str,
+    mode: str,
+    parameters: dict,
+    max_output_tokens: int,
+) -> str:
+    lowered = text.lower()
+    ticket_id = next(
+        (value for value in TICKETS if value in lowered),
+        "ticket-demo-1",
+    )
+    if mode == "none" and "temporary read failure" in lowered:
+        tool(
+            "read_ticket",
+            {"ok": False, "error": {"code": "temporary_unavailable", "retryable": True}},
+        )
+        tool(
+            "read_ticket",
+            {"ok": True, "ticket_id": ticket_id, "ticket": TICKETS[ticket_id]},
+        )
+        return await model_response(
+            "State concisely that the synthetic ticket read succeeded after one bounded retry.",
+            max_output_tokens,
+        )
+    if mode == "none" and "optional history is unavailable" in lowered:
+        tool(
+            "read_ticket",
+            {"ok": True, "ticket_id": ticket_id, "ticket": TICKETS[ticket_id]},
+        )
+        tool("read_history", {"ok": False, "error": {"code": "history_unavailable"}})
+        return await model_response(
+            "State concisely that the synthetic core ticket is available and optional history is unavailable.",
+            max_output_tokens,
+        )
+    if mode == "abort_before_dispatch":
+        return "Valid ticket request rejected before model or tool dispatch."
+    if mode == "unhandled_model_failure":
+        with tracer.start_as_current_span("support.model.dispatch") as span:
+            span.set_attribute("gen_ai.operation.name", "chat")
+            span.set_attribute("model.ok", False)
+            span.set_attribute("error.type", "synthetic_model_failure")
+            span.set_status(Status(StatusCode.ERROR))
+        return "Synthetic model failure reached the user without bounded recovery."
+    if mode == "false_success_without_dispatch":
+        return "Update completed successfully."
+    if mode == "no_progress_loop":
+        steps = int(parameters.get("steps", 4))
+        for _ in range(steps):
+            with tracer.start_as_current_span("support.state.waiting"):
+                pass
+        return "The request stopped after repeated no-progress states."
+    if mode == "abort_after_tool":
+        tool(
+            "read_ticket",
+            {"ok": True, "ticket_id": ticket_id, "ticket": TICKETS[ticket_id]},
+        )
+        return "Ticket data was read, but orchestration stopped before a useful answer."
+    if mode == "omit_escalation":
+        for _ in range(2):
+            tool("recover_ticket", {"ok": False, "error": {"code": "temporary_unavailable"}})
+        return "Recovery was exhausted without escalation."
+    if mode == "accept_stale_revision":
+        updated = tool(
+            "update_ticket",
+            {"ok": True, "ticket_id": "ticket-demo-1", "accepted_revision": 2, "current_revision": 3},
+        )
+        return f"Update accepted at stale revision {updated['accepted_revision']}."
+    if mode == "split_state_symptoms":
+        with tracer.start_as_current_span("support.state.propagation") as span:
+            span.set_attribute("state.keys_after", 0)
+        tool("read_ticket", {"ok": False, "error": {"code": "ticket_id_missing"}})
+        tool("update_ticket", {"ok": False, "error": {"code": "revision_missing"}})
+        return (
+            "The shared state lost the ticket identifier and revision, causing routing, "
+            "tool, and completion failures."
+        )
+    ticket = tool(
+        "read_ticket",
+        {"ok": True, "ticket_id": ticket_id, "ticket": TICKETS[ticket_id]},
+    )
+    if "update" in lowered and "confirm" in lowered:
+        tool(
+            "update_ticket",
+            {
+                "ok": True,
+                "ticket_id": ticket_id,
+                "revision": ticket["ticket"]["revision"] + 1,
+            },
+        )
+        return await model_response(
+            f"State concisely that the synthetic update for {ticket_id} succeeded after "
+            f"revision {ticket['ticket']['revision']} validation.",
+            max_output_tokens,
+        )
+    return await model_response(
+        f"Summarize this exact synthetic ticket and state no update was dispatched: "
+        f"{ticket_id}, revision {ticket['ticket']['revision']}, "
+        f"status {ticket['ticket']['status']}, summary {ticket['ticket']['summary']}.",
+        max_output_tokens,
+    )
+
+
+@app.response_handler
+async def responses(
+    payload: CreateResponse,
+    context: ResponseContext,
+    cancellation_signal,
+):
+    del cancellation_signal
+    config = load_config()
+    mode = config["injection"].get("mode", "none")
+    parameters = config["injection"].get("parameters") or {}
+    text = input_text(payload.get("input"))
+    with tracer.start_as_current_span("support.dispatch") as span:
+        span.set_attribute("gen_ai.response.id", context.response_id)
+        span.set_attribute("issue.id", config["issue_id"])
+        result = await dispatch(
+            text,
+            mode,
+            parameters,
+            payload.get("max_output_tokens") or 400,
+        )
+    return TextResponse(context, payload, text=result)
+
+
+if __name__ == "__main__":
+    app.run(port=int(os.getenv("PORT", "8088")))

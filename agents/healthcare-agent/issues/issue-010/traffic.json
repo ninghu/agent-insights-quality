@@ -1,0 +1,169 @@
+{
+  "contract_version": "1.0",
+  "agent_name": "healthcare-agent",
+  "logical_version": "issue-010",
+  "requests": [
+    {
+      "id": "issue-010-request-1",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Is Dr. Rivera free on 2026-09-21?"
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-health-issue-010-1"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Claims availability while omitting the required slot lookup.",
+        "defect_observed": true
+      }
+    },
+    {
+      "id": "issue-010-request-2",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "What slots does Dr. Chen have tomorrow?"
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-health-issue-010-2"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Claims availability while omitting the required slot lookup.",
+        "defect_observed": true
+      }
+    },
+    {
+      "id": "issue-010-request-3",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Find an afternoon time with Dr. Patel."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-health-issue-010-3"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Claims availability while omitting the required slot lookup.",
+        "defect_observed": true
+      }
+    },
+    {
+      "id": "issue-010-request-4",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Is slot-demo-101 still available?"
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-health-issue-010-4"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Claims availability while omitting the required slot lookup.",
+        "defect_observed": true
+      }
+    },
+    {
+      "id": "issue-010-request-5",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Give me any open time on 2026-09-22."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-health-issue-010-5"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Claims availability while omitting the required slot lookup.",
+        "defect_observed": true
+      }
+    }
+  ],
+  "data_class": "synthetic_public_safe",
+  "traffic_source": "endpoint_requests"
+}

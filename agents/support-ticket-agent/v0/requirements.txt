@@ -1,0 +1,9 @@
+aiohttp==3.13.3
+azure-ai-agentserver-responses==2.0.0
+azure-identity==1.25.3
+azure-monitor-opentelemetry-exporter==1.0.0b56
+opentelemetry-api==1.43.0
+opentelemetry-exporter-otlp-proto-http==1.43.0
+opentelemetry-sdk==1.43.0
+openai==2.54.0
+PyYAML==6.0.3

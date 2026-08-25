@@ -1,0 +1,36 @@
+contract_version: '1.0'
+issue_id: issue-031
+agent_name: support-ticket-agent
+framework: custom-python-responses
+deployment:
+  kind: foundry_hosted_custom_container
+  baseline: ../../v0
+  protocol: responses
+  port: 8088
+  build_file: ../../v0/Dockerfile
+category: latency
+severity: medium
+expected_behavior:
+  desired: Stop a no-progress state after one detection.
+  injected: Repeats the same waiting state four times.
+injected_defect:
+  single_root: The no-progress loop bound is four instead of one.
+  activation: all_matching_endpoint_requests
+injection:
+  mode: no_progress_loop
+  parameters:
+    steps: 4
+packaging:
+  command: python ../../v0/package.py --issue implementation.yaml --output issue-031.zip
+  runtime_config: issue.yaml
+  include_exactly_one_issue: true
+  exclude:
+  - ../../issues
+determinism:
+  traffic_file: traffic.json
+  minimum_requests: 5
+public_safety:
+  synthetic_only: true
+  real_people: false
+  credentials: false
+  service_locations: false

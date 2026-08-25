@@ -1,0 +1,8 @@
+contract_version: '1.0'
+agent_name: support-ticket-agent
+protocol: responses
+port: 8088
+health_path: /health
+readiness_path: /readiness
+request_path: /responses
+build_file: Dockerfile

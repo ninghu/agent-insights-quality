@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agent-insights-quality"
 version = "0.1.0"
-description = "Repository contracts and automation for daily Agent Insights quality qualification"
+description = "Deterministic qualification lab for Microsoft Foundry Agent Insights"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
