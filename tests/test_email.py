@@ -43,7 +43,7 @@ def test_email_requires_reviewed_domain_and_one_success(tmp_path: Path) -> None:
     assert ">Test agent</th>" in request["html"]
     assert ">Assigned issues</th>" in request["html"]
     assert ">Report</th>" in request["html"]
-    assert ">Ownership</th>" in request["html"]
+    assert ">Ownership</th>" not in request["html"]
     assert "Quality Score: 100/100" in request["html"]
     assert "How Scoring Works" in request["html"]
     assert "docs/QUALITY_BAR.md#quality-score" in request["html"]
