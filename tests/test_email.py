@@ -36,23 +36,20 @@ def test_email_requires_reviewed_domain_and_one_success(tmp_path: Path) -> None:
     with pytest.raises(ContractError, match="microsoft.com"):
         create_request(report, "test@example.com")
     request = create_request(report, "synthetic@microsoft.com")
+    assert request["channel"] == "copilot_email"
+    assert request["send_once"] is True
+    assert request["retry_ambiguous"] is False
     assert "Recommended human validation" not in request["html"]
     assert ">Test agent</th>" in request["html"]
     assert ">Assigned issues</th>" in request["html"]
     assert ">Report</th>" in request["html"]
     assert ">Ownership</th>" in request["html"]
     receipt = {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "content_digest": request["content_digest"],
         "status": "sent",
-        "attempts": [
-            {
-                "transport": "connected_microsoft_mail",
-                "status": "sent",
-                "content_digest": request["content_digest"],
-                "provider_reference": "sha256:" + "a" * 64,
-            }
-        ],
+        "provider_reference": "sha256:" + "a" * 64,
+        "retry_allowed": False,
     }
     path = tmp_path / "receipt.json"
     path.write_text(json.dumps(receipt), encoding="utf-8")
@@ -60,35 +57,26 @@ def test_email_requires_reviewed_domain_and_one_success(tmp_path: Path) -> None:
     import_receipt(request, path, output)
     assert output.exists()
     validate_published_receipt(path, request["content_digest"])
-    with pytest.raises(ContractError, match="expected content"):
+    with pytest.raises(ContractError, match="does not match"):
         validate_published_receipt(path, "sha256:" + "b" * 64)
     receipt["status"] = "failed"
+    receipt["provider_reference"] = None
+    receipt["retry_allowed"] = True
     path.write_text(json.dumps(receipt), encoding="utf-8")
-    with pytest.raises(ContractError, match="cannot contain"):
-        import_receipt(request, path, output)
+    import_receipt(request, path, output)
+    with pytest.raises(ContractError, match="confirmed"):
+        validate_published_receipt(path, request["content_digest"])
 
     receipt = {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "content_digest": request["content_digest"],
-        "status": "sent",
-        "attempts": [
-            {
-                "transport": "connected_microsoft_mail",
-                "status": "unavailable",
-                "content_digest": request["content_digest"],
-            },
-            {
-                "transport": "graph",
-                "status": "unauthorized",
-                "content_digest": request["content_digest"],
-            },
-            {
-                "transport": "outlook",
-                "status": "sent",
-                "content_digest": request["content_digest"],
-                "provider_reference": "sha256:" + "c" * 64,
-            },
-        ],
+        "status": "unknown",
+        "provider_reference": None,
+        "retry_allowed": False,
     }
     path.write_text(json.dumps(receipt), encoding="utf-8")
     import_receipt(request, path, output)
+    receipt["retry_allowed"] = True
+    path.write_text(json.dumps(receipt), encoding="utf-8")
+    with pytest.raises(ContractError, match="cannot be retried"):
+        import_receipt(request, path, output)

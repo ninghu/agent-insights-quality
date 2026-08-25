@@ -114,17 +114,14 @@ def create_request(
         {"recipient": recipient.lower(), "subject": subject, "html": body}
     )
     return {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
+        "channel": "copilot_email",
         "recipient": recipient,
         "subject": subject,
         "html": body,
         "content_digest": digest,
-        "transport_order": [
-            "connected_microsoft_mail",
-            "graph",
-            "outlook",
-        ],
-        "stop_after_first_confirmed_success": True,
+        "send_once": True,
+        "retry_ambiguous": False,
     }
 
 
@@ -148,23 +145,14 @@ def _validate_receipt_semantics(
     receipt: dict[str, Any],
     expected_digest: str,
 ) -> None:
-    if receipt["content_digest"] != expected_digest or any(
-        item["content_digest"] != expected_digest for item in receipt["attempts"]
-    ):
-        raise ContractError("Email attempts do not share the expected content digest")
-    expected_order = ["connected_microsoft_mail", "graph", "outlook"]
-    actual_order = [item["transport"] for item in receipt["attempts"]]
-    if actual_order != expected_order[: len(actual_order)]:
-        raise ContractError("Email attempts do not follow the reviewed transport order")
-    sent = [item for item in receipt["attempts"] if item["status"] == "sent"]
-    if receipt["status"] == "sent" and len(sent) != 1:
-        raise ContractError("A sent email requires exactly one confirmed transport")
-    if receipt["status"] == "failed" and sent:
-        raise ContractError("A failed email receipt cannot contain confirmed delivery")
-    if sent and receipt["attempts"][-1] != sent[0]:
-        raise ContractError("Transport attempts must stop after confirmed delivery")
-    if sent and not sent[0].get("provider_reference"):
+    if receipt["content_digest"] != expected_digest:
+        raise ContractError("Email receipt content digest does not match the request")
+    if receipt["status"] == "sent" and not receipt.get("provider_reference"):
         raise ContractError("Confirmed delivery requires an opaque provider reference")
+    if receipt["status"] in {"sent", "unknown"} and receipt["retry_allowed"]:
+        raise ContractError("Sent or ambiguous delivery cannot be retried")
+
+
 def validate_published_receipt(path: Path, expected_digest: str) -> None:
     receipt = read_json(path)
     schema = read_json(ROOT / "schemas" / "email-receipt.schema.json")

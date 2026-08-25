@@ -1,8 +1,9 @@
 schema_version: "1.0.0"
 recipient_mode: authenticated_user
 allowed_domain: microsoft.com
-transport_order: [connected_microsoft_mail, graph, outlook]
-stop_after_first_confirmed_success: true
+email_channel: copilot_email
+send_once: true
+retry_ambiguous: false
 quality_score:
   formula: field_weighted_v1
   field_quality_weight: 0.85
