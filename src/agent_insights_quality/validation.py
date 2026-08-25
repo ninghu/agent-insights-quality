@@ -55,6 +55,10 @@ def _tracked_text_files() -> list[Path]:
 
 def _validate_reporting_policy() -> None:
     policy = read_yaml(ROOT / "config" / "reporting.yaml")
+    if policy.get("recipient") != "agentinsightsteam@microsoft.com":
+        raise ContractError("Reporting recipient is not the reviewed team mailbox")
+    if policy.get("email_channel") != "copilot_email":
+        raise ContractError("Reporting email channel is not reviewed")
     if policy.get("quality_score") != {
         "formula": QUALITY_SCORE_FORMULA,
         "field_quality_weight": FIELD_QUALITY_WEIGHT,

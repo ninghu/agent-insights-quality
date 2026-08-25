@@ -1,6 +1,5 @@
 schema_version: "1.0.0"
-recipient_mode: authenticated_user
-allowed_domain: microsoft.com
+recipient: agentinsightsteam@microsoft.com
 email_channel: copilot_email
 send_once: true
 retry_ambiguous: false

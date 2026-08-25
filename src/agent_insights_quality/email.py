@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import html
-import os
 import re
 import subprocess
 from base64 import urlsafe_b64encode
@@ -22,6 +21,7 @@ from agent_insights_quality.util import (
     atomic_json,
     content_hash,
     read_json,
+    read_yaml,
 )
 
 _PUBLIC_REPORT_BASE_URL = (
@@ -60,34 +60,11 @@ _PROJECT_NAMES = {
 
 
 def resolve_recipient() -> str:
-    configured = str(os.environ.get("AIQ_TEST_REPORT_RECIPIENT") or "").strip()
-    if configured:
-        return configured
-    process = subprocess.run(
-        [
-            azure_cli(),
-            "ad",
-            "signed-in-user",
-            "show",
-            "--query",
-            "[mail,userPrincipalName]",
-            "--output",
-            "tsv",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
-    if process.returncode != 0:
-        raise ContractError("Authenticated report recipient could not be resolved")
-    values = [value.strip() for value in process.stdout.splitlines() if value.strip()]
-    recipient = next(
-        (value for value in values if value.lower().endswith("@microsoft.com")),
-        "",
-    )
-    if not recipient:
-        raise ContractError("Authenticated report recipient is outside the allowed domain")
+    recipient = str(
+        read_yaml(ROOT / "config" / "reporting.yaml").get("recipient") or ""
+    ).strip()
+    if recipient != "agentinsightsteam@microsoft.com":
+        raise ContractError("Report recipient does not match the reviewed team mailbox")
     return recipient
 
 

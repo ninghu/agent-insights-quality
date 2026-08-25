@@ -8,6 +8,8 @@
 - deployed Foundry Agent endpoint access;
 - one email capability with explicit HTML support.
 
+The fixed reviewed recipient is `agentinsightsteam@microsoft.com`.
+
 The automation does not need issue, release, deployment, or mailbox search capabilities.
 
 ## Readiness
