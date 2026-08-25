@@ -28,6 +28,7 @@ _PUBLIC_REPORT_BASE_URL = (
     "https://github.com/ninghu/agent-insights-quality/blob/main/"
 )
 _PUBLIC_ISSUE_CATALOG_URL = _PUBLIC_REPORT_BASE_URL + "ISSUE_CATALOG.md"
+_QUALITY_BAR_URL = _PUBLIC_REPORT_BASE_URL + "docs/QUALITY_BAR.md#quality-score"
 _OUTLOOK_TEXT_STYLE = (
     "font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:19px;"
 )
@@ -586,7 +587,9 @@ def _render_html(
         f'<span style="display:inline-block;padding:5px 10px;background-color:'
         f'{status_style["background"]};color:{status_style["foreground"]};'
         'font-size:12px;line-height:16px;font-weight:700;">'
-        f"Overall insight quality score: {html.escape(score)} &middot; "
+        f"Quality Score: {html.escape(score)} "
+        f'(<a style="color:inherit;text-decoration:underline;" '
+        f'href="{_QUALITY_BAR_URL}">How Scoring Works</a>) &middot; '
         f"{html.escape(report['status'])}</span>"
         "</td></tr>"
         '<tr><td style="padding:28px 32px 0 32px;">'
