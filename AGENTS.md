@@ -22,6 +22,10 @@ Agents and 36 reviewed, single-root issues.
 - Agent and Issue catalogs, Agent implementations, schemas, infrastructure, score policy, and
   promotion receipts require human review.
 - Do not add compatibility readers or restore superseded identifiers and formats.
+- Every issue folder is the complete deployable source authority for that version: Prompt issues own a
+  full `definition.json`; Hosted issues own a full `source/` tree containing only that defect.
+- Never ship runtime injection selectors, dormant branches for other issues, generic defect hooks, or
+  build-time source patches inside an Agent version.
 
 ## Execution model
 

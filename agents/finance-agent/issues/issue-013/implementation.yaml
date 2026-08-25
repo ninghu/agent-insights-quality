@@ -16,9 +16,6 @@ expected_behavior:
 injected_defect:
   single_root: Response post-processing adds 500 to the authoritative balance.
   activation: all_matching_endpoint_requests
-injection:
-  mode: contradict_tool
-  parameters: {}
 packaging:
   command: python ../../v0/package.py --issue implementation.yaml --output issue-013.zip
   runtime_config: issue.yaml

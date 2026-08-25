@@ -16,9 +16,6 @@ expected_behavior:
 injected_defect:
   single_root: The flight route invokes search_hotels.
   activation: all_matching_endpoint_requests
-injection:
-  mode: wrong_travel_tool
-  parameters: {}
 packaging:
   command: python ../../v0/package.py --issue implementation.yaml --output issue-022.zip
   runtime_config: issue.yaml

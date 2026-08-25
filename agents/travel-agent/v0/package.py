@@ -31,12 +31,20 @@ def add_file(archive: zipfile.ZipFile, name: str, data: bytes) -> None:
 def build(issue: Path, output: Path) -> None:
     config = read_config(issue)
     root = Path(__file__).parent
+    source_root = issue.parent / "source"
+    if not source_root.is_dir():
+        source_root = root / "source"
     entries: list[tuple[str, bytes]] = []
     for item in SOURCE_ITEMS:
-        path = root / item
+        path = source_root if item == "source" else root / item
         if path.is_dir():
             for child in sorted(p for p in path.rglob("*") if p.is_file()):
-                entries.append((child.relative_to(root).as_posix(), child.read_bytes()))
+                name = (
+                    Path("source") / child.relative_to(source_root)
+                    if item == "source"
+                    else child.relative_to(root)
+                )
+                entries.append((name.as_posix(), child.read_bytes()))
         else:
             entries.append((item, path.read_bytes()))
     issue_bytes = yaml.safe_dump(config, sort_keys=False, width=100).encode("utf-8")

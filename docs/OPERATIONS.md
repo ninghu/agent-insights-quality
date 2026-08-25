@@ -34,6 +34,11 @@ Provisioning creates five Agents, 41 immutable versions, and five disabled/manua
 one selected profile. Every hosted version must activate and bind an exact-version session. Prompt
 traffic uses an exact Agent reference.
 
+Each issue folder is self-contained. Prompt issues deploy their complete `definition.json`; Hosted
+issues package their complete `source/` tree together with the shared requirements and host/container
+contract. A deployed issue version contains only its reviewed defect and no dormant branches for
+other issues, so source-aware proposed fixes see the exact defective implementation.
+
 Run all 36 staging issues and complete human review before provisioning or changing daily mappings:
 
 ```powershell

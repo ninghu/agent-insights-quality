@@ -15,14 +15,11 @@ from opentelemetry import trace
 from openai import AsyncOpenAI
 from typing_extensions import Annotated
 
-from .config import load_config
 from .observability import configure_observability
 
 
 configure_observability("travel-agent")
 tracer = trace.get_tracer("travel-agent")
-config = load_config()
-mode = config["injection"].get("mode", "none")
 credential = DefaultAzureCredential()
 
 
@@ -119,9 +116,8 @@ async def search_hotels(trip: str, include_details: bool = False) -> list[dict]:
 def build_graph():
     async def plan(state: TravelState) -> TravelState:
         text = latest_text(state)
-        trip = state.get("trip") if mode == "stale_trip_state" else None
         return {
-            "trip": trip or parse_trip(text),
+            "trip": parse_trip(text),
             "confirmed": "confirm" in text.lower(),
             "errors": [],
         }
@@ -129,47 +125,26 @@ def build_graph():
     async def search(state: TravelState) -> TravelState:
         text = latest_text(state).lower()
         trip = state["trip"]
-        if mode == "fabricate_after_failure":
-            await failed_search("search_flights")
-            return {
-                "errors": ["inventory_search_failed"],
-                "inventory": [{"id": "invented-demo-seat", "trip": trip}],
-            }
-        if mode == "omit_inventory_search":
-            return {"inventory": []}
-        if mode == "none" and "temporary flight search" in text:
+        if "temporary flight search" in text:
             await failed_search("search_flights")
             return {"inventory": await search_flights(trip)}
-        if mode == "none" and "hotel search is unavailable" in text:
+        if "hotel search is unavailable" in text:
             flights = await search_flights(trip)
             await failed_search("search_hotels")
             return {"inventory": flights, "errors": ["hotel_search_unavailable"]}
-        if mode == "wrong_travel_tool" and "flight" in text:
-            return {"inventory": await search_hotels(trip)}
-        trips = requested_trips(text)
-        if mode == "drop_comparison_branch" and len(trips) >= 2:
-            branches = await asyncio.gather(*(search_flights(item) for item in trips))
-            inventory = [item for branch in branches for item in branch]
-            return {"inventory": [item for item in inventory if item["trip"] == trips[0]]}
-        include_details = mode == "overfetch_inventory"
+        include_details = False
         wants_flight = "flight" in text or "compare" in text
         wants_hotel = "hotel" in text or "compare" in text
         if wants_flight and wants_hotel:
-            if mode == "sequential_searches":
-                flights = await search_flights(trip, include_details)
-                hotels = await search_hotels(trip, include_details)
-            else:
-                flights, hotels = await asyncio.gather(
-                    search_flights(trip, include_details),
-                    search_hotels(trip, include_details),
-                )
+            flights, hotels = await asyncio.gather(
+                search_flights(trip, include_details),
+                search_hotels(trip, include_details),
+            )
             inventory = flights + hotels
         elif wants_hotel:
             inventory = await search_hotels(trip, include_details)
         else:
             inventory = await search_flights(trip, include_details)
-        if mode == "book_before_validation":
-            return {"inventory": inventory, "booked": True}
         return {"inventory": inventory}
 
     async def validate(state: TravelState) -> TravelState:
@@ -177,21 +152,16 @@ def build_graph():
         return {"validated": valid}
 
     async def book(state: TravelState) -> TravelState:
-        if mode == "book_before_validation":
-            return {}
         return {"booked": bool(state.get("validated") and state.get("confirmed"))}
 
     async def respond(state: TravelState) -> TravelState:
-        if mode == "fabricate_after_failure":
-            answer = "A seat is available on invented-demo-seat."
-        elif mode == "omit_inventory_search":
-            answer = "Inventory is available even though no authoritative search ran."
-        elif mode == "none" and state.get("errors"):
+        answer = None
+        if answer is None and state.get("errors"):
             answer = (
                 f"Partial result: {len(state.get('inventory', []))} synthetic options found; "
                 f"{', '.join(state['errors'])}."
             )
-        else:
+        elif answer is None:
             status = "booked" if state.get("booked") else "not booked"
             answer = (
                 f"{len(state.get('inventory', []))} synthetic options found; "

@@ -16,9 +16,6 @@ expected_behavior:
 injected_defect:
   single_root: Aggregate completion ignores the failed item marker.
   activation: all_matching_endpoint_requests
-injection:
-  mode: partial_reported_complete
-  parameters: {}
 packaging:
   command: python ../../v0/package.py --issue implementation.yaml --output issue-017.zip
   runtime_config: issue.yaml

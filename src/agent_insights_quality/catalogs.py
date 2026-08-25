@@ -103,7 +103,7 @@ def validate_semantics(
             for required in ("implementation.yaml", "traffic.json"):
                 if not (path / required).is_file():
                     raise ContractError(f"{issue['id']} is missing {required}")
-            _validate_implementation(issue, path)
+            _validate_implementation(issue, path, by_agent[issue["agent"]])
 
 
 def catalog_hashes(
@@ -139,7 +139,11 @@ def _validate_baseline(agent: dict[str, Any]) -> None:
             raise ContractError(f"{agent['name']} Prompt definition must use GPT-5.6 Terra")
 
 
-def _validate_implementation(issue: dict[str, Any], root: Path) -> None:
+def _validate_implementation(
+    issue: dict[str, Any],
+    root: Path,
+    agent: dict[str, Any],
+) -> None:
     metadata = read_yaml(root / "implementation.yaml")
     for key, expected in (
         ("issue_id", issue["id"]),
@@ -151,6 +155,39 @@ def _validate_implementation(issue: dict[str, Any], root: Path) -> None:
             raise ContractError(f"{issue['id']} implementation {key} does not match")
     if metadata.get("injected_defect", {}).get("single_root") in {None, ""}:
         raise ContractError(f"{issue['id']} must declare one injected root")
+    if agent["type"] == "prompt":
+        definition_path = root / "definition.json"
+        if not definition_path.is_file():
+            raise ContractError(
+                f"{issue['id']} Prompt source definition is missing"
+            )
+        value = json.loads(definition_path.read_text(encoding="utf-8"))
+        if (
+            value.get("name") != agent["name"]
+            or value.get("definition", {}).get("kind") != "prompt"
+            or value.get("definition", {}).get("model") != "gpt-5.6-terra"
+            or value.get("metadata", {}).get("logical_version") != issue["id"]
+        ):
+            raise ContractError(
+                f"{issue['id']} Prompt source definition is not self-contained"
+            )
+    else:
+        baseline_source = ROOT / agent["baseline_path"] / "source"
+        issue_source = root / "source"
+        baseline_files = {
+            path.relative_to(baseline_source).as_posix()
+            for path in baseline_source.rglob("*")
+            if path.is_file() and "__pycache__" not in path.parts
+        }
+        issue_files = {
+            path.relative_to(issue_source).as_posix()
+            for path in issue_source.rglob("*")
+            if path.is_file() and "__pycache__" not in path.parts
+        }
+        if not baseline_files or issue_files != baseline_files:
+            raise ContractError(
+                f"{issue['id']} Hosted source tree is not self-contained"
+            )
     traffic = json.loads((root / "traffic.json").read_text(encoding="utf-8"))
     requests = traffic.get("requests") if isinstance(traffic, dict) else None
     if (

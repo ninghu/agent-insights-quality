@@ -7,6 +7,7 @@ import copy
 import functools
 import http.server
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -215,9 +216,11 @@ def build_artifact(
         if not source_root.is_dir():
             raise ContractError(f"{agent['name']} source folder is missing")
         extra = root / "implementation.yaml" if issue else None
+        source_override = root / "source" if issue else None
         archive = deterministic_zip(
             baseline_root,
             extra=extra,
+            source_override=source_override,
             include=("source", "requirements.txt", "host.yaml"),
         )
         host = _read_yaml(baseline_root / "host.yaml")
@@ -342,6 +345,14 @@ def _build_and_push_support_image(
     if logical_version != "v0":
         implementation = root / "issues" / logical_version / "implementation.yaml"
         relevant[implementation.relative_to(root).as_posix()] = file_hash(implementation)
+        issue_source = root / "issues" / logical_version / "source"
+        relevant.update(
+            {
+                path.relative_to(root).as_posix(): file_hash(path)
+                for path in sorted(issue_source.rglob("*"))
+                if path.is_file() and "__pycache__" not in path.parts
+            }
+        )
     tag = content_hash(relevant).split(":")[1][:16]
     local_tag = f"aiq-support-{tag}:local"
     remote_tag = (
@@ -354,7 +365,20 @@ def _build_and_push_support_image(
         "--no-index --trusted-host host.docker.internal "
         f"--find-links=http://host.docker.internal:{wheelhouse_port} --pre"
     )
-    try:
+    source_root = (
+        root / "v0" / "source"
+        if logical_version == "v0"
+        else root / "issues" / logical_version / "source"
+    )
+    with tempfile.TemporaryDirectory(
+        prefix="support-build-",
+        dir=ROOT / ".aiq-runtime",
+    ) as temporary:
+        context = Path(temporary)
+        shutil.copytree(root / "v0", context / "v0")
+        shutil.rmtree(context / "v0" / "source")
+        shutil.copytree(source_root, context / "v0" / "source")
+        shutil.copyfile(root / issue_path, context / "v0" / "implementation.yaml")
         build = subprocess.run(
             [
                 "docker",
@@ -363,22 +387,21 @@ def _build_and_push_support_image(
                 "host.docker.internal:host-gateway",
                 "--quiet",
                 "-f",
-                str(root / "v0" / "Dockerfile"),
-                "--build-arg",
-                f"ISSUE_PATH={issue_path}",
+                str(context / "v0" / "Dockerfile"),
                 "--build-arg",
                 f"PIP_INSTALL_ARGS={install_args}",
                 "-t",
                 local_tag,
-                str(root),
+                str(context),
             ],
             capture_output=True,
             text=True,
             timeout=900,
             check=False,
         )
-        if build.returncode != 0:
-            raise ContractError(f"Support image build failed for {logical_version}")
+    if build.returncode != 0:
+        raise ContractError(f"Support image build failed for {logical_version}")
+    try:
         subprocess.run(
             ["docker", "tag", local_tag, remote_tag],
             capture_output=True,
@@ -449,6 +472,7 @@ def deterministic_zip(
     source: Path,
     *,
     extra: Path | None = None,
+    source_override: Path | None = None,
     include: tuple[str, ...] | None = None,
 ) -> bytes:
     output = io.BytesIO()
@@ -463,10 +487,19 @@ def deterministic_zip(
         for path in sorted(candidates):
             if not path.is_file() or "__pycache__" in path.parts:
                 continue
-            info = zipfile.ZipInfo(path.relative_to(source).as_posix())
+            name = path.relative_to(source).as_posix()
+            data_path = path
+            if source_override is not None and name.startswith("source/"):
+                candidate = source_override / Path(name).relative_to("source")
+                if not candidate.is_file():
+                    raise ContractError(
+                        f"Hosted issue source is missing {name}"
+                    )
+                data_path = candidate
+            info = zipfile.ZipInfo(name)
             info.date_time = (1980, 1, 1, 0, 0, 0)
             info.external_attr = 0o644 << 16
-            archive.writestr(info, path.read_bytes())
+            archive.writestr(info, data_path.read_bytes())
         if extra is not None:
             info = zipfile.ZipInfo("issue.yaml")
             info.date_time = (1980, 1, 1, 0, 0, 0)
