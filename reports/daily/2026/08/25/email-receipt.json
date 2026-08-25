@@ -1,13 +1,7 @@
 {
-  "schema_version": "1.0.0",
+  "schema_version": "2.0.0",
   "content_digest": "sha256:a702d5ce03e17bc22023344703db2a665028951fa5a52d3d206ae2bc3a26e856",
   "status": "sent",
-  "attempts": [
-    {
-      "transport": "connected_microsoft_mail",
-      "status": "sent",
-      "content_digest": "sha256:a702d5ce03e17bc22023344703db2a665028951fa5a52d3d206ae2bc3a26e856",
-      "provider_reference": "sha256:275cb5c415928eab53bdd62cdfecc84dde42dd8db06216f1669e3369f3221c88"
-    }
-  ]
+  "provider_reference": "sha256:275cb5c415928eab53bdd62cdfecc84dde42dd8db06216f1669e3369f3221c88",
+  "retry_allowed": false
 }
