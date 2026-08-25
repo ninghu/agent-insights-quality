@@ -9,12 +9,14 @@ import pytest
 from agent_insights_quality.email import (
     create_request,
     import_receipt,
+    resolve_recipient,
     validate_published_receipt,
 )
 from agent_insights_quality.util import ContractError
 
 
 def test_email_requires_reviewed_domain_and_one_success(tmp_path: Path) -> None:
+    assert resolve_recipient() == "agentinsightsteam@microsoft.com"
     report = {
         "status": "PASS",
         "report_date": "2026-08-24",
