@@ -27,6 +27,7 @@ from agent_insights_quality.util import (
 _PUBLIC_REPORT_BASE_URL = (
     "https://github.com/ninghu/agent-insights-quality/blob/main/"
 )
+_PUBLIC_ISSUE_CATALOG_URL = _PUBLIC_REPORT_BASE_URL + "ISSUE_CATALOG.md"
 _OUTLOOK_TEXT_STYLE = (
     "font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:19px;"
 )
@@ -538,6 +539,13 @@ def _agent_rows(
             f'href="{html.escape(_agent_report_url(report, name), quote=True)}">'
             "View report</a>"
         )
+        issue_links = ", ".join(
+            f'<a style="color:#0067b8;text-decoration:underline;" '
+            f'href="{_PUBLIC_ISSUE_CATALOG_URL}#{item["issue_id"]}">'
+            f'{html.escape(item["issue_id"])}</a>'
+            for item in report.get("issues", [])
+            if item.get("agent") == name
+        ) or '<span style="color:#64748b;">None</span>'
         rows.append(
             "<tr>"
             '<td style="padding:11px 12px;border:1px solid #d6deea;'
@@ -547,6 +555,8 @@ def _agent_rows(
             f'color:#334155;">{html.escape(_AGENT_TYPES.get(name, "agent"))}</td>'
             '<td style="padding:11px 12px;border:1px solid #d6deea;">'
             f"{agent_link_html}</td>"
+            '<td style="padding:11px 12px;border:1px solid #d6deea;'
+            f'color:#334155;line-height:18px;">{issue_links}</td>'
             '<td style="padding:11px 12px;border:1px solid #d6deea;">'
             f"{report_link_html}</td>"
             "</tr>"
@@ -622,13 +632,15 @@ def _render_html(
         + '<table cellpadding="0" cellspacing="0" border="0" width="100%" '
         'style="width:100%;border-collapse:collapse;font-size:13px;">'
         '<tr bgcolor="#e8eef7">'
-        '<th align="left" width="42%" style="padding:10px 12px;'
+        '<th align="left" width="24%" style="padding:10px 12px;'
         'border:1px solid #d6deea;color:#12304a;">Test agent</th>'
-        '<th align="left" width="14%" style="padding:10px 12px;'
+        '<th align="left" width="12%" style="padding:10px 12px;'
         'border:1px solid #d6deea;color:#12304a;">Type</th>'
-        '<th align="left" width="22%" style="padding:10px 12px;'
+        '<th align="left" width="14%" style="padding:10px 12px;'
         'border:1px solid #d6deea;color:#12304a;">Agent</th>'
-        '<th align="left" width="22%" style="padding:10px 12px;'
+        '<th align="left" width="34%" style="padding:10px 12px;'
+        'border:1px solid #d6deea;color:#12304a;">Assigned issues</th>'
+        '<th align="left" width="16%" style="padding:10px 12px;'
         'border:1px solid #d6deea;color:#12304a;">Report</th></tr>'
         + rows
         + "</table></td></tr></table>"

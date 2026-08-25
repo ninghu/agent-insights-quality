@@ -38,6 +38,7 @@ def test_email_requires_reviewed_domain_and_one_success(tmp_path: Path) -> None:
     request = create_request(report, "synthetic@microsoft.com")
     assert "Recommended human validation" not in request["html"]
     assert ">Test agent</th>" in request["html"]
+    assert ">Assigned issues</th>" in request["html"]
     assert ">Report</th>" in request["html"]
     assert ">Ownership</th>" in request["html"]
     receipt = {
