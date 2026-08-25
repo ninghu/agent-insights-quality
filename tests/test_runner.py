@@ -43,11 +43,13 @@ class FakeRuntime:
         baseline_noise: str | None = None,
         fail: str | None = None,
         reset_failure_agent: str | None = None,
+        clean_window_failure_agent: str | None = None,
         probe_concurrency: bool = False,
     ):
         self.baseline_noise = baseline_noise
         self.fail = fail
         self.reset_failure_agent = reset_failure_agent
+        self.clean_window_failure_agent = clean_window_failure_agent
         self.probe_concurrency = probe_concurrency
         self.invoked: list[str] = []
         self._active_agents: set[str] = set()
@@ -66,6 +68,8 @@ class FakeRuntime:
     def assert_clean_window(self, agent_name: str, lookback_hours: int) -> None:
         assert agent_name.endswith("-agent")
         assert lookback_hours == 3
+        if agent_name == self.clean_window_failure_agent:
+            raise RuntimeError(f"{agent_name} has pre-existing traces")
 
     def invoke_version(
         self,
@@ -260,3 +264,19 @@ def test_baseline_operational_failure_stops_only_one_agent() -> None:
         for item in results
         if item.agent_name != "weather-agent"
     )
+
+
+def test_clean_window_failure_has_actionable_error_code() -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    selected = select_daily(date(2026, 8, 24), agents, issues, hashes["issues"])
+    results = execute(
+        agents=agents,
+        issues=issues,
+        selected=selected,
+        registry=_registry(agents, hashes),
+        runtime=FakeRuntime(clean_window_failure_agent="weather-agent"),
+        seed=1,
+    )
+    weather = next(item for item in results if item.agent_name == "weather-agent")
+    assert weather.baseline.error_code == "clean_window_not_empty"

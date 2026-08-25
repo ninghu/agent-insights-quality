@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,8 @@ def test_email_requires_reviewed_domain_and_one_success(tmp_path: Path) -> None:
             "quality_score": 100,
             "quality_threshold": 90,
             "quality_score_formula": "field_weighted_v1",
+            "incomplete_reasons": [],
+            "incomplete": False,
         },
         "issues": [],
     }
@@ -47,6 +50,14 @@ def test_email_requires_reviewed_domain_and_one_success(tmp_path: Path) -> None:
     assert "Quality Score: 100/100" in request["html"]
     assert "How Scoring Works" in request["html"]
     assert "docs/QUALITY_BAR.md#quality-score" in request["html"]
+    incomplete = deepcopy(report)
+    incomplete["status"] = "INCOMPLETE"
+    incomplete["summary"]["quality_score"] = None
+    incomplete["summary"]["incomplete"] = True
+    incomplete["summary"]["incomplete_reasons"] = ["clean_window_not_empty"]
+    incomplete_request = create_request(incomplete, "synthetic@microsoft.com")
+    assert "pre-existing telemetry" in incomplete_request["html"]
+    assert "no Agent traffic was sent" in incomplete_request["html"]
     receipt = {
         "schema_version": "2.0.0",
         "content_digest": request["content_digest"],

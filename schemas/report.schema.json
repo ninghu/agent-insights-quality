@@ -39,6 +39,11 @@
         "issues_partial": {"type": "integer", "minimum": 0, "maximum": 36},
         "quality_failures": {"type": "integer", "minimum": 0, "maximum": 41},
         "incomplete": {"type": "boolean"},
+        "incomplete_reasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
         "failure_code": {"type": "string", "minLength": 1},
         "noise_cards": {"type": "integer", "minimum": 0},
         "unverified_cards": {"type": "integer", "minimum": 0},

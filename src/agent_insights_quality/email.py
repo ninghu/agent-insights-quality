@@ -295,7 +295,7 @@ def _grade_rows(report: dict[str, Any]) -> list[tuple[str, str]]:
         + len(baseline_cards)
     )
     missing = sum(item.get("detail") == "MISSING" for item in issues)
-    return [
+    rows = [
         ("Overall judgment", report["status"]),
         ("Expected issue insights", str(report["summary"]["issues_expected"])),
         ("Observed Insights", str(report["summary"]["observed_cards"])),
@@ -308,6 +308,33 @@ def _grade_rows(report: dict[str, Any]) -> list[tuple[str, str]]:
         ),
         ("Missing expected issues", str(missing)),
     ]
+    if report["status"] == "INCOMPLETE":
+        rows.insert(
+            1,
+            (
+                "Run status reason",
+                _incomplete_reason(report["summary"].get("incomplete_reasons", [])),
+            ),
+        )
+    return rows
+
+
+def _incomplete_reason(reasons: list[str]) -> str:
+    labels = {
+        "clean_window_not_empty": (
+            "Clean window blocked by pre-existing telemetry inside the required "
+            "three-hour lookback; no Agent traffic was sent."
+        ),
+        "monitor_reset_failed": "Agent Insights monitor reset failed before traffic.",
+        "clean_window_failed": "Clean-window telemetry verification failed.",
+        "invocation_failed": "One or more deployed Agent endpoint invocations failed.",
+        "telemetry_failed": "Natural telemetry did not arrive or correlate completely.",
+        "trace_contract_failed": "Trace-contract verification failed.",
+        "insight_run_failed": "One or more Agent Insights runs failed.",
+    }
+    if not reasons:
+        return "Validated runtime evidence was incomplete."
+    return " ".join(labels.get(reason, reason.replace("_", " ").capitalize()) for reason in reasons)
 
 
 def _working_capabilities(report: dict[str, Any]) -> list[tuple[str, str]]:
@@ -424,6 +451,11 @@ def _improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str]]:
 
 def _summary_narrative(report: dict[str, Any]) -> tuple[str, str]:
     summary = report["summary"]
+    if report["status"] == "INCOMPLETE":
+        return (
+            _incomplete_reason(summary.get("incomplete_reasons", [])),
+            "No quality score or product conclusion was produced from this run.",
+        )
     return (
         f"The run expected {summary['issues_expected']} issue Insights and zero "
         f"baseline Insights, and observed {summary['observed_cards']} distinct cards.",
