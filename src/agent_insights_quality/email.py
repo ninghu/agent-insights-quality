@@ -274,28 +274,6 @@ def _data_table(
     )
 
 
-def _ownership_value(items: Sequence[dict[str, Any]]) -> str:
-    labels = {
-        "agent": "Agent",
-        "insight_engine": "Insight Engine",
-        "test_framework": "Test framework",
-        "infrastructure": "Infrastructure",
-        "unresolved": "Unresolved",
-    }
-    counts = Counter(
-        item.get("assessment", {}).get("ownership")
-        for item in items
-        if item.get("assessment", {}).get("ownership") not in {None, "none"}
-    )
-    if not counts:
-        return "None"
-    return ", ".join(
-        f"{labels[owner]} ({counts[owner]})"
-        for owner in labels
-        if counts[owner]
-    )
-
-
 def _grade_rows(report: dict[str, Any]) -> list[tuple[str, str]]:
     issues = report.get("issues", [])
     issue_cards = [
@@ -382,7 +360,7 @@ def _working_capabilities(report: dict[str, Any]) -> list[tuple[str, str]]:
     return rows
 
 
-def _improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str, str]]:
+def _improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str]]:
     issues = report.get("issues", [])
     baseline = report.get("baseline", [])
     rows: list[tuple[str, str, str]] = []
@@ -398,7 +376,6 @@ def _improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str, str]]
                 "Healthy baseline findings",
                 f"{len(baseline_failures)} of 5 baselines were not clean.",
                 "Healthy Agent versions should produce zero findings.",
-                _ownership_value(baseline_failures),
             )
         )
     missing = [item for item in issues if item.get("detail") == "MISSING"]
@@ -408,7 +385,6 @@ def _improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str, str]]
                 "Expected findings were missed",
                 f"{len(missing)} single-root issues produced no attributable card.",
                 "Produce one attributable finding for every proven issue.",
-                _ownership_value(missing),
             )
         )
     incorrect = [
@@ -424,29 +400,15 @@ def _improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str, str]]
                 f"{len(incorrect)} findings did not pass every required field.",
                 "Match root cause, title, description, category, severity, fix, "
                 "and traces.",
-                _ownership_value(incorrect),
             )
         )
     noise_cards = int(report["summary"].get("noise_cards", 0))
     if noise_cards:
-        noise_items = [
-            *[
-                item
-                for item in baseline
-                if item.get("assessment", {}).get("verdict") == "noise"
-            ],
-            *[
-                item
-                for item in issues
-                if item.get("detail") in {"NOISE", "DUPLICATE"}
-            ],
-        ]
         rows.append(
             (
                 "Noise",
                 f"{noise_cards} false-positive, unrelated, or duplicate cards.",
                 "Return only distinct findings attributable to the current tested issue.",
-                _ownership_value(noise_items),
             )
         )
     if not rows:
@@ -455,7 +417,6 @@ def _improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str, str]]
                 "No product-quality gap observed",
                 "Every baseline and selected issue met the reviewed contract.",
                 "Preserve the current behavior and reviewed catalogs.",
-                "None",
             )
         )
     return rows
@@ -613,9 +574,9 @@ def _render_html(
         '<tr><td style="padding:24px 32px 0 32px;">'
         + _section_heading("What needs improvement")
         + _data_table(
-            ("Product gap", "What happened", "Needed behavior", "Ownership"),
+            ("Product gap", "What happened", "Needed behavior"),
             _improvement_rows(report),
-            (22, 34, 30, 14),
+            (24, 43, 33),
         )
         + "</td></tr>"
         '<tr><td style="padding:24px 32px 38px 32px;">'
