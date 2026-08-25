@@ -1,6 +1,14 @@
 {
   "days": [
     {
+      "baseline_passed": 0,
+      "issues_correct": 0,
+      "issues_expected": 25,
+      "quality_score": null,
+      "report_date": "2026-08-24",
+      "status": "INCOMPLETE"
+    },
+    {
       "baseline_passed": 1,
       "issues_correct": 3,
       "issues_expected": 25,
