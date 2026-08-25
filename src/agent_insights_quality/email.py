@@ -589,7 +589,7 @@ def _render_html(
         'font-size:12px;line-height:16px;font-weight:700;">'
         f"Quality Score: {html.escape(score)} "
         f'(<a style="color:inherit;text-decoration:underline;" '
-        f'href="{_QUALITY_BAR_URL}">Score Formula</a>) &middot; '
+        f'href="{_QUALITY_BAR_URL}">How Scoring Works</a>) &middot; '
         f"{html.escape(report['status'])}</span>"
         "</td></tr>"
         '<tr><td style="padding:28px 32px 0 32px;">'
