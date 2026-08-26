@@ -34,6 +34,25 @@ FIELD_WEIGHTS = {
 }
 
 
+def _runtime_evidence_complete(value: dict[str, Any]) -> bool:
+    requests = value.get("endpoint_request_count")
+    responses = value.get("endpoint_response_count")
+    usable = value.get("endpoint_usable_response_count")
+    return (
+        isinstance(requests, int)
+        and not isinstance(requests, bool)
+        and requests > 0
+        and isinstance(responses, int)
+        and not isinstance(responses, bool)
+        and responses > 0
+        and isinstance(usable, int)
+        and not isinstance(usable, bool)
+        and usable > 0
+        and requests == responses == usable
+        and value.get("trace_contract_verified") is True
+    )
+
+
 def calculate_quality_score(
     *,
     field_quality_score: float,
@@ -162,6 +181,30 @@ def _summary_metrics(
             for item in [*baseline, *issues]
             if item.get("error_code")
         }
+        | (
+            {"assessment_evidence_incomplete"}
+            if any(
+                item["assessment"]["verdict"] == "inconclusive"
+                or any(
+                    card.get("evaluation") == "incomplete"
+                    for card in item["assessment"].get("card_evaluations", [])
+                )
+                for item in baseline
+            )
+            or any(
+                item["assessment"]["finding_type"] == "INCOMPLETE"
+                for item in issues
+            )
+            else set()
+        )
+        | (
+            {"runtime_evidence_incomplete"}
+            if any(
+                item.get("runtime_evidence_complete") is not True
+                for item in [*baseline, *issues]
+            )
+            else set()
+        )
     )
     quality_score = calculate_quality_score(
         field_quality_score=field_quality_score,
@@ -209,6 +252,7 @@ def build_report(
     incomplete = False
     for agent in manifest["agents"]:
         baseline_value = agent["baseline"]
+        baseline_runtime_complete = _runtime_evidence_complete(baseline_value)
         baseline.append(
             {
                 "agent": agent["name"],
@@ -216,6 +260,7 @@ def build_report(
                 "foundry_version": baseline_value["foundry_version"],
                 "status": baseline_value["status"],
                 "error_code": baseline_value.get("error_code"),
+                "runtime_evidence_complete": baseline_runtime_complete,
                 "insight_count": len(baseline_value["insight_references"]),
                 "assessment": {
                     "verdict": baseline_assessments[agent["name"]]["verdict"],
@@ -232,15 +277,20 @@ def build_report(
         )
         if (
             baseline_value["status"] not in {"passed", "not_at_bar"}
-            or (
-                baseline_assessments[agent["name"]]["verdict"] == "inconclusive"
-                and not baseline_assessments[agent["name"]]["card_evaluations"]
+            or not baseline_runtime_complete
+            or baseline_assessments[agent["name"]]["verdict"] == "inconclusive"
+            or any(
+                card.get("evaluation") == "incomplete"
+                for card in baseline_assessments[agent["name"]][
+                    "card_evaluations"
+                ]
             )
         ):
             incomplete = True
         for value in agent["issues"]:
             issue_id = value["issue_id"]
             assessment = assessments[issue_id]
+            runtime_complete = _runtime_evidence_complete(value)
             fields_pass = (
                 set(assessment["fields"]) == REQUIRED_FIELDS
                 and all(assessment["fields"].values())
@@ -248,7 +298,7 @@ def build_report(
             complete = value["status"] not in {
                 "inconclusive",
                 "skipped_baseline",
-            }
+            } and runtime_complete and assessment["finding_type"] != "INCOMPLETE"
             correct = (
                 value["status"] == "observed"
                 and len(value["insight_references"]) == 1
@@ -266,6 +316,7 @@ def build_report(
                     "title": issue_by_id[issue_id]["title"],
                     "status": value["status"],
                     "error_code": value.get("error_code"),
+                    "runtime_evidence_complete": runtime_complete,
                     "result": (
                         "INCOMPLETE"
                         if not complete
@@ -336,6 +387,7 @@ def build_operational_failure_report(
             "status": "inconclusive",
             "result": "INCOMPLETE",
             "detail": "INCOMPLETE",
+            "runtime_evidence_complete": False,
             "observed_count": 0,
             "assessment": {
                 "verdict": "missing",
@@ -374,6 +426,7 @@ def build_operational_failure_report(
                 "logical_version": "v0",
                 "foundry_version": "unavailable",
                 "status": "inconclusive",
+                "runtime_evidence_complete": False,
                 "insight_count": 0,
                 "assessment": {
                     "verdict": "inconclusive",
@@ -422,6 +475,12 @@ def validate_report(report: dict[str, Any]) -> None:
         raise ContractError(f"Report is invalid: {errors[0].message}")
     if len(report["issues"]) not in {25, 36}:
         raise ContractError("A report must contain the daily 25 or staging 36 issues")
+    if any(
+        not isinstance(item, dict)
+        or not isinstance(item.get("runtime_evidence_complete"), bool)
+        for item in [*report["baseline"], *report["issues"]]
+    ):
+        raise ContractError("Report runtime evidence is incomplete")
 
 
 def _validate_complete_summary(
@@ -430,6 +489,22 @@ def _validate_complete_summary(
     expected_count: int,
     label: str,
 ) -> None:
+    assessment_incomplete = any(
+        item.get("runtime_evidence_complete") is not True
+        or item["assessment"]["verdict"] == "inconclusive"
+        or any(
+            card.get("evaluation") == "incomplete"
+            for card in item["assessment"].get("card_evaluations", [])
+        )
+        for item in report["baseline"]
+    ) or any(
+        item.get("runtime_evidence_complete") is not True
+        or item["result"] == "INCOMPLETE"
+        or item["assessment"]["finding_type"] == "INCOMPLETE"
+        for item in report["issues"]
+    )
+    if assessment_incomplete:
+        raise ContractError(f"{label} report is incomplete")
     expected = _summary_metrics(
         report["baseline"],
         report["issues"],

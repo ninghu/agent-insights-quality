@@ -16,9 +16,6 @@ expected_behavior:
 injected_defect:
   single_root: The failed-search branch inserts an invented inventory item.
   activation: all_matching_endpoint_requests
-injection:
-  mode: fabricate_after_failure
-  parameters: {}
 packaging:
   command: python ../../v0/package.py --issue implementation.yaml --output issue-021.zip
   runtime_config: issue.yaml

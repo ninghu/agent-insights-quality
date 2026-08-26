@@ -27,12 +27,8 @@ artifacts:
   - traffic.json
   - Dockerfile
   - container.yaml
-  - issue.yaml
 public_safety:
   synthetic_only: true
   real_people: false
   credentials: false
   service_locations: false
-injection:
-  mode: none
-  parameters: {}

@@ -13,7 +13,7 @@ Agents and 36 reviewed, single-root issues.
 - Invoke deployed Agent endpoints for test traffic.
 - Keep Application Insights read-only. Direct trace injection is forbidden.
 - Keep email requests, deployment registries, run manifests, assessment packages, assessments,
-  promotion receipts, and provider receipts under `.aiq-runtime/`.
+  promotion receipts, provider receipts, and work-item snapshots under `.aiq-runtime/`.
 
 ## Authorities
 
@@ -22,6 +22,10 @@ Agents and 36 reviewed, single-root issues.
 - Agent and Issue catalogs, Agent implementations, schemas, infrastructure, score policy, and
   promotion receipts require human review.
 - Do not add compatibility readers or restore superseded identifiers and formats.
+- Every issue folder is the complete deployable source authority for that version: Prompt issues own a
+  full `definition.json`; Hosted issues own a full `source/` tree containing only that defect.
+- Never ship runtime injection selectors, dormant branches for other issues, generic defect hooks, or
+  build-time source patches inside an Agent version.
 
 ## Execution model
 
@@ -37,12 +41,18 @@ Agents and 36 reviewed, single-root issues.
   or Agent content digests.
 - Monitor reset does not delete telemetry. Never reuse a dirty generation for a clean qualification.
 - Never send ad-hoc debug traffic to daily or staging before a qualification.
+- Quality-tagged Azure Boards work items are private email context only. Never write their query URL,
+  titles, assignees, or links into committed reports.
+- Bind each private work-item snapshot digest and closed-business date to its qualification run before
+  Agent traffic; finalization must use the same snapshot.
 
 ## Assessment and scoring
 
 - GPT-5.6 Sol assesses private packages against `src/agent_insights_quality/prompts/assessment.md`.
 - Use independent `endpoint_evidence` and trace proof. Never use a card's own claim to prove the
   Agent defect described by that card.
+- Equal nonzero request, response, and usable-response counts plus a verified natural trace contract
+  prove that the reviewed source-and-traffic contract was exercised. Semantic assertions are optional.
 - Assign `insight_engine` only when endpoint behavior and trace contract are proven.
 - Use `none`, `agent`, `insight_engine`, `test_framework`, `infrastructure`, or `unresolved`
   ownership.

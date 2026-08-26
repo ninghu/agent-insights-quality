@@ -8,8 +8,15 @@ import zipfile
 from pathlib import Path
 
 import yaml
-
 from agent_insights_quality.util import ROOT
+
+
+def _is_source_file(path: Path) -> bool:
+    return (
+        path.is_file()
+        and "__pycache__" not in path.parts
+        and path.suffix.casefold() not in {".pyc", ".pyo"}
+    )
 
 
 def test_prompt_definitions_are_complete_and_use_terra() -> None:
@@ -20,6 +27,7 @@ def test_prompt_definitions_are_complete_and_use_terra() -> None:
         ]
     )
     assert len(paths) == 14
+    digests = set()
     for path in paths:
         value = json.loads(path.read_text(encoding="utf-8"))
         definition = value["definition"]
@@ -27,6 +35,14 @@ def test_prompt_definitions_are_complete_and_use_terra() -> None:
         assert definition["model"] == "gpt-5.6-terra"
         assert definition["instructions"].strip()
         assert definition["tools"]
+        logical_version = "v0" if path.parent.name == "v0" else path.parent.name
+        if logical_version != "v0":
+            assert value["metadata"]["logical_version"] == logical_version
+        serialized = json.dumps(value, sort_keys=True)
+        assert '"injection"' not in serialized
+        assert '"mode"' not in serialized
+        digests.add(hashlib.sha256(path.read_bytes()).hexdigest())
+    assert len(digests) == 14
 
 
 def test_all_traffic_is_synthetic_endpoint_traffic() -> None:
@@ -88,11 +104,80 @@ def test_hosted_packages_are_deterministic_and_isolated(tmp_path: Path) -> None:
                 names = archive.namelist()
                 assert names.count("issue.yaml") == 1
                 assert not any(name.startswith("issues/") for name in names)
+                assert not any(
+                    "__pycache__" in Path(name).parts
+                    or Path(name).suffix.casefold() in {".pyc", ".pyo"}
+                    for name in names
+                )
                 active = yaml.safe_load(archive.read("issue.yaml"))
-                assert active["issue_id"] == implementation.parent.name.replace(
+                issue_id = implementation.parent.name.replace(
                     "implementation", "v0"
                 )
+                assert active["issue_id"] == issue_id
+                app = archive.read("source/app.py")
+                source_root = (
+                    root / "v0" / "source"
+                    if issue_id == "v0"
+                    else implementation.parent / "source"
+                )
+                assert app == (source_root / "app.py").read_bytes()
+                text = app.decode("utf-8")
+                assert "AIQ-PATCH-" not in text
+                assert "mode ==" not in text
         assert len(digests) == 9
+
+
+def test_hosted_packagers_fail_when_issue_source_is_missing(tmp_path: Path) -> None:
+    for agent_name in ("finance-agent", "travel-agent", "support-ticket-agent"):
+        package = ROOT / "agents" / agent_name / "v0" / "package.py"
+        issue_root = tmp_path / agent_name
+        issue_root.mkdir()
+        implementation = issue_root / "implementation.yaml"
+        implementation.write_text(
+            f"issue_id: issue-999\nagent_name: {agent_name}\n",
+            encoding="utf-8",
+        )
+        completed = subprocess.run(
+            [
+                "python",
+                str(package),
+                "--issue",
+                str(implementation),
+                "--output",
+                str(issue_root / "package.zip"),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert completed.returncode != 0
+        assert "source tree is missing" in completed.stderr
+
+
+def test_every_hosted_issue_has_self_contained_source() -> None:
+    for agent_name in ("finance-agent", "travel-agent", "support-ticket-agent"):
+        root = ROOT / "agents" / agent_name
+        baseline_files = {
+            path.relative_to(root / "v0" / "source").as_posix()
+            for path in (root / "v0" / "source").rglob("*")
+            if _is_source_file(path)
+        }
+        app_digests = set()
+        for issue in sorted(
+            path for path in (root / "issues").iterdir() if path.is_dir()
+        ):
+            issue_files = {
+                path.relative_to(issue / "source").as_posix()
+                for path in (issue / "source").rglob("*")
+                if _is_source_file(path)
+            }
+            assert issue_files == baseline_files
+            app = (issue / "source" / "app.py").read_bytes()
+            assert b"AIQ-PATCH-" not in app
+            assert b"mode ==" not in app
+            app_digests.add(hashlib.sha256(app).hexdigest())
+        assert len(app_digests) == 8
 
 
 def test_hosted_framework_and_identity_boundaries() -> None:
@@ -115,6 +200,17 @@ def test_hosted_framework_and_identity_boundaries() -> None:
     assert '"gen_ai.operation.name", "execute_tool"' in support
     assert "ContextVar" in finance
     assert "ResetTransientState" not in finance
+    issue_014 = (
+        ROOT
+        / "agents"
+        / "finance-agent"
+        / "issues"
+        / "issue-014"
+        / "source"
+        / "app.py"
+    ).read_text(encoding="utf-8")
+    assert "str | None" in issue_014
+    assert "] = None" in issue_014
 
 
 def test_healthcare_fixture_arguments_match_requested_slots() -> None:

@@ -14,7 +14,6 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 from openai import AsyncOpenAI
 
-from .config import load_config
 from .observability import configure_observability
 
 
@@ -22,6 +21,7 @@ configure_observability("support-ticket-agent")
 tracer = trace.get_tracer("support-ticket-agent")
 app = ResponsesAgentServerHost()
 credential = DefaultAzureCredential()
+ISSUE_ID = "v0"
 
 
 async def token_provider() -> str:
@@ -89,8 +89,6 @@ async def model_response(prompt: str, max_output_tokens: int) -> str:
 
 async def dispatch(
     text: str,
-    mode: str,
-    parameters: dict,
     max_output_tokens: int,
 ) -> str:
     lowered = text.lower()
@@ -98,7 +96,7 @@ async def dispatch(
         (value for value in TICKETS if value in lowered),
         "ticket-demo-1",
     )
-    if mode == "none" and "temporary read failure" in lowered:
+    if "temporary read failure" in lowered:
         tool(
             "read_ticket",
             {"ok": False, "error": {"code": "temporary_unavailable", "retryable": True}},
@@ -111,7 +109,7 @@ async def dispatch(
             "State concisely that the synthetic ticket read succeeded after one bounded retry.",
             max_output_tokens,
         )
-    if mode == "none" and "optional history is unavailable" in lowered:
+    if "optional history is unavailable" in lowered:
         tool(
             "read_ticket",
             {"ok": True, "ticket_id": ticket_id, "ticket": TICKETS[ticket_id]},
@@ -120,48 +118,6 @@ async def dispatch(
         return await model_response(
             "State concisely that the synthetic core ticket is available and optional history is unavailable.",
             max_output_tokens,
-        )
-    if mode == "abort_before_dispatch":
-        return "Valid ticket request rejected before model or tool dispatch."
-    if mode == "unhandled_model_failure":
-        with tracer.start_as_current_span("support.model.dispatch") as span:
-            span.set_attribute("gen_ai.operation.name", "chat")
-            span.set_attribute("model.ok", False)
-            span.set_attribute("error.type", "synthetic_model_failure")
-            span.set_status(Status(StatusCode.ERROR))
-        return "Synthetic model failure reached the user without bounded recovery."
-    if mode == "false_success_without_dispatch":
-        return "Update completed successfully."
-    if mode == "no_progress_loop":
-        steps = int(parameters.get("steps", 4))
-        for _ in range(steps):
-            with tracer.start_as_current_span("support.state.waiting"):
-                pass
-        return "The request stopped after repeated no-progress states."
-    if mode == "abort_after_tool":
-        tool(
-            "read_ticket",
-            {"ok": True, "ticket_id": ticket_id, "ticket": TICKETS[ticket_id]},
-        )
-        return "Ticket data was read, but orchestration stopped before a useful answer."
-    if mode == "omit_escalation":
-        for _ in range(2):
-            tool("recover_ticket", {"ok": False, "error": {"code": "temporary_unavailable"}})
-        return "Recovery was exhausted without escalation."
-    if mode == "accept_stale_revision":
-        updated = tool(
-            "update_ticket",
-            {"ok": True, "ticket_id": "ticket-demo-1", "accepted_revision": 2, "current_revision": 3},
-        )
-        return f"Update accepted at stale revision {updated['accepted_revision']}."
-    if mode == "split_state_symptoms":
-        with tracer.start_as_current_span("support.state.propagation") as span:
-            span.set_attribute("state.keys_after", 0)
-        tool("read_ticket", {"ok": False, "error": {"code": "ticket_id_missing"}})
-        tool("update_ticket", {"ok": False, "error": {"code": "revision_missing"}})
-        return (
-            "The shared state lost the ticket identifier and revision, causing routing, "
-            "tool, and completion failures."
         )
     ticket = tool(
         "read_ticket",
@@ -196,17 +152,12 @@ async def responses(
     cancellation_signal,
 ):
     del cancellation_signal
-    config = load_config()
-    mode = config["injection"].get("mode", "none")
-    parameters = config["injection"].get("parameters") or {}
     text = input_text(payload.get("input"))
     with tracer.start_as_current_span("support.dispatch") as span:
         span.set_attribute("gen_ai.response.id", context.response_id)
-        span.set_attribute("issue.id", config["issue_id"])
+        span.set_attribute("issue.id", ISSUE_ID)
         result = await dispatch(
             text,
-            mode,
-            parameters,
             payload.get("max_output_tokens") or 400,
         )
     return TextResponse(context, payload, text=result)

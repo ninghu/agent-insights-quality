@@ -46,12 +46,47 @@ def test_email_requires_reviewed_domain_and_one_success(tmp_path: Path) -> None:
     assert request["retry_ambiguous"] is False
     assert "Recommended human validation" not in request["html"]
     assert ">Test agent</th>" in request["html"]
-    assert ">Assigned issues</th>" in request["html"]
+    assert ">Tested issues</th>" in request["html"]
     assert ">Report</th>" in request["html"]
     assert ">Ownership</th>" not in request["html"]
     assert "Quality Score: 100/100" in request["html"]
     assert "How Scoring Works" in request["html"]
     assert "docs/QUALITY_BAR.md#quality-score" in request["html"]
+    work_item_request = create_request(
+        report,
+        "synthetic@microsoft.com",
+        work_items={
+            "closed_business_date": "2026-08-23",
+            "active_items": [
+                {
+                    "id": 42,
+                    "type": "Bug",
+                    "title": "Synthetic & escaped",
+                    "assigned_to": "Example Owner",
+                    "state": "Active",
+                    "url": "https://synthetic.example/workitems/42",
+                }
+            ],
+            "closed_yesterday_items": [
+                {
+                    "id": 41,
+                    "type": "Bug",
+                    "title": "Closed synthetic issue",
+                    "assigned_to": "Example Owner",
+                    "state": "Closed",
+                    "url": "https://synthetic.example/workitems/41",
+                }
+            ],
+        },
+    )
+    assert "Quality work items" in work_item_request["html"]
+    assert ">Active</h3>" in work_item_request["html"]
+    assert "Closed yesterday (2026-08-23)" in work_item_request["html"]
+    assert ">ID</th>" in work_item_request["html"]
+    assert "Synthetic &amp; escaped" in work_item_request["html"]
+    assert 'href="https://synthetic.example/workitems/42"' in work_item_request["html"]
+    assert 'href="https://synthetic.example/workitems/41"' in work_item_request["html"]
+    assert "Removed items are excluded" in work_item_request["html"]
     incomplete = deepcopy(report)
     incomplete["status"] = "INCOMPLETE"
     incomplete["summary"]["quality_score"] = None

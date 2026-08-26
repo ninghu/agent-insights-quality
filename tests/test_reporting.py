@@ -5,6 +5,7 @@ from copy import deepcopy
 from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.reporting import (
     build_report,
+    calculate_quality_score,
     render_agent_markdown,
     validate_published_report,
 )
@@ -24,6 +25,10 @@ def _manifest() -> dict:
                     "foundry_version": "1",
                     "status": "passed",
                     "insight_references": [],
+                    "endpoint_request_count": 5,
+                    "endpoint_response_count": 5,
+                    "endpoint_usable_response_count": 5,
+                    "trace_contract_verified": True,
                 },
                 "issues": [
                     {
@@ -32,6 +37,10 @@ def _manifest() -> dict:
                         "status": "observed",
                         "insight_references": ["sha256:" + "a" * 64],
                         "evidence_reference": "sha256:" + "b" * 64,
+                        "endpoint_request_count": 5,
+                        "endpoint_response_count": 5,
+                        "endpoint_usable_response_count": 5,
+                        "trace_contract_verified": True,
                     }
                     for issue_id in selected
                 ],
@@ -138,6 +147,10 @@ def test_field_quality_and_clean_card_precision_components() -> None:
         "foundry_version": "1",
         "status": "not_at_bar",
         "insight_references": ["sha256:" + "1" * 64],
+        "endpoint_request_count": 5,
+        "endpoint_response_count": 5,
+        "endpoint_usable_response_count": 5,
+        "trace_contract_verified": True,
     }
     baseline["weather-agent"] = {
         "verdict": "noise",
@@ -167,16 +180,52 @@ def test_incomplete_issue_is_inconclusive() -> None:
     assert report["summary"]["quality_score"] is None
 
 
+def test_incomplete_issue_assessment_prevents_a_numeric_score() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    assessments = _assessments(manifest)
+    issue_id = manifest["agents"][0]["issues"][0]["issue_id"]
+    assessments[issue_id]["verdict"] = "missing"
+    assessments[issue_id]["finding_type"] = "INCOMPLETE"
+    assessments[issue_id]["ownership"] = "unresolved"
+    assessments[issue_id]["fields"] = {
+        field: False for field in assessments[issue_id]["fields"]
+    }
+    report = build_report(
+        manifest,
+        issues,
+        assessments,
+        _baseline_assessments(manifest),
+    )
+    result = next(item for item in report["issues"] if item["issue_id"] == issue_id)
+    assert result["result"] == "INCOMPLETE"
+    assert report["status"] == "INCOMPLETE"
+    assert report["summary"]["incomplete"] is True
+    assert report["summary"]["incomplete_reasons"] == [
+        "assessment_evidence_incomplete"
+    ]
+    assert report["summary"]["quality_score"] is None
+
+
 def test_inconclusive_assessment_prevents_a_numeric_score() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
+    manifest["agents"][0]["baseline"] = {
+        "foundry_version": "1",
+        "status": "not_at_bar",
+        "insight_references": ["sha256:" + "1" * 64],
+        "endpoint_request_count": 5,
+        "endpoint_response_count": 5,
+        "endpoint_usable_response_count": 5,
+        "trace_contract_verified": True,
+    }
     baseline = _baseline_assessments(manifest)
     baseline["weather-agent"] = {
         "verdict": "inconclusive",
         "ownership": "unresolved",
         "ownership_reason": "Independent endpoint evidence is unavailable.",
         "confidence": 0.8,
-        "card_evaluations": [],
+        "card_evaluations": [{"evaluation": "incomplete"}],
     }
     report = build_report(
         manifest,
@@ -186,7 +235,52 @@ def test_inconclusive_assessment_prevents_a_numeric_score() -> None:
     )
     assert report["status"] == "INCOMPLETE"
     assert report["summary"]["incomplete"] is True
+    assert report["summary"]["incomplete_reasons"] == [
+        "assessment_evidence_incomplete"
+    ]
     assert report["summary"]["quality_score"] is None
+
+
+def test_incomplete_baseline_card_prevents_a_numeric_score() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    manifest["agents"][0]["baseline"] = {
+        "foundry_version": "1",
+        "status": "not_at_bar",
+        "insight_references": ["sha256:" + "1" * 64],
+        "endpoint_request_count": 5,
+        "endpoint_response_count": 5,
+        "endpoint_usable_response_count": 5,
+        "trace_contract_verified": True,
+    }
+    baseline = _baseline_assessments(manifest)
+    baseline["weather-agent"] = {
+        "verdict": "noise",
+        "ownership": "unresolved",
+        "ownership_reason": "The generated card could not be verified.",
+        "confidence": 0.8,
+        "card_evaluations": [{"evaluation": "incomplete"}],
+    }
+    report = build_report(manifest, issues, _assessments(manifest), baseline)
+    assert report["status"] == "INCOMPLETE"
+    assert report["summary"]["incomplete"] is True
+    assert report["summary"]["quality_score"] is None
+
+
+def test_missing_runtime_evidence_prevents_a_numeric_score() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    manifest["agents"][0]["issues"][0]["endpoint_usable_response_count"] = 4
+    report = build_report(
+        manifest,
+        issues,
+        _assessments(manifest),
+        _baseline_assessments(manifest),
+    )
+    assert report["issues"][0]["result"] == "INCOMPLETE"
+    assert report["status"] == "INCOMPLETE"
+    assert report["summary"]["quality_score"] is None
+    assert "runtime_evidence_incomplete" in report["summary"]["incomplete_reasons"]
 
 
 def test_published_report_requires_complete_consistent_content() -> None:
@@ -201,6 +295,37 @@ def test_published_report_requires_complete_consistent_content() -> None:
     report["delivery"]["content_digest"] = "sha256:" + "a" * 64
     validate_published_report(report)
     report["issues"][0]["assessment"] = None
+    with pytest.raises(ContractError, match="incomplete"):
+        validate_published_report(report)
+
+
+def test_published_report_rejects_incomplete_assessment_evidence() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    assessments = _assessments(manifest)
+    issue_id = manifest["agents"][0]["issues"][0]["issue_id"]
+    assessments[issue_id]["verdict"] = "missing"
+    assessments[issue_id]["finding_type"] = "INCOMPLETE"
+    assessments[issue_id]["ownership"] = "unresolved"
+    assessments[issue_id]["fields"] = {
+        field: False for field in assessments[issue_id]["fields"]
+    }
+    report = build_report(
+        manifest,
+        issues,
+        assessments,
+        _baseline_assessments(manifest),
+    )
+    report["summary"]["incomplete"] = False
+    report["summary"]["quality_score"] = calculate_quality_score(
+        field_quality_score=report["summary"]["field_quality_score"],
+        clean_card_precision=report["summary"]["clean_card_precision"],
+        incomplete=False,
+    )
+    report["status"] = (
+        "PASS" if report["summary"]["quality_score"] >= 90 else "FAIL"
+    )
+    report["delivery"]["content_digest"] = "sha256:" + "a" * 64
     with pytest.raises(ContractError, match="incomplete"):
         validate_published_report(report)
 

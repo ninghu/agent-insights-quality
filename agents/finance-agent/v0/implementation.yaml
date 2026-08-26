@@ -31,6 +31,3 @@ public_safety:
   real_people: false
   credentials: false
   service_locations: false
-injection:
-  mode: none
-  parameters: {}

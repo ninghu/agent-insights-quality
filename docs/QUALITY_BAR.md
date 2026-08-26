@@ -37,5 +37,9 @@ A run is `INCOMPLETE` when identity, quota, deployment, endpoint traffic, trace 
 Insights execution, exact-version attribution, assessment, or report consistency prevents a trusted
 complete result.
 
+Any baseline assessment with an `inconclusive` verdict or issue assessment with an `INCOMPLETE`
+finding makes the entire run `INCOMPLETE`. The final quality score is `null`; partial field metrics
+must not be presented as a trusted product-quality score.
+
 Efficiency metrics are evidence, not bonus points. `PASS` and `FAIL` are determined only by the
 reviewed quality-score formula and threshold.

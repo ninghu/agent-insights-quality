@@ -16,9 +16,6 @@ expected_behavior:
 injected_defect:
   single_root: The plan node preserves the first stored trip instead of parsing the latest turn.
   activation: all_matching_endpoint_requests
-injection:
-  mode: stale_trip_state
-  parameters: {}
 packaging:
   command: python ../../v0/package.py --issue implementation.yaml --output issue-028.zip
   runtime_config: issue.yaml

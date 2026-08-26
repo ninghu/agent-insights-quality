@@ -16,10 +16,6 @@ expected_behavior:
 injected_defect:
   single_root: The permanent-error path is configured for three identical attempts.
   activation: all_matching_endpoint_requests
-injection:
-  mode: excess_permanent_retries
-  parameters:
-    attempts: 3
 packaging:
   command: python ../../v0/package.py --issue implementation.yaml --output issue-019.zip
   runtime_config: issue.yaml

@@ -305,6 +305,95 @@ def test_json_get_retries_transient_http_failures(monkeypatch) -> None:
     assert sleeps == [1]
 
 
+def test_json_request_refreshes_an_expired_credential_once(monkeypatch) -> None:
+    tokens = iter(["expired-token", "fresh-token"])
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _scope: next(tokens),
+    )
+    authorization = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        @staticmethod
+        def read():
+            return b'{"value":"ok"}'
+
+    def open_request(request, **_kwargs):
+        authorization.append(request.headers["Authorization"])
+        if len(authorization) == 1:
+            raise urllib.error.HTTPError(
+                "https://example.invalid",
+                401,
+                "Unauthorized",
+                {},
+                io.BytesIO(b"{}"),
+            )
+        return Response()
+
+    monkeypatch.setattr(
+        "agent_insights_quality.live.urllib.request.urlopen",
+        open_request,
+    )
+    value = runtime._json_request("POST", "https://example.invalid")
+    assert value["value"] == "ok"
+    assert authorization == ["Bearer expired-token", "Bearer fresh-token"]
+
+
+def test_json_request_reserves_auth_refresh_after_transient_retries(
+    monkeypatch,
+) -> None:
+    tokens = iter(["expired-token", "fresh-token"])
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _scope: next(tokens),
+        sleep=lambda _seconds: None,
+    )
+    attempts = 0
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        @staticmethod
+        def read():
+            return b'{"value":"ok"}'
+
+    def open_request(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        status = 503 if attempts <= 18 else 401 if attempts == 19 else 200
+        if status != 200:
+            raise urllib.error.HTTPError(
+                "https://example.invalid",
+                status,
+                "Synthetic failure",
+                {},
+                io.BytesIO(b"{}"),
+            )
+        return Response()
+
+    monkeypatch.setattr(
+        "agent_insights_quality.live.urllib.request.urlopen",
+        open_request,
+    )
+    value = runtime._json_request("GET", "https://example.invalid")
+    assert value["value"] == "ok"
+    assert attempts == 20
+
+
 def test_hosted_routing_uses_one_fixed_ratio_rule() -> None:
     runtime = _runtime()
     captured = {}

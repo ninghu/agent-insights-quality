@@ -16,9 +16,6 @@ expected_behavior:
 injected_defect:
   single_root: Both search tools enable expanded details and return 80 items each.
   activation: all_matching_endpoint_requests
-injection:
-  mode: overfetch_inventory
-  parameters: {}
 packaging:
   command: python ../../v0/package.py --issue implementation.yaml --output issue-024.zip
   runtime_config: issue.yaml

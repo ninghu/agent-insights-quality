@@ -34,10 +34,16 @@ Provisioning creates five Agents, 41 immutable versions, and five disabled/manua
 one selected profile. Every hosted version must activate and bind an exact-version session. Prompt
 traffic uses an exact Agent reference.
 
+Each issue folder is self-contained. Prompt issues deploy their complete `definition.json`; Hosted
+issues package their complete `source/` tree together with the shared requirements and host/container
+contract. A deployed issue version contains only its reviewed defect and no dormant branches for
+other issues, so source-aware proposed fixes see the exact defective implementation.
+
 Run all 36 staging issues and complete human review before provisioning or changing daily mappings:
 
 ```powershell
-python -m agent_insights_quality run-full --report-date <Pacific YYYY-MM-DD>
+python -m agent_insights_quality run-full --report-date <Pacific YYYY-MM-DD> `
+  --work-items .aiq-runtime\work-items\active-quality.json
 ```
 
 After a complete staging `PASS` or `FAIL` report is human-reviewed, bind all 41 exact content
@@ -55,7 +61,8 @@ Set `AIQ_STAGING_PROMOTION_RECEIPT` to that private file before provisioning `da
 ## Daily execution
 
 ```powershell
-python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD>
+python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD> `
+  --work-items .aiq-runtime\work-items\active-quality.json
 ```
 
 The runner validates catalog hashes against the protected daily registry, resets each monitor once,
@@ -73,6 +80,11 @@ to expire before rerunning qualification against the same profile.
 The runner prints flushed, thread-safe progress lines for each Agent/version and for endpoint,
 telemetry, trace, and Agent Insights stages. Long telemetry waits, Insight runs, and remote retries
 emit periodic heartbeats without exposing URLs, payloads, or private identifiers.
+
+Issue source, traffic, and version digests are reviewed contracts. Equal nonzero request, response,
+and usable-response counts plus a verified natural trace contract prove that the reviewed runtime
+contract was exercised. Optional semantic assertions can add simple output checks without becoming a
+second assertion framework.
 
 The measured five-Agent-concurrent daily smoke on 2026-08-25 completed in 37.6 minutes: 32.1 minutes
 for endpoint/telemetry/Agent Insights runtime, 5.3 minutes for parallel Sol assessment, and 13 seconds
@@ -94,7 +106,8 @@ stops that Agent.
 python -m agent_insights_quality finalize `
   --manifest <private-run-manifest> `
   --assessment <issue-001-assessment.json> `
-  --assessment <...>
+  --assessment <...> `
+  --work-items .aiq-runtime\work-items\active-quality.json
 ```
 
 Finalization writes sanitized per-Agent Markdown under the report's `agents/` directory. Each row is
@@ -106,6 +119,21 @@ The direct-email request remains private. Use the available Copilot email capabi
 set HTML mode explicitly. Never create a draft or retry an ambiguous send. Import one receipt with
 status `sent`, `failed`, or `unknown`; ambiguous delivery sets `retry_allowed=false` and requires
 manual verification.
+
+Before finalization, fetch the privately configured Azure Boards saved query:
+
+```powershell
+python -m agent_insights_quality fetch-quality-work-items `
+  --query-url <private-query-url> `
+  --report-date <Pacific YYYY-MM-DD> `
+  --output .aiq-runtime\work-items\active-quality.json
+```
+
+Pass that snapshot to both the runner and `finalize` with `--work-items`. The email first lists active
+exact-`Quality` items, then items closed on the previous Pacific date, using ID, type, title, assignee,
+and state. `Removed` items are excluded. The query URL, snapshot, and work-item content remain private
+and never enter generated reports. Before traffic, the runner validates the closed date and writes a
+private digest binding beside the run manifest; finalization rejects a different or stale snapshot.
 
 ```powershell
 python -m agent_insights_quality email-receipt-import `

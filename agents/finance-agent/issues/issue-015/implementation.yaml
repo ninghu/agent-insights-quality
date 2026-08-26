@@ -16,9 +16,6 @@ expected_behavior:
 injected_defect:
   single_root: Account selection swaps acct-demo-a and acct-demo-b before dispatch.
   activation: all_matching_endpoint_requests
-injection:
-  mode: wrong_account
-  parameters: {}
 packaging:
   command: python ../../v0/package.py --issue implementation.yaml --output issue-015.zip
   runtime_config: issue.yaml

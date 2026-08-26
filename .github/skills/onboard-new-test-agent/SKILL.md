@@ -7,7 +7,9 @@ Add one new synthetic Test Agent only as a human-reviewed fixed-topology migrati
 2. Add a complete `agents/<agent>/v0` implementation and at least five deterministic healthy traffic
    requests.
 3. Add at least five independently fixable, single-root issues so weekday selection can choose five
-   issues for the Agent.
+   issues for the Agent. Every Prompt issue owns a complete `definition.json`; every Hosted issue owns
+   a complete `source/` tree containing only its defect. Issue traffic must exercise the reviewed
+   defect deterministically.
 4. Add the Agent and permanent issue assignments to both reviewed catalogs.
 5. Update every fixed-count contract:
    - Agent and Issue catalog schemas;

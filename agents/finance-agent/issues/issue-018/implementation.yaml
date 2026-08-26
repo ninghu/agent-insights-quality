@@ -16,9 +16,6 @@ expected_behavior:
 injected_defect:
   single_root: The transient retry bound is set to zero.
   activation: all_matching_endpoint_requests
-injection:
-  mode: no_transient_retry
-  parameters: {}
 packaging:
   command: python ../../v0/package.py --issue implementation.yaml --output issue-018.zip
   runtime_config: issue.yaml

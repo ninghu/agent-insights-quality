@@ -16,9 +16,6 @@ expected_behavior:
 injected_defect:
   single_root: The model dispatch branch returns raw failure text without recovery.
   activation: all_matching_endpoint_requests
-injection:
-  mode: unhandled_model_failure
-  parameters: {}
 packaging:
   command: python ../../v0/package.py --issue implementation.yaml --output issue-034.zip
   runtime_config: issue.yaml
