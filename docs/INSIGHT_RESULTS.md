@@ -11,6 +11,42 @@ passing fields.
 | Incorrect | The card is related to the tested issue, but its root cause or other material guidance is wrong or misleading. | `MISMATCHED` |
 | Noise / Duplicate | The card should not have appeared because it is unrelated, a false positive, an extra duplicate, or a finding on a healthy baseline. | `NOISE` or `DUPLICATE` |
 
+## How field results are read
+
+Every attributable card has a separate pass/fail result for root cause, title, description, category,
+severity, proposed fix, and linked traces. The label is a holistic usefulness judgment, not a formula
+based only on the number of passing fields. The per-Agent report contains the actual field results for
+each card.
+
+Example Partially Correct card:
+
+| Field | Result |
+| --- | --- |
+| Root cause | Pass |
+| Title | Pass |
+| Description | Pass |
+| Category | Pass |
+| Severity | Fail |
+| Proposed fix | Fail |
+| Linked traces | Pass |
+
+The diagnosis is still useful because the root cause and problem direction are correct.
+
+Example Incorrect card:
+
+| Field | Result |
+| --- | --- |
+| Root cause | Fail |
+| Title | Pass |
+| Description | Pass |
+| Category | Fail |
+| Severity | Pass |
+| Proposed fix | Fail |
+| Linked traces | Pass |
+
+Although the title and description discuss the right topic, the wrong root cause and remediation would
+mislead an engineer. These are examples only; actual field combinations vary by card.
+
 ## Fully Correct
 
 A card is Fully Correct only when all seven reviewed fields pass:

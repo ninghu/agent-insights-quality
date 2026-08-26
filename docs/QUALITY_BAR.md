@@ -26,6 +26,8 @@ score = 0.85 * field_quality + 0.15 * clean_card_precision
 The report stores both component scores and the final score to one decimal place when needed.
 Structural, privacy, provenance, and
 reporting evidence must still be complete and trustworthy before a score can be used.
+See [Insight Result Labels](INSIGHT_RESULTS.md) for Fully Correct, Partially Correct, Incorrect, and
+Noise definitions and field examples.
 
 ## FAIL
 
