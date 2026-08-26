@@ -25,6 +25,11 @@ def test_profile_discovers_fixed_azure_resources(monkeypatch) -> None:
             "name": "syntheticregistry",
         },
         {
+            "type": "Microsoft.Storage/storageAccounts",
+            "name": "syntheticstorage",
+            "tags": {"purpose": "agent-insights-quality"},
+        },
+        {
             "type": "Microsoft.Insights/components",
             "name": "daily-insights",
             "id": "/subscriptions/hidden/daily",
@@ -48,4 +53,5 @@ def test_profile_discovers_fixed_azure_resources(monkeypatch) -> None:
     assert profile.project_name == "agent-insights-quality"
     assert profile.account_name == "synthetic-daily-account"
     assert profile.container_registry_name == "syntheticregistry"
+    assert profile.registry_storage_account_name == "syntheticstorage"
     assert profile.project_endpoint.endswith("/api/projects/agent-insights-quality")

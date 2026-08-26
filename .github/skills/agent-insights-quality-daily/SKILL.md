@@ -4,9 +4,10 @@
 
 1. Resolve the Pacific business date.
 2. Fetch the privately configured Azure Boards query with `fetch-quality-work-items` into
-   `.aiq-runtime/`, passing the report date. Keep active exact-`Quality` items plus items closed on the
-   previous Pacific date; exclude `Removed`.
+   `~/.aiq-runtime/agent-insights-quality/`, passing the report date. Keep active exact-`Quality` items
+   plus items closed on the previous Pacific date; exclude `Removed`.
 3. Run `python -m agent_insights_quality run-daily --report-date <date> --work-items <snapshot>`.
+   The runner must synchronize the canonical private Azure Blob registry before any Agent traffic.
 4. Assess all five baseline packages and every issue package with GPT-5.6 Sol using the repository
    assessment prompt. Use independent `endpoint_evidence`; never assign `insight_engine` unless
    endpoint behavior and trace contract are both proven. Equal nonzero request, response, and usable

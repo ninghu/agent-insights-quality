@@ -8,7 +8,8 @@ It uses independent daily and staging Foundry accounts, each with one Project:
 
 Both profiles have independent Application Insights resources, monitors, deployment registries, and
 private artifacts. Application Insights is read-only. Test traffic always invokes exact deployed
-Agent versions; direct trace injection is forbidden.
+Agent versions; direct trace injection is forbidden. Canonical registries are stored as private,
+Entra-authenticated Azure blobs and cached under the user's durable private runtime root.
 
 ## Reviewed contracts
 
@@ -66,16 +67,17 @@ python -m agent_insights_quality provision --profile staging
 python -m agent_insights_quality fetch-quality-work-items `
   --query-url <private-query-url> `
   --report-date <Pacific YYYY-MM-DD> `
-  --output .aiq-runtime\work-items\active-quality.json
+  --output $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
 python -m agent_insights_quality run-full --report-date <Pacific YYYY-MM-DD> `
-  --work-items .aiq-runtime\work-items\active-quality.json
+  --work-items $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
 python -m agent_insights_quality provision --profile daily
 python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD> `
-  --work-items .aiq-runtime\work-items\active-quality.json
+  --work-items $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
 ```
 
 Infrastructure deployment resolves the latest GPT-5.6 Terra version available in West US 2 from the
 Azure ARM model catalog.
 
 See [Framework Overview](docs/FRAMEWORK_OVERVIEW.md), [Operations](docs/OPERATIONS.md),
-[Automation Setup](docs/AUTOMATION_SETUP.md), and [Quality Bar](docs/QUALITY_BAR.md).
+[Automation Setup](docs/AUTOMATION_SETUP.md), [Insight Result Labels](docs/INSIGHT_RESULTS.md), and
+[Quality Bar](docs/QUALITY_BAR.md).

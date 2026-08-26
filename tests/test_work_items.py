@@ -5,7 +5,7 @@ from datetime import date
 
 import pytest
 
-from agent_insights_quality.util import ContractError
+from agent_insights_quality.util import ContractError, runtime_root
 from agent_insights_quality.work_items import (
     _closed_items_wiql,
     fetch_quality_work_items,
@@ -48,7 +48,8 @@ def test_quality_work_items_are_filtered_and_sanitized(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("agent_insights_quality.work_items.ROOT", tmp_path)
+    runtime_root = tmp_path / ".aiq-runtime" / "test-runtime"
+    monkeypatch.setenv("AIQ_RUNTIME_ROOT", str(runtime_root))
     values = [
         _item(4, assigned_to={"displayName": "Example Owner"}),
         _item(2, state="Completed"),
@@ -94,8 +95,8 @@ def test_quality_work_items_are_filtered_and_sanitized(
             ),
         },
     ]
-    snapshot = tmp_path / ".aiq-runtime" / "work-items.json"
-    snapshot.parent.mkdir()
+    snapshot = runtime_root / "work-items.json"
+    snapshot.parent.mkdir(parents=True)
     snapshot.write_text(
         json.dumps(
             {
@@ -166,3 +167,18 @@ def test_work_item_query_fails_closed_for_missing_fields_and_public_output(
     assert "[System.TeamProject] = 'PublicProject'" in wiql
     assert "[Microsoft.VSTS.Common.ClosedDate] >= '2026-08-23'" in wiql
     assert "[Microsoft.VSTS.Common.ClosedDate] < '2026-08-26'" in wiql
+
+
+def test_runtime_root_is_absolute_durable_and_private(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    configured = tmp_path / ".aiq-runtime" / "agent-insights-quality"
+    monkeypatch.setenv("AIQ_RUNTIME_ROOT", str(configured))
+    assert runtime_root() == configured.resolve()
+    monkeypatch.setenv("AIQ_RUNTIME_ROOT", ".aiq-runtime/local")
+    with pytest.raises(ContractError, match="must be absolute"):
+        runtime_root()
+    monkeypatch.setenv("AIQ_RUNTIME_ROOT", str(tmp_path / "not-private"))
+    with pytest.raises(ContractError, match=r"under \.aiq-runtime"):
+        runtime_root()

@@ -32,7 +32,7 @@ from agent_insights_quality.provisioning import (
     provision_profile,
     validate_promotion_receipt,
 )
-from agent_insights_quality.registry import load_registry
+from agent_insights_quality.registry import load_registry, sync_registry
 from agent_insights_quality.reporting import (
     build_operational_failure_report,
     build_report,
@@ -52,6 +52,7 @@ from agent_insights_quality.util import (
     content_hash,
     immutable_json,
     read_json,
+    runtime_root,
 )
 from agent_insights_quality.validation import validate_repository
 from agent_insights_quality.work_items import (
@@ -76,7 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
         run = commands.add_parser(name)
         run.add_argument("--report-date", required=True, type=date.fromisoformat)
         run.add_argument("--rerun", type=int, default=0)
-        run.add_argument("--state-root", type=Path, default=ROOT / ".aiq-runtime")
+        run.add_argument("--state-root", type=Path, default=runtime_root())
         run.add_argument("--work-items", type=Path, required=True)
     finalize = commands.add_parser("finalize")
     finalize.add_argument("--manifest", type=Path, required=True)
@@ -204,14 +205,15 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                 "content_digest": content_hash(work_items),
             },
         )
+        profile = RuntimeProfile.from_env(profile_name)
+        sync_registry(profile)
+        registry = load_registry(
+            profile.registry_path,
+            profile=profile_name,
+            catalog_hashes=hashes,
+        )
+        runtime = LiveRuntime(profile)
         try:
-            profile = RuntimeProfile.from_env(profile_name)
-            registry = load_registry(
-                profile.registry_path,
-                profile=profile_name,
-                catalog_hashes=hashes,
-            )
-            runtime = LiveRuntime(profile)
             results = execute(
                 agents=agents,
                 issues=issues,

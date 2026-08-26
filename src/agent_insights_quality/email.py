@@ -22,6 +22,7 @@ from agent_insights_quality.util import (
     content_hash,
     read_json,
     read_yaml,
+    runtime_root,
 )
 
 _PUBLIC_REPORT_BASE_URL = (
@@ -29,6 +30,7 @@ _PUBLIC_REPORT_BASE_URL = (
 )
 _PUBLIC_ISSUE_CATALOG_URL = _PUBLIC_REPORT_BASE_URL + "ISSUE_CATALOG.md"
 _QUALITY_BAR_URL = _PUBLIC_REPORT_BASE_URL + "docs/QUALITY_BAR.md#quality-score"
+_INSIGHT_RESULTS_URL = _PUBLIC_REPORT_BASE_URL + "docs/INSIGHT_RESULTS.md"
 _OUTLOOK_TEXT_STYLE = (
     "font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:19px;"
 )
@@ -53,19 +55,55 @@ _AGENT_TYPES = {
     "travel-agent": "hosted_code",
     "support-ticket-agent": "hosted_container",
 }
+_AGENT_OWNERS = {
+    "finance-agent": "Han Che",
+    "travel-agent": "Sean Gayler",
+    "support-ticket-agent": "Nishal Dsilva",
+    "healthcare-agent": "Ilya Matiach",
+    "weather-agent": "Billy Hu",
+}
 _PROJECT_NAMES = {
     "daily": "agent-insights-quality",
     "staging": "agent-insights-quality-staging",
 }
 
 
+def _validated_recipient(value: str) -> str:
+    recipient = value.strip()
+    if (
+        not recipient.isascii()
+        or len(recipient) > 254
+        or re.fullmatch(
+            r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@microsoft\.com",
+            recipient,
+            re.IGNORECASE | re.ASCII,
+        )
+        is None
+    ):
+        raise ContractError(
+            "Report recipient must be exactly one reviewed microsoft.com address"
+        )
+    return recipient
+
+
 def resolve_recipient() -> str:
-    recipient = str(
+    reviewed_recipient = str(
         read_yaml(ROOT / "config" / "reporting.yaml").get("recipient") or ""
     ).strip()
-    if recipient != "agentinsightsteam@microsoft.com":
+    if reviewed_recipient != "agentinsightsteam@microsoft.com":
         raise ContractError("Report recipient does not match the reviewed team mailbox")
-    return recipient
+    override_path = runtime_root() / "config" / "email-recipient.json"
+    recipient = reviewed_recipient
+    if override_path.is_file():
+        override = read_json(override_path)
+        if (
+            override.get("schema_version") != "1.0.0"
+            or override.get("purpose") != "daily_test"
+            or set(override) != {"schema_version", "purpose", "recipient"}
+        ):
+            raise ContractError("Private test email recipient override is invalid")
+        recipient = str(override.get("recipient") or "").strip()
+    return _validated_recipient(recipient)
 
 
 def create_request(
@@ -76,8 +114,7 @@ def create_request(
     agent_links: Mapping[str, str] | None = None,
     work_items: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if not recipient.lower().endswith("@microsoft.com"):
-        raise ContractError("Report recipient must use the reviewed microsoft.com domain")
+    recipient = _validated_recipient(recipient)
     score = _overall_score(report)
     subject = (
         f"[Agent Insights Quality] {report['status']} - {score} - "
@@ -260,19 +297,14 @@ def _grade_rows(report: dict[str, Any]) -> list[tuple[str, str]]:
         for item in issues
         for card in item.get("assessment", {}).get("card_evaluations", [])
     ]
-    baseline_cards = [
-        card
-        for item in report.get("baseline", [])
-        for card in item.get("assessment", {}).get("card_evaluations", [])
-    ]
-    correct = sum(card.get("verdict") == "correct" for card in issue_cards)
+    correct = sum(card.get("finding_type") == "MATCHED" for card in issue_cards)
     partial = sum(
-        card.get("verdict") == "partially_useful" for card in issue_cards
+        card.get("finding_type") == "PARTIAL" for card in issue_cards
     )
-    incorrect_or_noisy = (
-        sum(card.get("verdict") == "incorrect" for card in issue_cards)
-        + len(baseline_cards)
+    incorrect = sum(
+        card.get("finding_type") == "MISMATCHED" for card in issue_cards
     )
+    noise = int(report["summary"]["noise_cards"])
     missing = sum(item.get("detail") == "MISSING" for item in issues)
     rows = [
         ("Overall judgment", report["status"]),
@@ -280,11 +312,8 @@ def _grade_rows(report: dict[str, Any]) -> list[tuple[str, str]]:
         ("Observed Insights", str(report["summary"]["observed_cards"])),
         ("Fully correct Insights", str(correct)),
         ("Partially Correct Insights", str(partial)),
-        (
-            "Incorrect/noisy insights",
-            f"{incorrect_or_noisy} cards, including "
-            f"{report['summary']['noise_cards']} noise cards",
-        ),
+        ("Incorrect related Insights", str(incorrect)),
+        ("Noise/duplicate Insights", str(noise)),
         ("Missing expected issues", str(missing)),
     ]
     if report["status"] == "INCOMPLETE":
@@ -296,6 +325,14 @@ def _grade_rows(report: dict[str, Any]) -> list[tuple[str, str]]:
             ),
         )
     return rows
+
+
+def _insight_results_link() -> str:
+    return (
+        f'<p style="margin:0 0 18px 0;color:#334155;{_OUTLOOK_TEXT_STYLE}">'
+        '<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
+        f'href="{_INSIGHT_RESULTS_URL}">How Insight Results Differ</a></p>'
+    )
 
 
 def _incomplete_reason(reasons: list[str]) -> str:
@@ -520,6 +557,8 @@ def _agent_rows(
             f"<strong>{html.escape(name)}</strong></td>"
             '<td style="padding:11px 12px;border:1px solid #d6deea;'
             f'color:#334155;">{html.escape(_AGENT_TYPES.get(name, "agent"))}</td>'
+            '<td style="padding:11px 12px;border:1px solid #d6deea;'
+            f'color:#334155;">{html.escape(_AGENT_OWNERS[name])}</td>'
             '<td style="padding:11px 12px;border:1px solid #d6deea;">'
             f"{agent_link_html}</td>"
             '<td style="padding:11px 12px;border:1px solid #d6deea;'
@@ -562,7 +601,7 @@ def _work_items_section(
             "border:1px solid #d6deea;color:#12304a;vertical-align:top;"
             f'{_OUTLOOK_TEXT_STYLE}font-weight:700;">{label}</th>'
             for label, width in zip(
-                ("ID", "Type", "Title", "Assigned to", "State"),
+                ("ID", "Type", "Title", "Owner", "State"),
                 (8, 12, 40, 25, 15),
                 strict=True,
             )
@@ -639,6 +678,7 @@ def _render_html(
             for paragraph in summary
         )
         + _private_project_source_link(report, project_link)
+        + _insight_results_link()
         + _data_table(("Grade", "Findings"), _grade_rows(report), (38, 62))
         + "</td></tr>"
         '<tr><td style="padding:30px 32px 0 32px;">'
@@ -662,15 +702,17 @@ def _render_html(
         + '<table cellpadding="0" cellspacing="0" border="0" width="100%" '
         'style="width:100%;border-collapse:collapse;font-size:13px;">'
         '<tr bgcolor="#e8eef7">'
-        '<th align="left" width="24%" style="padding:10px 12px;'
+        '<th align="left" width="18%" style="padding:10px 12px;'
         'border:1px solid #d6deea;color:#12304a;">Test agent</th>'
         '<th align="left" width="12%" style="padding:10px 12px;'
         'border:1px solid #d6deea;color:#12304a;">Type</th>'
         '<th align="left" width="14%" style="padding:10px 12px;'
+        'border:1px solid #d6deea;color:#12304a;">Owner</th>'
+        '<th align="left" width="12%" style="padding:10px 12px;'
         'border:1px solid #d6deea;color:#12304a;">Agent</th>'
-        '<th align="left" width="34%" style="padding:10px 12px;'
+        '<th align="left" width="30%" style="padding:10px 12px;'
         'border:1px solid #d6deea;color:#12304a;">Tested issues</th>'
-        '<th align="left" width="16%" style="padding:10px 12px;'
+        '<th align="left" width="14%" style="padding:10px 12px;'
         'border:1px solid #d6deea;color:#12304a;">Report</th></tr>'
         + rows
         + "</table></td></tr>"
