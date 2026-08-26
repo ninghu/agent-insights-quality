@@ -12,6 +12,13 @@ AGENT_NAME = "finance-agent"
 SOURCE_ITEMS = ['source', 'requirements.txt', 'host.yaml']
 
 
+def is_package_file(path: Path) -> bool:
+    return (
+        "__pycache__" not in path.parts
+        and path.suffix.casefold() not in {".pyc", ".pyo"}
+    )
+
+
 def read_config(path: Path) -> dict:
     value = yaml.safe_load(path.read_text(encoding="utf-8"))
     if value.get("agent_name") != AGENT_NAME:
@@ -33,12 +40,14 @@ def build(issue: Path, output: Path) -> None:
     root = Path(__file__).parent
     source_root = issue.parent / "source"
     if not source_root.is_dir():
-        source_root = root / "source"
+        raise ValueError(f"source tree is missing beside {issue}")
     entries: list[tuple[str, bytes]] = []
     for item in SOURCE_ITEMS:
         path = source_root if item == "source" else root / item
         if path.is_dir():
-            for child in sorted(p for p in path.rglob("*") if p.is_file()):
+            for child in sorted(
+                p for p in path.rglob("*") if p.is_file() and is_package_file(p)
+            ):
                 name = (
                     Path("source") / child.relative_to(source_root)
                     if item == "source"

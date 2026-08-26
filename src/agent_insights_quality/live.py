@@ -78,6 +78,10 @@ class LiveRuntime:
             self._token_cache[scope] = (now, token)
             return token
 
+    def _invalidate_token(self, scope: str) -> None:
+        with self._token_lock:
+            self._token_cache.pop(scope, None)
+
     def _logs_client(self) -> Any:
         if self._logs_client_instance is None:
             from azure.monitor.query import LogsQueryClient
@@ -919,9 +923,11 @@ union traces, dependencies, requests
             else set()
         )
         max_attempts = 20 if method == "GET" else 10 if retries else 1
+        attempt = 0
+        credential_refreshed = False
         status = 0
         payload = b""
-        for attempt in range(max_attempts):
+        while attempt < max_attempts:
             request = urllib.request.Request(
                 url,
                 data=data,
@@ -936,23 +942,33 @@ union traces, dependencies, requests
                 status = error.code
                 payload = error.read()
             except (TimeoutError, urllib.error.URLError) as error:
-                if method == "GET" and attempt < max_attempts - 1:
-                    delay = min(2**attempt, 30)
+                attempt += 1
+                if method == "GET" and attempt < max_attempts:
+                    delay = min(2 ** (attempt - 1), 30)
                     self.report_progress(
                         f"remote GET had no response; retrying in {delay}s "
-                        f"({attempt + 2}/{max_attempts})"
+                        f"({attempt + 1}/{max_attempts})"
                     )
                     self._sleep(delay)
                     continue
                 raise ContractError(
                     "Remote operation failed before a response was received"
                 ) from error
-            if status not in retries or attempt == max_attempts - 1:
+            if status == 401 and not credential_refreshed:
+                self._invalidate_token(_FOUNDRY_SCOPE)
+                headers["Authorization"] = (
+                    "Bearer " + self._token_provider(_FOUNDRY_SCOPE)
+                )
+                credential_refreshed = True
+                self.report_progress("remote credential expired; refreshed once")
+                continue
+            attempt += 1
+            if status not in retries or attempt == max_attempts:
                 break
-            delay = min(2**attempt, 30)
+            delay = min(2 ** (attempt - 1), 30)
             self.report_progress(
                 f"remote {method} returned HTTP {status}; retrying in {delay}s "
-                f"({attempt + 2}/{max_attempts})"
+                f"({attempt + 1}/{max_attempts})"
             )
             self._sleep(delay)
         allowed = expected or {200, 201, 202}

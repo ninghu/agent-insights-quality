@@ -121,6 +121,7 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
             {
                 "agent": agent["name"],
                 "status": "passed",
+                "runtime_evidence_complete": True,
                 "insight_count": 0,
                 "assessment": {
                     "verdict": "clean",
@@ -138,6 +139,7 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
                 "agent": issue["agent"],
                 "title": issue["title"],
                 "status": "observed",
+                "runtime_evidence_complete": True,
                 "result": "PASS",
                 "detail": "MATCHED",
                 "observed_count": 1,

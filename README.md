@@ -63,9 +63,15 @@ Live commands require protected runtime configuration:
 ```powershell
 python -m agent_insights_quality deploy-infrastructure
 python -m agent_insights_quality provision --profile staging
-python -m agent_insights_quality run-full --report-date <Pacific YYYY-MM-DD>
+python -m agent_insights_quality fetch-quality-work-items `
+  --query-url <private-query-url> `
+  --report-date <Pacific YYYY-MM-DD> `
+  --output .aiq-runtime\work-items\active-quality.json
+python -m agent_insights_quality run-full --report-date <Pacific YYYY-MM-DD> `
+  --work-items .aiq-runtime\work-items\active-quality.json
 python -m agent_insights_quality provision --profile daily
-python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD>
+python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD> `
+  --work-items .aiq-runtime\work-items\active-quality.json
 ```
 
 Infrastructure deployment resolves the latest GPT-5.6 Terra version available in West US 2 from the

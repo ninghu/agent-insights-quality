@@ -35,6 +35,14 @@ from agent_insights_quality.util import (
 from jsonschema import Draft202012Validator
 
 
+def _is_package_file(path: Path) -> bool:
+    return (
+        path.is_file()
+        and "__pycache__" not in path.parts
+        and path.suffix.casefold() not in {".pyc", ".pyo"}
+    )
+
+
 class RemoteHttpError(ContractError):
     def __init__(self, status: int, code: str, message: str, route: str) -> None:
         super().__init__(
@@ -340,7 +348,7 @@ def _build_and_push_support_image(
     relevant = {
         path.relative_to(root).as_posix(): file_hash(path)
         for path in sorted((root / "v0").rglob("*"))
-        if path.is_file() and "__pycache__" not in path.parts
+        if _is_package_file(path)
     }
     if logical_version != "v0":
         implementation = root / "issues" / logical_version / "implementation.yaml"
@@ -350,7 +358,7 @@ def _build_and_push_support_image(
             {
                 path.relative_to(root).as_posix(): file_hash(path)
                 for path in sorted(issue_source.rglob("*"))
-                if path.is_file() and "__pycache__" not in path.parts
+                if _is_package_file(path)
             }
         )
     tag = content_hash(relevant).split(":")[1][:16]
@@ -375,9 +383,17 @@ def _build_and_push_support_image(
         dir=ROOT / ".aiq-runtime",
     ) as temporary:
         context = Path(temporary)
-        shutil.copytree(root / "v0", context / "v0")
+        shutil.copytree(
+            root / "v0",
+            context / "v0",
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+        )
         shutil.rmtree(context / "v0" / "source")
-        shutil.copytree(source_root, context / "v0" / "source")
+        shutil.copytree(
+            source_root,
+            context / "v0" / "source",
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+        )
         shutil.copyfile(root / issue_path, context / "v0" / "implementation.yaml")
         build = subprocess.run(
             [
@@ -485,7 +501,7 @@ def deterministic_zip(
                 path = source / item
                 candidates.extend(path.rglob("*") if path.is_dir() else [path])
         for path in sorted(candidates):
-            if not path.is_file() or "__pycache__" in path.parts:
+            if not _is_package_file(path):
                 continue
             name = path.relative_to(source).as_posix()
             data_path = path

@@ -74,6 +74,7 @@ def create_request(
     *,
     project_link: str | None = None,
     agent_links: Mapping[str, str] | None = None,
+    work_items: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not recipient.lower().endswith("@microsoft.com"):
         raise ContractError("Report recipient must use the reviewed microsoft.com domain")
@@ -87,6 +88,7 @@ def create_request(
         report,
         project_link=project_link,
         agent_links=agent_links,
+        work_items=work_items,
     )
     digest = content_hash(
         {"recipient": recipient.lower(), "subject": subject, "html": body}
@@ -308,6 +310,12 @@ def _incomplete_reason(reasons: list[str]) -> str:
         "telemetry_failed": "Natural telemetry did not arrive or correlate completely.",
         "trace_contract_failed": "Trace-contract verification failed.",
         "insight_run_failed": "One or more Agent Insights runs failed.",
+        "assessment_evidence_incomplete": (
+            "Independent assessment evidence was insufficient for a trusted score."
+        ),
+        "runtime_evidence_incomplete": (
+            "Endpoint response counts or natural trace evidence were incomplete."
+        ),
     }
     if not reasons:
         return "Validated runtime evidence was incomplete."
@@ -523,11 +531,72 @@ def _agent_rows(
     return "".join(rows)
 
 
+def _work_items_section(
+    work_items: Mapping[str, Any] | None,
+) -> str:
+    if work_items is None:
+        return ""
+    def table(items: Sequence[Mapping[str, Any]]) -> str:
+        if not items:
+            return (
+                f'<p style="margin:0;color:#334155;{_OUTLOOK_TEXT_STYLE}">'
+                "None.</p>"
+            )
+        rows = "".join(
+            "<tr>"
+            '<td style="padding:11px 12px;border:1px solid #d6deea;">'
+            '<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
+            f'href="{html.escape(str(item["url"]), quote=True)}">'
+            f'{html.escape(str(item["id"]))}</a></td>'
+            + "".join(
+                '<td style="padding:11px 12px;border:1px solid #d6deea;'
+                f'color:#334155;vertical-align:top;{_OUTLOOK_TEXT_STYLE}">'
+                f"{html.escape(str(item[field]))}</td>"
+                for field in ("type", "title", "assigned_to", "state")
+            )
+            + "</tr>"
+            for item in items
+        )
+        headers = "".join(
+            f'<th align="left" width="{width}%" style="padding:10px 12px;'
+            "border:1px solid #d6deea;color:#12304a;vertical-align:top;"
+            f'{_OUTLOOK_TEXT_STYLE}font-weight:700;">{label}</th>'
+            for label, width in zip(
+                ("ID", "Type", "Title", "Assigned to", "State"),
+                (8, 12, 40, 25, 15),
+                strict=True,
+            )
+        )
+        return (
+            '<table cellpadding="0" cellspacing="0" border="0" width="100%" '
+            f'style="width:100%;border-collapse:collapse;{_OUTLOOK_TEXT_STYLE}">'
+            f'<tr bgcolor="#e8eef7">{headers}</tr>{rows}</table>'
+        )
+
+    active = work_items.get("active_items", [])
+    closed = work_items.get("closed_yesterday_items", [])
+    closed_date = str(work_items.get("closed_business_date") or "")
+    return (
+        '<tr><td style="padding:24px 32px 38px 32px;">'
+        + _section_heading("Quality work items")
+        + f'<h3 style="margin:0 0 10px 0;color:#12304a;{_OUTLOOK_TEXT_STYLE}'
+        'font-size:16px;">Active</h3>'
+        + table(active)
+        + f'<h3 style="margin:24px 0 10px 0;color:#12304a;{_OUTLOOK_TEXT_STYLE}'
+        f'font-size:16px;">Closed yesterday ({html.escape(closed_date)})</h3>'
+        + table(closed)
+        + f'<p style="margin:12px 0 0 0;color:#64748b;{_OUTLOOK_TEXT_STYLE}">'
+        "Only exact Quality tags are included; Removed items are excluded.</p>"
+        + "</td></tr>"
+    )
+
+
 def _render_html(
     report: dict[str, Any],
     *,
     project_link: str | None = None,
     agent_links: Mapping[str, str] | None = None,
+    work_items: Mapping[str, Any] | None = None,
 ) -> str:
     status_style = _STATUS_STYLES[report["status"]]
     score = _overall_score(report)
@@ -600,20 +669,23 @@ def _render_html(
         '<th align="left" width="14%" style="padding:10px 12px;'
         'border:1px solid #d6deea;color:#12304a;">Agent</th>'
         '<th align="left" width="34%" style="padding:10px 12px;'
-        'border:1px solid #d6deea;color:#12304a;">Assigned issues</th>'
+        'border:1px solid #d6deea;color:#12304a;">Tested issues</th>'
         '<th align="left" width="16%" style="padding:10px 12px;'
         'border:1px solid #d6deea;color:#12304a;">Report</th></tr>'
         + rows
-        + "</table></td></tr></table>"
+        + "</table></td></tr>"
+        + _work_items_section(work_items)
+        + "</table>"
         "<!--[if mso]></td></tr></table><![endif]-->"
         "</td></tr></table></body></html>"
     )
     headings = tuple(re.findall(r"<h2[^>]*>(.*?)</h2>", body))
-    if headings != (
+    expected_headings = (
         "Summary",
         "What is working",
         "What needs improvement",
         "Test Agents",
-    ):
-        raise ContractError("Email must contain exactly the four reviewed sections")
+    ) + (("Quality work items",) if work_items is not None else ())
+    if headings != expected_headings:
+        raise ContractError("Email contains an unexpected section layout")
     return body

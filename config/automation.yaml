@@ -9,4 +9,4 @@ max_parallel_agents: 5
 insight_lookback_hours: 3
 qualification_profiles_allow_debug_traffic: false
 clean_window_preflight_required: true
-telemetry_generation: g20
+telemetry_generation: g25

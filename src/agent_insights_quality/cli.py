@@ -49,10 +49,15 @@ from agent_insights_quality.util import (
     ROOT,
     ContractError,
     atomic_json,
+    content_hash,
     immutable_json,
     read_json,
 )
 from agent_insights_quality.validation import validate_repository
+from agent_insights_quality.work_items import (
+    fetch_quality_work_items,
+    load_quality_work_items,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -72,6 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
         run.add_argument("--report-date", required=True, type=date.fromisoformat)
         run.add_argument("--rerun", type=int, default=0)
         run.add_argument("--state-root", type=Path, default=ROOT / ".aiq-runtime")
+        run.add_argument("--work-items", type=Path, required=True)
     finalize = commands.add_parser("finalize")
     finalize.add_argument("--manifest", type=Path, required=True)
     finalize.add_argument("--assessment", type=Path, action="append", required=True)
@@ -82,6 +88,11 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     finalize.add_argument("--output-root", type=Path, default=ROOT / "reports")
+    finalize.add_argument("--work-items", type=Path, required=True)
+    work_items = commands.add_parser("fetch-quality-work-items")
+    work_items.add_argument("--query-url", required=True)
+    work_items.add_argument("--report-date", required=True, type=date.fromisoformat)
+    work_items.add_argument("--output", type=Path, required=True)
     receipt = commands.add_parser("email-receipt-import")
     receipt.add_argument("--request", type=Path, required=True)
     receipt.add_argument("--receipt", type=Path, required=True)
@@ -131,6 +142,16 @@ def _dispatch(args: argparse.Namespace) -> str | None:
     if args.command == "generate-docs":
         generate_docs(check=args.check)
         return None
+    if args.command == "fetch-quality-work-items":
+        count = fetch_quality_work_items(
+            args.query_url,
+            args.report_date,
+            args.output,
+        )
+        return json.dumps(
+            {"quality_work_items": count, "output": str(args.output)},
+            sort_keys=True,
+        )
     agents, issues = load_catalogs()
     hashes = catalog_hashes(agents, issues)
     if args.command == "select":
@@ -164,12 +185,25 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         return f"{args.profile} profile provisioned."
     if args.command in {"run-daily", "run-full"}:
         profile_name = "daily" if args.command == "run-daily" else "staging"
+        work_items = load_quality_work_items(
+            args.work_items,
+            report_date=args.report_date,
+        )
         selected = (
             select_daily(args.report_date, agents, issues, hashes["issues"])
             if profile_name == "daily"
             else select_full(agents)
         )
         state = args.state_root / profile_name / run_id(args.report_date, args.rerun)
+        immutable_json(
+            state / "work-items-reference.json",
+            {
+                "schema_version": "1.0.0",
+                "run_id": run_id(args.report_date, args.rerun),
+                "report_date": args.report_date.isoformat(),
+                "content_digest": content_hash(work_items),
+            },
+        )
         try:
             profile = RuntimeProfile.from_env(profile_name)
             registry = load_registry(
@@ -227,7 +261,11 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             handoff_written = False
             try:
                 recipient = resolve_recipient()
-                request = create_request(failure, recipient)
+                request = create_request(
+                    failure,
+                    recipient,
+                    work_items=work_items,
+                )
                 failure["delivery"]["content_digest"] = request["content_digest"]
                 write_report(failure, failure_root)
                 atomic_json(state / "email-send-request.json", request)
@@ -252,6 +290,23 @@ def _dispatch(args: argparse.Namespace) -> str | None:
     if args.command == "finalize":
         manifest = read_json(args.manifest)
         validate_manifest(manifest)
+        work_items = load_quality_work_items(
+            args.work_items,
+            report_date=date.fromisoformat(manifest["report_date"]),
+        )
+        work_items_reference = read_json(
+            args.manifest.parent / "work-items-reference.json"
+        )
+        expected_reference = {
+            "schema_version": "1.0.0",
+            "run_id": manifest["run_id"],
+            "report_date": manifest["report_date"],
+            "content_digest": content_hash(work_items),
+        }
+        if work_items_reference != expected_reference:
+            raise ContractError(
+                "Quality work-item snapshot does not match the qualification run"
+            )
         issue_ids = {
             item["issue_id"]
             for agent in manifest["agents"]
@@ -294,6 +349,7 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             recipient,
             project_link=project_link,
             agent_links=agent_links,
+            work_items=work_items,
         )
         report["delivery"]["content_digest"] = request["content_digest"]
         write_report(report, output)

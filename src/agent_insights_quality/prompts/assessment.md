@@ -21,6 +21,11 @@ Never assign `insight_engine` unless endpoint behavior and trace contract are bo
 Use `endpoint_evidence`, not the Insight's own description, as the independent runtime proof.
 Never infer an Agent defect by treating the observed card's claim as proof of that same defect.
 
+Agent source, traffic, and version digests are reviewed before qualification. Treat the reviewed
+runtime contract as exercised when request, response, and usable-response counts are equal and
+nonzero and `trace_contract_verified` is true. Semantic assertion counts are optional corroboration;
+their absence alone is not incomplete evidence.
+
 Evaluate every object in `observed_insights` independently in `card_evaluations`. Echo each card's
 reference, title, category, and severity exactly. Use one card-level verdict, finding type, ownership,
 field map, confidence, and reasoning per generated card. The set of card references must exactly match

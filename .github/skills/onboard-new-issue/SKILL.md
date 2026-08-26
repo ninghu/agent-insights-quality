@@ -5,7 +5,8 @@ Add one independently fixable issue only after human review.
 1. Choose the permanent Agent based on its real Foundry type and implementation surface.
 2. Allocate the next continuous `issue-NNN` ID.
 3. Add one Issue Catalog entry with one expected Insight and one natural trace contract.
-4. Add `agents/<agent>/issues/issue-NNN/implementation.yaml` and `traffic.json`.
+4. Add `agents/<agent>/issues/issue-NNN/implementation.yaml` and deterministic `traffic.json` requests
+   that exercise the reviewed defect.
 5. For Prompt Agents, add a complete deployable `definition.json`.
 6. For Hosted Agents, copy the complete healthy `source/` tree into the issue folder and modify only
    the reviewed defect location. Do not use runtime mode switches, dormant defect branches, hooks, or
