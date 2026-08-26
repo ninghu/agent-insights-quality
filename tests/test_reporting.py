@@ -339,11 +339,30 @@ def test_agent_report_is_a_human_validation_handoff() -> None:
         _assessments(manifest),
         _baseline_assessments(manifest),
     )
+    report["issues"][0]["assessment"]["card_evaluations"] = [
+        {
+            "title": "Synthetic partial finding",
+            "finding_type": "PARTIAL",
+            "fields": {
+                "root_cause": True,
+                "title": True,
+                "description": True,
+                "category": True,
+                "severity": False,
+                "proposed_fix": False,
+                "linked_traces": True,
+            },
+        }
+    ]
     markdown = render_agent_markdown(report, "weather-agent")
     assert "## Review summary" in markdown
     assert "## Evaluation guide" in markdown
     assert "## Insight-level evaluation" in markdown
     assert "## Human validation checklist" in markdown
-    assert "| Issue | Foundry version | Generated Insight | Evaluation |" in markdown
+    assert (
+        "| Issue | Foundry version | Generated Insight | Evaluation | "
+        "Passing fields | Failing fields |"
+    ) in markdown
+    assert "root cause, title, description, category, linked traces" in markdown
+    assert "severity, proposed fix" in markdown
     assert "| Ownership |" not in markdown
-    assert "| Fields |" not in markdown

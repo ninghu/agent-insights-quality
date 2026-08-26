@@ -827,6 +827,22 @@ def _evaluation_label(value: str) -> str:
     }[value]
 
 
+def _field_result_cells(fields: dict[str, Any] | None) -> tuple[str, str]:
+    if not fields:
+        return "-", "-"
+    passing = [
+        field.replace("_", " ")
+        for field in FIELD_WEIGHTS
+        if fields.get(field) is True
+    ]
+    failing = [
+        field.replace("_", " ")
+        for field in FIELD_WEIGHTS
+        if fields.get(field) is not True
+    ]
+    return ", ".join(passing) or "None", ", ".join(failing) or "None"
+
+
 def render_agent_markdown(report: dict[str, Any], agent_name: str) -> str:
     baseline = next(
         item for item in report["baseline"] if item["agent"] == agent_name
@@ -879,20 +895,21 @@ def render_agent_markdown(report: dict[str, Any], agent_name: str) -> str:
         "",
         "## Insight-level evaluation",
         "",
-        "| Issue | Foundry version | Generated Insight | Evaluation |",
-        "| --- | --- | --- | --- |",
+        "| Issue | Foundry version | Generated Insight | Evaluation | Passing fields | Failing fields |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
     if baseline_cards:
         for card in baseline_cards:
+            passing, failing = _field_result_cells(None)
             lines.append(
                 f"| `v0` | `{baseline['foundry_version']}` | "
                 f"{_markdown_cell(card['title'])} | "
-                f"{_evaluation_label(card['evaluation'])} |"
+                f"{_evaluation_label(card['evaluation'])} | {passing} | {failing} |"
             )
     else:
         lines.append(
             f"| `v0` | `{baseline['foundry_version']}` | "
-            "No generated Insight | Correct |"
+            "No generated Insight | Correct | - | - |"
         )
     for item in issues:
         issue_link = (
@@ -902,17 +919,19 @@ def render_agent_markdown(report: dict[str, Any], agent_name: str) -> str:
         cards = item["assessment"].get("card_evaluations", [])
         if cards:
             for card in cards:
+                passing, failing = _field_result_cells(card["fields"])
                 lines.append(
                     f"| [{item['issue_id']}]({issue_link}) | "
                     f"`{item['foundry_version']}` | "
                     f"{_markdown_cell(card['title'])} | "
-                    f"{_evaluation_label(card['finding_type'])} |"
+                    f"{_evaluation_label(card['finding_type'])} | "
+                    f"{passing} | {failing} |"
                 )
         else:
             lines.append(
                 f"| [{item['issue_id']}]({issue_link}) | "
                 f"`{item['foundry_version']}` | No generated Insight | "
-                f"{_evaluation_label(item['detail'])} |"
+                f"{_evaluation_label(item['detail'])} | - | - |"
             )
     lines.extend(
         [

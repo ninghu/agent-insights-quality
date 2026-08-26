@@ -97,11 +97,14 @@ def test_email_requires_reviewed_domain_and_one_success(
     assert "Quality Score: 100/100" in request["html"]
     assert "How Scoring Works" in request["html"]
     assert "docs/QUALITY_BAR.md#quality-score" in request["html"]
-    assert "How Insight Results Differ" in request["html"]
+    assert "How to read results" in request["html"]
     assert "docs/INSIGHT_RESULTS.md" in request["html"]
     assert "Incorrect related Insights" in request["html"]
     assert "Noise/duplicate Insights" in request["html"]
     assert "Incorrect/noisy insights" not in request["html"]
+    assert request["html"].index("Incorrect related Insights") < request["html"].index(
+        "How to read results"
+    )
     for owner in (
         "Han Che",
         "Sean Gayler",

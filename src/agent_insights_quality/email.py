@@ -331,7 +331,7 @@ def _insight_results_link() -> str:
     return (
         f'<p style="margin:0 0 18px 0;color:#334155;{_OUTLOOK_TEXT_STYLE}">'
         '<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
-        f'href="{_INSIGHT_RESULTS_URL}">How Insight Results Differ</a></p>'
+        f'href="{_INSIGHT_RESULTS_URL}">How to read results</a></p>'
     )
 
 
@@ -678,8 +678,8 @@ def _render_html(
             for paragraph in summary
         )
         + _private_project_source_link(report, project_link)
-        + _insight_results_link()
         + _data_table(("Grade", "Findings"), _grade_rows(report), (38, 62))
+        + _insight_results_link()
         + "</td></tr>"
         '<tr><td style="padding:30px 32px 0 32px;">'
         + _section_heading("What is working")
