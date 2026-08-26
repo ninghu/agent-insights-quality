@@ -7,6 +7,14 @@
       "quality_score": 39.4,
       "report_date": "2026-08-25",
       "status": "FAIL"
+    },
+    {
+      "baseline_passed": 1,
+      "issues_correct": 4,
+      "issues_expected": 25,
+      "quality_score": 44.1,
+      "report_date": "2026-08-26",
+      "status": "FAIL"
     }
   ],
   "schema_version": "1.0.0"
