@@ -283,6 +283,14 @@ resource artifacts 'Microsoft.Storage/storageAccounts/blobServices/containers@20
   }
 }
 
+resource deploymentRegistries 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: 'deployment-registries'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
 resource lifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05-01' = {
   parent: storage
   name: 'default'

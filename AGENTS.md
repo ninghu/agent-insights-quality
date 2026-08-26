@@ -13,7 +13,11 @@ Agents and 36 reviewed, single-root issues.
 - Invoke deployed Agent endpoints for test traffic.
 - Keep Application Insights read-only. Direct trace injection is forbidden.
 - Keep email requests, deployment registries, run manifests, assessment packages, assessments,
-  promotion receipts, provider receipts, and work-item snapshots under `.aiq-runtime/`.
+  promotion receipts, provider receipts, and work-item snapshots under the durable user-level
+  `~/.aiq-runtime/agent-insights-quality/` root shared by all worktrees.
+- Canonical daily and staging deployment registries live in the private Azure
+  `deployment-registries` blob container and synchronize into the local runtime root. Never commit
+  them to Git.
 
 ## Authorities
 
@@ -45,6 +49,8 @@ Agents and 36 reviewed, single-root issues.
   titles, assignees, or links into committed reports.
 - Bind each private work-item snapshot digest and closed-business date to its qualification run before
   Agent traffic; finalization must use the same snapshot.
+- A temporary individual test recipient may be configured only in the durable private runtime root;
+  the committed fallback recipient remains the reviewed team mailbox.
 
 ## Assessment and scoring
 

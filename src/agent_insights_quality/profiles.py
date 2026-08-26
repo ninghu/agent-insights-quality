@@ -5,7 +5,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from agent_insights_quality.registry import PROFILE_PROJECTS
-from agent_insights_quality.util import ROOT, ContractError, read_yaml
+from agent_insights_quality.util import ROOT, ContractError, read_yaml, runtime_root
 from agent_insights_quality.azure_cli import azure_cli
 
 RESOURCE_GROUP = "agent-insights-quality-rg"
@@ -24,6 +24,7 @@ class RuntimeProfile:
     registry_path: Path
     account_name: str = ""
     container_registry_name: str = ""
+    registry_storage_account_name: str = ""
 
     @classmethod
     def from_env(cls, name: str) -> "RuntimeProfile":
@@ -45,6 +46,14 @@ class RuntimeProfile:
             if str(item.get("type") or "").casefold()
             == "microsoft.containerregistry/registries"
         ]
+        storage_accounts = [
+            item
+            for item in resources
+            if str(item.get("type") or "").casefold()
+            == "microsoft.storage/storageaccounts"
+            and isinstance(item.get("tags"), dict)
+            and item["tags"].get("purpose") == "agent-insights-quality"
+        ]
         profile_insights = [
             item
             for item in resources
@@ -54,7 +63,12 @@ class RuntimeProfile:
             and item["tags"].get("profile") == name
             and item["tags"].get("generation") == TELEMETRY_GENERATION
         ]
-        if len(accounts) != 1 or len(registries) != 1 or len(profile_insights) != 1:
+        if (
+            len(accounts) != 1
+            or len(registries) != 1
+            or len(storage_accounts) != 1
+            or len(profile_insights) != 1
+        ):
             raise ContractError(
                 "Fixed Azure resources could not be resolved uniquely for the profile"
             )
@@ -70,14 +84,10 @@ class RuntimeProfile:
             project_endpoint=endpoint,
             insights_endpoint=endpoint,
             application_insights_resource_id=resource_id,
-            registry_path=(
-                ROOT
-                / ".aiq-runtime"
-                / "deployment-registries"
-                / f"{name}.json"
-            ),
+            registry_path=runtime_root() / "deployment-registries" / f"{name}.json",
             account_name=account_name,
             container_registry_name=str(registries[0]["name"]),
+            registry_storage_account_name=str(storage_accounts[0]["name"]),
         )
 
 

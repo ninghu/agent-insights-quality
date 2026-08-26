@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from agent_insights_quality.catalogs import catalog_hashes, load_catalogs
-from agent_insights_quality.registry import load_registry
+from agent_insights_quality.registry import (
+    load_registry,
+    publish_registry,
+    sync_registry,
+)
 from agent_insights_quality.util import ContractError
 
 
@@ -53,3 +58,49 @@ def test_registry_is_profile_isolated(tmp_path: Path) -> None:
             profile="staging",
             catalog_hashes=catalog_hashes(agents, issues),
         )
+    invalid = _registry("daily")
+    invalid["agents"]["unexpected-agent"] = invalid["agents"].pop(
+        "support-ticket-agent"
+    )
+    path.write_text(json.dumps(invalid), encoding="utf-8")
+    with pytest.raises(ContractError, match="inventory"):
+        load_registry(
+            path,
+            profile="daily",
+            catalog_hashes=catalog_hashes(agents, issues),
+        )
+
+
+def test_registry_syncs_through_private_blob_storage(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "daily.json"
+    profile = SimpleNamespace(
+        name="daily",
+        registry_path=path,
+        registry_storage_account_name="syntheticstorage",
+    )
+    calls = []
+
+    def run(arguments, **_kwargs):
+        calls.append(arguments)
+        if "download" in arguments:
+            destination = Path(arguments[arguments.index("--file") + 1])
+            destination.write_text(
+                json.dumps(_registry("daily")),
+                encoding="utf-8",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "agent_insights_quality.registry.subprocess.run",
+        run,
+    )
+    sync_registry(profile)
+    assert json.loads(path.read_text(encoding="utf-8"))["profile"] == "daily"
+    publish_registry(profile)
+    assert "download" in calls[0]
+    assert "upload" in calls[1]
+    assert "--auth-mode" in calls[0]
+    assert "--auth-mode" in calls[1]

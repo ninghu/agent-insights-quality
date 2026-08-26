@@ -11,11 +11,11 @@ from zoneinfo import ZoneInfo
 
 from agent_insights_quality.azure_cli import azure_cli
 from agent_insights_quality.util import (
-    ROOT,
     ContractError,
     atomic_json,
     content_hash,
     read_json,
+    runtime_root,
 )
 
 _CLOSED_STATES = {"closed", "completed"}
@@ -68,9 +68,9 @@ def _assigned_to(value: Any) -> str:
 
 
 def _private_snapshot_path(path: Path) -> Path:
-    runtime_root = (ROOT / ".aiq-runtime").resolve()
+    private_root = runtime_root()
     resolved = path.resolve()
-    if not resolved.is_relative_to(runtime_root):
+    if not resolved.is_relative_to(private_root):
         raise ContractError("Quality work-item snapshots must stay under .aiq-runtime")
     return resolved
 

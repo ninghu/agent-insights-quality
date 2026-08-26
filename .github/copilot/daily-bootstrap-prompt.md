@@ -11,13 +11,15 @@ Follow both contracts. If either contract cannot be read, stop without sending q
 or email and without creating a pull request.
 
 Before qualification, fetch Quality-tagged work items from the privately configured Azure Boards
-query into `.aiq-runtime`, using the Pacific report date. Include active items and items closed on the
-previous Pacific business date; exclude `Removed`. Pass the private snapshot to both the daily runner
-and finalizer. If the query fails, stop without sending traffic or email.
+query into the durable user-level `~/.aiq-runtime/agent-insights-quality/` root, using the Pacific
+report date. Include active items and items closed on the previous Pacific business date; exclude
+`Removed`. Pass the private snapshot to both the daily runner and finalizer. If the query or durable
+daily deployment registry blob is unavailable, stop without sending traffic or email. The runner
+automatically synchronizes the approved registry into the local runtime root before traffic.
 
 Use only the daily profile. During the scheduled run, never modify catalogs, Agent implementations,
 schemas, infrastructure, configuration, skills, workflows, or documentation. Write only generated
-daily report paths and private `.aiq-runtime` state.
+daily report paths and private durable runtime state.
 
 Use the available email capability exactly once in explicit HTML mode. Never create a draft and never
 retry an ambiguous send. Validate generated paths and report consistency, create an `aiq-daily/`

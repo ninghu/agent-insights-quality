@@ -7,13 +7,21 @@
 - read-only Application Insights queries;
 - deployed Foundry Agent endpoint access;
 - read access to one privately configured Azure Boards saved query;
+- Storage Blob Data Reader access to the private `deployment-registries` container;
 - one email capability with explicit HTML support.
 
 The fixed reviewed recipient is `agentinsightsteam@microsoft.com`.
 
+During a reviewed delivery test, a private
+`~/.aiq-runtime/agent-insights-quality/config/email-recipient.json` override may target one Microsoft
+mailbox. Remove the override after confirmation to restore the committed team recipient.
+
 The automation does not need work-item mutation, release, deployment, or mailbox search capabilities.
 Keep the Boards query URL and fetched work-item snapshot private; neither belongs in repository
-configuration or generated reports.
+configuration or generated reports. Deployment registries and run state live under the durable
+user-level `~/.aiq-runtime/agent-insights-quality/` root so scheduled worktrees share approved state.
+The canonical registry is stored in the existing private Azure storage account; provisioning operators
+need Storage Blob Data Contributor, while qualification-only operators need Storage Blob Data Reader.
 
 ## Readiness
 

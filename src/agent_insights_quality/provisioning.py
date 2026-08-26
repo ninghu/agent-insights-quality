@@ -23,6 +23,7 @@ from agent_insights_quality.catalogs import catalog_hashes
 from agent_insights_quality.azure_cli import azure_cli
 from agent_insights_quality.live import _azure_cli_token
 from agent_insights_quality.profiles import RuntimeProfile
+from agent_insights_quality.registry import publish_registry
 from agent_insights_quality.reporting import validate_staging_report
 from agent_insights_quality.run_manifest import validate_manifest
 from agent_insights_quality.util import (
@@ -31,6 +32,7 @@ from agent_insights_quality.util import (
     atomic_json,
     content_hash,
     file_hash,
+    runtime_root,
 )
 from jsonschema import Draft202012Validator
 
@@ -111,6 +113,7 @@ def provision_profile(
         "agents": registry_agents,
     }
     atomic_json(profile.registry_path, registry)
+    publish_registry(profile)
     return registry
 
 
@@ -275,10 +278,11 @@ def _build_support_images(
         raise ContractError("Current Azure user cannot sign in to the owned registry")
     root = ROOT / "agents" / agent["name"]
     versions = ["v0", *agent["issue_ids"]]
-    (ROOT / ".aiq-runtime").mkdir(parents=True, exist_ok=True)
+    private_root = runtime_root()
+    private_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
         prefix="aiq-wheelhouse-",
-        dir=ROOT / ".aiq-runtime",
+        dir=private_root,
     ) as temporary:
         wheelhouse = Path(temporary)
         download = subprocess.run(
@@ -380,7 +384,7 @@ def _build_and_push_support_image(
     )
     with tempfile.TemporaryDirectory(
         prefix="support-build-",
-        dir=ROOT / ".aiq-runtime",
+        dir=runtime_root(),
     ) as temporary:
         context = Path(temporary)
         shutil.copytree(

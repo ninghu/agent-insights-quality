@@ -43,7 +43,7 @@ Run all 36 staging issues and complete human review before provisioning or chang
 
 ```powershell
 python -m agent_insights_quality run-full --report-date <Pacific YYYY-MM-DD> `
-  --work-items .aiq-runtime\work-items\active-quality.json
+  --work-items $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
 ```
 
 After a complete staging `PASS` or `FAIL` report is human-reviewed, bind all 41 exact content
@@ -58,11 +58,17 @@ python -m agent_insights_quality create-promotion-receipt `
 
 Set `AIQ_STAGING_PROMOTION_RECEIPT` to that private file before provisioning `daily`.
 
+Provisioning writes each profile registry locally and uploads `daily.json` or `staging.json` to the
+private Azure `deployment-registries` container using Entra authentication. Every qualification run
+downloads the canonical blob before traffic, then validates profile, Project, catalogs, and all
+version digests. Authorized operators therefore share one deployed environment without committing
+Azure deployment identifiers to Git.
+
 ## Daily execution
 
 ```powershell
 python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD> `
-  --work-items .aiq-runtime\work-items\active-quality.json
+  --work-items $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
 ```
 
 The runner validates catalog hashes against the protected daily registry, resets each monitor once,
@@ -107,7 +113,7 @@ python -m agent_insights_quality finalize `
   --manifest <private-run-manifest> `
   --assessment <issue-001-assessment.json> `
   --assessment <...> `
-  --work-items .aiq-runtime\work-items\active-quality.json
+  --work-items $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
 ```
 
 Finalization writes sanitized per-Agent Markdown under the report's `agents/` directory. Each row is
@@ -126,7 +132,7 @@ Before finalization, fetch the privately configured Azure Boards saved query:
 python -m agent_insights_quality fetch-quality-work-items `
   --query-url <private-query-url> `
   --report-date <Pacific YYYY-MM-DD> `
-  --output .aiq-runtime\work-items\active-quality.json
+  --output $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
 ```
 
 Pass that snapshot to both the runner and `finalize` with `--work-items`. The email first lists active

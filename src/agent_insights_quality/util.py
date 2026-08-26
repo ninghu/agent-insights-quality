@@ -16,6 +16,20 @@ class ContractError(ValueError):
     """A reviewed repository or runtime contract is invalid."""
 
 
+def runtime_root() -> Path:
+    configured = os.environ.get("AIQ_RUNTIME_ROOT")
+    if configured and not Path(configured).expanduser().is_absolute():
+        raise ContractError("Configured private runtime root must be absolute")
+    root = (
+        Path(configured).expanduser()
+        if configured
+        else Path.home() / ".aiq-runtime" / "agent-insights-quality"
+    ).resolve()
+    if ".aiq-runtime" not in root.parts:
+        raise ContractError("Private runtime root must stay under .aiq-runtime")
+    return root
+
+
 def canonical_bytes(value: Any) -> bytes:
     return json.dumps(
         value,
