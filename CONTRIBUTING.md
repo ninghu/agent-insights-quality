@@ -5,11 +5,15 @@ receipts are human-reviewed contracts. Keep every change synthetic and public-sa
 
 ## Review the existing catalogs
 
-Before proposing a Test Agent or issue, review the generated [Agent Catalog](AGENT_CATALOG.md) for
-the current Agents and assignments, and the generated [Issue Catalog](ISSUE_CATALOG.md) for the
-existing reviewed defects. Their source authorities are
-[`catalogs/AGENT_CATALOG.yaml`](catalogs/AGENT_CATALOG.yaml) and
-[`catalogs/ISSUE_CATALOG.yaml`](catalogs/ISSUE_CATALOG.yaml); update the YAML catalogs and regenerate
+Before proposing a Test Agent or issue, review:
+
+- the generated [Agent Catalog](AGENT_CATALOG.md) for current Agents, owners, frameworks, and issue
+  counts;
+- the generated [Issue Catalog](ISSUE_CATALOG.md) for existing reviewed defects and their permanent
+  Agent assignments.
+
+The source authorities are [`catalogs/AGENT_CATALOG.yaml`](catalogs/AGENT_CATALOG.yaml) and
+[`catalogs/ISSUE_CATALOG.yaml`](catalogs/ISSUE_CATALOG.yaml). Update the YAML catalogs and regenerate
 the readable views rather than editing the generated Markdown directly.
 
 ## Test Agent and issue contract
@@ -29,11 +33,9 @@ Each permanent Test Agent owns one healthy baseline and one or more reviewed iss
 Do not invent an onboarding workflow from scratch. Ask Copilot to follow the appropriate versioned
 repository skill:
 
-- New Test Agent:
+- Test Agent:
   [`.github/skills/onboard-test-agent/SKILL.md`](.github/skills/onboard-test-agent/SKILL.md)
-- New issue: [`.github/skills/onboard-new-issue/SKILL.md`](.github/skills/onboard-new-issue/SKILL.md)
-
-Example prompts:
+- Issue: [`.github/skills/onboard-new-issue/SKILL.md`](.github/skills/onboard-new-issue/SKILL.md)
 
 ```text
 Use the onboard-test-agent skill to propose a new fixed synthetic Test Agent. Stop for human
@@ -45,80 +47,84 @@ Use the onboard-new-issue skill to propose issue-NNN for <agent>. Stop for human
 changing catalogs or Agent source.
 ```
 
-Each skill must first produce a reviewable plan. Catalog, schema, source, infrastructure, score-policy,
-and promotion changes cannot be approved solely by automation. The `onboard-test-agent` skill
-composes the `onboard-new-issue` skill for every initial issue; use `onboard-new-issue` directly when
-adding an issue to an existing Agent.
+Both skills begin with a reviewable plan and stop for human review before changing catalogs, source,
+or runtime state. The `onboard-test-agent` skill composes `onboard-new-issue` for every initial issue;
+use `onboard-new-issue` directly when adding an issue to an existing Agent.
 
 ## Onboard a new Test Agent
 
-Use the `onboard-test-agent` skill to:
+The `onboard-test-agent` skill is authoritative. A new permanent Agent requires:
 
-1. review the stable Agent name, Foundry type, real framework, GPT-5.6 Terra model, owner, and healthy
-   baseline contract, with explicit acceptance from that owner or an authorized maintainer;
-2. add a complete deployable `v0` implementation and at least five healthy deterministic requests;
-3. add at least one reviewed single-root issue with a self-contained implementation by following
-   every step in the new-issue skill and assigning that issue to the new Agent;
-4. update both catalogs and every Agent/Issue-count contract;
-5. update CI build matrices, report schemas, score denominators, generated docs, and operator docs;
-6. verify exact-version routing, endpoint behavior, natural telemetry, trace proof, and baseline
-   ownership;
-7. derive Agent, staging-issue, daily-issue, and total-version counts from the reviewed catalogs;
-   daily selects `min(5, assigned issues)` for each Agent;
-8. qualify the new Agent's baseline and all assigned issues when existing digests, mappings, and
-   shared contracts are unchanged; otherwise qualify every affected Agent or the full catalog;
-9. assess with GPT-5.6 Sol and require human review.
+- a reviewed stable name, Foundry type, real framework, model, owner, and healthy baseline contract;
+- a complete deployable `v0` implementation with at least five deterministic healthy requests;
+- at least one reviewed single-root issue created through `onboard-new-issue`;
+- updates to both catalogs and every derived topology, schema, CI, reporting, and documentation
+  contract.
 
-A Hosted-code Agent includes `implementation.yaml`, `traffic.json`, `source/`, `host.yaml`,
-`requirements.txt`, and deterministic `package.py`; a Hosted-container Agent also includes its
-container contract and CI build entry. Record the owner in the Agent Catalog.
+Use the real framework packaging required by the Agent type. Do not add a placeholder implementation,
+private endpoint, compatibility alias, shared state with another Agent, or synthetic trace injection.
 
-`v0` source and configuration must be healthy. If runtime behavior violates that contract, classify
-the evidence as `agent`, `test_framework`, `infrastructure`, or `unresolved`; never assume every
-baseline card is Noise.
+## Onboard a new issue
 
-Keep the standalone `onboard-new-issue` skill. `onboard-test-agent` composes it for initial issues;
-contributors also use it later to add issues to an existing Agent.
+The `onboard-new-issue` skill is authoritative. A new issue requires:
 
-## Define a new issue
-
-Use the new-issue skill to:
-
-1. select one permanent Agent and one independently fixable root cause;
-2. define the expected title, root cause, category, severity, proposed fix, and natural trace minimum;
-3. allocate the next continuous `issue-NNN` identifier;
-4. append that ID to the permanent Agent's ordered `issue_ids` in `catalogs/AGENT_CATALOG.yaml`;
-5. create deterministic synthetic endpoint traffic that exercises the defect;
-6. add a complete Prompt `definition.json` or Hosted `source/` tree containing only that defect;
-7. prove `v0` remains a healthy static contract and the issue differs by exactly one reviewed root;
-8. update all old topology counts, explicit Agent lists, schemas, runtime validators, promotion checks,
-   CI matrices, tests, skills, generated views, and readable docs;
-9. run full-catalog staging qualification and obtain human review before promotion.
+- the next continuous `issue-NNN` ID, one permanent Agent assignment, and a reviewed expected title,
+  root cause, category, severity, proposed fix, and natural trace contract;
+- a complete self-contained Prompt `definition.json` or Hosted `source/` tree containing exactly one
+  independently fixable root cause;
+- deterministic synthetic endpoint traffic that exercises the defect while `v0` remains healthy;
+- matching catalog entries and updates to every derived topology, schema, CI, reporting, promotion,
+  test, skill, and readable-document contract.
 
 Do not use runtime mode switches, dormant defect branches, generic hooks, source patches, telemetry
 injection, compatibility aliases, or private data.
 
-## Required validation
+## Validate the change
+
+Install the development dependencies once:
+
+```powershell
+python -m pip install -e ".[dev]"
+```
+
+When a catalog changes, regenerate its readable views before validation:
 
 ```powershell
 python -m agent_insights_quality generate-docs
+```
+
+Run these checks for every change:
+
+```powershell
 python -m agent_insights_quality validate
 python -m ruff check .
 python -m pytest
+```
+
+Compile Bicep only when infrastructure changes:
+
+```powershell
 az bicep build --file infra\main.bicep --stdout
 ```
 
-Agent-only changes qualify each affected Agent's baseline and all assigned issues. Unchanged Agents
-reuse their latest reviewed evidence only when content digests, mappings, and shared contracts are
-unchanged. Shared runtime, telemetry, assessment, scoring, schema, infrastructure, or cross-Agent
-topology changes require full-catalog qualification or retained evidence re-evaluation when no new
-traffic is needed. Compose promotion from complete reviewed PASS/FAIL evidence; INCOMPLETE is never
-promotable or reusable. Daily provisioning ends with read-only readiness and registry reconciliation,
-not smoke traffic.
+## Qualify and promote
+
+Follow the [staging qualification skill](.github/skills/staging-qualification/SKILL.md) for live
+qualification and promotion.
+
+The policy is impact-based: Agent source, definition, traffic, or assignment changes qualify each
+affected Agent's `v0` and all assigned issues. Evidence for unchanged Agents is reusable only when
+content digests, mappings, and shared contracts are unchanged. Shared runtime, telemetry, assessment,
+scoring, schema, infrastructure, or cross-Agent topology changes require full-catalog qualification
+or retained-evidence re-evaluation when no new traffic is needed.
 
 Targeted qualification requires reviewed CLI support for both targeted reports and composed promotion
-receipts. Until both are available, use full-catalog qualification and never combine evidence
-manually.
+receipts. The current CLI cannot produce both, so use full-catalog qualification and never combine
+evidence or receipts manually.
+
+Promote only complete, human-reviewed `PASS` or `FAIL` evidence; `INCOMPLETE` is never promotable or
+reusable. After daily provisioning, use read-only readiness and registry reconciliation rather than
+smoke traffic.
 
 Protected runtime prerequisites and operator roles are documented in
 [`docs/AUTOMATION_SETUP.md`](docs/AUTOMATION_SETUP.md).
