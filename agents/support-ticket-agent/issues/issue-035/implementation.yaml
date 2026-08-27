@@ -8,7 +8,7 @@ deployment:
   protocol: responses
   port: 8088
   build_file: ../../v0/Dockerfile
-category: reliability_errors
+category: hallucinations
 severity: high
 expected_behavior:
   desired: Report success only after the requested operation is dispatched.
