@@ -1057,22 +1057,40 @@ class FoundryProvisioner:
         if hosted:
             headers["Foundry-Features"] = "HostedAgents=V1Preview"
         headers.update(extra_headers or {})
-        request = urllib.request.Request(
-            self._profile.project_endpoint
-            + path
-            + ("&" if "?" in path else "?")
-            + "api-version=v1",
-            data=body,
-            headers=headers,
-            method=method,
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=300) as response:
-                status = response.status
-                payload = response.read()
-        except urllib.error.HTTPError as error:
-            status = error.code
-            payload = error.read()
+        attempts = 5 if method == "GET" else 1
+        status = 0
+        payload = b""
+        for attempt in range(attempts):
+            request = urllib.request.Request(
+                self._profile.project_endpoint
+                + path
+                + ("&" if "?" in path else "?")
+                + "api-version=v1",
+                data=body,
+                headers=headers,
+                method=method,
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=300) as response:
+                    status = response.status
+                    payload = response.read()
+            except urllib.error.HTTPError as error:
+                status = error.code
+                payload = error.read()
+            except (TimeoutError, urllib.error.URLError):
+                if attempt + 1 == attempts:
+                    raise ContractError(
+                        "Foundry read failed before a response was received"
+                    ) from None
+                time.sleep(2**attempt)
+                continue
+            if (
+                method != "GET"
+                or status not in {408, 429, 500, 502, 503, 504}
+                or attempt + 1 == attempts
+            ):
+                break
+            time.sleep(2**attempt)
         if status not in (expected or {200, 201, 202}):
             code, message = _remote_error(payload)
             raise RemoteHttpError(
