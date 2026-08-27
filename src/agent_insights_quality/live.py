@@ -24,6 +24,23 @@ from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.util import ContractError
 from agent_insights_quality.azure_cli import azure_cli
 
+try:
+    from azure.core.exceptions import (
+        HttpResponseError,
+        ServiceRequestError,
+        ServiceResponseError,
+    )
+
+    _TELEMETRY_HTTP_ERRORS = (HttpResponseError,)
+    _TELEMETRY_TRANSIENT_ERRORS = (
+        HttpResponseError,
+        ServiceRequestError,
+        ServiceResponseError,
+    )
+except ImportError:
+    _TELEMETRY_HTTP_ERRORS = ()
+    _TELEMETRY_TRANSIENT_ERRORS = ()
+
 _TRACE_ID = re.compile(r"^[0-9a-f]{32}$")
 _FOUNDRY_SCOPE = "https://ai.azure.com/.default"
 _LOGS_SCOPE = "https://api.loganalytics.io/.default"
@@ -99,12 +116,29 @@ class LiveRuntime:
         *,
         timespan: Any,
     ) -> Any:
-        with self._telemetry_query_lock:
-            return client.query_resource(
-                self._profile.application_insights_resource_id,
-                query,
-                timespan=timespan,
-            )
+        for attempt in range(4):
+            try:
+                with self._telemetry_query_lock:
+                    return client.query_resource(
+                        self._profile.application_insights_resource_id,
+                        query,
+                        timespan=timespan,
+                    )
+            except _TELEMETRY_TRANSIENT_ERRORS as error:
+                if (
+                    isinstance(error, _TELEMETRY_HTTP_ERRORS)
+                    and error.status_code not in _TRANSIENT_HTTP
+                ):
+                    raise
+                if attempt == 3:
+                    raise
+                delay = 2**attempt
+                self.report_progress(
+                    f"telemetry query failed transiently; retrying in {delay}s "
+                    f"({attempt + 2}/4)"
+                )
+                self._sleep(delay)
+        raise ContractError("Telemetry query retry loop did not execute")
 
     def reset_monitor(self, agent_name: str, monitor_id: str) -> None:
         del agent_name

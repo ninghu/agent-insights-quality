@@ -8,6 +8,8 @@ import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
+
 from agent_insights_quality.live import (
     LiveRuntime,
     _complete_operation_ids,
@@ -502,6 +504,51 @@ def test_runtime_caches_tokens_and_serializes_telemetry_queries() -> None:
         for future in futures:
             future.result()
     assert maximum_active == 1
+
+
+def test_telemetry_query_retries_transient_sdk_failures() -> None:
+    from azure.core.exceptions import HttpResponseError
+
+    runtime = _runtime()
+    attempts = 0
+    sleeps = []
+
+    class Client:
+        def query_resource(self, *_args, **_kwargs):
+            nonlocal attempts
+            attempts += 1
+            if attempts < 4:
+                error = HttpResponseError("synthetic throttling")
+                error.status_code = 503
+                raise error
+            return "complete"
+
+    runtime._sleep = sleeps.append
+    assert (
+        runtime._query_resource(Client(), "query", timespan=(0, 1))
+        == "complete"
+    )
+    assert attempts == 4
+    assert sleeps == [1, 2, 4]
+
+
+def test_telemetry_query_does_not_retry_nontransient_http_failures() -> None:
+    from azure.core.exceptions import HttpResponseError
+
+    runtime = _runtime()
+    attempts = 0
+
+    class Client:
+        def query_resource(self, *_args, **_kwargs):
+            nonlocal attempts
+            attempts += 1
+            error = HttpResponseError("synthetic bad request")
+            error.status_code = 400
+            raise error
+
+    with pytest.raises(HttpResponseError):
+        runtime._query_resource(Client(), "query", timespan=(0, 1))
+    assert attempts == 1
 
 
 def test_failed_agent_insights_run_retries_without_new_traffic() -> None:
