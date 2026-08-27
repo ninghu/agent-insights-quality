@@ -506,8 +506,10 @@ def test_runtime_caches_tokens_and_serializes_telemetry_queries() -> None:
     assert maximum_active == 1
 
 
-def test_telemetry_query_retries_transient_sdk_failures() -> None:
-    from azure.core.exceptions import HttpResponseError
+def test_telemetry_query_retries_transient_sdk_failures(monkeypatch) -> None:
+    class SyntheticHttpError(Exception):
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
 
     runtime = _runtime()
     attempts = 0
@@ -518,11 +520,17 @@ def test_telemetry_query_retries_transient_sdk_failures() -> None:
             nonlocal attempts
             attempts += 1
             if attempts < 4:
-                error = HttpResponseError("synthetic throttling")
-                error.status_code = 503
-                raise error
+                raise SyntheticHttpError(503)
             return "complete"
 
+    monkeypatch.setattr(
+        "agent_insights_quality.live._TELEMETRY_HTTP_ERRORS",
+        (SyntheticHttpError,),
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.live._TELEMETRY_TRANSIENT_ERRORS",
+        (SyntheticHttpError,),
+    )
     runtime._sleep = sleeps.append
     assert (
         runtime._query_resource(Client(), "query", timespan=(0, 1))
@@ -532,8 +540,12 @@ def test_telemetry_query_retries_transient_sdk_failures() -> None:
     assert sleeps == [1, 2, 4]
 
 
-def test_telemetry_query_does_not_retry_nontransient_http_failures() -> None:
-    from azure.core.exceptions import HttpResponseError
+def test_telemetry_query_does_not_retry_nontransient_http_failures(
+    monkeypatch,
+) -> None:
+    class SyntheticHttpError(Exception):
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
 
     runtime = _runtime()
     attempts = 0
@@ -542,11 +554,17 @@ def test_telemetry_query_does_not_retry_nontransient_http_failures() -> None:
         def query_resource(self, *_args, **_kwargs):
             nonlocal attempts
             attempts += 1
-            error = HttpResponseError("synthetic bad request")
-            error.status_code = 400
-            raise error
+            raise SyntheticHttpError(400)
 
-    with pytest.raises(HttpResponseError):
+    monkeypatch.setattr(
+        "agent_insights_quality.live._TELEMETRY_HTTP_ERRORS",
+        (SyntheticHttpError,),
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.live._TELEMETRY_TRANSIENT_ERRORS",
+        (SyntheticHttpError,),
+    )
+    with pytest.raises(SyntheticHttpError):
         runtime._query_resource(Client(), "query", timespan=(0, 1))
     assert attempts == 1
 
