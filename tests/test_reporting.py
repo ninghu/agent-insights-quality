@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 
 from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.reporting import (
+    apply_score_comparison,
     build_report,
     calculate_quality_score,
     render_agent_markdown,
+    render_markdown,
+    score_comparison,
+    updated_trend,
     validate_published_report,
 )
 from agent_insights_quality.util import ContractError
@@ -124,6 +129,96 @@ def test_report_status_uses_ninety_point_threshold() -> None:
     )
     assert failed["summary"]["quality_score"] == 83
     assert failed["status"] == "FAIL"
+
+
+def test_daily_score_compares_with_latest_prior_scored_report(
+    tmp_path: Path,
+) -> None:
+    _, issues = load_catalogs()
+    report = build_report(
+        _manifest(),
+        issues,
+        _assessments(_manifest()),
+        _baseline_assessments(_manifest()),
+    )
+    report["report_date"] = "2026-08-27"
+    trend = tmp_path / "trend.json"
+    trend.write_text(
+        """{
+  "schema_version": "1.0.0",
+  "days": [
+    {"report_date": "2026-08-25", "quality_score": 94.1},
+    {"report_date": "2026-08-26", "quality_score": null}
+  ]
+}
+""",
+        encoding="utf-8",
+    )
+
+    apply_score_comparison(report, trend)
+
+    assert report["score_comparison"] == {
+        "report_date": "2026-08-25",
+        "quality_score": 94.1,
+        "delta": 5.9,
+    }
+    assert "Score **100/100** (+5.9 vs 2026-08-25)" in render_markdown(report)
+
+
+def test_incomplete_daily_score_has_no_comparison(tmp_path: Path) -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    manifest["agents"][0]["baseline"]["status"] = "inconclusive"
+    report = build_report(
+        manifest,
+        issues,
+        _assessments(manifest),
+        _baseline_assessments(manifest),
+    )
+    trend = tmp_path / "trend.json"
+    trend.write_text(
+        '{"schema_version":"1.0.0","days":'
+        '[{"report_date":"2026-08-23","quality_score":94.1}]}',
+        encoding="utf-8",
+    )
+
+    apply_score_comparison(report, trend)
+
+    assert report["score_comparison"] is None
+
+
+def test_score_comparison_uses_immutable_base_trend() -> None:
+    _, issues = load_catalogs()
+    report = build_report(
+        _manifest(),
+        issues,
+        _assessments(_manifest()),
+        _baseline_assessments(_manifest()),
+    )
+    report["report_date"] = "2026-08-27"
+    base = {
+        "schema_version": "1.0.0",
+        "days": [
+            {
+                "report_date": "2026-08-26",
+                "status": "FAIL",
+                "baseline_passed": 1,
+                "issues_correct": 4,
+                "issues_expected": 25,
+                "quality_score": 44.1,
+            }
+        ],
+    }
+
+    assert score_comparison(report, base) == {
+        "report_date": "2026-08-26",
+        "quality_score": 44.1,
+        "delta": 55.9,
+    }
+    expected = updated_trend(report, base)
+    tampered = deepcopy(expected)
+    tampered["days"][0]["quality_score"] = 90
+    assert tampered != expected
 
 
 def test_field_quality_and_clean_card_precision_components() -> None:

@@ -20,6 +20,7 @@ from agent_insights_quality.live import (
     _usable_response,
 )
 from agent_insights_quality.profiles import RuntimeProfile
+from agent_insights_quality.util import ContractError
 
 
 def _runtime() -> LiveRuntime:
@@ -683,6 +684,101 @@ def test_json_post_retries_foundry_failed_dependency(monkeypatch) -> None:
     assert value["_request_reference"] == request_references[-1]
 
 
+def test_json_post_retries_no_response_with_explicit_policy(monkeypatch) -> None:
+    runtime = _runtime()
+    request_references = []
+    sleeps = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        @staticmethod
+        def read():
+            return b'{"value":"ok"}'
+
+    def open_request(request, **_kwargs):
+        request_references.append(request.headers["X-ms-client-request-id"])
+        if len(request_references) == 1:
+            raise TimeoutError("synthetic no-response timeout")
+        return Response()
+
+    runtime._sleep = sleeps.append
+    monkeypatch.setattr(
+        "agent_insights_quality.live.urllib.request.urlopen",
+        open_request,
+    )
+    value = runtime._json_request(
+        "POST",
+        "https://example.invalid",
+        retry_statuses={408, 503},
+        retry_no_response=True,
+    )
+    assert value["value"] == "ok"
+    assert len(set(request_references)) == 2
+    assert value["_request_reference"] == request_references[-1]
+    assert sleeps == [1]
+
+
+def test_json_post_bounds_no_response_retries(monkeypatch) -> None:
+    runtime = _runtime()
+    attempts = 0
+    sleeps = []
+
+    def open_request(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise TimeoutError("synthetic no-response timeout")
+
+    runtime._sleep = sleeps.append
+    monkeypatch.setattr(
+        "agent_insights_quality.live.urllib.request.urlopen",
+        open_request,
+    )
+    with pytest.raises(
+        ContractError,
+        match="Remote operation failed before a response was received",
+    ):
+        runtime._json_request(
+            "POST",
+            "https://example.invalid",
+            retry_statuses={408, 503},
+            retry_no_response=True,
+        )
+    assert attempts == 3
+    assert sleeps == [1, 2]
+
+
+def test_json_post_requires_explicit_no_response_retry(monkeypatch) -> None:
+    runtime = _runtime()
+    attempts = 0
+
+    def open_request(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise TimeoutError("synthetic no-response timeout")
+
+    monkeypatch.setattr(
+        "agent_insights_quality.live.urllib.request.urlopen",
+        open_request,
+    )
+    with pytest.raises(
+        ContractError,
+        match="Remote operation failed before a response was received",
+    ):
+        runtime._json_request(
+            "POST",
+            "https://example.invalid",
+            retry_statuses={408, 503},
+        )
+    assert attempts == 1
+
+
 def test_hosted_invocation_correlates_with_successful_request_reference() -> None:
     runtime = _runtime()
 
@@ -715,6 +811,75 @@ def test_hosted_invocation_correlates_with_successful_request_reference() -> Non
     assert usable is True
     assert assertion_count == 0
     assert assertions_passed == 0
+
+
+def test_hosted_cleanup_failure_preserves_completed_responses() -> None:
+    runtime = _runtime()
+    progress = []
+    runtime._activate_hosted_version = lambda *_args: None  # type: ignore[method-assign]
+    runtime._create_hosted_session = (  # type: ignore[method-assign]
+        lambda *_args: "session-id"
+    )
+    runtime._invoke_hosted = (  # type: ignore[method-assign]
+        lambda *_args: (["successful-attempt"], True, 0, 0)
+    )
+    runtime._delete_hosted_session = (  # type: ignore[method-assign]
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("synthetic cleanup failure"))
+    )
+    runtime.report_progress = progress.append  # type: ignore[method-assign]
+
+    results = runtime._invoke_group(
+        "finance-agent",
+        "hosted",
+        "19",
+        [
+            {
+                "_index": 0,
+                "body": {"input": "synthetic request"},
+                "expected_status": 200,
+            }
+        ],
+        1,
+    )
+
+    assert results == [(0, ["successful-attempt"], True, 0, 0)]
+    assert progress == [
+        "finance-agent/19: session cleanup failed after endpoint completion; "
+        "preserving completed evidence"
+    ]
+
+
+def test_hosted_cleanup_failure_preserves_primary_invocation_error() -> None:
+    runtime = _runtime()
+    progress = []
+    runtime._activate_hosted_version = lambda *_args: None  # type: ignore[method-assign]
+    runtime._create_hosted_session = (  # type: ignore[method-assign]
+        lambda *_args: "session-id"
+    )
+    runtime._invoke_hosted = (  # type: ignore[method-assign]
+        lambda *_args: (_ for _ in ()).throw(ValueError("primary invocation failure"))
+    )
+    runtime._delete_hosted_session = (  # type: ignore[method-assign]
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("secondary cleanup failure"))
+    )
+    runtime.report_progress = progress.append  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError, match="primary invocation failure"):
+        runtime._invoke_group(
+            "finance-agent",
+            "hosted",
+            "19",
+            [
+                {
+                    "_index": 0,
+                    "body": {"input": "synthetic request"},
+                    "expected_status": 200,
+                }
+            ],
+            1,
+        )
+
+    assert progress == ["finance-agent/19: session cleanup also failed"]
 
 
 def test_json_request_refreshes_an_expired_credential_once(monkeypatch) -> None:

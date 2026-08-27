@@ -786,6 +786,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         if summary["clean_card_precision"] is None
         else f"{summary['clean_card_precision']:g}/100"
     )
+    comparison = _score_comparison_text(report)
     lines = [
         f"# Agent Insights Quality - {report['report_date']}",
         "",
@@ -793,7 +794,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         "| Grade | Findings |",
         "| --- | --- |",
-        f"| **{report['status']}** | Score **{score}** (PASS threshold "
+        f"| **{report['status']}** | Score **{score}**{comparison} (PASS threshold "
         f"{summary['quality_threshold']}/100); "
         f"{summary['issues_correct']} matched, {summary['issues_partial']} partial, "
         f"{summary['noise_cards']} noise cards |",
@@ -1035,15 +1036,91 @@ def write_report(report: dict[str, Any], output: Path) -> None:
         )
 
 
+def apply_score_comparison(report: dict[str, Any], trend_path: Path) -> None:
+    trend = (
+        read_json(trend_path)
+        if trend_path.exists()
+        else {"schema_version": "1.0.0", "days": []}
+    )
+    report["score_comparison"] = score_comparison(report, trend)
+
+
+def score_comparison(
+    report: dict[str, Any],
+    trend: dict[str, Any],
+) -> dict[str, Any] | None:
+    if report["profile"] != "daily" or report["summary"]["quality_score"] is None:
+        return None
+    days = trend.get("days")
+    if not isinstance(days, list):
+        raise ContractError("Trend history has an invalid days collection")
+    candidates = []
+    for value in days:
+        if not isinstance(value, dict):
+            raise ContractError("Trend history contains an invalid day")
+        report_date = value.get("report_date")
+        quality_score = value.get("quality_score")
+        if quality_score is None:
+            continue
+        if (
+            not isinstance(report_date, str)
+            or isinstance(quality_score, bool)
+            or not isinstance(quality_score, (int, float))
+            or not 0 <= quality_score <= 100
+        ):
+            raise ContractError("Trend history contains an invalid scored day")
+        if report_date >= report["report_date"]:
+            continue
+        candidates.append(value)
+    if not candidates:
+        return None
+    previous = max(candidates, key=lambda value: value["report_date"])
+    delta = round(
+        float(report["summary"]["quality_score"])
+        - float(previous["quality_score"]),
+        1,
+    )
+    return {
+        "report_date": previous["report_date"],
+        "quality_score": previous["quality_score"],
+        "delta": 0 if delta == 0 else delta,
+    }
+
+
+def _score_comparison_text(report: dict[str, Any]) -> str:
+    if report["profile"] != "daily":
+        return ""
+    comparison = report.get("score_comparison")
+    if not isinstance(comparison, dict):
+        return " (change N/A)"
+    delta = comparison["delta"]
+    sign = "+" if delta > 0 else ""
+    return f" ({sign}{delta:g} vs {comparison['report_date']})"
+
+
 def update_trend(report: dict[str, Any], path: Path) -> None:
     if path.exists():
         trend = read_json(path)
     else:
         trend = {"schema_version": "1.0.0", "days": []}
+    atomic_json(path, updated_trend(report, trend))
+
+
+def updated_trend(
+    report: dict[str, Any],
+    trend: dict[str, Any],
+) -> dict[str, Any]:
+    days_value = trend.get("days")
+    if not isinstance(days_value, list) or any(
+        not isinstance(value, dict)
+        or not isinstance(value.get("report_date"), str)
+        for value in days_value
+    ):
+        raise ContractError("Trend history contains an invalid day")
     days = [
         value
-        for value in trend.get("days", [])
-        if isinstance(value, dict) and value.get("report_date") != report["report_date"]
+        for value in days_value
+        if value["report_date"] != report["report_date"]
     ]
     days.append(
         {
@@ -1056,7 +1133,4 @@ def update_trend(report: dict[str, Any], path: Path) -> None:
         }
     )
     days.sort(key=lambda value: value["report_date"])
-    atomic_json(
-        path,
-        {"schema_version": "1.0.0", "days": days[-90:]},
-    )
+    return {"schema_version": "1.0.0", "days": days[-90:]}

@@ -34,9 +34,12 @@ from agent_insights_quality.provisioning import (
 )
 from agent_insights_quality.registry import load_registry, sync_registry
 from agent_insights_quality.reporting import (
+    apply_score_comparison,
     build_operational_failure_report,
     build_report,
+    score_comparison,
     update_trend,
+    updated_trend,
     write_report,
     validate_published_report,
     render_markdown,
@@ -110,6 +113,7 @@ def build_parser() -> argparse.ArgumentParser:
     published.add_argument("--latest-json", type=Path, required=True)
     published.add_argument("--latest-markdown", type=Path, required=True)
     published.add_argument("--trend", type=Path, required=True)
+    published.add_argument("--base-trend", type=Path, required=True)
     published.add_argument(
         "--agent-report",
         type=Path,
@@ -329,6 +333,8 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             assessments,
             baseline_assessments,
         )
+        if manifest["profile"] == "daily":
+            apply_score_comparison(report, args.output_root / "trend.json")
         output = (
             args.output_root
             / "daily"
@@ -425,6 +431,7 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         if actual_agent_reports != expected_agent_reports:
             raise ContractError("Published per-Agent reports are inconsistent")
         trend = read_json(args.trend)
+        base_trend = read_json(args.base_trend)
         matching_days = [
             item
             for item in trend.get("days", [])
@@ -441,6 +448,10 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         }
         if matching_days != [expected_day]:
             raise ContractError("Published trend does not match the report")
+        if trend != updated_trend(report, base_trend):
+            raise ContractError("Published trend rewrites historical results")
+        if report.get("score_comparison") != score_comparison(report, base_trend):
+            raise ContractError("Published score comparison does not match the trend")
         return None
     if args.command == "create-promotion-receipt":
         report = read_json(args.report)

@@ -10,6 +10,10 @@ runtime contracts directly from `origin/main` with:
 Follow both contracts. If either contract cannot be read, stop without sending qualification traffic
 or email and without creating a pull request.
 
+Before every repository Python command, set `PYTHONPATH` to the current worktree's `src` directory in
+the same shell process. Verify `agent_insights_quality.__file__` resolves inside the current worktree
+before the first command. Never use an editable installation from another worktree.
+
 Before qualification, fetch Quality-tagged work items from the privately configured Azure Boards
 query into the durable user-level `~/.aiq-runtime/agent-insights-quality/` root, using the Pacific
 report date. Include active items and items closed on the previous Pacific business date; exclude

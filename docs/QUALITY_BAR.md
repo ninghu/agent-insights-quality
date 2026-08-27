@@ -26,6 +26,9 @@ score = 0.85 * field_quality + 0.15 * clean_card_precision
   precision. It is reported separately as a baseline health failure.
 
 The report stores both component scores and the final score to one decimal place when needed.
+Daily reports show the signed score change against the most recent prior daily report with a numeric
+score. Incomplete reports are skipped as comparison baselines, and an incomplete current run shows
+the score change as `N/A`.
 Structural, privacy, provenance, and
 reporting evidence must still be complete and trustworthy before a score can be used.
 See [Insight Result Labels](INSIGHT_RESULTS.md) for Fully Correct, Partially Correct, Incorrect, and

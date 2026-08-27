@@ -284,7 +284,7 @@ union traces, dependencies, requests
         self._activate_hosted_version(agent_name, foundry_version)
         session_id = self._create_hosted_session(agent_name, foundry_version)
         try:
-            return [
+            results = [
                 (
                     int(fixture["_index"]),
                     *self._invoke_hosted(
@@ -296,16 +296,37 @@ union traces, dependencies, requests
                 )
                 for fixture in fixtures
             ]
-        finally:
-            self._json_request(
-                "DELETE",
-                f"{self._profile.project_endpoint}/agents/"
-                f"{urllib.parse.quote(agent_name, safe='')}/endpoint/sessions/"
-                f"{urllib.parse.quote(session_id, safe='')}",
-                hosted=True,
-                expected={200, 202, 204, 404},
-                retry_statuses=_TRANSIENT_HTTP,
+        except Exception:
+            try:
+                self._delete_hosted_session(agent_name, session_id)
+            except Exception:
+                self.report_progress(
+                    f"{agent_name}/{foundry_version}: session cleanup also failed"
+                )
+            raise
+        try:
+            self._delete_hosted_session(agent_name, session_id)
+        except Exception:
+            self.report_progress(
+                f"{agent_name}/{foundry_version}: session cleanup failed after "
+                "endpoint completion; preserving completed evidence"
             )
+        return results
+
+    def _delete_hosted_session(
+        self,
+        agent_name: str,
+        session_id: str,
+    ) -> None:
+        self._json_request(
+            "DELETE",
+            f"{self._profile.project_endpoint}/agents/"
+            f"{urllib.parse.quote(agent_name, safe='')}/endpoint/sessions/"
+            f"{urllib.parse.quote(session_id, safe='')}",
+            hosted=True,
+            expected={200, 202, 204, 404},
+            retry_statuses=_TRANSIENT_HTTP,
+        )
 
     def _activate_hosted_version(
         self,
@@ -333,6 +354,7 @@ union traces, dependencies, requests
             expected={200},
             content_type="application/merge-patch+json",
             retry_statuses=_TRANSIENT_HTTP,
+            retry_no_response=True,
         )
         rules = (
             response.get("agent_endpoint", {})
@@ -376,6 +398,7 @@ union traces, dependencies, requests
             body,
             expected={fixture["expected_status"]},
             retry_statuses=_TRANSIENT_HTTP,
+            retry_no_response=True,
         )
         response_ids: list[str] = []
         for _ in range(8):
@@ -455,6 +478,7 @@ union traces, dependencies, requests
                     "agent_reference": reference,
                 },
                 retry_statuses=_TRANSIENT_HTTP,
+                retry_no_response=True,
             )
         raise ContractError("Prompt exceeded the bounded tool-turn limit")
 
@@ -516,6 +540,7 @@ union traces, dependencies, requests
             expected={fixture["expected_status"]},
             correlation_id=correlation_id,
             retry_statuses=_TRANSIENT_HTTP,
+            retry_no_response=True,
         )
         request_reference = str(response.get("_request_reference") or "")
         if not request_reference:
@@ -993,6 +1018,7 @@ union traces, dependencies, requests
         correlation_id: str | None = None,
         content_type: str = "application/json",
         retry_statuses: set[int] | None = None,
+        retry_no_response: bool = False,
     ) -> dict[str, Any]:
         data = json.dumps(body).encode("utf-8") if body is not None else None
         headers = {
@@ -1018,6 +1044,7 @@ union traces, dependencies, requests
         )
         max_attempts = 20 if method == "GET" else 10 if retries else 1
         attempt = 0
+        no_response_failures = 0
         credential_refreshed = False
         status = 0
         payload = b""
@@ -1037,12 +1064,17 @@ union traces, dependencies, requests
                 payload = error.read()
             except (TimeoutError, urllib.error.URLError) as error:
                 attempt += 1
-                if method == "GET" and attempt < max_attempts:
+                no_response_failures += 1
+                can_retry = attempt < max_attempts and (
+                    method == "GET"
+                    or (retry_no_response and no_response_failures < 3)
+                )
+                if can_retry:
                     request_reference = str(uuid.uuid4())
                     headers["x-ms-client-request-id"] = request_reference
                     delay = min(2 ** (attempt - 1), 30)
                     self.report_progress(
-                        f"remote GET had no response; retrying in {delay}s "
+                        f"remote {method} had no response; retrying in {delay}s "
                         f"({attempt + 1}/{max_attempts})"
                     )
                     self._sleep(delay)

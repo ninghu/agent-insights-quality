@@ -41,6 +41,11 @@ def test_email_requires_reviewed_domain_and_one_success(
         "profile": "daily",
         "run_id": "aiq-20260824",
         "report_date": "2026-08-24",
+        "score_comparison": {
+            "report_date": "2026-08-23",
+            "quality_score": 94.1,
+            "delta": 5.9,
+        },
         "summary": {
             "issues_correct": 25,
             "issues_expected": 25,
@@ -95,6 +100,7 @@ def test_email_requires_reviewed_domain_and_one_success(
     assert ">Report</th>" in request["html"]
     assert ">Ownership</th>" not in request["html"]
     assert "Quality Score: 100/100" in request["html"]
+    assert "(+5.9 vs 2026-08-23)" in request["html"]
     assert "How Scoring Works" in request["html"]
     assert "docs/QUALITY_BAR.md#quality-score" in request["html"]
     assert "How to read results" in request["html"]
@@ -155,7 +161,9 @@ def test_email_requires_reviewed_domain_and_one_success(
     incomplete["summary"]["quality_score"] = None
     incomplete["summary"]["incomplete"] = True
     incomplete["summary"]["incomplete_reasons"] = ["clean_window_not_empty"]
+    incomplete["score_comparison"] = None
     incomplete_request = create_request(incomplete, "synthetic@microsoft.com")
+    assert "Quality Score: N/A (change N/A)" in incomplete_request["html"]
     assert "pre-existing telemetry" in incomplete_request["html"]
     assert "no Agent traffic was sent" in incomplete_request["html"]
     receipt = {

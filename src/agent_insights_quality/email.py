@@ -250,6 +250,17 @@ def _overall_score(report: dict[str, Any]) -> str:
     return f"{score:g}/100"
 
 
+def _score_comparison(report: dict[str, Any]) -> str:
+    if report.get("profile") != "daily":
+        return ""
+    comparison = report.get("score_comparison")
+    if not isinstance(comparison, dict):
+        return " (change N/A)"
+    delta = comparison["delta"]
+    sign = "+" if delta > 0 else ""
+    return f" ({sign}{delta:g} vs {comparison['report_date']})"
+
+
 def _section_heading(title: str) -> str:
     return (
         '<h2 style="margin:0 0 14px 0;color:#12304a;font-family:Segoe UI,Arial,'
@@ -636,6 +647,7 @@ def _render_html(
 ) -> str:
     status_style = _STATUS_STYLES[report["status"]]
     score = _overall_score(report)
+    score_comparison = _score_comparison(report)
     summary = _summary_narrative(report)
     rows = _agent_rows(report, agent_links or {})
     body = (
@@ -662,7 +674,8 @@ def _render_html(
         f'<span style="display:inline-block;padding:5px 10px;background-color:'
         f'{status_style["background"]};color:{status_style["foreground"]};'
         'font-size:12px;line-height:16px;font-weight:700;">'
-        f"Quality Score: {html.escape(score)} "
+        f"Quality Score: {html.escape(score)}"
+        f"{html.escape(score_comparison)} "
         f'(<a style="color:inherit;text-decoration:underline;" '
         f'href="{_QUALITY_BAR_URL}">How Scoring Works</a>) &middot; '
         f"{html.escape(report['status'])}</span>"
