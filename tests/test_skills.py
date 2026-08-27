@@ -153,3 +153,31 @@ def test_staging_skill_uses_impact_based_qualification() -> None:
         "never splice evidence or receipts manually",
     ):
         assert requirement in normalized
+
+
+def test_daily_skill_publishes_adx_without_blocking_email() -> None:
+    skill = _text(".github/skills/agent-insights-quality-daily/SKILL.md")
+    normalized = " ".join(skill.split())
+    for requirement in (
+        "public-safe daily ADX publication",
+        "full reasoning already present in the committed sanitized report",
+        "never private assessment packages",
+        "work-item context",
+        "quality-trend dashboard link",
+        "continue the email and pull-request flow",
+        "email warning",
+        "pull-request description",
+        "ADX is the only authorized analytics write",
+        "Application Insights remains read-only",
+        "Never write telemetry",
+    ):
+        assert requirement in normalized
+    readiness = _text(".github/copilot/daily-readiness-prompt.md")
+    for requirement in (
+        "unique ADX quality-cluster resolution",
+        "all seven logical quality views",
+        "Viewer/Ingestor principal assignments",
+        "reviewed `https://aka.ms/agent-insights/quality` short link",
+        "without writing data",
+    ):
+        assert requirement in " ".join(readiness.split())

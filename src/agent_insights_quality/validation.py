@@ -64,6 +64,8 @@ def _validate_reporting_policy() -> None:
         raise ContractError("Reporting recipient is not the reviewed team mailbox")
     if policy.get("email_channel") != "copilot_email":
         raise ContractError("Reporting email channel is not reviewed")
+    if policy.get("dashboard_url") != "https://aka.ms/agent-insights/quality":
+        raise ContractError("Reporting dashboard link is not reviewed")
     if policy.get("quality_score") != {
         "formula": QUALITY_SCORE_FORMULA,
         "field_quality_weight": FIELD_QUALITY_WEIGHT,

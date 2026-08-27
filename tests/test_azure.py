@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 from agent_insights_quality.azure import (
+    deploy_analytics_infrastructure,
     deploy_infrastructure,
     resolve_latest_terra_version,
 )
@@ -59,3 +61,21 @@ def test_deployment_reads_fixed_telemetry_resource_set(
         value == "telemetryGeneration=g29"
         for value in deployment
     )
+
+
+def test_analytics_deployment_does_not_change_foundry_models(monkeypatch) -> None:
+    calls = []
+
+    def run(arguments, **_kwargs):
+        calls.append(arguments)
+        if "signed-in-user" in arguments:
+            return SimpleNamespace(returncode=0, stdout="synthetic-principal")
+        return SimpleNamespace(returncode=0, stdout="")
+
+    monkeypatch.setattr("agent_insights_quality.azure.subprocess.run", run)
+    deploy_analytics_infrastructure()
+    deployment = calls[-1]
+    template = deployment[deployment.index("--template-file") + 1]
+    assert Path(template).name == "analytics.bicep"
+    assert not any("terraModelVersion" in value for value in deployment)
+    assert not any("telemetryGeneration" in value for value in deployment)

@@ -11,6 +11,12 @@ private artifacts. Application Insights is read-only. Test traffic always invoke
 Agent versions; direct trace injection is forbidden. Canonical registries are stored as private,
 Entra-authenticated Azure blobs and cached under the user's durable private runtime root.
 
+Sanitized daily results are published to a shared Azure Data Explorer database in the same
+quality-test resource group. A native ADX dashboard combines run, Agent, issue, card, and field
+trends with public catalog expectations and the explanations already present in committed reports.
+It never stores prompts, responses, traces, evidence references, work items, private runtime links,
+or private Azure identifiers.
+
 ## Reviewed contracts
 
 Only two catalogs define the test inventory:
@@ -56,6 +62,7 @@ evidence is `INCOMPLETE`.
 
 ```powershell
 python -m pip install -e ".[dev]"
+python -m pip install -e ".[azure]"
 python -m agent_insights_quality generate-docs
 python -m agent_insights_quality validate
 python -m pytest
@@ -65,6 +72,7 @@ Live commands require protected runtime configuration:
 
 ```powershell
 python -m agent_insights_quality deploy-infrastructure
+python -m agent_insights_quality deploy-analytics
 python -m agent_insights_quality provision --profile staging
 python -m agent_insights_quality fetch-quality-work-items `
   --query-url <private-query-url> `
@@ -75,10 +83,15 @@ python -m agent_insights_quality run-full --report-date <Pacific YYYY-MM-DD> `
 python -m agent_insights_quality provision --profile daily
 python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD> `
   --work-items $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
+python -m agent_insights_quality render-adx-dashboard
 ```
 
-Infrastructure deployment resolves the latest GPT-5.6 Terra version available in West US 2 from the
-Azure ARM model catalog.
+Full infrastructure deployment resolves the latest GPT-5.6 Terra version available in West US 2 from
+the Azure ARM model catalog and includes the ADX resources. Use the scoped `deploy-analytics` command
+to create or update only the two-node production ADX trend database in the existing
+`agent-insights-quality-rg` without changing Foundry or telemetry. Daily finalization publishes
+sanitized results and explanations there and includes the reviewed
+`https://aka.ms/agent-insights/quality` short link in the HTML email.
 
 See [Framework Overview](docs/FRAMEWORK_OVERVIEW.md), [Operations](docs/OPERATIONS.md),
 [Automation Setup](docs/AUTOMATION_SETUP.md), [Insight Result Labels](docs/INSIGHT_RESULTS.md), and
