@@ -20,11 +20,12 @@ from agent_insights_quality.adx import (
     resolve_quality_analytics,
     resolve_report_catalogs,
 )
+from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.report_summary import (
     improvement_rows,
     working_capabilities,
 )
-from agent_insights_quality.util import ROOT, read_json
+from agent_insights_quality.util import ROOT, content_hash, read_json
 
 
 class _FakeAdxClient:
@@ -56,7 +57,11 @@ class _FakeAdxClient:
 
 
 def _report() -> dict:
-    return deepcopy(read_json(_report_path()))
+    report = deepcopy(read_json(_report_path()))
+    agents, issues = load_catalogs(require_paths=False)
+    report["catalog_hashes"]["agents"] = content_hash(agents)
+    report["catalog_hashes"]["issues"] = content_hash(issues)
+    return report
 
 
 def _report_path() -> Path:
@@ -159,11 +164,29 @@ def test_publication_payload_contains_public_safe_explanations() -> None:
         assert excluded_value not in rendered
 
 
-def test_historical_report_resolves_its_reviewed_catalog_snapshot() -> None:
+def test_historical_report_resolves_its_reviewed_catalog_snapshot(
+    monkeypatch,
+) -> None:
     report = _report()
+    current = load_catalogs(require_paths=False)
+    historical = deepcopy(current)
+    for agent in historical[0]["agents"]:
+        agent.pop("owner", None)
+    report["catalog_hashes"]["agents"] = content_hash(historical[0])
+    report["catalog_hashes"]["issues"] = content_hash(historical[1])
+    original = "a" * 40
+    monkeypatch.setattr(
+        "agent_insights_quality.adx._run_git",
+        lambda _arguments: original,
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.adx._catalogs_at_commit",
+        lambda _commit: historical,
+    )
     agents, issues = resolve_report_catalogs(
         report,
         source_path=_report_path(),
+        current_catalogs=current,
     )
     assert {item["name"] for item in agents["agents"]} == {
         item["agent"] for item in report["baseline"]
@@ -174,15 +197,17 @@ def test_historical_report_resolves_its_reviewed_catalog_snapshot() -> None:
         if item["id"] in {result["issue_id"] for result in report["issues"]}
     } == {result["issue_id"] for result in report["issues"]}
     with pytest.raises(AdxError, match="catalog snapshot"):
-        resolve_report_catalogs(report)
+        resolve_report_catalogs(report, current_catalogs=current)
 
 
 def test_invalid_historical_catalog_candidate_is_skipped(monkeypatch) -> None:
     report = _report()
-    historical = resolve_report_catalogs(
-        report,
-        source_path=_report_path(),
-    )
+    current = load_catalogs(require_paths=False)
+    historical = deepcopy(current)
+    for agent in historical[0]["agents"]:
+        agent.pop("owner", None)
+    report["catalog_hashes"]["agents"] = content_hash(historical[0])
+    report["catalog_hashes"]["issues"] = content_hash(historical[1])
     commits = ["a" * 40, "b" * 40]
     calls = iter(
         [
@@ -211,7 +236,7 @@ def test_invalid_historical_catalog_candidate_is_skipped(monkeypatch) -> None:
     assert resolve_report_catalogs(
         report,
         source_path=_report_path(),
-        current_catalogs=({"agents": []}, {"issues": []}),
+        current_catalogs=current,
     ) == historical
 
 
