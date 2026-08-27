@@ -20,6 +20,8 @@ def build_manifest(
     report_date: date,
     profile: str,
     rerun: int,
+    insight_lookback_hours: float,
+    telemetry_resource_set: str,
     catalog_hashes: dict[str, str],
     selected: dict[str, list[str]],
     registry: dict[str, Any],
@@ -58,10 +60,12 @@ def build_manifest(
             }
         )
     manifest: dict[str, Any] = {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "run_id": run_id(report_date, rerun),
         "profile": profile,
         "report_date": report_date.isoformat(),
+        "insight_lookback_hours": insight_lookback_hours,
+        "telemetry_resource_set": telemetry_resource_set,
         "catalog_hashes": catalog_hashes,
         "agents": agents,
         "manifest_hash": "",

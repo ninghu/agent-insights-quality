@@ -6,7 +6,8 @@ import subprocess
 from pathlib import Path
 from typing import Mapping
 
-from agent_insights_quality.util import ROOT, ContractError, read_yaml
+from agent_insights_quality.automation_policy import load_automation_policy
+from agent_insights_quality.util import ROOT, ContractError
 from agent_insights_quality.azure_cli import azure_cli
 
 
@@ -15,14 +16,7 @@ def deploy_infrastructure(
 ) -> None:
     del environment
     terra_model_version = resolve_latest_terra_version()
-    telemetry_generation = str(
-        read_yaml(ROOT / "config" / "automation.yaml").get(
-            "telemetry_generation",
-            "",
-        )
-    )
-    if re.fullmatch(r"g[1-9][0-9]*", telemetry_generation) is None:
-        raise ContractError("Automation telemetry generation is invalid")
+    telemetry_resource_set = load_automation_policy().telemetry_resource_set
     identity = subprocess.run(
         [azure_cli(), "ad", "signed-in-user", "show", "--query", "id", "--output", "tsv"],
         capture_output=True,
@@ -47,7 +41,7 @@ def deploy_infrastructure(
         "location=westus2",
         "resourceGroupName=agent-insights-quality-rg",
         f"terraModelVersion={terra_model_version}",
-        f"telemetryGeneration={telemetry_generation}",
+        f"telemetryGeneration={telemetry_resource_set}",
         "automationOwner=ninghu",
         f"automationPrincipalId={principal_id}",
         "--only-show-errors",

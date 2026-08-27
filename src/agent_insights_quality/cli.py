@@ -5,11 +5,14 @@ import json
 import os
 from datetime import date
 from pathlib import Path
+from typing import Any
+
 from agent_insights_quality.assessment import (
     load_assessments,
     load_baseline_assessments,
     rehydrate_packages,
 )
+from agent_insights_quality.automation_policy import load_automation_policy
 from agent_insights_quality.azure import deploy_infrastructure
 from agent_insights_quality.catalogs import (
     catalog_hashes,
@@ -47,12 +50,22 @@ from agent_insights_quality.reporting import (
 )
 from agent_insights_quality.run_manifest import build_manifest, run_id, validate_manifest
 from agent_insights_quality.runner import execute
+from agent_insights_quality.runtime_state import (
+    ActiveQualificationError,
+    VersionCheckpointStore,
+    profile_run_lock,
+)
 from agent_insights_quality.selection import select_daily, select_full
+from agent_insights_quality.telemetry_cleanup import (
+    apply_cleanup_plan,
+    write_cleanup_plan,
+)
 from agent_insights_quality.util import (
     ROOT,
     ContractError,
     atomic_json,
     content_hash,
+    file_hash,
     immutable_json,
     read_json,
     runtime_root,
@@ -126,6 +139,10 @@ def build_parser() -> argparse.ArgumentParser:
     promotion.add_argument("--manifest", type=Path, required=True)
     promotion.add_argument("--output", type=Path, required=True)
     promotion.add_argument("--human-reviewed", action="store_true")
+    cleanup = commands.add_parser("cleanup-telemetry")
+    cleanup.add_argument("--plan", type=Path, required=True)
+    cleanup.add_argument("--receipt", type=Path)
+    cleanup.add_argument("--human-reviewed", action="store_true")
     return parser
 
 
@@ -155,6 +172,27 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         )
         return json.dumps(
             {"quality_work_items": count, "output": str(args.output)},
+            sort_keys=True,
+        )
+    if args.command == "cleanup-telemetry":
+        if args.human_reviewed:
+            if args.receipt is None:
+                raise ContractError("Reviewed telemetry cleanup requires a receipt path")
+            receipt = apply_cleanup_plan(args.plan, args.receipt)
+            return json.dumps(
+                {
+                    "deleted_resource_count": receipt["deleted_resource_count"],
+                    "remaining_owned_resource_count": receipt[
+                        "remaining_owned_resource_count"
+                    ],
+                },
+                sort_keys=True,
+            )
+        if args.receipt is not None:
+            raise ContractError("Telemetry cleanup planning does not accept a receipt")
+        plan = write_cleanup_plan(args.plan)
+        return json.dumps(
+            {"planned_resource_count": len(plan["resources"])},
             sort_keys=True,
         )
     agents, issues = load_catalogs()
@@ -189,6 +227,7 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         )
         return f"{args.profile} profile provisioned."
     if args.command in {"run-daily", "run-full"}:
+        policy = load_automation_policy()
         profile_name = "daily" if args.command == "run-daily" else "staging"
         work_items = load_quality_work_items(
             args.work_items,
@@ -210,6 +249,7 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             },
         )
         profile = RuntimeProfile.from_env(profile_name)
+        profile.assert_insights_connection()
         sync_registry(profile)
         registry = load_registry(
             profile.registry_path,
@@ -217,32 +257,65 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             catalog_hashes=hashes,
         )
         runtime = LiveRuntime(profile)
+        seed = int(hashes["issues"].split(":")[1][:16], 16)
+        run_contract_digest = _run_contract_digest(
+            profile_name=profile_name,
+            report_date=args.report_date.isoformat(),
+            rerun=args.rerun,
+            catalog_hashes=hashes,
+            selected=selected,
+            registry=registry,
+            work_items=work_items,
+            policy=policy,
+            seed=seed,
+        )
         try:
-            results = execute(
-                agents=agents,
-                issues=issues,
-                selected=selected,
-                registry=registry,
-                runtime=runtime,
-                seed=int(hashes["issues"].split(":")[1][:16], 16),
-            )
-            manifest = build_manifest(
-                report_date=args.report_date,
-                profile=profile_name,
-                rerun=args.rerun,
-                catalog_hashes=hashes,
-                selected=selected,
-                registry=registry,
-                results=results,
-            )
-            immutable_json(state / "run-manifest.json", manifest)
-            packages = rehydrate_packages(
-                manifest,
-                issues,
-                registry,
-                runtime,
-                state / "assessment-packages",
-            )
+            with profile_run_lock(
+                profile_name,
+                run_id(args.report_date, args.rerun),
+            ):
+                results = execute(
+                    agents=agents,
+                    issues=issues,
+                    selected=selected,
+                    registry=registry,
+                    runtime=runtime,
+                    seed=seed,
+                    lookback_hours=policy.insight_lookback_hours,
+                    clean_window_poll_seconds=policy.clean_window_poll_seconds,
+                    clean_window_ingestion_margin_seconds=(
+                        policy.clean_window_ingestion_margin_seconds
+                    ),
+                    clean_window_max_wait_seconds=(
+                        policy.clean_window_max_wait_seconds
+                    ),
+                    max_recovery_versions=policy.max_recovery_versions,
+                    checkpoint_store=VersionCheckpointStore(
+                        state / "stage-checkpoints",
+                        run_contract_digest,
+                    ),
+                )
+                manifest = build_manifest(
+                    report_date=args.report_date,
+                    profile=profile_name,
+                    rerun=args.rerun,
+                    insight_lookback_hours=policy.insight_lookback_hours,
+                    telemetry_resource_set=policy.telemetry_resource_set,
+                    catalog_hashes=hashes,
+                    selected=selected,
+                    registry=registry,
+                    results=results,
+                )
+                immutable_json(state / "run-manifest.json", manifest)
+                packages = rehydrate_packages(
+                    manifest,
+                    issues,
+                    registry,
+                    runtime,
+                    state / "assessment-packages",
+                )
+        except ActiveQualificationError:
+            raise
         except Exception as error:
             failure = build_operational_failure_report(
                 report_date=args.report_date,
@@ -385,7 +458,11 @@ def _dispatch(args: argparse.Namespace) -> str | None:
     if args.command == "replay-run":
         manifest = read_json(args.manifest)
         validate_manifest(manifest)
-        profile = RuntimeProfile.from_env(manifest["profile"])
+        profile = RuntimeProfile.from_env(
+            manifest["profile"],
+            manifest["telemetry_resource_set"],
+        )
+        profile.assert_insights_connection()
         result = LiveRuntime(profile).replay_manifest(manifest)
         return json.dumps(result, indent=2, sort_keys=True)
     if args.command == "validate-generated-paths":
@@ -467,3 +544,43 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         atomic_json(args.output, receipt)
         return "Staging promotion receipt created."
     raise AssertionError("unreachable")
+
+
+def _run_contract_digest(
+    *,
+    profile_name: str,
+    report_date: str,
+    rerun: int,
+    catalog_hashes: dict[str, str],
+    selected: dict[str, list[str]],
+    registry: dict[str, Any],
+    work_items: dict[str, Any],
+    policy: Any,
+    seed: int,
+) -> str:
+    runtime_files = {
+        path.relative_to(ROOT).as_posix(): file_hash(path)
+        for path in sorted((ROOT / "src" / "agent_insights_quality").glob("*.py"))
+    }
+    runtime_files["config/automation.yaml"] = file_hash(
+        ROOT / "config" / "automation.yaml"
+    )
+    runtime_files["schemas/run-manifest.schema.json"] = file_hash(
+        ROOT / "schemas" / "run-manifest.schema.json"
+    )
+    return content_hash(
+        {
+            "schema_version": "1.0.0",
+            "profile": profile_name,
+            "report_date": report_date,
+            "rerun": rerun,
+            "catalog_hashes": catalog_hashes,
+            "selected": selected,
+            "registry_hash": content_hash(registry),
+            "work_items_hash": content_hash(work_items),
+            "lookback_hours": policy.insight_lookback_hours,
+            "telemetry_resource_set": policy.telemetry_resource_set,
+            "seed": seed,
+            "runtime_files": runtime_files,
+        }
+    )

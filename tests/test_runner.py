@@ -8,11 +8,15 @@ from pathlib import Path
 from agent_insights_quality.catalogs import catalog_hashes, load_catalogs
 from agent_insights_quality.models import (
     InsightEvidence,
+    InsightRunCheckpoint,
     InsightRunEvidence,
     InvocationEvidence,
+    VersionResult,
 )
 from agent_insights_quality.runner import execute
+from agent_insights_quality.runtime_state import VersionCheckpointStore
 from agent_insights_quality.selection import select_daily
+from agent_insights_quality.util import ContractError
 
 
 def _registry(agents: dict, hashes: dict[str, str]) -> dict:
@@ -56,18 +60,32 @@ class FakeRuntime:
         self._concurrency_lock = threading.Lock()
         self.maximum_concurrent_agents = 0
         self.progress: list[str] = []
+        self.reset_agents: list[str] = []
+        self.clean_agents: list[str] = []
 
     def report_progress(self, message: str) -> None:
         self.progress.append(message)
 
     def reset_monitor(self, agent_name: str, monitor_id: str) -> None:
         assert agent_name in monitor_id
+        self.reset_agents.append(agent_name)
         if agent_name == self.reset_failure_agent:
             raise RuntimeError("synthetic reset failure")
 
-    def assert_clean_window(self, agent_name: str, lookback_hours: int) -> None:
+    def wait_for_clean_window(
+        self,
+        agent_name: str,
+        lookback_hours: float,
+        **kwargs,
+    ) -> None:
         assert agent_name.endswith("-agent")
-        assert lookback_hours == 3
+        assert lookback_hours == 0.1
+        assert kwargs == {
+            "poll_seconds": 15,
+            "ingestion_margin_seconds": 30,
+            "max_wait_seconds": 1200,
+        }
+        self.clean_agents.append(agent_name)
         if agent_name == self.clean_window_failure_agent:
             raise RuntimeError(f"{agent_name} has pre-existing traces")
 
@@ -114,17 +132,33 @@ class FakeRuntime:
         del agent_name, invocation
         return ((foundry_version.replace("issue-", "") + "0" * 32)[:32],)
 
-    def run_insights(
+    def start_insights_run(
         self,
         *,
         agent_name: str,
         monitor_id: str,
         foundry_version: str,
         operation_ids: tuple[str, ...],
-        lookback_hours: int,
+        lookback_hours: float,
+        persist,
+    ) -> InsightRunCheckpoint:
+        del agent_name, monitor_id, foundry_version, operation_ids
+        assert lookback_hours == 0.1
+        checkpoint = InsightRunCheckpoint("synthetic-run", {})
+        persist(checkpoint)
+        return checkpoint
+
+    def finish_insights_run(
+        self,
+        *,
+        agent_name: str,
+        monitor_id: str,
+        foundry_version: str,
+        operation_ids: tuple[str, ...],
+        checkpoint: InsightRunCheckpoint,
     ) -> InsightRunEvidence:
         del agent_name, monitor_id
-        assert lookback_hours == 3
+        assert checkpoint.run_id == "synthetic-run"
         if foundry_version == "v0" and self.baseline_noise is None:
             insights = ()
         else:
@@ -158,11 +192,14 @@ class FakeRuntime:
         foundry_version: str,
         operation_ids: tuple[str, ...],
         required_operations: tuple[str, ...],
+        window_start: str,
+        window_end: str,
     ) -> None:
         assert agent_name.endswith("-agent")
         assert foundry_version
         assert operation_ids
         assert "invoke_agent" in required_operations
+        assert window_start < window_end
 
 
 def test_runner_executes_25_issues() -> None:
@@ -204,6 +241,182 @@ def test_runner_parallelizes_agents_but_not_versions_within_an_agent() -> None:
         seed=1,
     )
     assert runtime.maximum_concurrent_agents > 1
+
+
+def test_telemetry_recovery_reuses_private_invocation_checkpoint(
+    tmp_path: Path,
+) -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    selected = select_daily(date(2026, 8, 24), agents, issues, hashes["issues"])
+    target = selected["weather-agent"][0]
+
+    class RecoveringRuntime(FakeRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.telemetry_attempts: dict[str, int] = {}
+
+        def wait_for_telemetry(
+            self,
+            *,
+            agent_name: str,
+            foundry_version: str,
+            invocation: InvocationEvidence,
+        ) -> tuple[str, ...]:
+            self.telemetry_attempts[foundry_version] = (
+                self.telemetry_attempts.get(foundry_version, 0) + 1
+            )
+            if (
+                foundry_version == target
+                and self.telemetry_attempts[foundry_version] == 1
+            ):
+                raise ContractError("Synthetic telemetry deadline")
+            return super().wait_for_telemetry(
+                agent_name=agent_name,
+                foundry_version=foundry_version,
+                invocation=invocation,
+            )
+
+    runtime = RecoveringRuntime()
+    execute(
+        agents=agents,
+        issues=issues,
+        selected=selected,
+        registry=_registry(agents, hashes),
+        runtime=runtime,
+        seed=1,
+        checkpoint_store=VersionCheckpointStore(
+            tmp_path / "stages",
+            "sha256:" + "d" * 64,
+        ),
+    )
+    assert runtime.invoked.count(target) == 1
+    assert runtime.telemetry_attempts[target] == 2
+
+
+def test_insight_poll_recovery_reuses_started_run_checkpoint(
+    tmp_path: Path,
+) -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    selected = select_daily(date(2026, 8, 24), agents, issues, hashes["issues"])
+    target = selected["weather-agent"][0]
+
+    class RecoveringRuntime(FakeRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.starts: dict[str, int] = {}
+            self.polls: dict[str, int] = {}
+
+        def start_insights_run(self, **kwargs) -> InsightRunCheckpoint:
+            version = kwargs["foundry_version"]
+            self.starts[version] = self.starts.get(version, 0) + 1
+            return super().start_insights_run(**kwargs)
+
+        def finish_insights_run(self, **kwargs) -> InsightRunEvidence:
+            version = kwargs["foundry_version"]
+            self.polls[version] = self.polls.get(version, 0) + 1
+            if version == target and self.polls[version] == 1:
+                raise ContractError("Synthetic Insight polling deadline")
+            return super().finish_insights_run(**kwargs)
+
+    runtime = RecoveringRuntime()
+    execute(
+        agents=agents,
+        issues=issues,
+        selected=selected,
+        registry=_registry(agents, hashes),
+        runtime=runtime,
+        seed=1,
+        checkpoint_store=VersionCheckpointStore(
+            tmp_path / "stages",
+            "sha256:" + "d" * 64,
+        ),
+    )
+    assert runtime.starts[target] == 1
+    assert runtime.polls[target] == 2
+
+
+def test_ambiguous_insight_start_retries_only_after_clean_retraffic(
+    tmp_path: Path,
+) -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    selected = select_daily(date(2026, 8, 24), agents, issues, hashes["issues"])
+    target = selected["weather-agent"][0]
+
+    class RecoveringRuntime(FakeRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.starts: dict[str, int] = {}
+
+        def start_insights_run(self, **kwargs) -> InsightRunCheckpoint:
+            version = kwargs["foundry_version"]
+            self.starts[version] = self.starts.get(version, 0) + 1
+            if version == target and self.starts[version] == 1:
+                raise ContractError(
+                    "Remote operation failed before a response was received"
+                )
+            return super().start_insights_run(**kwargs)
+
+    runtime = RecoveringRuntime()
+    execute(
+        agents=agents,
+        issues=issues,
+        selected=selected,
+        registry=_registry(agents, hashes),
+        runtime=runtime,
+        seed=1,
+        checkpoint_store=VersionCheckpointStore(
+            tmp_path / "stages",
+            "sha256:" + "d" * 64,
+        ),
+    )
+    assert runtime.starts[target] == 2
+    assert runtime.invoked.count(target) == 2
+    assert runtime.clean_agents.count("weather-agent") == 2
+    assert runtime.reset_agents.count("weather-agent") == 2
+
+
+def test_resume_waits_before_first_version_without_checkpoint(
+    tmp_path: Path,
+) -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    selected = select_daily(date(2026, 8, 24), agents, issues, hashes["issues"])
+    registry = _registry(agents, hashes)
+    store = VersionCheckpointStore(
+        tmp_path / "stages",
+        "sha256:" + "d" * 64,
+    )
+    entry = registry["agents"]["weather-agent"]["versions"]["v0"]
+    store.save_result(
+        "weather-agent",
+        "v0",
+        entry["foundry_version"],
+        entry["content_digest"],
+        VersionResult(
+            logical_version="v0",
+            foundry_version=entry["foundry_version"],
+            status="passed",
+            endpoint_request_count=1,
+            endpoint_response_count=1,
+            endpoint_usable_response_count=1,
+            trace_contract_verified=True,
+        ),
+    )
+    runtime = FakeRuntime()
+    execute(
+        agents=agents,
+        issues=issues,
+        selected=selected,
+        registry=registry,
+        runtime=runtime,
+        seed=1,
+        checkpoint_store=store,
+    )
+    assert runtime.clean_agents.count("weather-agent") == 1
+    assert runtime.reset_agents.count("weather-agent") == 1
 
 
 def test_issue_failure_does_not_stop_later_versions() -> None:

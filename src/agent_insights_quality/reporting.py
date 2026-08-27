@@ -1117,20 +1117,30 @@ def updated_trend(
         for value in days_value
     ):
         raise ContractError("Trend history contains an invalid day")
+    current = {
+        "report_date": report["report_date"],
+        "status": report["status"],
+        "baseline_passed": report["summary"]["baseline_passed"],
+        "issues_correct": report["summary"]["issues_correct"],
+        "issues_expected": report["summary"]["issues_expected"],
+        "quality_score": report["summary"]["quality_score"],
+    }
+    existing = [
+        value
+        for value in days_value
+        if value["report_date"] == report["report_date"]
+    ]
+    if len(existing) > 1:
+        raise ContractError("Trend history contains duplicate report dates")
+    if existing and existing[0] != current and existing[0].get(
+        "quality_score"
+    ) is not None:
+        raise ContractError("A scored trend day is immutable")
     days = [
         value
         for value in days_value
         if value["report_date"] != report["report_date"]
     ]
-    days.append(
-        {
-            "report_date": report["report_date"],
-            "status": report["status"],
-            "baseline_passed": report["summary"]["baseline_passed"],
-            "issues_correct": report["summary"]["issues_correct"],
-            "issues_expected": report["summary"]["issues_expected"],
-            "quality_score": report["summary"]["quality_score"],
-        }
-    )
+    days.append(current)
     days.sort(key=lambda value: value["report_date"])
     return {"schema_version": "1.0.0", "days": days[-90:]}

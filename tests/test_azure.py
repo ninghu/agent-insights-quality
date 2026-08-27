@@ -37,7 +37,7 @@ def test_latest_terra_version_is_selected(monkeypatch) -> None:
     assert resolve_latest_terra_version() == "2026-07-09"
 
 
-def test_deployment_reads_telemetry_generation_from_automation_policy(
+def test_deployment_reads_fixed_telemetry_resource_set(
     monkeypatch,
 ) -> None:
     calls = []
@@ -56,6 +56,6 @@ def test_deployment_reads_telemetry_generation_from_automation_policy(
     deploy_infrastructure()
     deployment = calls[-1]
     assert any(
-        value.startswith("telemetryGeneration=g")
+        value == "telemetryGeneration=g29"
         for value in deployment
     )

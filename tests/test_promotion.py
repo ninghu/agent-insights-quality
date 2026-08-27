@@ -67,10 +67,12 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
         },
     }
     manifest = {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "run_id": "aiq-20260824",
         "profile": "staging",
         "report_date": "2026-08-24",
+        "insight_lookback_hours": 0.1,
+        "telemetry_resource_set": "g29",
         "catalog_hashes": hashes,
         "agents": [
             {

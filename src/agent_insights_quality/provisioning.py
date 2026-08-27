@@ -23,7 +23,7 @@ from agent_insights_quality.catalogs import catalog_hashes
 from agent_insights_quality.azure_cli import azure_cli
 from agent_insights_quality.live import _azure_cli_token
 from agent_insights_quality.profiles import RuntimeProfile
-from agent_insights_quality.registry import publish_registry
+from agent_insights_quality.registry import load_registry, publish_registry
 from agent_insights_quality.reporting import validate_staging_report
 from agent_insights_quality.run_manifest import validate_manifest
 from agent_insights_quality.util import (
@@ -68,6 +68,16 @@ def provision_profile(
 ) -> dict[str, Any]:
     client = FoundryProvisioner(profile, token_provider=token_provider)
     client.wait_project()
+    reusable = _reusable_registry(
+        client,
+        profile,
+        agents,
+        issues,
+        approved_digests,
+    )
+    if reusable is not None:
+        publish_registry(profile)
+        return reusable
     issue_by_id = {item["id"]: item for item in issues["issues"]}
     support_agent = next(
         item for item in agents["agents"] if item["name"] == "support-ticket-agent"
@@ -105,6 +115,14 @@ def provision_profile(
             "monitor_id": monitor_id,
             "versions": versions,
         }
+    if not _monitor_inventory_matches(
+        client._list_monitors(),
+        {
+            name: value["monitor_id"]
+            for name, value in registry_agents.items()
+        },
+    ):
+        raise ContractError("Profile monitor inventory is not exact")
     registry = {
         "schema_version": "1.0.0",
         "profile": profile.name,
@@ -115,6 +133,69 @@ def provision_profile(
     atomic_json(profile.registry_path, registry)
     publish_registry(profile)
     return registry
+
+
+def _reusable_registry(
+    client: FoundryProvisioner,
+    profile: RuntimeProfile,
+    agents: dict[str, Any],
+    issues: dict[str, Any],
+    approved_digests: dict[str, str] | None,
+) -> dict[str, Any] | None:
+    if not profile.registry_path.exists():
+        return None
+    try:
+        registry = load_registry(
+            profile.registry_path,
+            profile=profile.name,
+            catalog_hashes=catalog_hashes(agents, issues),
+        )
+    except ContractError:
+        return None
+    expected_monitors = {
+        name: value["monitor_id"]
+        for name, value in registry["agents"].items()
+    }
+    if not _monitor_inventory_matches(client._list_monitors(), expected_monitors):
+        return None
+    for agent in agents["agents"]:
+        name = agent["name"]
+        hosted = agent["type"] != "prompt"
+        for logical_version in ["v0", *agent["issue_ids"]]:
+            entry = registry["agents"][name]["versions"][logical_version]
+            key = f"{name}/{logical_version}"
+            if (
+                approved_digests is not None
+                and approved_digests.get(key) != entry["content_digest"]
+            ):
+                return None
+            found = client._find_version(
+                name,
+                logical_version,
+                entry["content_digest"],
+                hosted=hosted,
+            )
+            if str(found or "") != str(entry["foundry_version"]):
+                return None
+    return registry
+
+
+def _monitor_inventory_matches(
+    monitors: list[dict[str, Any]],
+    expected: dict[str, str],
+) -> bool:
+    grouped: dict[str, list[str]] = {}
+    for item in monitors:
+        if not isinstance(item, dict):
+            return False
+        grouped.setdefault(
+            str(item.get("agent_name") or ""),
+            [],
+        ).append(str(item.get("id") or ""))
+    return set(grouped) == set(expected) and all(
+        grouped[name] == [monitor_id]
+        for name, monitor_id in expected.items()
+    )
 
 
 def validate_promotion_receipt(
@@ -278,6 +359,16 @@ def _build_support_images(
         raise ContractError("Current Azure user cannot sign in to the owned registry")
     root = ROOT / "agents" / agent["name"]
     versions = ["v0", *agent["issue_ids"]]
+    tags = {
+        logical: _support_image_tag(root, logical)
+        for logical in versions
+    }
+    existing = {
+        logical: _existing_acr_image(registry, tag)
+        for logical, tag in tags.items()
+    }
+    if all(existing.values()):
+        return {logical: str(existing[logical]) for logical in versions}
     private_root = runtime_root()
     private_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
@@ -323,7 +414,9 @@ def _build_support_images(
         thread.start()
         try:
             return {
-                logical: _build_and_push_support_image(
+                logical: str(existing[logical])
+                if existing[logical]
+                else _build_and_push_support_image(
                     registry=registry,
                     root=root,
                     logical_version=logical,
@@ -349,23 +442,7 @@ def _build_and_push_support_image(
         if logical_version == "v0"
         else f"issues/{logical_version}/implementation.yaml"
     )
-    relevant = {
-        path.relative_to(root).as_posix(): file_hash(path)
-        for path in sorted((root / "v0").rglob("*"))
-        if _is_package_file(path)
-    }
-    if logical_version != "v0":
-        implementation = root / "issues" / logical_version / "implementation.yaml"
-        relevant[implementation.relative_to(root).as_posix()] = file_hash(implementation)
-        issue_source = root / "issues" / logical_version / "source"
-        relevant.update(
-            {
-                path.relative_to(root).as_posix(): file_hash(path)
-                for path in sorted(issue_source.rglob("*"))
-                if _is_package_file(path)
-            }
-        )
-    tag = content_hash(relevant).split(":")[1][:16]
+    tag = _support_image_tag(root, logical_version)
     local_tag = f"aiq-support-{tag}:local"
     remote_tag = (
         f"{registry}.azurecr.io/agent-insights-quality-support:{tag}"
@@ -454,6 +531,26 @@ def _build_and_push_support_image(
             capture_output=True,
             check=False,
         )
+
+
+def _support_image_tag(root: Path, logical_version: str) -> str:
+    relevant = {
+        path.relative_to(root).as_posix(): file_hash(path)
+        for path in sorted((root / "v0").rglob("*"))
+        if _is_package_file(path)
+    }
+    if logical_version != "v0":
+        implementation = root / "issues" / logical_version / "implementation.yaml"
+        relevant[implementation.relative_to(root).as_posix()] = file_hash(implementation)
+        issue_source = root / "issues" / logical_version / "source"
+        relevant.update(
+            {
+                path.relative_to(root).as_posix(): file_hash(path)
+                for path in sorted(issue_source.rglob("*"))
+                if _is_package_file(path)
+            }
+        )
+    return content_hash(relevant).split(":")[1][:16]
 
 
 def _existing_acr_image(registry: str, tag: str) -> str | None:

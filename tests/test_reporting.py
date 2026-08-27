@@ -221,6 +221,31 @@ def test_score_comparison_uses_immutable_base_trend() -> None:
     assert tampered != expected
 
 
+def test_scored_trend_day_cannot_be_replaced() -> None:
+    _, issues = load_catalogs()
+    report = build_report(
+        _manifest(),
+        issues,
+        _assessments(_manifest()),
+        _baseline_assessments(_manifest()),
+    )
+    base = {
+        "schema_version": "1.0.0",
+        "days": [
+            {
+                "report_date": report["report_date"],
+                "status": "FAIL",
+                "baseline_passed": 1,
+                "issues_correct": 4,
+                "issues_expected": 25,
+                "quality_score": 44.1,
+            }
+        ],
+    }
+    with pytest.raises(ContractError, match="immutable"):
+        updated_trend(report, base)
+
+
 def test_field_quality_and_clean_card_precision_components() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()

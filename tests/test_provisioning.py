@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_insights_quality.provisioning import deterministic_zip, _version_from_response
+from agent_insights_quality.provisioning import (
+    _monitor_inventory_matches,
+    _version_from_response,
+    deterministic_zip,
+)
 
 
 def test_hosted_package_is_deterministic_and_issue_specific(tmp_path: Path) -> None:
@@ -25,3 +29,25 @@ def test_agent_create_response_uses_nested_version_not_agent_id() -> None:
             "versions": {"latest": {"version": "1"}},
         }
     ) == "1"
+
+
+def test_monitor_inventory_rejects_duplicates_and_unexpected_agents() -> None:
+    expected = {"weather-agent": "monitor-weather"}
+    assert _monitor_inventory_matches(
+        [{"agent_name": "weather-agent", "id": "monitor-weather"}],
+        expected,
+    )
+    assert not _monitor_inventory_matches(
+        [
+            {"agent_name": "weather-agent", "id": "monitor-old"},
+            {"agent_name": "weather-agent", "id": "monitor-weather"},
+        ],
+        expected,
+    )
+    assert not _monitor_inventory_matches(
+        [
+            {"agent_name": "weather-agent", "id": "monitor-weather"},
+            {"agent_name": "unknown-agent", "id": "monitor-unknown"},
+        ],
+        expected,
+    )

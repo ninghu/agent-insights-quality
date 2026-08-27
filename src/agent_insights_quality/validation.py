@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 from agent_insights_quality.catalogs import generate_docs, load_catalogs
+from agent_insights_quality.automation_policy import load_automation_policy
 from agent_insights_quality.reporting import (
     CLEAN_CARD_PRECISION_WEIGHT,
     FIELD_QUALITY_WEIGHT,
@@ -19,6 +20,7 @@ _REMOVED_TERMS = re.compile(
 )
 def validate_repository() -> None:
     load_catalogs()
+    load_automation_policy()
     generate_docs(check=True)
     _validate_reporting_policy()
     _validate_removed_terms()

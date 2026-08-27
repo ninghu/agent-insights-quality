@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import io
 import json
+import sys
 import threading
 import time
+import types
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -19,8 +22,9 @@ from agent_insights_quality.live import (
     _trace_contract_ready,
     _usable_response,
 )
+from agent_insights_quality.models import InsightRunCheckpoint
 from agent_insights_quality.profiles import RuntimeProfile
-from agent_insights_quality.util import ContractError
+from agent_insights_quality.util import ContractError, InsightWindowExpiredError
 
 
 def _runtime() -> LiveRuntime:
@@ -570,28 +574,146 @@ def test_telemetry_query_does_not_retry_nontransient_http_failures(
     assert attempts == 1
 
 
-def test_failed_agent_insights_run_retries_without_new_traffic() -> None:
-    runtime = _runtime()
-    statuses = iter(["failed", "failed", "succeeded"])
-    sleeps = []
-
-    class Result:
-        def __init__(self, status):
-            self.status = status
-
-    runtime._run_insights_once = (  # type: ignore[method-assign]
-        lambda **_kwargs: Result(next(statuses))
+def test_agent_insights_checkpoint_is_persisted_before_polling() -> None:
+    now = datetime(2026, 8, 27, 18, 0, tzinfo=UTC)
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        utcnow=lambda: now,
     )
-    runtime._sleep = sleeps.append
-    result = runtime.run_insights(
+    checkpoint = InsightRunCheckpoint("private-run-id", {})
+    persisted = []
+    runtime._start_insights_once = (  # type: ignore[method-assign]
+        lambda **_kwargs: checkpoint
+    )
+    runtime._operation_time_bounds = (  # type: ignore[method-assign]
+        lambda **_kwargs: (
+            now - timedelta(minutes=1),
+            now - timedelta(seconds=30),
+        )
+    )
+    result = runtime.start_insights_run(
         agent_name="weather-agent",
         monitor_id="monitor-weather",
         foundry_version="1",
         operation_ids=("a" * 32,),
-        lookback_hours=3,
+        lookback_hours=0.1,
+        persist=persisted.append,
     )
-    assert result.status == "succeeded"
-    assert sleeps == [30, 30]
+    assert result == checkpoint
+    assert persisted == [checkpoint]
+
+
+def test_agent_insights_rejects_operations_outside_short_window() -> None:
+    now = datetime(2026, 8, 27, 18, 0, tzinfo=UTC)
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        utcnow=lambda: now,
+    )
+    runtime._operation_time_bounds = (  # type: ignore[method-assign]
+        lambda **_kwargs: (
+            now - timedelta(minutes=7),
+            now - timedelta(minutes=6, seconds=30),
+        )
+    )
+    runtime._start_insights_once = (  # type: ignore[method-assign]
+        lambda **_kwargs: pytest.fail("expired operations must not start Insights")
+    )
+    with pytest.raises(InsightWindowExpiredError, match="expired"):
+        runtime.start_insights_run(
+            agent_name="weather-agent",
+            monitor_id="monitor-weather",
+            foundry_version="1",
+            operation_ids=("a" * 32,),
+            lookback_hours=0.1,
+            persist=lambda _checkpoint: None,
+        )
+
+
+def test_agent_insights_rejects_window_anchor_race() -> None:
+    now = datetime(2026, 8, 27, 18, 0, tzinfo=UTC)
+    earliest = now - timedelta(minutes=5)
+    latest = now - timedelta(minutes=4)
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        utcnow=lambda: now,
+    )
+
+    runtime._operation_time_bounds = (  # type: ignore[method-assign]
+        lambda **_kwargs: (earliest, latest)
+    )
+    runtime._wait_insights_run = (  # type: ignore[method-assign]
+        lambda *_args: {
+            "status": "succeeded",
+            "window_start": (earliest + timedelta(seconds=1)).isoformat(),
+            "window_end": (now + timedelta(minutes=1)).isoformat(),
+        }
+    )
+    runtime._list_insights = lambda _monitor_id: []  # type: ignore[method-assign]
+    with pytest.raises(InsightWindowExpiredError, match="excluded"):
+        runtime.finish_insights_run(
+            agent_name="weather-agent",
+            monitor_id="monitor-weather",
+            foundry_version="1",
+            operation_ids=("a" * 32,),
+            checkpoint=InsightRunCheckpoint("private-run-id", {}),
+        )
+
+
+def test_clean_window_waits_for_private_ledger_horizon(monkeypatch) -> None:
+    query_module = types.ModuleType("azure.monitor.query")
+    query_module.LogsQueryStatus = type("LogsQueryStatus", (), {"SUCCESS": "success"})
+    monitor_module = types.ModuleType("azure.monitor")
+    azure_module = types.ModuleType("azure")
+    monkeypatch.setitem(sys.modules, "azure", azure_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor", monitor_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
+    now = [datetime(2026, 8, 27, 18, 0, tzinfo=UTC)]
+    monotonic = [0.0]
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        utcnow=lambda: now[0],
+        monotonic=lambda: monotonic[0],
+    )
+    ready_at = now[0] + timedelta(seconds=120)
+    queries = []
+
+    class Ledger:
+        @staticmethod
+        def clean_after(*_args, **_kwargs):
+            return ready_at
+
+    class Table:
+        rows = [[None, 0]]
+
+    class Result:
+        status = "success"
+        tables = [Table()]
+
+    def sleep(seconds):
+        now[0] += timedelta(seconds=seconds)
+        monotonic[0] += seconds
+
+    def query(_client, query_text, *, timespan):
+        queries.append((query_text, timespan))
+        return Result()
+
+    runtime._traffic_ledger = Ledger()
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+    runtime._query_resource = query  # type: ignore[method-assign]
+    runtime._sleep = sleep
+    runtime.wait_for_clean_window(
+        "weather-agent",
+        0.1,
+        poll_seconds=30,
+        ingestion_margin_seconds=30,
+        max_wait_seconds=180,
+    )
+    assert monotonic[0] == 120
+    assert all("ago(390s)" in query_text for query_text, _ in queries)
 
 
 def test_json_get_retries_transient_http_failures(monkeypatch) -> None:
@@ -684,7 +806,7 @@ def test_json_post_retries_foundry_failed_dependency(monkeypatch) -> None:
     assert value["_request_reference"] == request_references[-1]
 
 
-def test_json_post_retries_no_response_with_explicit_policy(monkeypatch) -> None:
+def test_json_patch_retries_no_response_with_explicit_policy(monkeypatch) -> None:
     runtime = _runtime()
     request_references = []
     sleeps = []
@@ -714,7 +836,7 @@ def test_json_post_retries_no_response_with_explicit_policy(monkeypatch) -> None
         open_request,
     )
     value = runtime._json_request(
-        "POST",
+        "PATCH",
         "https://example.invalid",
         retry_statuses={408, 503},
         retry_no_response=True,
@@ -725,7 +847,7 @@ def test_json_post_retries_no_response_with_explicit_policy(monkeypatch) -> None
     assert sleeps == [1]
 
 
-def test_json_post_bounds_no_response_retries(monkeypatch) -> None:
+def test_json_patch_bounds_no_response_retries(monkeypatch) -> None:
     runtime = _runtime()
     attempts = 0
     sleeps = []
@@ -745,7 +867,7 @@ def test_json_post_bounds_no_response_retries(monkeypatch) -> None:
         match="Remote operation failed before a response was received",
     ):
         runtime._json_request(
-            "POST",
+            "PATCH",
             "https://example.invalid",
             retry_statuses={408, 503},
             retry_no_response=True,

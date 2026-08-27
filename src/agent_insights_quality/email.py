@@ -347,7 +347,7 @@ def _incomplete_reason(reasons: list[str]) -> str:
     labels = {
         "clean_window_not_empty": (
             "Clean window blocked by pre-existing telemetry inside the required "
-            "three-hour lookback; no Agent traffic was sent."
+            "short lookback; no Agent traffic was sent."
         ),
         "monitor_reset_failed": "Agent Insights monitor reset failed before traffic.",
         "clean_window_failed": "Clean-window telemetry verification failed.",

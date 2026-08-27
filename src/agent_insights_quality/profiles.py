@@ -4,14 +4,13 @@ import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+from agent_insights_quality.automation_policy import load_automation_policy
 from agent_insights_quality.registry import PROFILE_PROJECTS
-from agent_insights_quality.util import ROOT, ContractError, read_yaml, runtime_root
+from agent_insights_quality.util import ContractError, runtime_root
 from agent_insights_quality.azure_cli import azure_cli
 
 RESOURCE_GROUP = "agent-insights-quality-rg"
-TELEMETRY_GENERATION = str(
-    read_yaml(ROOT / "config" / "automation.yaml")["telemetry_generation"]
-)
 
 
 @dataclass(frozen=True)
@@ -25,11 +24,22 @@ class RuntimeProfile:
     account_name: str = ""
     container_registry_name: str = ""
     registry_storage_account_name: str = ""
+    account_resource_id: str = ""
+    telemetry_resource_set: str = ""
 
     @classmethod
-    def from_env(cls, name: str) -> "RuntimeProfile":
+    def from_env(
+        cls,
+        name: str,
+        telemetry_resource_set: str | None = None,
+    ) -> "RuntimeProfile":
         if name not in PROFILE_PROJECTS:
             raise ContractError("Profile must be daily or staging")
+        resource_set = (
+            telemetry_resource_set
+            if telemetry_resource_set is not None
+            else load_automation_policy().telemetry_resource_set
+        )
         resources = _azure_resources()
         accounts = [
             item
@@ -61,13 +71,16 @@ class RuntimeProfile:
             == "microsoft.insights/components"
             and isinstance(item.get("tags"), dict)
             and item["tags"].get("profile") == name
-            and item["tags"].get("generation") == TELEMETRY_GENERATION
+            and item["tags"].get("generation") == resource_set
         ]
+        if len(profile_insights) != 1:
+            raise ContractError(
+                f"Telemetry resource set {resource_set} is retired, missing, or ambiguous"
+            )
         if (
             len(accounts) != 1
             or len(registries) != 1
             or len(storage_accounts) != 1
-            or len(profile_insights) != 1
         ):
             raise ContractError(
                 "Fixed Azure resources could not be resolved uniquely for the profile"
@@ -88,7 +101,43 @@ class RuntimeProfile:
             account_name=account_name,
             container_registry_name=str(registries[0]["name"]),
             registry_storage_account_name=str(storage_accounts[0]["name"]),
+            account_resource_id=str(accounts[0]["id"]),
+            telemetry_resource_set=resource_set,
         )
+
+    def assert_insights_connection(self) -> None:
+        if not self.account_resource_id:
+            raise ContractError("Profile account resource identity is unavailable")
+        connection_id = (
+            f"{self.account_resource_id}/projects/{self.project_name}/connections/"
+            f"application-insights-{self.name}"
+        )
+        process = subprocess.run(
+            [
+                azure_cli(),
+                "rest",
+                "--method",
+                "get",
+                "--url",
+                "https://management.azure.com"
+                + connection_id
+                + "?api-version=2025-06-01",
+                "--output",
+                "json",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        if process.returncode != 0:
+            raise ContractError("Project telemetry connection could not be queried")
+        value = json.loads(process.stdout)
+        target = str(value.get("properties", {}).get("target") or "")
+        if target.casefold() != self.application_insights_resource_id.casefold():
+            raise ContractError(
+                "Project telemetry connection does not match the active resource set"
+            )
 
 
 def _azure_resources() -> list[dict]:

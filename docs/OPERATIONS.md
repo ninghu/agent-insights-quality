@@ -13,9 +13,9 @@ private artifact root.
 
 Both use 90-day telemetry and artifact retention.
 
-The reviewed telemetry generation is stored only in `config/automation.yaml`; it is not part of the
-Agent deployment catalog hash. Increment it only for an explicit human-reviewed clean telemetry
-reset; deploy the new generation, update Project connections, then delete the superseded generation.
+The reviewed fixed telemetry resource set is stored in `config/automation.yaml`; it is not part of
+the Agent deployment catalog hash. Daily and staging each keep one App Insights and Log Analytics
+pair. Routine runs, reruns, and Agent changes reuse them.
 
 ## One-time deployment
 
@@ -67,7 +67,7 @@ Set `AIQ_STAGING_PROMOTION_RECEIPT` to that private file before provisioning `da
 Promotion may compose newly reviewed affected-Agent evidence with the latest valid receipts for
 unchanged Agents. The composed receipt must bind every current mapping and exact digest; incomplete
 evidence is never reusable. After daily provisioning, verify the registry and endpoints read-only.
-Do not send smoke traffic that dirties the next three-hour clean window.
+Do not send smoke traffic that starts a new clean-window wait.
 
 Provisioning writes each profile registry locally and uploads `daily.json` or `staging.json` to the
 private Azure `deployment-registries` container using Entra authentication. Every qualification run
@@ -83,16 +83,16 @@ python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD> `
 ```
 
 The runner validates catalog hashes against the protected daily registry, resets each monitor once,
-runs a read-only three-hour clean-window census, runs `v0`, then runs five deterministic issues per
+waits for the reviewed `0.1`-hour clean interval, runs `v0`, then runs five deterministic issues per
 Agent. Agents execute concurrently; exact versions for one Agent execute sequentially. Before each
 Hosted version, the runner patches the Agent endpoint to one `FixedRatio` rule with 100% traffic on
 that exact version, confirms the selector, and then creates an exact-version session. This keeps
 compute behavior and outer telemetry version identity aligned.
 
 Daily and staging Projects prohibit ad-hoc debug traffic. A pre-existing `invoke_agent` trace in the
-minimum lookback window fails the Agent before any qualification traffic is sent. Monitor reset does
-not delete telemetry. Debug locally or in a separately owned sandbox; wait for the three-hour window
-to expire before rerunning qualification against the same profile.
+minimum lookback window delays the Agent before any qualification traffic is sent. Monitor reset does
+not delete telemetry. Debug locally or in a separately owned sandbox; the runner waits until the
+short clean interval expires before rerunning qualification against the same profile.
 
 The runner prints flushed, thread-safe progress lines for each Agent/version and for endpoint,
 telemetry, trace, and Agent Insights stages. Long telemetry waits, Insight runs, and remote retries
