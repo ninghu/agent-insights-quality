@@ -29,7 +29,14 @@ def test_contributing_routes_onboarding_through_versioned_skills() -> None:
     contributing = _text("CONTRIBUTING.md")
     normalized = " ".join(contributing.split())
     assert ".github/skills/onboard-new-issue/SKILL.md" in contributing
-    assert ".github/skills/onboard-new-test-agent/SKILL.md" in contributing
+    assert ".github/skills/onboard-test-agent/SKILL.md" in contributing
+    for catalog in (
+        "AGENT_CATALOG.md",
+        "ISSUE_CATALOG.md",
+        "catalogs/AGENT_CATALOG.yaml",
+        "catalogs/ISSUE_CATALOG.yaml",
+    ):
+        assert catalog in contributing
     assert "Stop for human review" in contributing
     assert "full-catalog" in contributing
     assert "staging qualification" in contributing
@@ -79,8 +86,8 @@ def test_new_issue_skill_covers_complete_reviewed_contract() -> None:
         assert requirement in normalized
 
 
-def test_new_agent_skill_covers_topology_and_baseline_safety() -> None:
-    skill = _text(".github/skills/onboard-new-test-agent/SKILL.md")
+def test_onboard_test_agent_skill_covers_topology_and_baseline_safety() -> None:
+    skill = _text(".github/skills/onboard-test-agent/SKILL.md")
     normalized = " ".join(skill.split())
     for requirement in (
         "reviewable plan",
