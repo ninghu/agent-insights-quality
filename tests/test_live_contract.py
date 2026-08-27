@@ -638,6 +638,7 @@ def test_json_get_retries_transient_http_failures(monkeypatch) -> None:
 def test_json_post_retries_foundry_failed_dependency(monkeypatch) -> None:
     runtime = _runtime()
     attempts = 0
+    request_references = []
 
     class Response:
         status = 200
@@ -652,9 +653,10 @@ def test_json_post_retries_foundry_failed_dependency(monkeypatch) -> None:
         def read():
             return b'{"value":"ok"}'
 
-    def open_request(*_args, **_kwargs):
+    def open_request(request, **_kwargs):
         nonlocal attempts
         attempts += 1
+        request_references.append(request.headers["X-ms-client-request-id"])
         if attempts == 1:
             raise urllib.error.HTTPError(
                 "https://example.invalid",
@@ -677,6 +679,42 @@ def test_json_post_retries_foundry_failed_dependency(monkeypatch) -> None:
     )
     assert value["value"] == "ok"
     assert attempts == 2
+    assert len(set(request_references)) == 2
+    assert value["_request_reference"] == request_references[-1]
+
+
+def test_hosted_invocation_correlates_with_successful_request_reference() -> None:
+    runtime = _runtime()
+
+    def request(*_args, **_kwargs):
+        return {
+            "_http_status": 200,
+            "_request_reference": "successful-attempt",
+            "id": "response-id-not-present-in-telemetry",
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "complete"}],
+                }
+            ],
+        }
+
+    runtime._json_request = request  # type: ignore[method-assign]
+    references, usable, assertion_count, assertions_passed = (
+        runtime._invoke_hosted(
+            "finance-agent",
+            "session-id",
+            {
+                "body": {"input": "synthetic request"},
+                "expected_status": 200,
+            },
+            1,
+        )
+    )
+    assert references == ["successful-attempt"]
+    assert usable is True
+    assert assertion_count == 0
+    assert assertions_passed == 0
 
 
 def test_json_request_refreshes_an_expired_credential_once(monkeypatch) -> None:

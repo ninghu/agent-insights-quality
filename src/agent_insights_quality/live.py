@@ -517,13 +517,15 @@ union traces, dependencies, requests
             correlation_id=correlation_id,
             retry_statuses=_TRANSIENT_HTTP,
         )
-        response_id = str(response.get("id") or "")
+        request_reference = str(response.get("_request_reference") or "")
+        if not request_reference:
+            raise ContractError("Hosted response omitted its request reference")
         assertion_count, assertions_passed = _semantic_assertion_result(
             response,
             fixture,
         )
         return (
-            [response_id or correlation_id],
+            [request_reference],
             _usable_response(response, fixture["expected_status"]),
             assertion_count,
             assertions_passed,
@@ -1036,6 +1038,8 @@ union traces, dependencies, requests
             except (TimeoutError, urllib.error.URLError) as error:
                 attempt += 1
                 if method == "GET" and attempt < max_attempts:
+                    request_reference = str(uuid.uuid4())
+                    headers["x-ms-client-request-id"] = request_reference
                     delay = min(2 ** (attempt - 1), 30)
                     self.report_progress(
                         f"remote GET had no response; retrying in {delay}s "
@@ -1051,12 +1055,16 @@ union traces, dependencies, requests
                 headers["Authorization"] = (
                     "Bearer " + self._token_provider(_FOUNDRY_SCOPE)
                 )
+                request_reference = str(uuid.uuid4())
+                headers["x-ms-client-request-id"] = request_reference
                 credential_refreshed = True
                 self.report_progress("remote credential expired; refreshed once")
                 continue
             attempt += 1
             if status not in retries or attempt == max_attempts:
                 break
+            request_reference = str(uuid.uuid4())
+            headers["x-ms-client-request-id"] = request_reference
             delay = min(2 ** (attempt - 1), 30)
             self.report_progress(
                 f"remote {method} returned HTTP {status}; retrying in {delay}s "
