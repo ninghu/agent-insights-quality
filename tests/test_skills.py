@@ -30,6 +30,7 @@ def test_contributing_routes_onboarding_through_versioned_skills() -> None:
     normalized = " ".join(contributing.split())
     assert ".github/skills/onboard-new-issue/SKILL.md" in contributing
     assert ".github/skills/onboard-test-agent/SKILL.md" in contributing
+    assert ".github/skills/staging-qualification/SKILL.md" in contributing
     for catalog in (
         "AGENT_CATALOG.md",
         "ISSUE_CATALOG.md",
@@ -41,6 +42,7 @@ def test_contributing_routes_onboarding_through_versioned_skills() -> None:
     assert "full-catalog" in contributing
     assert "staging qualification" in contributing
     assert "at least one reviewed single-root issue" in contributing
+    assert "The current CLI cannot produce both" in contributing
     for requirement in (
         "`v0` is a complete, deployable healthy version",
         "Every non-baseline logical version represents exactly one `issue-NNN`",
@@ -48,11 +50,12 @@ def test_contributing_routes_onboarding_through_versioned_skills() -> None:
         "exactly one independently fixable, reviewed root cause",
     ):
         assert requirement in normalized
-    assert contributing.index("- New Test Agent:") < contributing.index("- New issue:")
+    assert contributing.index("- Test Agent:") < contributing.index("- Issue:")
     assert contributing.index("## Onboard a new Test Agent") < contributing.index(
-        "## Define a new issue"
+        "## Onboard a new issue"
     )
     for command in (
+        'python -m pip install -e ".[dev]"',
         "python -m agent_insights_quality generate-docs",
         "python -m agent_insights_quality validate",
         "python -m ruff check .",
