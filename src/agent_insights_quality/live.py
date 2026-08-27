@@ -45,6 +45,8 @@ _TRACE_ID = re.compile(r"^[0-9a-f]{32}$")
 _FOUNDRY_SCOPE = "https://ai.azure.com/.default"
 _LOGS_SCOPE = "https://api.loganalytics.io/.default"
 _TRANSIENT_HTTP = {408, 424, 429, 500, 502, 503, 504}
+_DEFAULT_REQUEST_TIMEOUT_SECONDS = 300
+_HOSTED_RESPONSE_TIMEOUT_SECONDS = 600
 
 
 class _RuntimeTokenCredential:
@@ -516,6 +518,7 @@ union traces, dependencies, requests
             expected={fixture["expected_status"]},
             correlation_id=correlation_id,
             retry_statuses=_TRANSIENT_HTTP,
+            timeout_seconds=_HOSTED_RESPONSE_TIMEOUT_SECONDS,
         )
         request_reference = str(response.get("_request_reference") or "")
         if not request_reference:
@@ -993,6 +996,7 @@ union traces, dependencies, requests
         correlation_id: str | None = None,
         content_type: str = "application/json",
         retry_statuses: set[int] | None = None,
+        timeout_seconds: int = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
     ) -> dict[str, Any]:
         data = json.dumps(body).encode("utf-8") if body is not None else None
         headers = {
@@ -1029,7 +1033,10 @@ union traces, dependencies, requests
                 method=method,
             )
             try:
-                with urllib.request.urlopen(request, timeout=300) as response:
+                with urllib.request.urlopen(
+                    request,
+                    timeout=timeout_seconds,
+                ) as response:
                     status = response.status
                     payload = response.read()
             except urllib.error.HTTPError as error:
