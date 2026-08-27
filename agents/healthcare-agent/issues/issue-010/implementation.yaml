@@ -6,7 +6,7 @@ deployment:
   kind: native_prompt
   model: gpt-5.6-terra
   definition: definition.json
-category: tool_call_failures
+category: hallucinations
 severity: high
 expected_behavior:
   desired: Use an authoritative slot lookup before claiming availability.

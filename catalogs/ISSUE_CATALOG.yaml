@@ -88,7 +88,7 @@ issues:
   - id: issue-010
     title: Slot availability claimed without lookup
     agent: healthcare-agent
-    category: tool_call_failures
+    category: hallucinations
     severity: high
     implementation: agents/healthcare-agent/issues/issue-010
     root_cause: The agent claims slot availability without calling the required slot lookup tool.
@@ -142,7 +142,7 @@ issues:
   - id: issue-016
     title: Structured finance error treated as data
     agent: finance-agent
-    category: tool_call_failures
+    category: hallucinations
     severity: medium
     implementation: agents/finance-agent/issues/issue-016
     root_cause: The agent treats a structured finance error returned over successful transport as usable data.
@@ -151,7 +151,7 @@ issues:
   - id: issue-017
     title: Partial finance result reported complete
     agent: finance-agent
-    category: tool_call_failures
+    category: output_quality
     severity: medium
     implementation: agents/finance-agent/issues/issue-017
     root_cause: The agent reports an aggregate finance result as complete despite an explicit failed item.
@@ -205,7 +205,7 @@ issues:
   - id: issue-023
     title: Required inventory search omitted
     agent: travel-agent
-    category: tool_call_failures
+    category: hallucinations
     severity: high
     implementation: agents/travel-agent/issues/issue-023
     root_cause: The graph omits the authoritative inventory search before answering.
@@ -295,7 +295,7 @@ issues:
   - id: issue-033
     title: Ticket result omitted after successful tool
     agent: support-ticket-agent
-    category: reliability_errors
+    category: output_quality
     severity: high
     implementation: agents/support-ticket-agent/issues/issue-033
     root_cause: The runtime omits a useful ticket answer after the required tool succeeds.
@@ -313,7 +313,7 @@ issues:
   - id: issue-035
     title: Ticket operation reports false success
     agent: support-ticket-agent
-    category: reliability_errors
+    category: hallucinations
     severity: high
     implementation: agents/support-ticket-agent/issues/issue-035
     root_cause: The agent reports success although the requested operation was never dispatched.

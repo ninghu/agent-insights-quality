@@ -3,51 +3,56 @@
 Agent and Issue catalogs, Agent implementations, schemas, score policy, infrastructure, and promotion
 receipts are human-reviewed contracts. Keep every change synthetic and public-safe.
 
+## Review the existing catalogs
+
+Before proposing a Test Agent or issue, review the generated [Agent Catalog](AGENT_CATALOG.md) for
+the current Agents and assignments, and the generated [Issue Catalog](ISSUE_CATALOG.md) for the
+existing reviewed defects. Their source authorities are
+[`catalogs/AGENT_CATALOG.yaml`](catalogs/AGENT_CATALOG.yaml) and
+[`catalogs/ISSUE_CATALOG.yaml`](catalogs/ISSUE_CATALOG.yaml); update the YAML catalogs and regenerate
+the readable views rather than editing the generated Markdown directly.
+
+## Test Agent and issue contract
+
+Each permanent Test Agent owns one healthy baseline and one or more reviewed issue versions:
+
+- `v0` is a complete, deployable healthy version and must not contain an intentional defect.
+- Every non-baseline logical version represents exactly one `issue-NNN`, and each issue is assigned
+  exactly once to one permanent Test Agent in both catalogs.
+- Each issue version contains exactly one independently fixable, reviewed root cause and remains
+  complete and independently deployable.
+- Deterministic synthetic traffic must exercise the deployed version through its Agent endpoint so
+  telemetry is produced naturally.
+
 ## Use the onboarding skills
 
 Do not invent an onboarding workflow from scratch. Ask Copilot to follow the appropriate versioned
 repository skill:
 
-- New issue: [`.github/skills/onboard-new-issue/SKILL.md`](.github/skills/onboard-new-issue/SKILL.md)
 - New Test Agent:
-  [`.github/skills/onboard-new-test-agent/SKILL.md`](.github/skills/onboard-new-test-agent/SKILL.md)
+  [`.github/skills/onboard-test-agent/SKILL.md`](.github/skills/onboard-test-agent/SKILL.md)
+- New issue: [`.github/skills/onboard-new-issue/SKILL.md`](.github/skills/onboard-new-issue/SKILL.md)
 
 Example prompts:
+
+```text
+Use the onboard-test-agent skill to propose a new fixed synthetic Test Agent. Stop for human
+review of its name, framework, baseline contract, owner, and issue set before implementation.
+```
 
 ```text
 Use the onboard-new-issue skill to propose issue-NNN for <agent>. Stop for human review before
 changing catalogs or Agent source.
 ```
 
-```text
-Use the onboard-new-test-agent skill to propose a new fixed synthetic Test Agent. Stop for human
-review of its name, framework, baseline contract, owner, and issue set before implementation.
-```
-
-The skill must first produce a reviewable plan. Catalog, schema, source, infrastructure, score-policy,
-and promotion changes cannot be approved solely by automation.
-
-## Define a new issue
-
-Use the new-issue skill to:
-
-1. select one permanent Agent and one independently fixable root cause;
-2. define the expected title, root cause, category, severity, proposed fix, and natural trace minimum;
-3. allocate the next continuous `issue-NNN` identifier;
-4. append that ID to the permanent Agent's ordered `issue_ids` in `catalogs/AGENT_CATALOG.yaml`;
-5. create deterministic synthetic endpoint traffic that exercises the defect;
-6. add a complete Prompt `definition.json` or Hosted `source/` tree containing only that defect;
-7. prove `v0` remains a healthy static contract and the issue differs by exactly one reviewed root;
-8. update all old topology counts, explicit Agent lists, schemas, runtime validators, promotion checks,
-   CI matrices, tests, skills, generated views, and readable docs;
-9. run full-catalog staging qualification and obtain human review before promotion.
-
-Do not use runtime mode switches, dormant defect branches, generic hooks, source patches, telemetry
-injection, compatibility aliases, or private data.
+Each skill must first produce a reviewable plan. Catalog, schema, source, infrastructure, score-policy,
+and promotion changes cannot be approved solely by automation. The `onboard-test-agent` skill
+composes the `onboard-new-issue` skill for every initial issue; use `onboard-new-issue` directly when
+adding an issue to an existing Agent.
 
 ## Onboard a new Test Agent
 
-Use the new-Agent skill to:
+Use the `onboard-test-agent` skill to:
 
 1. review the stable Agent name, Foundry type, real framework, GPT-5.6 Terra model, owner, and healthy
    baseline contract, with explicit acceptance from that owner or an authorized maintainer;
@@ -72,8 +77,26 @@ container contract and CI build entry. Record the owner in the Agent Catalog.
 the evidence as `agent`, `test_framework`, `infrastructure`, or `unresolved`; never assume every
 baseline card is Noise.
 
-Keep the standalone new-issue skill. The new-Agent skill composes it for initial issues; contributors
-also use it later to add issues to an existing Agent.
+Keep the standalone `onboard-new-issue` skill. `onboard-test-agent` composes it for initial issues;
+contributors also use it later to add issues to an existing Agent.
+
+## Define a new issue
+
+Use the new-issue skill to:
+
+1. select one permanent Agent and one independently fixable root cause;
+2. define the expected title, root cause, category, severity, proposed fix, and natural trace minimum;
+3. allocate the next continuous `issue-NNN` identifier;
+4. append that ID to the permanent Agent's ordered `issue_ids` in `catalogs/AGENT_CATALOG.yaml`;
+5. create deterministic synthetic endpoint traffic that exercises the defect;
+6. add a complete Prompt `definition.json` or Hosted `source/` tree containing only that defect;
+7. prove `v0` remains a healthy static contract and the issue differs by exactly one reviewed root;
+8. update all old topology counts, explicit Agent lists, schemas, runtime validators, promotion checks,
+   CI matrices, tests, skills, generated views, and readable docs;
+9. run full-catalog staging qualification and obtain human review before promotion.
+
+Do not use runtime mode switches, dormant defect branches, generic hooks, source patches, telemetry
+injection, compatibility aliases, or private data.
 
 ## Required validation
 
@@ -97,11 +120,5 @@ Targeted qualification requires reviewed CLI support for both targeted reports a
 receipts. Until both are available, use full-catalog qualification and never combine evidence
 manually.
 
-## Live operator access
-
-Live operators use the shared protected infrastructure. Provisioning requires Storage Blob Data
-Contributor on the private registry container; qualification requires Storage Blob Data Reader.
-Canonical registry blobs synchronize into `~/.aiq-runtime/agent-insights-quality/` and must never be
-committed.
-
-Do not add compatibility readers for superseded formats.
+Protected runtime prerequisites and operator roles are documented in
+[`docs/AUTOMATION_SETUP.md`](docs/AUTOMATION_SETUP.md).
