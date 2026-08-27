@@ -23,6 +23,34 @@ def deploy_infrastructure(
     )
     if re.fullmatch(r"g[1-9][0-9]*", telemetry_generation) is None:
         raise ContractError("Automation telemetry generation is invalid")
+    principal_id = _current_principal_id()
+    _deploy_template(
+        ROOT / "infra" / "main.bicep",
+        [
+            "location=westus2",
+            "resourceGroupName=agent-insights-quality-rg",
+            f"terraModelVersion={terra_model_version}",
+            f"telemetryGeneration={telemetry_generation}",
+            "automationOwner=ninghu",
+            f"automationPrincipalId={principal_id}",
+        ],
+    )
+
+
+def deploy_analytics_infrastructure() -> None:
+    principal_id = _current_principal_id()
+    _deploy_template(
+        ROOT / "infra" / "analytics.bicep",
+        [
+            "location=westus2",
+            "resourceGroupName=agent-insights-quality-rg",
+            "automationOwner=ninghu",
+            f"automationPrincipalId={principal_id}",
+        ],
+    )
+
+
+def _current_principal_id() -> str:
     identity = subprocess.run(
         [azure_cli(), "ad", "signed-in-user", "show", "--query", "id", "--output", "tsv"],
         capture_output=True,
@@ -33,7 +61,10 @@ def deploy_infrastructure(
     principal_id = identity.stdout.strip()
     if identity.returncode != 0 or not principal_id:
         raise ContractError("Current Azure user identity could not be resolved")
+    return principal_id
 
+
+def _deploy_template(template: Path, parameters: list[str]) -> None:
     arguments = [
         azure_cli(),
         "deployment",
@@ -42,14 +73,9 @@ def deploy_infrastructure(
         "--location",
         "westus2",
         "--template-file",
-        str(ROOT / "infra" / "main.bicep"),
+        str(template),
         "--parameters",
-        "location=westus2",
-        "resourceGroupName=agent-insights-quality-rg",
-        f"terraModelVersion={terra_model_version}",
-        f"telemetryGeneration={telemetry_generation}",
-        "automationOwner=ninghu",
-        f"automationPrincipalId={principal_id}",
+        *parameters,
         "--only-show-errors",
         "--output",
         "none",

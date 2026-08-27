@@ -1,0 +1,354 @@
+{
+  "$schema": "https://dataexplorer.azure.com/static/d/schema/20/dashboard.json",
+  "autoRefresh": {
+    "enabled": false
+  },
+  "dataSources": [
+    {
+      "clusterUri": "{{ADX_CLUSTER_URI}}",
+      "database": "{{ADX_DATABASE}}",
+      "id": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "kind": "manual-kusto",
+      "name": "{{ADX_CLUSTER_NAME}}",
+      "scopeId": "kusto"
+    }
+  ],
+  "eTag": "1f223eb3-e30c-4134-b87b-b53b20cc251d",
+  "id": "d8396ea4-e60c-45e9-b705-68d88d0b25d8",
+  "pages": [
+    {
+      "id": "8f04f149-93f7-47a3-9099-02a23a70a61f",
+      "name": "Quality trend"
+    },
+    {
+      "id": "2a7768b8-083b-4337-9835-c4812d5fafcd",
+      "name": "Diagnostics"
+    }
+  ],
+  "parameters": [
+    {
+      "beginVariableName": "_startTime",
+      "defaultValue": {
+        "count": 90,
+        "kind": "dynamic",
+        "unit": "days"
+      },
+      "description": "Pacific report-date range",
+      "displayName": "Time range",
+      "endVariableName": "_endTime",
+      "id": "f2989ea6-67e6-4b58-82fd-c10fcacb82f4",
+      "kind": "duration",
+      "showOnPages": {
+        "kind": "all"
+      }
+    }
+  ],
+  "schema_version": "20",
+  "tiles": [
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "7bcd5bad-a4d1-40f8-8753-aaabf7cec17b",
+      "layout": {
+        "height": 4,
+        "width": 6,
+        "x": 0,
+        "y": 0
+      },
+      "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
+      "query": "AIQDailyRuns()\n| where ReportDate between (_startTime .. _endTime)\n| top 1 by ReportDate desc\n| project QualityScore",
+      "title": "Latest quality score",
+      "usedParamVariables": [
+        "_startTime",
+        "_endTime"
+      ],
+      "visualOptions": {
+        "colorRulesDisabled": false,
+        "hideTileTitle": false
+      },
+      "visualType": "card"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "9ed47f6f-a002-4d91-b45c-944b1fe01dbd",
+      "layout": {
+        "height": 8,
+        "width": 18,
+        "x": 6,
+        "y": 0
+      },
+      "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
+      "query": "AIQDailyRuns()\n| where ReportDate between (_startTime .. _endTime)\n| project ReportDate, ['Quality score'] = QualityScore, ['Pass threshold'] = QualityThreshold\n| order by ReportDate asc",
+      "title": "Quality improvement trend",
+      "usedParamVariables": [
+        "_startTime",
+        "_endTime"
+      ],
+      "visualOptions": {
+        "hideLegend": false,
+        "hideTileTitle": false,
+        "seriesColumns": {
+          "type": "infer"
+        },
+        "xColumn": {
+          "type": "specified",
+          "value": "ReportDate"
+        },
+        "yColumns": {
+          "type": "specified",
+          "value": [
+            "Quality score",
+            "Pass threshold"
+          ]
+        }
+      },
+      "visualType": "line"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "4c93e27b-d563-450a-b861-307dfd10a82a",
+      "layout": {
+        "height": 4,
+        "width": 6,
+        "x": 0,
+        "y": 4
+      },
+      "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
+      "query": "AIQDailyRuns()\n| where ReportDate between (_startTime .. _endTime)\n| summarize Days = count() by Status\n| order by Status asc",
+      "title": "Run outcomes",
+      "usedParamVariables": [
+        "_startTime",
+        "_endTime"
+      ],
+      "visualOptions": {
+        "hideLegend": false,
+        "hideTileTitle": false,
+        "pie__kind": "pie",
+        "pie__label": [
+          "name",
+          "percentage"
+        ]
+      },
+      "visualType": "pie"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "90cd8721-dffa-4b93-b658-40d812552322",
+      "layout": {
+        "height": 7,
+        "width": 12,
+        "x": 0,
+        "y": 8
+      },
+      "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
+      "query": "AIQDailyRuns()\n| where ReportDate between (_startTime .. _endTime)\n| project ReportDate, ['Field quality'] = FieldQualityScore, ['Clean-card precision'] = CleanCardPrecision\n| order by ReportDate asc",
+      "title": "Score components",
+      "usedParamVariables": [
+        "_startTime",
+        "_endTime"
+      ],
+      "visualOptions": {
+        "hideLegend": false,
+        "hideTileTitle": false,
+        "xColumn": {
+          "type": "specified",
+          "value": "ReportDate"
+        },
+        "yColumns": {
+          "type": "specified",
+          "value": [
+            "Field quality",
+            "Clean-card precision"
+          ]
+        }
+      },
+      "visualType": "line"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "78becf82-2a46-4a38-a749-3541e23322f1",
+      "layout": {
+        "height": 7,
+        "width": 12,
+        "x": 12,
+        "y": 8
+      },
+      "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
+      "query": "AIQDailyRuns()\n| where ReportDate between (_startTime .. _endTime)\n| extend IssueMatchRate = round(100.0 * IssuesCorrect / iff(IssuesExpected == 0, 1, IssuesExpected), 1), BaselineCleanRate = round(100.0 * BaselinePassed / 5.0, 1)\n| project ReportDate, ['Issue match rate'] = IssueMatchRate, ['Baseline clean rate'] = BaselineCleanRate\n| order by ReportDate asc",
+      "title": "Coverage and baseline health",
+      "usedParamVariables": [
+        "_startTime",
+        "_endTime"
+      ],
+      "visualOptions": {
+        "hideLegend": false,
+        "hideTileTitle": false,
+        "xColumn": {
+          "type": "specified",
+          "value": "ReportDate"
+        },
+        "yColumns": {
+          "type": "specified",
+          "value": [
+            "Issue match rate",
+            "Baseline clean rate"
+          ]
+        }
+      },
+      "visualType": "line"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "99853e21-8015-4b08-bdb7-ab8c2448a5ec",
+      "layout": {
+        "height": 7,
+        "width": 24,
+        "x": 0,
+        "y": 15
+      },
+      "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
+      "query": "AIQDailyRuns()\n| where ReportDate between (_startTime .. _endTime)\n| project ReportDate, NoiseCards, UnverifiedCards\n| order by ReportDate asc",
+      "title": "Noise and incomplete evaluations",
+      "usedParamVariables": [
+        "_startTime",
+        "_endTime"
+      ],
+      "visualOptions": {
+        "hideLegend": false,
+        "hideTileTitle": false,
+        "xColumn": {
+          "type": "specified",
+          "value": "ReportDate"
+        },
+        "yColumns": {
+          "type": "specified",
+          "value": [
+            "NoiseCards",
+            "UnverifiedCards"
+          ]
+        }
+      },
+      "visualType": "column"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "ee9c562a-caff-4fcd-8557-8cac8b5f1d73",
+      "layout": {
+        "height": 8,
+        "width": 24,
+        "x": 0,
+        "y": 0
+      },
+      "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
+      "query": "AIQDailyAgents()\n| where ReportDate between (_startTime .. _endTime)\n| extend MatchRate = round(100.0 * IssuesCorrect / iff(IssuesExpected == 0, 1, IssuesExpected), 1)\n| project ReportDate, Agent, MatchRate\n| order by ReportDate asc",
+      "title": "Issue match rate by Agent",
+      "usedParamVariables": [
+        "_startTime",
+        "_endTime"
+      ],
+      "visualOptions": {
+        "hideLegend": false,
+        "hideTileTitle": false,
+        "seriesColumns": {
+          "type": "specified",
+          "value": [
+            "Agent"
+          ]
+        },
+        "xColumn": {
+          "type": "specified",
+          "value": "ReportDate"
+        },
+        "yColumns": {
+          "type": "specified",
+          "value": [
+            "MatchRate"
+          ]
+        }
+      },
+      "visualType": "line"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "489ab82d-abdc-4bec-b4e5-71b507991aa9",
+      "layout": {
+        "height": 8,
+        "width": 12,
+        "x": 0,
+        "y": 8
+      },
+      "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
+      "query": "AIQDailyFields()\n| where ReportDate between (_startTime .. _endTime)\n| summarize PassRate = round(100.0 * countif(Passed) / count(), 1) by Field\n| order by PassRate asc",
+      "title": "Field pass rate",
+      "usedParamVariables": [
+        "_startTime",
+        "_endTime"
+      ],
+      "visualOptions": {
+        "hideLegend": true,
+        "hideTileTitle": false,
+        "xColumn": {
+          "type": "specified",
+          "value": "Field"
+        },
+        "yColumns": {
+          "type": "specified",
+          "value": [
+            "PassRate"
+          ]
+        }
+      },
+      "visualType": "bar"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "98abb7e3-1364-497a-b8a0-2430c387f282",
+      "layout": {
+        "height": 8,
+        "width": 12,
+        "x": 12,
+        "y": 8
+      },
+      "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
+      "query": "AIQDailyIssues()\n| where ReportDate between (_startTime .. _endTime)\n| where Ownership != 'none'\n| summarize Findings = count() by Ownership\n| order by Findings desc",
+      "title": "Finding ownership",
+      "usedParamVariables": [
+        "_startTime",
+        "_endTime"
+      ],
+      "visualOptions": {
+        "hideLegend": false,
+        "hideTileTitle": false,
+        "pie__kind": "pie",
+        "pie__label": [
+          "name",
+          "percentage"
+        ]
+      },
+      "visualType": "pie"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "2ffeadbc-e967-41bc-935a-c1b25ac157f9",
+      "layout": {
+        "height": 9,
+        "width": 24,
+        "x": 0,
+        "y": 16
+      },
+      "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
+      "query": "AIQDailyIssues()\n| where ReportDate between (_startTime .. _endTime)\n| where Result != 'PASS'\n| top 50 by ReportDate desc\n| project ReportDate, Agent, IssueId, Result, Detail, Ownership, FieldsPassed, FieldsExpected",
+      "title": "Recent non-passing issues",
+      "usedParamVariables": [
+        "_startTime",
+        "_endTime"
+      ],
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "hideTileTitle": false,
+        "table__enableRenderLinks": false
+      },
+      "visualType": "table"
+    }
+  ],
+  "title": "Agent Insights Quality Trends"
+}

@@ -20,6 +20,7 @@ dev = [
   "ruff>=0.12,<1",
 ]
 azure = [
+  "azure-kusto-data>=5.0,<6",
   "azure-monitor-query>=1.4,<2",
   "azure-storage-blob>=12.26,<13",
 ]

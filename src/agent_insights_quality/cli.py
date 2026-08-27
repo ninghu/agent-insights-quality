@@ -5,12 +5,22 @@ import json
 import os
 from datetime import date
 from pathlib import Path
+from agent_insights_quality.adx import (
+    configure_dashboard_link,
+    publish_daily_report,
+    publish_daily_report_best_effort,
+    render_dashboard,
+    resolve_dashboard_link,
+)
 from agent_insights_quality.assessment import (
     load_assessments,
     load_baseline_assessments,
     rehydrate_packages,
 )
-from agent_insights_quality.azure import deploy_infrastructure
+from agent_insights_quality.azure import (
+    deploy_analytics_infrastructure,
+    deploy_infrastructure,
+)
 from agent_insights_quality.catalogs import (
     catalog_hashes,
     catalog_summary,
@@ -71,6 +81,13 @@ def build_parser() -> argparse.ArgumentParser:
     select.add_argument("--report-date", required=True, type=date.fromisoformat)
     select.add_argument("--full", action="store_true")
     commands.add_parser("deploy-infrastructure")
+    commands.add_parser("deploy-analytics")
+    publish_adx = commands.add_parser("publish-adx")
+    publish_adx.add_argument("--report", type=Path, action="append", required=True)
+    dashboard = commands.add_parser("render-adx-dashboard")
+    dashboard.add_argument("--output", type=Path)
+    configure_dashboard = commands.add_parser("configure-adx-dashboard")
+    configure_dashboard.add_argument("--url", required=True)
     provision = commands.add_parser("provision")
     provision.add_argument("--profile", choices=("daily", "staging"), required=True)
     for name in ("run-daily", "run-full"):
@@ -165,6 +182,19 @@ def _dispatch(args: argparse.Namespace) -> str | None:
     if args.command == "deploy-infrastructure":
         deploy_infrastructure()
         return "Infrastructure deployment completed."
+    if args.command == "deploy-analytics":
+        deploy_analytics_infrastructure()
+        return "Analytics infrastructure deployment completed."
+    if args.command == "publish-adx":
+        receipts = [
+            publish_daily_report(read_json(path))
+            for path in args.report
+        ]
+        return json.dumps({"publications": receipts}, sort_keys=True)
+    if args.command == "render-adx-dashboard":
+        return str(render_dashboard(args.output))
+    if args.command == "configure-adx-dashboard":
+        return str(configure_dashboard_link(args.url))
     if args.command == "provision":
         profile = RuntimeProfile.from_env(args.profile)
         approved_digests = None
@@ -263,9 +293,21 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             handoff_written = False
             try:
                 recipient = resolve_recipient()
+                adx_publication = (
+                    publish_daily_report_best_effort(failure)
+                    if profile_name == "daily"
+                    else None
+                )
+                dashboard_link = (
+                    resolve_dashboard_link()
+                    if profile_name == "daily"
+                    else None
+                )
                 request = create_request(
                     failure,
                     recipient,
+                    dashboard_link=dashboard_link,
+                    adx_publication=adx_publication,
                     work_items=work_items,
                 )
                 failure["delivery"]["content_digest"] = request["content_digest"]
@@ -342,6 +384,16 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         write_report(report, output)
         recipient = resolve_recipient()
         runtime_profile = RuntimeProfile.from_env(manifest["profile"])
+        adx_publication = (
+            publish_daily_report_best_effort(report)
+            if manifest["profile"] == "daily"
+            else None
+        )
+        dashboard_link = (
+            resolve_dashboard_link()
+            if manifest["profile"] == "daily"
+            else None
+        )
         project_link, agent_links = build_runtime_links(
             runtime_profile,
             [agent["name"] for agent in manifest["agents"]],
@@ -351,6 +403,8 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             recipient,
             project_link=project_link,
             agent_links=agent_links,
+            dashboard_link=dashboard_link,
+            adx_publication=adx_publication,
             work_items=work_items,
         )
         report["delivery"]["content_digest"] = request["content_digest"]
@@ -370,6 +424,16 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                 "status": report["status"],
                 "report": str(output / "report.json"),
                 "email_request": str(private_request),
+                "adx_publication": (
+                    adx_publication["status"]
+                    if adx_publication is not None
+                    else "not_applicable"
+                ),
+                "adx_error_code": (
+                    adx_publication.get("error_code")
+                    if adx_publication is not None
+                    else None
+                ),
             },
             sort_keys=True,
         )

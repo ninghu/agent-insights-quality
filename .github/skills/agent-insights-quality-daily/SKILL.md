@@ -6,7 +6,7 @@ license: MIT
 
 # Daily Agent Insights Quality
 
-<!-- prompt-version: 2.0.0 -->
+<!-- prompt-version: 2.1.0 -->
 
 1. Resolve the Pacific business date.
 2. Fetch the privately configured Azure Boards query with `fetch-quality-work-items` into
@@ -22,14 +22,19 @@ license: MIT
    Never assume a baseline card is Noise merely because it came from `v0`; use independent trace
    proof to distinguish an Agent runtime defect, Insight false positive, framework gap, or external
    infrastructure failure.
-5. Run `finalize` with all assessments and the same private work-item snapshot.
+5. Run `finalize` with all assessments and the same private work-item snapshot. Finalization must
+   attempt the sanitized daily ADX publication and create the immutable email request with the
+   privately configured quality-trend dashboard link. Record the returned ADX status. If ADX
+   publication fails, continue the email and pull-request flow; the email warning, private receipt,
+   final automation result, and pull-request description must explicitly report the failure.
 6. Use the available Copilot email capability to send the immutable HTML request exactly once. Set
    HTML mode explicitly, never create a draft, and never retry an ambiguous send.
 7. Import one simple delivery receipt:
    - confirmed success: `sent`, opaque provider reference, retry forbidden;
    - explicit no-send failure: `failed`, retry allowed only for a later reviewed run;
    - ambiguous result: `unknown`, retry forbidden and manual verification required.
-8. Create an `aiq-daily/` generated-only pull request.
+8. Create an `aiq-daily/` generated-only pull request. Include the ADX publication status in the
+   description without committing the cluster URI, dashboard link, or private receipt.
 9. Enable auto-merge only when the report is `PASS` or trusted `FAIL` and required checks pass.
 
 The runner executes five Agents concurrently and versions sequentially within each Agent. Complete
@@ -39,5 +44,7 @@ Any `inconclusive` baseline assessment or `INCOMPLETE` issue assessment makes th
 `INCOMPLETE` with no numeric quality score.
 
 Never change catalogs, Agent implementations, schemas, infrastructure, configuration, or skills from
-daily automation. Never target staging. Never write telemetry. Never commit the Boards query or
-work-item snapshot.
+daily automation. Never target staging. ADX is the only authorized analytics write and accepts only
+the finalized sanitized metrics payload; Application Insights remains read-only. Never write
+telemetry or commit the Boards query, work-item snapshot, ADX receipt, rendered dashboard, cluster
+URI, or dashboard link.

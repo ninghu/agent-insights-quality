@@ -5,6 +5,9 @@ param automationPrincipalId string
 param telemetryGeneration string
 param testAgentCapacity int
 param insightGenerationCapacity int
+param adxSkuName string
+@minValue(2)
+param adxCapacity int
 
 var commonTags = {
   purpose: 'agent-insights-quality'
@@ -22,6 +25,18 @@ var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 var acrPushRoleId = '8311e382-0749-4cb8-b61a-304f252e45ec'
 var blobContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 var foundryProjectManagerRoleId = 'eadc314b-1a2d-4efa-be10-5d325db5065e'
+
+module qualityAnalytics 'quality-analytics.bicep' = {
+  name: 'quality-analytics'
+  params: {
+    location: location
+    uniqueSuffix: uniqueSuffix
+    automationOwner: automationOwner
+    automationPrincipalId: automationPrincipalId
+    skuName: adxSkuName
+    capacity: adxCapacity
+  }
+}
 
 resource dailyWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: 'aiq-daily-${telemetryGeneration}-law-${uniqueSuffix}'

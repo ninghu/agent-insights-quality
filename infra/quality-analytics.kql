@@ -1,0 +1,113 @@
+.create-merge table DailyQualityPublications (
+    ReportDate:datetime,
+    RunId:string,
+    PublishedAt:datetime,
+    SourceDigest:string,
+    Payload:dynamic
+)
+
+.alter-merge table DailyQualityPublications policy retention softdelete = 730d recoverability = enabled
+
+.alter table DailyQualityPublications policy caching hot = 90d
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality',
+    docstring = 'Latest published daily qualification result for each Pacific report date.'
+) AIQDailyPublications() {
+    DailyQualityPublications
+    | summarize arg_max(PublishedAt, *) by ReportDate
+    | project ReportDate, RunId, PublishedAt, SourceDigest, Payload
+}
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality',
+    docstring = 'Daily qualification summary metrics.'
+) AIQDailyRuns() {
+    AIQDailyPublications()
+    | project
+        ReportDate,
+        RunId,
+        PublishedAt,
+        Status = tostring(Payload.run.status),
+        QualityScore = todouble(Payload.run.quality_score),
+        FieldQualityScore = todouble(Payload.run.field_quality_score),
+        CleanCardPrecision = todouble(Payload.run.clean_card_precision),
+        QualityThreshold = todouble(Payload.run.quality_threshold),
+        BaselinePassed = toint(Payload.run.baseline_passed),
+        IssuesCorrect = toint(Payload.run.issues_correct),
+        IssuesExpected = toint(Payload.run.issues_expected),
+        IssuesPartial = toint(Payload.run.issues_partial),
+        QualityFailures = toint(Payload.run.quality_failures),
+        NoiseCards = toint(Payload.run.noise_cards),
+        UnverifiedCards = toint(Payload.run.unverified_cards),
+        ObservedCards = toint(Payload.run.observed_cards),
+        Incomplete = tobool(Payload.run.incomplete),
+        IncompleteReasons = Payload.run.incomplete_reasons
+}
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality',
+    docstring = 'Per-Agent daily qualification metrics.'
+) AIQDailyAgents() {
+    AIQDailyPublications()
+    | mv-expand AgentMetric = Payload.agents to typeof(dynamic)
+    | project
+        ReportDate,
+        RunId,
+        PublishedAt,
+        Agent = tostring(AgentMetric.agent),
+        BaselineStatus = tostring(AgentMetric.baseline_status),
+        BaselineVerdict = tostring(AgentMetric.baseline_verdict),
+        BaselineOwnership = tostring(AgentMetric.baseline_ownership),
+        BaselineInsightCount = toint(AgentMetric.baseline_insight_count),
+        BaselineRuntimeEvidenceComplete =
+            tobool(AgentMetric.baseline_runtime_evidence_complete),
+        IssuesExpected = toint(AgentMetric.issues_expected),
+        IssuesCorrect = toint(AgentMetric.issues_correct),
+        IssuesPartial = toint(AgentMetric.issues_partial),
+        IssuesFailed = toint(AgentMetric.issues_failed),
+        IssuesIncomplete = toint(AgentMetric.issues_incomplete),
+        NoiseCards = toint(AgentMetric.noise_cards),
+        FieldsPassed = toint(AgentMetric.fields_passed),
+        FieldsExpected = toint(AgentMetric.fields_expected)
+}
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality',
+    docstring = 'Per-issue daily qualification outcomes.'
+) AIQDailyIssues() {
+    AIQDailyPublications()
+    | mv-expand IssueMetric = Payload.issues to typeof(dynamic)
+    | project
+        ReportDate,
+        RunId,
+        PublishedAt,
+        Agent = tostring(IssueMetric.agent),
+        IssueId = tostring(IssueMetric.issue_id),
+        Status = tostring(IssueMetric.status),
+        Result = tostring(IssueMetric.result),
+        Detail = tostring(IssueMetric.detail),
+        Ownership = tostring(IssueMetric.ownership),
+        FindingType = tostring(IssueMetric.finding_type),
+        ObservedCount = toint(IssueMetric.observed_count),
+        RuntimeEvidenceComplete = tobool(IssueMetric.runtime_evidence_complete),
+        Confidence = todouble(IssueMetric.confidence),
+        FieldsPassed = toint(IssueMetric.fields_passed),
+        FieldsExpected = toint(IssueMetric.fields_expected)
+}
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality',
+    docstring = 'Per-field daily qualification outcomes.'
+) AIQDailyFields() {
+    AIQDailyPublications()
+    | mv-expand FieldMetric = Payload.fields to typeof(dynamic)
+    | project
+        ReportDate,
+        RunId,
+        PublishedAt,
+        Agent = tostring(FieldMetric.agent),
+        IssueId = tostring(FieldMetric.issue_id),
+        Field = tostring(FieldMetric.field),
+        Passed = tobool(FieldMetric.passed)
+}

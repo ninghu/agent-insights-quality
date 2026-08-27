@@ -12,7 +12,7 @@ flowchart LR
     B[Run synthetic traffic<br/>against deployed Agents]
     C[Collect telemetry<br/>and generate Agent Insights]
     D[Evaluate every Insight<br/>quality and ownership]
-    E[Publish score and reports<br/>PASS, FAIL, or INCOMPLETE]
+    E[Publish score, reports, and ADX trend<br/>PASS, FAIL, or INCOMPLETE]
 
     A --> B --> C --> D --> E
 ```

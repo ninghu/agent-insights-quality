@@ -109,9 +109,20 @@ def create_request(
     *,
     project_link: str | None = None,
     agent_links: Mapping[str, str] | None = None,
+    dashboard_link: str | None = None,
+    adx_publication: Mapping[str, Any] | None = None,
     work_items: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     recipient = _validated_recipient(recipient)
+    if report.get("profile") == "daily":
+        if dashboard_link is None:
+            raise ContractError("Daily email requires the ADX dashboard link")
+        if adx_publication is None or adx_publication.get("status") not in {
+            "published",
+            "already_published",
+            "failed",
+        }:
+            raise ContractError("Daily email requires explicit ADX publication status")
     score = _overall_score(report)
     subject = (
         f"[Agent Insights Quality] {report['status']} - {score} - "
@@ -122,6 +133,8 @@ def create_request(
         report,
         project_link=project_link,
         agent_links=agent_links,
+        dashboard_link=dashboard_link,
+        adx_publication=adx_publication,
         work_items=work_items,
     )
     digest = content_hash(
@@ -515,6 +528,31 @@ def _private_project_source_link(
     )
 
 
+def _dashboard_source_link(
+    dashboard_link: str | None,
+    adx_publication: Mapping[str, Any] | None,
+) -> str:
+    if dashboard_link is None:
+        return ""
+    value = (
+        '<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
+        f'href="{html.escape(dashboard_link, quote=True)}">'
+        "Open quality trend dashboard</a>"
+    )
+    warning = ""
+    if adx_publication is not None and adx_publication.get("status") == "failed":
+        warning = (
+            '<p style="margin:0 0 18px 0;padding:10px 12px;'
+            f'background-color:#fff4ce;color:#8a5700;{_OUTLOOK_TEXT_STYLE}">'
+            "ADX publication failed for this run, so today's result might not yet "
+            "appear on the dashboard.</p>"
+        )
+    return (
+        f'<p style="margin:0 0 18px 0;color:#334155;{_OUTLOOK_TEXT_STYLE}">'
+        f"Quality trend dashboard: {value}</p>{warning}"
+    )
+
+
 def _agent_rows(
     report: dict[str, Any],
     agent_links: Mapping[str, str],
@@ -632,6 +670,8 @@ def _render_html(
     *,
     project_link: str | None = None,
     agent_links: Mapping[str, str] | None = None,
+    dashboard_link: str | None = None,
+    adx_publication: Mapping[str, Any] | None = None,
     work_items: Mapping[str, Any] | None = None,
 ) -> str:
     status_style = _STATUS_STYLES[report["status"]]
@@ -675,6 +715,7 @@ def _render_html(
             for paragraph in summary
         )
         + _private_project_source_link(report, project_link)
+        + _dashboard_source_link(dashboard_link, adx_publication)
         + _data_table(("Grade", "Findings"), _grade_rows(report), (38, 62))
         + _insight_results_link()
         + "</td></tr>"

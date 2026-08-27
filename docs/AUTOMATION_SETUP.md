@@ -8,9 +8,13 @@
 - deployed Foundry Agent endpoint access;
 - read access to one privately configured Azure Boards saved query;
 - Storage Blob Data Reader access to the private `deployment-registries` container;
+- ADX Database Viewer and Ingestor access to the fixed quality analytics database;
 - one email capability with explicit HTML support.
 
 The fixed reviewed recipient is `agentinsightsteam@microsoft.com`.
+Install the live Azure clients from the reviewed optional dependency set with
+`python -m pip install -e ".[azure]"`; this includes the ADX data client used by daily
+finalization.
 
 During a reviewed delivery test, a private
 `~/.aiq-runtime/agent-insights-quality/config/email-recipient.json` override may target one Microsoft
@@ -22,6 +26,9 @@ configuration or generated reports. Deployment registries and run state live und
 user-level `~/.aiq-runtime/agent-insights-quality/` root so scheduled worktrees share approved state.
 The canonical registry is stored in the existing private Azure storage account; provisioning operators
 need Storage Blob Data Contributor, while qualification-only operators need Storage Blob Data Reader.
+ADX publication receipts, the rendered dashboard import file, and the copied dashboard share link
+also stay under this durable private root. The share link must be configured before daily
+finalization so every HTML email can include it.
 
 ## Readiness
 
@@ -48,6 +55,7 @@ invoke a runtime-packaged skill by name.
 ## First-run observation
 
 Verify live progress output, 30 assessment packages, active and yesterday-closed Quality work-item
-sections, one immutable HTML send attempt, five per-Agent reports, generated-path validation, required
-checks, and auto-merge. A complete trusted FAIL is a valid product-quality result; INCOMPLETE is not
-published.
+sections, one immutable HTML send attempt with the dashboard link, explicit ADX publication status,
+five per-Agent reports, generated-path validation, required checks, and auto-merge. A complete
+trusted FAIL is a valid product-quality result; INCOMPLETE is not auto-merged, but its sanitized
+operational result is retained in ADX.
