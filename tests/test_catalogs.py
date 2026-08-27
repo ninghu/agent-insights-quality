@@ -24,6 +24,13 @@ def test_catalogs_define_fixed_inventory() -> None:
         "travel-agent": 8,
         "support-ticket-agent": 8,
     }
+    assert {item["name"]: item["owner"] for item in agents["agents"]} == {
+        "weather-agent": "Billy Hu",
+        "healthcare-agent": "Ilya Matiach",
+        "finance-agent": "Han Che",
+        "travel-agent": "Sean Gayler",
+        "support-ticket-agent": "Nishal Dsilva",
+    }
     assert set(catalog_hashes(agents, issues)) == {"agents", "issues", "artifacts"}
 
 

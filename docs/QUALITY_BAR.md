@@ -22,6 +22,8 @@ score = 0.85 * field_quality + 0.15 * clean_card_precision
 - Daily uses 25 expected issues; full staging uses 36.
 - Ownership does not change the score. It identifies whether remediation belongs to the Agent, Insight
   Engine, test framework, infrastructure, or remains unresolved.
+- A trace-proven valid Agent finding on `v0` is not Insight noise and does not reduce clean-card
+  precision. It is reported separately as a baseline health failure.
 
 The report stores both component scores and the final score to one decimal place when needed.
 Structural, privacy, provenance, and

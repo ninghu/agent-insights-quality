@@ -29,7 +29,7 @@
           "monitor_id": {"type": "string", "minLength": 1},
           "versions": {
             "type": "object",
-            "minProperties": 7,
+            "minProperties": 2,
             "additionalProperties": {
               "type": "object",
               "additionalProperties": false,

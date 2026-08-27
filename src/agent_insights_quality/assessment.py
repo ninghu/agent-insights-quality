@@ -97,6 +97,17 @@ def rehydrate_packages(
             all_insights,
             set(baseline.get("operation_ids") or []),
         )
+        baseline_operation_ids = set(baseline.get("operation_ids") or [])
+        trace_proof_cache: dict[tuple[str, ...], dict[str, Any]] = {}
+
+        def baseline_insight_payload(value: Any) -> dict[str, Any]:
+            payload = _insight_payload(value)
+            key = _linked_baseline_operations(value, baseline_operation_ids)
+            if key not in trace_proof_cache:
+                trace_proof_cache[key] = runtime.trace_behavior_evidence(key)
+            payload["independent_trace_proof"] = trace_proof_cache[key]
+            return payload
+
         baseline_package = {
             "schema_version": "1.0.0",
             "target_kind": "baseline",
@@ -126,7 +137,7 @@ def rehydrate_packages(
             },
             "expected": {"insight_count": 0, "behavior": "healthy v0 contract"},
             "observed_insights": [
-                _insight_payload(value) for value in baseline_cards
+                baseline_insight_payload(value) for value in baseline_cards
             ],
             "package_hash": "",
         }
@@ -211,6 +222,18 @@ def _cards_for_operations(
         for value in insights
         if set(value.linked_operation_ids).intersection(operation_ids)
     ]
+
+
+def _linked_baseline_operations(
+    insight: Any,
+    baseline_operation_ids: set[str],
+) -> tuple[str, ...]:
+    values = tuple(
+        sorted(set(insight.linked_operation_ids) & baseline_operation_ids)
+    )
+    if not values:
+        raise ContractError("Baseline card has no linked baseline operation")
+    return values
 
 
 def _insight_payload(value: Any) -> dict[str, Any]:
@@ -323,10 +346,16 @@ def load_baseline_assessments(
             raise ContractError(
                 f"{agent_name} clean baseline contradicts runtime evidence"
             )
+        expected_ownership = {
+            "clean": "none",
+            "noise": "insight_engine",
+            "agent_finding": "agent",
+        }.get(value["verdict"])
         if (
-            value["verdict"] == "clean" and value["ownership"] != "none"
+            expected_ownership is not None
+            and value["ownership"] != expected_ownership
         ) or (
-            value["verdict"] != "clean" and value["ownership"] == "none"
+            expected_ownership is None and value["ownership"] == "none"
         ):
             raise ContractError(
                 f"{agent_name} baseline ownership is inconsistent"
@@ -414,9 +443,29 @@ def _validate_baseline_cards(
         )
     for evaluation in evaluations:
         _validate_card_identity(evaluation, cards[evaluation["reference"]])
+        expected_ownership = {
+            "noise": "insight_engine",
+            "valid_agent_finding": "agent",
+        }.get(evaluation["evaluation"])
+        if (
+            expected_ownership is not None
+            and evaluation["ownership"] != expected_ownership
+        ) or (
+            expected_ownership is None and evaluation["ownership"] == "none"
+        ):
+            raise ContractError(
+                "Baseline card evaluation ownership is inconsistent"
+            )
     if assessment["verdict"] == "clean" and evaluations:
         raise ContractError("Clean baseline cannot contain card evaluations")
     if assessment["verdict"] == "noise" and any(
         item["evaluation"] != "noise" for item in evaluations
     ):
         raise ContractError("Baseline noise verdict contradicts card evaluations")
+    if assessment["verdict"] == "agent_finding" and (
+        not any(item["evaluation"] == "valid_agent_finding" for item in evaluations)
+        or any(item["evaluation"] == "incomplete" for item in evaluations)
+    ):
+        raise ContractError(
+            "Baseline Agent-finding verdict contradicts card evaluations"
+        )

@@ -9,7 +9,7 @@
     "model": {"const": "gpt-5.6-sol"},
     "package_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "foundry_version": {"type": "string", "minLength": 1},
-    "verdict": {"enum": ["clean", "noise", "inconclusive"]},
+    "verdict": {"enum": ["clean", "noise", "agent_finding", "inconclusive"]},
     "ownership": {"enum": ["none", "agent", "insight_engine", "test_framework", "infrastructure", "unresolved"]},
     "ownership_reason": {"type": "string", "minLength": 1, "maxLength": 1000},
     "card_evaluations": {

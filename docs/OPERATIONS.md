@@ -46,6 +46,12 @@ python -m agent_insights_quality run-full --report-date <Pacific YYYY-MM-DD> `
   --work-items $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
 ```
 
+For an isolated Agent-only change, qualify only that Agent's `v0` and all assigned issues. Existing
+Agents may reuse their latest reviewed evidence only when their content digests, mappings, and all
+shared contracts are unchanged. Shared runtime, telemetry, assessment, scoring, schema,
+infrastructure, or cross-Agent topology changes require full-catalog qualification or read-only
+re-evaluation of retained evidence when no new traffic is needed.
+
 After a complete staging `PASS` or `FAIL` report is human-reviewed, bind all 41 exact content
 digests. `INCOMPLETE` is never promotable:
 
@@ -57,6 +63,11 @@ python -m agent_insights_quality create-promotion-receipt `
 ```
 
 Set `AIQ_STAGING_PROMOTION_RECEIPT` to that private file before provisioning `daily`.
+
+Promotion may compose newly reviewed affected-Agent evidence with the latest valid receipts for
+unchanged Agents. The composed receipt must bind every current mapping and exact digest; incomplete
+evidence is never reusable. After daily provisioning, verify the registry and endpoints read-only.
+Do not send smoke traffic that dirties the next three-hour clean window.
 
 Provisioning writes each profile registry locally and uploads `daily.json` or `staging.json` to the
 private Azure `deployment-registries` container using Entra authentication. Every qualification run

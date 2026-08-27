@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from agent_insights_quality.assessment import load_assessments
+from agent_insights_quality.assessment import (
+    _linked_baseline_operations,
+    _validate_baseline_cards,
+    load_assessments,
+)
 from agent_insights_quality.util import ContractError
 
 
@@ -128,3 +133,35 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
     path.write_text(json.dumps(assessment), encoding="utf-8")
     with pytest.raises(ContractError, match="contradicts runtime evidence"):
         load_assessments([path], {"issue-001"}, packages)
+
+
+def test_baseline_trace_proof_uses_only_baseline_operations() -> None:
+    insight = SimpleNamespace(linked_operation_ids=("a" * 32, "b" * 32))
+    assert _linked_baseline_operations(insight, {"a" * 32}) == ("a" * 32,)
+    with pytest.raises(ContractError, match="no linked baseline"):
+        _linked_baseline_operations(insight, {"c" * 32})
+
+
+def test_valid_baseline_finding_requires_agent_ownership() -> None:
+    card = {
+        "reference": "sha256:" + "a" * 64,
+        "title": "Synthetic baseline finding",
+        "category": "reliability_errors",
+        "severity": "medium",
+    }
+    assessment = {
+        "agent_name": "weather-agent",
+        "verdict": "agent_finding",
+        "card_evaluations": [
+            {
+                **card,
+                "evaluation": "valid_agent_finding",
+                "ownership": "insight_engine",
+            }
+        ],
+    }
+    with pytest.raises(ContractError, match="ownership"):
+        _validate_baseline_cards(
+            assessment,
+            {"observed_insights": [card]},
+        )

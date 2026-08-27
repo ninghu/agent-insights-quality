@@ -56,11 +56,8 @@ _AGENT_TYPES = {
     "support-ticket-agent": "hosted_container",
 }
 _AGENT_OWNERS = {
-    "finance-agent": "Han Che",
-    "travel-agent": "Sean Gayler",
-    "support-ticket-agent": "Nishal Dsilva",
-    "healthcare-agent": "Ilya Matiach",
-    "weather-agent": "Billy Hu",
+    item["name"]: item["owner"]
+    for item in read_yaml(ROOT / "catalogs" / "AGENT_CATALOG.yaml")["agents"]
 }
 _PROJECT_NAMES = {
     "daily": "agent-insights-quality",

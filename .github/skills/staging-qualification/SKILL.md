@@ -1,6 +1,12 @@
+---
+name: staging-qualification
+description: Run full-catalog staging qualification and reviewed promotion to daily.
+license: MIT
+---
+
 # Staging Qualification
 
-Use this skill for a human-reviewed full qualification before promotion.
+Use this skill for human-reviewed impact-based qualification before promotion.
 
 1. Sync the latest default branch before changing contracts or infrastructure.
 2. Validate catalogs, generated docs, schemas, tests, Ruff, and Bicep.
@@ -9,22 +15,34 @@ Use this skill for a human-reviewed full qualification before promotion.
    staging registry to the private Azure Blob container.
 5. Fetch the private Quality-tagged work-item snapshot under the durable user-level runtime root.
 6. Verify a clean three-hour window for all five Agents.
-7. Run `python -m agent_insights_quality run-full --report-date <Pacific date> --work-items <snapshot>`.
-   The runner must synchronize the canonical staging registry before traffic.
-8. Require 41 private assessment packages with complete runtime evidence.
-9. Assess five baselines and 36 issues with GPT-5.6 Sol. Equal nonzero request, response, and usable
+7. Determine affected Agents from content digests, mappings, and shared-contract changes:
+   - qualify each affected Agent's `v0` and all assigned issues;
+   - reuse reviewed evidence for unchanged Agents only when digest, mapping, and shared contracts are
+     unchanged;
+   - use full-catalog qualification for shared runtime, telemetry, assessment, scoring, schema,
+     infrastructure, or cross-Agent topology changes.
+8. Require one complete package for every selected baseline and issue.
+9. Assess selected baselines and issues with GPT-5.6 Sol. Equal nonzero request, response, and usable
    response counts plus a verified trace contract prove the reviewed runtime contract was exercised.
    Semantic assertions are optional corroboration.
+   Independently verify every baseline card; `v0` is a reviewed healthy contract, not proof that its
+   runtime behavior was healthy.
 10. Finalize with `--work-items <snapshot>` and inspect score, noise, ownership, and every non-matched
     finding. Any
    `inconclusive` baseline assessment or `INCOMPLETE` issue assessment makes the whole run
    `INCOMPLETE` with no numeric quality score. Never commit the snapshot.
-11. Create a promotion receipt for a complete, trusted `PASS` or `FAIL` report after explicit human
-    review. Never promote `INCOMPLETE`.
+11. After explicit human review, compose promotion from complete trusted PASS/FAIL evidence for
+    affected Agents and latest valid receipts for unchanged Agents. Verify every exact digest and
+    mapping. Never promote or reuse `INCOMPLETE`.
+
+Use only reviewed tooling that validates targeted reports and composed receipts. If the current CLI
+cannot produce both, stop targeted execution and use full-catalog qualification; never splice
+evidence or receipts manually.
 
 If a run is incomplete, preserve its artifacts, inspect stage-specific error codes, and reproduce only
 the failing stage. Rotate telemetry only after fixing the root cause: deploy and validate the new
 generation before deleting the exact old App Insights and workspace set.
 
-Do not promote `INCOMPLETE`, reuse a dirty telemetry generation, weaken an Issue contract to make a
-run pass, or persist private runtime identifiers.
+After exact-digest daily provisioning, perform read-only readiness and registry reconciliation; do
+not send daily smoke traffic. Do not promote `INCOMPLETE`, reuse a dirty telemetry generation, weaken
+an Issue contract to make a run pass, or persist private runtime identifiers.

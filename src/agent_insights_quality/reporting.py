@@ -152,7 +152,13 @@ def _summary_metrics(
         for item in issues
     )
     non_clean_cards = (
-        sum(item["insight_count"] for item in baseline)
+        sum(
+            sum(
+                card.get("evaluation") == "noise"
+                for card in item["assessment"].get("card_evaluations", [])
+            )
+            for item in baseline
+        )
         + sum(
             sum(
                 card.get("finding_type")
@@ -526,6 +532,61 @@ def _validate_complete_summary(
         raise ContractError(f"{label} report status is inconsistent")
 
 
+def _baseline_report_semantics_valid(item: dict[str, Any]) -> bool:
+    assessment = item.get("assessment")
+    if not isinstance(assessment, dict):
+        return False
+    cards = assessment.get("card_evaluations")
+    if (
+        not isinstance(cards, list)
+        or len(cards) != item.get("insight_count")
+        or any(
+            not isinstance(card, dict)
+            or card.get("evaluation")
+            not in {"noise", "valid_agent_finding", "incomplete"}
+            or card.get("ownership")
+            not in {
+                "agent",
+                "insight_engine",
+                "test_framework",
+                "infrastructure",
+                "unresolved",
+            }
+            or (
+                card.get("evaluation") == "noise"
+                and card.get("ownership") != "insight_engine"
+            )
+            or (
+                card.get("evaluation") == "valid_agent_finding"
+                and card.get("ownership") != "agent"
+            )
+            or (
+                card.get("evaluation") == "incomplete"
+                and card.get("ownership") == "none"
+            )
+            for card in cards
+        )
+    ):
+        return False
+    verdict = assessment.get("verdict")
+    ownership = assessment.get("ownership")
+    if verdict == "clean":
+        return ownership == "none" and not cards
+    if verdict == "noise":
+        return (
+            ownership == "insight_engine"
+            and bool(cards)
+            and all(card["evaluation"] == "noise" for card in cards)
+        )
+    if verdict == "agent_finding":
+        return (
+            ownership == "agent"
+            and any(card["evaluation"] == "valid_agent_finding" for card in cards)
+            and all(card["evaluation"] != "incomplete" for card in cards)
+        )
+    return verdict == "inconclusive" and ownership not in {None, "none"}
+
+
 def validate_published_report(
     report: dict[str, Any],
     issue_catalog: dict[str, Any] | None = None,
@@ -551,7 +612,7 @@ def validate_published_report(
             or item["insight_count"] < 0
             or not isinstance(item.get("assessment"), dict)
             or item["assessment"].get("verdict")
-            not in {"clean", "noise", "inconclusive"}
+            not in {"clean", "noise", "agent_finding", "inconclusive"}
             or item["assessment"].get("ownership")
             not in {
                 "none",
@@ -561,6 +622,7 @@ def validate_published_report(
                 "infrastructure",
                 "unresolved",
             }
+            or not _baseline_report_semantics_valid(item)
             for item in baseline
         )
     ):
@@ -658,7 +720,8 @@ def validate_staging_report(
             or not isinstance(item.get("insight_count"), int)
             or item["insight_count"] < 0
             or item.get("assessment", {}).get("verdict")
-            not in {"clean", "noise", "inconclusive"}
+            not in {"clean", "noise", "agent_finding", "inconclusive"}
+            or not _baseline_report_semantics_valid(item)
             for item in baseline
         )
     ):
@@ -820,8 +883,8 @@ def _evaluation_label(value: str) -> str:
         "DUPLICATE": "Duplicate",
         "INCOMPLETE": "Incomplete",
         "noise": "Noise",
-        "valid_agent_finding": "Correct",
         "incomplete": "Incomplete",
+        "valid_agent_finding": "Valid Agent Finding",
         "clean": "Clean",
         "inconclusive": "Incomplete",
     }[value]

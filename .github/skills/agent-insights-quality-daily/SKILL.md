@@ -1,3 +1,9 @@
+---
+name: agent-insights-quality-daily
+description: Run weekday Agent Insights qualification, reporting, email, and publication.
+license: MIT
+---
+
 # Daily Agent Insights Quality
 
 <!-- prompt-version: 2.0.0 -->
@@ -13,6 +19,9 @@
    endpoint behavior and trace contract are both proven. Equal nonzero request, response, and usable
    response counts plus a verified trace contract prove the reviewed runtime contract was exercised;
    semantic assertions are optional.
+   Never assume a baseline card is Noise merely because it came from `v0`; use independent trace
+   proof to distinguish an Agent runtime defect, Insight false positive, framework gap, or external
+   infrastructure failure.
 5. Run `finalize` with all assessments and the same private work-item snapshot.
 6. Use the available Copilot email capability to send the immutable HTML request exactly once. Set
    HTML mode explicitly, never create a draft, and never retry an ambiguous send.

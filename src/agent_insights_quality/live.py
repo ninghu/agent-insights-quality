@@ -9,6 +9,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -23,10 +24,27 @@ from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.util import ContractError
 from agent_insights_quality.azure_cli import azure_cli
 
+try:
+    from azure.core.exceptions import (
+        HttpResponseError,
+        ServiceRequestError,
+        ServiceResponseError,
+    )
+
+    _TELEMETRY_HTTP_ERRORS = (HttpResponseError,)
+    _TELEMETRY_TRANSIENT_ERRORS = (
+        HttpResponseError,
+        ServiceRequestError,
+        ServiceResponseError,
+    )
+except ImportError:
+    _TELEMETRY_HTTP_ERRORS = ()
+    _TELEMETRY_TRANSIENT_ERRORS = ()
+
 _TRACE_ID = re.compile(r"^[0-9a-f]{32}$")
 _FOUNDRY_SCOPE = "https://ai.azure.com/.default"
 _LOGS_SCOPE = "https://api.loganalytics.io/.default"
-_TRANSIENT_HTTP = {408, 429, 500, 502, 503, 504}
+_TRANSIENT_HTTP = {408, 424, 429, 500, 502, 503, 504}
 
 
 class _RuntimeTokenCredential:
@@ -98,12 +116,29 @@ class LiveRuntime:
         *,
         timespan: Any,
     ) -> Any:
-        with self._telemetry_query_lock:
-            return client.query_resource(
-                self._profile.application_insights_resource_id,
-                query,
-                timespan=timespan,
-            )
+        for attempt in range(4):
+            try:
+                with self._telemetry_query_lock:
+                    return client.query_resource(
+                        self._profile.application_insights_resource_id,
+                        query,
+                        timespan=timespan,
+                    )
+            except _TELEMETRY_TRANSIENT_ERRORS as error:
+                if (
+                    isinstance(error, _TELEMETRY_HTTP_ERRORS)
+                    and error.status_code not in _TRANSIENT_HTTP
+                ):
+                    raise
+                if attempt == 3:
+                    raise
+                delay = 2**attempt
+                self.report_progress(
+                    f"telemetry query failed transiently; retrying in {delay}s "
+                    f"({attempt + 2}/4)"
+                )
+                self._sleep(delay)
+        raise ContractError("Telemetry query retry loop did not execute")
 
     def reset_monitor(self, agent_name: str, monitor_id: str) -> None:
         del agent_name
@@ -482,13 +517,15 @@ union traces, dependencies, requests
             correlation_id=correlation_id,
             retry_statuses=_TRANSIENT_HTTP,
         )
-        response_id = str(response.get("id") or "")
+        request_reference = str(response.get("_request_reference") or "")
+        if not request_reference:
+            raise ContractError("Hosted response omitted its request reference")
         assertion_count, assertions_passed = _semantic_assertion_result(
             response,
             fixture,
         )
         return (
-            [response_id or correlation_id],
+            [request_reference],
             _usable_response(response, fixture["expected_status"]),
             assertion_count,
             assertions_passed,
@@ -734,6 +771,63 @@ union traces, dependencies, requests
             self._sleep(15)
         raise ContractError("Trace contract did not stabilize before the bounded deadline")
 
+    def trace_behavior_evidence(
+        self,
+        operation_ids: tuple[str, ...],
+    ) -> dict[str, Any]:
+        try:
+            from azure.monitor.query import LogsQueryStatus
+        except ImportError as error:
+            raise ContractError(
+                'Trace behavior evidence requires installation with ".[azure]"'
+            ) from error
+        if not operation_ids or any(
+            _TRACE_ID.fullmatch(value) is None for value in operation_ids
+        ):
+            raise ContractError("Trace behavior evidence has invalid operation identities")
+        values = ", ".join(f'"{value}"' for value in operation_ids)
+        query = f"""
+union traces, dependencies, requests
+| where operation_Id in ({values})
+| extend operation_name=tostring(customDimensions["gen_ai.operation.name"])
+| extend tool_name=coalesce(
+    tostring(customDimensions["gen_ai.tool.name"]),
+    tostring(customDimensions["tool.name"]))
+| extend tool_call_id=coalesce(
+    tostring(customDimensions["gen_ai.tool.call.id"]),
+    tostring(customDimensions["tool.call.id"]))
+| extend error_type=tostring(customDimensions["error.type"])
+| extend tool_ok=tostring(customDimensions["tool.ok"])
+| extend tool_result=tostring(customDimensions["gen_ai.tool.call.result"])
+| extend input_messages=tostring(customDimensions["gen_ai.input.messages"])
+| extend output_messages=tostring(customDimensions["gen_ai.output.messages"])
+| project operation_Id, operation_name, tool_name, tool_call_id, error_type, tool_ok, tool_result,
+    input_messages, output_messages, timestamp
+"""
+        result = self._query_resource(
+            self._logs_client(),
+            query,
+            timespan=timedelta(days=90),
+        )
+        if result.status != LogsQueryStatus.SUCCESS:
+            raise ContractError("Trace behavior evidence query failed")
+        rows = [
+            {
+                "operation_id": str(row[0]),
+                "operation_name": str(row[1] or ""),
+                "tool_name": str(row[2] or ""),
+                "tool_call_id": str(row[3] or ""),
+                "error_type": str(row[4] or ""),
+                "tool_ok": str(row[5] or ""),
+                "tool_result": str(row[6] or ""),
+                "messages": [str(row[7] or ""), str(row[8] or "")],
+                "timestamp": str(row[9] or ""),
+            }
+            for table in result.tables
+            for row in table.rows
+        ]
+        return _trace_behavior_summary(rows)
+
     def replay_manifest(self, manifest: dict[str, Any]) -> dict[str, Any]:
         evidence = []
         for agent in manifest["agents"]:
@@ -944,6 +1038,8 @@ union traces, dependencies, requests
             except (TimeoutError, urllib.error.URLError) as error:
                 attempt += 1
                 if method == "GET" and attempt < max_attempts:
+                    request_reference = str(uuid.uuid4())
+                    headers["x-ms-client-request-id"] = request_reference
                     delay = min(2 ** (attempt - 1), 30)
                     self.report_progress(
                         f"remote GET had no response; retrying in {delay}s "
@@ -959,12 +1055,16 @@ union traces, dependencies, requests
                 headers["Authorization"] = (
                     "Bearer " + self._token_provider(_FOUNDRY_SCOPE)
                 )
+                request_reference = str(uuid.uuid4())
+                headers["x-ms-client-request-id"] = request_reference
                 credential_refreshed = True
                 self.report_progress("remote credential expired; refreshed once")
                 continue
             attempt += 1
             if status not in retries or attempt == max_attempts:
                 break
+            request_reference = str(uuid.uuid4())
+            headers["x-ms-client-request-id"] = request_reference
             delay = min(2 ** (attempt - 1), 30)
             self.report_progress(
                 f"remote {method} returned HTTP {status}; retrying in {delay}s "
@@ -1068,6 +1168,181 @@ def _trace_contract_ready(
         seen_ids == set(operation_ids)
         and not (set(required_operations) - observed_operations)
     )
+
+
+def _trace_behavior_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    call_names: dict[tuple[str, str], set[str]] = defaultdict(set)
+    anonymous_calls: Counter[str] = Counter()
+    response_ids: set[str] = set()
+    successful_responses: set[str] = set()
+    error_codes: Counter[str] = Counter()
+    recorded_errors: set[tuple[str, str]] = set()
+    assistant_response_operations: set[str] = set()
+    seen_messages: set[tuple[str, str]] = set()
+    terminal_snapshots: dict[str, tuple[tuple[str, str], list[Any]]] = {}
+
+    def record_response(value: Any, identity: str, operation_id: str) -> None:
+        if isinstance(value, str) and value.strip().startswith(("{", "[")):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                pass
+        serialized = json.dumps(value, sort_keys=True, ensure_ascii=True)
+        response_id = f"{operation_id}:{identity or serialized}"
+        response_ids.add(response_id)
+        codes: list[str] = []
+
+        def find_codes(item: Any) -> None:
+            if isinstance(item, dict):
+                error = item.get("error")
+                if isinstance(error, dict) and error.get("code"):
+                    codes.append(str(error["code"]))
+                for child in item.values():
+                    find_codes(child)
+            elif isinstance(item, list):
+                for child in item:
+                    find_codes(child)
+
+        find_codes(value)
+        if codes:
+            for code in codes:
+                key = (response_id, code)
+                if key not in recorded_errors:
+                    recorded_errors.add(key)
+                    error_codes[code] += 1
+        else:
+            successful_responses.add(response_id)
+
+    def record_terminal_assistant(value: Any, operation_id: str) -> None:
+        if not isinstance(value, list) or not value:
+            return
+        message = value[-1]
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            return
+        parts = message.get("parts")
+        if not isinstance(parts, list):
+            return
+        if any(
+            isinstance(part, dict) and part.get("type") == "tool_call"
+            for part in parts
+        ):
+            return
+        visible = any(
+            isinstance(part, dict)
+            and part.get("type") in {"text", "output_text"}
+            and isinstance(part.get("content") or part.get("text"), str)
+            and str(part.get("content") or part.get("text")).strip()
+            for part in parts
+        )
+        if visible:
+            assistant_response_operations.add(operation_id)
+
+    def walk(value: Any, operation_id: str) -> None:
+        if isinstance(value, dict):
+            value_type = str(value.get("type") or "")
+            if value_type == "tool_call":
+                tool_name = str(value.get("name") or "unknown")
+                call_id = str(value.get("id") or "")
+                if call_id:
+                    call_names[(operation_id, call_id)].add(tool_name)
+                else:
+                    anonymous_calls[tool_name] += 1
+            elif value_type == "tool_call_response":
+                record_response(
+                    value.get("response"),
+                    str(value.get("id") or value.get("call_id") or ""),
+                    operation_id,
+                )
+            for child in value.values():
+                walk(child, operation_id)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child, operation_id)
+        elif isinstance(value, str):
+            stripped = value.strip()
+            message_key = (operation_id, stripped)
+            if stripped.startswith(("{", "[")) and message_key not in seen_messages:
+                seen_messages.add(message_key)
+                try:
+                    parsed = json.loads(stripped)
+                    walk(parsed, operation_id)
+                except json.JSONDecodeError:
+                    pass
+
+    for row_index, row in enumerate(rows):
+        operation_id = row["operation_id"]
+        if row["operation_name"] == "execute_tool":
+            tool_name = row["tool_name"] or "unknown"
+            call_id = row.get("tool_call_id", "")
+            if call_id:
+                call_names[(operation_id, call_id)].add(tool_name)
+            else:
+                anonymous_calls[tool_name] += 1
+            tool_ok = row.get("tool_ok", "").casefold()
+            response_id = f"{operation_id}:{call_id or f'span:{row_index}'}"
+            if row["error_type"]:
+                response_ids.add(response_id)
+                key = (response_id, row["error_type"])
+                if key not in recorded_errors:
+                    recorded_errors.add(key)
+                    error_codes[row["error_type"]] += 1
+            elif tool_ok == "false":
+                response_ids.add(response_id)
+                key = (response_id, "tool_error")
+                if key not in recorded_errors:
+                    recorded_errors.add(key)
+                    error_codes["tool_error"] += 1
+            elif tool_ok == "true":
+                response_ids.add(response_id)
+                successful_responses.add(response_id)
+            elif row["tool_result"]:
+                try:
+                    record_response(
+                        json.loads(row["tool_result"]),
+                        call_id or f"span:{row_index}",
+                        operation_id,
+                    )
+                except json.JSONDecodeError:
+                    response_ids.add(response_id)
+                    successful_responses.add(response_id)
+        for message_index, raw in enumerate(row["messages"]):
+            stripped = raw.strip()
+            if not stripped:
+                continue
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                walk(raw, operation_id)
+                continue
+            walk(parsed, operation_id)
+            if message_index == 1 and isinstance(parsed, list):
+                candidate_key = (
+                    row.get("timestamp", ""),
+                    json.dumps(parsed, sort_keys=True, ensure_ascii=True),
+                )
+                current = terminal_snapshots.get(operation_id)
+                if current is None or candidate_key > current[0]:
+                    terminal_snapshots[operation_id] = (candidate_key, parsed)
+
+    for operation_id, (_, snapshot) in terminal_snapshots.items():
+        record_terminal_assistant(snapshot, operation_id)
+
+    call_counts: Counter[str] = Counter()
+    for names in call_names.values():
+        canonical = next(
+            (name for name in sorted(names) if name != "unknown"),
+            "unknown",
+        )
+        call_counts[canonical] += 1
+    call_counts.update(anonymous_calls)
+    return {
+        "operation_count": len({row["operation_id"] for row in rows}),
+        "tool_call_counts": dict(sorted(call_counts.items())),
+        "tool_response_count": len(response_ids),
+        "successful_tool_response_count": len(successful_responses),
+        "error_codes": dict(sorted(error_codes.items())),
+        "assistant_response_count": len(assistant_response_operations),
+    }
 
 
 def _usable_response(response: dict[str, Any], expected_status: int) -> bool:

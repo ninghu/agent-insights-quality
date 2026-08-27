@@ -20,6 +20,15 @@ Classify ownership independently:
 Never assign `insight_engine` unless endpoint behavior and trace contract are both proven.
 Use `endpoint_evidence`, not the Insight's own description, as the independent runtime proof.
 Never infer an Agent defect by treating the observed card's claim as proof of that same defect.
+Use each baseline card's `independent_trace_proof` as sanitized read-only evidence of actual tool-call
+counts, tool responses, error codes, and user-facing response presence. For a baseline card:
+
+- use `agent_finding` at the top level and `valid_agent_finding` with `agent` ownership when
+  independent trace proof supports at least one card and no card remains incomplete;
+- use `noise` with `insight_engine` ownership when independent proof contradicts the card;
+- use `incomplete` with `unresolved` ownership when the proof cannot distinguish them.
+
+Do not assume a baseline is healthy merely because response counts and the generic trace contract pass.
 
 Agent source, traffic, and version digests are reviewed before qualification. Treat the reviewed
 runtime contract as exercised when request, response, and usable-response counts are equal and

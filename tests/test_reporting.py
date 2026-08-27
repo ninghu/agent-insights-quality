@@ -267,6 +267,44 @@ def test_incomplete_baseline_card_prevents_a_numeric_score() -> None:
     assert report["summary"]["quality_score"] is None
 
 
+def test_valid_baseline_agent_finding_is_not_noise() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    manifest["agents"][0]["baseline"] = {
+        "foundry_version": "1",
+        "status": "not_at_bar",
+        "insight_references": ["sha256:" + "1" * 64],
+        "endpoint_request_count": 5,
+        "endpoint_response_count": 5,
+        "endpoint_usable_response_count": 5,
+        "trace_contract_verified": True,
+    }
+    baseline = _baseline_assessments(manifest)
+    baseline["weather-agent"] = {
+        "verdict": "agent_finding",
+        "ownership": "agent",
+        "ownership_reason": "Independent trace proof confirms an Agent defect.",
+        "confidence": 0.99,
+        "card_evaluations": [
+            {
+                "evaluation": "valid_agent_finding",
+                "ownership": "agent",
+            }
+        ],
+    }
+    report = build_report(manifest, issues, _assessments(manifest), baseline)
+    assert report["status"] == "PASS"
+    assert report["summary"]["baseline_passed"] == 4
+    assert report["summary"]["noise_cards"] == 0
+    assert report["summary"]["clean_card_precision"] == 100
+    assert report["summary"]["quality_score"] == 100
+    report["delivery"]["content_digest"] = "sha256:" + "a" * 64
+    validate_published_report(report)
+    report["baseline"][0]["assessment"]["ownership"] = "insight_engine"
+    with pytest.raises(ContractError, match="baseline"):
+        validate_published_report(report)
+
+
 def test_missing_runtime_evidence_prevents_a_numeric_score() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()

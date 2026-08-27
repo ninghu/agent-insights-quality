@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import io
+import json
 import threading
 import time
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
+
 from agent_insights_quality.live import (
     LiveRuntime,
     _complete_operation_ids,
     _normalize_fixture,
     _semantic_assertion_result,
+    _trace_behavior_summary,
     _trace_contract_ready,
     _usable_response,
 )
@@ -94,6 +98,269 @@ def test_semantic_assertions_record_only_counts() -> None:
     )
     assert count == 3
     assert passed == 3
+
+
+def test_trace_behavior_summary_sanitizes_prompt_tool_sequence() -> None:
+    messages = json.dumps(
+        [
+            {
+                "role": "assistant",
+                "parts": [
+                    {
+                        "type": "tool_call",
+                        "id": "call-1",
+                        "name": "lookup_slots",
+                        "arguments": {"private": "not retained"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "parts": [
+                    {
+                        "type": "tool_call_response",
+                        "response": json.dumps(
+                            {
+                                "error": {
+                                    "code": "temporary_unavailable",
+                                    "retryable": True,
+                                }
+                            }
+                        ),
+                    }
+                ],
+            },
+        ]
+    )
+    summary = _trace_behavior_summary(
+        [
+            {
+                "operation_id": "a" * 32,
+                "operation_name": "invoke_agent",
+                "tool_name": "",
+                "tool_call_id": "",
+                "error_type": "",
+                "tool_ok": "",
+                "tool_result": "",
+                "messages": ["", messages],
+                "timestamp": "2026-08-26T10:00:00Z",
+            }
+        ]
+    )
+    assert summary == {
+        "operation_count": 1,
+        "tool_call_counts": {"lookup_slots": 1},
+        "tool_response_count": 1,
+        "successful_tool_response_count": 0,
+        "error_codes": {"temporary_unavailable": 1},
+        "assistant_response_count": 0,
+    }
+    assert "private" not in json.dumps(summary)
+
+
+def test_trace_behavior_summary_records_hosted_tool_recovery() -> None:
+    summary = _trace_behavior_summary(
+        [
+            {
+                "operation_id": "a" * 32,
+                "operation_name": "execute_tool",
+                "tool_name": "read_ticket",
+                "tool_call_id": "",
+                "error_type": "",
+                "tool_ok": "false",
+                "tool_result": "",
+                "messages": ["", ""],
+            },
+            {
+                "operation_id": "a" * 32,
+                "operation_name": "execute_tool",
+                "tool_name": "read_ticket",
+                "tool_call_id": "",
+                "error_type": "",
+                "tool_ok": "true",
+                "tool_result": "",
+                "messages": ["", ""],
+            },
+        ]
+    )
+    assert summary["tool_call_counts"] == {"read_ticket": 2}
+    assert summary["successful_tool_response_count"] == 1
+    assert summary["error_codes"] == {"tool_error": 1}
+
+
+def test_trace_behavior_summary_requires_terminal_visible_response() -> None:
+    messages = json.dumps(
+        [
+            {
+                "role": "assistant",
+                "parts": [{"type": "text", "content": "Checking now."}],
+            },
+            {
+                "role": "assistant",
+                "parts": [
+                    {
+                        "type": "tool_call",
+                        "id": "call-1",
+                        "name": "lookup_slots",
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "parts": [
+                    {
+                        "type": "tool_call_response",
+                        "response": {"slots": ["slot-demo-1"]},
+                    }
+                ],
+            },
+        ]
+    )
+    row = {
+        "operation_id": "a" * 32,
+        "operation_name": "invoke_agent",
+        "tool_name": "",
+        "tool_call_id": "",
+        "error_type": "",
+        "tool_ok": "",
+        "tool_result": "",
+        "messages": [messages, ""],
+    }
+    assert _trace_behavior_summary([row])["assistant_response_count"] == 0
+    with_final = json.loads(messages)
+    with_final.append(
+        {
+            "role": "assistant",
+            "parts": [{"type": "text", "content": "One slot is available."}],
+        }
+    )
+    row["messages"] = ["", json.dumps(with_final)]
+    assert _trace_behavior_summary([row])["assistant_response_count"] == 1
+    with_final.append(
+        {
+            "role": "user",
+            "parts": [{"type": "text", "content": "One more question."}],
+        }
+    )
+    row["messages"] = ["", json.dumps(with_final)]
+    assert _trace_behavior_summary([row])["assistant_response_count"] == 0
+    terminal = with_final[:-1]
+    first = {**row, "operation_id": "a" * 32, "messages": ["", json.dumps(terminal)]}
+    second = {**row, "operation_id": "b" * 32, "messages": ["", json.dumps(terminal)]}
+    assert (
+        _trace_behavior_summary([first, second])["assistant_response_count"]
+        == 2
+    )
+    text_and_tool = [
+        {
+            "role": "assistant",
+            "parts": [
+                {"type": "text", "content": "Checking now."},
+                {"type": "tool_call", "id": "call-2", "name": "lookup_slots"},
+            ],
+        }
+    ]
+    row["messages"] = ["", json.dumps(text_and_tool)]
+    assert _trace_behavior_summary([row])["assistant_response_count"] == 0
+    alternate = [
+        {
+            "role": "assistant",
+            "parts": [{"type": "text", "content": "A different final answer."}],
+        }
+    ]
+    first = {
+        **row,
+        "messages": ["", json.dumps(terminal)],
+        "timestamp": "2026-08-26T10:01:00Z",
+    }
+    second = {
+        **row,
+        "messages": ["", json.dumps(alternate)],
+        "timestamp": "2026-08-26T10:02:00Z",
+    }
+    assert _trace_behavior_summary([first, second])["assistant_response_count"] == 1
+    assert _trace_behavior_summary([second, first])["assistant_response_count"] == 1
+
+
+def test_trace_behavior_summary_deduplicates_tool_call_ids() -> None:
+    messages = json.dumps(
+        [
+            {
+                "role": "assistant",
+                "parts": [
+                    {
+                        "type": "tool_call",
+                        "id": "call-1",
+                        "name": "lookup_slots",
+                    }
+                ],
+            }
+        ]
+    )
+    summary = _trace_behavior_summary(
+        [
+            {
+                "operation_id": "a" * 32,
+                "operation_name": "execute_tool",
+                "tool_name": "unknown",
+                "tool_call_id": "call-1",
+                "error_type": "",
+                "tool_ok": "true",
+                "tool_result": "",
+                "messages": [messages, ""],
+            }
+        ]
+    )
+    assert summary["tool_call_counts"] == {"lookup_slots": 1}
+
+
+def test_trace_behavior_summary_deduplicates_tool_responses() -> None:
+    messages = json.dumps(
+        [
+            {
+                "role": "assistant",
+                "parts": [
+                    {
+                        "type": "tool_call",
+                        "id": "call-1",
+                        "name": "lookup_slots",
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "parts": [
+                    {
+                        "type": "tool_call_response",
+                        "id": "call-1",
+                        "response": {
+                            "error": {"code": "temporary_unavailable"}
+                        },
+                    }
+                ],
+            },
+        ]
+    )
+    result = json.dumps(
+        {"error": {"code": "temporary_unavailable"}}
+    )
+    summary = _trace_behavior_summary(
+        [
+            {
+                "operation_id": "a" * 32,
+                "operation_name": "execute_tool",
+                "tool_name": "lookup_slots",
+                "tool_call_id": "call-1",
+                "error_type": "",
+                "tool_ok": "",
+                "tool_result": result,
+                "messages": [messages, ""],
+            }
+        ]
+    )
+    assert summary["tool_call_counts"] == {"lookup_slots": 1}
+    assert summary["tool_response_count"] == 1
+    assert summary["error_codes"] == {"temporary_unavailable": 1}
 
 
 def test_repeated_tool_fixtures_are_argument_aware() -> None:
@@ -239,6 +506,69 @@ def test_runtime_caches_tokens_and_serializes_telemetry_queries() -> None:
     assert maximum_active == 1
 
 
+def test_telemetry_query_retries_transient_sdk_failures(monkeypatch) -> None:
+    class SyntheticHttpError(Exception):
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+
+    runtime = _runtime()
+    attempts = 0
+    sleeps = []
+
+    class Client:
+        def query_resource(self, *_args, **_kwargs):
+            nonlocal attempts
+            attempts += 1
+            if attempts < 4:
+                raise SyntheticHttpError(503)
+            return "complete"
+
+    monkeypatch.setattr(
+        "agent_insights_quality.live._TELEMETRY_HTTP_ERRORS",
+        (SyntheticHttpError,),
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.live._TELEMETRY_TRANSIENT_ERRORS",
+        (SyntheticHttpError,),
+    )
+    runtime._sleep = sleeps.append
+    assert (
+        runtime._query_resource(Client(), "query", timespan=(0, 1))
+        == "complete"
+    )
+    assert attempts == 4
+    assert sleeps == [1, 2, 4]
+
+
+def test_telemetry_query_does_not_retry_nontransient_http_failures(
+    monkeypatch,
+) -> None:
+    class SyntheticHttpError(Exception):
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+
+    runtime = _runtime()
+    attempts = 0
+
+    class Client:
+        def query_resource(self, *_args, **_kwargs):
+            nonlocal attempts
+            attempts += 1
+            raise SyntheticHttpError(400)
+
+    monkeypatch.setattr(
+        "agent_insights_quality.live._TELEMETRY_HTTP_ERRORS",
+        (SyntheticHttpError,),
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.live._TELEMETRY_TRANSIENT_ERRORS",
+        (SyntheticHttpError,),
+    )
+    with pytest.raises(SyntheticHttpError):
+        runtime._query_resource(Client(), "query", timespan=(0, 1))
+    assert attempts == 1
+
+
 def test_failed_agent_insights_run_retries_without_new_traffic() -> None:
     runtime = _runtime()
     statuses = iter(["failed", "failed", "succeeded"])
@@ -303,6 +633,88 @@ def test_json_get_retries_transient_http_failures(monkeypatch) -> None:
     assert value["value"] == "ok"
     assert attempts == 2
     assert sleeps == [1]
+
+
+def test_json_post_retries_foundry_failed_dependency(monkeypatch) -> None:
+    runtime = _runtime()
+    attempts = 0
+    request_references = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        @staticmethod
+        def read():
+            return b'{"value":"ok"}'
+
+    def open_request(request, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        request_references.append(request.headers["X-ms-client-request-id"])
+        if attempts == 1:
+            raise urllib.error.HTTPError(
+                "https://example.invalid",
+                424,
+                "Failed Dependency",
+                {},
+                io.BytesIO(b"{}"),
+            )
+        return Response()
+
+    runtime._sleep = lambda _seconds: None
+    monkeypatch.setattr(
+        "agent_insights_quality.live.urllib.request.urlopen",
+        open_request,
+    )
+    value = runtime._json_request(
+        "POST",
+        "https://example.invalid",
+        retry_statuses={424},
+    )
+    assert value["value"] == "ok"
+    assert attempts == 2
+    assert len(set(request_references)) == 2
+    assert value["_request_reference"] == request_references[-1]
+
+
+def test_hosted_invocation_correlates_with_successful_request_reference() -> None:
+    runtime = _runtime()
+
+    def request(*_args, **_kwargs):
+        return {
+            "_http_status": 200,
+            "_request_reference": "successful-attempt",
+            "id": "response-id-not-present-in-telemetry",
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "complete"}],
+                }
+            ],
+        }
+
+    runtime._json_request = request  # type: ignore[method-assign]
+    references, usable, assertion_count, assertions_passed = (
+        runtime._invoke_hosted(
+            "finance-agent",
+            "session-id",
+            {
+                "body": {"input": "synthetic request"},
+                "expected_status": 200,
+            },
+            1,
+        )
+    )
+    assert references == ["successful-attempt"]
+    assert usable is True
+    assert assertion_count == 0
+    assert assertions_passed == 0
 
 
 def test_json_request_refreshes_an_expired_credential_once(monkeypatch) -> None:
