@@ -8,7 +8,7 @@ deployment:
   protocol: responses
   port: 8088
   entrypoint: python -m source.app
-category: tool_call_failures
+category: hallucinations
 severity: medium
 expected_behavior:
   desired: Treat a structured tool error as a failure.

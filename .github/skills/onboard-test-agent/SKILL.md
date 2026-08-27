@@ -1,10 +1,10 @@
 ---
-name: onboard-new-test-agent
+name: onboard-test-agent
 description: Add one fixed synthetic Test Agent and its initial reviewed issue set.
 license: MIT
 ---
 
-# Onboard New Test Agent
+# Onboard Test Agent
 
 Add one new synthetic Test Agent only as a human-reviewed fixed-topology migration.
 

@@ -779,23 +779,48 @@ def test_json_post_requires_explicit_no_response_retry(monkeypatch) -> None:
     assert attempts == 1
 
 
-def test_hosted_invocation_correlates_with_successful_request_reference() -> None:
+def test_hosted_invocation_correlates_with_successful_request_reference(
+    monkeypatch,
+) -> None:
     runtime = _runtime()
+    timeout_seconds = None
+    request_reference = None
 
-    def request(*_args, **_kwargs):
-        return {
-            "_http_status": 200,
-            "_request_reference": "successful-attempt",
-            "id": "response-id-not-present-in-telemetry",
-            "output": [
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        @staticmethod
+        def read():
+            return json.dumps(
                 {
-                    "type": "message",
-                    "content": [{"type": "output_text", "text": "complete"}],
+                    "id": "response-id-not-present-in-telemetry",
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [
+                                {"type": "output_text", "text": "complete"}
+                            ],
+                        }
+                    ],
                 }
-            ],
-        }
+            ).encode()
 
-    runtime._json_request = request  # type: ignore[method-assign]
+    def open_request(request, *, timeout):
+        nonlocal request_reference, timeout_seconds
+        request_reference = request.headers["X-ms-client-request-id"]
+        timeout_seconds = timeout
+        return Response()
+
+    monkeypatch.setattr(
+        "agent_insights_quality.live.urllib.request.urlopen",
+        open_request,
+    )
     references, usable, assertion_count, assertions_passed = (
         runtime._invoke_hosted(
             "finance-agent",
@@ -807,10 +832,11 @@ def test_hosted_invocation_correlates_with_successful_request_reference() -> Non
             1,
         )
     )
-    assert references == ["successful-attempt"]
+    assert references == [request_reference]
     assert usable is True
     assert assertion_count == 0
     assert assertions_passed == 0
+    assert timeout_seconds == 600
 
 
 def test_hosted_cleanup_failure_preserves_completed_responses() -> None:

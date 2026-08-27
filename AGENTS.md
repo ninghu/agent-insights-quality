@@ -101,5 +101,5 @@ az bicep build --file infra\main.bicep --stdout
 
 - `.github/skills/agent-insights-quality-daily/SKILL.md`: weekday qualification and publication.
 - `.github/skills/staging-qualification/SKILL.md`: full 36-issue qualification and promotion.
-- `.github/skills/onboard-new-test-agent/SKILL.md`: add one reviewed fixed Test Agent.
+- `.github/skills/onboard-test-agent/SKILL.md`: add one reviewed fixed Test Agent.
 - `.github/skills/onboard-new-issue/SKILL.md`: add one reviewed issue.
