@@ -3,6 +3,15 @@
 Agent and Issue catalogs, Agent implementations, schemas, score policy, infrastructure, and promotion
 receipts are human-reviewed contracts. Keep every change synthetic and public-safe.
 
+## Review the existing catalogs
+
+Before proposing a Test Agent or issue, review the generated [Agent Catalog](AGENT_CATALOG.md) for
+the current Agents and assignments, and the generated [Issue Catalog](ISSUE_CATALOG.md) for the
+existing reviewed defects. Their source authorities are
+[`catalogs/AGENT_CATALOG.yaml`](catalogs/AGENT_CATALOG.yaml) and
+[`catalogs/ISSUE_CATALOG.yaml`](catalogs/ISSUE_CATALOG.yaml); update the YAML catalogs and regenerate
+the readable views rather than editing the generated Markdown directly.
+
 ## Test Agent and issue contract
 
 Each permanent Test Agent owns one healthy baseline and one or more reviewed issue versions:
