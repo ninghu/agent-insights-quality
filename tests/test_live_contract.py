@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import threading
 import time
 import urllib.error
@@ -12,6 +13,7 @@ from agent_insights_quality.live import (
     _complete_operation_ids,
     _normalize_fixture,
     _semantic_assertion_result,
+    _trace_behavior_summary,
     _trace_contract_ready,
     _usable_response,
 )
@@ -94,6 +96,269 @@ def test_semantic_assertions_record_only_counts() -> None:
     )
     assert count == 3
     assert passed == 3
+
+
+def test_trace_behavior_summary_sanitizes_prompt_tool_sequence() -> None:
+    messages = json.dumps(
+        [
+            {
+                "role": "assistant",
+                "parts": [
+                    {
+                        "type": "tool_call",
+                        "id": "call-1",
+                        "name": "lookup_slots",
+                        "arguments": {"private": "not retained"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "parts": [
+                    {
+                        "type": "tool_call_response",
+                        "response": json.dumps(
+                            {
+                                "error": {
+                                    "code": "temporary_unavailable",
+                                    "retryable": True,
+                                }
+                            }
+                        ),
+                    }
+                ],
+            },
+        ]
+    )
+    summary = _trace_behavior_summary(
+        [
+            {
+                "operation_id": "a" * 32,
+                "operation_name": "invoke_agent",
+                "tool_name": "",
+                "tool_call_id": "",
+                "error_type": "",
+                "tool_ok": "",
+                "tool_result": "",
+                "messages": ["", messages],
+                "timestamp": "2026-08-26T10:00:00Z",
+            }
+        ]
+    )
+    assert summary == {
+        "operation_count": 1,
+        "tool_call_counts": {"lookup_slots": 1},
+        "tool_response_count": 1,
+        "successful_tool_response_count": 0,
+        "error_codes": {"temporary_unavailable": 1},
+        "assistant_response_count": 0,
+    }
+    assert "private" not in json.dumps(summary)
+
+
+def test_trace_behavior_summary_records_hosted_tool_recovery() -> None:
+    summary = _trace_behavior_summary(
+        [
+            {
+                "operation_id": "a" * 32,
+                "operation_name": "execute_tool",
+                "tool_name": "read_ticket",
+                "tool_call_id": "",
+                "error_type": "",
+                "tool_ok": "false",
+                "tool_result": "",
+                "messages": ["", ""],
+            },
+            {
+                "operation_id": "a" * 32,
+                "operation_name": "execute_tool",
+                "tool_name": "read_ticket",
+                "tool_call_id": "",
+                "error_type": "",
+                "tool_ok": "true",
+                "tool_result": "",
+                "messages": ["", ""],
+            },
+        ]
+    )
+    assert summary["tool_call_counts"] == {"read_ticket": 2}
+    assert summary["successful_tool_response_count"] == 1
+    assert summary["error_codes"] == {"tool_error": 1}
+
+
+def test_trace_behavior_summary_requires_terminal_visible_response() -> None:
+    messages = json.dumps(
+        [
+            {
+                "role": "assistant",
+                "parts": [{"type": "text", "content": "Checking now."}],
+            },
+            {
+                "role": "assistant",
+                "parts": [
+                    {
+                        "type": "tool_call",
+                        "id": "call-1",
+                        "name": "lookup_slots",
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "parts": [
+                    {
+                        "type": "tool_call_response",
+                        "response": {"slots": ["slot-demo-1"]},
+                    }
+                ],
+            },
+        ]
+    )
+    row = {
+        "operation_id": "a" * 32,
+        "operation_name": "invoke_agent",
+        "tool_name": "",
+        "tool_call_id": "",
+        "error_type": "",
+        "tool_ok": "",
+        "tool_result": "",
+        "messages": [messages, ""],
+    }
+    assert _trace_behavior_summary([row])["assistant_response_count"] == 0
+    with_final = json.loads(messages)
+    with_final.append(
+        {
+            "role": "assistant",
+            "parts": [{"type": "text", "content": "One slot is available."}],
+        }
+    )
+    row["messages"] = ["", json.dumps(with_final)]
+    assert _trace_behavior_summary([row])["assistant_response_count"] == 1
+    with_final.append(
+        {
+            "role": "user",
+            "parts": [{"type": "text", "content": "One more question."}],
+        }
+    )
+    row["messages"] = ["", json.dumps(with_final)]
+    assert _trace_behavior_summary([row])["assistant_response_count"] == 0
+    terminal = with_final[:-1]
+    first = {**row, "operation_id": "a" * 32, "messages": ["", json.dumps(terminal)]}
+    second = {**row, "operation_id": "b" * 32, "messages": ["", json.dumps(terminal)]}
+    assert (
+        _trace_behavior_summary([first, second])["assistant_response_count"]
+        == 2
+    )
+    text_and_tool = [
+        {
+            "role": "assistant",
+            "parts": [
+                {"type": "text", "content": "Checking now."},
+                {"type": "tool_call", "id": "call-2", "name": "lookup_slots"},
+            ],
+        }
+    ]
+    row["messages"] = ["", json.dumps(text_and_tool)]
+    assert _trace_behavior_summary([row])["assistant_response_count"] == 0
+    alternate = [
+        {
+            "role": "assistant",
+            "parts": [{"type": "text", "content": "A different final answer."}],
+        }
+    ]
+    first = {
+        **row,
+        "messages": ["", json.dumps(terminal)],
+        "timestamp": "2026-08-26T10:01:00Z",
+    }
+    second = {
+        **row,
+        "messages": ["", json.dumps(alternate)],
+        "timestamp": "2026-08-26T10:02:00Z",
+    }
+    assert _trace_behavior_summary([first, second])["assistant_response_count"] == 1
+    assert _trace_behavior_summary([second, first])["assistant_response_count"] == 1
+
+
+def test_trace_behavior_summary_deduplicates_tool_call_ids() -> None:
+    messages = json.dumps(
+        [
+            {
+                "role": "assistant",
+                "parts": [
+                    {
+                        "type": "tool_call",
+                        "id": "call-1",
+                        "name": "lookup_slots",
+                    }
+                ],
+            }
+        ]
+    )
+    summary = _trace_behavior_summary(
+        [
+            {
+                "operation_id": "a" * 32,
+                "operation_name": "execute_tool",
+                "tool_name": "unknown",
+                "tool_call_id": "call-1",
+                "error_type": "",
+                "tool_ok": "true",
+                "tool_result": "",
+                "messages": [messages, ""],
+            }
+        ]
+    )
+    assert summary["tool_call_counts"] == {"lookup_slots": 1}
+
+
+def test_trace_behavior_summary_deduplicates_tool_responses() -> None:
+    messages = json.dumps(
+        [
+            {
+                "role": "assistant",
+                "parts": [
+                    {
+                        "type": "tool_call",
+                        "id": "call-1",
+                        "name": "lookup_slots",
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "parts": [
+                    {
+                        "type": "tool_call_response",
+                        "id": "call-1",
+                        "response": {
+                            "error": {"code": "temporary_unavailable"}
+                        },
+                    }
+                ],
+            },
+        ]
+    )
+    result = json.dumps(
+        {"error": {"code": "temporary_unavailable"}}
+    )
+    summary = _trace_behavior_summary(
+        [
+            {
+                "operation_id": "a" * 32,
+                "operation_name": "execute_tool",
+                "tool_name": "lookup_slots",
+                "tool_call_id": "call-1",
+                "error_type": "",
+                "tool_ok": "",
+                "tool_result": result,
+                "messages": [messages, ""],
+            }
+        ]
+    )
+    assert summary["tool_call_counts"] == {"lookup_slots": 1}
+    assert summary["tool_response_count"] == 1
+    assert summary["error_codes"] == {"temporary_unavailable": 1}
 
 
 def test_repeated_tool_fixtures_are_argument_aware() -> None:

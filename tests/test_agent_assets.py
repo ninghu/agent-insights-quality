@@ -35,6 +35,19 @@ def test_prompt_definitions_are_complete_and_use_terra() -> None:
         assert definition["model"] == "gpt-5.6-terra"
         assert definition["instructions"].strip()
         assert definition["tools"]
+        if "healthcare-agent" in path.parts:
+            instructions = definition["instructions"]
+            assert (
+                "call lookup_slots exactly once more using the same account_scope, "
+                "provider, and date"
+            ) in instructions
+            assert "After that retry, do not retry again" in instructions
+            assert "wait for every tool response" in instructions
+            assert "always emit one final user-facing availability summary" in instructions
+        if "weather-agent" in path.parts:
+            instructions = definition["instructions"]
+            assert "always emit one terminal user-facing response" in instructions
+            assert "never finish with tool output only" in instructions
         logical_version = "v0" if path.parent.name == "v0" else path.parent.name
         if logical_version != "v0":
             assert value["metadata"]["logical_version"] == logical_version
@@ -198,8 +211,18 @@ def test_hosted_framework_and_identity_boundaries() -> None:
     assert "ResponsesAgentServerHost" in support
     assert "@app.response_handler" in support
     assert '"gen_ai.operation.name", "execute_tool"' in support
-    assert "ContextVar" in finance
+    assert "transient_lock = threading.Lock()" in finance
     assert "ResetTransientState" not in finance
+    finance_sources = sorted(
+        ROOT.glob("agents/finance-agent/**/source/app.py")
+    )
+    assert len(finance_sources) == 9
+    for source in finance_sources:
+        text = source.read_text(encoding="utf-8")
+        assert "transient_attempts: set[tuple[int, str]]" in text
+        assert "span.get_span_context().trace_id" in text
+        assert "After account_not_found, stop that request" in text
+        assert "ContextVar" not in text
     issue_014 = (
         ROOT
         / "agents"

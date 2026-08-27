@@ -60,6 +60,9 @@ Agents and 36 reviewed, single-root issues.
 - Equal nonzero request, response, and usable-response counts plus a verified natural trace contract
   prove that the reviewed source-and-traffic contract was exercised. Semantic assertions are optional.
 - Assign `insight_engine` only when endpoint behavior and trace contract are proven.
+- Baseline source and configuration must be reviewed healthy, but runtime behavior must still be
+  proven. A baseline card supported by independent trace proof is an `agent` finding, not Noise;
+  external identity, quota, service, or ingestion failures use `infrastructure`.
 - Use `none`, `agent`, `insight_engine`, `test_framework`, `infrastructure`, or `unresolved`
   ownership.
 - `field_weighted_v1` score is 85% expected-issue field quality and 15% clean-card precision.

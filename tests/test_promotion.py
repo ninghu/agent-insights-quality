@@ -129,6 +129,7 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
                     "finding_type": "MATCHED",
                     "ownership_reason": "No baseline Insight was observed.",
                     "confidence": 0.99,
+                    "card_evaluations": [],
                 },
             }
             for agent in agents["agents"]

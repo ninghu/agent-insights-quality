@@ -214,12 +214,13 @@ def render_agent_catalog(agents: dict[str, Any]) -> str:
         "",
         "<!-- Generated from catalogs/AGENT_CATALOG.yaml; do not edit. -->",
         "",
-        "| Agent | Type | Framework | Model | Issue count |",
-        "| --- | --- | --- | --- | ---: |",
+        "| Agent | Owner | Type | Framework | Model | Issue count |",
+        "| --- | --- | --- | --- | --- | ---: |",
     ]
     for agent in agents["agents"]:
         lines.append(
-            f"| `{agent['name']}` | `{agent['type']}` | `{agent['framework']}` | "
+            f"| `{agent['name']}` | {agent['owner']} | `{agent['type']}` | "
+            f"`{agent['framework']}` | "
             f"`{agent['model']}` | {len(agent['issue_ids'])} |"
         )
     lines.append("")

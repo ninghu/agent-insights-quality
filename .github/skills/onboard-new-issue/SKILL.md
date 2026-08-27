@@ -1,22 +1,41 @@
+---
+name: onboard-new-issue
+description: Add one human-reviewed single-root issue to an existing or newly proposed Test Agent.
+license: MIT
+---
+
 # Onboard New Issue
 
 Add one independently fixable issue only after human review.
 
-1. Choose the permanent Agent based on its real Foundry type and implementation surface.
-2. Allocate the next continuous `issue-NNN` ID.
-3. Add one Issue Catalog entry with one expected Insight and one natural trace contract.
-4. Add `agents/<agent>/issues/issue-NNN/implementation.yaml` and deterministic `traffic.json` requests
+1. Produce a reviewable plan and stop for human approval before changing catalogs or source.
+2. Choose the existing permanent Agent, or the proposed Agent in an enclosing new-Agent migration,
+   based on its real Foundry type and implementation surface.
+3. Allocate the next continuous `issue-NNN` ID.
+4. Add one Issue Catalog entry with expected title, root cause, category, severity, proposed fix, and
+   one natural trace contract.
+5. Append the new ID to the permanent Agent's ordered `issue_ids` in
+   `catalogs/AGENT_CATALOG.yaml`; both catalogs must agree exactly.
+6. Add `agents/<agent>/issues/issue-NNN/implementation.yaml` and deterministic `traffic.json` requests
    that exercise the reviewed defect.
-5. For Prompt Agents, add a complete deployable `definition.json`.
-6. For Hosted Agents, copy the complete healthy `source/` tree into the issue folder and modify only
+7. For Prompt Agents, add a complete deployable `definition.json`.
+8. For Hosted Agents, copy the complete healthy `source/` tree into the issue folder and modify only
    the reviewed defect location. Do not use runtime mode switches, dormant defect branches, hooks, or
    build-time patches.
-7. Generate docs, validate, and test deterministic packaging.
-8. Update fixed total-count contracts when the Issue Catalog size changes: Issue Catalog schema,
-   staging report schema and validator, score denominator tests, promotion tests, generated docs, and
-   readable documentation.
-9. Confirm the permanent Agent still has at least five eligible issues for deterministic weekday
-   selection.
-10. Deploy the digest to staging and run full qualification before daily promotion.
+9. Prove `v0` remains a healthy static contract and the issue implementation differs by exactly one
+   reviewed root. Propagate unrelated baseline maintenance into every self-contained version.
+10. Generate docs, validate, and test deterministic packaging.
+11. Search for the previous Agent count, issue count, version count, final issue ID, and explicit
+   Agent-name lists. Update every matching schema, runtime validator, promotion check, CI matrix,
+   test, skill, generated view, and readable document, including promotion/deployment registry schemas
+   and generated-change validation.
+12. Confirm the Agent has at least one assigned issue and daily selection uses
+   `min(5, assigned issues)`.
+13. Run repository validation, Ruff, tests, and Bicep compilation.
+14. Deploy the digest to staging, run full-catalog qualification, complete Sol assessment, and require
+    human review before daily promotion. In an enclosing new-Agent migration, catalog assignment,
+    qualification, and promotion may be completed atomically by the parent workflow.
+15. Create a receipt only from a complete reviewed PASS or FAIL with matching report, manifest,
+    registry hashes, and every exact version digest. Never promote INCOMPLETE.
 
 Never add a multi-root issue, compatibility alias, telemetry injection, or private data.

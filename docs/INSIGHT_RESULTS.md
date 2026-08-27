@@ -9,7 +9,7 @@ passing fields.
 | Fully Correct | The card identifies the expected root cause and passes title, description, category, severity, proposed fix, and linked-trace checks. | `MATCHED` |
 | Partially Correct | The card identifies the correct problem direction and remains useful, but one or more fields are incomplete or inaccurate. | `PARTIAL` |
 | Incorrect | The card is related to the tested issue, but its root cause or other material guidance is wrong or misleading. | `MISMATCHED` |
-| Noise / Duplicate | The card should not have appeared because it is unrelated, a false positive, an extra duplicate, or a finding on a healthy baseline. | `NOISE` or `DUPLICATE` |
+| Noise / Duplicate | The card should not have appeared because it is unrelated, contradicted by independent evidence, or an extra duplicate. | `NOISE` or `DUPLICATE` |
 
 ## How field results are read
 
@@ -74,8 +74,20 @@ the card partially correct when its core diagnosis is wrong.
 ## Noise / Duplicate
 
 Noise is not a lower-quality description of the expected issue. It is a card that should not exist at
-all. This includes false positives, unrelated findings, redundant duplicates, and findings generated
-for a healthy baseline.
+all. This includes false positives, unrelated findings, and redundant duplicates. A card generated
+for `v0` is Noise only when independent runtime evidence contradicts it. If independent trace proof
+shows that `v0` violated its reviewed healthy contract, the card is a valid Agent finding.
+
+## Baseline ownership
+
+`v0` source and configuration are reviewed to contain no injected defect. Runtime can still deviate
+from that contract:
+
+- `agent`: model or workflow behavior violated the healthy contract;
+- `insight_engine`: independent evidence proves healthy behavior but the card is a false positive;
+- `test_framework`: fixture, dispatch, correlation, or evidence extraction is wrong;
+- `infrastructure`: identity, quota, service availability, deployment, or ingestion failed;
+- `unresolved`: retained evidence cannot distinguish the owner.
 
 ## Missing expected Insight
 

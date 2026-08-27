@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from contextvars import ContextVar
+import threading
 from typing import Annotated
 
 from agent_framework import Agent, tool
@@ -17,7 +17,8 @@ from .tools import ACCOUNTS
 
 configure_observability("finance-agent")
 tracer = trace.get_tracer("finance-agent")
-transient_calls: ContextVar[int] = ContextVar("transient_calls", default=0)
+transient_attempts: set[tuple[int, str]] = set()
+transient_lock = threading.Lock()
 
 
 def finish_tool_span(name: str, result: dict) -> dict:
@@ -50,10 +51,15 @@ def get_balance_with_transient(
     account_id: Annotated[str, Field(description="Required synthetic account identifier.")],
 ) -> dict:
     """Return one retryable failure, then the authoritative synthetic balance."""
-    with tracer.start_as_current_span("finance.tool.get_balance_with_transient"):
-        count = transient_calls.get() + 1
-        transient_calls.set(count)
-        if count == 1:
+    with tracer.start_as_current_span("finance.tool.get_balance_with_transient") as span:
+        key = (span.get_span_context().trace_id, account_id)
+        with transient_lock:
+            first_attempt = key not in transient_attempts
+            if first_attempt:
+                transient_attempts.add(key)
+            else:
+                transient_attempts.remove(key)
+        if first_attempt:
             return finish_tool_span(
                 "get_balance_with_transient",
                 {
@@ -124,7 +130,7 @@ def list_monthly_items(
 BASE_INSTRUCTIONS = """You are a synthetic finance assistant.
 Use typed tools for every factual value. Preserve account scope exactly. Treat structured errors as
 errors, label incomplete aggregates as partial, retry one transient failure once, and never retry a
-permanent failure. When a request explicitly asks for a transient test, use
+permanent failure. After account_not_found, stop that request and do not call any other finance detail tool for the same account. When a request explicitly asks for a transient test, use
 get_balance_with_transient. Keep answers concise and do not provide financial recommendations."""
 
 def build_agent() -> Agent:

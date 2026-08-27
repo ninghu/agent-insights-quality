@@ -20,30 +20,35 @@ models:
     id: gpt-5.6-sol
 agents:
   - name: weather-agent
+    owner: Billy Hu
     type: prompt
     framework: foundry_prompt
     model: gpt-5.6-terra
     baseline_path: agents/weather-agent/v0
     issue_ids: [issue-001, issue-002, issue-003, issue-004, issue-005, issue-006]
   - name: healthcare-agent
+    owner: Ilya Matiach
     type: prompt
     framework: foundry_prompt
     model: gpt-5.6-terra
     baseline_path: agents/healthcare-agent/v0
     issue_ids: [issue-007, issue-008, issue-009, issue-010, issue-011, issue-012]
   - name: finance-agent
+    owner: Han Che
     type: hosted_code
     framework: microsoft_agent_framework
     model: gpt-5.6-terra
     baseline_path: agents/finance-agent/v0
     issue_ids: [issue-013, issue-014, issue-015, issue-016, issue-017, issue-018, issue-019, issue-020]
   - name: travel-agent
+    owner: Sean Gayler
     type: hosted_code
     framework: langgraph
     model: gpt-5.6-terra
     baseline_path: agents/travel-agent/v0
     issue_ids: [issue-021, issue-022, issue-023, issue-024, issue-025, issue-026, issue-027, issue-028]
   - name: support-ticket-agent
+    owner: Nishal Dsilva
     type: hosted_custom_container
     framework: custom_responses
     model: gpt-5.6-terra

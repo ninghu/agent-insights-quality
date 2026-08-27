@@ -1,3 +1,9 @@
+---
+name: staging-qualification
+description: Run full-catalog staging qualification and reviewed promotion to daily.
+license: MIT
+---
+
 # Staging Qualification
 
 Use this skill for a human-reviewed full qualification before promotion.
@@ -15,6 +21,8 @@ Use this skill for a human-reviewed full qualification before promotion.
 9. Assess five baselines and 36 issues with GPT-5.6 Sol. Equal nonzero request, response, and usable
    response counts plus a verified trace contract prove the reviewed runtime contract was exercised.
    Semantic assertions are optional corroboration.
+   Independently verify every baseline card; `v0` is a reviewed healthy contract, not proof that its
+   runtime behavior was healthy.
 10. Finalize with `--work-items <snapshot>` and inspect score, noise, ownership, and every non-matched
     finding. Any
    `inconclusive` baseline assessment or `INCOMPLETE` issue assessment makes the whole run
