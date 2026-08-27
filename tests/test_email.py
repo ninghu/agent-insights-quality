@@ -14,6 +14,9 @@ from agent_insights_quality.email import (
 )
 from agent_insights_quality.util import ContractError
 
+_DASHBOARD_LINK = "https://aka.ms/agent-insights/quality"
+_ADX_PUBLICATION = {"status": "published", "error_code": None}
+
 
 def test_email_requires_reviewed_domain_and_one_success(
     tmp_path: Path,
@@ -84,7 +87,12 @@ def test_email_requires_reviewed_domain_and_one_success(
         create_request(report, "Example User <synthetic@microsoft.com>")
     with pytest.raises(ContractError, match="exactly one"):
         create_request(report, "user@m\u0131crosoft.com")
-    request = create_request(report, "synthetic@microsoft.com")
+    request = create_request(
+        report,
+        "synthetic@microsoft.com",
+        dashboard_link=_DASHBOARD_LINK,
+        adx_publication=_ADX_PUBLICATION,
+    )
     assert request["channel"] == "copilot_email"
     assert request["send_once"] is True
     assert request["retry_ambiguous"] is False
@@ -99,6 +107,8 @@ def test_email_requires_reviewed_domain_and_one_success(
     assert "docs/QUALITY_BAR.md#quality-score" in request["html"]
     assert "How to read results" in request["html"]
     assert "docs/INSIGHT_RESULTS.md" in request["html"]
+    assert "Open quality trend dashboard" in request["html"]
+    assert _DASHBOARD_LINK in request["html"]
     assert "Incorrect related Insights" in request["html"]
     assert "Noise/duplicate Insights" in request["html"]
     assert "Incorrect/noisy insights" not in request["html"]
@@ -116,6 +126,8 @@ def test_email_requires_reviewed_domain_and_one_success(
     work_item_request = create_request(
         report,
         "synthetic@microsoft.com",
+        dashboard_link=_DASHBOARD_LINK,
+        adx_publication=_ADX_PUBLICATION,
         work_items={
             "closed_business_date": "2026-08-23",
             "active_items": [
@@ -155,9 +167,15 @@ def test_email_requires_reviewed_domain_and_one_success(
     incomplete["summary"]["quality_score"] = None
     incomplete["summary"]["incomplete"] = True
     incomplete["summary"]["incomplete_reasons"] = ["clean_window_not_empty"]
-    incomplete_request = create_request(incomplete, "synthetic@microsoft.com")
+    incomplete_request = create_request(
+        incomplete,
+        "synthetic@microsoft.com",
+        dashboard_link=_DASHBOARD_LINK,
+        adx_publication={"status": "failed", "error_code": "query_failed"},
+    )
     assert "pre-existing telemetry" in incomplete_request["html"]
     assert "no Agent traffic was sent" in incomplete_request["html"]
+    assert "ADX publication failed for this run" in incomplete_request["html"]
     receipt = {
         "schema_version": "2.0.0",
         "content_digest": request["content_digest"],

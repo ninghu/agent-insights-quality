@@ -4,7 +4,6 @@ import html
 import re
 import subprocess
 from base64 import urlsafe_b64encode
-from collections import Counter
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -15,6 +14,10 @@ from jsonschema import Draft202012Validator
 
 from agent_insights_quality.azure_cli import azure_cli
 from agent_insights_quality.profiles import RESOURCE_GROUP, RuntimeProfile
+from agent_insights_quality.report_summary import (
+    improvement_rows,
+    working_capabilities,
+)
 from agent_insights_quality.util import (
     ROOT,
     ContractError,
@@ -109,9 +112,20 @@ def create_request(
     *,
     project_link: str | None = None,
     agent_links: Mapping[str, str] | None = None,
+    dashboard_link: str | None = None,
+    adx_publication: Mapping[str, Any] | None = None,
     work_items: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     recipient = _validated_recipient(recipient)
+    if report.get("profile") == "daily":
+        if dashboard_link is None:
+            raise ContractError("Daily email requires the ADX dashboard link")
+        if adx_publication is None or adx_publication.get("status") not in {
+            "published",
+            "already_published",
+            "failed",
+        }:
+            raise ContractError("Daily email requires explicit ADX publication status")
     score = _overall_score(report)
     subject = (
         f"[Agent Insights Quality] {report['status']} - {score} - "
@@ -122,6 +136,8 @@ def create_request(
         report,
         project_link=project_link,
         agent_links=agent_links,
+        dashboard_link=dashboard_link,
+        adx_publication=adx_publication,
         work_items=work_items,
     )
     digest = content_hash(
@@ -356,118 +372,6 @@ def _incomplete_reason(reasons: list[str]) -> str:
     return " ".join(labels.get(reason, reason.replace("_", " ").capitalize()) for reason in reasons)
 
 
-def _working_capabilities(report: dict[str, Any]) -> list[tuple[str, str]]:
-    summary = report["summary"]
-    issues = report.get("issues", [])
-    details = Counter(item.get("detail") for item in issues)
-    useful = int(summary["issues_correct"]) + details["PARTIAL"]
-    rows: list[tuple[str, str]] = []
-    if useful:
-        rows.append(
-            (
-                "Useful diagnostic signal",
-                f"{useful} issue findings contained useful customer signal; "
-                f"{summary['issues_correct']} met the strict quality bar.",
-            )
-        )
-    if summary["issues_correct"]:
-        rows.append(
-            (
-                "Finding content",
-                f"All {summary['issues_correct']} fully correct findings passed "
-                "root cause, title, description, category, severity, proposed fix, "
-                "and linked-trace checks.",
-            )
-        )
-    if summary["baseline_passed"]:
-        rows.append(
-            (
-                "Baseline health",
-                f"{summary['baseline_passed']} of 5 healthy Agent versions produced "
-                "zero findings.",
-            )
-        )
-    if not summary.get("incomplete", False):
-        rows.append(
-            (
-                "Evidence coverage",
-                f"All 5 baselines and {summary['issues_expected']} issue targets had "
-                "complete endpoint and trace evidence.",
-            )
-        )
-    if not rows:
-        rows.append(
-            (
-                "No trusted capability conclusion",
-                "Validated evidence was incomplete; observed and missing findings "
-                "remain untrusted.",
-            )
-        )
-    return rows
-
-
-def _improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str]]:
-    issues = report.get("issues", [])
-    baseline = report.get("baseline", [])
-    rows: list[tuple[str, str, str]] = []
-    baseline_failures = [
-        item
-        for item in baseline
-        if item.get("assessment", {}).get("verdict") != "clean"
-        or item.get("insight_count", 0)
-    ]
-    if baseline_failures:
-        rows.append(
-            (
-                "Healthy baseline findings",
-                f"{len(baseline_failures)} of 5 baselines were not clean.",
-                "Healthy Agent versions should produce zero findings.",
-            )
-        )
-    missing = [item for item in issues if item.get("detail") == "MISSING"]
-    if missing:
-        rows.append(
-            (
-                "Expected findings were missed",
-                f"{len(missing)} single-root issues produced no attributable card.",
-                "Produce one attributable finding for every proven issue.",
-            )
-        )
-    incorrect = [
-        item
-        for item in issues
-        if item.get("result") == "FAIL"
-        and item.get("detail") not in {"MISSING", "NOISE", "DUPLICATE"}
-    ]
-    if incorrect:
-        rows.append(
-            (
-                "Finding content was incomplete or inaccurate",
-                f"{len(incorrect)} findings did not pass every required field.",
-                "Match root cause, title, description, category, severity, fix, "
-                "and traces.",
-            )
-        )
-    noise_cards = int(report["summary"].get("noise_cards", 0))
-    if noise_cards:
-        rows.append(
-            (
-                "Noise",
-                f"{noise_cards} false-positive, unrelated, or duplicate cards.",
-                "Return only distinct findings attributable to the current tested issue.",
-            )
-        )
-    if not rows:
-        rows.append(
-            (
-                "No product-quality gap observed",
-                "Every baseline and selected issue met the reviewed contract.",
-                "Preserve the current behavior and reviewed catalogs.",
-            )
-        )
-    return rows
-
-
 def _summary_narrative(report: dict[str, Any]) -> tuple[str, str]:
     summary = report["summary"]
     if report["status"] == "INCOMPLETE":
@@ -512,6 +416,31 @@ def _private_project_source_link(
     return (
         f'<p style="margin:0 0 18px 0;color:#334155;{_OUTLOOK_TEXT_STYLE}">'
         f"Foundry Project: {value}</p>"
+    )
+
+
+def _dashboard_source_link(
+    dashboard_link: str | None,
+    adx_publication: Mapping[str, Any] | None,
+) -> str:
+    if dashboard_link is None:
+        return ""
+    value = (
+        '<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
+        f'href="{html.escape(dashboard_link, quote=True)}">'
+        "Open quality trend dashboard</a>"
+    )
+    warning = ""
+    if adx_publication is not None and adx_publication.get("status") == "failed":
+        warning = (
+            '<p style="margin:0 0 18px 0;padding:10px 12px;'
+            f'background-color:#fff4ce;color:#8a5700;{_OUTLOOK_TEXT_STYLE}">'
+            "ADX publication failed for this run, so today's result might not yet "
+            "appear on the dashboard.</p>"
+        )
+    return (
+        f'<p style="margin:0 0 18px 0;color:#334155;{_OUTLOOK_TEXT_STYLE}">'
+        f"Quality trend dashboard: {value}</p>{warning}"
     )
 
 
@@ -632,6 +561,8 @@ def _render_html(
     *,
     project_link: str | None = None,
     agent_links: Mapping[str, str] | None = None,
+    dashboard_link: str | None = None,
+    adx_publication: Mapping[str, Any] | None = None,
     work_items: Mapping[str, Any] | None = None,
 ) -> str:
     status_style = _STATUS_STYLES[report["status"]]
@@ -675,6 +606,7 @@ def _render_html(
             for paragraph in summary
         )
         + _private_project_source_link(report, project_link)
+        + _dashboard_source_link(dashboard_link, adx_publication)
         + _data_table(("Grade", "Findings"), _grade_rows(report), (38, 62))
         + _insight_results_link()
         + "</td></tr>"
@@ -682,7 +614,7 @@ def _render_html(
         + _section_heading("What is working")
         + _data_table(
             ("Capability", "Evidence"),
-            _working_capabilities(report),
+            working_capabilities(report),
             (28, 72),
         )
         + "</td></tr>"
@@ -690,7 +622,7 @@ def _render_html(
         + _section_heading("What needs improvement")
         + _data_table(
             ("Product gap", "What happened", "Needed behavior"),
-            _improvement_rows(report),
+            improvement_rows(report),
             (24, 43, 33),
         )
         + "</td></tr>"

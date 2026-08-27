@@ -12,6 +12,9 @@ param testAgentCapacity int = 100
 @minValue(1)
 @maxValue(1000)
 param insightGenerationCapacity int = 100
+param adxSkuName string = 'Standard_E2ads_v5'
+@minValue(2)
+param adxCapacity int = 2
 
 resource resourceGroup 'Microsoft.Resources/resourceGroups@2024-11-01' = {
   name: resourceGroupName
@@ -34,5 +37,7 @@ module lab 'modules/lab.bicep' = {
     telemetryGeneration: telemetryGeneration
     testAgentCapacity: testAgentCapacity
     insightGenerationCapacity: insightGenerationCapacity
+    adxSkuName: adxSkuName
+    adxCapacity: adxCapacity
   }
 }

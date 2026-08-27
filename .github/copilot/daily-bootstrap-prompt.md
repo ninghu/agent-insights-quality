@@ -19,7 +19,16 @@ automatically synchronizes the approved registry into the local runtime root bef
 
 Use only the daily profile. During the scheduled run, never modify catalogs, Agent implementations,
 schemas, infrastructure, configuration, skills, workflows, or documentation. Write only generated
-daily report paths and private durable runtime state.
+daily report paths, private durable runtime state, and the public-safe v2 result and explanation
+payload to the fixed ADX quality database. ADX content must come only from public catalogs and the
+committed sanitized report; never publish private work items, assessment packages, prompts,
+responses, traces, evidence references, provider IDs, Foundry versions, or private links.
+Application Insights remains read-only.
+
+Finalization attempts ADX publication and creates an email containing the privately configured
+quality-trend dashboard link. Record the returned ADX status. An ADX failure does not block email or
+the pull request: preserve the generated warning, report the failure in the final result and pull
+request description, and never expose the cluster URI, dashboard link, or private receipt.
 
 Use the available email capability exactly once in explicit HTML mode. Never create a draft and never
 retry an ambiguous send. Validate generated paths and report consistency, create an `aiq-daily/`
