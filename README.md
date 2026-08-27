@@ -43,8 +43,7 @@ Monday through Friday, each Agent runs:
 2. five deterministically rotated issue versions;
 3. one on-demand Agent Insights run after each exact version's telemetry arrives.
 
-The first run after monitor reset currently uses a three-hour compatibility lookback. The policy and
-runtime support fractional values, but West US 2 must accept them before enabling `0.1`. The runner waits for natural
+The first run after monitor reset uses the reviewed `0.1`-hour lookback. The runner waits for natural
 telemetry and trace proof before Agent Insights, guards against expired operations, and automatically
 waits for a clean short interval before a recovery attempt. The service checkpoint advances later
 effective windows. Exact Agent version and operation IDs remain mandatory evidence.

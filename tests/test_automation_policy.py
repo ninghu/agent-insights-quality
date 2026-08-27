@@ -13,10 +13,10 @@ from agent_insights_quality.util import ROOT, ContractError
 
 def test_repository_uses_fractional_fixed_telemetry_policy() -> None:
     policy = load_automation_policy()
-    assert policy.insight_lookback_hours == 3.0
+    assert policy.insight_lookback_hours == 0.1
     assert policy.telemetry_resource_set == FIXED_TELEMETRY_RESOURCE_SET == "g29"
     assert policy.max_recovery_versions == 3
-    assert policy.clean_window_max_wait_seconds >= 11430
+    assert policy.clean_window_max_wait_seconds >= 990
 
 
 @pytest.mark.parametrize(

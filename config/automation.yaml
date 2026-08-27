@@ -6,10 +6,10 @@ generated_branch_prefix: aiq-daily/
 auto_merge_statuses: [PASS, FAIL]
 issues_per_agent_daily: 5
 max_parallel_agents: 5
-insight_lookback_hours: 3
+insight_lookback_hours: 0.1
 clean_window_poll_seconds: 15
 clean_window_ingestion_margin_seconds: 30
-clean_window_max_wait_seconds: 12000
+clean_window_max_wait_seconds: 1200
 max_recovery_versions: 3
 qualification_profiles_allow_debug_traffic: false
 clean_window_preflight_required: true

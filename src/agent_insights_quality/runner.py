@@ -144,10 +144,10 @@ def execute(
     registry: dict[str, Any],
     runtime: RuntimePort,
     seed: int,
-    lookback_hours: float = 3.0,
+    lookback_hours: float = 0.1,
     clean_window_poll_seconds: int = 15,
     clean_window_ingestion_margin_seconds: int = 30,
-    clean_window_max_wait_seconds: int = 12000,
+    clean_window_max_wait_seconds: int = 1200,
     max_recovery_versions: int = 3,
     checkpoint_store: VersionCheckpointStore | None = None,
 ) -> list[AgentResult]:

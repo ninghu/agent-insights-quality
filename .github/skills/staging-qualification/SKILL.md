@@ -14,8 +14,7 @@ Use this skill for human-reviewed impact-based qualification before promotion.
 4. Provision staging, reconcile exactly 41 versions and five monitors, and publish the canonical
    staging registry to the private Azure Blob container.
 5. Fetch the private Quality-tagged work-item snapshot under the durable user-level runtime root.
-6. Wait for the configured clean window for all five Agents. Use the three-hour compatibility value
-   until the service accepts fractional lookback in West US 2.
+6. Wait for the configured `0.1`-hour clean window for all five Agents.
 7. Determine affected Agents from content digests, mappings, and shared-contract changes:
    - qualify each affected Agent's `v0` and all assigned issues;
    - reuse reviewed evidence for unchanged Agents only when digest, mapping, and shared contracts are

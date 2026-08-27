@@ -79,11 +79,11 @@ class FakeRuntime:
         **kwargs,
     ) -> None:
         assert agent_name.endswith("-agent")
-        assert lookback_hours == 3.0
+        assert lookback_hours == 0.1
         assert kwargs == {
             "poll_seconds": 15,
             "ingestion_margin_seconds": 30,
-            "max_wait_seconds": 12000,
+            "max_wait_seconds": 1200,
         }
         self.clean_agents.append(agent_name)
         if agent_name == self.clean_window_failure_agent:
@@ -143,7 +143,7 @@ class FakeRuntime:
         persist,
     ) -> InsightRunCheckpoint:
         del agent_name, monitor_id, foundry_version, operation_ids
-        assert lookback_hours == 3.0
+        assert lookback_hours == 0.1
         checkpoint = InsightRunCheckpoint("synthetic-run", {})
         persist(checkpoint)
         return checkpoint
