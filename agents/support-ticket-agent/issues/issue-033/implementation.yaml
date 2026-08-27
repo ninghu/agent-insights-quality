@@ -8,7 +8,7 @@ deployment:
   protocol: responses
   port: 8088
   build_file: ../../v0/Dockerfile
-category: reliability_errors
+category: output_quality
 severity: high
 expected_behavior:
   desired: Produce a useful final answer after a successful tool call.
