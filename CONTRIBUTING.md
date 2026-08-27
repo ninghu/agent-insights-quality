@@ -60,7 +60,9 @@ Use the new-Agent skill to:
    ownership;
 7. derive Agent, staging-issue, daily-issue, and total-version counts from the reviewed catalogs;
    daily selects `min(5, assigned issues)` for each Agent;
-8. run all Agents and issues in staging, assess with GPT-5.6 Sol, and require human review.
+8. qualify the new Agent's baseline and all assigned issues when existing digests, mappings, and
+   shared contracts are unchanged; otherwise qualify every affected Agent or the full catalog;
+9. assess with GPT-5.6 Sol and require human review.
 
 A Hosted-code Agent includes `implementation.yaml`, `traffic.json`, `source/`, `host.yaml`,
 `requirements.txt`, and deterministic `package.py`; a Hosted-container Agent also includes its
@@ -83,9 +85,17 @@ python -m pytest
 az bicep build --file infra\main.bicep --stdout
 ```
 
-Agent, Issue, runtime, assessment, scoring, schema, or infrastructure changes require full-catalog
-staging qualification of the exact content digest and human review before daily promotion. Create a
-promotion receipt only for a complete reviewed PASS or FAIL; INCOMPLETE is never promotable.
+Agent-only changes qualify each affected Agent's baseline and all assigned issues. Unchanged Agents
+reuse their latest reviewed evidence only when content digests, mappings, and shared contracts are
+unchanged. Shared runtime, telemetry, assessment, scoring, schema, infrastructure, or cross-Agent
+topology changes require full-catalog qualification or retained evidence re-evaluation when no new
+traffic is needed. Compose promotion from complete reviewed PASS/FAIL evidence; INCOMPLETE is never
+promotable or reusable. Daily provisioning ends with read-only readiness and registry reconciliation,
+not smoke traffic.
+
+Targeted qualification requires reviewed CLI support for both targeted reports and composed promotion
+receipts. Until both are available, use full-catalog qualification and never combine evidence
+manually.
 
 ## Live operator access
 

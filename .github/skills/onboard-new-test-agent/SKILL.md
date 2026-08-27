@@ -40,10 +40,12 @@ Add one new synthetic Test Agent only as a human-reviewed fixed-topology migrati
 8. Verify deterministic packaging, exact-version routing, endpoint behavior, natural telemetry,
    privacy-safe trace proof, and baseline ownership.
 9. Run repository validation, Ruff, tests, and Bicep compilation.
-10. Deploy to staging, run every Agent and issue, complete Sol assessment, and require human review
-   before daily promotion.
-11. Create a receipt only from a complete reviewed PASS or FAIL with matching report, manifest,
-   registry hashes, and every exact version digest. Never promote INCOMPLETE.
+10. When existing Agent digests, mappings, and shared contracts are unchanged, deploy and qualify only
+   the new Agent's `v0` and all assigned issues. Otherwise qualify every affected Agent or the full
+   catalog. Complete Sol assessment and require human review before daily promotion.
+11. Compose promotion from the new Agent's complete reviewed PASS/FAIL evidence plus valid receipts
+   for unchanged Agents. Require matching mappings and every exact digest. Never promote or reuse
+   INCOMPLETE.
 
 Use GPT-5.6 Terra for the Test Agent and keep Agent Insights generation on its separate Terra
 deployment. Do not add a placeholder implementation, private endpoint, compatibility alias, shared

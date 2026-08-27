@@ -75,9 +75,19 @@ Agents and 36 reviewed, single-root issues.
 2. Generate readable catalog views when a catalog changes.
 3. Run repository validation, Ruff, and tests.
 4. Compile Bicep when infrastructure changes.
-5. Run full staging qualification for Agent, Issue, runtime, assessment, score, schema, or
-   infrastructure changes.
-6. Require human review before promotion to daily.
+5. Use impact-based staging:
+   - Agent source, definition, traffic, or assigned-issue changes qualify only each affected Agent's
+     `v0` and all assigned issues.
+   - Unchanged Agents reuse their latest reviewed evidence only when their content digests, mappings,
+     and every shared runtime contract are unchanged.
+   - Shared runtime, telemetry, assessment, scoring, schema, infrastructure, or cross-Agent topology
+     changes require full-catalog qualification, or retained evidence re-evaluation when no new Agent
+     traffic is needed.
+6. Compose promotion from new affected-Agent evidence plus the latest valid receipts for unchanged
+   Agents. Every exact digest and mapping must match; `INCOMPLETE` evidence is never reusable.
+7. Require human review before promotion to daily.
+8. After exact-digest daily provisioning, use read-only readiness and registry reconciliation. Do not
+   send daily smoke traffic that dirties the clean window.
 
 ```powershell
 python -m agent_insights_quality generate-docs

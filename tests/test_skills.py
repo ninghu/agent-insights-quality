@@ -45,6 +45,7 @@ def test_contributing_routes_onboarding_through_versioned_skills() -> None:
 
 def test_new_issue_skill_covers_complete_reviewed_contract() -> None:
     skill = _text(".github/skills/onboard-new-issue/SKILL.md")
+    normalized = " ".join(skill.split())
     for requirement in (
         "reviewable plan",
         "human approval",
@@ -58,15 +59,17 @@ def test_new_issue_skill_covers_complete_reviewed_contract() -> None:
         "deterministic packaging",
         "catalogs/AGENT_CATALOG.yaml",
         "previous Agent count, issue count, version count",
-        "full-catalog qualification",
+        "affected Agent",
+        "valid receipts for unchanged Agents",
         "human review before daily promotion",
-        "Never promote INCOMPLETE",
+        "Never promote or reuse INCOMPLETE",
     ):
-        assert requirement in skill
+        assert requirement in normalized
 
 
 def test_new_agent_skill_covers_topology_and_baseline_safety() -> None:
     skill = _text(".github/skills/onboard-new-test-agent/SKILL.md")
+    normalized = " ".join(skill.split())
     for requirement in (
         "reviewable plan",
         "human approval",
@@ -83,11 +86,11 @@ def test_new_agent_skill_covers_topology_and_baseline_safety() -> None:
         "deterministic `package.py`",
         "privacy-safe trace proof",
         "baseline ownership",
-        "run every Agent and issue",
+        "qualify only the new Agent",
         "human review",
-        "Never promote INCOMPLETE",
+        "Never promote or reuse INCOMPLETE",
     ):
-        assert requirement in skill
+        assert requirement in normalized
 
 
 def test_onboarding_schema_minimums_match_one_issue_contract() -> None:
@@ -111,3 +114,20 @@ def test_onboarding_schema_minimums_match_one_issue_contract() -> None:
     assert agents["minItems"] == agents["maxItems"] == 5
     assert issue_ids["minItems"] == 1
     assert versions["minProperties"] == 2
+
+
+def test_staging_skill_uses_impact_based_qualification() -> None:
+    skill = _text(".github/skills/staging-qualification/SKILL.md")
+    normalized = " ".join(skill.split())
+    for requirement in (
+        "impact-based qualification",
+        "qualify each affected Agent's `v0` and all assigned issues",
+        "reuse reviewed evidence for unchanged Agents",
+        "full-catalog qualification for shared runtime",
+        "compose promotion",
+        "Never promote or reuse `INCOMPLETE`",
+        "do not send daily smoke traffic",
+        "use full-catalog qualification",
+        "never splice evidence or receipts manually",
+    ):
+        assert requirement in normalized

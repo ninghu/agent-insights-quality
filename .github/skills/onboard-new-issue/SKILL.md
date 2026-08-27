@@ -32,10 +32,13 @@ Add one independently fixable issue only after human review.
 12. Confirm the Agent has at least one assigned issue and daily selection uses
    `min(5, assigned issues)`.
 13. Run repository validation, Ruff, tests, and Bicep compilation.
-14. Deploy the digest to staging, run full-catalog qualification, complete Sol assessment, and require
-    human review before daily promotion. In an enclosing new-Agent migration, catalog assignment,
-    qualification, and promotion may be completed atomically by the parent workflow.
-15. Create a receipt only from a complete reviewed PASS or FAIL with matching report, manifest,
-    registry hashes, and every exact version digest. Never promote INCOMPLETE.
+14. Deploy the affected Agent digests to staging, qualify that Agent's `v0` and all assigned issues,
+    complete Sol assessment, and require human review before daily promotion. Reuse other Agents'
+    evidence only when their digests, mappings, and shared contracts are unchanged. In an enclosing
+    new-Agent migration, catalog assignment, qualification, and promotion may be completed atomically
+    by the parent.
+15. Compose promotion from the affected Agent's complete reviewed PASS/FAIL evidence plus valid
+    receipts for unchanged Agents. Require matching mappings and every exact digest. Never promote or
+    reuse INCOMPLETE.
 
 Never add a multi-root issue, compatibility alias, telemetry injection, or private data.
