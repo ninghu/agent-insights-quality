@@ -27,7 +27,7 @@ from agent_insights_quality.azure_cli import azure_cli
 _TRACE_ID = re.compile(r"^[0-9a-f]{32}$")
 _FOUNDRY_SCOPE = "https://ai.azure.com/.default"
 _LOGS_SCOPE = "https://api.loganalytics.io/.default"
-_TRANSIENT_HTTP = {408, 429, 500, 502, 503, 504}
+_TRANSIENT_HTTP = {408, 424, 429, 500, 502, 503, 504}
 
 
 class _RuntimeTokenCredential:

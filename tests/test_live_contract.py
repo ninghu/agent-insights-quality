@@ -570,6 +570,50 @@ def test_json_get_retries_transient_http_failures(monkeypatch) -> None:
     assert sleeps == [1]
 
 
+def test_json_post_retries_foundry_failed_dependency(monkeypatch) -> None:
+    runtime = _runtime()
+    attempts = 0
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        @staticmethod
+        def read():
+            return b'{"value":"ok"}'
+
+    def open_request(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise urllib.error.HTTPError(
+                "https://example.invalid",
+                424,
+                "Failed Dependency",
+                {},
+                io.BytesIO(b"{}"),
+            )
+        return Response()
+
+    runtime._sleep = lambda _seconds: None
+    monkeypatch.setattr(
+        "agent_insights_quality.live.urllib.request.urlopen",
+        open_request,
+    )
+    value = runtime._json_request(
+        "POST",
+        "https://example.invalid",
+        retry_statuses={424},
+    )
+    assert value["value"] == "ok"
+    assert attempts == 2
+
+
 def test_json_request_refreshes_an_expired_credential_once(monkeypatch) -> None:
     tokens = iter(["expired-token", "fresh-token"])
     runtime = LiveRuntime(
