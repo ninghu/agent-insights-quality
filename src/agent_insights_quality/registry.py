@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +30,7 @@ def sync_registry(profile: Any) -> None:
     )
     os.close(descriptor)
     try:
-        process = subprocess.run(
+        process = _run_registry_command(
             [
                 azure_cli(),
                 "storage",
@@ -51,10 +52,6 @@ def sync_registry(profile: Any) -> None:
                 "--output",
                 "none",
             ],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
         )
         if process.returncode != 0:
             raise ContractError("Private deployment registry download failed")
@@ -68,7 +65,7 @@ def publish_registry(profile: Any) -> None:
     account = str(profile.registry_storage_account_name or "").strip()
     if not account:
         raise ContractError("Private registry storage account could not be resolved")
-    process = subprocess.run(
+    process = _run_registry_command(
         [
             azure_cli(),
             "storage",
@@ -90,13 +87,38 @@ def publish_registry(profile: Any) -> None:
             "--output",
             "none",
         ],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
     )
     if process.returncode != 0:
         raise ContractError("Private deployment registry upload failed")
+
+
+def _run_registry_command(
+    arguments: list[str],
+) -> subprocess.CompletedProcess[str]:
+    process: subprocess.CompletedProcess[str] | None = None
+    for attempt in range(3):
+        try:
+            process = subprocess.run(
+                arguments,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            if attempt == 2:
+                raise ContractError(
+                    "Registry command timed out after bounded retries"
+                ) from None
+            time.sleep(2**attempt)
+            continue
+        if process.returncode == 0:
+            return process
+        if attempt < 2:
+            time.sleep(2**attempt)
+    if process is None:
+        raise ContractError("Registry command retry loop did not execute")
+    return process
 
 
 def load_registry(

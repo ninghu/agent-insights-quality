@@ -94,6 +94,7 @@ def test_cleanup_apply_is_idempotent_after_reviewed_resources_are_absent(
             ("Microsoft.CognitiveServices/accounts", 2),
             ("Microsoft.CognitiveServices/accounts/projects", 2),
             ("Microsoft.ContainerRegistry/registries", 1),
+            ("Microsoft.Kusto/clusters", 1),
             ("Microsoft.Storage/storageAccounts", 1),
         )
         for index in range(count)

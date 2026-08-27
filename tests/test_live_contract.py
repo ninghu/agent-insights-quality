@@ -604,6 +604,26 @@ def test_agent_insights_checkpoint_is_persisted_before_polling() -> None:
     assert persisted == [checkpoint]
 
 
+def test_integral_lookback_uses_service_compatible_integer() -> None:
+    runtime = _runtime()
+    captured = {}
+    runtime._insight_revisions = lambda _monitor: {}  # type: ignore[method-assign]
+
+    def request(method, url, body=None, **_kwargs):
+        captured.update({"method": method, "url": url, "body": body})
+        return {"id": "private-run-id"}
+
+    runtime._json_request = request  # type: ignore[method-assign]
+    checkpoint = runtime._start_insights_once(
+        monitor_id="private-monitor",
+        lookback_hours=1.0,
+    )
+    assert checkpoint.run_id == "private-run-id"
+    assert captured["method"] == "POST"
+    assert captured["body"]["lookback_hours"] == 1
+    assert isinstance(captured["body"]["lookback_hours"], int)
+
+
 def test_agent_insights_rejects_operations_outside_short_window() -> None:
     now = datetime(2026, 8, 27, 18, 0, tzinfo=UTC)
     runtime = LiveRuntime(

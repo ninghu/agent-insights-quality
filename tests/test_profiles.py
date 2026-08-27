@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from types import SimpleNamespace
 
 import pytest
 
 from agent_insights_quality.automation_policy import FIXED_TELEMETRY_RESOURCE_SET
-from agent_insights_quality.profiles import RuntimeProfile
+from agent_insights_quality.profiles import RuntimeProfile, _run_azure_read
 from agent_insights_quality.util import ContractError
 
 
@@ -115,3 +116,22 @@ def test_profile_rejects_mismatched_project_telemetry_connection(
     )
     with pytest.raises(ContractError, match="does not match"):
         profile.assert_insights_connection()
+
+
+def test_azure_resource_reads_retry_transient_failures(monkeypatch) -> None:
+    attempts = 0
+
+    def run(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise subprocess.TimeoutExpired("az", 120)
+        return SimpleNamespace(
+            returncode=0,
+            stdout="[]",
+        )
+
+    monkeypatch.setattr("agent_insights_quality.profiles.subprocess.run", run)
+    monkeypatch.setattr("agent_insights_quality.profiles.time.sleep", lambda _: None)
+    assert _run_azure_read(["az"]).returncode == 0
+    assert attempts == 2

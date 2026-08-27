@@ -1119,22 +1119,40 @@ class FoundryProvisioner:
         data = json.dumps(body).encode() if body is not None else None
         if data:
             headers["Content-Type"] = "application/json"
-        request = urllib.request.Request(
-            self._profile.insights_endpoint
-            + path
-            + ("&" if "?" in path else "?")
-            + "api-version=v1",
-            data=data,
-            headers=headers,
-            method=method,
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=300) as response:
-                payload = response.read()
-        except urllib.error.HTTPError as error:
-            raise ContractError(
-                f"Agent Insights operation failed with HTTP {error.code}"
-            ) from None
+        attempts = 5 if method == "GET" else 1
+        payload = b""
+        for attempt in range(attempts):
+            request = urllib.request.Request(
+                self._profile.insights_endpoint
+                + path
+                + ("&" if "?" in path else "?")
+                + "api-version=v1",
+                data=data,
+                headers=headers,
+                method=method,
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=300) as response:
+                    payload = response.read()
+            except urllib.error.HTTPError as error:
+                if (
+                    method == "GET"
+                    and error.code in {408, 429, 500, 502, 503, 504}
+                    and attempt + 1 < attempts
+                ):
+                    time.sleep(2**attempt)
+                    continue
+                raise ContractError(
+                    f"Agent Insights operation failed with HTTP {error.code}"
+                ) from None
+            except (TimeoutError, urllib.error.URLError):
+                if method == "GET" and attempt + 1 < attempts:
+                    time.sleep(2**attempt)
+                    continue
+                raise ContractError(
+                    "Agent Insights operation failed before a response"
+                ) from None
+            break
         value = json.loads(payload) if payload else {}
         if not isinstance(value, dict):
             raise ContractError("Agent Insights returned an invalid payload")

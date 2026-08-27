@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import json
+import urllib.error
 from pathlib import Path
 
 from agent_insights_quality.provisioning import (
+    FoundryProvisioner,
     _monitor_inventory_matches,
     _version_from_response,
     deterministic_zip,
 )
+from agent_insights_quality.profiles import RuntimeProfile
 
 
 def test_hosted_package_is_deterministic_and_issue_specific(tmp_path: Path) -> None:
@@ -51,3 +55,49 @@ def test_monitor_inventory_rejects_duplicates_and_unexpected_agents() -> None:
         ],
         expected,
     )
+
+
+def test_monitor_list_get_retries_no_response(monkeypatch) -> None:
+    attempts = 0
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        @staticmethod
+        def read():
+            return json.dumps({"data": []}).encode()
+
+    def open_request(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise urllib.error.URLError("synthetic timeout")
+        return Response()
+
+    monkeypatch.setattr(
+        "agent_insights_quality.provisioning.urllib.request.urlopen",
+        open_request,
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.provisioning.time.sleep",
+        lambda _: None,
+    )
+    client = FoundryProvisioner(
+        RuntimeProfile(
+            name="staging",
+            project_name="agent-insights-quality-staging",
+            project_endpoint="https://example.invalid",
+            insights_endpoint="https://example.invalid",
+            application_insights_resource_id="/subscriptions/hidden/insights",
+            registry_path=Path("registry.json"),
+        ),
+        token_provider=lambda _: "synthetic-token",
+    )
+    assert client._list_monitors() == []
+    assert attempts == 2

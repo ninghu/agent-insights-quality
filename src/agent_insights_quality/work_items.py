@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -153,21 +154,38 @@ def normalize_quality_work_items(
 
 
 def _run_boards_query(arguments: list[str]) -> list[Any]:
-    completed = subprocess.run(
-        [
-            azure_cli(),
-            "boards",
-            "query",
-            *arguments,
-            "--only-show-errors",
-            "--output",
-            "json",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
+    command = [
+        azure_cli(),
+        "boards",
+        "query",
+        *arguments,
+        "--only-show-errors",
+        "--output",
+        "json",
+    ]
+    completed = None
+    for attempt in range(3):
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            if attempt == 2:
+                raise ContractError(
+                    "Azure Boards query timed out after bounded retries"
+                ) from None
+            time.sleep(2**attempt)
+            continue
+        if completed.returncode == 0:
+            break
+        if attempt < 2:
+            time.sleep(2**attempt)
+    if completed is None:
+        raise ContractError("Azure Boards query retry loop did not execute")
     if completed.returncode != 0:
         raise ContractError("Azure Boards quality work-item query failed")
     if not completed.stdout.strip():

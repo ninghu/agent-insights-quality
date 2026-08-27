@@ -144,10 +144,10 @@ def execute(
     registry: dict[str, Any],
     runtime: RuntimePort,
     seed: int,
-    lookback_hours: float = 0.1,
+    lookback_hours: float = 3.0,
     clean_window_poll_seconds: int = 15,
     clean_window_ingestion_margin_seconds: int = 30,
-    clean_window_max_wait_seconds: int = 1200,
+    clean_window_max_wait_seconds: int = 12000,
     max_recovery_versions: int = 3,
     checkpoint_store: VersionCheckpointStore | None = None,
 ) -> list[AgentResult]:
@@ -571,6 +571,18 @@ def _execute_version(
         else None
     )
     if insight_checkpoint is None:
+        if (
+            checkpoint_store is not None
+            and checkpoint_store.insight_start_pending(*checkpoint_args)
+        ):
+            raise _VersionStageError(
+                "insight_run_start_failed",
+                RuntimeError(
+                    "Remote operation failed before a response was received"
+                ),
+            )
+        if checkpoint_store is not None:
+            checkpoint_store.mark_insight_start_pending(*checkpoint_args)
         try:
             insight_checkpoint = runtime.start_insights_run(
                 agent_name=agent["name"],

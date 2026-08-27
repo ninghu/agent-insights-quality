@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -112,7 +113,7 @@ class RuntimeProfile:
             f"{self.account_resource_id}/projects/{self.project_name}/connections/"
             f"application-insights-{self.name}"
         )
-        process = subprocess.run(
+        process = _run_azure_read(
             [
                 azure_cli(),
                 "rest",
@@ -125,10 +126,6 @@ class RuntimeProfile:
                 "--output",
                 "json",
             ],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
         )
         if process.returncode != 0:
             raise ContractError("Project telemetry connection could not be queried")
@@ -141,7 +138,7 @@ class RuntimeProfile:
 
 
 def _azure_resources() -> list[dict]:
-    process = subprocess.run(
+    process = _run_azure_read(
         [
             azure_cli(),
             "resource",
@@ -151,10 +148,6 @@ def _azure_resources() -> list[dict]:
             "--output",
             "json",
         ],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
     )
     if process.returncode != 0:
         raise ContractError("Fixed Azure resource group could not be queried")
@@ -162,3 +155,28 @@ def _azure_resources() -> list[dict]:
     if not isinstance(value, list):
         raise ContractError("Azure resource discovery returned an invalid payload")
     return [item for item in value if isinstance(item, dict)]
+
+
+def _run_azure_read(arguments: list[str]) -> subprocess.CompletedProcess[str]:
+    process: subprocess.CompletedProcess[str] | None = None
+    for attempt in range(3):
+        try:
+            process = subprocess.run(
+                arguments,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            if attempt == 2:
+                raise ContractError("Azure read timed out after bounded retries") from None
+            time.sleep(2**attempt)
+            continue
+        if process.returncode == 0:
+            return process
+        if attempt < 2:
+            time.sleep(2**attempt)
+    if process is None:
+        raise ContractError("Azure read retry loop did not execute")
+    return process

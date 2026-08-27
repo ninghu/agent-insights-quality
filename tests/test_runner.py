@@ -79,11 +79,11 @@ class FakeRuntime:
         **kwargs,
     ) -> None:
         assert agent_name.endswith("-agent")
-        assert lookback_hours == 0.1
+        assert lookback_hours == 3.0
         assert kwargs == {
             "poll_seconds": 15,
             "ingestion_margin_seconds": 30,
-            "max_wait_seconds": 1200,
+            "max_wait_seconds": 12000,
         }
         self.clean_agents.append(agent_name)
         if agent_name == self.clean_window_failure_agent:
@@ -143,7 +143,7 @@ class FakeRuntime:
         persist,
     ) -> InsightRunCheckpoint:
         del agent_name, monitor_id, foundry_version, operation_ids
-        assert lookback_hours == 0.1
+        assert lookback_hours == 3.0
         checkpoint = InsightRunCheckpoint("synthetic-run", {})
         persist(checkpoint)
         return checkpoint
@@ -376,6 +376,67 @@ def test_ambiguous_insight_start_retries_only_after_clean_retraffic(
     assert runtime.invoked.count(target) == 2
     assert runtime.clean_agents.count("weather-agent") == 2
     assert runtime.reset_agents.count("weather-agent") == 2
+
+
+def test_pending_insight_start_from_crash_forces_clean_retraffic(
+    tmp_path: Path,
+) -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    selected = select_daily(date(2026, 8, 24), agents, issues, hashes["issues"])
+    registry = _registry(agents, hashes)
+    store = VersionCheckpointStore(
+        tmp_path / "stages",
+        "sha256:" + "d" * 64,
+    )
+    entry = registry["agents"]["weather-agent"]["versions"]["v0"]
+    checkpoint_args = (
+        "weather-agent",
+        "v0",
+        entry["foundry_version"],
+        entry["content_digest"],
+    )
+    store.save_invocation(
+        *checkpoint_args,
+        InvocationEvidence(
+            operation_ids=(),
+            response_references=("private-response",),
+            started_at="2026-08-24T10:00:00+00:00",
+            completed_at="2026-08-24T10:01:00+00:00",
+            request_count=1,
+            allow_window_correlation=False,
+            response_count=1,
+            usable_response_count=1,
+        ),
+    )
+    store.save_operation_ids(*checkpoint_args, ("v0" + "0" * 30,))
+    store.save_trace_verified(*checkpoint_args)
+    store.mark_insight_start_pending(*checkpoint_args)
+
+    class RecordingRuntime(FakeRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.invoked_pairs = []
+
+        def invoke_version(self, **kwargs) -> InvocationEvidence:
+            self.invoked_pairs.append(
+                (kwargs["agent_name"], kwargs["foundry_version"])
+            )
+            return super().invoke_version(**kwargs)
+
+    runtime = RecordingRuntime()
+    execute(
+        agents=agents,
+        issues=issues,
+        selected=selected,
+        registry=registry,
+        runtime=runtime,
+        seed=1,
+        checkpoint_store=store,
+    )
+    assert ("weather-agent", "v0") in runtime.invoked_pairs
+    assert runtime.clean_agents.count("weather-agent") == 1
+    assert runtime.reset_agents.count("weather-agent") == 1
 
 
 def test_resume_waits_before_first_version_without_checkpoint(

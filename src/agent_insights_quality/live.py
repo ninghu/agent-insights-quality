@@ -794,12 +794,17 @@ union traces, dependencies, requests
         lookback_hours: float,
     ) -> InsightRunCheckpoint:
         before = self._insight_revisions(monitor_id)
+        service_lookback: int | float = (
+            int(lookback_hours)
+            if float(lookback_hours).is_integer()
+            else lookback_hours
+        )
         run = self._json_request(
             "POST",
             self._insights_url(
                 f"/agent_insight_monitors/{urllib.parse.quote(monitor_id, safe='')}/runs"
             ),
-            {"lookback_hours": lookback_hours},
+            {"lookback_hours": service_lookback},
             expected={200, 201, 202},
         )
         run_id = str(run.get("id") or "")

@@ -47,6 +47,9 @@ def _tracked_text_files() -> list[Path]:
             path.is_file()
             and ".git" not in path.parts
             and ".aiq-runtime" not in path.parts
+            and ".mypy_cache" not in path.parts
+            and ".pytest_cache" not in path.parts
+            and ".ruff_cache" not in path.parts
             and "__pycache__" not in path.parts
             and path.suffix.lower() not in {".pyc", ".zip", ".png", ".jpg", ".jpeg"}
             and path.stat().st_size <= 2 * 1024 * 1024

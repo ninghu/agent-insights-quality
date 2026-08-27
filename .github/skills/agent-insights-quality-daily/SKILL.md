@@ -16,7 +16,7 @@ license: MIT
    plus items closed on the previous Pacific date; exclude `Removed`.
 4. Run `python -m agent_insights_quality run-daily --report-date <date> --work-items <snapshot>`.
    The runner must synchronize the canonical private Azure Blob registry, verify the fixed telemetry
-   connection, and wait for the `0.1`-hour clean interval before any Agent traffic. It may recover at
+   connection, and wait for the configured clean interval before any Agent traffic. It may recover at
    most three transiently incomplete versions before finalization.
 5. Assess all five baseline packages and every issue package with GPT-5.6 Sol using the repository
    assessment prompt. Use independent `endpoint_evidence`; never assign `insight_engine` unless

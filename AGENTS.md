@@ -42,8 +42,8 @@ Agents and 36 reviewed, single-root issues.
 - Routine runs and reruns reuse `g29`; they must not create or rotate telemetry resources.
 - The telemetry resource set is not an Agent deployment change and must not invalidate promotion
   receipts or Agent content digests.
-- Monitor reset does not delete telemetry. Wait for the reviewed `0.1`-hour clean interval before a
-  new traffic attempt.
+- Monitor reset does not delete telemetry. Use the current three-hour compatibility interval until
+  the West US 2 service deployment accepts fractional lookback values.
 - Never send ad-hoc debug traffic to daily or staging before a qualification.
 - Quality-tagged Azure Boards work items are private email context only. Never write their query URL,
   titles, assignees, or links into committed reports.

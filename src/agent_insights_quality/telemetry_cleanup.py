@@ -25,6 +25,7 @@ _STABLE_COUNTS = {
     "microsoft.cognitiveservices/accounts": 2,
     "microsoft.cognitiveservices/accounts/projects": 2,
     "microsoft.containerregistry/registries": 1,
+    "microsoft.kusto/clusters": 1,
     "microsoft.storage/storageaccounts": 1,
 }
 
@@ -116,7 +117,7 @@ def apply_cleanup_plan(path: Path, receipt_path: Path) -> dict[str, Any]:
         "deleted_resource_count": len(resources),
         "already_absent_resource_count": len(plan["resources"]) - len(resources),
         "completed_at": datetime.now(UTC).isoformat(),
-        "remaining_owned_resource_count": 10,
+        "remaining_owned_resource_count": 11,
     }
     receipt["receipt_hash"] = content_hash(receipt)
     atomic_json(receipt_path, receipt)
@@ -137,9 +138,9 @@ def build_cleanup_plan(
         tags = item.get("tags")
         if not isinstance(tags, dict) or tags.get("purpose") != "agent-insights-quality":
             raise ContractError("Telemetry inventory contains a resource without owned tags")
+        resource_id = str(item.get("id") or "")
         generation = str(tags.get("generation") or "")
         profile = str(tags.get("profile") or "")
-        resource_id = str(item.get("id") or "")
         if (
             profile not in {"daily", "staging"}
             or not generation
@@ -166,7 +167,9 @@ def build_cleanup_plan(
             if len(matches) != 1:
                 raise ContractError("Active telemetry resource set is incomplete or ambiguous")
     retired = [
-        item for item in telemetry if item["generation"] != active_resource_set
+        item
+        for item in telemetry
+        if item["generation"] != active_resource_set
     ]
     grouped: dict[tuple[str, str], set[str]] = {}
     for item in retired:

@@ -83,7 +83,7 @@ python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD> `
 ```
 
 The runner validates catalog hashes against the protected daily registry, resets each monitor once,
-waits for the reviewed `0.1`-hour clean interval, runs `v0`, then runs five deterministic issues per
+waits for the current three-hour compatibility interval, runs `v0`, then runs five deterministic issues per
 Agent. Agents execute concurrently; exact versions for one Agent execute sequentially. Before each
 Hosted version, the runner patches the Agent endpoint to one `FixedRatio` rule with 100% traffic on
 that exact version, confirms the selector, and then creates an exact-version session. This keeps

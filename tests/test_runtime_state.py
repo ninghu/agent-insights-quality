@@ -97,11 +97,14 @@ def test_version_checkpoint_round_trips_private_stages(tmp_path: Path) -> None:
     store.save_invocation(*args, invocation)
     store.save_operation_ids(*args, ("c" * 32,))
     store.save_trace_verified(*args)
+    store.mark_insight_start_pending(*args)
+    assert store.insight_start_pending(*args) is True
     checkpoint = InsightRunCheckpoint(
         "private-run-id",
         {"private-card-id": ("2026-08-27T18:01:00+00:00", 1)},
     )
     store.save_insight_run(*args, checkpoint)
+    assert store.insight_start_pending(*args) is False
     store.save_result(*args, result)
     assert store.invocation(*args) == invocation
     assert store.operation_ids(*args) == ("c" * 32,)

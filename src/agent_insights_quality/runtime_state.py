@@ -278,6 +278,39 @@ class VersionCheckpointStore:
             raise ContractError("Version checkpoint Insight run is invalid")
         return InsightRunCheckpoint(run_id=run_id, before_revisions=parsed)
 
+    def insight_start_pending(
+        self,
+        agent_name: str,
+        logical_version: str,
+        foundry_version: str,
+        content_digest: str,
+    ) -> bool:
+        return (
+            self._load(
+                agent_name,
+                logical_version,
+                foundry_version,
+                content_digest,
+            ).get("insight_start_pending")
+            is True
+        )
+
+    def mark_insight_start_pending(
+        self,
+        agent_name: str,
+        logical_version: str,
+        foundry_version: str,
+        content_digest: str,
+    ) -> None:
+        value = self._load(
+            agent_name,
+            logical_version,
+            foundry_version,
+            content_digest,
+        )
+        value["insight_start_pending"] = True
+        self._write(agent_name, logical_version, value)
+
     def save_insight_run(
         self,
         agent_name: str,
@@ -293,6 +326,7 @@ class VersionCheckpointStore:
             content_digest,
         )
         value["insight_run"] = asdict(checkpoint)
+        value.pop("insight_start_pending", None)
         self._write(agent_name, logical_version, value)
 
     def clear_insight_run(
@@ -309,6 +343,7 @@ class VersionCheckpointStore:
             content_digest,
         )
         value.pop("insight_run", None)
+        value.pop("insight_start_pending", None)
         self._write(agent_name, logical_version, value)
 
     def result(
