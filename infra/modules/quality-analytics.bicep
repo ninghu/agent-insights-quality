@@ -52,7 +52,7 @@ resource schema 'Microsoft.Kusto/clusters/databases/scripts@2025-02-14' = {
   name: 'quality-analytics-schema'
   properties: {
     continueOnErrors: false
-    forceUpdateTag: 'quality-analytics-v2'
+    forceUpdateTag: 'quality-analytics-v6'
     #disable-next-line use-secure-value-for-secure-inputs
     scriptContent: loadTextContent('../quality-analytics.kql')
   }

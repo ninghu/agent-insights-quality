@@ -3,7 +3,8 @@
     RunId:string,
     PublishedAt:datetime,
     SourceDigest:string,
-    Payload:dynamic
+    Payload:dynamic,
+    PayloadVersion:string
 )
 
 .alter-merge table DailyQualityPublications policy retention softdelete = 730d recoverability = enabled
@@ -15,8 +16,9 @@
     docstring = 'Latest published daily qualification result for each Pacific report date.'
 ) AIQDailyPublications() {
     DailyQualityPublications
+    | where PayloadVersion == '2.0.0'
     | summarize arg_max(PublishedAt, *) by ReportDate
-    | project ReportDate, RunId, PublishedAt, SourceDigest, Payload
+    | project ReportDate, RunId, PublishedAt, SourceDigest, PayloadVersion, Payload
 }
 
 .create-or-alter function with (
@@ -29,6 +31,7 @@
         RunId,
         PublishedAt,
         Status = tostring(Payload.run.status),
+        ReportUrl = tostring(Payload.run.report_url),
         QualityScore = todouble(Payload.run.quality_score),
         FieldQualityScore = todouble(Payload.run.field_quality_score),
         CleanCardPrecision = todouble(Payload.run.clean_card_precision),
@@ -56,9 +59,15 @@
         RunId,
         PublishedAt,
         Agent = tostring(AgentMetric.agent),
+        Owner = tostring(AgentMetric.owner),
+        AgentType = tostring(AgentMetric.agent_type),
+        Framework = tostring(AgentMetric.framework),
+        AgentReportUrl = tostring(AgentMetric.agent_report_url),
+        SelectedIssueIds = AgentMetric.selected_issue_ids,
         BaselineStatus = tostring(AgentMetric.baseline_status),
         BaselineVerdict = tostring(AgentMetric.baseline_verdict),
         BaselineOwnership = tostring(AgentMetric.baseline_ownership),
+        BaselineOwnershipReason = tostring(AgentMetric.baseline_ownership_reason),
         BaselineInsightCount = toint(AgentMetric.baseline_insight_count),
         BaselineRuntimeEvidenceComplete =
             tobool(AgentMetric.baseline_runtime_evidence_complete),
@@ -83,17 +92,34 @@
         RunId,
         PublishedAt,
         Agent = tostring(IssueMetric.agent),
+        Owner = tostring(IssueMetric.owner),
+        AgentType = tostring(IssueMetric.agent_type),
+        Framework = tostring(IssueMetric.framework),
         IssueId = tostring(IssueMetric.issue_id),
+        IssueTitle = tostring(IssueMetric['title']),
+        Category = tostring(IssueMetric.category),
+        Severity = tostring(IssueMetric.severity),
+        ExpectedRootCause = tostring(IssueMetric.expected_root_cause),
+        ExpectedFix = tostring(IssueMetric.expected_fix),
         Status = tostring(IssueMetric.status),
+        ErrorCode = tostring(IssueMetric.error_code),
         Result = tostring(IssueMetric.result),
         Detail = tostring(IssueMetric.detail),
+        Verdict = tostring(IssueMetric.verdict),
         Ownership = tostring(IssueMetric.ownership),
+        OwnershipReason = tostring(IssueMetric.ownership_reason),
         FindingType = tostring(IssueMetric.finding_type),
         ObservedCount = toint(IssueMetric.observed_count),
         RuntimeEvidenceComplete = tobool(IssueMetric.runtime_evidence_complete),
         Confidence = todouble(IssueMetric.confidence),
+        CardCount = toint(IssueMetric.card_count),
+        PassingFields = IssueMetric.passing_fields,
+        FailingFields = IssueMetric.failing_fields,
         FieldsPassed = toint(IssueMetric.fields_passed),
-        FieldsExpected = toint(IssueMetric.fields_expected)
+        FieldsExpected = toint(IssueMetric.fields_expected),
+        IssueUrl = tostring(IssueMetric.issue_url),
+        AgentReportUrl = tostring(IssueMetric.agent_report_url),
+        ReportUrl = tostring(IssueMetric.report_url)
 }
 
 .create-or-alter function with (
@@ -108,6 +134,88 @@
         PublishedAt,
         Agent = tostring(FieldMetric.agent),
         IssueId = tostring(FieldMetric.issue_id),
+        IssueTitle = tostring(FieldMetric.issue_title),
+        Result = tostring(FieldMetric.result),
         Field = tostring(FieldMetric.field),
         Passed = tobool(FieldMetric.passed)
+}
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality',
+    docstring = 'Per-Agent healthy-baseline daily outcomes and explanations.'
+) AIQDailyBaselines() {
+    AIQDailyPublications()
+    | mv-expand BaselineMetric = Payload.baselines to typeof(dynamic)
+    | project
+        ReportDate,
+        RunId,
+        PublishedAt,
+        Agent = tostring(BaselineMetric.agent),
+        Owner = tostring(BaselineMetric.owner),
+        AgentType = tostring(BaselineMetric.agent_type),
+        Framework = tostring(BaselineMetric.framework),
+        Status = tostring(BaselineMetric.status),
+        Verdict = tostring(BaselineMetric.verdict),
+        Ownership = tostring(BaselineMetric.ownership),
+        OwnershipReason = tostring(BaselineMetric.ownership_reason),
+        Confidence = todouble(BaselineMetric.confidence),
+        InsightCount = toint(BaselineMetric.insight_count),
+        RuntimeEvidenceComplete =
+            tobool(BaselineMetric.runtime_evidence_complete),
+        CardCount = toint(BaselineMetric.card_count),
+        AgentReportUrl = tostring(BaselineMetric.agent_report_url),
+        ReportUrl = tostring(BaselineMetric.report_url)
+}
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality',
+    docstring = 'Generated baseline and issue card assessments with public-safe reasoning.'
+) AIQDailyCards() {
+    AIQDailyPublications()
+    | mv-expand CardMetric = Payload.cards to typeof(dynamic)
+    | project
+        ReportDate,
+        RunId,
+        PublishedAt,
+        TargetKind = tostring(CardMetric.target_kind),
+        Target = tostring(CardMetric.target),
+        Agent = tostring(CardMetric.agent),
+        IssueId = tostring(CardMetric.issue_id),
+        IssueTitle = tostring(CardMetric.issue_title),
+        Result = tostring(CardMetric.result),
+        CardIndex = toint(CardMetric.card_index),
+        CardTitle = tostring(CardMetric['title']),
+        Category = tostring(CardMetric.category),
+        Severity = tostring(CardMetric.severity),
+        Verdict = tostring(CardMetric.verdict),
+        Evaluation = tostring(CardMetric.evaluation),
+        FindingType = tostring(CardMetric.finding_type),
+        Ownership = tostring(CardMetric.ownership),
+        OwnershipReason = tostring(CardMetric.ownership_reason),
+        Confidence = todouble(CardMetric.confidence),
+        Reasoning = tostring(CardMetric.reasoning),
+        PassingFields = CardMetric.passing_fields,
+        FailingFields = CardMetric.failing_fields,
+        FieldsPassed = toint(CardMetric.fields_passed),
+        FieldsExpected = toint(CardMetric.fields_expected),
+        IssueUrl = tostring(CardMetric.issue_url),
+        AgentReportUrl = tostring(CardMetric.agent_report_url),
+        ReportUrl = tostring(CardMetric.report_url)
+}
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality',
+    docstring = 'Email-equivalent public-safe daily highlights.'
+) AIQDailyHighlights() {
+    AIQDailyPublications()
+    | mv-expand HighlightMetric = Payload.highlights to typeof(dynamic)
+    | project
+        ReportDate,
+        RunId,
+        PublishedAt,
+        Section = tostring(HighlightMetric.section),
+        Ordinal = toint(HighlightMetric.ordinal),
+        HighlightTitle = tostring(HighlightMetric['title']),
+        WhatHappened = tostring(HighlightMetric.what_happened),
+        NeededBehavior = tostring(HighlightMetric.needed_behavior)
 }

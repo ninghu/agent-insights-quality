@@ -12,10 +12,12 @@ Agents and 36 reviewed, single-root issues.
   prompt or response payloads, private work-item content, provider message IDs, or customer data.
 - Invoke deployed Agent endpoints for test traffic.
 - Keep Application Insights read-only. Direct trace injection is forbidden. ADX is the only
-  authorized analytics write and receives only sanitized daily quality metrics.
+  authorized analytics write and receives only public-safe catalog context plus fields already
+  present in committed sanitized daily reports. Never publish private assessment packages or
+  work-item context to ADX.
 - Keep email requests, deployment registries, run manifests, assessment packages, assessments,
   promotion receipts, provider receipts, work-item snapshots, ADX publication receipts, rendered
-  dashboards, and the dashboard share link under the durable user-level
+  dashboards under the durable user-level
   `~/.aiq-runtime/agent-insights-quality/` root shared by all worktrees.
 - Canonical daily and staging deployment registries live in the private Azure
   `deployment-registries` blob container and synchronize into the local runtime root. Never commit

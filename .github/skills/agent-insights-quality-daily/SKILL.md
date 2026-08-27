@@ -6,7 +6,7 @@ license: MIT
 
 # Daily Agent Insights Quality
 
-<!-- prompt-version: 2.1.0 -->
+<!-- prompt-version: 2.2.0 -->
 
 1. Resolve the Pacific business date.
 2. Fetch the privately configured Azure Boards query with `fetch-quality-work-items` into
@@ -23,8 +23,11 @@ license: MIT
    proof to distinguish an Agent runtime defect, Insight false positive, framework gap, or external
    infrastructure failure.
 5. Run `finalize` with all assessments and the same private work-item snapshot. Finalization must
-   attempt the sanitized daily ADX publication and create the immutable email request with the
-   privately configured quality-trend dashboard link. Record the returned ADX status. If ADX
+   attempt the public-safe daily ADX publication and create the immutable email request with the
+   privately configured quality-trend dashboard link. ADX may receive public catalog expectations
+   and full reasoning already present in the committed sanitized report, but never private assessment
+   packages, work-item context, prompts, responses, traces, evidence references, provider IDs,
+   Foundry versions, or private links. Record the returned ADX status. If ADX
    publication fails, continue the email and pull-request flow; the email warning, private receipt,
    final automation result, and pull-request description must explicitly report the failure.
 6. Use the available Copilot email capability to send the immutable HTML request exactly once. Set
@@ -45,6 +48,6 @@ Any `inconclusive` baseline assessment or `INCOMPLETE` issue assessment makes th
 
 Never change catalogs, Agent implementations, schemas, infrastructure, configuration, or skills from
 daily automation. Never target staging. ADX is the only authorized analytics write and accepts only
-the finalized sanitized metrics payload; Application Insights remains read-only. Never write
-telemetry or commit the Boards query, work-item snapshot, ADX receipt, rendered dashboard, cluster
-URI, or dashboard link.
+the finalized public-safe v2 result and explanation payload; Application Insights remains read-only.
+Never write telemetry or commit the Boards query, work-item snapshot, ADX receipt, rendered
+dashboard, cluster URI, or dashboard link.

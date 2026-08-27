@@ -6,7 +6,6 @@ import os
 from datetime import date
 from pathlib import Path
 from agent_insights_quality.adx import (
-    configure_dashboard_link,
     publish_daily_report,
     publish_daily_report_best_effort,
     render_dashboard,
@@ -86,8 +85,6 @@ def build_parser() -> argparse.ArgumentParser:
     publish_adx.add_argument("--report", type=Path, action="append", required=True)
     dashboard = commands.add_parser("render-adx-dashboard")
     dashboard.add_argument("--output", type=Path)
-    configure_dashboard = commands.add_parser("configure-adx-dashboard")
-    configure_dashboard.add_argument("--url", required=True)
     provision = commands.add_parser("provision")
     provision.add_argument("--profile", choices=("daily", "staging"), required=True)
     for name in ("run-daily", "run-full"):
@@ -187,14 +184,16 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         return "Analytics infrastructure deployment completed."
     if args.command == "publish-adx":
         receipts = [
-            publish_daily_report(read_json(path))
+            publish_daily_report(
+                read_json(path),
+                source_path=path,
+                catalogs=(agents, issues),
+            )
             for path in args.report
         ]
         return json.dumps({"publications": receipts}, sort_keys=True)
     if args.command == "render-adx-dashboard":
         return str(render_dashboard(args.output))
-    if args.command == "configure-adx-dashboard":
-        return str(configure_dashboard_link(args.url))
     if args.command == "provision":
         profile = RuntimeProfile.from_env(args.profile)
         approved_digests = None
@@ -294,7 +293,11 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             try:
                 recipient = resolve_recipient()
                 adx_publication = (
-                    publish_daily_report_best_effort(failure)
+                    publish_daily_report_best_effort(
+                        failure,
+                        source_path=failure_root / "report.json",
+                        catalogs=(agents, issues),
+                    )
                     if profile_name == "daily"
                     else None
                 )
@@ -385,7 +388,11 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         recipient = resolve_recipient()
         runtime_profile = RuntimeProfile.from_env(manifest["profile"])
         adx_publication = (
-            publish_daily_report_best_effort(report)
+            publish_daily_report_best_effort(
+                report,
+                source_path=output / "report.json",
+                catalogs=(agents, issues),
+            )
             if manifest["profile"] == "daily"
             else None
         )

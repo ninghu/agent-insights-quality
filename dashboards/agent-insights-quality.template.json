@@ -13,16 +13,20 @@
       "scopeId": "kusto"
     }
   ],
-  "eTag": "1f223eb3-e30c-4134-b87b-b53b20cc251d",
+  "eTag": "327bd46d-da15-46aa-a3a5-49f713e2f896",
   "id": "d8396ea4-e60c-45e9-b705-68d88d0b25d8",
   "pages": [
     {
       "id": "8f04f149-93f7-47a3-9099-02a23a70a61f",
-      "name": "Quality trend"
+      "name": "Trend"
     },
     {
       "id": "2a7768b8-083b-4337-9835-c4812d5fafcd",
-      "name": "Diagnostics"
+      "name": "Daily Results"
+    },
+    {
+      "id": "36b3f7b6-d568-43cb-93ec-e4deab0d477a",
+      "name": "Agent and Issue Explanation"
     }
   ],
   "parameters": [
@@ -33,7 +37,7 @@
         "kind": "dynamic",
         "unit": "days"
       },
-      "description": "Pacific report-date range",
+      "description": "Pacific report-date range for trend visuals",
       "displayName": "Time range",
       "endVariableName": "_endTime",
       "id": "f2989ea6-67e6-4b58-82fd-c10fcacb82f4",
@@ -41,6 +45,124 @@
       "showOnPages": {
         "kind": "all"
       }
+    },
+    {
+      "dataSource": {
+        "columns": {
+          "label": "Label",
+          "value": "Value"
+        },
+        "consumedVariables": [],
+        "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+        "kind": "query",
+        "query": "AIQDailyRuns()\n| extend Value = format_datetime(ReportDate, 'yyyy-MM-dd')\n| project Value, Label = Value\n| distinct Value, Label\n| order by Value desc"
+      },
+      "defaultValue": {
+        "kind": "all"
+      },
+      "displayName": "Report date",
+      "id": "250e0a32-9ae6-40c1-8d31-e663c13f01b7",
+      "kind": "string",
+      "selectionType": "single-all",
+      "showOnPages": {
+        "kind": "all"
+      },
+      "variableName": "_reportDate"
+    },
+    {
+      "dataSource": {
+        "columns": {
+          "label": "Label",
+          "value": "Value"
+        },
+        "consumedVariables": [],
+        "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+        "kind": "query",
+        "query": "AIQDailyAgents()\n| project Value = Agent, Label = Agent\n| distinct Value, Label\n| order by Value asc"
+      },
+      "defaultValue": {
+        "kind": "all"
+      },
+      "displayName": "Test Agent",
+      "id": "12351920-7e2e-4af3-980d-b8fbd5ff349d",
+      "kind": "string",
+      "selectionType": "single-all",
+      "showOnPages": {
+        "kind": "all"
+      },
+      "variableName": "_agent"
+    },
+    {
+      "dataSource": {
+        "columns": {
+          "label": "Label",
+          "value": "Value"
+        },
+        "consumedVariables": [
+          "_reportDate",
+          "_agent"
+        ],
+        "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+        "kind": "query",
+        "query": "AIQDailyIssues()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| project Value = IssueId, Label = strcat(IssueId, ' - ', IssueTitle)\n| distinct Value, Label\n| order by Value asc"
+      },
+      "defaultValue": {
+        "kind": "all"
+      },
+      "displayName": "Tested issue",
+      "id": "e2914627-9583-450d-a27d-127f14a3f9c9",
+      "kind": "string",
+      "selectionType": "single-all",
+      "showOnPages": {
+        "kind": "all"
+      },
+      "variableName": "_issue"
+    },
+    {
+      "dataSource": {
+        "columns": {
+          "label": "Label",
+          "value": "Value"
+        },
+        "consumedVariables": [],
+        "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+        "kind": "query",
+        "query": "AIQDailyIssues()\n| project Value = Result, Label = Result\n| distinct Value, Label\n| order by Value asc"
+      },
+      "defaultValue": {
+        "kind": "all"
+      },
+      "displayName": "Result",
+      "id": "8b55301f-f335-45f1-8e48-6008191d10b0",
+      "kind": "string",
+      "selectionType": "single-all",
+      "showOnPages": {
+        "kind": "all"
+      },
+      "variableName": "_result"
+    },
+    {
+      "dataSource": {
+        "columns": {
+          "label": "Label",
+          "value": "Value"
+        },
+        "consumedVariables": [],
+        "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+        "kind": "query",
+        "query": "AIQDailyIssues()\n| project Value = Ownership, Label = Ownership\n| distinct Value, Label\n| order by Value asc"
+      },
+      "defaultValue": {
+        "kind": "all"
+      },
+      "displayName": "Ownership",
+      "id": "db4e06e4-5ca8-4845-8e28-f95f741833fb",
+      "kind": "string",
+      "selectionType": "single-all",
+      "showOnPages": {
+        "kind": "all"
+      },
+      "variableName": "_ownership"
     }
   ],
   "schema_version": "20",
@@ -50,7 +172,7 @@
       "id": "7bcd5bad-a4d1-40f8-8753-aaabf7cec17b",
       "layout": {
         "height": 4,
-        "width": 6,
+        "width": 4,
         "x": 0,
         "y": 0
       },
@@ -72,8 +194,8 @@
       "id": "9ed47f6f-a002-4d91-b45c-944b1fe01dbd",
       "layout": {
         "height": 8,
-        "width": 18,
-        "x": 6,
+        "width": 20,
+        "x": 4,
         "y": 0
       },
       "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
@@ -108,7 +230,7 @@
       "id": "4c93e27b-d563-450a-b861-307dfd10a82a",
       "layout": {
         "height": 4,
-        "width": 6,
+        "width": 4,
         "x": 0,
         "y": 4
       },
@@ -201,7 +323,7 @@
       "id": "99853e21-8015-4b08-bdb7-ab8c2448a5ec",
       "layout": {
         "height": 7,
-        "width": 24,
+        "width": 12,
         "x": 0,
         "y": 15
       },
@@ -214,18 +336,7 @@
       ],
       "visualOptions": {
         "hideLegend": false,
-        "hideTileTitle": false,
-        "xColumn": {
-          "type": "specified",
-          "value": "ReportDate"
-        },
-        "yColumns": {
-          "type": "specified",
-          "value": [
-            "NoiseCards",
-            "UnverifiedCards"
-          ]
-        }
+        "hideTileTitle": false
       },
       "visualType": "column"
     },
@@ -233,12 +344,12 @@
       "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
       "id": "ee9c562a-caff-4fcd-8557-8cac8b5f1d73",
       "layout": {
-        "height": 8,
-        "width": 24,
-        "x": 0,
-        "y": 0
+        "height": 7,
+        "width": 12,
+        "x": 12,
+        "y": 15
       },
-      "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
+      "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
       "query": "AIQDailyAgents()\n| where ReportDate between (_startTime .. _endTime)\n| extend MatchRate = round(100.0 * IssuesCorrect / iff(IssuesExpected == 0, 1, IssuesExpected), 1)\n| project ReportDate, Agent, MatchRate\n| order by ReportDate asc",
       "title": "Issue match rate by Agent",
       "usedParamVariables": [
@@ -271,12 +382,12 @@
       "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
       "id": "489ab82d-abdc-4bec-b4e5-71b507991aa9",
       "layout": {
-        "height": 8,
-        "width": 12,
+        "height": 7,
+        "width": 24,
         "x": 0,
-        "y": 8
+        "y": 22
       },
-      "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
+      "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
       "query": "AIQDailyFields()\n| where ReportDate between (_startTime .. _endTime)\n| summarize PassRate = round(100.0 * countif(Passed) / count(), 1) by Field\n| order by PassRate asc",
       "title": "Field pass rate",
       "usedParamVariables": [
@@ -285,62 +396,236 @@
       ],
       "visualOptions": {
         "hideLegend": true,
-        "hideTileTitle": false,
-        "xColumn": {
-          "type": "specified",
-          "value": "Field"
-        },
-        "yColumns": {
-          "type": "specified",
-          "value": [
-            "PassRate"
-          ]
-        }
+        "hideTileTitle": false
       },
       "visualType": "bar"
     },
     {
       "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "98abb7e3-1364-497a-b8a0-2430c387f282",
+      "id": "4c6e01f0-1019-443d-a026-2c70a250ed82",
+      "layout": {
+        "height": 5,
+        "width": 24,
+        "x": 0,
+        "y": 0
+      },
+      "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
+      "query": "AIQDailyRuns()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| top 1 by ReportDate desc\n| project ReportDate, Status, QualityScore, FieldQualityScore, CleanCardPrecision, BaselinePassed, IssuesCorrect, IssuesExpected, NoiseCards, ReportUrl",
+      "title": "Selected daily run",
+      "usedParamVariables": [
+        "_reportDate"
+      ],
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "hideTileTitle": false,
+        "table__enableRenderLinks": true,
+        "table__renderLinksForColumns": [
+          "ReportUrl"
+        ]
+      },
+      "visualType": "table"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "4355b85a-1f7d-43ca-b985-bddfa0d520d6",
+      "layout": {
+        "height": 8,
+        "width": 24,
+        "x": 0,
+        "y": 5
+      },
+      "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
+      "query": "AIQDailyBaselines()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| top 50 by ReportDate desc\n| project ReportDate, Agent, Owner, AgentType, Framework, Status, Verdict, Ownership, InsightCount, RuntimeEvidenceComplete, OwnershipReason, AgentReportUrl",
+      "title": "Healthy baseline results",
+      "usedParamVariables": [
+        "_reportDate",
+        "_agent"
+      ],
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "hideTileTitle": false,
+        "table__enableRenderLinks": true,
+        "table__renderLinksForColumns": [
+          "AgentReportUrl"
+        ]
+      },
+      "visualType": "table"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "8ec799b1-850f-4bed-954f-34820e7cf772",
+      "layout": {
+        "height": 14,
+        "width": 24,
+        "x": 0,
+        "y": 13
+      },
+      "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
+      "query": "AIQDailyIssues()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| where isempty(_issue) or IssueId == _issue\n| where isempty(_result) or Result == _result\n| where isempty(_ownership) or Ownership == _ownership\n| top 250 by ReportDate desc\n| project ReportDate, Agent, Owner, IssueId, IssueTitle, Category, Severity, Result, Detail, Ownership, FieldsPassed, FieldsExpected, CardCount, ObservedCount, RuntimeEvidenceComplete, FailingFields = tostring(FailingFields), IssueUrl, AgentReportUrl",
+      "title": "Tested issue results",
+      "usedParamVariables": [
+        "_reportDate",
+        "_agent",
+        "_issue",
+        "_result",
+        "_ownership"
+      ],
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "hideTileTitle": false,
+        "table__enableRenderLinks": true,
+        "table__renderLinksForColumns": [
+          "IssueUrl",
+          "AgentReportUrl"
+        ]
+      },
+      "visualType": "table"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "d14dc0df-95da-4d7f-b5db-f3d4177f917b",
+      "layout": {
+        "height": 8,
+        "width": 12,
+        "x": 0,
+        "y": 27
+      },
+      "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
+      "query": "AIQDailyHighlights()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where Section == 'What is working'\n| order by ReportDate desc, Ordinal asc\n| take 100\n| project ReportDate, HighlightTitle, WhatHappened",
+      "title": "What is working",
+      "usedParamVariables": [
+        "_reportDate"
+      ],
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "hideTileTitle": false,
+        "table__enableRenderLinks": false
+      },
+      "visualType": "table"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "cb971496-262f-4d5a-8dc5-cb231362d9ef",
       "layout": {
         "height": 8,
         "width": 12,
         "x": 12,
-        "y": 8
+        "y": 27
       },
       "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
-      "query": "AIQDailyIssues()\n| where ReportDate between (_startTime .. _endTime)\n| where Ownership != 'none'\n| summarize Findings = count() by Ownership\n| order by Findings desc",
-      "title": "Finding ownership",
+      "query": "AIQDailyHighlights()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where Section == 'What needs improvement'\n| order by ReportDate desc, Ordinal asc\n| take 100\n| project ReportDate, HighlightTitle, WhatHappened, NeededBehavior",
+      "title": "What needs improvement",
       "usedParamVariables": [
-        "_startTime",
-        "_endTime"
+        "_reportDate"
       ],
       "visualOptions": {
-        "hideLegend": false,
+        "colorRulesDisabled": true,
         "hideTileTitle": false,
-        "pie__kind": "pie",
-        "pie__label": [
-          "name",
-          "percentage"
-        ]
+        "table__enableRenderLinks": false
       },
-      "visualType": "pie"
+      "visualType": "table"
     },
     {
       "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "2ffeadbc-e967-41bc-935a-c1b25ac157f9",
+      "id": "63528098-b0e5-4a4a-b324-40479ef8cde8",
       "layout": {
-        "height": 9,
+        "height": 6,
         "width": 24,
         "x": 0,
-        "y": 16
+        "y": 0
       },
-      "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
-      "query": "AIQDailyIssues()\n| where ReportDate between (_startTime .. _endTime)\n| where Result != 'PASS'\n| top 50 by ReportDate desc\n| project ReportDate, Agent, IssueId, Result, Detail, Ownership, FieldsPassed, FieldsExpected",
-      "title": "Recent non-passing issues",
+      "pageId": "36b3f7b6-d568-43cb-93ec-e4deab0d477a",
+      "query": "AIQDailyAgents()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| top 50 by ReportDate desc\n| project ReportDate, Agent, Owner, AgentType, Framework, BaselineVerdict, IssuesCorrect, IssuesExpected, IssuesPartial, IssuesFailed, NoiseCards, SelectedIssueIds = tostring(SelectedIssueIds), AgentReportUrl",
+      "title": "Test Agent context",
       "usedParamVariables": [
-        "_startTime",
-        "_endTime"
+        "_reportDate",
+        "_agent"
+      ],
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "hideTileTitle": false,
+        "table__enableRenderLinks": true,
+        "table__renderLinksForColumns": [
+          "AgentReportUrl"
+        ]
+      },
+      "visualType": "table"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "581bdfe8-aa02-42e2-9e83-0203fb1f7a5c",
+      "layout": {
+        "height": 13,
+        "width": 24,
+        "x": 0,
+        "y": 6
+      },
+      "pageId": "36b3f7b6-d568-43cb-93ec-e4deab0d477a",
+      "query": "AIQDailyIssues()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| where isempty(_issue) or IssueId == _issue\n| where isempty(_result) or Result == _result\n| where isempty(_ownership) or Ownership == _ownership\n| top 100 by ReportDate desc\n| project ReportDate, Agent, IssueId, IssueTitle, Category, Severity, Result, Detail, Ownership, ExpectedRootCause, ExpectedFix, OwnershipReason, FailingFields = tostring(FailingFields), IssueUrl",
+      "title": "Expected issue and observed outcome",
+      "usedParamVariables": [
+        "_reportDate",
+        "_agent",
+        "_issue",
+        "_result",
+        "_ownership"
+      ],
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "hideTileTitle": false,
+        "table__enableRenderLinks": true,
+        "table__renderLinksForColumns": [
+          "IssueUrl"
+        ]
+      },
+      "visualType": "table"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "e31c1a94-f5ca-47e0-9491-69d5ab701cac",
+      "layout": {
+        "height": 15,
+        "width": 24,
+        "x": 0,
+        "y": 19
+      },
+      "pageId": "36b3f7b6-d568-43cb-93ec-e4deab0d477a",
+      "query": "AIQDailyCards()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| where isempty(_issue) or IssueId == _issue\n| where isempty(_result) or Result == _result\n| where isempty(_ownership) or Ownership == _ownership\n| top 250 by ReportDate desc\n| project ReportDate, TargetKind, Agent, IssueId, IssueTitle, CardIndex, CardTitle, Category, Severity, Result, Verdict, Evaluation, FindingType, Ownership, Confidence, OwnershipReason, Reasoning, PassingFields = tostring(PassingFields), FailingFields = tostring(FailingFields), AgentReportUrl",
+      "title": "Generated card assessment and reasoning",
+      "usedParamVariables": [
+        "_reportDate",
+        "_agent",
+        "_issue",
+        "_result",
+        "_ownership"
+      ],
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "hideTileTitle": false,
+        "table__enableRenderLinks": true,
+        "table__renderLinksForColumns": [
+          "AgentReportUrl"
+        ]
+      },
+      "visualType": "table"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "44934ee1-8895-422e-8f06-a842336b0fa5",
+      "layout": {
+        "height": 10,
+        "width": 24,
+        "x": 0,
+        "y": 34
+      },
+      "pageId": "36b3f7b6-d568-43cb-93ec-e4deab0d477a",
+      "query": "AIQDailyFields()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| where isempty(_issue) or IssueId == _issue\n| where isempty(_result) or Result == _result\n| top 500 by ReportDate desc\n| project ReportDate, Agent, IssueId, IssueTitle, Result, Field, Passed",
+      "title": "Required field outcomes",
+      "usedParamVariables": [
+        "_reportDate",
+        "_agent",
+        "_issue",
+        "_result"
       ],
       "visualOptions": {
         "colorRulesDisabled": true,

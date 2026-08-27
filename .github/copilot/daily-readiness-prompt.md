@@ -12,8 +12,8 @@ Fetch `origin/main`, read `AGENTS.md`, the daily skill, and automation configura
 5. read-only Application Insights query capability;
 6. read access to the privately configured Azure Boards saved query;
 7. availability of the reviewed Azure optional dependencies, unique ADX quality-cluster resolution,
-   all four logical quality views, and Viewer/Ingestor principal assignments without writing data;
-8. a valid private native-dashboard share link under the durable runtime root;
+   all seven logical quality views, and Viewer/Ingestor principal assignments without writing data;
+8. the reviewed `https://aka.ms/agent-insights/quality` short link resolves to the ADX dashboard;
 9. visibility of an email-send capability that supports explicit HTML;
 10. commit, push, and pull-request capabilities without invoking them.
 

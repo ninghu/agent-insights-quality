@@ -159,7 +159,10 @@ def test_daily_skill_publishes_adx_without_blocking_email() -> None:
     skill = _text(".github/skills/agent-insights-quality-daily/SKILL.md")
     normalized = " ".join(skill.split())
     for requirement in (
-        "sanitized daily ADX publication",
+        "public-safe daily ADX publication",
+        "full reasoning already present in the committed sanitized report",
+        "never private assessment packages",
+        "work-item context",
         "quality-trend dashboard link",
         "continue the email and pull-request flow",
         "email warning",
@@ -172,9 +175,9 @@ def test_daily_skill_publishes_adx_without_blocking_email() -> None:
     readiness = _text(".github/copilot/daily-readiness-prompt.md")
     for requirement in (
         "unique ADX quality-cluster resolution",
-        "all four logical quality views",
+        "all seven logical quality views",
         "Viewer/Ingestor principal assignments",
-        "native-dashboard share link",
+        "reviewed `https://aka.ms/agent-insights/quality` short link",
         "without writing data",
     ):
         assert requirement in " ".join(readiness.split())

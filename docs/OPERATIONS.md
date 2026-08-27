@@ -12,7 +12,7 @@ private artifact root.
 | `staging` | `agent-insights-quality-staging` | Full qualification before promotion |
 
 Both use 90-day telemetry and artifact retention. The shared ADX quality-history database retains
-sanitized daily metrics for 730 days and keeps 90 days in hot cache.
+sanitized daily results and explanations for 730 days and keeps 90 days in hot cache.
 
 The reviewed telemetry generation is stored only in `config/automation.yaml`; it is not part of the
 Agent deployment catalog hash. Increment it only for an explicit human-reviewed clean telemetry
@@ -44,16 +44,10 @@ Render the private, ready-to-import dashboard file after deployment:
 python -m agent_insights_quality render-adx-dashboard
 ```
 
-In the ADX web UI, use **New dashboard** > **Import dashboard from file**, select the rendered file
-under `~/.aiq-runtime/agent-insights-quality/dashboards/`, and copy the dashboard share link. Store
-the validated link privately:
-
-```powershell
-python -m agent_insights_quality configure-adx-dashboard `
-  --url "<copied native ADX dashboard share link>"
-```
-
-The rendered file and share link contain private Azure context and must never be committed.
+In the ADX web UI, use **New dashboard** > **Import dashboard from file** and select the rendered file
+under `~/.aiq-runtime/agent-insights-quality/dashboards/`. The rendered file contains private Azure
+context and must never be committed. Daily email uses the reviewed public
+`https://aka.ms/agent-insights/quality` short link, which redirects to the shared dashboard.
 
 Provisioning creates five Agents, 41 immutable versions, and five disabled/manual monitors in exactly
 one selected profile. Every hosted version must activate and bind an exact-version session. Prompt
@@ -157,11 +151,20 @@ one generated Insight card, plus an explicit row for each missing expected issue
 GitHub-rendered Markdown reports; private prompts, responses, traces, and resource identifiers remain
 excluded. Each report includes a review summary, evaluation legend, and human-validation checklist.
 
-For `daily`, finalization also derives one metrics-only payload and publishes it atomically to ADX.
-The payload exposes logical `AIQDailyRuns`, `AIQDailyAgents`, `AIQDailyIssues`, and `AIQDailyFields`
-views, but excludes assessment narratives, prompts, responses, traces, evidence references, work
-items, provider IDs, and Azure resource identifiers. `run_id` plus a deterministic source digest
-makes retries idempotent and rejects conflicting content.
+For `daily`, finalization also derives one public-safe payload and publishes it atomically to ADX.
+The v2 payload exposes logical `AIQDailyRuns`, `AIQDailyAgents`, `AIQDailyBaselines`,
+`AIQDailyIssues`, `AIQDailyCards`, `AIQDailyFields`, and `AIQDailyHighlights` views. It contains the
+25 tested issues, matching public catalog expectations, current maintenance owners, outcome and
+field detail, generated-card metadata, full reasoning already present in the committed sanitized
+report, and the same aggregate highlights rendered in email. Historical publication resolves the
+exact reviewed catalog snapshot from the report's publishing commit before attaching expected root
+cause and fix text.
+
+ADX never receives private assessment packages, Azure Boards work items, prompts, responses, raw
+traces, evidence references, provider IDs, Foundry versions, private Project/Agent links, or Azure
+resource identifiers. `run_id`, payload version, and a deterministic source digest make retries
+idempotent and reject conflicting content. Canonical functions read only v2 rows; they do not
+translate the superseded v1 payload.
 
 An ADX failure does not change the qualification result or block email and generated pull-request
 publication. Finalization writes an explicit private failure receipt, returns the failure code, and
@@ -173,9 +176,8 @@ set HTML mode explicitly. Never create a draft or retry an ambiguous send. Impor
 status `sent`, `failed`, or `unknown`; ambiguous delivery sets `retry_allowed=false` and requires
 manual verification.
 
-Every daily email includes the privately configured quality-trend dashboard link. Missing or invalid
-dashboard-link configuration prevents creation of a daily email request; configure the copied link
-once after importing the dashboard.
+Every daily email includes the reviewed `https://aka.ms/agent-insights/quality` quality-trend link.
+Repository validation rejects any unreviewed replacement.
 
 Before finalization, fetch the privately configured Azure Boards saved query:
 
@@ -226,6 +228,6 @@ python -m agent_insights_quality publish-adx `
 
 To initialize history, invoke the command for every existing daily report that passes the current
 report contract, in chronological order. Never adapt or restore superseded report formats solely for
-ADX backfill. An identical retry returns `already_published`; a different metrics payload for the
-same `run_id` fails closed. Publication receipts remain private under
+ADX backfill. An identical retry returns `already_published`; a different v2 payload for the same
+`run_id` fails closed. Publication receipts remain private under
 `~/.aiq-runtime/agent-insights-quality/adx-publications/`.

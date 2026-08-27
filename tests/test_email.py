@@ -14,7 +14,7 @@ from agent_insights_quality.email import (
 )
 from agent_insights_quality.util import ContractError
 
-_DASHBOARD_LINK = "https://dataexplorer.azure.com/dashboards/synthetic-quality"
+_DASHBOARD_LINK = "https://aka.ms/agent-insights/quality"
 _ADX_PUBLICATION = {"status": "published", "error_code": None}
 
 

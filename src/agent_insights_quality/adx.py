@@ -10,8 +10,15 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
+import yaml
+
 from agent_insights_quality.azure_cli import azure_cli
+from agent_insights_quality.catalogs import load_catalogs, validate_semantics
 from agent_insights_quality.profiles import RESOURCE_GROUP
+from agent_insights_quality.report_summary import (
+    improvement_rows,
+    working_capabilities,
+)
 from agent_insights_quality.reporting import REQUIRED_FIELDS, validate_report
 from agent_insights_quality.util import (
     ROOT,
@@ -20,15 +27,19 @@ from agent_insights_quality.util import (
     canonical_bytes,
     content_hash,
     read_json,
+    read_yaml,
     runtime_root,
 )
 
 ADX_DATABASE = "AgentInsightsQuality"
 ADX_TABLE = "DailyQualityPublications"
+PAYLOAD_VERSION = "2.0.0"
 _ADX_API_VERSION = "2025-02-14"
 _RUN_ID = re.compile(r"aiq-[0-9]{8}(?:-r[0-9]{2,})?", re.ASCII)
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}", re.ASCII)
 _DASHBOARD_TEMPLATE = ROOT / "dashboards" / "agent-insights-quality.template.json"
+_PUBLIC_REPOSITORY_URL = "https://github.com/ninghu/agent-insights-quality/blob/main"
+_REVIEWED_DASHBOARD_URL = "https://aka.ms/agent-insights/quality"
 
 
 class AdxError(ContractError):
@@ -281,6 +292,7 @@ def _validate_dashboard(
     data_sources = dashboard.get("dataSources")
     tiles = dashboard.get("tiles")
     pages = dashboard.get("pages")
+    parameters = dashboard.get("parameters")
     if (
         dashboard.get("title") != "Agent Insights Quality Trends"
         or not isinstance(data_sources, list)
@@ -288,17 +300,45 @@ def _validate_dashboard(
         or not isinstance(tiles, list)
         or len(tiles) < 8
         or not isinstance(pages, list)
-        or len(pages) != 2
+        or len(pages) != 3
+        or any(not isinstance(page, dict) for page in pages)
+        or [page.get("name") for page in pages]
+        != ["Trend", "Daily Results", "Agent and Issue Explanation"]
+        or not isinstance(parameters, list)
+        or len(parameters) != 6
     ):
         raise AdxError(
             "ADX dashboard template is structurally invalid",
             code="invalid_dashboard_template",
         )
     source = data_sources[0]
+    tile_queries = [
+        str(tile.get("query") or "")
+        for tile in tiles
+        if isinstance(tile, dict)
+    ]
+    parameter_queries = [
+        str(parameter["dataSource"].get("query") or "")
+        for parameter in parameters
+        if isinstance(parameter, dict)
+        and isinstance(parameter.get("dataSource"), dict)
+    ]
+    required_views = {
+        "AIQDailyRuns",
+        "AIQDailyAgents",
+        "AIQDailyBaselines",
+        "AIQDailyIssues",
+        "AIQDailyCards",
+        "AIQDailyFields",
+        "AIQDailyHighlights",
+    }
     if (
         source.get("clusterUri") != analytics.cluster_uri
         or source.get("database") != analytics.database_name
         or source.get("kind") != "manual-kusto"
+        or len(parameter_queries) != 5
+        or any(not query.startswith("AIQDaily") for query in parameter_queries)
+        or any(view not in "\n".join(tile_queries) for view in required_views)
         or any(
             not isinstance(tile, dict)
             or tile.get("dataSourceId") != source.get("id")
@@ -312,83 +352,59 @@ def _validate_dashboard(
         )
 
 
-def dashboard_config_path() -> Path:
-    return runtime_root() / "config" / "adx-dashboard.json"
-
-
-def configure_dashboard_link(value: str) -> Path:
-    link = _validate_dashboard_link(value)
-    path = dashboard_config_path()
-    atomic_json(
-        path,
-        {
-            "schema_version": "1.0.0",
-            "dashboard_url": link,
-        },
-    )
-    return path
-
-
 def resolve_dashboard_link() -> str:
-    path = dashboard_config_path()
-    if not path.is_file():
+    value = read_yaml(ROOT / "config" / "reporting.yaml").get("dashboard_url")
+    if value != _REVIEWED_DASHBOARD_URL:
         raise AdxError(
-            "The private ADX dashboard share link is not configured",
-            code="dashboard_link_unavailable",
-        )
-    value = read_json(path)
-    if set(value) != {"schema_version", "dashboard_url"} or value.get(
-        "schema_version"
-    ) != "1.0.0":
-        raise AdxError(
-            "The private ADX dashboard configuration is invalid",
+            "The reviewed ADX dashboard link is invalid",
             code="dashboard_link_invalid",
         )
-    return _validate_dashboard_link(str(value.get("dashboard_url") or ""))
+    return _REVIEWED_DASHBOARD_URL
 
 
-def _validate_dashboard_link(value: str) -> str:
-    link = value.strip()
-    try:
-        parsed = urlsplit(link)
-        port = parsed.port
-    except ValueError as error:
-        raise AdxError(
-            "The ADX dashboard share link is invalid",
-            code="dashboard_link_invalid",
-        ) from error
-    path = parsed.path.casefold()
-    if (
-        not link.isascii()
-        or len(link) > 2048
-        or parsed.scheme != "https"
-        or parsed.hostname != "dataexplorer.azure.com"
-        or parsed.username is not None
-        or parsed.password is not None
-        or port is not None
-        or parsed.fragment
-        or not path.startswith(("/dashboard/", "/dashboards/"))
-        or path.rstrip("/") in {"/dashboard", "/dashboards"}
-    ):
-        raise AdxError(
-            "The ADX dashboard share link is invalid",
-            code="dashboard_link_invalid",
-        )
-    return link
-
-
-def build_publication_payload(report: dict[str, Any]) -> dict[str, Any]:
+def build_publication_payload(
+    report: dict[str, Any],
+    *,
+    source_path: Path | None = None,
+    catalogs: tuple[dict[str, Any], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     _validate_daily_source(report)
+    agent_catalog, issue_catalog = resolve_report_catalogs(
+        report,
+        source_path=source_path,
+        current_catalogs=catalogs,
+    )
     summary = report["summary"]
     issues = report["issues"]
+    agent_by_name = {
+        item["name"]: item for item in agent_catalog["agents"]
+    }
+    current_agents, _ = load_catalogs(require_paths=False)
+    current_agent_by_name = {
+        item["name"]: item for item in current_agents["agents"]
+    }
+    owner_by_agent = {
+        name: context.get("owner")
+        or current_agent_by_name.get(name, {}).get("owner")
+        or "Unassigned"
+        for name, context in agent_by_name.items()
+    }
+    issue_by_id = {
+        item["id"]: item for item in issue_catalog["issues"]
+    }
+    _validate_catalog_context(report, agent_by_name, issue_by_id)
     baseline_by_agent = {item["agent"]: item for item in report["baseline"]}
     issues_by_agent = {
         agent: [item for item in issues if item["agent"] == agent]
         for agent in baseline_by_agent
     }
+    report_url = _report_url(report)
     agents = []
+    baselines = []
+    cards = []
     for agent in sorted(baseline_by_agent, key=str.casefold):
         baseline = baseline_by_agent[agent]
+        agent_context = agent_by_name[agent]
         agent_issues = issues_by_agent[agent]
         issue_cards = [
             card
@@ -404,9 +420,19 @@ def build_publication_payload(report: dict[str, Any]) -> dict[str, Any]:
         agents.append(
             {
                 "agent": agent,
+                "owner": owner_by_agent[agent],
+                "agent_type": agent_context["type"],
+                "framework": agent_context["framework"],
+                "agent_report_url": _agent_report_url(report, agent),
+                "selected_issue_ids": [
+                    item["issue_id"] for item in agent_issues
+                ],
                 "baseline_status": baseline["status"],
                 "baseline_verdict": baseline["assessment"]["verdict"],
                 "baseline_ownership": baseline["assessment"]["ownership"],
+                "baseline_ownership_reason": baseline["assessment"][
+                    "ownership_reason"
+                ],
                 "baseline_insight_count": baseline["insight_count"],
                 "baseline_runtime_evidence_complete": baseline[
                     "runtime_evidence_complete"
@@ -435,39 +461,137 @@ def build_publication_payload(report: dict[str, Any]) -> dict[str, Any]:
                 "fields_expected": len(fields),
             }
         )
-    issue_metrics = [
-        {
-            "agent": item["agent"],
-            "issue_id": item["issue_id"],
-            "status": item["status"],
-            "result": item["result"],
-            "detail": item["detail"],
-            "ownership": item["assessment"]["ownership"],
-            "finding_type": item["assessment"]["finding_type"],
-            "observed_count": item["observed_count"],
-            "runtime_evidence_complete": item["runtime_evidence_complete"],
-            "confidence": item["assessment"]["confidence"],
-            "fields_passed": sum(
-                value is True for value in item["assessment"]["fields"].values()
-            ),
-            "fields_expected": len(item["assessment"]["fields"]),
-        }
-        for item in issues
-    ]
+        baseline_cards = baseline["assessment"].get("card_evaluations", [])
+        baselines.append(
+            {
+                "agent": agent,
+                "owner": owner_by_agent[agent],
+                "agent_type": agent_context["type"],
+                "framework": agent_context["framework"],
+                "status": baseline["status"],
+                "verdict": baseline["assessment"]["verdict"],
+                "ownership": baseline["assessment"]["ownership"],
+                "ownership_reason": baseline["assessment"]["ownership_reason"],
+                "confidence": baseline["assessment"]["confidence"],
+                "insight_count": baseline["insight_count"],
+                "runtime_evidence_complete": baseline[
+                    "runtime_evidence_complete"
+                ],
+                "card_count": len(baseline_cards),
+                "agent_report_url": _agent_report_url(report, agent),
+                "report_url": report_url,
+            }
+        )
+        cards.extend(
+            _card_metric(
+                report=report,
+                agent=agent,
+                issue_id=None,
+                issue_title="Healthy baseline",
+                result="BASELINE",
+                card=card,
+                card_index=index,
+            )
+            for index, card in enumerate(baseline_cards, start=1)
+        )
+    issue_metrics = []
+    for item in issues:
+        context = issue_by_id[item["issue_id"]]
+        agent_context = agent_by_name[item["agent"]]
+        fields = item["assessment"]["fields"]
+        card_evaluations = item["assessment"].get("card_evaluations", [])
+        issue_metrics.append(
+            {
+                "agent": item["agent"],
+                "owner": owner_by_agent[item["agent"]],
+                "agent_type": agent_context["type"],
+                "framework": agent_context["framework"],
+                "issue_id": item["issue_id"],
+                "title": context["title"],
+                "category": context["category"],
+                "severity": context["severity"],
+                "expected_root_cause": context["root_cause"],
+                "expected_fix": context["expected_fix"],
+                "status": item["status"],
+                "error_code": item.get("error_code"),
+                "result": item["result"],
+                "detail": item["detail"],
+                "verdict": item["assessment"]["verdict"],
+                "ownership": item["assessment"]["ownership"],
+                "ownership_reason": item["assessment"]["ownership_reason"],
+                "finding_type": item["assessment"]["finding_type"],
+                "observed_count": item["observed_count"],
+                "runtime_evidence_complete": item[
+                    "runtime_evidence_complete"
+                ],
+                "confidence": item["assessment"]["confidence"],
+                "card_count": len(card_evaluations),
+                "passing_fields": _field_names(fields, expected=True),
+                "failing_fields": _field_names(fields, expected=False),
+                "fields_passed": sum(value is True for value in fields.values()),
+                "fields_expected": len(fields),
+                "issue_url": _issue_url(item["issue_id"]),
+                "agent_report_url": _agent_report_url(
+                    report,
+                    item["agent"],
+                ),
+                "report_url": report_url,
+            }
+        )
+        cards.extend(
+            _card_metric(
+                report=report,
+                agent=item["agent"],
+                issue_id=item["issue_id"],
+                issue_title=context["title"],
+                result=item["result"],
+                card=card,
+                card_index=index,
+            )
+            for index, card in enumerate(card_evaluations, start=1)
+        )
     field_metrics = [
         {
             "agent": item["agent"],
             "issue_id": item["issue_id"],
+            "issue_title": issue_by_id[item["issue_id"]]["title"],
+            "result": item["result"],
             "field": field,
             "passed": passed,
         }
         for item in issues
         for field, passed in sorted(item["assessment"]["fields"].items())
     ]
+    highlights = [
+        {
+            "section": "What is working",
+            "ordinal": index,
+            "title": title,
+            "what_happened": description,
+            "needed_behavior": "",
+        }
+        for index, (title, description) in enumerate(
+            working_capabilities(report),
+            start=1,
+        )
+    ] + [
+        {
+            "section": "What needs improvement",
+            "ordinal": index,
+            "title": title,
+            "what_happened": what_happened,
+            "needed_behavior": needed_behavior,
+        }
+        for index, (title, what_happened, needed_behavior) in enumerate(
+            improvement_rows(report),
+            start=1,
+        )
+    ]
     return {
-        "schema_version": "1.0.0",
+        "schema_version": PAYLOAD_VERSION,
         "run": {
             "status": report["status"],
+            "report_url": report_url,
             "baseline_passed": summary["baseline_passed"],
             "issues_correct": summary["issues_correct"],
             "issues_expected": summary["issues_expected"],
@@ -485,9 +609,205 @@ def build_publication_payload(report: dict[str, Any]) -> dict[str, Any]:
             "quality_score_formula": summary["quality_score_formula"],
         },
         "agents": agents,
+        "baselines": baselines,
         "issues": issue_metrics,
+        "cards": cards,
         "fields": field_metrics,
+        "highlights": highlights,
     }
+
+
+def resolve_report_catalogs(
+    report: dict[str, Any],
+    *,
+    source_path: Path | None = None,
+    current_catalogs: tuple[dict[str, Any], dict[str, Any]] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    current = current_catalogs or load_catalogs(require_paths=False)
+    if _catalogs_match_report(report, current):
+        return current
+    if source_path is None:
+        raise AdxError(
+            "The daily report catalog snapshot is unavailable",
+            code="catalog_snapshot_unavailable",
+        )
+    try:
+        relative = source_path.resolve().relative_to(ROOT).as_posix()
+    except ValueError as error:
+        raise AdxError(
+            "Historical report must be inside the repository",
+            code="catalog_snapshot_unavailable",
+        ) from error
+    commits = _run_git(
+        ["log", "--follow", "--format=%H", "--", relative]
+    ).splitlines()
+    for commit in commits:
+        if re.fullmatch(r"[0-9a-f]{40}", commit, re.ASCII) is None:
+            continue
+        try:
+            historical = _catalogs_at_commit(commit)
+        except AdxError:
+            continue
+        if _catalogs_match_report(report, historical):
+            return historical
+    raise AdxError(
+        "The reviewed catalog snapshot for this daily report was not found",
+        code="catalog_snapshot_unavailable",
+    )
+
+
+def _catalogs_match_report(
+    report: dict[str, Any],
+    catalogs: tuple[dict[str, Any], dict[str, Any]],
+) -> bool:
+    agents, issues = catalogs
+    hashes = report.get("catalog_hashes", {})
+    return (
+        isinstance(hashes, dict)
+        and hashes.get("agents") == content_hash(agents)
+        and hashes.get("issues") == content_hash(issues)
+    )
+
+
+def _catalogs_at_commit(
+    commit: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    values = []
+    try:
+        for path in (
+            "catalogs/AGENT_CATALOG.yaml",
+            "catalogs/ISSUE_CATALOG.yaml",
+        ):
+            value = yaml.safe_load(_run_git(["show", f"{commit}:{path}"]))
+            if not isinstance(value, dict):
+                raise AdxError(
+                    "Historical catalog snapshot is invalid",
+                    code="catalog_snapshot_unavailable",
+                )
+            values.append(value)
+    except yaml.YAMLError as error:
+        raise AdxError(
+            "Historical catalog snapshot is invalid",
+            code="catalog_snapshot_unavailable",
+        ) from error
+    agents, issues = values
+    try:
+        validate_semantics(agents, issues, require_paths=False)
+    except ContractError as error:
+        raise AdxError(
+            "Historical catalog snapshot is invalid",
+            code="catalog_snapshot_unavailable",
+        ) from error
+    return agents, issues
+
+
+def _run_git(arguments: list[str]) -> str:
+    try:
+        process = subprocess.run(
+            ["git", *arguments],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise AdxError(
+            "Historical catalog lookup failed",
+            code="catalog_snapshot_unavailable",
+        ) from error
+    if process.returncode != 0:
+        raise AdxError(
+            "Historical catalog lookup failed",
+            code="catalog_snapshot_unavailable",
+        )
+    return process.stdout
+
+
+def _validate_catalog_context(
+    report: dict[str, Any],
+    agent_by_name: dict[str, dict[str, Any]],
+    issue_by_id: dict[str, dict[str, Any]],
+) -> None:
+    if set(agent_by_name) != {item["agent"] for item in report["baseline"]}:
+        raise AdxError(
+            "Report Agents do not match the reviewed catalog snapshot",
+            code="invalid_report",
+        )
+    for item in report["issues"]:
+        context = issue_by_id.get(item["issue_id"])
+        if (
+            context is None
+            or context["agent"] != item["agent"]
+            or context["title"] != item["title"]
+        ):
+            raise AdxError(
+                "Report issues do not match the reviewed catalog snapshot",
+                code="invalid_report",
+            )
+
+
+def _field_names(fields: dict[str, Any], *, expected: bool) -> list[str]:
+    return sorted(
+        field for field, value in fields.items() if value is expected
+    )
+
+
+def _card_metric(
+    *,
+    report: dict[str, Any],
+    agent: str,
+    issue_id: str | None,
+    issue_title: str,
+    result: str,
+    card: dict[str, Any],
+    card_index: int,
+) -> dict[str, Any]:
+    fields = card.get("fields")
+    if not isinstance(fields, dict):
+        fields = {}
+    return {
+        "target_kind": "baseline" if issue_id is None else "issue",
+        "target": issue_id or "v0",
+        "agent": agent,
+        "issue_id": issue_id or "",
+        "issue_title": issue_title,
+        "result": result,
+        "card_index": card_index,
+        "title": card["title"],
+        "category": card["category"],
+        "severity": card["severity"],
+        "verdict": card.get("verdict", ""),
+        "evaluation": card.get("evaluation", ""),
+        "finding_type": card.get("finding_type", ""),
+        "ownership": card["ownership"],
+        "ownership_reason": card["ownership_reason"],
+        "confidence": card["confidence"],
+        "reasoning": card["reasoning"],
+        "passing_fields": _field_names(fields, expected=True),
+        "failing_fields": _field_names(fields, expected=False),
+        "fields_passed": sum(value is True for value in fields.values()),
+        "fields_expected": len(fields),
+        "issue_url": _issue_url(issue_id) if issue_id is not None else "",
+        "agent_report_url": _agent_report_url(report, agent),
+        "report_url": _report_url(report),
+    }
+
+
+def _report_url(report: dict[str, Any]) -> str:
+    date_path = str(report["report_date"]).replace("-", "/")
+    return f"{_PUBLIC_REPOSITORY_URL}/reports/daily/{date_path}/report.md"
+
+
+def _agent_report_url(report: dict[str, Any], agent: str) -> str:
+    date_path = str(report["report_date"]).replace("-", "/")
+    return (
+        f"{_PUBLIC_REPOSITORY_URL}/reports/daily/{date_path}/agents/{agent}.md"
+    )
+
+
+def _issue_url(issue_id: str) -> str:
+    return f"{_PUBLIC_REPOSITORY_URL}/ISSUE_CATALOG.md#{issue_id}"
 
 
 def _validate_daily_source(report: dict[str, Any]) -> None:
@@ -550,6 +870,8 @@ def publication_receipt_path(run_id: str) -> Path:
 def publish_daily_report(
     report: dict[str, Any],
     *,
+    source_path: Path | None = None,
+    catalogs: tuple[dict[str, Any], dict[str, Any]] | None = None,
     analytics: QualityAnalytics | None = None,
     client_factory: Callable[[str], AdxClient] = _default_client_factory,
     receipt_path: Path | None = None,
@@ -559,7 +881,11 @@ def publish_daily_report(
     _validate_run_id(run_id)
     receipt_path = receipt_path or publication_receipt_path(run_id)
     try:
-        payload = build_publication_payload(report)
+        payload = build_publication_payload(
+            report,
+            source_path=source_path,
+            catalogs=catalogs,
+        )
         source_digest = content_hash(payload)
         target = analytics or resolve_quality_analytics()
         client = client_factory(target.cluster_uri)
@@ -607,9 +933,16 @@ def publish_daily_report(
 
 def publish_daily_report_best_effort(
     report: dict[str, Any],
+    *,
+    source_path: Path | None = None,
+    catalogs: tuple[dict[str, Any], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     try:
-        return publish_daily_report(report)
+        return publish_daily_report(
+            report,
+            source_path=source_path,
+            catalogs=catalogs,
+        )
     except AdxError as error:
         if error.code == "invalid_report":
             raise
@@ -644,6 +977,7 @@ def _existing_publications(
         database,
         f"{ADX_TABLE}\n"
         f"| where RunId == '{run_id}'\n"
+        f"| where PayloadVersion == '{PAYLOAD_VERSION}'\n"
         "| project SourceDigest",
     )
 
@@ -679,14 +1013,15 @@ def _publication_command(
             code="invalid_report",
         )
     encoded = base64.b64encode(canonical_bytes(payload)).decode("ascii")
-    tag = f"aiq-run:{run_id}"
+    tag = f"aiq-v2-run:{run_id}"
     return (
         f".set-or-append {ADX_TABLE} "
         f"with (tags='[\"{tag}\"]', ingestIfNotExists='[\"{tag}\"]') <|\n"
         f"print ReportDate=datetime({report_date}), RunId='{run_id}', "
         "PublishedAt=now(), "
         f"SourceDigest='{source_digest}', "
-        f"Payload=parse_json(base64_decode_tostring('{encoded}'))"
+        f"Payload=parse_json(base64_decode_tostring('{encoded}')), "
+        f"PayloadVersion='{PAYLOAD_VERSION}'"
     )
 
 
@@ -699,7 +1034,8 @@ def _publication_receipt(
     error_code: str | None = None,
 ) -> dict[str, Any]:
     return {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
+        "payload_version": PAYLOAD_VERSION,
         "report_date": report_date,
         "run_id": run_id,
         "source_digest": source_digest,

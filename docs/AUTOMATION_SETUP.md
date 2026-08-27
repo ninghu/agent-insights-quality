@@ -26,9 +26,8 @@ configuration or generated reports. Deployment registries and run state live und
 user-level `~/.aiq-runtime/agent-insights-quality/` root so scheduled worktrees share approved state.
 The canonical registry is stored in the existing private Azure storage account; provisioning operators
 need Storage Blob Data Contributor, while qualification-only operators need Storage Blob Data Reader.
-ADX publication receipts, the rendered dashboard import file, and the copied dashboard share link
-also stay under this durable private root. The share link must be configured before daily
-finalization so every HTML email can include it.
+ADX publication receipts and the rendered dashboard import file also stay under this durable private
+root. Daily email uses the reviewed public `https://aka.ms/agent-insights/quality` short link.
 
 ## Readiness
 
@@ -56,6 +55,6 @@ invoke a runtime-packaged skill by name.
 
 Verify live progress output, 30 assessment packages, active and yesterday-closed Quality work-item
 sections, one immutable HTML send attempt with the dashboard link, explicit ADX publication status,
-five per-Agent reports, generated-path validation, required checks, and auto-merge. A complete
-trusted FAIL is a valid product-quality result; INCOMPLETE is not auto-merged, but its sanitized
-operational result is retained in ADX.
+five per-Agent reports, all seven public-safe ADX views, generated-path validation, required checks,
+and auto-merge. A complete trusted FAIL is a valid product-quality result; INCOMPLETE is not
+auto-merged, but its sanitized operational result and committed explanation are retained in ADX.

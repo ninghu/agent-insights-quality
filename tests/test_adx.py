@@ -9,15 +9,20 @@ from types import SimpleNamespace
 import pytest
 
 from agent_insights_quality.adx import (
+    PAYLOAD_VERSION,
     AdxError,
     QualityAnalytics,
     build_publication_payload,
-    configure_dashboard_link,
     publish_daily_report,
     publish_daily_report_best_effort,
     render_dashboard,
     resolve_dashboard_link,
     resolve_quality_analytics,
+    resolve_report_catalogs,
+)
+from agent_insights_quality.report_summary import (
+    improvement_rows,
+    working_capabilities,
 )
 from agent_insights_quality.util import ROOT, read_json
 
@@ -31,11 +36,17 @@ class _FakeAdxClient:
     def query(self, database: str, query: str) -> list[dict[str, str]]:
         assert database == "AgentInsightsQuality"
         assert "DailyQualityPublications" in query
+        assert "PayloadVersion == '2.0.0'" in query
         return list(self.rows)
 
     def manage(self, database: str, command: str) -> None:
         assert database == "AgentInsightsQuality"
         self.commands.append(command)
+        assert "PayloadVersion='2.0.0'" in command
+        assert "aiq-v2-run:" in command
+        assert command.index("Payload=parse_json") < command.index(
+            "PayloadVersion="
+        )
         match = re.search(r"SourceDigest='(sha256:[0-9a-f]{64})'", command)
         assert match is not None
         self.rows = [{"SourceDigest": match.group(1)}]
@@ -45,7 +56,11 @@ class _FakeAdxClient:
 
 
 def _report() -> dict:
-    return deepcopy(read_json(ROOT / "reports" / "daily" / "2026" / "08" / "26" / "report.json"))
+    return deepcopy(read_json(_report_path()))
+
+
+def _report_path() -> Path:
+    return ROOT / "reports" / "daily" / "2026" / "08" / "26" / "report.json"
 
 
 def _private_runtime(tmp_path: Path, monkeypatch) -> Path:
@@ -61,12 +76,61 @@ def _analytics() -> QualityAnalytics:
     )
 
 
-def test_publication_payload_contains_only_sanitized_metrics() -> None:
-    payload = build_publication_payload(_report())
+def test_publication_payload_contains_public_safe_explanations() -> None:
+    report = _report()
+    payload = build_publication_payload(
+        report,
+        source_path=_report_path(),
+    )
+    assert payload["schema_version"] == PAYLOAD_VERSION
     assert len(payload["agents"]) == 5
+    assert len(payload["baselines"]) == 5
     assert len(payload["issues"]) == 25
+    assert len(payload["cards"]) == 36
     assert len(payload["fields"]) == 175
+    assert len(payload["highlights"]) == 8
     assert payload["run"]["quality_score_formula"] == "field_weighted_v1"
+    assert payload["run"]["report_url"].endswith(
+        "/reports/daily/2026/08/26/report.md"
+    )
+    assert all(item["owner"] for item in payload["agents"])
+    issue = payload["issues"][0]
+    assert issue["title"]
+    assert issue["expected_root_cause"]
+    assert issue["expected_fix"]
+    assert issue["ownership_reason"]
+    assert issue["issue_url"].endswith(f"#{issue['issue_id']}")
+    assert issue["fields_expected"] == 7
+    card = payload["cards"][0]
+    assert card["reasoning"]
+    assert card["ownership_reason"]
+    assert card["report_url"].startswith("https://github.com/")
+    committed_reasoning = {
+        card["reasoning"]
+        for item in report["baseline"]
+        for card in item["assessment"]["card_evaluations"]
+    } | {
+        card["reasoning"]
+        for item in report["issues"]
+        for card in item["assessment"]["card_evaluations"]
+    }
+    assert {item["reasoning"] for item in payload["cards"]} == committed_reasoning
+    expected_highlights = {
+        ("What is working", title, description, "")
+        for title, description in working_capabilities(report)
+    } | {
+        ("What needs improvement", title, what_happened, needed_behavior)
+        for title, what_happened, needed_behavior in improvement_rows(report)
+    }
+    assert {
+        (
+            item["section"],
+            item["title"],
+            item["what_happened"],
+            item["needed_behavior"],
+        )
+        for item in payload["highlights"]
+    } == expected_highlights
     assert {item["field"] for item in payload["fields"]} == {
         "category",
         "description",
@@ -77,15 +141,78 @@ def test_publication_payload_contains_only_sanitized_metrics() -> None:
         "title",
     }
     rendered = json.dumps(payload, sort_keys=True)
-    for excluded in (
+    for excluded_key in (
         "catalog_hashes",
         "delivery",
         "evidence_reference",
         "foundry_version",
-        "ownership_reason",
-        "reasoning",
+        "manifest_reference",
+        "reference",
     ):
-        assert excluded not in rendered
+        assert f'"{excluded_key}":' not in rendered
+    for excluded_value in (
+        ".services.ai.azure.com",
+        "/subscriptions/",
+        "active_items",
+        "closed_yesterday_items",
+    ):
+        assert excluded_value not in rendered
+
+
+def test_historical_report_resolves_its_reviewed_catalog_snapshot() -> None:
+    report = _report()
+    agents, issues = resolve_report_catalogs(
+        report,
+        source_path=_report_path(),
+    )
+    assert {item["name"] for item in agents["agents"]} == {
+        item["agent"] for item in report["baseline"]
+    }
+    assert {
+        item["id"]
+        for item in issues["issues"]
+        if item["id"] in {result["issue_id"] for result in report["issues"]}
+    } == {result["issue_id"] for result in report["issues"]}
+    with pytest.raises(AdxError, match="catalog snapshot"):
+        resolve_report_catalogs(report)
+
+
+def test_invalid_historical_catalog_candidate_is_skipped(monkeypatch) -> None:
+    report = _report()
+    historical = resolve_report_catalogs(
+        report,
+        source_path=_report_path(),
+    )
+    commits = ["a" * 40, "b" * 40]
+    calls = iter(
+        [
+            AdxError(
+                "Synthetic invalid catalog",
+                code="catalog_snapshot_unavailable",
+            ),
+            historical,
+        ]
+    )
+
+    def catalog_at_commit(_commit: str):
+        value = next(calls)
+        if isinstance(value, AdxError):
+            raise value
+        return value
+
+    monkeypatch.setattr(
+        "agent_insights_quality.adx._run_git",
+        lambda _arguments: "\n".join(commits),
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.adx._catalogs_at_commit",
+        catalog_at_commit,
+    )
+    assert resolve_report_catalogs(
+        report,
+        source_path=_report_path(),
+        current_catalogs=({"agents": []}, {"issues": []}),
+    ) == historical
 
 
 def test_publication_is_idempotent_and_rejects_digest_conflicts(
@@ -101,11 +228,13 @@ def test_publication_is_idempotent_and_rejects_digest_conflicts(
 
     first = publish_daily_report(
         report,
+        source_path=_report_path(),
         analytics=_analytics(),
         client_factory=factory,
     )
     second = publish_daily_report(
         report,
+        source_path=_report_path(),
         analytics=_analytics(),
         client_factory=factory,
     )
@@ -125,6 +254,7 @@ def test_publication_is_idempotent_and_rejects_digest_conflicts(
     with pytest.raises(AdxError, match="different payload") as caught:
         publish_daily_report(
             changed,
+            source_path=_report_path(),
             analytics=_analytics(),
             client_factory=factory,
         )
@@ -146,6 +276,7 @@ def test_publication_failure_writes_private_receipt(
     with pytest.raises(AdxError, match="Synthetic ADX failure"):
         publish_daily_report(
             _report(),
+            source_path=_report_path(),
             analytics=_analytics(),
             client_factory=fail,
         )
@@ -169,7 +300,10 @@ def test_best_effort_publication_returns_operational_failure(
             AdxError("Synthetic discovery failure", code="resource_resolution_failed")
         ),
     )
-    receipt = publish_daily_report_best_effort(_report())
+    receipt = publish_daily_report_best_effort(
+        _report(),
+        source_path=_report_path(),
+    )
     assert receipt["status"] == "failed"
     assert receipt["error_code"] == "resource_resolution_failed"
 
@@ -184,10 +318,12 @@ def test_three_digit_rerun_identity_is_publishable(
     client = _FakeAdxClient()
     receipt = publish_daily_report(
         report,
+        source_path=_report_path(),
         analytics=_analytics(),
         client_factory=lambda _uri: client,
     )
     assert receipt["status"] == "published"
+    assert receipt["payload_version"] == PAYLOAD_VERSION
 
 
 def test_dashboard_rendering_and_private_share_link(
@@ -201,20 +337,27 @@ def test_dashboard_rendering_and_private_share_link(
     assert dashboard["dataSources"][0]["clusterUri"] == _analytics().cluster_uri
     assert dashboard["dataSources"][0]["database"] == "AgentInsightsQuality"
     assert "{{ADX_" not in output.read_text(encoding="ascii")
-    assert len(dashboard["tiles"]) == 10
+    assert [page["name"] for page in dashboard["pages"]] == [
+        "Trend",
+        "Daily Results",
+        "Agent and Issue Explanation",
+    ]
+    assert len(dashboard["parameters"]) == 6
+    assert len(dashboard["tiles"]) == 17
     assert dashboard["parameters"][0]["defaultValue"]["count"] == 90
+    assert {
+        parameter.get("variableName")
+        for parameter in dashboard["parameters"]
+        if parameter.get("variableName")
+    } == {
+        "_reportDate",
+        "_agent",
+        "_issue",
+        "_result",
+        "_ownership",
+    }
 
-    link = "https://dataexplorer.azure.com/dashboards/synthetic-quality?source=email"
-    configured = configure_dashboard_link(link)
-    assert configured.is_relative_to(private_root)
-    assert resolve_dashboard_link() == link
-    for invalid in (
-        "http://dataexplorer.azure.com/dashboards/example",
-        "https://example.com/dashboards/example",
-        "https://dataexplorer.azure.com/",
-    ):
-        with pytest.raises(AdxError, match="invalid"):
-            configure_dashboard_link(invalid)
+    assert resolve_dashboard_link() == "https://aka.ms/agent-insights/quality"
 
 
 def test_quality_analytics_resource_is_resolved_by_tags(monkeypatch) -> None:
@@ -275,7 +418,11 @@ def test_adx_infrastructure_uses_existing_production_resource_group() -> None:
     for function in (
         "AIQDailyRuns",
         "AIQDailyAgents",
+        "AIQDailyBaselines",
         "AIQDailyIssues",
+        "AIQDailyCards",
         "AIQDailyFields",
+        "AIQDailyHighlights",
     ):
         assert function in schema
+    assert "where PayloadVersion == '2.0.0'" in schema
