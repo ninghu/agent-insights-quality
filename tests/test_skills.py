@@ -27,12 +27,24 @@ def test_repository_skills_have_discoverable_frontmatter() -> None:
 
 def test_contributing_routes_onboarding_through_versioned_skills() -> None:
     contributing = _text("CONTRIBUTING.md")
+    normalized = " ".join(contributing.split())
     assert ".github/skills/onboard-new-issue/SKILL.md" in contributing
     assert ".github/skills/onboard-new-test-agent/SKILL.md" in contributing
     assert "Stop for human review" in contributing
     assert "full-catalog" in contributing
     assert "staging qualification" in contributing
     assert "at least one reviewed single-root issue" in contributing
+    for requirement in (
+        "`v0` is a complete, deployable healthy version",
+        "Every non-baseline logical version represents exactly one `issue-NNN`",
+        "each issue is assigned exactly once to one permanent Test Agent",
+        "exactly one independently fixable, reviewed root cause",
+    ):
+        assert requirement in normalized
+    assert contributing.index("- New Test Agent:") < contributing.index("- New issue:")
+    assert contributing.index("## Onboard a new Test Agent") < contributing.index(
+        "## Define a new issue"
+    )
     for command in (
         "python -m agent_insights_quality generate-docs",
         "python -m agent_insights_quality validate",
