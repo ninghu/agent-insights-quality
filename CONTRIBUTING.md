@@ -30,13 +30,13 @@ Do not invent an onboarding workflow from scratch. Ask Copilot to follow the app
 repository skill:
 
 - New Test Agent:
-  [`.github/skills/onboard-new-test-agent/SKILL.md`](.github/skills/onboard-new-test-agent/SKILL.md)
+  [`.github/skills/onboard-test-agent/SKILL.md`](.github/skills/onboard-test-agent/SKILL.md)
 - New issue: [`.github/skills/onboard-new-issue/SKILL.md`](.github/skills/onboard-new-issue/SKILL.md)
 
 Example prompts:
 
 ```text
-Use the onboard-new-test-agent skill to propose a new fixed synthetic Test Agent. Stop for human
+Use the onboard-test-agent skill to propose a new fixed synthetic Test Agent. Stop for human
 review of its name, framework, baseline contract, owner, and issue set before implementation.
 ```
 
@@ -46,13 +46,13 @@ changing catalogs or Agent source.
 ```
 
 Each skill must first produce a reviewable plan. Catalog, schema, source, infrastructure, score-policy,
-and promotion changes cannot be approved solely by automation. The new-Test-Agent skill composes the
-new-issue skill for every initial issue; use the new-issue skill directly when adding an issue to an
-existing Agent.
+and promotion changes cannot be approved solely by automation. The `onboard-test-agent` skill
+composes the `onboard-new-issue` skill for every initial issue; use `onboard-new-issue` directly when
+adding an issue to an existing Agent.
 
 ## Onboard a new Test Agent
 
-Use the new-Agent skill to:
+Use the `onboard-test-agent` skill to:
 
 1. review the stable Agent name, Foundry type, real framework, GPT-5.6 Terra model, owner, and healthy
    baseline contract, with explicit acceptance from that owner or an authorized maintainer;
@@ -77,8 +77,8 @@ container contract and CI build entry. Record the owner in the Agent Catalog.
 the evidence as `agent`, `test_framework`, `infrastructure`, or `unresolved`; never assume every
 baseline card is Noise.
 
-Keep the standalone new-issue skill. The new-Agent skill composes it for initial issues; contributors
-also use it later to add issues to an existing Agent.
+Keep the standalone `onboard-new-issue` skill. `onboard-test-agent` composes it for initial issues;
+contributors also use it later to add issues to an existing Agent.
 
 ## Define a new issue
 
