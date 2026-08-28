@@ -124,3 +124,5 @@ def test_profile_run_lock_rejects_overlap(tmp_path: Path) -> None:
         with pytest.raises(ContractError, match="active qualification"):
             with profile_run_lock("daily", "aiq-20260827-r01", tmp_path):
                 pass
+    with profile_run_lock("daily", "aiq-20260827-r01", tmp_path):
+        pass

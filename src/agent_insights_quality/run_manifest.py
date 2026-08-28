@@ -9,6 +9,9 @@ from agent_insights_quality.models import AgentResult
 from agent_insights_quality.registry import version_entry
 from agent_insights_quality.util import ROOT, ContractError, content_hash, read_json
 
+OFFICIAL_DELIVERY = "official"
+TEST_EMAIL_ONLY_DELIVERY = "test_email_only"
+
 
 def run_id(report_date: date, rerun: int = 0) -> str:
     base = f"aiq-{report_date:%Y%m%d}"
@@ -20,6 +23,7 @@ def build_manifest(
     report_date: date,
     profile: str,
     rerun: int,
+    delivery_mode: str,
     insight_lookback_hours: float,
     telemetry_resource_set: str,
     catalog_hashes: dict[str, str],
@@ -60,9 +64,10 @@ def build_manifest(
             }
         )
     manifest: dict[str, Any] = {
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "run_id": run_id(report_date, rerun),
         "profile": profile,
+        "delivery_mode": delivery_mode,
         "report_date": report_date.isoformat(),
         "insight_lookback_hours": insight_lookback_hours,
         "telemetry_resource_set": telemetry_resource_set,
@@ -117,6 +122,12 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     )
     if errors:
         raise ContractError(f"Run manifest is invalid: {errors[0].message}")
+    if manifest["delivery_mode"] == TEST_EMAIL_ONLY_DELIVERY and (
+        manifest["profile"] != "daily" or "-r" not in manifest["run_id"]
+    ):
+        raise ContractError(
+            "Test email-only delivery requires a daily nonzero rerun identity"
+        )
     expected = content_hash(
         {key: value for key, value in manifest.items() if key != "manifest_hash"}
     )

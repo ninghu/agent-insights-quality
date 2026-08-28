@@ -27,6 +27,8 @@ def test_email_requires_reviewed_domain_and_one_success(
     runtime_root = tmp_path / ".aiq-runtime" / "test-runtime"
     monkeypatch.setenv("AIQ_RUNTIME_ROOT", str(runtime_root))
     assert resolve_recipient() == "agentinsightsteam@microsoft.com"
+    with pytest.raises(ContractError, match="private test email recipient"):
+        resolve_recipient(test_run=True)
     override = runtime_root / "config" / "email-recipient.json"
     override.parent.mkdir(parents=True)
     override.write_text(
@@ -39,7 +41,8 @@ def test_email_requires_reviewed_domain_and_one_success(
         ),
         encoding="utf-8",
     )
-    assert resolve_recipient() == "synthetic-user@microsoft.com"
+    assert resolve_recipient() == "agentinsightsteam@microsoft.com"
+    assert resolve_recipient(test_run=True) == "synthetic-user@microsoft.com"
     override.unlink()
     report = {
         "status": "PASS",
@@ -104,6 +107,7 @@ def test_email_requires_reviewed_domain_and_one_success(
     assert request["channel"] == "copilot_email"
     assert request["send_once"] is True
     assert request["retry_ambiguous"] is False
+    assert request["delivery_mode"] == "official"
     assert "Recommended human validation" not in request["html"]
     assert ">Test agent</th>" in request["html"]
     assert ">Owner</th>" in request["html"]
@@ -189,6 +193,27 @@ def test_email_requires_reviewed_domain_and_one_success(
     assert 'href="https://synthetic.example/workitems/42"' in work_item_request["html"]
     assert 'href="https://synthetic.example/workitems/41"' in work_item_request["html"]
     assert "Removed items are excluded" in work_item_request["html"]
+    test_request = create_request(
+        report,
+        "synthetic-user@microsoft.com",
+        project_link=_PROJECT_LINK,
+        adx_publication={"status": "skipped_test", "error_code": None},
+        test_run=True,
+    )
+    assert test_request["subject"].startswith("[TEST] [Agent Insights Quality]")
+    assert test_request["delivery_mode"] == "test_email_only"
+    assert "TEST RUN" in test_request["html"]
+    assert "intentionally not published to ADX" in test_request["html"]
+    assert "Open quality trend dashboard" not in test_request["html"]
+    assert "Not published" in test_request["html"]
+    with pytest.raises(ContractError, match="dashboard publication to be skipped"):
+        create_request(
+            report,
+            "synthetic-user@microsoft.com",
+            dashboard_link=_DASHBOARD_LINK,
+            adx_publication={"status": "skipped_test", "error_code": None},
+            test_run=True,
+        )
     incomplete = deepcopy(report)
     incomplete["status"] = "INCOMPLETE"
     incomplete["summary"]["quality_score"] = None

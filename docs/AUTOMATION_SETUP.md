@@ -18,7 +18,7 @@ finalization.
 
 During a reviewed delivery test, a private
 `~/.aiq-runtime/agent-insights-quality/config/email-recipient.json` override may target one Microsoft
-mailbox. Remove the override after confirmation to restore the committed team recipient.
+mailbox. Official runs ignore this override and always use the committed team recipient.
 
 The automation does not need work-item mutation, release, deployment, or mailbox search capabilities.
 Keep the Boards query URL and fetched work-item snapshot private; neither belongs in repository
@@ -36,8 +36,13 @@ pull requests, or email.
 
 ## Controlled email test
 
-Run `.github/copilot/email-test-prompt.md` manually. Confirm exactly one rendered HTML email arrives.
-If delivery is ambiguous, verify manually before any later retry.
+For a full reviewed qualification delivery test, use
+`run-daily --test-run --rerun N --report-date <date> --work-items <snapshot>` with a nonzero rerun
+number, then assess and finalize normally. It sends exactly one TEST-marked email to the private
+`daily_test` override and writes all report and receipt artifacts under that private run directory.
+It does not contact ADX, modify repository report or trend paths, or create a pull request. If
+delivery is ambiguous, verify manually before any later retry. Remove the private override after the
+test.
 
 ## Scheduled automation
 

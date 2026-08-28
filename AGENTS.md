@@ -59,6 +59,9 @@ Agents and 36 reviewed, single-root issues.
   Agent traffic; finalization must use the same snapshot.
 - A temporary individual test recipient may be configured only in the durable private runtime root;
   the committed fallback recipient remains the reviewed team mailbox.
+- An email-only test run must explicitly use `--test-run` with a nonzero rerun identity. It sends only
+  to the private test recipient and never writes ADX, repository report or trend paths, or a pull
+  request. Official runs ignore the private recipient override.
 
 ## Assessment and scoring
 
