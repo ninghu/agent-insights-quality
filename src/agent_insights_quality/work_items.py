@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from agent_insights_quality.azure_cli import azure_cli
+from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.util import (
     ContractError,
     atomic_json,
@@ -17,6 +19,7 @@ from agent_insights_quality.util import (
     read_json,
     runtime_root,
 )
+_PROGRESS = ProgressReporter("aiq-work-items")
 
 _CLOSED_STATES = {"closed", "completed"}
 _ACTIVE_EXCLUDED_STATES = {"removed", *_CLOSED_STATES}
@@ -153,21 +156,43 @@ def normalize_quality_work_items(
 
 
 def _run_boards_query(arguments: list[str]) -> list[Any]:
-    completed = subprocess.run(
-        [
-            azure_cli(),
-            "boards",
-            "query",
-            *arguments,
-            "--only-show-errors",
-            "--output",
-            "json",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
+    command = [
+        azure_cli(),
+        "boards",
+        "query",
+        *arguments,
+        "--only-show-errors",
+        "--output",
+        "json",
+    ]
+    completed = None
+    for attempt in range(3):
+        try:
+            with _PROGRESS.heartbeat(
+                f"Azure Boards query attempt {attempt + 1}/3"
+            ) as outcome:
+                completed = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    check=False,
+                )
+                if completed.returncode != 0:
+                    outcome.fail()
+        except subprocess.TimeoutExpired:
+            if attempt == 2:
+                raise ContractError(
+                    "Azure Boards query timed out after bounded retries"
+                ) from None
+            time.sleep(2**attempt)
+            continue
+        if completed.returncode == 0:
+            break
+        if attempt < 2:
+            time.sleep(2**attempt)
+    if completed is None:
+        raise ContractError("Azure Boards query retry loop did not execute")
     if completed.returncode != 0:
         raise ContractError("Azure Boards quality work-item query failed")
     if not completed.stdout.strip():

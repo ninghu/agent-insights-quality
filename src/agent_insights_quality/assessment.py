@@ -5,7 +5,8 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from agent_insights_quality.models import AgentResult
+from agent_insights_quality.models import AgentResult, VersionResult
+from agent_insights_quality.runtime_state import VersionCheckpointStore
 from agent_insights_quality.util import ROOT, ContractError, atomic_json, content_hash, read_json
 
 
@@ -81,21 +82,22 @@ def rehydrate_packages(
     registry: dict[str, Any],
     runtime: Any,
     output: Path,
+    checkpoint_store: VersionCheckpointStore,
 ) -> list[Path]:
     output.mkdir(parents=True, exist_ok=True)
     issue_by_id = {item["id"]: item for item in issues["issues"]}
     paths: list[Path] = []
     for agent in manifest["agents"]:
-        all_insights = [
-            runtime._to_insight(value)
-            for value in runtime._list_insights(
-                registry["agents"][agent["name"]]["monitor_id"]
-            )
-        ]
         baseline = agent["baseline"]
-        baseline_cards = _cards_for_operations(
-            all_insights,
+        baseline_result = _checkpoint_result(
+            checkpoint_store,
+            agent["name"],
+            baseline,
+        )
+        baseline_cards = _baseline_cards(
+            baseline_result.observed_insights,
             set(baseline.get("operation_ids") or []),
+            baseline["foundry_version"],
         )
         baseline_operation_ids = set(baseline.get("operation_ids") or [])
         trace_proof_cache: dict[tuple[str, ...], dict[str, Any]] = {}
@@ -153,8 +155,13 @@ def rehydrate_packages(
         paths.append(path)
         for value in agent["issues"]:
             issue_id = value["issue_id"]
+            issue_result = _checkpoint_result(
+                checkpoint_store,
+                agent["name"],
+                value,
+            )
             cards = _cards_for_operations(
-                all_insights,
+                issue_result.observed_insights,
                 set(value.get("operation_ids") or []),
             )
             expected = issue_by_id[issue_id]
@@ -211,6 +218,55 @@ def rehydrate_packages(
     return paths
 
 
+def _checkpoint_result(
+    store: VersionCheckpointStore,
+    agent_name: str,
+    value: dict[str, Any],
+) -> Any:
+    result = store.result(
+        agent_name,
+        value["logical_version"],
+        value["foundry_version"],
+        value["content_digest"],
+    )
+    if result is None:
+        if value["status"] not in {"inconclusive", "skipped_baseline"}:
+            raise ContractError("Assessment package checkpoint result is missing")
+        result = VersionResult(
+            logical_version=value["logical_version"],
+            foundry_version=value["foundry_version"],
+            status=value["status"],
+            operation_ids=list(value.get("operation_ids") or []),
+            insight_references=list(value.get("insight_references") or []),
+            window_start=value.get("window_start"),
+            window_end=value.get("window_end"),
+            error_code=value.get("error_code"),
+            endpoint_request_count=int(value.get("endpoint_request_count") or 0),
+            endpoint_response_count=int(value.get("endpoint_response_count") or 0),
+            endpoint_usable_response_count=int(
+                value.get("endpoint_usable_response_count") or 0
+            ),
+            semantic_assertion_count=int(
+                value.get("semantic_assertion_count") or 0
+            ),
+            semantic_assertions_passed=int(
+                value.get("semantic_assertions_passed") or 0
+            ),
+            trace_contract_verified=bool(
+                value.get("trace_contract_verified")
+            ),
+        )
+    if (
+        result.status != value["status"]
+        or result.operation_ids != value.get("operation_ids", [])
+        or result.insight_references != value.get("insight_references", [])
+        or result.window_start != value.get("window_start")
+        or result.window_end != value.get("window_end")
+    ):
+        raise ContractError("Assessment package checkpoint result does not match manifest")
+    return result
+
+
 def _cards_for_operations(
     insights: list[Any],
     operation_ids: set[str],
@@ -221,6 +277,18 @@ def _cards_for_operations(
         value
         for value in insights
         if set(value.linked_operation_ids).intersection(operation_ids)
+    ]
+
+
+def _baseline_cards(
+    insights: list[Any],
+    operation_ids: set[str],
+    foundry_version: str,
+) -> list[Any]:
+    return [
+        value
+        for value in _cards_for_operations(insights, operation_ids)
+        if value.agent_version == foundry_version
     ]
 
 

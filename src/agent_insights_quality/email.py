@@ -14,6 +14,7 @@ from jsonschema import Draft202012Validator
 
 from agent_insights_quality.azure_cli import azure_cli
 from agent_insights_quality.profiles import RESOURCE_GROUP, RuntimeProfile
+from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.report_summary import (
     improvement_rows,
     working_capabilities,
@@ -22,12 +23,14 @@ from agent_insights_quality.util import (
     ROOT,
     ContractError,
     atomic_json,
+    atomic_text,
     content_hash,
     read_json,
     read_yaml,
     runtime_root,
 )
 
+_PROGRESS = ProgressReporter("aiq-email")
 _PUBLIC_REPORT_BASE_URL = (
     "https://github.com/ninghu/agent-insights-quality/blob/main/"
 )
@@ -84,6 +87,20 @@ def _validated_recipient(value: str) -> str:
             "Report recipient must be exactly one reviewed microsoft.com address"
         )
     return recipient
+
+
+def write_private_report_preview(
+    request: Mapping[str, Any],
+    path: Path,
+) -> None:
+    try:
+        path.resolve().relative_to(runtime_root().resolve())
+    except ValueError as error:
+        raise ContractError("Report preview must remain in the private runtime root") from error
+    rendered = request.get("html")
+    if not isinstance(rendered, str) or not rendered.startswith("<!doctype html>"):
+        raise ContractError("Report preview request does not contain valid HTML")
+    atomic_text(path, rendered)
 
 
 def resolve_recipient() -> str:
@@ -214,21 +231,24 @@ def build_runtime_links(
         )
     except ValueError as error:
         raise ContractError("Runtime subscription is not a canonical UUID") from error
-    process = subprocess.run(
-        [
-            azure_cli(),
-            "account",
-            "show",
-            "--query",
-            "tenantId",
-            "--output",
-            "tsv",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
+    with _PROGRESS.heartbeat("Azure tenant resolution") as outcome:
+        process = subprocess.run(
+            [
+                azure_cli(),
+                "account",
+                "show",
+                "--query",
+                "tenantId",
+                "--output",
+                "tsv",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        if process.returncode != 0:
+            outcome.fail()
     if process.returncode != 0:
         raise ContractError("Authenticated Azure tenant could not be resolved")
     try:
@@ -264,6 +284,15 @@ def _overall_score(report: dict[str, Any]) -> str:
     if score is None:
         return "N/A"
     return f"{score:g}/100"
+
+
+def _score_comparison(report: dict[str, Any]) -> str:
+    comparison = report.get("score_comparison")
+    if not isinstance(comparison, dict):
+        return " (change N/A)"
+    delta = comparison["delta"]
+    sign = "+" if delta > 0 else ""
+    return f" ({sign}{delta:g})"
 
 
 def _section_heading(title: str) -> str:
@@ -352,7 +381,7 @@ def _incomplete_reason(reasons: list[str]) -> str:
     labels = {
         "clean_window_not_empty": (
             "Clean window blocked by pre-existing telemetry inside the required "
-            "three-hour lookback; no Agent traffic was sent."
+            "short lookback; no Agent traffic was sent."
         ),
         "monitor_reset_failed": "Agent Insights monitor reset failed before traffic.",
         "clean_window_failed": "Clean-window telemetry verification failed.",
@@ -567,6 +596,7 @@ def _render_html(
 ) -> str:
     status_style = _STATUS_STYLES[report["status"]]
     score = _overall_score(report)
+    score_comparison = _score_comparison(report)
     summary = _summary_narrative(report)
     rows = _agent_rows(report, agent_links or {})
     body = (
@@ -593,10 +623,12 @@ def _render_html(
         f'<span style="display:inline-block;padding:5px 10px;background-color:'
         f'{status_style["background"]};color:{status_style["foreground"]};'
         'font-size:12px;line-height:16px;font-weight:700;">'
-        f"Quality Score: {html.escape(score)} "
-        f'(<a style="color:inherit;text-decoration:underline;" '
-        f'href="{_QUALITY_BAR_URL}">How Scoring Works</a>) &middot; '
+        f"Quality Score: {html.escape(score)}"
+        f"{html.escape(score_comparison)} &middot; "
         f"{html.escape(report['status'])}</span>"
+        '<div style="margin-top:8px;color:#dbeafe;font-size:12px;line-height:16px;">'
+        f'(<a style="color:inherit;text-decoration:underline;" '
+        f'href="{_QUALITY_BAR_URL}">How Scoring Works</a>)</div>'
         "</td></tr>"
         '<tr><td style="padding:28px 32px 0 32px;">'
         + _section_heading("Summary")

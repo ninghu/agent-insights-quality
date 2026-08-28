@@ -19,11 +19,12 @@ import zipfile
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from agent_insights_quality.catalogs import catalog_hashes
+from agent_insights_quality.catalogs import catalog_hashes, agent_model_contract
 from agent_insights_quality.azure_cli import azure_cli
 from agent_insights_quality.live import _azure_cli_token
+from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.profiles import RuntimeProfile
-from agent_insights_quality.registry import publish_registry
+from agent_insights_quality.registry import load_registry, publish_registry
 from agent_insights_quality.reporting import validate_staging_report
 from agent_insights_quality.run_manifest import validate_manifest
 from agent_insights_quality.util import (
@@ -66,15 +67,45 @@ def provision_profile(
     token_provider: Callable[[str], str] = _azure_cli_token,
     approved_digests: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    client = FoundryProvisioner(profile, token_provider=token_provider)
+    reporter = ProgressReporter("aiq-provision")
+    progress = reporter.emit
+
+    progress(f"{profile.name}: verifying Test Agent model")
+    model_contract = agent_model_contract(agents)
+    profile.assert_test_agent_model(model_contract)
+    client = FoundryProvisioner(
+        profile,
+        token_provider=token_provider,
+        progress=reporter,
+    )
+    progress(f"{profile.name}: waiting for Foundry Project data plane")
     client.wait_project()
+    progress(f"{profile.name}: checking reusable registry")
+    reusable = _reusable_registry(
+        client,
+        profile,
+        agents,
+        issues,
+        approved_digests,
+    )
+    if reusable is not None:
+        progress(f"{profile.name}: existing 41-version registry is reusable")
+        publish_registry(profile)
+        progress(f"{profile.name}: canonical registry published")
+        return reusable
     issue_by_id = {item["id"]: item for item in issues["issues"]}
     support_agent = next(
         item for item in agents["agents"] if item["name"] == "support-ticket-agent"
     )
-    support_images = _build_support_images(profile, support_agent)
+    progress(f"{profile.name}: resolving Support image artifacts")
+    support_images = _build_support_images(
+        profile,
+        support_agent,
+        progress=reporter,
+    )
     registry_agents: dict[str, Any] = {}
     for agent in agents["agents"]:
+        progress(f"{profile.name}/{agent['name']}: reconciling versions")
         versions: dict[str, Any] = {}
         logical_versions = ["v0", *agent["issue_ids"]]
         for logical_version in logical_versions:
@@ -100,26 +131,121 @@ def provision_profile(
                 "foundry_version": version,
                 "content_digest": artifact["content_digest"],
             }
+            progress(
+                f"{profile.name}/{agent['name']}/{logical_version}: active"
+            )
+        progress(f"{profile.name}/{agent['name']}: reconciling monitor")
         monitor_id = client.ensure_monitor(agent["name"])
         registry_agents[agent["name"]] = {
             "monitor_id": monitor_id,
             "versions": versions,
         }
+    if not _monitor_inventory_matches(
+        client._list_monitors(),
+        {
+            name: value["monitor_id"]
+            for name, value in registry_agents.items()
+        },
+    ):
+        raise ContractError("Profile monitor inventory is not exact")
     registry = {
         "schema_version": "1.0.0",
         "profile": profile.name,
         "project_name": profile.project_name,
+        "test_agent_model": model_contract,
         "catalog_hashes": catalog_hashes(agents, issues),
         "agents": registry_agents,
     }
     atomic_json(profile.registry_path, registry)
+    progress(f"{profile.name}: local registry reconciled")
     publish_registry(profile)
+    progress(f"{profile.name}: canonical registry published")
     return registry
+
+
+def _reusable_registry(
+    client: FoundryProvisioner,
+    profile: RuntimeProfile,
+    agents: dict[str, Any],
+    issues: dict[str, Any],
+    approved_digests: dict[str, str] | None,
+) -> dict[str, Any] | None:
+    if not profile.registry_path.exists():
+        return None
+    try:
+        registry = load_registry(
+            profile.registry_path,
+            profile=profile.name,
+            catalog_hashes=catalog_hashes(agents, issues),
+        )
+    except ContractError:
+        return None
+    expected_monitors = {
+        name: value["monitor_id"]
+        for name, value in registry["agents"].items()
+    }
+    if not _monitor_inventory_matches(client._list_monitors(), expected_monitors):
+        return None
+    for agent in agents["agents"]:
+        name = agent["name"]
+        client.report_progress(
+            f"{profile.name}/{name}: validating reusable versions"
+        )
+        hosted = agent["type"] != "prompt"
+        for logical_version in ["v0", *agent["issue_ids"]]:
+            entry = registry["agents"][name]["versions"][logical_version]
+            key = f"{name}/{logical_version}"
+            if (
+                approved_digests is not None
+                and approved_digests.get(key) != entry["content_digest"]
+            ):
+                return None
+            found = client._find_version(
+                name,
+                logical_version,
+                entry["content_digest"],
+                hosted=hosted,
+            )
+            if str(found or "") != str(entry["foundry_version"]):
+                return None
+            client._wait_active(
+                name,
+                str(found),
+                hosted=hosted,
+                expected_metadata={
+                    "aiq_profile": profile.name,
+                    "aiq_logical_version": logical_version,
+                    "aiq_content_digest": entry["content_digest"],
+                },
+            )
+            client.report_progress(
+                f"{profile.name}/{name}/{logical_version}: active"
+            )
+    return registry
+
+
+def _monitor_inventory_matches(
+    monitors: list[dict[str, Any]],
+    expected: dict[str, str],
+) -> bool:
+    grouped: dict[str, list[str]] = {}
+    for item in monitors:
+        if not isinstance(item, dict):
+            return False
+        grouped.setdefault(
+            str(item.get("agent_name") or ""),
+            [],
+        ).append(str(item.get("id") or ""))
+    return set(grouped) == set(expected) and all(
+        grouped[name] == [monitor_id]
+        for name, monitor_id in expected.items()
+    )
 
 
 def validate_promotion_receipt(
     path: Path,
     expected_hashes: dict[str, str],
+    expected_model: dict[str, str],
 ) -> dict[str, str]:
     value = json.loads(path.read_text(encoding="utf-8"))
     schema = json.loads(
@@ -132,6 +258,8 @@ def validate_promotion_receipt(
         raise ContractError(f"Staging promotion receipt is invalid: {errors[0].message}")
     if value["catalog_hashes"] != expected_hashes:
         raise ContractError("Staging promotion receipt catalog hashes are stale")
+    if value["test_agent_model"] != expected_model:
+        raise ContractError("Staging promotion receipt Test Agent model is stale")
     if value["artifact_manifest_hash"] != expected_hashes["artifacts"]:
         raise ContractError("Staging promotion receipt artifact manifest is stale")
     digests = value["version_content_digests"]
@@ -189,6 +317,7 @@ def create_promotion_receipt(
         "human_reviewed": True,
         "qualification_status": report["status"],
         "quality_score": report["summary"]["quality_score"],
+        "test_agent_model": registry["test_agent_model"],
         "catalog_hashes": registry["catalog_hashes"],
         "artifact_manifest_hash": registry["catalog_hashes"]["artifacts"],
         "version_content_digests": digests,
@@ -263,57 +392,82 @@ def build_artifact(
 def _build_support_images(
     profile: RuntimeProfile,
     agent: dict[str, Any],
+    *,
+    progress: ProgressReporter | None = None,
 ) -> dict[str, str]:
+    reporter = progress or ProgressReporter("aiq-provision")
+    report = reporter.emit
     registry = profile.container_registry_name
     if not registry:
         raise ContractError("Owned container registry could not be resolved")
-    login = subprocess.run(
-        [azure_cli(), "acr", "login", "--name", registry, "--output", "none"],
-        capture_output=True,
-        text=True,
-        timeout=180,
-        check=False,
-    )
+    with reporter.heartbeat("support-ticket-agent: registry sign-in") as outcome:
+        login = subprocess.run(
+            [azure_cli(), "acr", "login", "--name", registry, "--output", "none"],
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+        if login.returncode != 0:
+            outcome.fail()
     if login.returncode != 0:
         raise ContractError("Current Azure user cannot sign in to the owned registry")
     root = ROOT / "agents" / agent["name"]
     versions = ["v0", *agent["issue_ids"]]
+    tags = {
+        logical: _support_image_tag(root, logical)
+        for logical in versions
+    }
+    existing = {
+        logical: _existing_acr_image(registry, tag, progress=reporter)
+        for logical, tag in tags.items()
+    }
+    if all(existing.values()):
+        report(f"{profile.name}/support-ticket-agent: all images found in cache")
+        return {logical: str(existing[logical]) for logical in versions}
     private_root = runtime_root()
     private_root.mkdir(parents=True, exist_ok=True)
+    report(f"{profile.name}/support-ticket-agent: preparing Python wheelhouse")
     with tempfile.TemporaryDirectory(
         prefix="aiq-wheelhouse-",
         dir=private_root,
     ) as temporary:
         wheelhouse = Path(temporary)
-        download = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "download",
-                "-r",
-                str(root / "v0" / "requirements.txt"),
-                "--dest",
-                str(wheelhouse),
-                "--platform",
-                "manylinux2014_x86_64",
-                "--python-version",
-                "312",
-                "--implementation",
-                "cp",
-                "--abi",
-                "cp312",
-                "--only-binary=:all:",
-                "--pre",
-                "--quiet",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=600,
-            check=False,
-        )
+        with reporter.heartbeat(
+            "support-ticket-agent: wheelhouse download"
+        ) as outcome:
+            download = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "download",
+                    "-r",
+                    str(root / "v0" / "requirements.txt"),
+                    "--dest",
+                    str(wheelhouse),
+                    "--platform",
+                    "manylinux2014_x86_64",
+                    "--python-version",
+                    "312",
+                    "--implementation",
+                    "cp",
+                    "--abi",
+                    "cp312",
+                    "--only-binary=:all:",
+                    "--pre",
+                    "--quiet",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=600,
+                check=False,
+            )
+            if download.returncode != 0:
+                outcome.fail()
         if download.returncode != 0:
             raise ContractError("Support image wheelhouse preparation failed")
+        report(f"{profile.name}/support-ticket-agent: wheelhouse ready")
         handler = functools.partial(
             _QuietHttpHandler,
             directory=wheelhouse,
@@ -323,11 +477,14 @@ def _build_support_images(
         thread.start()
         try:
             return {
-                logical: _build_and_push_support_image(
+                logical: str(existing[logical])
+                if existing[logical]
+                else _build_and_push_support_image(
                     registry=registry,
                     root=root,
                     logical_version=logical,
                     wheelhouse_port=server.server_port,
+                    progress=reporter,
                 )
                 for logical in versions
             }
@@ -343,36 +500,25 @@ def _build_and_push_support_image(
     root: Path,
     logical_version: str,
     wheelhouse_port: int,
+    progress: ProgressReporter | None = None,
 ) -> str:
+    reporter = progress or ProgressReporter("aiq-provision")
+    report = reporter.emit
     issue_path = (
         "v0/implementation.yaml"
         if logical_version == "v0"
         else f"issues/{logical_version}/implementation.yaml"
     )
-    relevant = {
-        path.relative_to(root).as_posix(): file_hash(path)
-        for path in sorted((root / "v0").rglob("*"))
-        if _is_package_file(path)
-    }
-    if logical_version != "v0":
-        implementation = root / "issues" / logical_version / "implementation.yaml"
-        relevant[implementation.relative_to(root).as_posix()] = file_hash(implementation)
-        issue_source = root / "issues" / logical_version / "source"
-        relevant.update(
-            {
-                path.relative_to(root).as_posix(): file_hash(path)
-                for path in sorted(issue_source.rglob("*"))
-                if _is_package_file(path)
-            }
-        )
-    tag = content_hash(relevant).split(":")[1][:16]
+    tag = _support_image_tag(root, logical_version)
     local_tag = f"aiq-support-{tag}:local"
     remote_tag = (
         f"{registry}.azurecr.io/agent-insights-quality-support:{tag}"
     )
-    existing = _existing_acr_image(registry, tag)
+    existing = _existing_acr_image(registry, tag, progress=reporter)
     if existing:
+        report(f"support-ticket-agent/{logical_version}: image found in cache")
         return existing
+    report(f"support-ticket-agent/{logical_version}: building image")
     install_args = (
         "--no-index --trusted-host host.docker.internal "
         f"--find-links=http://host.docker.internal:{wheelhouse_port} --pre"
@@ -399,28 +545,34 @@ def _build_and_push_support_image(
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
         )
         shutil.copyfile(root / issue_path, context / "v0" / "implementation.yaml")
-        build = subprocess.run(
-            [
-                "docker",
-                "build",
-                "--add-host",
-                "host.docker.internal:host-gateway",
-                "--quiet",
-                "-f",
-                str(context / "v0" / "Dockerfile"),
-                "--build-arg",
-                f"PIP_INSTALL_ARGS={install_args}",
-                "-t",
-                local_tag,
-                str(context),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=900,
-            check=False,
-        )
+        with reporter.heartbeat(
+            f"support-ticket-agent/{logical_version}: image build"
+        ) as outcome:
+            build = subprocess.run(
+                [
+                    "docker",
+                    "build",
+                    "--add-host",
+                    "host.docker.internal:host-gateway",
+                    "--quiet",
+                    "-f",
+                    str(context / "v0" / "Dockerfile"),
+                    "--build-arg",
+                    f"PIP_INSTALL_ARGS={install_args}",
+                    "-t",
+                    local_tag,
+                    str(context),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=900,
+                check=False,
+            )
+            if build.returncode != 0:
+                outcome.fail()
     if build.returncode != 0:
         raise ContractError(f"Support image build failed for {logical_version}")
+    report(f"support-ticket-agent/{logical_version}: image built; pushing")
     try:
         subprocess.run(
             ["docker", "tag", local_tag, remote_tag],
@@ -429,54 +581,108 @@ def _build_and_push_support_image(
             check=True,
         )
         for attempt in range(3):
-            push = subprocess.run(
-                ["docker", "push", remote_tag],
-                capture_output=True,
-                text=True,
-                timeout=900,
-                check=False,
-            )
+            with reporter.heartbeat(
+                f"support-ticket-agent/{logical_version}: image push"
+            ) as outcome:
+                push = subprocess.run(
+                    ["docker", "push", remote_tag],
+                    capture_output=True,
+                    text=True,
+                    timeout=900,
+                    check=False,
+                )
+                if push.returncode != 0:
+                    outcome.fail()
             match = re.search(r"digest:\s*(sha256:[0-9a-f]{64})", push.stdout)
             if push.returncode == 0 and match:
+                report(f"support-ticket-agent/{logical_version}: image published")
                 return (
                     f"{registry}.azurecr.io/agent-insights-quality-support@"
                     f"{match.group(1)}"
                 )
-            recovered = _existing_acr_image(registry, tag)
+            recovered = _existing_acr_image(registry, tag, progress=reporter)
             if recovered:
+                report(
+                    f"support-ticket-agent/{logical_version}: published image recovered"
+                )
                 return recovered
             if attempt < 2:
+                report(
+                    f"support-ticket-agent/{logical_version}: image push retry "
+                    f"{attempt + 2}/3"
+                )
                 time.sleep(30 * (attempt + 1))
         raise ContractError(f"Support image push failed for {logical_version}")
     finally:
-        subprocess.run(
-            ["docker", "image", "rm", local_tag, remote_tag],
+        try:
+            with reporter.heartbeat(
+                f"support-ticket-agent/{logical_version}: local image cleanup"
+            ) as outcome:
+                cleanup = subprocess.run(
+                    ["docker", "image", "rm", local_tag, remote_tag],
+                    capture_output=True,
+                    timeout=120,
+                    check=False,
+                )
+                if cleanup.returncode != 0:
+                    outcome.fail()
+        except (subprocess.SubprocessError, OSError):
+            report(
+                f"support-ticket-agent/{logical_version}: "
+                "local image cleanup failed; continuing"
+            )
+
+
+def _support_image_tag(root: Path, logical_version: str) -> str:
+    relevant = {
+        path.relative_to(root).as_posix(): file_hash(path)
+        for path in sorted((root / "v0").rglob("*"))
+        if _is_package_file(path)
+    }
+    if logical_version != "v0":
+        implementation = root / "issues" / logical_version / "implementation.yaml"
+        relevant[implementation.relative_to(root).as_posix()] = file_hash(implementation)
+        issue_source = root / "issues" / logical_version / "source"
+        relevant.update(
+            {
+                path.relative_to(root).as_posix(): file_hash(path)
+                for path in sorted(issue_source.rglob("*"))
+                if _is_package_file(path)
+            }
+        )
+    return content_hash(relevant).split(":")[1][:16]
+
+
+def _existing_acr_image(
+    registry: str,
+    tag: str,
+    *,
+    progress: ProgressReporter | None = None,
+) -> str | None:
+    reporter = progress or ProgressReporter("aiq-provision")
+    with reporter.heartbeat("Support image cache lookup") as outcome:
+        process = subprocess.run(
+            [
+                azure_cli(),
+                "acr",
+                "manifest",
+                "show-metadata",
+                "--registry",
+                registry,
+                "--name",
+                f"agent-insights-quality-support:{tag}",
+                "--query",
+                "digest",
+                "--output",
+                "tsv",
+            ],
             capture_output=True,
+            text=True,
+            timeout=120,
             check=False,
         )
-
-
-def _existing_acr_image(registry: str, tag: str) -> str | None:
-    process = subprocess.run(
-        [
-            azure_cli(),
-            "acr",
-            "manifest",
-            "show-metadata",
-            "--registry",
-            registry,
-            "--name",
-            f"agent-insights-quality-support:{tag}",
-            "--query",
-            "digest",
-            "--output",
-            "tsv",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
+        if process.returncode != 0:
+            outcome.fail()
     digest = process.stdout.strip()
     if process.returncode == 0 and re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
         return f"{registry}.azurecr.io/agent-insights-quality-support@{digest}"
@@ -554,7 +760,7 @@ def _hosted_definition(
             "dependency_resolution": "remote_build",
         },
         "environment_variables": {
-            "AZURE_AI_MODEL_DEPLOYMENT_NAME": "terra-test-agents",
+            "AZURE_AI_MODEL_DEPLOYMENT_NAME": "gpt-5.4-mini",
         },
     }
 
@@ -567,7 +773,7 @@ def _container_definition(container: dict[str, Any]) -> dict[str, Any]:
         "memory": "2Gi",
         "container_configuration": {"image": "${DIGEST_PINNED_IMAGE}"},
         "environment_variables": {
-            "AZURE_AI_MODEL_DEPLOYMENT_NAME": "terra-test-agents",
+            "AZURE_AI_MODEL_DEPLOYMENT_NAME": "gpt-5.4-mini",
         },
     }
 
@@ -578,12 +784,18 @@ class FoundryProvisioner:
         profile: RuntimeProfile,
         *,
         token_provider: Callable[[str], str],
+        progress: ProgressReporter | None = None,
     ) -> None:
         self._profile = profile
         self._token_provider = token_provider
+        self._progress = progress or ProgressReporter("aiq-provision")
+
+    def report_progress(self, message: str) -> None:
+        self._progress.emit(message)
 
     def wait_project(self) -> None:
         deadline = time.monotonic() + 15 * 60
+        next_progress = time.monotonic() + 60
         while time.monotonic() < deadline:
             try:
                 response = self._request(
@@ -597,7 +809,15 @@ class FoundryProvisioner:
                     raise
                 response = {"_status": error.status}
             if response["_status"] == 200:
+                self.report_progress(
+                    f"{self._profile.name}: Foundry Project data plane ready"
+                )
                 return
+            if time.monotonic() >= next_progress:
+                self.report_progress(
+                    f"{self._profile.name}: still waiting for Foundry Project"
+                )
+                next_progress = time.monotonic() + 60
             time.sleep(10)
         raise ContractError("Foundry Project data plane was not ready within 15 minutes")
 
@@ -673,6 +893,10 @@ class FoundryProvisioner:
             except RemoteHttpError as error:
                 if not error.transient or attempt == 2:
                     raise
+                self.report_progress(
+                    f"{self._profile.name}/{agent['name']}/{logical_version}: "
+                    f"transient create failure; recovering ({attempt + 2}/3)"
+                )
                 time.sleep(5)
                 recovered = self._find_version(
                     agent["name"],
@@ -715,6 +939,7 @@ class FoundryProvisioner:
         hosted: bool,
     ) -> str | None:
         deadline = time.monotonic() + 15 * 60
+        next_progress = time.monotonic() + 60
         while time.monotonic() < deadline:
             recovered = self._find_version(
                 name,
@@ -724,6 +949,12 @@ class FoundryProvisioner:
             )
             if recovered:
                 return recovered
+            if time.monotonic() >= next_progress:
+                self.report_progress(
+                    f"{self._profile.name}/{name}/{logical_version}: "
+                    "waiting for exact version visibility"
+                )
+                next_progress = time.monotonic() + 60
             time.sleep(5)
         return None
 
@@ -905,6 +1136,7 @@ class FoundryProvisioner:
         expected_metadata: dict[str, str],
     ) -> None:
         deadline = time.monotonic() + 30 * 60
+        next_progress = time.monotonic() + 60
         while time.monotonic() < deadline:
             try:
                 response = self._request(
@@ -916,6 +1148,11 @@ class FoundryProvisioner:
             except RemoteHttpError as error:
                 if not error.transient:
                     raise
+                self.report_progress(
+                    f"{self._profile.name}/{name}/"
+                    f"{expected_metadata['aiq_logical_version']}: "
+                    "activation check transient; retrying"
+                )
                 time.sleep(5)
                 continue
             status = str(response.get("status") or "").lower()
@@ -936,6 +1173,13 @@ class FoundryProvisioner:
                     f"{name}/{logical} reached terminal state {status}"
                     + (f" ({code})" if code else "")
                 )
+            if time.monotonic() >= next_progress:
+                logical = expected_metadata["aiq_logical_version"]
+                self.report_progress(
+                    f"{self._profile.name}/{name}/{logical}: "
+                    f"activation status {status or 'pending'}"
+                )
+                next_progress = time.monotonic() + 60
             time.sleep(5)
         raise ContractError("Foundry version did not activate before the deadline")
 
@@ -960,22 +1204,41 @@ class FoundryProvisioner:
         if hosted:
             headers["Foundry-Features"] = "HostedAgents=V1Preview"
         headers.update(extra_headers or {})
-        request = urllib.request.Request(
-            self._profile.project_endpoint
-            + path
-            + ("&" if "?" in path else "?")
-            + "api-version=v1",
-            data=body,
-            headers=headers,
-            method=method,
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=300) as response:
-                status = response.status
-                payload = response.read()
-        except urllib.error.HTTPError as error:
-            status = error.code
-            payload = error.read()
+        attempts = 5 if method == "GET" else 1
+        status = 0
+        payload = b""
+        for attempt in range(attempts):
+            request = urllib.request.Request(
+                self._profile.project_endpoint
+                + path
+                + ("&" if "?" in path else "?")
+                + "api-version=v1",
+                data=body,
+                headers=headers,
+                method=method,
+            )
+            try:
+                with self._progress.heartbeat(f"Foundry {method} operation"):
+                    with urllib.request.urlopen(request, timeout=300) as response:
+                        status = response.status
+                        payload = response.read()
+            except urllib.error.HTTPError as error:
+                status = error.code
+                payload = error.read()
+            except (TimeoutError, urllib.error.URLError):
+                if attempt + 1 == attempts:
+                    raise ContractError(
+                        "Foundry read failed before a response was received"
+                    ) from None
+                time.sleep(2**attempt)
+                continue
+            if (
+                method != "GET"
+                or status not in {408, 429, 500, 502, 503, 504}
+                or attempt + 1 == attempts
+            ):
+                break
+            time.sleep(2**attempt)
         if status not in (expected or {200, 201, 202}):
             code, message = _remote_error(payload)
             raise RemoteHttpError(
@@ -1004,22 +1267,43 @@ class FoundryProvisioner:
         data = json.dumps(body).encode() if body is not None else None
         if data:
             headers["Content-Type"] = "application/json"
-        request = urllib.request.Request(
-            self._profile.insights_endpoint
-            + path
-            + ("&" if "?" in path else "?")
-            + "api-version=v1",
-            data=data,
-            headers=headers,
-            method=method,
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=300) as response:
-                payload = response.read()
-        except urllib.error.HTTPError as error:
-            raise ContractError(
-                f"Agent Insights operation failed with HTTP {error.code}"
-            ) from None
+        attempts = 5 if method == "GET" else 1
+        payload = b""
+        for attempt in range(attempts):
+            request = urllib.request.Request(
+                self._profile.insights_endpoint
+                + path
+                + ("&" if "?" in path else "?")
+                + "api-version=v1",
+                data=data,
+                headers=headers,
+                method=method,
+            )
+            try:
+                with self._progress.heartbeat(
+                    f"Agent Insights {method} operation"
+                ):
+                    with urllib.request.urlopen(request, timeout=300) as response:
+                        payload = response.read()
+            except urllib.error.HTTPError as error:
+                if (
+                    method == "GET"
+                    and error.code in {408, 429, 500, 502, 503, 504}
+                    and attempt + 1 < attempts
+                ):
+                    time.sleep(2**attempt)
+                    continue
+                raise ContractError(
+                    f"Agent Insights operation failed with HTTP {error.code}"
+                ) from None
+            except (TimeoutError, urllib.error.URLError):
+                if method == "GET" and attempt + 1 < attempts:
+                    time.sleep(2**attempt)
+                    continue
+                raise ContractError(
+                    "Agent Insights operation failed before a response"
+                ) from None
+            break
         value = json.loads(payload) if payload else {}
         if not isinstance(value, dict):
             raise ContractError("Agent Insights returned an invalid payload")
@@ -1068,8 +1352,8 @@ def _resolve_definition(
     project_endpoint: str,
 ) -> dict[str, Any]:
     value = copy.deepcopy(definition)
-    if value.get("kind") == "prompt" and value.get("model") == "gpt-5.6-terra":
-        value["model"] = "terra-test-agents"
+    if value.get("kind") == "prompt" and value.get("model") == "gpt-5.4-mini":
+        value["model"] = "gpt-5.4-mini"
     environment = value.get("environment_variables")
     if isinstance(environment, dict):
         for key, item in list(environment.items()):

@@ -60,6 +60,13 @@ def validate_semantics(
     *,
     require_paths: bool,
 ) -> None:
+    if agents.get("models", {}).get("test_agents") != {
+        "name": "GPT-5.4 mini",
+        "id": "gpt-5.4-mini",
+        "version": "2026-03-17",
+        "deployment_role": "test-agent",
+    }:
+        raise ContractError("Test Agent model contract must use GPT-5.4 mini")
     agent_items = agents["agents"]
     issue_items = issues["issues"]
     by_agent = {item["name"]: item for item in agent_items}
@@ -124,6 +131,15 @@ def catalog_hashes(
     }
 
 
+def agent_model_contract(agents: dict[str, Any]) -> dict[str, str]:
+    model = agents["models"]["test_agents"]
+    return {
+        "deployment_name": str(model["id"]),
+        "model_id": str(model["id"]),
+        "model_version": str(model["version"]),
+    }
+
+
 def _validate_baseline(agent: dict[str, Any]) -> None:
     root = ROOT / agent["baseline_path"]
     metadata = read_yaml(root / "implementation.yaml")
@@ -135,8 +151,8 @@ def _validate_baseline(agent: dict[str, Any]) -> None:
         raise ContractError(f"{agent['name']} baseline requires at least five requests")
     if agent["type"] == "prompt":
         definition = json.loads((root / "definition.json").read_text(encoding="utf-8"))
-        if definition.get("definition", {}).get("model") != "gpt-5.6-terra":
-            raise ContractError(f"{agent['name']} Prompt definition must use GPT-5.6 Terra")
+        if definition.get("definition", {}).get("model") != "gpt-5.4-mini":
+            raise ContractError(f"{agent['name']} Prompt definition must use GPT-5.4 mini")
 
 
 def _validate_implementation(
@@ -165,7 +181,7 @@ def _validate_implementation(
         if (
             value.get("name") != agent["name"]
             or value.get("definition", {}).get("kind") != "prompt"
-            or value.get("definition", {}).get("model") != "gpt-5.6-terra"
+            or value.get("definition", {}).get("model") != "gpt-5.4-mini"
             or value.get("metadata", {}).get("logical_version") != issue["id"]
         ):
             raise ContractError(

@@ -38,7 +38,7 @@ version and expects exactly one Insight.
 | `travel-agent` | Hosted code | LangGraph | 8 |
 | `support-ticket-agent` | Hosted container | Custom Responses | 8 |
 
-All five test Agents use GPT-5.6 Terra. Agent Insights generation uses a separate GPT-5.6 Terra
+All five test Agents use GPT-5.4 mini. Agent Insights generation uses a separate GPT-5.6 Terra
 deployment. GPT-5.6 Sol performs one structured quality assessment.
 
 ## Daily qualification
@@ -49,8 +49,10 @@ Monday through Friday, each Agent runs:
 2. five deterministically rotated issue versions;
 3. one on-demand Agent Insights run after each exact version's telemetry arrives.
 
-The first run after monitor reset uses the minimum three-hour lookback. The service checkpoint
-advances later effective windows. Exact Agent version and operation IDs remain mandatory evidence.
+The first run after monitor reset uses the reviewed `0.1`-hour lookback. The runner waits for natural
+telemetry and trace proof before Agent Insights, guards against expired operations, and automatically
+waits for a clean short interval before a recovery attempt. The service checkpoint advances later
+effective windows. Exact Agent version and operation IDs remain mandatory evidence.
 
 The daily quality score is 85% field quality across expected issues and 15% clean-card precision.
 A complete run is `PASS` at `90/100` or above and `FAIL` below `90/100`; incomplete or ambiguous
@@ -84,8 +86,9 @@ python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD> `
 python -m agent_insights_quality render-adx-dashboard
 ```
 
-Full infrastructure deployment resolves the latest GPT-5.6 Terra version available in West US 2 from
-the Azure ARM model catalog and includes the ADX resources. Use the scoped `deploy-analytics` command
+Full infrastructure deployment pins the GPT-5.4 mini Test Agents to `2026-03-17`, resolves the latest
+GPT-5.6 Terra Insight-generation version available in West US 2 from the Azure ARM model catalog, and
+includes the ADX resources. Use the scoped `deploy-analytics` command
 to create or update only the two-node production ADX trend database in the existing
 `agent-insights-quality-rg` without changing Foundry or telemetry. Daily finalization publishes
 sanitized results and explanations there and includes the reviewed

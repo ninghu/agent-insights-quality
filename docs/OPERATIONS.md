@@ -14,9 +14,9 @@ private artifact root.
 Both use 90-day telemetry and artifact retention. The shared ADX quality-history database retains
 sanitized daily results and explanations for 730 days and keeps 90 days in hot cache.
 
-The reviewed telemetry generation is stored only in `config/automation.yaml`; it is not part of the
-Agent deployment catalog hash. Increment it only for an explicit human-reviewed clean telemetry
-reset; deploy the new generation, update Project connections, then delete the superseded generation.
+The reviewed fixed telemetry resource set is stored in `config/automation.yaml`; it is not part of
+the Agent deployment catalog hash. Daily and staging each keep one App Insights and Log Analytics
+pair. Routine runs, reruns, and Agent changes reuse them.
 
 ## One-time deployment
 
@@ -51,7 +51,14 @@ context and must never be committed. Daily email uses the reviewed public
 
 Provisioning creates five Agents, 41 immutable versions, and five disabled/manual monitors in exactly
 one selected profile. Every hosted version must activate and bind an exact-version session. Prompt
-traffic uses an exact Agent reference.
+traffic uses an exact Agent reference. Provisioning emits flushed, public-safe phase, version,
+activation, retry, image-cache, monitor, and registry progress without exposing private resource IDs.
+
+All potentially long-running repository operations use the same console contract: emit a public-safe
+start line, a periodic elapsed heartbeat, and a completion or failure line. This includes
+infrastructure and ADX deployment, Azure/profile/registry/work-item reads, image build and push,
+provisioning, cleanup, endpoint traffic, telemetry queries, trace waits, and Agent Insights runs.
+Progress-output failures are best-effort and never fail the underlying operation.
 
 Each issue folder is self-contained. Prompt issues deploy their complete `definition.json`; Hosted
 issues package their complete `source/` tree together with the shared requirements and host/container
@@ -86,7 +93,7 @@ Set `AIQ_STAGING_PROMOTION_RECEIPT` to that private file before provisioning `da
 Promotion may compose newly reviewed affected-Agent evidence with the latest valid receipts for
 unchanged Agents. The composed receipt must bind every current mapping and exact digest; incomplete
 evidence is never reusable. After daily provisioning, verify the registry and endpoints read-only.
-Do not send smoke traffic that dirties the next three-hour clean window.
+Do not send smoke traffic that starts a new clean-window wait.
 
 Provisioning writes each profile registry locally and uploads `daily.json` or `staging.json` to the
 private Azure `deployment-registries` container using Entra authentication. Every qualification run
@@ -102,16 +109,17 @@ python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD> `
 ```
 
 The runner validates catalog hashes against the protected daily registry, resets each monitor once,
-runs a read-only three-hour clean-window census, runs `v0`, then runs five deterministic issues per
-Agent. Agents execute concurrently; exact versions for one Agent execute sequentially. Before each
+waits for the reviewed `0.1`-hour clean interval, runs `v0`, then runs five deterministic issues per
+Agent. Agent starts are staggered by five seconds to avoid a simultaneous endpoint burst while all
+five Agents still execute concurrently; exact versions for one Agent execute sequentially. Before each
 Hosted version, the runner patches the Agent endpoint to one `FixedRatio` rule with 100% traffic on
 that exact version, confirms the selector, and then creates an exact-version session. This keeps
 compute behavior and outer telemetry version identity aligned.
 
 Daily and staging Projects prohibit ad-hoc debug traffic. A pre-existing `invoke_agent` trace in the
-minimum lookback window fails the Agent before any qualification traffic is sent. Monitor reset does
-not delete telemetry. Debug locally or in a separately owned sandbox; wait for the three-hour window
-to expire before rerunning qualification against the same profile.
+minimum lookback window delays the Agent before any qualification traffic is sent. Monitor reset does
+not delete telemetry. Debug locally or in a separately owned sandbox; the runner waits until the
+short clean interval expires before rerunning qualification against the same profile.
 
 The runner prints flushed, thread-safe progress lines for each Agent/version and for endpoint,
 telemetry, trace, and Agent Insights stages. Long telemetry waits, Insight runs, and remote retries
@@ -150,6 +158,9 @@ Finalization writes sanitized per-Agent Markdown under the report's `agents/` di
 one generated Insight card, plus an explicit row for each missing expected issue. Email links to these
 GitHub-rendered Markdown reports; private prompts, responses, traces, and resource identifiers remain
 excluded. Each report includes a review summary, evaluation legend, and human-validation checklist.
+Finalization also writes private `report-preview.html` beside the run manifest. Staging human review
+uses this preview because it is rendered by the exact same Outlook-safe HTML path as the daily email.
+It may contain private work-item context and runtime links, so it must never be committed.
 
 For `daily`, finalization also derives one public-safe payload and publishes it atomically to ADX.
 The v2 payload exposes logical `AIQDailyRuns`, `AIQDailyAgents`, `AIQDailyBaselines`,

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
 
 from agent_insights_quality.util import ContractError, runtime_root
 from agent_insights_quality.work_items import (
+    _run_boards_query,
     _closed_items_wiql,
     fetch_quality_work_items,
     load_quality_work_items,
@@ -18,6 +21,25 @@ QUERY_URL = (
     "https://synthetic.visualstudio.com/PublicProject/_queries/query/"
     "00000000-0000-0000-0000-000000000001/"
 )
+
+
+def test_boards_query_retries_transient_failures(monkeypatch) -> None:
+    attempts = 0
+
+    def run(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise subprocess.TimeoutExpired("az", 120)
+        return SimpleNamespace(
+            returncode=0,
+            stdout="[]",
+        )
+
+    monkeypatch.setattr("agent_insights_quality.work_items.subprocess.run", run)
+    monkeypatch.setattr("agent_insights_quality.work_items.time.sleep", lambda _: None)
+    assert _run_boards_query(["--id", "synthetic"]) == []
+    assert attempts == 2
 
 
 def _item(

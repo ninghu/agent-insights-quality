@@ -47,6 +47,6 @@ Add one new synthetic Test Agent only as a human-reviewed fixed-topology migrati
    for unchanged Agents. Require matching mappings and every exact digest. Never promote or reuse
    INCOMPLETE.
 
-Use GPT-5.6 Terra for the Test Agent and keep Agent Insights generation on its separate Terra
+Use GPT-5.4 mini for the Test Agent and keep Agent Insights generation on its separate Terra
 deployment. Do not add a placeholder implementation, private endpoint, compatibility alias, shared
 state with another Agent, or synthetic trace injection.

@@ -16,6 +16,10 @@ class ContractError(ValueError):
     """A reviewed repository or runtime contract is invalid."""
 
 
+class InsightWindowExpiredError(ContractError):
+    """Correlated evidence is outside the requested Agent Insights window."""
+
+
 def runtime_root() -> Path:
     configured = os.environ.get("AIQ_RUNTIME_ROOT")
     if configured and not Path(configured).expanduser().is_absolute():
@@ -78,6 +82,24 @@ def atomic_json(path: Path, value: Mapping[str, Any]) -> None:
     try:
         with os.fdopen(descriptor, "w", encoding="ascii", newline="\n") as stream:
             stream.write(rendered)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def atomic_text(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        dir=path.parent,
+        text=True,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(value)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)

@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from agent_insights_quality.catalogs import catalog_hashes, load_catalogs
+from agent_insights_quality.catalogs import (
+    catalog_hashes,
+    load_catalogs,
+    agent_model_contract,
+)
 from agent_insights_quality.provisioning import (
     create_promotion_receipt,
     validate_promotion_receipt,
@@ -17,6 +21,7 @@ from agent_insights_quality.util import content_hash
 def test_daily_promotion_requires_reviewed_staging_digest(tmp_path: Path) -> None:
     agents, issues = load_catalogs()
     hashes = catalog_hashes(agents, issues)
+    model = agent_model_contract(agents)
     digests = {
         f"{agent['name']}/{logical}": "sha256:" + f"{index + 1:064x}"
         for agent in agents["agents"]
@@ -29,6 +34,7 @@ def test_daily_promotion_requires_reviewed_staging_digest(tmp_path: Path) -> Non
         "human_reviewed": True,
         "qualification_status": "FAIL",
         "quality_score": 47.1,
+        "test_agent_model": model,
         "catalog_hashes": hashes,
         "artifact_manifest_hash": hashes["artifacts"],
         "version_content_digests": digests,
@@ -37,20 +43,22 @@ def test_daily_promotion_requires_reviewed_staging_digest(tmp_path: Path) -> Non
     }
     path = tmp_path / "promotion.json"
     path.write_text(json.dumps(receipt), encoding="utf-8")
-    assert validate_promotion_receipt(path, hashes) == digests
+    assert validate_promotion_receipt(path, hashes, model) == digests
     changed = dict(hashes)
     changed["issues"] = "sha256:" + "b" * 64
     with pytest.raises(ContractError, match="stale"):
-        validate_promotion_receipt(path, changed)
+        validate_promotion_receipt(path, changed, model)
 
 
 def test_promotion_receipt_binds_all_staging_versions() -> None:
     agents, issues = load_catalogs()
     hashes = catalog_hashes(agents, issues)
+    model = agent_model_contract(agents)
     registry = {
         "schema_version": "1.0.0",
         "profile": "staging",
         "project_name": "agent-insights-quality-staging",
+        "test_agent_model": model,
         "catalog_hashes": hashes,
         "agents": {
             agent["name"]: {
@@ -67,10 +75,12 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
         },
     }
     manifest = {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "run_id": "aiq-20260824",
         "profile": "staging",
         "report_date": "2026-08-24",
+        "insight_lookback_hours": 0.1,
+        "telemetry_resource_set": "g29",
         "catalog_hashes": hashes,
         "agents": [
             {

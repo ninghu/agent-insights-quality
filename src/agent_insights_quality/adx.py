@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 import yaml
 
 from agent_insights_quality.azure_cli import azure_cli
+from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.catalogs import load_catalogs, validate_semantics
 from agent_insights_quality.profiles import RESOURCE_GROUP
 from agent_insights_quality.report_summary import (
@@ -32,6 +33,7 @@ from agent_insights_quality.util import (
 )
 
 ADX_DATABASE = "AgentInsightsQuality"
+_PROGRESS = ProgressReporter("aiq-adx")
 ADX_TABLE = "DailyQualityPublications"
 PAYLOAD_VERSION = "2.0.0"
 _ADX_API_VERSION = "2025-02-14"
@@ -84,7 +86,8 @@ class _AzureKustoClient:
 
     def query(self, database: str, query: str) -> list[dict[str, Any]]:
         try:
-            response = self._client.execute(database, query)
+            with _PROGRESS.heartbeat("ADX verification query"):
+                response = self._client.execute(database, query)
         except self._error_types as error:
             raise AdxError(
                 "Azure Data Explorer verification query failed",
@@ -99,7 +102,8 @@ class _AzureKustoClient:
 
     def manage(self, database: str, command: str) -> None:
         try:
-            self._client.execute_mgmt(database, command)
+            with _PROGRESS.heartbeat("ADX management command"):
+                self._client.execute_mgmt(database, command)
         except self._error_types as error:
             raise AdxError(
                 "Azure Data Explorer publication command failed",
@@ -116,13 +120,16 @@ def _default_client_factory(cluster_uri: str) -> AdxClient:
 
 def _run_azure(arguments: list[str], *, code: str) -> Any:
     try:
-        process = subprocess.run(
-            [azure_cli(), *arguments],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-        )
+        with _PROGRESS.heartbeat("ADX Azure operation") as progress:
+            process = subprocess.run(
+                [azure_cli(), *arguments],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+            if process.returncode != 0:
+                progress.fail()
     except (OSError, subprocess.TimeoutExpired) as error:
         raise AdxError(
             "Azure Data Explorer resource discovery failed",

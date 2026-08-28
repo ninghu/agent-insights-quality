@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from agent_insights_quality.catalogs import catalog_hashes, load_catalogs
+from agent_insights_quality.catalogs import (
+    catalog_hashes,
+    load_catalogs,
+    agent_model_contract,
+)
 from agent_insights_quality.registry import (
+    _run_registry_command,
     load_registry,
     publish_registry,
     sync_registry,
@@ -25,6 +31,7 @@ def _registry(profile: str) -> dict:
             if profile == "daily"
             else "agent-insights-quality-staging"
         ),
+        "test_agent_model": agent_model_contract(agents),
         "catalog_hashes": catalog_hashes(agents, issues),
         "agents": {
             agent["name"]: {
@@ -104,3 +111,23 @@ def test_registry_syncs_through_private_blob_storage(
     assert "upload" in calls[1]
     assert "--auth-mode" in calls[0]
     assert "--auth-mode" in calls[1]
+
+
+def test_registry_command_retries_transient_failures(monkeypatch) -> None:
+    attempts = 0
+
+    def run(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise subprocess.TimeoutExpired("az", 120)
+        return SimpleNamespace(
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+
+    monkeypatch.setattr("agent_insights_quality.registry.subprocess.run", run)
+    monkeypatch.setattr("agent_insights_quality.registry.time.sleep", lambda _: None)
+    assert _run_registry_command(["az"]).returncode == 0
+    assert attempts == 2

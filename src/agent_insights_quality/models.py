@@ -40,6 +40,12 @@ class InsightRunEvidence:
     insights: tuple[InsightEvidence, ...]
 
 
+@dataclass(frozen=True)
+class InsightRunCheckpoint:
+    run_id: str
+    before_revisions: dict[str, tuple[str, int]]
+
+
 @dataclass
 class VersionResult:
     logical_version: str

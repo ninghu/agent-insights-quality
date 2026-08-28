@@ -17,11 +17,15 @@ from typing import Any, Callable
 
 from agent_insights_quality.models import (
     InsightEvidence,
+    InsightRunCheckpoint,
     InsightRunEvidence,
     InvocationEvidence,
 )
+from agent_insights_quality.automation_policy import TRAFFIC_UNCERTAINTY_SECONDS
 from agent_insights_quality.profiles import RuntimeProfile
-from agent_insights_quality.util import ContractError
+from agent_insights_quality.progress import ProgressReporter
+from agent_insights_quality.runtime_state import TrafficLedger
+from agent_insights_quality.util import ContractError, InsightWindowExpiredError
 from agent_insights_quality.azure_cli import azure_cli
 
 try:
@@ -47,6 +51,7 @@ _LOGS_SCOPE = "https://api.loganalytics.io/.default"
 _TRANSIENT_HTTP = {408, 424, 429, 500, 502, 503, 504}
 _DEFAULT_REQUEST_TIMEOUT_SECONDS = 300
 _HOSTED_RESPONSE_TIMEOUT_SECONDS = 600
+_AUTH_PROGRESS = ProgressReporter("aiq-auth")
 
 
 class _RuntimeTokenCredential:
@@ -72,21 +77,23 @@ class LiveRuntime:
         *,
         token_provider: Callable[[str], str] | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        utcnow: Callable[[], datetime] = lambda: datetime.now(UTC),
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._profile = profile
         self._raw_token_provider = token_provider or _azure_cli_token
         self._sleep = sleep
+        self._utcnow = utcnow
+        self._monotonic = monotonic
         self._token_lock = threading.Lock()
         self._token_cache: dict[str, tuple[float, str]] = {}
         self._telemetry_query_lock = threading.Lock()
         self._logs_client_instance: Any | None = None
-        self._progress_lock = threading.Lock()
-        self._progress_started = time.monotonic()
+        self._progress = ProgressReporter("aiq", monotonic=monotonic)
+        self._traffic_ledger = TrafficLedger(profile.name)
 
     def report_progress(self, message: str) -> None:
-        elapsed = time.monotonic() - self._progress_started
-        with self._progress_lock:
-            print(f"[aiq +{elapsed:07.1f}s] {message}", flush=True)
+        self._progress.emit(message)
 
     def _token_provider(self, scope: str) -> str:
         with self._token_lock:
@@ -121,11 +128,12 @@ class LiveRuntime:
         for attempt in range(4):
             try:
                 with self._telemetry_query_lock:
-                    return client.query_resource(
-                        self._profile.application_insights_resource_id,
-                        query,
-                        timespan=timespan,
-                    )
+                    with self._progress.heartbeat("Azure Monitor query"):
+                        return client.query_resource(
+                            self._profile.application_insights_resource_id,
+                            query,
+                            timespan=timespan,
+                        )
             except _TELEMETRY_TRANSIENT_ERRORS as error:
                 if (
                     isinstance(error, _TELEMETRY_HTTP_ERRORS)
@@ -153,33 +161,70 @@ class LiveRuntime:
             retry_statuses={409, *_TRANSIENT_HTTP},
         )
 
-    def assert_clean_window(self, agent_name: str, lookback_hours: int) -> None:
+    def wait_for_clean_window(
+        self,
+        agent_name: str,
+        lookback_hours: float,
+        *,
+        poll_seconds: int,
+        ingestion_margin_seconds: int,
+        max_wait_seconds: int,
+    ) -> None:
         try:
             from azure.monitor.query import LogsQueryStatus
         except ImportError as error:
             raise ContractError(
                 'Clean-window preflight requires installation with ".[azure]"'
             ) from error
+        lookback_seconds = int(round(lookback_hours * 3600))
+        query_seconds = lookback_seconds + ingestion_margin_seconds
         query = f"""
 union traces, dependencies, requests
-| where timestamp >= ago({lookback_hours}h)
+| where timestamp >= ago({query_seconds}s)
 | extend operation_name = tostring(customDimensions["gen_ai.operation.name"])
 | extend observed_agent = tostring(customDimensions["gen_ai.agent.name"])
 | where operation_name == "invoke_agent" and observed_agent == "{agent_name}"
-| summarize operation_count=dcount(operation_Id)
+| summarize latest=max(timestamp), operation_count=dcount(operation_Id)
 """
-        result = self._query_resource(
-            self._logs_client(),
-            query,
-            timespan=timedelta(hours=lookback_hours),
-        )
-        if result.status != LogsQueryStatus.SUCCESS or not result.tables:
-            raise ContractError("Clean-window preflight telemetry query failed")
-        count = int(result.tables[0].rows[0][0]) if result.tables[0].rows else 0
-        if count:
-            raise ContractError(
-                f"{agent_name} has pre-existing traces in the minimum lookback window"
+        deadline = self._monotonic() + max_wait_seconds
+        next_progress = self._monotonic()
+        while self._monotonic() < deadline:
+            now = self._utcnow().astimezone(UTC)
+            ledger_ready = self._traffic_ledger.clean_after(
+                agent_name,
+                lookback_seconds=lookback_seconds,
+                margin_seconds=ingestion_margin_seconds,
             )
+            result = self._query_resource(
+                self._logs_client(),
+                query,
+                timespan=timedelta(seconds=query_seconds),
+            )
+            if result.status != LogsQueryStatus.SUCCESS or not result.tables:
+                raise ContractError("Clean-window telemetry query failed")
+            latest = None
+            count = 0
+            if result.tables[0].rows:
+                latest = result.tables[0].rows[0][0]
+                count = int(result.tables[0].rows[0][1] or 0)
+            telemetry_ready = (
+                latest.astimezone(UTC) + timedelta(seconds=query_seconds)
+                if count and isinstance(latest, datetime)
+                else None
+            )
+            ready_at = max(
+                value for value in (ledger_ready, telemetry_ready, now) if value is not None
+            )
+            if ready_at <= now:
+                return
+            if self._monotonic() >= next_progress:
+                remaining = max(1, int((ready_at - now).total_seconds()))
+                self.report_progress(
+                    f"{agent_name}: waiting {remaining}s for clean telemetry window"
+                )
+                next_progress = self._monotonic() + 30
+            self._sleep(min(poll_seconds, max(1, (ready_at - now).total_seconds())))
+        raise ContractError("Clean telemetry window did not become ready before deadline")
 
     def invoke_version(
         self,
@@ -201,8 +246,18 @@ union traces, dependencies, requests
         groups: dict[str, list[dict[str, Any]]] = {}
         for fixture in normalized:
             groups.setdefault(fixture["conversation_key"], []).append(fixture)
-        started = datetime.now(UTC)
+        started = self._utcnow().astimezone(UTC)
         response_references: list[str] = []
+        self._traffic_ledger.mark_started(
+            agent_name,
+            now=started,
+            uncertain_seconds=TRAFFIC_UNCERTAINTY_SECONDS,
+        )
+        completed_groups: dict[
+            str,
+            list[tuple[int, list[str], bool, int, int]],
+        ] = {}
+        errors: list[Exception] = []
         with ThreadPoolExecutor(max_workers=min(5, len(groups))) as pool:
             futures = {
                 pool.submit(
@@ -215,12 +270,33 @@ union traces, dependencies, requests
                 ): key
                 for key, fixtures in groups.items()
             }
-            completed_groups: dict[
-                str,
-                list[tuple[int, list[str], bool, int, int]],
-            ] = {}
             for future in as_completed(futures):
-                completed_groups[futures[future]] = future.result()
+                try:
+                    completed_groups[futures[future]] = future.result()
+                except Exception as error:
+                    errors.append(error)
+        if errors:
+            if all(
+                re.search(r"\bHTTP [0-9]{3}\b", str(error))
+                for error in errors
+            ):
+                self._traffic_ledger.mark_completed(
+                    agent_name,
+                    now=self._utcnow().astimezone(UTC),
+                )
+            primary = next(
+                (
+                    error
+                    for error in errors
+                    if re.search(r"\bHTTP [0-9]{3}\b", str(error)) is None
+                ),
+                errors[0],
+            )
+            raise primary
+        self._traffic_ledger.mark_completed(
+            agent_name,
+            now=self._utcnow().astimezone(UTC),
+        )
         ordered = sorted(
             [
                 item
@@ -237,7 +313,7 @@ union traces, dependencies, requests
             usable_response_count += int(usable)
             semantic_assertion_count += assertion_count
             semantic_assertions_passed += assertions_passed
-        completed = datetime.now(UTC)
+        completed = self._utcnow().astimezone(UTC)
         return InvocationEvidence(
             operation_ids=(),
             response_references=tuple(response_references),
@@ -286,7 +362,7 @@ union traces, dependencies, requests
         self._activate_hosted_version(agent_name, foundry_version)
         session_id = self._create_hosted_session(agent_name, foundry_version)
         try:
-            return [
+            results = [
                 (
                     int(fixture["_index"]),
                     *self._invoke_hosted(
@@ -298,16 +374,37 @@ union traces, dependencies, requests
                 )
                 for fixture in fixtures
             ]
-        finally:
-            self._json_request(
-                "DELETE",
-                f"{self._profile.project_endpoint}/agents/"
-                f"{urllib.parse.quote(agent_name, safe='')}/endpoint/sessions/"
-                f"{urllib.parse.quote(session_id, safe='')}",
-                hosted=True,
-                expected={200, 202, 204, 404},
-                retry_statuses=_TRANSIENT_HTTP,
+        except Exception:
+            try:
+                self._delete_hosted_session(agent_name, session_id)
+            except Exception:
+                self.report_progress(
+                    f"{agent_name}/{foundry_version}: session cleanup also failed"
+                )
+            raise
+        try:
+            self._delete_hosted_session(agent_name, session_id)
+        except Exception:
+            self.report_progress(
+                f"{agent_name}/{foundry_version}: session cleanup failed after "
+                "endpoint completion; preserving completed evidence"
             )
+        return results
+
+    def _delete_hosted_session(
+        self,
+        agent_name: str,
+        session_id: str,
+    ) -> None:
+        self._json_request(
+            "DELETE",
+            f"{self._profile.project_endpoint}/agents/"
+            f"{urllib.parse.quote(agent_name, safe='')}/endpoint/sessions/"
+            f"{urllib.parse.quote(session_id, safe='')}",
+            hosted=True,
+            expected={200, 202, 204, 404},
+            retry_statuses=_TRANSIENT_HTTP,
+        )
 
     def _activate_hosted_version(
         self,
@@ -335,6 +432,7 @@ union traces, dependencies, requests
             expected={200},
             content_type="application/merge-patch+json",
             retry_statuses=_TRANSIENT_HTTP,
+            retry_no_response=True,
         )
         rules = (
             response.get("agent_endpoint", {})
@@ -372,12 +470,16 @@ union traces, dependencies, requests
             **body.get("metadata", {}),
             "traffic_seed": str(seed),
         }
+        self._traffic_ledger.mark_started(
+            agent_name,
+            now=self._utcnow().astimezone(UTC),
+            uncertain_seconds=_DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        )
         response = self._json_request(
             "POST",
             f"{self._profile.project_endpoint}/openai/v1/responses",
             body,
             expected={fixture["expected_status"]},
-            retry_statuses=_TRANSIENT_HTTP,
         )
         response_ids: list[str] = []
         for _ in range(8):
@@ -447,6 +549,11 @@ union traces, dependencies, requests
                         "output": json.dumps(result, sort_keys=True),
                     }
                 )
+            self._traffic_ledger.mark_started(
+                agent_name,
+                now=self._utcnow().astimezone(UTC),
+                uncertain_seconds=_DEFAULT_REQUEST_TIMEOUT_SECONDS,
+            )
             response = self._json_request(
                 "POST",
                 f"{self._profile.project_endpoint}/openai/v1/responses",
@@ -456,7 +563,6 @@ union traces, dependencies, requests
                     "store": True,
                     "agent_reference": reference,
                 },
-                retry_statuses=_TRANSIENT_HTTP,
             )
         raise ContractError("Prompt exceeded the bounded tool-turn limit")
 
@@ -476,7 +582,6 @@ union traces, dependencies, requests
                 }
             },
             hosted=True,
-            retry_statuses=_TRANSIENT_HTTP,
         )
         session_id = str(
             session.get("agent_session_id")
@@ -508,6 +613,11 @@ union traces, dependencies, requests
             "store": False,
         }
         correlation_id = str(uuid.uuid4())
+        self._traffic_ledger.mark_started(
+            agent_name,
+            now=self._utcnow().astimezone(UTC),
+            uncertain_seconds=_HOSTED_RESPONSE_TIMEOUT_SECONDS,
+        )
         response = self._json_request(
             "POST",
             f"{self._profile.project_endpoint}/agents/"
@@ -517,7 +627,6 @@ union traces, dependencies, requests
             hosted=True,
             expected={fixture["expected_status"]},
             correlation_id=correlation_id,
-            retry_statuses=_TRANSIENT_HTTP,
             timeout_seconds=_HOSTED_RESPONSE_TIMEOUT_SECONDS,
         )
         request_reference = str(response.get("_request_reference") or "")
@@ -624,59 +733,117 @@ union traces, dependencies, requests
             self._sleep(15)
         raise ContractError("Natural telemetry did not arrive before the bounded deadline")
 
-    def run_insights(
+    def start_insights_run(
         self,
         *,
         agent_name: str,
         monitor_id: str,
         foundry_version: str,
         operation_ids: tuple[str, ...],
-        lookback_hours: int,
+        lookback_hours: float,
+        persist: Callable[[InsightRunCheckpoint], None],
+    ) -> InsightRunCheckpoint:
+        earliest, _ = self._operation_time_bounds(
+            agent_name=agent_name,
+            foundry_version=foundry_version,
+            operation_ids=operation_ids,
+        )
+        if earliest < self._utcnow().astimezone(UTC) - timedelta(
+            hours=lookback_hours
+        ):
+            raise InsightWindowExpiredError(
+                "Correlated operations expired before Agent Insights started"
+            )
+        checkpoint = self._start_insights_once(
+            monitor_id=monitor_id,
+            lookback_hours=lookback_hours,
+        )
+        persist(checkpoint)
+        return checkpoint
+
+    def finish_insights_run(
+        self,
+        *,
+        agent_name: str,
+        monitor_id: str,
+        foundry_version: str,
+        operation_ids: tuple[str, ...],
+        checkpoint: InsightRunCheckpoint,
     ) -> InsightRunEvidence:
-        last_result: InsightRunEvidence | None = None
-        for attempt in range(3):
-            if attempt:
-                self.report_progress(
-                    f"{agent_name}/{foundry_version}: retrying Agent Insights run "
-                    f"({attempt + 1}/3)"
-                )
-            last_result = self._run_insights_once(
+        run = self._wait_insights_run(
+            agent_name,
+            foundry_version,
+            monitor_id,
+            checkpoint.run_id,
+        )
+        after = self._list_insights(monitor_id)
+        changed = [
+            item
+            for item in after
+            if checkpoint.before_revisions.get(str(item.get("id") or ""))
+            != (
+                str(item.get("updated_at") or item.get("updatedAt") or ""),
+                len(self._linked_ids(item)),
+            )
+        ]
+        evidence = tuple(
+            self._to_insight(value)
+            for value in changed
+            if str(value.get("agent_version") or value.get("agentVersion") or "")
+            == foundry_version
+            and set(self._linked_ids(value)).intersection(operation_ids)
+        )
+        result = InsightRunEvidence(
+            run_reference=_opaque(checkpoint.run_id),
+            window_start=str(run.get("window_start") or run.get("windowStart") or ""),
+            window_end=str(run.get("window_end") or run.get("windowEnd") or ""),
+            status=str(run.get("status") or ""),
+            insights=evidence,
+        )
+        if result.status.lower() == "succeeded":
+            earliest, latest = self._operation_time_bounds(
                 agent_name=agent_name,
-                monitor_id=monitor_id,
                 foundry_version=foundry_version,
                 operation_ids=operation_ids,
-                lookback_hours=lookback_hours,
             )
-            if last_result.status.lower() == "succeeded":
-                return last_result
-            if attempt < 2:
-                self._sleep(30)
-        if last_result is None:
-            raise ContractError("Agent Insights run retry loop did not execute")
-        return last_result
+            self._assert_run_contains_operations(result, earliest, latest)
+        return result
 
-    def _run_insights_once(
+    def _start_insights_once(
         self,
         *,
-        agent_name: str,
         monitor_id: str,
-        foundry_version: str,
-        operation_ids: tuple[str, ...],
-        lookback_hours: int,
-    ) -> InsightRunEvidence:
+        lookback_hours: float,
+    ) -> InsightRunCheckpoint:
         before = self._insight_revisions(monitor_id)
+        service_lookback: int | float = (
+            int(lookback_hours)
+            if float(lookback_hours).is_integer()
+            else lookback_hours
+        )
         run = self._json_request(
             "POST",
             self._insights_url(
                 f"/agent_insight_monitors/{urllib.parse.quote(monitor_id, safe='')}/runs"
             ),
-            {"lookback_hours": lookback_hours},
+            {"lookback_hours": service_lookback},
             expected={200, 201, 202},
-            retry_statuses={409, *_TRANSIENT_HTTP},
         )
         run_id = str(run.get("id") or "")
         if not run_id:
             raise ContractError("Agent Insights run omitted its identity")
+        return InsightRunCheckpoint(
+            run_id=run_id,
+            before_revisions=before,
+        )
+
+    def _wait_insights_run(
+        self,
+        agent_name: str,
+        foundry_version: str,
+        monitor_id: str,
+        run_id: str,
+    ) -> dict[str, Any]:
         deadline = time.monotonic() + 45 * 60
         next_progress = time.monotonic() + 60
         while time.monotonic() < deadline:
@@ -699,30 +866,68 @@ union traces, dependencies, requests
             self._sleep(10)
         else:
             raise ContractError("Agent Insights run exceeded its bounded deadline")
-        after = self._list_insights(monitor_id)
-        changed = [
-            item
-            for item in after
-            if before.get(str(item.get("id") or ""))
-            != (
-                str(item.get("updated_at") or item.get("updatedAt") or ""),
-                len(self._linked_ids(item)),
+        return run
+
+    def _operation_time_bounds(
+        self,
+        *,
+        agent_name: str,
+        foundry_version: str,
+        operation_ids: tuple[str, ...],
+    ) -> tuple[datetime, datetime]:
+        try:
+            from azure.monitor.query import LogsQueryStatus
+        except ImportError as error:
+            raise ContractError(
+                'Operation window verification requires installation with ".[azure]"'
+            ) from error
+        values = ", ".join(f'"{value}"' for value in operation_ids)
+        query = f"""
+union traces, dependencies, requests
+| where operation_Id in ({values})
+| extend operation_name=tostring(customDimensions["gen_ai.operation.name"])
+| extend observed_agent=tostring(customDimensions["gen_ai.agent.name"])
+| extend agent_version=tostring(customDimensions["gen_ai.agent.version"])
+| where operation_name == "invoke_agent"
+  and observed_agent == "{agent_name}"
+  and agent_version == "{foundry_version}"
+| summarize earliest=min(timestamp), latest=max(timestamp), roots=dcount(operation_Id)
+"""
+        result = self._query_resource(
+            self._logs_client(),
+            query,
+            timespan=timedelta(days=90),
+        )
+        if (
+            result.status != LogsQueryStatus.SUCCESS
+            or not result.tables
+            or not result.tables[0].rows
+        ):
+            raise ContractError("Operation window verification query failed")
+        row = result.tables[0].rows[0]
+        if (
+            not isinstance(row[0], datetime)
+            or not isinstance(row[1], datetime)
+            or int(row[2] or 0) != len(operation_ids)
+        ):
+            raise ContractError("Operation window verification evidence is incomplete")
+        return row[0].astimezone(UTC), row[1].astimezone(UTC)
+
+    @staticmethod
+    def _assert_run_contains_operations(
+        result: InsightRunEvidence,
+        earliest: datetime,
+        latest: datetime,
+    ) -> None:
+        try:
+            start = datetime.fromisoformat(result.window_start).astimezone(UTC)
+            end = datetime.fromisoformat(result.window_end).astimezone(UTC)
+        except (TypeError, ValueError) as error:
+            raise ContractError("Agent Insights run returned an invalid window") from error
+        if start > earliest or end <= latest:
+            raise InsightWindowExpiredError(
+                "Agent Insights run window excluded correlated operations"
             )
-        ]
-        evidence = tuple(
-            self._to_insight(value)
-            for value in changed
-            if str(value.get("agent_version") or value.get("agentVersion") or "")
-            == foundry_version
-            and set(self._linked_ids(value)).intersection(operation_ids)
-        )
-        return InsightRunEvidence(
-            run_reference=_opaque(run_id),
-            window_start=str(run.get("window_start") or run.get("windowStart") or ""),
-            window_end=str(run.get("window_end") or run.get("windowEnd") or ""),
-            status=str(run.get("status") or ""),
-            insights=evidence,
-        )
 
     def verify_trace_contract(
         self,
@@ -731,6 +936,8 @@ union traces, dependencies, requests
         foundry_version: str,
         operation_ids: tuple[str, ...],
         required_operations: tuple[str, ...],
+        window_start: str,
+        window_end: str,
     ) -> None:
         try:
             from azure.monitor.query import LogsQueryStatus
@@ -754,12 +961,14 @@ union traces, dependencies, requests
     span_count=count()
   by operation_Id
 """
+        start = datetime.fromisoformat(window_start)
+        end = datetime.fromisoformat(window_end) + timedelta(minutes=15)
         deadline = time.monotonic() + 15 * 60
         while time.monotonic() < deadline:
             result = self._query_resource(
                 self._logs_client(),
                 query,
-                timespan=timedelta(hours=3),
+                timespan=(start, end),
             )
             if (
                 result.status == LogsQueryStatus.SUCCESS
@@ -996,6 +1205,7 @@ union traces, dependencies, requests
         correlation_id: str | None = None,
         content_type: str = "application/json",
         retry_statuses: set[int] | None = None,
+        retry_no_response: bool = False,
         timeout_seconds: int = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
     ) -> dict[str, Any]:
         data = json.dumps(body).encode("utf-8") if body is not None else None
@@ -1022,6 +1232,7 @@ union traces, dependencies, requests
         )
         max_attempts = 20 if method == "GET" else 10 if retries else 1
         attempt = 0
+        no_response_failures = 0
         credential_refreshed = False
         status = 0
         payload = b""
@@ -1033,23 +1244,29 @@ union traces, dependencies, requests
                 method=method,
             )
             try:
-                with urllib.request.urlopen(
-                    request,
-                    timeout=timeout_seconds,
-                ) as response:
-                    status = response.status
-                    payload = response.read()
+                with self._progress.heartbeat(f"remote {method} request"):
+                    with urllib.request.urlopen(
+                        request,
+                        timeout=timeout_seconds,
+                    ) as response:
+                        status = response.status
+                        payload = response.read()
             except urllib.error.HTTPError as error:
                 status = error.code
                 payload = error.read()
             except (TimeoutError, urllib.error.URLError) as error:
                 attempt += 1
-                if method == "GET" and attempt < max_attempts:
+                no_response_failures += 1
+                can_retry = attempt < max_attempts and (
+                    method == "GET"
+                    or (retry_no_response and no_response_failures < 3)
+                )
+                if can_retry:
                     request_reference = str(uuid.uuid4())
                     headers["x-ms-client-request-id"] = request_reference
                     delay = min(2 ** (attempt - 1), 30)
                     self.report_progress(
-                        f"remote GET had no response; retrying in {delay}s "
+                        f"remote {method} had no response; retrying in {delay}s "
                         f"({attempt + 1}/{max_attempts})"
                     )
                     self._sleep(delay)
@@ -1105,23 +1322,34 @@ union traces, dependencies, requests
 
 def _azure_cli_token(scope: str) -> str:
     for attempt in range(5):
-        process = subprocess.run(
-            [
-                azure_cli(),
-                "account",
-                "get-access-token",
-                "--scope",
-                scope,
-                "--query",
-                "accessToken",
-                "--output",
-                "tsv",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
+        try:
+            with _AUTH_PROGRESS.heartbeat(
+                f"Azure token request attempt {attempt + 1}/5"
+            ) as outcome:
+                process = subprocess.run(
+                    [
+                        azure_cli(),
+                        "account",
+                        "get-access-token",
+                        "--scope",
+                        scope,
+                        "--query",
+                        "accessToken",
+                        "--output",
+                        "tsv",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    check=False,
+                )
+                if process.returncode != 0:
+                    outcome.fail()
+        except subprocess.TimeoutExpired:
+            if attempt < 4:
+                time.sleep(2**attempt)
+                continue
+            break
         token = process.stdout.strip()
         if process.returncode == 0 and token:
             return token

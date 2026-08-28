@@ -102,6 +102,7 @@ jobs:
           git show "${HEAD_SHA}:reports/latest.json" > "${RUNNER_TEMP}/latest.json"
           git show "${HEAD_SHA}:reports/latest.md" > "${RUNNER_TEMP}/latest.md"
           git show "${HEAD_SHA}:reports/trend.json" > "${RUNNER_TEMP}/trend.json"
+          git show "${BASE_SHA}:reports/trend.json" > "${RUNNER_TEMP}/base-trend.json"
           python -m agent_insights_quality validate-published-report \
             --report "${RUNNER_TEMP}/report.json" \
             --receipt "${RUNNER_TEMP}/email-receipt.json" \
@@ -110,6 +111,7 @@ jobs:
             --latest-json "${RUNNER_TEMP}/latest.json" \
             --latest-markdown "${RUNNER_TEMP}/latest.md" \
             --trend "${RUNNER_TEMP}/trend.json" \
+            --base-trend "${RUNNER_TEMP}/base-trend.json" \
             "${agent_args[@]}"
       - name: Enable auto-merge
         env:

@@ -136,7 +136,7 @@ get_balance_with_transient. Keep answers concise and do not provide financial re
 def build_agent() -> Agent:
     client = FoundryChatClient(
         project_endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"],
-        model=os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-5.6-terra"),
+        model=os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-5.4-mini"),
         credential=DefaultAzureCredential(),
     )
     instructions = (

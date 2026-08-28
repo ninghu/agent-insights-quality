@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import io
 import json
+import sys
 import threading
 import time
+import types
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -19,7 +22,9 @@ from agent_insights_quality.live import (
     _trace_contract_ready,
     _usable_response,
 )
+from agent_insights_quality.models import InsightRunCheckpoint
 from agent_insights_quality.profiles import RuntimeProfile
+from agent_insights_quality.util import ContractError, InsightWindowExpiredError
 
 
 def _runtime() -> LiveRuntime:
@@ -569,28 +574,166 @@ def test_telemetry_query_does_not_retry_nontransient_http_failures(
     assert attempts == 1
 
 
-def test_failed_agent_insights_run_retries_without_new_traffic() -> None:
-    runtime = _runtime()
-    statuses = iter(["failed", "failed", "succeeded"])
-    sleeps = []
-
-    class Result:
-        def __init__(self, status):
-            self.status = status
-
-    runtime._run_insights_once = (  # type: ignore[method-assign]
-        lambda **_kwargs: Result(next(statuses))
+def test_agent_insights_checkpoint_is_persisted_before_polling() -> None:
+    now = datetime(2026, 8, 27, 18, 0, tzinfo=UTC)
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        utcnow=lambda: now,
     )
-    runtime._sleep = sleeps.append
-    result = runtime.run_insights(
+    checkpoint = InsightRunCheckpoint("private-run-id", {})
+    persisted = []
+    runtime._start_insights_once = (  # type: ignore[method-assign]
+        lambda **_kwargs: checkpoint
+    )
+    runtime._operation_time_bounds = (  # type: ignore[method-assign]
+        lambda **_kwargs: (
+            now - timedelta(minutes=1),
+            now - timedelta(seconds=30),
+        )
+    )
+    result = runtime.start_insights_run(
         agent_name="weather-agent",
         monitor_id="monitor-weather",
         foundry_version="1",
         operation_ids=("a" * 32,),
-        lookback_hours=3,
+        lookback_hours=0.1,
+        persist=persisted.append,
     )
-    assert result.status == "succeeded"
-    assert sleeps == [30, 30]
+    assert result == checkpoint
+    assert persisted == [checkpoint]
+
+
+def test_integral_lookback_uses_service_compatible_integer() -> None:
+    runtime = _runtime()
+    captured = {}
+    runtime._insight_revisions = lambda _monitor: {}  # type: ignore[method-assign]
+
+    def request(method, url, body=None, **_kwargs):
+        captured.update({"method": method, "url": url, "body": body})
+        return {"id": "private-run-id"}
+
+    runtime._json_request = request  # type: ignore[method-assign]
+    checkpoint = runtime._start_insights_once(
+        monitor_id="private-monitor",
+        lookback_hours=1.0,
+    )
+    assert checkpoint.run_id == "private-run-id"
+    assert captured["method"] == "POST"
+    assert captured["body"]["lookback_hours"] == 1
+    assert isinstance(captured["body"]["lookback_hours"], int)
+
+
+def test_agent_insights_rejects_operations_outside_short_window() -> None:
+    now = datetime(2026, 8, 27, 18, 0, tzinfo=UTC)
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        utcnow=lambda: now,
+    )
+    runtime._operation_time_bounds = (  # type: ignore[method-assign]
+        lambda **_kwargs: (
+            now - timedelta(minutes=7),
+            now - timedelta(minutes=6, seconds=30),
+        )
+    )
+    runtime._start_insights_once = (  # type: ignore[method-assign]
+        lambda **_kwargs: pytest.fail("expired operations must not start Insights")
+    )
+    with pytest.raises(InsightWindowExpiredError, match="expired"):
+        runtime.start_insights_run(
+            agent_name="weather-agent",
+            monitor_id="monitor-weather",
+            foundry_version="1",
+            operation_ids=("a" * 32,),
+            lookback_hours=0.1,
+            persist=lambda _checkpoint: None,
+        )
+
+
+def test_agent_insights_rejects_window_anchor_race() -> None:
+    now = datetime(2026, 8, 27, 18, 0, tzinfo=UTC)
+    earliest = now - timedelta(minutes=5)
+    latest = now - timedelta(minutes=4)
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        utcnow=lambda: now,
+    )
+
+    runtime._operation_time_bounds = (  # type: ignore[method-assign]
+        lambda **_kwargs: (earliest, latest)
+    )
+    runtime._wait_insights_run = (  # type: ignore[method-assign]
+        lambda *_args: {
+            "status": "succeeded",
+            "window_start": (earliest + timedelta(seconds=1)).isoformat(),
+            "window_end": (now + timedelta(minutes=1)).isoformat(),
+        }
+    )
+    runtime._list_insights = lambda _monitor_id: []  # type: ignore[method-assign]
+    with pytest.raises(InsightWindowExpiredError, match="excluded"):
+        runtime.finish_insights_run(
+            agent_name="weather-agent",
+            monitor_id="monitor-weather",
+            foundry_version="1",
+            operation_ids=("a" * 32,),
+            checkpoint=InsightRunCheckpoint("private-run-id", {}),
+        )
+
+
+def test_clean_window_waits_for_private_ledger_horizon(monkeypatch) -> None:
+    query_module = types.ModuleType("azure.monitor.query")
+    query_module.LogsQueryStatus = type("LogsQueryStatus", (), {"SUCCESS": "success"})
+    monitor_module = types.ModuleType("azure.monitor")
+    azure_module = types.ModuleType("azure")
+    monkeypatch.setitem(sys.modules, "azure", azure_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor", monitor_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
+    now = [datetime(2026, 8, 27, 18, 0, tzinfo=UTC)]
+    monotonic = [0.0]
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        utcnow=lambda: now[0],
+        monotonic=lambda: monotonic[0],
+    )
+    ready_at = now[0] + timedelta(seconds=120)
+    queries = []
+
+    class Ledger:
+        @staticmethod
+        def clean_after(*_args, **_kwargs):
+            return ready_at
+
+    class Table:
+        rows = [[None, 0]]
+
+    class Result:
+        status = "success"
+        tables = [Table()]
+
+    def sleep(seconds):
+        now[0] += timedelta(seconds=seconds)
+        monotonic[0] += seconds
+
+    def query(_client, query_text, *, timespan):
+        queries.append((query_text, timespan))
+        return Result()
+
+    runtime._traffic_ledger = Ledger()
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+    runtime._query_resource = query  # type: ignore[method-assign]
+    runtime._sleep = sleep
+    runtime.wait_for_clean_window(
+        "weather-agent",
+        0.1,
+        poll_seconds=30,
+        ingestion_margin_seconds=30,
+        max_wait_seconds=180,
+    )
+    assert monotonic[0] == 120
+    assert all("ago(390s)" in query_text for query_text, _ in queries)
 
 
 def test_json_get_retries_transient_http_failures(monkeypatch) -> None:
@@ -683,6 +826,101 @@ def test_json_post_retries_foundry_failed_dependency(monkeypatch) -> None:
     assert value["_request_reference"] == request_references[-1]
 
 
+def test_json_patch_retries_no_response_with_explicit_policy(monkeypatch) -> None:
+    runtime = _runtime()
+    request_references = []
+    sleeps = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        @staticmethod
+        def read():
+            return b'{"value":"ok"}'
+
+    def open_request(request, **_kwargs):
+        request_references.append(request.headers["X-ms-client-request-id"])
+        if len(request_references) == 1:
+            raise TimeoutError("synthetic no-response timeout")
+        return Response()
+
+    runtime._sleep = sleeps.append
+    monkeypatch.setattr(
+        "agent_insights_quality.live.urllib.request.urlopen",
+        open_request,
+    )
+    value = runtime._json_request(
+        "PATCH",
+        "https://example.invalid",
+        retry_statuses={408, 503},
+        retry_no_response=True,
+    )
+    assert value["value"] == "ok"
+    assert len(set(request_references)) == 2
+    assert value["_request_reference"] == request_references[-1]
+    assert sleeps == [1]
+
+
+def test_json_patch_bounds_no_response_retries(monkeypatch) -> None:
+    runtime = _runtime()
+    attempts = 0
+    sleeps = []
+
+    def open_request(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise TimeoutError("synthetic no-response timeout")
+
+    runtime._sleep = sleeps.append
+    monkeypatch.setattr(
+        "agent_insights_quality.live.urllib.request.urlopen",
+        open_request,
+    )
+    with pytest.raises(
+        ContractError,
+        match="Remote operation failed before a response was received",
+    ):
+        runtime._json_request(
+            "PATCH",
+            "https://example.invalid",
+            retry_statuses={408, 503},
+            retry_no_response=True,
+        )
+    assert attempts == 3
+    assert sleeps == [1, 2]
+
+
+def test_json_post_requires_explicit_no_response_retry(monkeypatch) -> None:
+    runtime = _runtime()
+    attempts = 0
+
+    def open_request(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise TimeoutError("synthetic no-response timeout")
+
+    monkeypatch.setattr(
+        "agent_insights_quality.live.urllib.request.urlopen",
+        open_request,
+    )
+    with pytest.raises(
+        ContractError,
+        match="Remote operation failed before a response was received",
+    ):
+        runtime._json_request(
+            "POST",
+            "https://example.invalid",
+            retry_statuses={408, 503},
+        )
+    assert attempts == 1
+
+
 def test_hosted_invocation_correlates_with_successful_request_reference(
     monkeypatch,
 ) -> None:
@@ -741,6 +979,126 @@ def test_hosted_invocation_correlates_with_successful_request_reference(
     assert assertion_count == 0
     assert assertions_passed == 0
     assert timeout_seconds == 600
+
+
+def test_hosted_cleanup_failure_preserves_completed_responses() -> None:
+    runtime = _runtime()
+    progress = []
+    runtime._activate_hosted_version = lambda *_args: None  # type: ignore[method-assign]
+    runtime._create_hosted_session = (  # type: ignore[method-assign]
+        lambda *_args: "session-id"
+    )
+    runtime._invoke_hosted = (  # type: ignore[method-assign]
+        lambda *_args: (["successful-attempt"], True, 0, 0)
+    )
+    runtime._delete_hosted_session = (  # type: ignore[method-assign]
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("synthetic cleanup failure"))
+    )
+    runtime.report_progress = progress.append  # type: ignore[method-assign]
+
+    results = runtime._invoke_group(
+        "finance-agent",
+        "hosted",
+        "19",
+        [
+            {
+                "_index": 0,
+                "body": {"input": "synthetic request"},
+                "expected_status": 200,
+            }
+        ],
+        1,
+    )
+
+    assert results == [(0, ["successful-attempt"], True, 0, 0)]
+    assert progress == [
+        "finance-agent/19: session cleanup failed after endpoint completion; "
+        "preserving completed evidence"
+    ]
+
+
+def test_hosted_cleanup_failure_preserves_primary_invocation_error() -> None:
+    runtime = _runtime()
+    progress = []
+    runtime._activate_hosted_version = lambda *_args: None  # type: ignore[method-assign]
+    runtime._create_hosted_session = (  # type: ignore[method-assign]
+        lambda *_args: "session-id"
+    )
+    runtime._invoke_hosted = (  # type: ignore[method-assign]
+        lambda *_args: (_ for _ in ()).throw(ValueError("primary invocation failure"))
+    )
+    runtime._delete_hosted_session = (  # type: ignore[method-assign]
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("secondary cleanup failure"))
+    )
+    runtime.report_progress = progress.append  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError, match="primary invocation failure"):
+        runtime._invoke_group(
+            "finance-agent",
+            "hosted",
+            "19",
+            [
+                {
+                    "_index": 0,
+                    "body": {"input": "synthetic request"},
+                    "expected_status": 200,
+                }
+            ],
+            1,
+        )
+
+    assert progress == ["finance-agent/19: session cleanup also failed"]
+
+
+def test_mixed_group_failures_preserve_ambiguous_traffic_horizon(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime()
+    traffic = tmp_path / "traffic.json"
+    traffic.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "known-http",
+                    "request": {"body": {"input": "synthetic one"}},
+                },
+                {
+                    "id": "ambiguous",
+                    "request": {"body": {"input": "synthetic two"}},
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    class Ledger:
+        completed = 0
+
+        @staticmethod
+        def mark_started(*_args, **_kwargs):
+            return None
+
+        def mark_completed(self, *_args, **_kwargs):
+            self.completed += 1
+
+    ledger = Ledger()
+    runtime._traffic_ledger = ledger
+
+    def invoke_group(_agent, _type, _version, fixtures, _seed):
+        if fixtures[0]["id"] == "known-http":
+            raise ContractError("Remote operation failed with HTTP 424")
+        raise ContractError("Remote operation failed before a response was received")
+
+    runtime._invoke_group = invoke_group  # type: ignore[method-assign]
+    with pytest.raises(ContractError, match="before a response"):
+        runtime.invoke_version(
+            agent_name="finance-agent",
+            agent_type="hosted",
+            foundry_version="1",
+            traffic_path=traffic,
+            seed=1,
+        )
+    assert ledger.completed == 0
 
 
 def test_json_request_refreshes_an_expired_credential_once(monkeypatch) -> None:

@@ -10,11 +10,11 @@ Use this skill for human-reviewed impact-based qualification before promotion.
 
 1. Sync the latest default branch before changing contracts or infrastructure.
 2. Validate catalogs, generated docs, schemas, tests, Ruff, and Bicep.
-3. Deploy the reviewed telemetry generation and verify both Foundry Project data planes.
+3. Reuse and verify the fixed `g29` telemetry resource set and both Foundry Project connections.
 4. Provision staging, reconcile exactly 41 versions and five monitors, and publish the canonical
    staging registry to the private Azure Blob container.
 5. Fetch the private Quality-tagged work-item snapshot under the durable user-level runtime root.
-6. Verify a clean three-hour window for all five Agents.
+6. Wait for the configured `0.1`-hour clean window for all five Agents.
 7. Determine affected Agents from content digests, mappings, and shared-contract changes:
    - qualify each affected Agent's `v0` and all assigned issues;
    - reuse reviewed evidence for unchanged Agents only when digest, mapping, and shared contracts are
@@ -31,6 +31,9 @@ Use this skill for human-reviewed impact-based qualification before promotion.
     finding. Any
    `inconclusive` baseline assessment or `INCOMPLETE` issue assessment makes the whole run
    `INCOMPLETE` with no numeric quality score. Never commit the snapshot.
+   Open the private `report-preview.html` in a browser for human review. It uses the exact same
+   Outlook-safe HTML renderer and private quality-trend dashboard link as the daily email; never
+   commit the preview, dashboard link, or its private context.
 11. After explicit human review, compose promotion from complete trusted PASS/FAIL evidence for
     affected Agents and latest valid receipts for unchanged Agents. Verify every exact digest and
     mapping. Never promote or reuse `INCOMPLETE`.
@@ -39,10 +42,10 @@ Use only reviewed tooling that validates targeted reports and composed receipts.
 cannot produce both, stop targeted execution and use full-catalog qualification; never splice
 evidence or receipts manually.
 
-If a run is incomplete, preserve its artifacts, inspect stage-specific error codes, and reproduce only
-the failing stage. Rotate telemetry only after fixing the root cause: deploy and validate the new
-generation before deleting the exact old App Insights and workspace set.
+If a run is incomplete, preserve its artifacts, inspect stage-specific error codes, and resume only
+the failing stage when its private checkpoint proves prior work complete. Routine recovery reuses
+`g29`; never create a telemetry resource for a rerun.
 
 After exact-digest daily provisioning, perform read-only readiness and registry reconciliation; do
-not send daily smoke traffic. Do not promote `INCOMPLETE`, reuse a dirty telemetry generation, weaken
+not send daily smoke traffic. Do not promote `INCOMPLETE`, overlap the short clean window, weaken
 an Issue contract to make a run pass, or persist private runtime identifiers.

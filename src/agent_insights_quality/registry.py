@@ -3,12 +3,15 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator
 
 from agent_insights_quality.azure_cli import azure_cli
+from agent_insights_quality.catalogs import agent_model_contract
+from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.util import ROOT, ContractError, read_json, read_yaml
 
 PROFILE_PROJECTS = {
@@ -16,6 +19,7 @@ PROFILE_PROJECTS = {
     "staging": "agent-insights-quality-staging",
 }
 REGISTRY_CONTAINER = "deployment-registries"
+_PROGRESS = ProgressReporter("aiq-registry")
 
 
 def sync_registry(profile: Any) -> None:
@@ -29,7 +33,7 @@ def sync_registry(profile: Any) -> None:
     )
     os.close(descriptor)
     try:
-        process = subprocess.run(
+        process = _run_registry_command(
             [
                 azure_cli(),
                 "storage",
@@ -51,10 +55,6 @@ def sync_registry(profile: Any) -> None:
                 "--output",
                 "none",
             ],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
         )
         if process.returncode != 0:
             raise ContractError("Private deployment registry download failed")
@@ -68,7 +68,7 @@ def publish_registry(profile: Any) -> None:
     account = str(profile.registry_storage_account_name or "").strip()
     if not account:
         raise ContractError("Private registry storage account could not be resolved")
-    process = subprocess.run(
+    process = _run_registry_command(
         [
             azure_cli(),
             "storage",
@@ -90,13 +90,43 @@ def publish_registry(profile: Any) -> None:
             "--output",
             "none",
         ],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
     )
     if process.returncode != 0:
         raise ContractError("Private deployment registry upload failed")
+
+
+def _run_registry_command(
+    arguments: list[str],
+) -> subprocess.CompletedProcess[str]:
+    process: subprocess.CompletedProcess[str] | None = None
+    for attempt in range(3):
+        try:
+            with _PROGRESS.heartbeat(
+                f"private registry operation attempt {attempt + 1}/3"
+            ) as outcome:
+                process = subprocess.run(
+                    arguments,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    check=False,
+                )
+                if process.returncode != 0:
+                    outcome.fail()
+        except subprocess.TimeoutExpired:
+            if attempt == 2:
+                raise ContractError(
+                    "Registry command timed out after bounded retries"
+                ) from None
+            time.sleep(2**attempt)
+            continue
+        if process.returncode == 0:
+            return process
+        if attempt < 2:
+            time.sleep(2**attempt)
+    if process is None:
+        raise ContractError("Registry command retry loop did not execute")
+    return process
 
 
 def load_registry(
@@ -123,6 +153,8 @@ def load_registry(
     if registry["catalog_hashes"] != catalog_hashes:
         raise ContractError("Deployment registry catalog hashes are stale")
     agent_catalog = read_yaml(ROOT / "catalogs" / "AGENT_CATALOG.yaml")
+    if registry["test_agent_model"] != agent_model_contract(agent_catalog):
+        raise ContractError("Deployment registry Test Agent model is stale")
     expected = {
         agent["name"]: {"v0", *agent["issue_ids"]}
         for agent in agent_catalog["agents"]

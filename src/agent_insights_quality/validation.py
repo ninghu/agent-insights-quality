@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 from agent_insights_quality.catalogs import generate_docs, load_catalogs
+from agent_insights_quality.automation_policy import load_automation_policy
 from agent_insights_quality.reporting import (
     CLEAN_CARD_PRECISION_WEIGHT,
     FIELD_QUALITY_WEIGHT,
@@ -19,6 +20,7 @@ _REMOVED_TERMS = re.compile(
 )
 def validate_repository() -> None:
     load_catalogs()
+    load_automation_policy()
     generate_docs(check=True)
     _validate_reporting_policy()
     _validate_removed_terms()
@@ -45,6 +47,9 @@ def _tracked_text_files() -> list[Path]:
             path.is_file()
             and ".git" not in path.parts
             and ".aiq-runtime" not in path.parts
+            and ".mypy_cache" not in path.parts
+            and ".pytest_cache" not in path.parts
+            and ".ruff_cache" not in path.parts
             and "__pycache__" not in path.parts
             and path.suffix.lower() not in {".pyc", ".zip", ".png", ".jpg", ".jpeg"}
             and path.stat().st_size <= 2 * 1024 * 1024
