@@ -18,36 +18,28 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Use Celsius for this conversation and check Public Demo Location 1."
+                  "text": "Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=20. What is the weather?"
                 }
               ]
             }
           ],
           "conversation": {
-            "id": "conv-weather-issue-004-shared"
+            "id": "conv-issue-004-shared"
           },
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Establishes the Celsius preference for later endpoint requests.",
-        "defect_observed": false
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_current_conditions",
-          "arguments": {
-            "location": "Public Demo Location 1",
-            "unit": "celsius"
-          },
-          "returns": {
-            "condition": "clear",
-            "temperature": 20,
-            "unit": "celsius"
-          }
+        "behavior": "Establishes the Celsius preference for later requests.",
+        "defect_observed": false,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "20",
+            "celsius"
+          ]
         }
-      ]
+      }
     },
     {
       "id": "issue-004-request-2",
@@ -64,13 +56,13 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Now check Public Demo Location 2."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature=68. Now check this location."
                 }
               ]
             }
           ],
           "conversation": {
-            "id": "conv-weather-issue-004-shared"
+            "id": "conv-issue-004-shared"
           },
           "max_output_tokens": 400
         }
@@ -78,22 +70,14 @@
       "expected": {
         "http_status": 200,
         "behavior": "Uses Fahrenheit rather than the retained Celsius preference.",
-        "defect_observed": true
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_current_conditions",
-          "arguments": {
-            "location": "Public Demo Location 2",
-            "unit": "fahrenheit"
-          },
-          "returns": {
-            "condition": "clear",
-            "temperature": 68,
-            "unit": "fahrenheit"
-          }
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "fahrenheit"
+          ]
         }
-      ]
+      }
     },
     {
       "id": "issue-004-request-3",
@@ -110,13 +94,13 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "What about Public Demo Location 3?"
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=68. Now check this location."
                 }
               ]
             }
           ],
           "conversation": {
-            "id": "conv-weather-issue-004-shared"
+            "id": "conv-issue-004-shared"
           },
           "max_output_tokens": 400
         }
@@ -124,22 +108,14 @@
       "expected": {
         "http_status": 200,
         "behavior": "Uses Fahrenheit rather than the retained Celsius preference.",
-        "defect_observed": true
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_current_conditions",
-          "arguments": {
-            "location": "Public Demo Location 3",
-            "unit": "fahrenheit"
-          },
-          "returns": {
-            "condition": "clear",
-            "temperature": 68,
-            "unit": "fahrenheit"
-          }
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "fahrenheit"
+          ]
         }
-      ]
+      }
     },
     {
       "id": "issue-004-request-4",
@@ -156,13 +132,13 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Check Public Demo Location 4 too."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature=68. Now check this location."
                 }
               ]
             }
           ],
           "conversation": {
-            "id": "conv-weather-issue-004-shared"
+            "id": "conv-issue-004-shared"
           },
           "max_output_tokens": 400
         }
@@ -170,22 +146,14 @@
       "expected": {
         "http_status": 200,
         "behavior": "Uses Fahrenheit rather than the retained Celsius preference.",
-        "defect_observed": true
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_current_conditions",
-          "arguments": {
-            "location": "Public Demo Location 4",
-            "unit": "fahrenheit"
-          },
-          "returns": {
-            "condition": "clear",
-            "temperature": 68,
-            "unit": "fahrenheit"
-          }
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "fahrenheit"
+          ]
         }
-      ]
+      }
     },
     {
       "id": "issue-004-request-5",
@@ -202,13 +170,13 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Finally check Public Demo Location 5."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature=68. Now check this location."
                 }
               ]
             }
           ],
           "conversation": {
-            "id": "conv-weather-issue-004-shared"
+            "id": "conv-issue-004-shared"
           },
           "max_output_tokens": 400
         }
@@ -216,22 +184,14 @@
       "expected": {
         "http_status": 200,
         "behavior": "Uses Fahrenheit rather than the retained Celsius preference.",
-        "defect_observed": true
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_current_conditions",
-          "arguments": {
-            "location": "Public Demo Location 5",
-            "unit": "fahrenheit"
-          },
-          "returns": {
-            "condition": "clear",
-            "temperature": 68,
-            "unit": "fahrenheit"
-          }
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "fahrenheit"
+          ]
         }
-      ]
+      }
     }
   ],
   "data_class": "synthetic_public_safe",

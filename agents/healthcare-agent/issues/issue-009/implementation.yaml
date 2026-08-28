@@ -9,15 +9,15 @@ deployment:
 category: context_memory
 severity: medium
 expected_behavior:
-  desired: Use the latest explicit provider and slot correction.
-  injected: Uses a stale provider or slot from an earlier turn.
+  desired: "Use the latest explicit provider and slot correction."
+  injected: "Uses a stale provider or slot from an earlier turn."
 injected_defect:
-  single_root: Instructions prioritize the first provider and slot over later corrections.
+  single_root: "Instructions prioritize the first provider and slot over later corrections."
   activation: all_matching_endpoint_requests
   definition_is_complete: true
 determinism:
   temperature: 0
-  definition_sha256: 4d3e1ad91f5de4799bec8025128140aae1f2b52d7c1a46cd9fc0f1558157220a
+  definition_sha256: 8085d5581120fb5e0d20814c53be021cf6e625ce2806683ede40c682c44ac6b9
   traffic_file: traffic.json
   minimum_requests: 5
 artifacts:

@@ -4,11 +4,10 @@
   "logical_version": "v0",
   "coverage": [
     "grounded_success",
-    "normal_latency_and_token_use",
-    "bounded_latency_and_output",
+    "bounded_output",
+    "response_format_contract",
     "conversation_memory",
-    "handled_transient_tool_failure",
-    "handled_partial_result"
+    "incomplete_evidence_handling"
   ],
   "requests": [
     {
@@ -26,7 +25,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "What is the current weather in Portland, Oregon? Use Celsius."
+                  "text": "Use Fahrenheit for the rest of this conversation. Synthetic current-conditions evidence for Austin: condition=sunny, temperature=86, unit=fahrenheit. What is the current weather?"
                 }
               ]
             }
@@ -39,22 +38,60 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Uses the successful current-conditions result and states 14 C with light rain."
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_current_conditions",
-          "arguments": {
-            "location": "Portland, Oregon",
-            "unit": "celsius"
-          },
-          "returns": {
-            "condition": "light rain",
-            "temperature": 14,
-            "unit": "celsius"
-          }
+        "behavior": "Establishes the Fahrenheit preference and reports the grounded 86 F sunny result from the request evidence.",
+        "semantic_assertions": {
+          "required_terms_all": [
+            "Austin",
+            "86",
+            "sunny",
+            "fahrenheit"
+          ],
+          "forbidden_terms": [
+            "unavailable"
+          ],
+          "max_words": 40
         }
-      ]
+      }
+    },
+    {
+      "id": "weather-v0-memory-followup",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Synthetic current-conditions evidence for Denver: condition=snow, temperature=25. What is the weather now?"
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-weather-v0-a"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Applies the retained Fahrenheit preference from the earlier turn and reports 25 degrees Fahrenheit with snow, without asking again.",
+        "semantic_assertions": {
+          "required_terms_all": [
+            "Denver",
+            "25",
+            "snow",
+            "fahrenheit"
+          ],
+          "max_words": 40
+        }
+      }
     },
     {
       "id": "weather-v0-bounded",
@@ -71,7 +108,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Give me the next one-day forecast for Oslo in at most 30 words. Call get_forecast with days=1."
+                  "text": "Synthetic forecast evidence for Oslo tomorrow: condition=cloudy, high=12, low=7, unit=celsius. Give the one-day forecast in at most 20 words."
                 }
               ]
             }
@@ -84,31 +121,20 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Uses one forecast lookup and answers in no more than 30 words."
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_forecast",
-          "arguments": {
-            "location": "Oslo",
-            "days": 1,
-            "unit": "celsius"
-          },
-          "returns": {
-            "days": [
-              {
-                "date": "2030-05-10",
-                "condition": "cloudy",
-                "high": 12,
-                "low": 7
-              }
-            ]
-          }
+        "behavior": "Answers the one-day forecast in at most 20 words using only the given evidence.",
+        "semantic_assertions": {
+          "max_words": 20,
+          "required_terms_all": [
+            "cloudy",
+            "12",
+            "7",
+            "celsius"
+          ]
         }
-      ]
+      }
     },
     {
-      "id": "weather-v0-memory",
+      "id": "weather-v0-json",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -122,7 +148,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Use Fahrenheit for this conversation. What is the weather in Austin?"
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=21, unit=celsius. Return JSON with exactly the keys condition, temperature, and unit."
                 }
               ]
             }
@@ -135,74 +161,36 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Retains Fahrenheit and reports the grounded 86 F result."
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_current_conditions",
-          "arguments": {
-            "location": "Austin",
-            "unit": "fahrenheit"
-          },
-          "returns": {
-            "condition": "sunny",
-            "temperature": 86,
-            "unit": "fahrenheit"
+        "behavior": "Returns valid JSON with exactly the requested keys and grounded values.",
+        "semantic_assertions": {
+          "response_format": "json",
+          "required_terms_all": [
+            "clear",
+            "21",
+            "celsius"
+          ],
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "condition",
+              "temperature",
+              "unit"
+            ],
+            "properties": {
+              "condition": {
+                "const": "clear"
+              },
+              "temperature": {
+                "const": 21
+              },
+              "unit": {
+                "const": "celsius"
+              }
+            }
           }
         }
-      ]
-    },
-    {
-      "id": "weather-v0-transient",
-      "request": {
-        "method": "POST",
-        "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
-        "body": {
-          "input": [
-            {
-              "role": "user",
-              "content": [
-                {
-                  "type": "input_text",
-                  "text": "Are there active alerts for Miami?"
-                }
-              ]
-            }
-          ],
-          "conversation": {
-            "id": "conv-weather-v0-d"
-          },
-          "max_output_tokens": 400
-        }
-      },
-      "expected": {
-        "http_status": 200,
-        "behavior": "Retries once after the transient failure and reports that no alerts are active."
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_weather_alerts",
-          "arguments": {
-            "location": "Miami"
-          },
-          "sequence": [
-            {
-              "error": {
-                "code": "temporary_unavailable",
-                "retryable": true
-              }
-            },
-            {
-              "returns": {
-                "alerts": []
-              }
-            }
-          ]
-        }
-      ]
+      }
     },
     {
       "id": "weather-v0-partial",
@@ -219,48 +207,30 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Give me a three-day forecast for Reykjavik."
+                  "text": "Synthetic forecast evidence for Reykjavik: day one condition=windy, high=9, low=5, unit=celsius; day two evidence is unavailable. Give the two-day forecast."
                 }
               ]
             }
           ],
           "conversation": {
-            "id": "conv-weather-v0-e"
+            "id": "conv-weather-v0-d"
           },
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Reports the two available days and clearly labels the third day unavailable."
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_forecast",
-          "arguments": {
-            "location": "Reykjavik",
-            "days": 3,
-            "unit": "celsius"
-          },
-          "returns": {
-            "days": [
-              {
-                "day": 1,
-                "condition": "windy",
-                "high": 9,
-                "low": 5
-              },
-              {
-                "day": 2,
-                "condition": "rain",
-                "high": 8,
-                "low": 4
-              }
-            ],
-            "partial": true
-          }
+        "behavior": "Reports day one from the evidence and explicitly labels day two as unavailable instead of guessing.",
+        "semantic_assertions": {
+          "required_terms_all": [
+            "windy",
+            "9",
+            "5",
+            "unavailable"
+          ],
+          "max_words": 60
         }
-      ]
+      }
     }
   ],
   "data_class": "synthetic_public_safe",

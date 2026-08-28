@@ -18,13 +18,13 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Use Dr. Rivera for demo-account-a on 2026-09-21."
+                  "text": "Use Dr. Rivera for demo-account-a on 2026-09-21. Synthetic schedule evidence: slot-demo-stale open at 09:00 on 2026-09-21."
                 }
               ]
             }
           ],
           "conversation": {
-            "id": "conv-health-issue-009-shared"
+            "id": "conv-issue-009-shared"
           },
           "max_output_tokens": 400
         }
@@ -32,25 +32,14 @@
       "expected": {
         "http_status": 200,
         "behavior": "Establishes the initial provider for later correction requests.",
-        "defect_observed": false
-      },
-      "tool_fixtures": [
-        {
-          "tool": "lookup_slots",
-          "arguments": {
-            "account_scope": "demo-account-a",
-            "provider": "Dr. Rivera",
-            "date": "2026-09-21"
-          },
-          "returns": {
-            "slots": [
-              {
-                "slot_id": "slot-demo-stale"
-              }
-            ]
-          }
+        "defect_observed": false,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "slot-demo-stale",
+            "09:00"
+          ]
         }
-      ]
+      }
     },
     {
       "id": "issue-009-request-2",
@@ -67,13 +56,13 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Correction: use Dr. Chen, not Dr. Rivera."
+                  "text": "Correction for 2026-09-21: use Dr. Chen, not the earlier provider."
                 }
               ]
             }
           ],
           "conversation": {
-            "id": "conv-health-issue-009-shared"
+            "id": "conv-issue-009-shared"
           },
           "max_output_tokens": 400
         }
@@ -81,25 +70,14 @@
       "expected": {
         "http_status": 200,
         "behavior": "Uses an earlier value rather than the explicit correction.",
-        "defect_observed": true
-      },
-      "tool_fixtures": [
-        {
-          "tool": "lookup_slots",
-          "arguments": {
-            "account_scope": "demo-account-a",
-            "provider": "Dr. Rivera",
-            "date": "2026-09-21"
-          },
-          "returns": {
-            "slots": [
-              {
-                "slot_id": "slot-demo-stale"
-              }
-            ]
-          }
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "Dr. Rivera"
+          ]
         }
-      ]
+      }
     },
     {
       "id": "issue-009-request-3",
@@ -116,13 +94,13 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Correction: use Dr. Patel now."
+                  "text": "Correction for 2026-09-21: use Dr. Patel, not the earlier provider."
                 }
               ]
             }
           ],
           "conversation": {
-            "id": "conv-health-issue-009-shared"
+            "id": "conv-issue-009-shared"
           },
           "max_output_tokens": 400
         }
@@ -130,25 +108,14 @@
       "expected": {
         "http_status": 200,
         "behavior": "Uses an earlier value rather than the explicit correction.",
-        "defect_observed": true
-      },
-      "tool_fixtures": [
-        {
-          "tool": "lookup_slots",
-          "arguments": {
-            "account_scope": "demo-account-a",
-            "provider": "Dr. Rivera",
-            "date": "2026-09-21"
-          },
-          "returns": {
-            "slots": [
-              {
-                "slot_id": "slot-demo-stale"
-              }
-            ]
-          }
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "Dr. Rivera"
+          ]
         }
-      ]
+      }
     },
     {
       "id": "issue-009-request-4",
@@ -165,13 +132,13 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Correction: use Dr. Ali now."
+                  "text": "Correction for 2026-09-21: use Dr. Ali, not the earlier provider."
                 }
               ]
             }
           ],
           "conversation": {
-            "id": "conv-health-issue-009-shared"
+            "id": "conv-issue-009-shared"
           },
           "max_output_tokens": 400
         }
@@ -179,25 +146,14 @@
       "expected": {
         "http_status": 200,
         "behavior": "Uses an earlier value rather than the explicit correction.",
-        "defect_observed": true
-      },
-      "tool_fixtures": [
-        {
-          "tool": "lookup_slots",
-          "arguments": {
-            "account_scope": "demo-account-a",
-            "provider": "Dr. Rivera",
-            "date": "2026-09-21"
-          },
-          "returns": {
-            "slots": [
-              {
-                "slot_id": "slot-demo-stale"
-              }
-            ]
-          }
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "Dr. Rivera"
+          ]
         }
-      ]
+      }
     },
     {
       "id": "issue-009-request-5",
@@ -214,13 +170,13 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Final correction: use Dr. Chen."
+                  "text": "Correction for 2026-09-21: use Dr. Chen, not the earlier provider."
                 }
               ]
             }
           ],
           "conversation": {
-            "id": "conv-health-issue-009-shared"
+            "id": "conv-issue-009-shared"
           },
           "max_output_tokens": 400
         }
@@ -228,25 +184,14 @@
       "expected": {
         "http_status": 200,
         "behavior": "Uses an earlier value rather than the explicit correction.",
-        "defect_observed": true
-      },
-      "tool_fixtures": [
-        {
-          "tool": "lookup_slots",
-          "arguments": {
-            "account_scope": "demo-account-a",
-            "provider": "Dr. Rivera",
-            "date": "2026-09-21"
-          },
-          "returns": {
-            "slots": [
-              {
-                "slot_id": "slot-demo-stale"
-              }
-            ]
-          }
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "Dr. Rivera"
+          ]
         }
-      ]
+      }
     }
   ],
   "data_class": "synthetic_public_safe",

@@ -18,7 +18,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Prepare a handoff for a scheduling specialist."
+                  "text": "Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-21. Prepare a handoff for a scheduling specialist about the unavailable date."
                 }
               ]
             }
@@ -32,21 +32,17 @@
       "expected": {
         "http_status": 200,
         "behavior": "The handoff lacks at least one required ownership or validation field.",
-        "defect_observed": true
-      },
-      "tool_fixtures": [
-        {
-          "tool": "lookup_slots",
-          "arguments": {
-            "account_scope": "demo-account-a",
-            "provider": "Dr. Rivera",
-            "date": "2026-09-21"
-          },
-          "returns": {
-            "slots": []
-          }
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "forbidden_terms": [
+            "owner:",
+            "next_action:",
+            "deadline:",
+            "validation:"
+          ]
         }
-      ]
+      }
     },
     {
       "id": "issue-007-request-2",
@@ -63,7 +59,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Handoff my unresolved slot request."
+                  "text": "Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-22. Prepare a handoff for a scheduling specialist about the unavailable date."
                 }
               ]
             }
@@ -77,21 +73,17 @@
       "expected": {
         "http_status": 200,
         "behavior": "The handoff lacks at least one required ownership or validation field.",
-        "defect_observed": true
-      },
-      "tool_fixtures": [
-        {
-          "tool": "lookup_slots",
-          "arguments": {
-            "account_scope": "demo-account-a",
-            "provider": "Dr. Rivera",
-            "date": "2026-09-22"
-          },
-          "returns": {
-            "slots": []
-          }
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "forbidden_terms": [
+            "owner:",
+            "next_action:",
+            "deadline:",
+            "validation:"
+          ]
         }
-      ]
+      }
     },
     {
       "id": "issue-007-request-3",
@@ -108,7 +100,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Create a handoff for a provider correction."
+                  "text": "Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-23. Prepare a handoff for a scheduling specialist about the unavailable date."
                 }
               ]
             }
@@ -122,21 +114,17 @@
       "expected": {
         "http_status": 200,
         "behavior": "The handoff lacks at least one required ownership or validation field.",
-        "defect_observed": true
-      },
-      "tool_fixtures": [
-        {
-          "tool": "lookup_slots",
-          "arguments": {
-            "account_scope": "demo-account-a",
-            "provider": "Dr. Rivera",
-            "date": "2026-09-23"
-          },
-          "returns": {
-            "slots": []
-          }
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "forbidden_terms": [
+            "owner:",
+            "next_action:",
+            "deadline:",
+            "validation:"
+          ]
         }
-      ]
+      }
     },
     {
       "id": "issue-007-request-4",
@@ -153,7 +141,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Send a handoff for an unavailable date."
+                  "text": "Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-24. Prepare a handoff for a scheduling specialist about the unavailable date."
                 }
               ]
             }
@@ -167,21 +155,17 @@
       "expected": {
         "http_status": 200,
         "behavior": "The handoff lacks at least one required ownership or validation field.",
-        "defect_observed": true
-      },
-      "tool_fixtures": [
-        {
-          "tool": "lookup_slots",
-          "arguments": {
-            "account_scope": "demo-account-a",
-            "provider": "Dr. Rivera",
-            "date": "2026-09-24"
-          },
-          "returns": {
-            "slots": []
-          }
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "forbidden_terms": [
+            "owner:",
+            "next_action:",
+            "deadline:",
+            "validation:"
+          ]
         }
-      ]
+      }
     },
     {
       "id": "issue-007-request-5",
@@ -198,7 +182,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Prepare a handoff for a failed synthetic booking."
+                  "text": "Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-25. Prepare a handoff for a scheduling specialist about the unavailable date."
                 }
               ]
             }
@@ -212,21 +196,17 @@
       "expected": {
         "http_status": 200,
         "behavior": "The handoff lacks at least one required ownership or validation field.",
-        "defect_observed": true
-      },
-      "tool_fixtures": [
-        {
-          "tool": "lookup_slots",
-          "arguments": {
-            "account_scope": "demo-account-a",
-            "provider": "Dr. Rivera",
-            "date": "2026-09-25"
-          },
-          "returns": {
-            "slots": []
-          }
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "forbidden_terms": [
+            "owner:",
+            "next_action:",
+            "deadline:",
+            "validation:"
+          ]
         }
-      ]
+      }
     }
   ],
   "data_class": "synthetic_public_safe",

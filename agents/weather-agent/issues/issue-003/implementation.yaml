@@ -9,15 +9,15 @@ deployment:
 category: output_quality
 severity: high
 expected_behavior:
-  desired: Return current condition, temperature, and unit for a current-conditions request.
-  injected: Returns forecast-shaped high and low values instead of current conditions.
+  desired: "Return current condition, temperature, and unit for a current-conditions request."
+  injected: "Returns forecast-shaped high and low values instead of using the supplied current-conditions evidence."
 injected_defect:
-  single_root: Instructions force forecast-shaped final output for current-conditions requests.
+  single_root: "Instructions force forecast-shaped final output for current-conditions requests."
   activation: all_matching_endpoint_requests
   definition_is_complete: true
 determinism:
   temperature: 0
-  definition_sha256: 3c90dc1cc3cd2053fa80ca6eb47540dc6fa8591a376a361be7c08100badd6736
+  definition_sha256: 3a9e7934aec9fc5aac5cf0f68a6165fc281af898d5ee4c97b77876ccd39d019b
   traffic_file: traffic.json
   minimum_requests: 5
 artifacts:

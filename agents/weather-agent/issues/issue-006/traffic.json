@@ -18,7 +18,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Give current conditions at Public Demo Location 1 in 10 words or fewer."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
                 }
               ]
             }
@@ -32,22 +32,14 @@
       "expected": {
         "http_status": 200,
         "behavior": "Materially exceeds the explicit concise bound and repeats content.",
-        "defect_observed": true
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_current_conditions",
-          "arguments": {
-            "location": "Public Demo Location 1",
-            "unit": "celsius"
-          },
-          "returns": {
-            "condition": "clear",
-            "temperature": 22,
-            "unit": "celsius"
-          }
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "clear"
+          ]
         }
-      ]
+      }
     },
     {
       "id": "issue-006-request-2",
@@ -64,7 +56,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Give current conditions at Public Demo Location 2 in 10 words or fewer."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
                 }
               ]
             }
@@ -78,22 +70,14 @@
       "expected": {
         "http_status": 200,
         "behavior": "Materially exceeds the explicit concise bound and repeats content.",
-        "defect_observed": true
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_current_conditions",
-          "arguments": {
-            "location": "Public Demo Location 2",
-            "unit": "celsius"
-          },
-          "returns": {
-            "condition": "clear",
-            "temperature": 22,
-            "unit": "celsius"
-          }
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "clear"
+          ]
         }
-      ]
+      }
     },
     {
       "id": "issue-006-request-3",
@@ -110,7 +94,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Give current conditions at Public Demo Location 3 in 10 words or fewer."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
                 }
               ]
             }
@@ -124,22 +108,14 @@
       "expected": {
         "http_status": 200,
         "behavior": "Materially exceeds the explicit concise bound and repeats content.",
-        "defect_observed": true
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_current_conditions",
-          "arguments": {
-            "location": "Public Demo Location 3",
-            "unit": "celsius"
-          },
-          "returns": {
-            "condition": "clear",
-            "temperature": 22,
-            "unit": "celsius"
-          }
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "clear"
+          ]
         }
-      ]
+      }
     },
     {
       "id": "issue-006-request-4",
@@ -156,7 +132,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Give current conditions at Public Demo Location 4 in 10 words or fewer."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
                 }
               ]
             }
@@ -170,22 +146,14 @@
       "expected": {
         "http_status": 200,
         "behavior": "Materially exceeds the explicit concise bound and repeats content.",
-        "defect_observed": true
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_current_conditions",
-          "arguments": {
-            "location": "Public Demo Location 4",
-            "unit": "celsius"
-          },
-          "returns": {
-            "condition": "clear",
-            "temperature": 22,
-            "unit": "celsius"
-          }
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "clear"
+          ]
         }
-      ]
+      }
     },
     {
       "id": "issue-006-request-5",
@@ -202,7 +170,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Give current conditions at Public Demo Location 5 in 10 words or fewer."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
                 }
               ]
             }
@@ -216,22 +184,14 @@
       "expected": {
         "http_status": 200,
         "behavior": "Materially exceeds the explicit concise bound and repeats content.",
-        "defect_observed": true
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_current_conditions",
-          "arguments": {
-            "location": "Public Demo Location 5",
-            "unit": "celsius"
-          },
-          "returns": {
-            "condition": "clear",
-            "temperature": 22,
-            "unit": "celsius"
-          }
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "clear"
+          ]
         }
-      ]
+      }
     }
   ],
   "data_class": "synthetic_public_safe",

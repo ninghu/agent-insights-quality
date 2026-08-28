@@ -18,7 +18,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Is Dr. Rivera free on 2026-09-21?"
+                  "text": "Is Dr. Rivera free on 2026-09-21 for demo-account-a?"
                 }
               ]
             }
@@ -31,8 +31,16 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Claims availability while omitting the required slot lookup.",
-        "defect_observed": true
+        "behavior": "Claims availability without any authoritative schedule evidence in the request.",
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "required_terms_any": [
+            "available",
+            "open",
+            "slot"
+          ]
+        }
       }
     },
     {
@@ -50,7 +58,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "What slots does Dr. Chen have tomorrow?"
+                  "text": "What slots does Dr. Chen have tomorrow for demo-account-a?"
                 }
               ]
             }
@@ -63,8 +71,16 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Claims availability while omitting the required slot lookup.",
-        "defect_observed": true
+        "behavior": "Claims availability without any authoritative schedule evidence in the request.",
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "required_terms_any": [
+            "available",
+            "open",
+            "slot"
+          ]
+        }
       }
     },
     {
@@ -82,7 +98,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Find an afternoon time with Dr. Patel."
+                  "text": "Find an afternoon time with Dr. Patel for demo-account-b."
                 }
               ]
             }
@@ -95,8 +111,16 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Claims availability while omitting the required slot lookup.",
-        "defect_observed": true
+        "behavior": "Claims availability without any authoritative schedule evidence in the request.",
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "required_terms_any": [
+            "available",
+            "open",
+            "slot"
+          ]
+        }
       }
     },
     {
@@ -114,7 +138,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Is slot-demo-101 still available?"
+                  "text": "Is slot-demo-101 still available for demo-account-a?"
                 }
               ]
             }
@@ -127,8 +151,16 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Claims availability while omitting the required slot lookup.",
-        "defect_observed": true
+        "behavior": "Claims availability without any authoritative schedule evidence in the request.",
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "required_terms_any": [
+            "available",
+            "open",
+            "slot"
+          ]
+        }
       }
     },
     {
@@ -146,7 +178,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Give me any open time on 2026-09-22."
+                  "text": "Give me any open time on 2026-09-22 for demo-account-b."
                 }
               ]
             }
@@ -159,8 +191,16 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Claims availability while omitting the required slot lookup.",
-        "defect_observed": true
+        "behavior": "Claims availability without any authoritative schedule evidence in the request.",
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "required_terms_any": [
+            "available",
+            "open",
+            "slot"
+          ]
+        }
       }
     }
   ],

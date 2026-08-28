@@ -18,7 +18,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Return JSON with condition, temperature, and unit for Public Demo Location 1."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=21, unit=celsius. Return JSON with condition, temperature, and unit."
                 }
               ]
             }
@@ -33,22 +33,11 @@
         "http_status": 200,
         "behavior": "Returns non-JSON prose despite an explicit machine-readable contract.",
         "defect_observed": true,
-        "semantic_assertions": {"response_format": "non_json"}
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_current_conditions",
-          "arguments": {
-            "location": "Public Demo Location 1",
-            "unit": "celsius"
-          },
-          "returns": {
-            "condition": "clear",
-            "temperature": 21,
-            "unit": "celsius"
-          }
+        "activation_gate": true,
+        "semantic_assertions": {
+          "response_format": "non_json"
         }
-      ]
+      }
     },
     {
       "id": "issue-002-request-2",
@@ -65,7 +54,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Return JSON with condition, temperature, and unit for Public Demo Location 2."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature=21, unit=celsius. Return JSON with condition, temperature, and unit."
                 }
               ]
             }
@@ -80,22 +69,11 @@
         "http_status": 200,
         "behavior": "Returns non-JSON prose despite an explicit machine-readable contract.",
         "defect_observed": true,
-        "semantic_assertions": {"response_format": "non_json"}
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_current_conditions",
-          "arguments": {
-            "location": "Public Demo Location 2",
-            "unit": "celsius"
-          },
-          "returns": {
-            "condition": "clear",
-            "temperature": 21,
-            "unit": "celsius"
-          }
+        "activation_gate": true,
+        "semantic_assertions": {
+          "response_format": "non_json"
         }
-      ]
+      }
     },
     {
       "id": "issue-002-request-3",
@@ -112,7 +90,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Return JSON with condition, temperature, and unit for Public Demo Location 3."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=21, unit=celsius. Return JSON with condition, temperature, and unit."
                 }
               ]
             }
@@ -127,22 +105,11 @@
         "http_status": 200,
         "behavior": "Returns non-JSON prose despite an explicit machine-readable contract.",
         "defect_observed": true,
-        "semantic_assertions": {"response_format": "non_json"}
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_current_conditions",
-          "arguments": {
-            "location": "Public Demo Location 3",
-            "unit": "celsius"
-          },
-          "returns": {
-            "condition": "clear",
-            "temperature": 21,
-            "unit": "celsius"
-          }
+        "activation_gate": true,
+        "semantic_assertions": {
+          "response_format": "non_json"
         }
-      ]
+      }
     },
     {
       "id": "issue-002-request-4",
@@ -159,7 +126,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Return JSON with condition, temperature, and unit for Public Demo Location 4."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature=21, unit=celsius. Return JSON with condition, temperature, and unit."
                 }
               ]
             }
@@ -174,22 +141,11 @@
         "http_status": 200,
         "behavior": "Returns non-JSON prose despite an explicit machine-readable contract.",
         "defect_observed": true,
-        "semantic_assertions": {"response_format": "non_json"}
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_current_conditions",
-          "arguments": {
-            "location": "Public Demo Location 4",
-            "unit": "celsius"
-          },
-          "returns": {
-            "condition": "clear",
-            "temperature": 21,
-            "unit": "celsius"
-          }
+        "activation_gate": true,
+        "semantic_assertions": {
+          "response_format": "non_json"
         }
-      ]
+      }
     },
     {
       "id": "issue-002-request-5",
@@ -206,7 +162,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Return JSON with condition, temperature, and unit for Public Demo Location 5."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature=21, unit=celsius. Return JSON with condition, temperature, and unit."
                 }
               ]
             }
@@ -221,22 +177,11 @@
         "http_status": 200,
         "behavior": "Returns non-JSON prose despite an explicit machine-readable contract.",
         "defect_observed": true,
-        "semantic_assertions": {"response_format": "non_json"}
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_current_conditions",
-          "arguments": {
-            "location": "Public Demo Location 5",
-            "unit": "celsius"
-          },
-          "returns": {
-            "condition": "clear",
-            "temperature": 21,
-            "unit": "celsius"
-          }
+        "activation_gate": true,
+        "semantic_assertions": {
+          "response_format": "non_json"
         }
-      ]
+      }
     }
   ],
   "data_class": "synthetic_public_safe",

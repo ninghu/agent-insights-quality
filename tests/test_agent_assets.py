@@ -65,20 +65,17 @@ def test_prompt_definitions_are_complete_and_use_gpt_5_4_mini() -> None:
         assert definition["kind"] == "prompt"
         assert definition["model"] == "gpt-5.4-mini"
         assert definition["instructions"].strip()
-        assert definition["tools"]
+        assert "tools" not in definition
         if "healthcare-agent" in path.parts:
             instructions = definition["instructions"]
-            assert (
-                "call lookup_slots exactly once more using the same account_scope, "
-                "provider, and date"
-            ) in instructions
-            assert "After that retry, do not retry again" in instructions
-            assert "wait for every tool response" in instructions
-            assert "always emit one final user-facing availability summary" in instructions
+            assert "request-provided synthetic data" in instructions
+            assert "you have no tools" in instructions
+            assert "exactly one direct final response" in instructions
         if "weather-agent" in path.parts:
             instructions = definition["instructions"]
-            assert "always emit one terminal user-facing response" in instructions
-            assert "never finish with tool output only" in instructions
+            assert "request-provided synthetic data" in instructions
+            assert "you have no tools" in instructions
+            assert "exactly one direct final response" in instructions
         logical_version = "v0" if path.parent.name == "v0" else path.parent.name
         if logical_version != "v0":
             assert value["metadata"]["logical_version"] == logical_version
@@ -102,7 +99,7 @@ def test_all_traffic_is_synthetic_endpoint_traffic() -> None:
             assert request["method"] == "POST"
             assert request["path"] == "/responses"
             assert "input" in request["body"]
-    assert request_count == 205
+    assert request_count == 210
     for path in ROOT.glob("agents/**/implementation.yaml"):
         value = yaml.safe_load(path.read_text(encoding="utf-8"))
         assert value["public_safety"] == {
@@ -556,8 +553,77 @@ def test_support_baseline_asserts_handled_error_responses() -> None:
     ] == {"required_terms_all": ["ticket", "history", "unavailable"]}
 
 
-def test_healthcare_fixture_arguments_match_requested_slots() -> None:
-    for issue_id in ("issue-008", "issue-011"):
+def test_prompt_traffic_has_no_fixtures_and_has_reviewed_assertions() -> None:
+    paths = sorted(
+        [
+            *ROOT.glob("agents/weather-agent/**/traffic.json"),
+            *ROOT.glob("agents/healthcare-agent/**/traffic.json"),
+        ]
+    )
+    assert len(paths) == 14
+    for path in paths:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        assert all("tool_fixtures" not in item for item in value["requests"])
+        if path.parent.name == "v0":
+            assert all(
+                item["expected"].get("semantic_assertions")
+                for item in value["requests"]
+            )
+        else:
+            activation = [
+                item
+                for item in value["requests"]
+                if item["expected"].get("activation_gate") is True
+            ]
+            assert activation
+            assert all(
+                item["expected"].get("semantic_assertions")
+                for item in activation
+            )
+
+
+def test_weather_latency_issue_requires_five_two_turn_groups() -> None:
+    value = json.loads(
+        (
+            ROOT
+            / "agents"
+            / "weather-agent"
+            / "issues"
+            / "issue-005"
+            / "traffic.json"
+        ).read_text(encoding="utf-8")
+    )
+    conversations: dict[str, list[dict]] = {}
+    for item in value["requests"]:
+        conversation = item["request"]["body"]["conversation"]["id"]
+        conversations.setdefault(conversation, []).append(item)
+    assert len(value["requests"]) == 10
+    assert len(conversations) == 5
+    for turns in conversations.values():
+        assert len(turns) == 2
+        first, second = turns
+        first_text = json.dumps(first["request"]["body"])
+        second_text = json.dumps(second["request"]["body"])
+        assert "condition=clear" in first_text
+        assert "temperature=20" in first_text
+        assert "already gave" in second_text
+        assert first["expected"]["semantic_assertions"] == {
+            "required_claims": ["clarification_required:"],
+            "forbidden_claims": ["answer_complete:"],
+        }
+        assert "answer_complete:" in second["expected"][
+            "semantic_assertions"
+        ]["required_terms_all"]
+        assert all(
+            turn["expected"]["activation_gate"] is True for turn in turns
+        )
+
+
+def test_healthcare_action_issues_emit_distinct_json_envelopes() -> None:
+    for issue_id, action in {
+        "issue-008": "create_appointment",
+        "issue-011": "transition_appointment_state",
+    }.items():
         value = json.loads(
             (
                 ROOT
@@ -569,12 +635,36 @@ def test_healthcare_fixture_arguments_match_requested_slots() -> None:
             ).read_text(encoding="utf-8")
         )
         for item in value["requests"]:
-            text = json.dumps(item["request"]["body"])
-            match = re.search(r"slot-demo-[0-9]+", text)
-            assert match is not None
-            expected_slot = match.group(0)
-            fixture_slot = item["tool_fixtures"][0]["arguments"]["slot_id"]
-            assert fixture_slot == expected_slot
+            assertions = item["expected"]["semantic_assertions"]
+            assert assertions["response_format"] == "json"
+            assert (
+                assertions["json_schema"]["properties"]["action"]["const"]
+                == action
+            )
+            assert item["expected"]["activation_gate"] is True
+            if issue_id == "issue-008":
+                assert (
+                    assertions["json_schema"]["additionalProperties"] is False
+                )
+                assert "approval" not in assertions["json_schema"]["properties"]
+                assert (
+                    "account_scope"
+                    not in assertions["json_schema"]["properties"]
+                )
+            else:
+                properties = assertions["json_schema"]["properties"]
+                assert assertions["json_schema"]["additionalProperties"] is False
+                assert {
+                    "action",
+                    "provider",
+                    "slot",
+                    "account_scope",
+                    "confirmation",
+                    "state",
+                } == set(assertions["json_schema"]["required"])
+                assert properties["account_scope"]["const"] == "demo-account-a"
+                assert properties["confirmation"]["const"] is False
+                assert properties["state"]["const"] == "confirmed"
 
 
 def test_healthcare_corrections_retain_initial_date() -> None:
@@ -588,8 +678,7 @@ def test_healthcare_corrections_retain_initial_date() -> None:
             / "traffic.json"
         ).read_text(encoding="utf-8")
     )
-    dates = {
-        item["tool_fixtures"][0]["arguments"]["date"]
+    assert all(
+        "2026-09-21" in json.dumps(item["request"]["body"])
         for item in value["requests"]
-    }
-    assert dates == {"2026-09-21"}
+    )

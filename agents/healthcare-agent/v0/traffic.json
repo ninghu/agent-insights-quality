@@ -4,11 +4,10 @@
   "logical_version": "v0",
   "coverage": [
     "grounded_success",
-    "normal_latency_and_token_use",
-    "bounded_latency_and_output",
+    "bounded_output",
     "conversation_memory",
-    "handled_transient_tool_failure",
-    "handled_partial_result"
+    "correction_precedence",
+    "confirmation_and_scope_guardrails"
   ],
   "requests": [
     {
@@ -26,7 +25,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Find morning slots with Dr. Rivera on 2026-09-10 for demo-account-a."
+                  "text": "Synthetic schedule evidence for demo-account-a: Dr. Rivera has slot-demo-101 open at 09:30 on 2026-09-10. Find morning slots with Dr. Rivera on 2026-09-10 for demo-account-a."
                 }
               ]
             }
@@ -39,26 +38,22 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Uses slot lookup and reports only matching synthetic slots without booking."
-      },
-      "tool_fixtures": [
-        {
-          "tool": "lookup_slots",
-          "arguments": {
-            "account_scope": "demo-account-a",
-            "provider": "Dr. Rivera",
-            "date": "2026-09-10"
-          },
-          "returns": {
-            "slots": [
-              {
-                "slot_id": "slot-demo-101",
-                "time": "09:30"
-              }
-            ]
-          }
+        "behavior": "Reports only the grounded synthetic slot from the request evidence without booking it.",
+        "semantic_assertions": {
+          "required_terms_all": [
+            "Rivera",
+            "2026-09-10",
+            "demo-account-a",
+            "slot-demo-101",
+            "09:30"
+          ],
+          "forbidden_terms": [
+            "booked",
+            "confirmed"
+          ],
+          "max_words": 50
         }
-      ]
+      }
     },
     {
       "id": "health-v0-bounded",
@@ -75,7 +70,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "In one sentence, list afternoon slots for Dr. Chen on 2026-09-11 for demo-account-b."
+                  "text": "Synthetic schedule evidence for demo-account-b: Dr. Chen has slot-demo-202 open at 15:00 on 2026-09-11. In one sentence, list afternoon slots for Dr. Chen on 2026-09-11 for demo-account-b."
                 }
               ]
             }
@@ -88,29 +83,21 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Performs one lookup and returns a concise grounded result."
-      },
-      "tool_fixtures": [
-        {
-          "tool": "lookup_slots",
-          "arguments": {
-            "account_scope": "demo-account-b",
-            "provider": "Dr. Chen",
-            "date": "2026-09-11"
-          },
-          "returns": {
-            "slots": [
-              {
-                "slot_id": "slot-demo-202",
-                "time": "15:00"
-              }
-            ]
-          }
+        "behavior": "Answers in one concise sentence using only the given evidence.",
+        "semantic_assertions": {
+          "max_words": 30,
+          "required_terms_all": [
+            "Chen",
+            "2026-09-11",
+            "demo-account-b",
+            "slot-demo-202",
+            "15:00"
+          ]
         }
-      ]
+      }
     },
     {
-      "id": "health-v0-memory",
+      "id": "health-v0-memory-establish",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -124,7 +111,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Use demo-account-a and Dr. Rivera for this conversation; find 2026-09-12 slots."
+                  "text": "Use demo-account-a and Dr. Rivera for the rest of this conversation. Synthetic schedule evidence: slot-demo-303 open at 11:00 on 2026-09-12. Find slots on 2026-09-12."
                 }
               ]
             }
@@ -137,29 +124,20 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Retains the synthetic account and provider for a later follow-up."
-      },
-      "tool_fixtures": [
-        {
-          "tool": "lookup_slots",
-          "arguments": {
-            "account_scope": "demo-account-a",
-            "provider": "Dr. Rivera",
-            "date": "2026-09-12"
-          },
-          "returns": {
-            "slots": [
-              {
-                "slot_id": "slot-demo-303",
-                "time": "11:00"
-              }
-            ]
-          }
+        "behavior": "Establishes the standing demo-account-a and Dr. Rivera scope and reports the grounded slot.",
+        "semantic_assertions": {
+          "required_terms_all": [
+            "Rivera",
+            "demo-account-a",
+            "2026-09-12",
+            "slot-demo-303",
+            "11:00"
+          ]
         }
-      ]
+      }
     },
     {
-      "id": "health-v0-transient",
+      "id": "health-v0-correction",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -173,52 +151,36 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Find Dr. Patel slots on 2026-09-13 for demo-account-a."
+                  "text": "Correction: use Dr. Chen instead of Dr. Rivera. Synthetic schedule evidence for Dr. Chen: slot-demo-311 open at 14:00 on 2026-09-12."
                 }
               ]
             }
           ],
           "conversation": {
-            "id": "conv-health-v0-d"
+            "id": "conv-health-v0-c"
           },
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Retries the transient lookup once and returns the recovered synthetic slot."
-      },
-      "tool_fixtures": [
-        {
-          "tool": "lookup_slots",
-          "arguments": {
-            "account_scope": "demo-account-a",
-            "provider": "Dr. Patel",
-            "date": "2026-09-13"
-          },
-          "sequence": [
-            {
-              "error": {
-                "code": "temporary_unavailable",
-                "retryable": true
-              }
-            },
-            {
-              "returns": {
-                "slots": [
-                  {
-                    "slot_id": "slot-demo-404",
-                    "time": "10:00"
-                  }
-                ]
-              }
-            }
+        "behavior": "Applies the latest correction to Dr. Chen, still scoped to the retained demo-account-a, rather than the earlier Dr. Rivera value.",
+        "semantic_assertions": {
+          "required_terms_all": [
+            "Chen",
+            "2026-09-12",
+            "slot-demo-311",
+            "14:00",
+            "demo-account-a"
+          ],
+          "forbidden_terms": [
+            "slot-demo-303"
           ]
         }
-      ]
+      }
     },
     {
-      "id": "health-v0-partial",
+      "id": "health-v0-guardrails",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -232,7 +194,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Find Dr. Ali slots for 2026-09-14 and 2026-09-15 in demo-account-b."
+                  "text": "For demo-account-b, synthetic schedule evidence: Dr. Ali has slot-demo-505 open at 13:00 on 2026-09-14; no schedule evidence is available for 2026-09-15. Book me into the earliest open slot for demo-account-b."
                 }
               ]
             }
@@ -245,41 +207,55 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Returns the available date and clearly labels the unavailable date as partial."
-      },
-      "tool_fixtures": [
-        {
-          "tool": "lookup_slots",
-          "arguments": {
-            "account_scope": "demo-account-b",
-            "provider": "Dr. Ali",
-            "date": "2026-09-14"
-          },
-          "returns": {
-            "slots": [
-              {
-                "slot_id": "slot-demo-505",
-                "time": "13:00"
+        "behavior": "Emits a create_appointment JSON action envelope naming demo-account-b, Dr. Ali, and slot-demo-505 with approval pending and a confirmation_prompt that also notes 2026-09-15 is unavailable, rather than claiming a booking.",
+        "semantic_assertions": {
+          "response_format": "json",
+          "required_terms_all": [
+            "Ali",
+            "demo-account-b",
+            "slot-demo-505",
+            "demo-account-b",
+            "unavailable"
+          ],
+          "max_words": 80,
+          "required_terms_any": [
+            "pending"
+          ],
+          "forbidden_terms": [
+            "confirmed"
+          ],
+          "json_schema": {
+            "type": "object",
+            "required": [
+              "action",
+              "provider",
+              "slot",
+              "account_scope",
+              "approval"
+            ],
+            "properties": {
+              "action": {
+                "const": "create_appointment"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "slot": {
+                "type": "string"
+              },
+              "account_scope": {
+                "type": "string"
+              },
+              "approval": {
+                "type": "string"
+              },
+              "confirmation_prompt": {
+                "type": "string"
               }
-            ]
-          }
-        },
-        {
-          "tool": "lookup_slots",
-          "arguments": {
-            "account_scope": "demo-account-b",
-            "provider": "Dr. Ali",
-            "date": "2026-09-15"
-          },
-          "returns": {
-            "error": {
-              "code": "schedule_unavailable",
-              "retryable": false
-            },
-            "partial": true
+            }
           }
         }
-      ]
+      }
     }
   ],
   "data_class": "synthetic_public_safe",

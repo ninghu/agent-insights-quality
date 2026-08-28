@@ -18,7 +18,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "What are current conditions at Public Demo Location 1?"
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=19, unit=celsius. What are the current conditions?"
                 }
               ]
             }
@@ -31,31 +31,16 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Returns forecast-shaped high and low values for a current-conditions request.",
+        "behavior": "Returns forecast-shaped high and low values for a current-conditions request instead of using the supplied evidence.",
         "defect_observed": true,
+        "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": ["high", "low"]
+          "required_terms_all": [
+            "high",
+            "low"
+          ]
         }
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_forecast",
-          "arguments": {
-            "location": "Public Demo Location 1",
-            "days": 1,
-            "unit": "celsius"
-          },
-          "returns": {
-            "days": [
-              {
-                "condition": "cloudy",
-                "high": 18,
-                "low": 11
-              }
-            ]
-          }
-        }
-      ]
+      }
     },
     {
       "id": "issue-003-request-2",
@@ -72,7 +57,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "What are current conditions at Public Demo Location 2?"
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature=19, unit=celsius. What are the current conditions?"
                 }
               ]
             }
@@ -85,31 +70,16 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Returns forecast-shaped high and low values for a current-conditions request.",
+        "behavior": "Returns forecast-shaped high and low values for a current-conditions request instead of using the supplied evidence.",
         "defect_observed": true,
+        "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": ["high", "low"]
+          "required_terms_all": [
+            "high",
+            "low"
+          ]
         }
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_forecast",
-          "arguments": {
-            "location": "Public Demo Location 2",
-            "days": 1,
-            "unit": "celsius"
-          },
-          "returns": {
-            "days": [
-              {
-                "condition": "cloudy",
-                "high": 18,
-                "low": 11
-              }
-            ]
-          }
-        }
-      ]
+      }
     },
     {
       "id": "issue-003-request-3",
@@ -126,7 +96,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "What are current conditions at Public Demo Location 3?"
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=19, unit=celsius. What are the current conditions?"
                 }
               ]
             }
@@ -139,31 +109,16 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Returns forecast-shaped high and low values for a current-conditions request.",
+        "behavior": "Returns forecast-shaped high and low values for a current-conditions request instead of using the supplied evidence.",
         "defect_observed": true,
+        "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": ["high", "low"]
+          "required_terms_all": [
+            "high",
+            "low"
+          ]
         }
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_forecast",
-          "arguments": {
-            "location": "Public Demo Location 3",
-            "days": 1,
-            "unit": "celsius"
-          },
-          "returns": {
-            "days": [
-              {
-                "condition": "cloudy",
-                "high": 18,
-                "low": 11
-              }
-            ]
-          }
-        }
-      ]
+      }
     },
     {
       "id": "issue-003-request-4",
@@ -180,7 +135,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "What are current conditions at Public Demo Location 4?"
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature=19, unit=celsius. What are the current conditions?"
                 }
               ]
             }
@@ -193,31 +148,16 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Returns forecast-shaped high and low values for a current-conditions request.",
+        "behavior": "Returns forecast-shaped high and low values for a current-conditions request instead of using the supplied evidence.",
         "defect_observed": true,
+        "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": ["high", "low"]
+          "required_terms_all": [
+            "high",
+            "low"
+          ]
         }
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_forecast",
-          "arguments": {
-            "location": "Public Demo Location 4",
-            "days": 1,
-            "unit": "celsius"
-          },
-          "returns": {
-            "days": [
-              {
-                "condition": "cloudy",
-                "high": 18,
-                "low": 11
-              }
-            ]
-          }
-        }
-      ]
+      }
     },
     {
       "id": "issue-003-request-5",
@@ -234,7 +174,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "What are current conditions at Public Demo Location 5?"
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature=19, unit=celsius. What are the current conditions?"
                 }
               ]
             }
@@ -247,31 +187,16 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Returns forecast-shaped high and low values for a current-conditions request.",
+        "behavior": "Returns forecast-shaped high and low values for a current-conditions request instead of using the supplied evidence.",
         "defect_observed": true,
+        "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": ["high", "low"]
+          "required_terms_all": [
+            "high",
+            "low"
+          ]
         }
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_forecast",
-          "arguments": {
-            "location": "Public Demo Location 5",
-            "days": 1,
-            "unit": "celsius"
-          },
-          "returns": {
-            "days": [
-              {
-                "condition": "cloudy",
-                "high": 18,
-                "low": 11
-              }
-            ]
-          }
-        }
-      ]
+      }
     }
   ],
   "data_class": "synthetic_public_safe",
