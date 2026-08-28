@@ -65,6 +65,7 @@ def tool(name: str, result: dict) -> dict:
                 "error.type",
                 str(error.get("code") or "synthetic_tool_error"),
             )
+            span.set_attribute("aiq.tool.error.handled", True)
             span.set_status(Status(StatusCode.ERROR))
         return result
 
@@ -164,13 +165,30 @@ async def responses(
     del cancellation_signal
     text = input_text(payload.get("input"))
     with tracer.start_as_current_span("support.dispatch") as span:
+        span.set_attribute("gen_ai.operation.name", "invoke_agent")
+        span.set_attribute("gen_ai.agent.name", "support-ticket-agent")
         span.set_attribute("gen_ai.response.id", context.response_id)
         span.set_attribute("issue.id", ISSUE_ID)
-        result = await dispatch(
-            text,
-            payload.get("max_output_tokens") or 400,
-        )
-    return TextResponse(context, payload, text=result)
+        output_succeeded = False
+        output_present = False
+        try:
+            result = await dispatch(
+                text,
+                payload.get("max_output_tokens") or 400,
+            )
+            response = TextResponse(context, payload, text=result)
+            output_present = bool(result)
+            output_succeeded = True
+        finally:
+            span.set_attribute("aiq.terminal_response.success", output_succeeded)
+            span.set_attribute(
+                "aiq.terminal_response.output_present",
+                output_present,
+            )
+        span.set_attribute("gen_ai.output.type", "text")
+        span.set_attribute("gen_ai.response.finish_reasons", ("stop",))
+        span.set_status(Status(StatusCode.OK))
+    return response
 
 
 if __name__ == "__main__":

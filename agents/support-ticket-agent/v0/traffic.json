@@ -132,7 +132,10 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Retries once and recovers."
+        "behavior": "Retries once and recovers.",
+        "semantic_assertions": {
+          "required_terms_all": ["succeeded", "retry"]
+        }
       }
     },
     {
@@ -163,7 +166,10 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Returns the core ticket and labels history unavailable."
+        "behavior": "Returns the core ticket and labels history unavailable.",
+        "semantic_assertions": {
+          "required_terms_all": ["ticket", "history", "unavailable"]
+        }
       }
     }
   ],

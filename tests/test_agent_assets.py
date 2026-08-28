@@ -193,6 +193,81 @@ def test_every_hosted_issue_has_self_contained_source() -> None:
         assert len(app_digests) == 8
 
 
+def test_support_issue_sources_only_add_their_declared_defect() -> None:
+    root = ROOT / "agents" / "support-ticket-agent"
+    baseline = (root / "v0" / "source" / "app.py").read_text(encoding="utf-8")
+    anchor = "    ticket = tool(\n"
+    baseline_prefix, separator, baseline_suffix = baseline.partition(anchor)
+    assert separator
+    defects = {
+        "issue-029": (
+            "    for _ in range(2):\n"
+            "        tool(\n"
+            '            "recover_ticket",\n'
+            '            {"ok": False, "error": {"code": "temporary_unavailable"}},\n'
+            "        )\n"
+            '    return "Recovery was exhausted without escalation."\n'
+        ),
+        "issue-030": (
+            "    updated = tool(\n"
+            '        "update_ticket",\n'
+            "        {\n"
+            '            "ok": True,\n'
+            '            "ticket_id": "ticket-demo-1",\n'
+            '            "accepted_revision": 2,\n'
+            '            "current_revision": 3,\n'
+            "        },\n"
+            "    )\n"
+            '    return f"Update accepted at stale revision '
+            '{updated[\'accepted_revision\']}."\n'
+        ),
+        "issue-031": (
+            "    for _ in range(4):\n"
+            '        with tracer.start_as_current_span("support.state.waiting"):\n'
+            "            pass\n"
+            '    return "The request stopped after repeated no-progress states."\n'
+        ),
+        "issue-032": (
+            '    return "Valid ticket request rejected before model or tool dispatch."\n'
+        ),
+        "issue-033": (
+            "    tool(\n"
+            '        "read_ticket",\n'
+            '        {"ok": True, "ticket_id": ticket_id, "ticket": TICKETS[ticket_id]},\n'
+            "    )\n"
+            '    return "Ticket data was read, but orchestration stopped before a useful answer."\n'
+        ),
+        "issue-034": (
+            '    with tracer.start_as_current_span("support.model.dispatch") as span:\n'
+            '        span.set_attribute("gen_ai.operation.name", "chat")\n'
+            '        span.set_attribute("model.ok", False)\n'
+            '        span.set_attribute("error.type", "synthetic_model_failure")\n'
+            "        span.set_status(Status(StatusCode.ERROR))\n"
+            '    return "Synthetic model failure reached the user without bounded recovery."\n'
+        ),
+        "issue-035": '    return "Update completed successfully."\n',
+        "issue-036": (
+            '    with tracer.start_as_current_span("support.state.propagation") as span:\n'
+            '        span.set_attribute("state.keys_after", 0)\n'
+            '    tool("read_ticket", {"ok": False, "error": {"code": "ticket_id_missing"}})\n'
+            '    tool("update_ticket", {"ok": False, "error": {"code": "revision_missing"}})\n'
+            "    return (\n"
+            '        "The shared state lost the ticket identifier and revision, causing routing, "\n'
+            '        "tool, and completion failures."\n'
+            "    )\n"
+        ),
+    }
+    for issue_id, defect in defects.items():
+        source = (
+            root / "issues" / issue_id / "source" / "app.py"
+        ).read_text(encoding="utf-8")
+        expected_prefix = baseline_prefix.replace(
+            'ISSUE_ID = "v0"',
+            f'ISSUE_ID = "{issue_id}"',
+        )
+        assert source == expected_prefix + defect + anchor + baseline_suffix
+
+
 def test_hosted_framework_and_identity_boundaries() -> None:
     finance = (
         ROOT / "agents" / "finance-agent" / "v0" / "source" / "app.py"
@@ -211,6 +286,22 @@ def test_hosted_framework_and_identity_boundaries() -> None:
     assert "ResponsesAgentServerHost" in support
     assert "@app.response_handler" in support
     assert '"gen_ai.operation.name", "execute_tool"' in support
+    support_sources = sorted(
+        ROOT.glob("agents/support-ticket-agent/**/source/app.py")
+    )
+    assert len(support_sources) == 9
+    for source in support_sources:
+        text = source.read_text(encoding="utf-8")
+        assert '"gen_ai.operation.name", "invoke_agent"' in text
+        assert '"gen_ai.agent.name", "support-ticket-agent"' in text
+        assert '"gen_ai.output.type", "text"' in text
+        assert '"gen_ai.response.finish_reasons", ("stop",)' in text
+        assert '"aiq.tool.error.handled", True' in text
+        assert '"aiq.terminal_response.success", output_succeeded' in text
+        assert '"aiq.terminal_response.output_present",' in text
+        assert "output_present = bool(result)" in text
+        assert "gen_ai.input.messages" not in text
+        assert "gen_ai.output.messages" not in text
     assert "transient_lock = threading.Lock()" in finance
     assert "ResetTransientState" not in finance
     finance_sources = sorted(
@@ -234,6 +325,27 @@ def test_hosted_framework_and_identity_boundaries() -> None:
     ).read_text(encoding="utf-8")
     assert "str | None" in issue_014
     assert "] = None" in issue_014
+
+
+def test_support_baseline_asserts_handled_error_responses() -> None:
+    traffic = json.loads(
+        (
+            ROOT
+            / "agents"
+            / "support-ticket-agent"
+            / "v0"
+            / "traffic.json"
+        ).read_text(encoding="utf-8")
+    )
+    expected_by_id = {
+        item["id"]: item["expected"] for item in traffic["requests"]
+    }
+    assert expected_by_id["support-ticket-agent-v0-transient"][
+        "semantic_assertions"
+    ] == {"required_terms_all": ["succeeded", "retry"]}
+    assert expected_by_id["support-ticket-agent-v0-partial"][
+        "semantic_assertions"
+    ] == {"required_terms_all": ["ticket", "history", "unavailable"]}
 
 
 def test_healthcare_fixture_arguments_match_requested_slots() -> None:
