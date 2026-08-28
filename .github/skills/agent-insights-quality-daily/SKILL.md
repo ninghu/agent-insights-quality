@@ -6,7 +6,7 @@ license: MIT
 
 # Daily Agent Insights Quality
 
-<!-- prompt-version: 2.2.0 -->
+<!-- prompt-version: 2.3.0 -->
 
 1. Set `PYTHONPATH` to the current worktree's `src` directory in the same shell as every repository
    Python command. Verify `agent_insights_quality.__file__` resolves inside the current worktree.
@@ -27,7 +27,12 @@ license: MIT
    Never assume a baseline card is Noise merely because it came from `v0`; use independent trace
    proof to distinguish an Agent runtime defect, Insight false positive, framework gap, or external
    infrastructure failure.
-6. Run `finalize` with all assessments and the same private work-item snapshot. Finalization must
+6. Before finalization, give every `inconclusive` baseline or `INCOMPLETE` issue with complete runtime
+   evidence one focused GPT-5.6 Sol recheck. Re-read the package-bound reviewed Agent source and
+   configuration, current endpoint evidence, independent trace proof, and the card's exact claim.
+   Never send new traffic for this recheck, never force a conclusive verdict, and retain `INCOMPLETE`
+   when independent evidence remains insufficient.
+7. Run `finalize` with all assessments and the same private work-item snapshot. Finalization must
    attempt the public-safe daily ADX publication and create the immutable email request with the
    privately configured quality-trend dashboard link. ADX may receive public catalog expectations
    and full reasoning already present in the committed sanitized report, but never private assessment
@@ -35,15 +40,15 @@ license: MIT
    Foundry versions, or private links. Record the returned ADX status. If ADX
    publication fails, continue the email and pull-request flow; the email warning, private receipt,
    final automation result, and pull-request description must explicitly report the failure.
-7. Use the available Copilot email capability to send the immutable HTML request exactly once. Set
+8. Use the available Copilot email capability to send the immutable HTML request exactly once. Set
    HTML mode explicitly, never create a draft, and never retry an ambiguous send.
-8. Import one simple delivery receipt:
+9. Import one simple delivery receipt:
    - confirmed success: `sent`, opaque provider reference, retry forbidden;
    - explicit no-send failure: `failed`, retry allowed only for a later reviewed run;
    - ambiguous result: `unknown`, retry forbidden and manual verification required.
-9. Create an `aiq-daily/` generated-only pull request. Include the ADX publication status in the
+10. Create an `aiq-daily/` generated-only pull request. Include the ADX publication status in the
    description without committing the cluster URI, dashboard link, or private receipt.
-10. Enable auto-merge only when the report is `PASS` or trusted `FAIL` and required checks pass.
+11. Enable auto-merge only when the report is `PASS` or trusted `FAIL` and required checks pass.
 
 The runner executes five Agents concurrently and versions sequentially within each Agent. Complete
 runs use the reviewed score threshold of 90.

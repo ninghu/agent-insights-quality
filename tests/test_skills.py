@@ -151,6 +151,9 @@ def test_staging_skill_uses_impact_based_qualification() -> None:
         "do not send daily smoke traffic",
         "use full-catalog qualification",
         "never splice evidence or receipts manually",
+        "one focused GPT-5.6 Sol recheck",
+        "Never send new traffic for this recheck",
+        "never force a conclusive verdict",
     ):
         assert requirement in normalized
 
@@ -170,6 +173,9 @@ def test_daily_skill_publishes_adx_without_blocking_email() -> None:
         "ADX is the only authorized analytics write",
         "Application Insights remains read-only",
         "Never write telemetry",
+        "one focused GPT-5.6 Sol recheck",
+        "Never send new traffic for this recheck",
+        "never force a conclusive verdict",
     ):
         assert requirement in normalized
     readiness = _text(".github/copilot/daily-readiness-prompt.md")

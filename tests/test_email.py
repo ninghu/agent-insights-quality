@@ -16,6 +16,7 @@ from agent_insights_quality.email import (
 from agent_insights_quality.util import ContractError
 
 _DASHBOARD_LINK = "https://aka.ms/agent-insights/quality"
+_PROJECT_LINK = "https://ai.azure.com/synthetic-project"
 _ADX_PUBLICATION = {"status": "published", "error_code": None}
 
 
@@ -96,6 +97,7 @@ def test_email_requires_reviewed_domain_and_one_success(
     request = create_request(
         report,
         "synthetic@microsoft.com",
+        project_link=_PROJECT_LINK,
         dashboard_link=_DASHBOARD_LINK,
         adx_publication=_ADX_PUBLICATION,
     )
@@ -114,11 +116,21 @@ def test_email_requires_reviewed_domain_and_one_success(
     assert request["html"].index("PASS</span>") < request["html"].index(
         "How Scoring Works"
     )
+    assert 'style="color:#dbeafe;text-decoration:underline;"' in request["html"]
+    assert "(<a" not in request["html"]
+    assert "Works</a>)" not in request["html"]
     assert "docs/QUALITY_BAR.md#quality-score" in request["html"]
     assert "How to read results" in request["html"]
     assert "docs/INSIGHT_RESULTS.md" in request["html"]
     assert "Open quality trend dashboard" in request["html"]
     assert _DASHBOARD_LINK in request["html"]
+    assert request["html"].index("Test Agents</h2>") < request["html"].index(
+        "Foundry Project:"
+    )
+    assert request["html"].index("Foundry Project:") < request["html"].index(
+        ">Test agent</th>"
+    )
+    assert _PROJECT_LINK in request["html"]
     assert "Incorrect related Insights" in request["html"]
     assert "Noise/duplicate Insights" in request["html"]
     assert "Incorrect/noisy insights" not in request["html"]

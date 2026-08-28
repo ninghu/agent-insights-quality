@@ -626,9 +626,9 @@ def _render_html(
         f"Quality Score: {html.escape(score)}"
         f"{html.escape(score_comparison)} &middot; "
         f"{html.escape(report['status'])}</span>"
-        '<div style="margin-top:8px;color:#dbeafe;font-size:12px;line-height:16px;">'
-        f'(<a style="color:inherit;text-decoration:underline;" '
-        f'href="{_QUALITY_BAR_URL}">How Scoring Works</a>)</div>'
+        '<div style="margin-top:8px;font-size:12px;line-height:16px;">'
+        f'<a style="color:#dbeafe;text-decoration:underline;" '
+        f'href="{_QUALITY_BAR_URL}">How Scoring Works</a></div>'
         "</td></tr>"
         '<tr><td style="padding:28px 32px 0 32px;">'
         + _section_heading("Summary")
@@ -637,7 +637,6 @@ def _render_html(
             f'{_OUTLOOK_TEXT_STYLE}">{html.escape(paragraph)}</p>'
             for paragraph in summary
         )
-        + _private_project_source_link(report, project_link)
         + _dashboard_source_link(dashboard_link, adx_publication)
         + _data_table(("Grade", "Findings"), _grade_rows(report), (38, 62))
         + _insight_results_link()
@@ -660,6 +659,7 @@ def _render_html(
         + "</td></tr>"
         '<tr><td style="padding:24px 32px 38px 32px;">'
         + _section_heading("Test Agents")
+        + _private_project_source_link(report, project_link)
         + '<table cellpadding="0" cellspacing="0" border="0" width="100%" '
         'style="width:100%;border-collapse:collapse;font-size:13px;">'
         '<tr bgcolor="#e8eef7">'

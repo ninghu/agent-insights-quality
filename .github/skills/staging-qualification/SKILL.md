@@ -27,14 +27,19 @@ Use this skill for human-reviewed impact-based qualification before promotion.
    Semantic assertions are optional corroboration.
    Independently verify every baseline card; `v0` is a reviewed healthy contract, not proof that its
    runtime behavior was healthy.
-10. Finalize with `--work-items <snapshot>` and inspect score, noise, ownership, and every non-matched
+10. Before finalization, give every `inconclusive` baseline or `INCOMPLETE` issue with complete runtime
+    evidence one focused GPT-5.6 Sol recheck. Re-read the package-bound reviewed Agent source and
+    configuration, current endpoint evidence, independent trace proof, and the card's exact claim.
+    Never send new traffic for this recheck, never force a conclusive verdict, and retain `INCOMPLETE`
+    when independent evidence remains insufficient.
+11. Finalize with `--work-items <snapshot>` and inspect score, noise, ownership, and every non-matched
     finding. Any
    `inconclusive` baseline assessment or `INCOMPLETE` issue assessment makes the whole run
    `INCOMPLETE` with no numeric quality score. Never commit the snapshot.
    Open the private `report-preview.html` in a browser for human review. It uses the exact same
    Outlook-safe HTML renderer and private quality-trend dashboard link as the daily email; never
    commit the preview, dashboard link, or its private context.
-11. After explicit human review, compose promotion from complete trusted PASS/FAIL evidence for
+12. After explicit human review, compose promotion from complete trusted PASS/FAIL evidence for
     affected Agents and latest valid receipts for unchanged Agents. Verify every exact digest and
     mapping. Never promote or reuse `INCOMPLETE`.
 
