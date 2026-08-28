@@ -16,12 +16,20 @@ from openai import AsyncOpenAI
 from typing_extensions import Annotated
 
 from .observability import configure_observability
+from .options import (
+    MAX_RESPONSE_OPTIONS,
+    bounded_inventory_options,
+    describe_inventory,
+    describe_itineraries,
+    first_option_per_itinerary,
+    parse_trip,
+    requested_trips,
+)
 
 
 configure_observability("travel-agent")
 tracer = trace.get_tracer("travel-agent")
 credential = DefaultAzureCredential()
-MAX_RESPONSE_OPTIONS = 2
 
 
 async def token_provider() -> str:
@@ -41,20 +49,6 @@ class TravelState(TypedDict, total=False):
 def latest_text(state: TravelState) -> str:
     content = state["messages"][-1].content
     return content if isinstance(content, str) else str(content)
-
-
-def requested_trips(text: str) -> list[str]:
-    lowered = text.lower()
-    return [
-        trip
-        for trip in ("trip-alpha", "trip-beta", "trip-gamma")
-        if trip in lowered
-    ]
-
-
-def parse_trip(text: str) -> str:
-    trips = requested_trips(text)
-    return trips[0] if trips else "trip-alpha"
 
 
 async def failed_search(name: str) -> None:
@@ -128,41 +122,6 @@ async def search_hotels(trip: str, include_details: bool = False) -> list[dict]:
         return result
 
 
-def bounded_inventory_options(
-    inventory: list[dict],
-    limit: int = MAX_RESPONSE_OPTIONS,
-) -> list[dict]:
-    selected = []
-    for kind in ("flight", "hotel"):
-        if len(selected) >= limit:
-            break
-        option = next((item for item in inventory if item.get("kind") == kind), None)
-        if option is not None:
-            selected.append(option)
-    for option in inventory:
-        if len(selected) >= limit:
-            break
-        if option not in selected:
-            selected.append(option)
-    return selected
-
-
-def describe_inventory(inventory: list[dict]) -> str:
-    details = []
-    for option in inventory:
-        if option.get("kind") == "flight":
-            details.append(
-                f"Flight {option['id']}: carrier {option['carrier']}, "
-                f"departure {option['departure']}, price USD {option['price']}"
-            )
-        elif option.get("kind") == "hotel":
-            details.append(
-                f"Hotel {option['id']}: property {option['property']}, "
-                f"rating {option['rating']}, nightly rate USD {option['price']}"
-            )
-    return "; ".join(details) or "No synthetic inventory options"
-
-
 def build_graph():
     async def plan(state: TravelState) -> TravelState:
         text = latest_text(state)
@@ -185,6 +144,12 @@ def build_graph():
             await failed_search("search_hotels")
             return {"inventory": flights, "errors": ["hotel_search_unavailable"]}
         include_details = False
+        trips = requested_trips(text)
+        if len(trips) >= 2:
+            branches = await asyncio.gather(
+                *(search_flights(item, include_details) for item in trips)
+            )
+            return {"inventory": first_option_per_itinerary(branches)}
         wants_flight = "flight" in text or "compare" in text
         wants_hotel = "hotel" in text or "compare" in text
         if wants_flight and wants_hotel:
@@ -209,6 +174,7 @@ def build_graph():
     async def respond(state: TravelState) -> TravelState:
         answer = None
         inventory = state.get("inventory", [])
+        itinerary_details = describe_itineraries(inventory)
         option_limit = (
             1 if "one " in latest_text(state).lower() else MAX_RESPONSE_OPTIONS
         )
@@ -217,7 +183,7 @@ def build_graph():
         shown = len(response_options)
         if answer is None and state.get("errors"):
             answer = (
-                f"Partial result for {state['trip']}: {option_details}. "
+                f"Partial result: {itinerary_details}; {option_details}. "
                 f"{', '.join(state['errors'])}. "
                 f"Showing {shown} of {len(inventory)} synthetic options."
             )
@@ -228,7 +194,7 @@ def build_graph():
                 else "Booking not completed"
             )
             answer = (
-                f"{option_details}. {status} for {state['trip']}. "
+                f"{itinerary_details}; {option_details}. {status}. "
                 f"Showing {shown} of {len(inventory)} synthetic options."
             )
         grounded = await model_answer(

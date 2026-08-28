@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import importlib.util
 import json
 import re
 import subprocess
@@ -37,6 +38,16 @@ def _normalized_source_diff(baseline: str, issue: str) -> str:
             re.sub(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@", "@@", line)
         )
     return "\n".join(normalized)
+
+
+def _load_travel_options():
+    path = ROOT / "agents" / "travel-agent" / "v0" / "source" / "options.py"
+    spec = importlib.util.spec_from_file_location("travel_options_under_test", path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_prompt_definitions_are_complete_and_use_gpt_5_4_mini() -> None:
@@ -297,13 +308,19 @@ def test_travel_sources_preserve_bounded_comparison_contract() -> None:
     assert len(sources) == 9
     for source in sources:
         text = source.read_text(encoding="utf-8")
-        assert "MAX_RESPONSE_OPTIONS = 2" in text
+        options = (source.parent / "options.py").read_text(encoding="utf-8")
+        assert "MAX_RESPONSE_OPTIONS = 2" in options
         assert '"carrier": "Contoso Air"' in text
         assert '"departure": "09:00"' in text
         assert '"property": "Fabrikam Stay"' in text
         assert '"rating": 4.5' in text
         assert "count = 80 if include_details else 2" in text
-        assert "def bounded_inventory_options(" in text
+        assert "def bounded_inventory_options(" in options
+        assert "selected_kinds" in options
+        assert "def first_option_per_itinerary(" in options
+        assert "return [branch[0] for branch in branches if branch]" in options
+        if "issue-026" not in source.parts:
+            assert 'return {"inventory": first_option_per_itinerary(branches)}' in text
         assert "Showing {shown} of {len(inventory)} synthetic options." in text
         if "issue-025" not in source.parts:
             assert (
@@ -331,6 +348,78 @@ def test_travel_sources_preserve_bounded_comparison_contract() -> None:
         "flight-demo-1",
         "hotel-demo-1",
     ]
+
+
+def test_travel_bounded_inventory_keeps_one_representative_per_kind() -> None:
+    options = _load_travel_options()
+    inventory = [
+        {"id": "flight-demo-0", "kind": "flight"},
+        {"id": "flight-demo-1", "kind": "flight"},
+        {"id": "hotel-demo-0", "kind": "hotel"},
+        {"id": "hotel-demo-1", "kind": "hotel"},
+    ]
+
+    assert [
+        option["id"] for option in options.bounded_inventory_options(inventory)
+    ] == ["flight-demo-0", "hotel-demo-0"]
+    assert [
+        option["id"]
+        for option in options.bounded_inventory_options(inventory[:2])
+    ] == ["flight-demo-0"]
+
+
+def test_travel_partial_inventory_returns_one_useful_option() -> None:
+    options = _load_travel_options()
+    partial_inventory = [
+        {
+            "id": "flight-demo-0",
+            "kind": "flight",
+            "trip": "trip-beta",
+            "carrier": "Contoso Air",
+            "departure": "09:00",
+            "price": 200,
+        },
+        {
+            "id": "flight-demo-1",
+            "kind": "flight",
+            "trip": "trip-beta",
+            "carrier": "Contoso Air",
+            "departure": "09:00",
+            "price": 201,
+        },
+    ]
+
+    response_options = options.bounded_inventory_options(partial_inventory)
+    assert len(response_options) == 1
+    assert options.describe_itineraries(partial_inventory) == "Itinerary trip-beta"
+    assert options.describe_inventory(response_options) == (
+        "Flight flight-demo-0: carrier Contoso Air, "
+        "departure 09:00, price USD 200"
+    )
+
+
+def test_travel_two_trip_comparison_preserves_both_itineraries() -> None:
+    options = _load_travel_options()
+    prompt = "Compare flight options for trip-alpha and trip-beta."
+    trips = options.requested_trips(prompt)
+    branches = [
+        [
+            {"id": f"{trip}-flight-0", "kind": "flight", "trip": trip},
+            {"id": f"{trip}-flight-1", "kind": "flight", "trip": trip},
+        ]
+        for trip in trips
+    ]
+
+    inventory = options.first_option_per_itinerary(branches)
+    assert trips == ["trip-alpha", "trip-beta"]
+    assert [option["trip"] for option in inventory] == trips
+    assert [option["id"] for option in inventory] == [
+        "trip-alpha-flight-0",
+        "trip-beta-flight-0",
+    ]
+    assert options.describe_itineraries(inventory) == (
+        "Compared itineraries trip-alpha and trip-beta"
+    )
 
 
 def test_travel_issue_sources_match_reviewed_deltas() -> None:

@@ -44,7 +44,7 @@ issues:
                    return {"inventory": flights, "errors": ["hotel_search_unavailable"]}
       -        include_details = False
       +        include_details = True
-               wants_flight = "flight" in text or "compare" in text
+               trips = requested_trips(text)
   issue-025:
     declared_delta: The search node sets booked before downstream safety checks.
     expected_app_diff: |-
@@ -61,21 +61,15 @@ issues:
     declared_delta: Comparison assembly truncates the combined inventory to one item.
     expected_app_diff: |-
       @@
-               trip = state["trip"]
-      +        trips = requested_trips(text)
-      +        if len(trips) >= 2:
-      +            branches = await asyncio.gather(*(search_flights(item) for item in trips))
-      +            inventory = [item for branch in branches for item in branch]
+                   )
+      -            return {"inventory": first_option_per_itinerary(branches)}
+      +            inventory = first_option_per_itinerary(branches)
       +            return {
       +                "inventory": [
       +                    item for item in inventory if item["trip"] == trips[0]
-      +                ][:1]
+      +                ]
       +            }
-               if "temporary flight search" in text:
-      @@
-                   return {"inventory": flights, "errors": ["hotel_search_unavailable"]}
-      +        trips = requested_trips(text)
-               include_details = False
+               wants_flight = "flight" in text or "compare" in text
   issue-027:
     declared_delta: The graph search node awaits flight before starting hotel.
     expected_app_diff: |-
