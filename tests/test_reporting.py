@@ -6,6 +6,7 @@ from pathlib import Path
 from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.reporting import (
     apply_score_comparison,
+    apply_staging_score_comparison,
     build_report,
     calculate_quality_score,
     render_agent_markdown,
@@ -185,6 +186,66 @@ def test_incomplete_daily_score_has_no_comparison(tmp_path: Path) -> None:
     apply_score_comparison(report, trend)
 
     assert report["score_comparison"] is None
+
+
+def test_staging_score_compares_with_latest_reviewed_receipt(
+    tmp_path: Path,
+) -> None:
+    _, issues = load_catalogs()
+    report = build_report(
+        _manifest(),
+        issues,
+        _assessments(_manifest()),
+        _baseline_assessments(_manifest()),
+    )
+    report["profile"] = "staging"
+    report["run_id"] = "aiq-20260827-r34"
+    report["summary"]["quality_score"] = 48.3
+    receipts = tmp_path / "promotion-receipts"
+    receipts.mkdir()
+    (receipts / "aiq-20260827-r29.json").write_text(
+        """{
+  "profile": "staging",
+  "qualified": true,
+  "human_reviewed": true,
+  "quality_score": 47.8
+}
+""",
+        encoding="utf-8",
+    )
+
+    apply_staging_score_comparison(report, receipts)
+
+    assert report["score_comparison"] == {
+        "report_date": "2026-08-27",
+        "run_id": "aiq-20260827-r29",
+        "quality_score": 47.8,
+        "delta": 0.5,
+    }
+    assert "(+0.5 vs aiq-20260827-r29)" in render_markdown(report)
+
+
+def test_staging_score_comparison_accepts_three_digit_reruns(
+    tmp_path: Path,
+) -> None:
+    _, issues = load_catalogs()
+    report = build_report(
+        _manifest(),
+        issues,
+        _assessments(_manifest()),
+        _baseline_assessments(_manifest()),
+    )
+    report["profile"] = "staging"
+    report["run_id"] = "aiq-20260827-r100"
+    receipts = tmp_path / "promotion-receipts"
+    receipts.mkdir()
+    (receipts / "aiq-20260827-r99.json").write_text(
+        '{"profile":"staging","qualified":true,"human_reviewed":true,'
+        '"quality_score":47.8}',
+        encoding="utf-8",
+    )
+    apply_staging_score_comparison(report, receipts)
+    assert report["score_comparison"]["run_id"] == "aiq-20260827-r99"
 
 
 def test_score_comparison_uses_immutable_base_trend() -> None:

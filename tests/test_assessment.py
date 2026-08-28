@@ -7,11 +7,71 @@ from types import SimpleNamespace
 import pytest
 
 from agent_insights_quality.assessment import (
+    _baseline_cards,
+    _checkpoint_result,
     _linked_baseline_operations,
     _validate_baseline_cards,
     load_assessments,
 )
+from agent_insights_quality.cli import _rehydrate_with_retries
 from agent_insights_quality.util import ContractError
+
+
+def test_assessment_package_generation_retries_transient_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    attempts = 0
+    progress = []
+    sleeps = []
+
+    def rehydrate(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ContractError("synthetic transient package failure")
+        return [tmp_path / "package.json"]
+
+    runtime = SimpleNamespace(report_progress=progress.append)
+    monkeypatch.setattr(
+        "agent_insights_quality.cli.rehydrate_packages",
+        rehydrate,
+    )
+    monkeypatch.setattr("agent_insights_quality.cli.time.sleep", sleeps.append)
+    assert _rehydrate_with_retries(
+        {},
+        {},
+        {},
+        runtime,
+        tmp_path,
+        SimpleNamespace(),
+    ) == [tmp_path / "package.json"]
+    assert attempts == 2
+    assert sleeps == [1]
+    assert progress == [
+        "assessment package generation failed transiently; retrying (2/3)"
+    ]
+
+
+def test_incomplete_manifest_result_does_not_require_checkpoint() -> None:
+    store = SimpleNamespace(result=lambda *_args: None)
+    result = _checkpoint_result(
+        store,
+        "weather-agent",
+        {
+            "logical_version": "issue-001",
+            "foundry_version": "1",
+            "content_digest": "sha256:" + "a" * 64,
+            "status": "inconclusive",
+            "operation_ids": [],
+            "insight_references": [],
+            "window_start": None,
+            "window_end": None,
+            "error_code": "invocation_failed",
+        },
+    )
+    assert result.status == "inconclusive"
+    assert result.error_code == "invocation_failed"
 
 
 def test_assessment_must_match_current_package(tmp_path: Path) -> None:
@@ -140,6 +200,21 @@ def test_baseline_trace_proof_uses_only_baseline_operations() -> None:
     assert _linked_baseline_operations(insight, {"a" * 32}) == ("a" * 32,)
     with pytest.raises(ContractError, match="no linked baseline"):
         _linked_baseline_operations(insight, {"c" * 32})
+
+
+def test_baseline_card_attribution_requires_exact_version() -> None:
+    insights = [
+        SimpleNamespace(
+            agent_version="38",
+            linked_operation_ids=("a" * 32,),
+        ),
+        SimpleNamespace(
+            agent_version="42",
+            linked_operation_ids=("a" * 32,),
+        ),
+    ]
+    candidates = _baseline_cards(insights, {"a" * 32}, "38")
+    assert [value.agent_version for value in candidates] == ["38"]
 
 
 def test_valid_baseline_finding_requires_agent_ownership() -> None:

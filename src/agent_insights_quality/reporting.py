@@ -1045,6 +1045,58 @@ def apply_score_comparison(report: dict[str, Any], trend_path: Path) -> None:
     report["score_comparison"] = score_comparison(report, trend)
 
 
+def apply_staging_score_comparison(
+    report: dict[str, Any],
+    receipts_root: Path,
+) -> None:
+    report["score_comparison"] = None
+    score = report["summary"]["quality_score"]
+    if report["profile"] != "staging" or score is None:
+        return
+    current = _staging_run_key(report["run_id"])
+    candidates = []
+    for path in receipts_root.glob("aiq-*.json"):
+        match = re.fullmatch(r"aiq-([0-9]{8})(?:-r([0-9]{2,}))?\.json", path.name)
+        if match is None:
+            continue
+        value = read_json(path)
+        previous_score = value.get("quality_score")
+        if (
+            value.get("profile") != "staging"
+            or value.get("qualified") is not True
+            or value.get("human_reviewed") is not True
+            or isinstance(previous_score, bool)
+            or not isinstance(previous_score, (int, float))
+            or not 0 <= previous_score <= 100
+        ):
+            raise ContractError("Staging score history contains an invalid receipt")
+        run_id = path.stem
+        key = _staging_run_key(run_id)
+        if key < current:
+            candidates.append((key, run_id, previous_score))
+    if not candidates:
+        return
+    key, run_id, previous_score = max(candidates)
+    delta = round(float(score) - float(previous_score), 1)
+    report["score_comparison"] = {
+        "report_date": key[0],
+        "run_id": run_id,
+        "quality_score": previous_score,
+        "delta": 0 if delta == 0 else delta,
+    }
+
+
+def _staging_run_key(run_id: str) -> tuple[str, int]:
+    match = re.fullmatch(r"aiq-([0-9]{8})(?:-r([0-9]{2,}))?", run_id)
+    if match is None:
+        raise ContractError("Staging run identity is invalid")
+    raw_date = match.group(1)
+    return (
+        f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:]}",
+        int(match.group(2) or 0),
+    )
+
+
 def score_comparison(
     report: dict[str, Any],
     trend: dict[str, Any],
@@ -1088,14 +1140,13 @@ def score_comparison(
 
 
 def _score_comparison_text(report: dict[str, Any]) -> str:
-    if report["profile"] != "daily":
-        return ""
     comparison = report.get("score_comparison")
     if not isinstance(comparison, dict):
         return " (change N/A)"
     delta = comparison["delta"]
     sign = "+" if delta > 0 else ""
-    return f" ({sign}{delta:g} vs {comparison['report_date']})"
+    reference = comparison.get("run_id") or comparison["report_date"]
+    return f" ({sign}{delta:g} vs {reference})"
 
 
 def update_trend(report: dict[str, Any], path: Path) -> None:

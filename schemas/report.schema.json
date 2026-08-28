@@ -17,6 +17,7 @@
           "required": ["report_date", "quality_score", "delta"],
           "properties": {
             "report_date": {"type": "string", "format": "date"},
+            "run_id": {"type": "string", "pattern": "^aiq-[0-9]{8}(?:-r[0-9]{2,})?$"},
             "quality_score": {"type": "number", "minimum": 0, "maximum": 100},
             "delta": {"type": "number", "minimum": -100, "maximum": 100}
           }

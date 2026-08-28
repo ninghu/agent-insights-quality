@@ -660,7 +660,7 @@ def _existing_acr_image(
     progress: ProgressReporter | None = None,
 ) -> str | None:
     reporter = progress or ProgressReporter("aiq-provision")
-    with reporter.heartbeat("Support image cache lookup"):
+    with reporter.heartbeat("Support image cache lookup") as outcome:
         process = subprocess.run(
             [
                 azure_cli(),
@@ -681,6 +681,8 @@ def _existing_acr_image(
             timeout=120,
             check=False,
         )
+        if process.returncode != 0:
+            outcome.fail()
     digest = process.stdout.strip()
     if process.returncode == 0 and re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
         return f"{registry}.azurecr.io/agent-insights-quality-support@{digest}"

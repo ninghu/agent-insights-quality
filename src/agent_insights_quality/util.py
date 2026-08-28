@@ -90,6 +90,24 @@ def atomic_json(path: Path, value: Mapping[str, Any]) -> None:
             os.unlink(temporary)
 
 
+def atomic_text(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        dir=path.parent,
+        text=True,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(value)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def immutable_json(path: Path, value: Mapping[str, Any]) -> None:
     rendered = json.dumps(value, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
     if path.exists():

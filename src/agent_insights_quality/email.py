@@ -23,6 +23,7 @@ from agent_insights_quality.util import (
     ROOT,
     ContractError,
     atomic_json,
+    atomic_text,
     content_hash,
     read_json,
     read_yaml,
@@ -86,6 +87,20 @@ def _validated_recipient(value: str) -> str:
             "Report recipient must be exactly one reviewed microsoft.com address"
         )
     return recipient
+
+
+def write_private_report_preview(
+    request: Mapping[str, Any],
+    path: Path,
+) -> None:
+    try:
+        path.resolve().relative_to(runtime_root().resolve())
+    except ValueError as error:
+        raise ContractError("Report preview must remain in the private runtime root") from error
+    rendered = request.get("html")
+    if not isinstance(rendered, str) or not rendered.startswith("<!doctype html>"):
+        raise ContractError("Report preview request does not contain valid HTML")
+    atomic_text(path, rendered)
 
 
 def resolve_recipient() -> str:
@@ -272,14 +287,12 @@ def _overall_score(report: dict[str, Any]) -> str:
 
 
 def _score_comparison(report: dict[str, Any]) -> str:
-    if report.get("profile") != "daily":
-        return ""
     comparison = report.get("score_comparison")
     if not isinstance(comparison, dict):
         return " (change N/A)"
     delta = comparison["delta"]
     sign = "+" if delta > 0 else ""
-    return f" ({sign}{delta:g} vs {comparison['report_date']})"
+    return f" ({sign}{delta:g})"
 
 
 def _section_heading(title: str) -> str:
@@ -611,10 +624,11 @@ def _render_html(
         f'{status_style["background"]};color:{status_style["foreground"]};'
         'font-size:12px;line-height:16px;font-weight:700;">'
         f"Quality Score: {html.escape(score)}"
-        f"{html.escape(score_comparison)} "
-        f'(<a style="color:inherit;text-decoration:underline;" '
-        f'href="{_QUALITY_BAR_URL}">How Scoring Works</a>) &middot; '
+        f"{html.escape(score_comparison)} &middot; "
         f"{html.escape(report['status'])}</span>"
+        '<div style="margin-top:8px;color:#dbeafe;font-size:12px;line-height:16px;">'
+        f'(<a style="color:inherit;text-decoration:underline;" '
+        f'href="{_QUALITY_BAR_URL}">How Scoring Works</a>)</div>'
         "</td></tr>"
         '<tr><td style="padding:28px 32px 0 32px;">'
         + _section_heading("Summary")

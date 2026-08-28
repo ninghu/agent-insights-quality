@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,7 @@ from agent_insights_quality.email import (
     import_receipt,
     resolve_recipient,
     validate_published_receipt,
+    write_private_report_preview,
 )
 from agent_insights_quality.generated_paths import validate_generated_paths
 from agent_insights_quality.live import LiveRuntime
@@ -48,6 +50,7 @@ from agent_insights_quality.provisioning import (
 from agent_insights_quality.registry import load_registry, sync_registry
 from agent_insights_quality.reporting import (
     apply_score_comparison,
+    apply_staging_score_comparison,
     build_operational_failure_report,
     build_report,
     score_comparison,
@@ -304,6 +307,10 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             policy=policy,
             seed=seed,
         )
+        checkpoint_store = VersionCheckpointStore(
+            state / "stage-checkpoints",
+            run_contract_digest,
+        )
         try:
             with profile_run_lock(
                 profile_name,
@@ -328,10 +335,7 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                     agent_start_stagger_seconds=(
                         policy.agent_start_stagger_seconds
                     ),
-                    checkpoint_store=VersionCheckpointStore(
-                        state / "stage-checkpoints",
-                        run_contract_digest,
-                    ),
+                    checkpoint_store=checkpoint_store,
                 )
                 manifest = build_manifest(
                     report_date=args.report_date,
@@ -345,12 +349,13 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                     results=results,
                 )
                 immutable_json(state / "run-manifest.json", manifest)
-                packages = rehydrate_packages(
+                packages = _rehydrate_with_retries(
                     manifest,
                     issues,
                     registry,
                     runtime,
                     state / "assessment-packages",
+                    checkpoint_store,
                 )
         except ActiveQualificationError:
             raise
@@ -387,11 +392,7 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                     if profile_name == "daily"
                     else None
                 )
-                dashboard_link = (
-                    resolve_dashboard_link()
-                    if profile_name == "daily"
-                    else None
-                )
+                dashboard_link = resolve_dashboard_link()
                 request = create_request(
                     failure,
                     recipient,
@@ -402,6 +403,10 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                 failure["delivery"]["content_digest"] = request["content_digest"]
                 write_report(failure, failure_root)
                 atomic_json(state / "email-send-request.json", request)
+                write_private_report_preview(
+                    request,
+                    state / "report-preview.html",
+                )
                 handoff_written = True
             except ContractError:
                 pass
@@ -462,6 +467,11 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         )
         if manifest["profile"] == "daily":
             apply_score_comparison(report, args.output_root / "trend.json")
+        else:
+            apply_staging_score_comparison(
+                report,
+                runtime_root() / "promotion-receipts",
+            )
         output = (
             args.output_root
             / "daily"
@@ -484,11 +494,7 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             if manifest["profile"] == "daily"
             else None
         )
-        dashboard_link = (
-            resolve_dashboard_link()
-            if manifest["profile"] == "daily"
-            else None
-        )
+        dashboard_link = resolve_dashboard_link()
         project_link, agent_links = build_runtime_links(
             runtime_profile,
             [agent["name"] for agent in manifest["agents"]],
@@ -506,6 +512,8 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         write_report(report, output)
         private_request = args.manifest.parent / "email-send-request.json"
         atomic_json(private_request, request)
+        private_preview = args.manifest.parent / "report-preview.html"
+        write_private_report_preview(request, private_preview)
         if manifest["profile"] == "daily":
             atomic_json(args.output_root / "latest.json", report)
             (args.output_root / "latest.md").write_text(
@@ -519,6 +527,7 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                 "status": report["status"],
                 "report": str(output / "report.json"),
                 "email_request": str(private_request),
+                "report_preview": str(private_preview),
                 "adx_publication": (
                     adx_publication["status"]
                     if adx_publication is not None
@@ -665,3 +674,32 @@ def _run_contract_digest(
             "runtime_files": runtime_files,
         }
     )
+
+
+def _rehydrate_with_retries(
+    manifest: dict[str, Any],
+    issues: dict[str, Any],
+    registry: dict[str, Any],
+    runtime: Any,
+    output: Path,
+    checkpoint_store: VersionCheckpointStore,
+) -> list[Path]:
+    for attempt in range(3):
+        try:
+            return rehydrate_packages(
+                manifest,
+                issues,
+                registry,
+                runtime,
+                output,
+                checkpoint_store,
+            )
+        except ContractError:
+            if attempt == 2:
+                raise
+            runtime.report_progress(
+                "assessment package generation failed transiently; "
+                f"retrying ({attempt + 2}/3)"
+            )
+            time.sleep(2**attempt)
+    raise ContractError("Assessment package retry loop did not execute")

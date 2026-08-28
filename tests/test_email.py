@@ -11,6 +11,7 @@ from agent_insights_quality.email import (
     import_receipt,
     resolve_recipient,
     validate_published_receipt,
+    write_private_report_preview,
 )
 from agent_insights_quality.util import ContractError
 
@@ -108,8 +109,11 @@ def test_email_requires_reviewed_domain_and_one_success(
     assert ">Report</th>" in request["html"]
     assert ">Ownership</th>" not in request["html"]
     assert "Quality Score: 100/100" in request["html"]
-    assert "(+5.9 vs 2026-08-23)" in request["html"]
+    assert "(+5.9) &middot; PASS</span>" in request["html"]
     assert "How Scoring Works" in request["html"]
+    assert request["html"].index("PASS</span>") < request["html"].index(
+        "How Scoring Works"
+    )
     assert "docs/QUALITY_BAR.md#quality-score" in request["html"]
     assert "How to read results" in request["html"]
     assert "docs/INSIGHT_RESULTS.md" in request["html"]
@@ -121,6 +125,11 @@ def test_email_requires_reviewed_domain_and_one_success(
     assert request["html"].index("Incorrect related Insights") < request["html"].index(
         "How to read results"
     )
+    preview = runtime_root / "staging" / "run" / "report-preview.html"
+    write_private_report_preview(request, preview)
+    assert preview.read_text(encoding="utf-8") == request["html"]
+    with pytest.raises(ContractError, match="private runtime root"):
+        write_private_report_preview(request, tmp_path / "public-preview.html")
     for owner in (
         "Han Che",
         "Sean Gayler",
@@ -184,6 +193,19 @@ def test_email_requires_reviewed_domain_and_one_success(
     assert "pre-existing telemetry" in incomplete_request["html"]
     assert "no Agent traffic was sent" in incomplete_request["html"]
     assert "ADX publication failed for this run" in incomplete_request["html"]
+    staging = deepcopy(report)
+    staging["profile"] = "staging"
+    staging["score_comparison"] = {
+        "report_date": "2026-08-27",
+        "run_id": "aiq-20260827-r29",
+        "quality_score": 47.8,
+        "delta": 0.5,
+    }
+    staging_request = create_request(
+        staging,
+        "synthetic@microsoft.com",
+    )
+    assert "(+0.5) &middot; PASS</span>" in staging_request["html"]
     receipt = {
         "schema_version": "2.0.0",
         "content_digest": request["content_digest"],

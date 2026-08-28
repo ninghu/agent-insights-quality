@@ -158,6 +158,9 @@ Finalization writes sanitized per-Agent Markdown under the report's `agents/` di
 one generated Insight card, plus an explicit row for each missing expected issue. Email links to these
 GitHub-rendered Markdown reports; private prompts, responses, traces, and resource identifiers remain
 excluded. Each report includes a review summary, evaluation legend, and human-validation checklist.
+Finalization also writes private `report-preview.html` beside the run manifest. Staging human review
+uses this preview because it is rendered by the exact same Outlook-safe HTML path as the daily email.
+It may contain private work-item context and runtime links, so it must never be committed.
 
 For `daily`, finalization also derives one public-safe payload and publishes it atomically to ADX.
 The v2 payload exposes logical `AIQDailyRuns`, `AIQDailyAgents`, `AIQDailyBaselines`,
