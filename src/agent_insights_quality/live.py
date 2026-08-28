@@ -23,6 +23,7 @@ from agent_insights_quality.models import (
 )
 from agent_insights_quality.automation_policy import TRAFFIC_UNCERTAINTY_SECONDS
 from agent_insights_quality.profiles import RuntimeProfile
+from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.runtime_state import TrafficLedger
 from agent_insights_quality.util import ContractError, InsightWindowExpiredError
 from agent_insights_quality.azure_cli import azure_cli
@@ -50,6 +51,7 @@ _LOGS_SCOPE = "https://api.loganalytics.io/.default"
 _TRANSIENT_HTTP = {408, 424, 429, 500, 502, 503, 504}
 _DEFAULT_REQUEST_TIMEOUT_SECONDS = 300
 _HOSTED_RESPONSE_TIMEOUT_SECONDS = 600
+_AUTH_PROGRESS = ProgressReporter("aiq-auth")
 
 
 class _RuntimeTokenCredential:
@@ -87,14 +89,11 @@ class LiveRuntime:
         self._token_cache: dict[str, tuple[float, str]] = {}
         self._telemetry_query_lock = threading.Lock()
         self._logs_client_instance: Any | None = None
-        self._progress_lock = threading.Lock()
-        self._progress_started = time.monotonic()
+        self._progress = ProgressReporter("aiq", monotonic=monotonic)
         self._traffic_ledger = TrafficLedger(profile.name)
 
     def report_progress(self, message: str) -> None:
-        elapsed = time.monotonic() - self._progress_started
-        with self._progress_lock:
-            print(f"[aiq +{elapsed:07.1f}s] {message}", flush=True)
+        self._progress.emit(message)
 
     def _token_provider(self, scope: str) -> str:
         with self._token_lock:
@@ -129,11 +128,12 @@ class LiveRuntime:
         for attempt in range(4):
             try:
                 with self._telemetry_query_lock:
-                    return client.query_resource(
-                        self._profile.application_insights_resource_id,
-                        query,
-                        timespan=timespan,
-                    )
+                    with self._progress.heartbeat("Azure Monitor query"):
+                        return client.query_resource(
+                            self._profile.application_insights_resource_id,
+                            query,
+                            timespan=timespan,
+                        )
             except _TELEMETRY_TRANSIENT_ERRORS as error:
                 if (
                     isinstance(error, _TELEMETRY_HTTP_ERRORS)
@@ -1244,12 +1244,13 @@ union traces, dependencies, requests
                 method=method,
             )
             try:
-                with urllib.request.urlopen(
-                    request,
-                    timeout=timeout_seconds,
-                ) as response:
-                    status = response.status
-                    payload = response.read()
+                with self._progress.heartbeat(f"remote {method} request"):
+                    with urllib.request.urlopen(
+                        request,
+                        timeout=timeout_seconds,
+                    ) as response:
+                        status = response.status
+                        payload = response.read()
             except urllib.error.HTTPError as error:
                 status = error.code
                 payload = error.read()
@@ -1321,23 +1322,34 @@ union traces, dependencies, requests
 
 def _azure_cli_token(scope: str) -> str:
     for attempt in range(5):
-        process = subprocess.run(
-            [
-                azure_cli(),
-                "account",
-                "get-access-token",
-                "--scope",
-                scope,
-                "--query",
-                "accessToken",
-                "--output",
-                "tsv",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
+        try:
+            with _AUTH_PROGRESS.heartbeat(
+                f"Azure token request attempt {attempt + 1}/5"
+            ) as outcome:
+                process = subprocess.run(
+                    [
+                        azure_cli(),
+                        "account",
+                        "get-access-token",
+                        "--scope",
+                        scope,
+                        "--query",
+                        "accessToken",
+                        "--output",
+                        "tsv",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    check=False,
+                )
+                if process.returncode != 0:
+                    outcome.fail()
+        except subprocess.TimeoutExpired:
+            if attempt < 4:
+                time.sleep(2**attempt)
+                continue
+            break
         token = process.stdout.strip()
         if process.returncode == 0 and token:
             return token

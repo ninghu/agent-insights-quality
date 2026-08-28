@@ -10,6 +10,7 @@ from typing import Any
 from agent_insights_quality.automation_policy import load_automation_policy
 from agent_insights_quality.azure_cli import azure_cli
 from agent_insights_quality.profiles import RESOURCE_GROUP, RuntimeProfile
+from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.util import (
     ContractError,
     atomic_json,
@@ -28,6 +29,7 @@ _STABLE_COUNTS = {
     "microsoft.kusto/clusters": 1,
     "microsoft.storage/storageaccounts": 1,
 }
+_PROGRESS = ProgressReporter("aiq-cleanup")
 
 
 def write_cleanup_plan(path: Path) -> dict[str, Any]:
@@ -79,21 +81,26 @@ def apply_cleanup_plan(path: Path, receipt_path: Path) -> dict[str, Any]:
             item["profile"],
         ),
     )
-    for item in ordered:
-        process = subprocess.run(
-            [
-                azure_cli(),
-                "resource",
-                "delete",
-                "--ids",
-                item["resource_id"],
-                "--only-show-errors",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=15 * 60,
-            check=False,
-        )
+    for index, item in enumerate(ordered, start=1):
+        with _PROGRESS.heartbeat(
+            f"retired telemetry deletion {index}/{len(ordered)}"
+        ) as outcome:
+            process = subprocess.run(
+                [
+                    azure_cli(),
+                    "resource",
+                    "delete",
+                    "--ids",
+                    item["resource_id"],
+                    "--only-show-errors",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15 * 60,
+                check=False,
+            )
+            if process.returncode != 0:
+                outcome.fail()
         if process.returncode != 0:
             raise ContractError("Exact telemetry resource deletion failed")
     deadline = time.monotonic() + 15 * 60
@@ -230,21 +237,24 @@ def _validate_final_inventory(
 
 
 def _inventory() -> list[dict[str, Any]]:
-    process = subprocess.run(
-        [
-            azure_cli(),
-            "resource",
-            "list",
-            "--resource-group",
-            RESOURCE_GROUP,
-            "--output",
-            "json",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
+    with _PROGRESS.heartbeat("quality resource inventory") as outcome:
+        process = subprocess.run(
+            [
+                azure_cli(),
+                "resource",
+                "list",
+                "--resource-group",
+                RESOURCE_GROUP,
+                "--output",
+                "json",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        if process.returncode != 0:
+            outcome.fail()
     if process.returncode != 0:
         raise ContractError("Quality-test Resource Group inventory failed")
     value = json.loads(process.stdout)

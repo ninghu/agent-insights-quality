@@ -42,6 +42,8 @@ Agents and 36 reviewed, single-root issues.
 - Run the five test Agents concurrently.
 - Stagger Agent starts by the reviewed short delay to avoid a simultaneous endpoint burst.
 - Within one Agent, run `v0` and issue versions sequentially.
+- Every potentially long-running operation emits public-safe start, elapsed heartbeat, and
+  completion/failure progress. Progress-output failures must never abort the operation.
 - `g29` is the fixed telemetry resource set: one App Insights and Log Analytics pair per profile.
 - `rNN` is a qualification rerun identity.
 - Routine runs and reruns reuse `g29`; they must not create or rotate telemetry resources.

@@ -11,6 +11,7 @@ from jsonschema import Draft202012Validator
 
 from agent_insights_quality.azure_cli import azure_cli
 from agent_insights_quality.catalogs import agent_model_contract
+from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.util import ROOT, ContractError, read_json, read_yaml
 
 PROFILE_PROJECTS = {
@@ -18,6 +19,7 @@ PROFILE_PROJECTS = {
     "staging": "agent-insights-quality-staging",
 }
 REGISTRY_CONTAINER = "deployment-registries"
+_PROGRESS = ProgressReporter("aiq-registry")
 
 
 def sync_registry(profile: Any) -> None:
@@ -99,13 +101,18 @@ def _run_registry_command(
     process: subprocess.CompletedProcess[str] | None = None
     for attempt in range(3):
         try:
-            process = subprocess.run(
-                arguments,
-                capture_output=True,
-                text=True,
-                timeout=120,
-                check=False,
-            )
+            with _PROGRESS.heartbeat(
+                f"private registry operation attempt {attempt + 1}/3"
+            ) as outcome:
+                process = subprocess.run(
+                    arguments,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    check=False,
+                )
+                if process.returncode != 0:
+                    outcome.fail()
         except subprocess.TimeoutExpired:
             if attempt == 2:
                 raise ContractError(

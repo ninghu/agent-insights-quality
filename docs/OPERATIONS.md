@@ -51,7 +51,14 @@ context and must never be committed. Daily email uses the reviewed public
 
 Provisioning creates five Agents, 41 immutable versions, and five disabled/manual monitors in exactly
 one selected profile. Every hosted version must activate and bind an exact-version session. Prompt
-traffic uses an exact Agent reference.
+traffic uses an exact Agent reference. Provisioning emits flushed, public-safe phase, version,
+activation, retry, image-cache, monitor, and registry progress without exposing private resource IDs.
+
+All potentially long-running repository operations use the same console contract: emit a public-safe
+start line, a periodic elapsed heartbeat, and a completion or failure line. This includes
+infrastructure and ADX deployment, Azure/profile/registry/work-item reads, image build and push,
+provisioning, cleanup, endpoint traffic, telemetry queries, trace waits, and Agent Insights runs.
+Progress-output failures are best-effort and never fail the underlying operation.
 
 Each issue folder is self-contained. Prompt issues deploy their complete `definition.json`; Hosted
 issues package their complete `source/` tree together with the shared requirements and host/container

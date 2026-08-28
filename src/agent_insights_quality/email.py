@@ -14,6 +14,7 @@ from jsonschema import Draft202012Validator
 
 from agent_insights_quality.azure_cli import azure_cli
 from agent_insights_quality.profiles import RESOURCE_GROUP, RuntimeProfile
+from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.report_summary import (
     improvement_rows,
     working_capabilities,
@@ -28,6 +29,7 @@ from agent_insights_quality.util import (
     runtime_root,
 )
 
+_PROGRESS = ProgressReporter("aiq-email")
 _PUBLIC_REPORT_BASE_URL = (
     "https://github.com/ninghu/agent-insights-quality/blob/main/"
 )
@@ -214,21 +216,24 @@ def build_runtime_links(
         )
     except ValueError as error:
         raise ContractError("Runtime subscription is not a canonical UUID") from error
-    process = subprocess.run(
-        [
-            azure_cli(),
-            "account",
-            "show",
-            "--query",
-            "tenantId",
-            "--output",
-            "tsv",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
+    with _PROGRESS.heartbeat("Azure tenant resolution") as outcome:
+        process = subprocess.run(
+            [
+                azure_cli(),
+                "account",
+                "show",
+                "--query",
+                "tenantId",
+                "--output",
+                "tsv",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        if process.returncode != 0:
+            outcome.fail()
     if process.returncode != 0:
         raise ContractError("Authenticated Azure tenant could not be resolved")
     try:

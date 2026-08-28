@@ -11,6 +11,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from agent_insights_quality.azure_cli import azure_cli
+from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.util import (
     ContractError,
     atomic_json,
@@ -18,6 +19,7 @@ from agent_insights_quality.util import (
     read_json,
     runtime_root,
 )
+_PROGRESS = ProgressReporter("aiq-work-items")
 
 _CLOSED_STATES = {"closed", "completed"}
 _ACTIVE_EXCLUDED_STATES = {"removed", *_CLOSED_STATES}
@@ -166,13 +168,18 @@ def _run_boards_query(arguments: list[str]) -> list[Any]:
     completed = None
     for attempt in range(3):
         try:
-            completed = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=120,
-                check=False,
-            )
+            with _PROGRESS.heartbeat(
+                f"Azure Boards query attempt {attempt + 1}/3"
+            ) as outcome:
+                completed = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    check=False,
+                )
+                if completed.returncode != 0:
+                    outcome.fail()
         except subprocess.TimeoutExpired:
             if attempt == 2:
                 raise ContractError(

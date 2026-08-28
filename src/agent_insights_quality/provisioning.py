@@ -22,6 +22,7 @@ from typing import Any, Callable, Mapping
 from agent_insights_quality.catalogs import catalog_hashes, agent_model_contract
 from agent_insights_quality.azure_cli import azure_cli
 from agent_insights_quality.live import _azure_cli_token
+from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.registry import load_registry, publish_registry
 from agent_insights_quality.reporting import validate_staging_report
@@ -66,10 +67,20 @@ def provision_profile(
     token_provider: Callable[[str], str] = _azure_cli_token,
     approved_digests: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    reporter = ProgressReporter("aiq-provision")
+    progress = reporter.emit
+
+    progress(f"{profile.name}: verifying Test Agent model")
     model_contract = agent_model_contract(agents)
     profile.assert_test_agent_model(model_contract)
-    client = FoundryProvisioner(profile, token_provider=token_provider)
+    client = FoundryProvisioner(
+        profile,
+        token_provider=token_provider,
+        progress=reporter,
+    )
+    progress(f"{profile.name}: waiting for Foundry Project data plane")
     client.wait_project()
+    progress(f"{profile.name}: checking reusable registry")
     reusable = _reusable_registry(
         client,
         profile,
@@ -78,15 +89,23 @@ def provision_profile(
         approved_digests,
     )
     if reusable is not None:
+        progress(f"{profile.name}: existing 41-version registry is reusable")
         publish_registry(profile)
+        progress(f"{profile.name}: canonical registry published")
         return reusable
     issue_by_id = {item["id"]: item for item in issues["issues"]}
     support_agent = next(
         item for item in agents["agents"] if item["name"] == "support-ticket-agent"
     )
-    support_images = _build_support_images(profile, support_agent)
+    progress(f"{profile.name}: resolving Support image artifacts")
+    support_images = _build_support_images(
+        profile,
+        support_agent,
+        progress=reporter,
+    )
     registry_agents: dict[str, Any] = {}
     for agent in agents["agents"]:
+        progress(f"{profile.name}/{agent['name']}: reconciling versions")
         versions: dict[str, Any] = {}
         logical_versions = ["v0", *agent["issue_ids"]]
         for logical_version in logical_versions:
@@ -112,6 +131,10 @@ def provision_profile(
                 "foundry_version": version,
                 "content_digest": artifact["content_digest"],
             }
+            progress(
+                f"{profile.name}/{agent['name']}/{logical_version}: active"
+            )
+        progress(f"{profile.name}/{agent['name']}: reconciling monitor")
         monitor_id = client.ensure_monitor(agent["name"])
         registry_agents[agent["name"]] = {
             "monitor_id": monitor_id,
@@ -134,7 +157,9 @@ def provision_profile(
         "agents": registry_agents,
     }
     atomic_json(profile.registry_path, registry)
+    progress(f"{profile.name}: local registry reconciled")
     publish_registry(profile)
+    progress(f"{profile.name}: canonical registry published")
     return registry
 
 
@@ -163,6 +188,9 @@ def _reusable_registry(
         return None
     for agent in agents["agents"]:
         name = agent["name"]
+        client.report_progress(
+            f"{profile.name}/{name}: validating reusable versions"
+        )
         hosted = agent["type"] != "prompt"
         for logical_version in ["v0", *agent["issue_ids"]]:
             entry = registry["agents"][name]["versions"][logical_version]
@@ -180,6 +208,19 @@ def _reusable_registry(
             )
             if str(found or "") != str(entry["foundry_version"]):
                 return None
+            client._wait_active(
+                name,
+                str(found),
+                hosted=hosted,
+                expected_metadata={
+                    "aiq_profile": profile.name,
+                    "aiq_logical_version": logical_version,
+                    "aiq_content_digest": entry["content_digest"],
+                },
+            )
+            client.report_progress(
+                f"{profile.name}/{name}/{logical_version}: active"
+            )
     return registry
 
 
@@ -351,17 +392,24 @@ def build_artifact(
 def _build_support_images(
     profile: RuntimeProfile,
     agent: dict[str, Any],
+    *,
+    progress: ProgressReporter | None = None,
 ) -> dict[str, str]:
+    reporter = progress or ProgressReporter("aiq-provision")
+    report = reporter.emit
     registry = profile.container_registry_name
     if not registry:
         raise ContractError("Owned container registry could not be resolved")
-    login = subprocess.run(
-        [azure_cli(), "acr", "login", "--name", registry, "--output", "none"],
-        capture_output=True,
-        text=True,
-        timeout=180,
-        check=False,
-    )
+    with reporter.heartbeat("support-ticket-agent: registry sign-in") as outcome:
+        login = subprocess.run(
+            [azure_cli(), "acr", "login", "--name", registry, "--output", "none"],
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+        if login.returncode != 0:
+            outcome.fail()
     if login.returncode != 0:
         raise ContractError("Current Azure user cannot sign in to the owned registry")
     root = ROOT / "agents" / agent["name"]
@@ -371,47 +419,55 @@ def _build_support_images(
         for logical in versions
     }
     existing = {
-        logical: _existing_acr_image(registry, tag)
+        logical: _existing_acr_image(registry, tag, progress=reporter)
         for logical, tag in tags.items()
     }
     if all(existing.values()):
+        report(f"{profile.name}/support-ticket-agent: all images found in cache")
         return {logical: str(existing[logical]) for logical in versions}
     private_root = runtime_root()
     private_root.mkdir(parents=True, exist_ok=True)
+    report(f"{profile.name}/support-ticket-agent: preparing Python wheelhouse")
     with tempfile.TemporaryDirectory(
         prefix="aiq-wheelhouse-",
         dir=private_root,
     ) as temporary:
         wheelhouse = Path(temporary)
-        download = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "download",
-                "-r",
-                str(root / "v0" / "requirements.txt"),
-                "--dest",
-                str(wheelhouse),
-                "--platform",
-                "manylinux2014_x86_64",
-                "--python-version",
-                "312",
-                "--implementation",
-                "cp",
-                "--abi",
-                "cp312",
-                "--only-binary=:all:",
-                "--pre",
-                "--quiet",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=600,
-            check=False,
-        )
+        with reporter.heartbeat(
+            "support-ticket-agent: wheelhouse download"
+        ) as outcome:
+            download = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "download",
+                    "-r",
+                    str(root / "v0" / "requirements.txt"),
+                    "--dest",
+                    str(wheelhouse),
+                    "--platform",
+                    "manylinux2014_x86_64",
+                    "--python-version",
+                    "312",
+                    "--implementation",
+                    "cp",
+                    "--abi",
+                    "cp312",
+                    "--only-binary=:all:",
+                    "--pre",
+                    "--quiet",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=600,
+                check=False,
+            )
+            if download.returncode != 0:
+                outcome.fail()
         if download.returncode != 0:
             raise ContractError("Support image wheelhouse preparation failed")
+        report(f"{profile.name}/support-ticket-agent: wheelhouse ready")
         handler = functools.partial(
             _QuietHttpHandler,
             directory=wheelhouse,
@@ -428,6 +484,7 @@ def _build_support_images(
                     root=root,
                     logical_version=logical,
                     wheelhouse_port=server.server_port,
+                    progress=reporter,
                 )
                 for logical in versions
             }
@@ -443,7 +500,10 @@ def _build_and_push_support_image(
     root: Path,
     logical_version: str,
     wheelhouse_port: int,
+    progress: ProgressReporter | None = None,
 ) -> str:
+    reporter = progress or ProgressReporter("aiq-provision")
+    report = reporter.emit
     issue_path = (
         "v0/implementation.yaml"
         if logical_version == "v0"
@@ -454,9 +514,11 @@ def _build_and_push_support_image(
     remote_tag = (
         f"{registry}.azurecr.io/agent-insights-quality-support:{tag}"
     )
-    existing = _existing_acr_image(registry, tag)
+    existing = _existing_acr_image(registry, tag, progress=reporter)
     if existing:
+        report(f"support-ticket-agent/{logical_version}: image found in cache")
         return existing
+    report(f"support-ticket-agent/{logical_version}: building image")
     install_args = (
         "--no-index --trusted-host host.docker.internal "
         f"--find-links=http://host.docker.internal:{wheelhouse_port} --pre"
@@ -483,28 +545,34 @@ def _build_and_push_support_image(
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
         )
         shutil.copyfile(root / issue_path, context / "v0" / "implementation.yaml")
-        build = subprocess.run(
-            [
-                "docker",
-                "build",
-                "--add-host",
-                "host.docker.internal:host-gateway",
-                "--quiet",
-                "-f",
-                str(context / "v0" / "Dockerfile"),
-                "--build-arg",
-                f"PIP_INSTALL_ARGS={install_args}",
-                "-t",
-                local_tag,
-                str(context),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=900,
-            check=False,
-        )
+        with reporter.heartbeat(
+            f"support-ticket-agent/{logical_version}: image build"
+        ) as outcome:
+            build = subprocess.run(
+                [
+                    "docker",
+                    "build",
+                    "--add-host",
+                    "host.docker.internal:host-gateway",
+                    "--quiet",
+                    "-f",
+                    str(context / "v0" / "Dockerfile"),
+                    "--build-arg",
+                    f"PIP_INSTALL_ARGS={install_args}",
+                    "-t",
+                    local_tag,
+                    str(context),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=900,
+                check=False,
+            )
+            if build.returncode != 0:
+                outcome.fail()
     if build.returncode != 0:
         raise ContractError(f"Support image build failed for {logical_version}")
+    report(f"support-ticket-agent/{logical_version}: image built; pushing")
     try:
         subprocess.run(
             ["docker", "tag", local_tag, remote_tag],
@@ -513,31 +581,56 @@ def _build_and_push_support_image(
             check=True,
         )
         for attempt in range(3):
-            push = subprocess.run(
-                ["docker", "push", remote_tag],
-                capture_output=True,
-                text=True,
-                timeout=900,
-                check=False,
-            )
+            with reporter.heartbeat(
+                f"support-ticket-agent/{logical_version}: image push"
+            ) as outcome:
+                push = subprocess.run(
+                    ["docker", "push", remote_tag],
+                    capture_output=True,
+                    text=True,
+                    timeout=900,
+                    check=False,
+                )
+                if push.returncode != 0:
+                    outcome.fail()
             match = re.search(r"digest:\s*(sha256:[0-9a-f]{64})", push.stdout)
             if push.returncode == 0 and match:
+                report(f"support-ticket-agent/{logical_version}: image published")
                 return (
                     f"{registry}.azurecr.io/agent-insights-quality-support@"
                     f"{match.group(1)}"
                 )
-            recovered = _existing_acr_image(registry, tag)
+            recovered = _existing_acr_image(registry, tag, progress=reporter)
             if recovered:
+                report(
+                    f"support-ticket-agent/{logical_version}: published image recovered"
+                )
                 return recovered
             if attempt < 2:
+                report(
+                    f"support-ticket-agent/{logical_version}: image push retry "
+                    f"{attempt + 2}/3"
+                )
                 time.sleep(30 * (attempt + 1))
         raise ContractError(f"Support image push failed for {logical_version}")
     finally:
-        subprocess.run(
-            ["docker", "image", "rm", local_tag, remote_tag],
-            capture_output=True,
-            check=False,
-        )
+        try:
+            with reporter.heartbeat(
+                f"support-ticket-agent/{logical_version}: local image cleanup"
+            ) as outcome:
+                cleanup = subprocess.run(
+                    ["docker", "image", "rm", local_tag, remote_tag],
+                    capture_output=True,
+                    timeout=120,
+                    check=False,
+                )
+                if cleanup.returncode != 0:
+                    outcome.fail()
+        except (subprocess.SubprocessError, OSError):
+            report(
+                f"support-ticket-agent/{logical_version}: "
+                "local image cleanup failed; continuing"
+            )
 
 
 def _support_image_tag(root: Path, logical_version: str) -> str:
@@ -560,27 +653,34 @@ def _support_image_tag(root: Path, logical_version: str) -> str:
     return content_hash(relevant).split(":")[1][:16]
 
 
-def _existing_acr_image(registry: str, tag: str) -> str | None:
-    process = subprocess.run(
-        [
-            azure_cli(),
-            "acr",
-            "manifest",
-            "show-metadata",
-            "--registry",
-            registry,
-            "--name",
-            f"agent-insights-quality-support:{tag}",
-            "--query",
-            "digest",
-            "--output",
-            "tsv",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
+def _existing_acr_image(
+    registry: str,
+    tag: str,
+    *,
+    progress: ProgressReporter | None = None,
+) -> str | None:
+    reporter = progress or ProgressReporter("aiq-provision")
+    with reporter.heartbeat("Support image cache lookup"):
+        process = subprocess.run(
+            [
+                azure_cli(),
+                "acr",
+                "manifest",
+                "show-metadata",
+                "--registry",
+                registry,
+                "--name",
+                f"agent-insights-quality-support:{tag}",
+                "--query",
+                "digest",
+                "--output",
+                "tsv",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
     digest = process.stdout.strip()
     if process.returncode == 0 and re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
         return f"{registry}.azurecr.io/agent-insights-quality-support@{digest}"
@@ -682,12 +782,18 @@ class FoundryProvisioner:
         profile: RuntimeProfile,
         *,
         token_provider: Callable[[str], str],
+        progress: ProgressReporter | None = None,
     ) -> None:
         self._profile = profile
         self._token_provider = token_provider
+        self._progress = progress or ProgressReporter("aiq-provision")
+
+    def report_progress(self, message: str) -> None:
+        self._progress.emit(message)
 
     def wait_project(self) -> None:
         deadline = time.monotonic() + 15 * 60
+        next_progress = time.monotonic() + 60
         while time.monotonic() < deadline:
             try:
                 response = self._request(
@@ -701,7 +807,15 @@ class FoundryProvisioner:
                     raise
                 response = {"_status": error.status}
             if response["_status"] == 200:
+                self.report_progress(
+                    f"{self._profile.name}: Foundry Project data plane ready"
+                )
                 return
+            if time.monotonic() >= next_progress:
+                self.report_progress(
+                    f"{self._profile.name}: still waiting for Foundry Project"
+                )
+                next_progress = time.monotonic() + 60
             time.sleep(10)
         raise ContractError("Foundry Project data plane was not ready within 15 minutes")
 
@@ -777,6 +891,10 @@ class FoundryProvisioner:
             except RemoteHttpError as error:
                 if not error.transient or attempt == 2:
                     raise
+                self.report_progress(
+                    f"{self._profile.name}/{agent['name']}/{logical_version}: "
+                    f"transient create failure; recovering ({attempt + 2}/3)"
+                )
                 time.sleep(5)
                 recovered = self._find_version(
                     agent["name"],
@@ -819,6 +937,7 @@ class FoundryProvisioner:
         hosted: bool,
     ) -> str | None:
         deadline = time.monotonic() + 15 * 60
+        next_progress = time.monotonic() + 60
         while time.monotonic() < deadline:
             recovered = self._find_version(
                 name,
@@ -828,6 +947,12 @@ class FoundryProvisioner:
             )
             if recovered:
                 return recovered
+            if time.monotonic() >= next_progress:
+                self.report_progress(
+                    f"{self._profile.name}/{name}/{logical_version}: "
+                    "waiting for exact version visibility"
+                )
+                next_progress = time.monotonic() + 60
             time.sleep(5)
         return None
 
@@ -1009,6 +1134,7 @@ class FoundryProvisioner:
         expected_metadata: dict[str, str],
     ) -> None:
         deadline = time.monotonic() + 30 * 60
+        next_progress = time.monotonic() + 60
         while time.monotonic() < deadline:
             try:
                 response = self._request(
@@ -1020,6 +1146,11 @@ class FoundryProvisioner:
             except RemoteHttpError as error:
                 if not error.transient:
                     raise
+                self.report_progress(
+                    f"{self._profile.name}/{name}/"
+                    f"{expected_metadata['aiq_logical_version']}: "
+                    "activation check transient; retrying"
+                )
                 time.sleep(5)
                 continue
             status = str(response.get("status") or "").lower()
@@ -1040,6 +1171,13 @@ class FoundryProvisioner:
                     f"{name}/{logical} reached terminal state {status}"
                     + (f" ({code})" if code else "")
                 )
+            if time.monotonic() >= next_progress:
+                logical = expected_metadata["aiq_logical_version"]
+                self.report_progress(
+                    f"{self._profile.name}/{name}/{logical}: "
+                    f"activation status {status or 'pending'}"
+                )
+                next_progress = time.monotonic() + 60
             time.sleep(5)
         raise ContractError("Foundry version did not activate before the deadline")
 
@@ -1078,9 +1216,10 @@ class FoundryProvisioner:
                 method=method,
             )
             try:
-                with urllib.request.urlopen(request, timeout=300) as response:
-                    status = response.status
-                    payload = response.read()
+                with self._progress.heartbeat(f"Foundry {method} operation"):
+                    with urllib.request.urlopen(request, timeout=300) as response:
+                        status = response.status
+                        payload = response.read()
             except urllib.error.HTTPError as error:
                 status = error.code
                 payload = error.read()
@@ -1139,8 +1278,11 @@ class FoundryProvisioner:
                 method=method,
             )
             try:
-                with urllib.request.urlopen(request, timeout=300) as response:
-                    payload = response.read()
+                with self._progress.heartbeat(
+                    f"Agent Insights {method} operation"
+                ):
+                    with urllib.request.urlopen(request, timeout=300) as response:
+                        payload = response.read()
             except urllib.error.HTTPError as error:
                 if (
                     method == "GET"

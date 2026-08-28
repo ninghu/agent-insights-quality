@@ -7,11 +7,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agent_insights_quality.automation_policy import load_automation_policy
+from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.registry import PROFILE_PROJECTS
 from agent_insights_quality.util import ContractError, runtime_root
 from agent_insights_quality.azure_cli import azure_cli
 
 RESOURCE_GROUP = "agent-insights-quality-rg"
+_PROGRESS = ProgressReporter("aiq-profile")
 
 
 @dataclass(frozen=True)
@@ -194,13 +196,18 @@ def _run_azure_read(arguments: list[str]) -> subprocess.CompletedProcess[str]:
     process: subprocess.CompletedProcess[str] | None = None
     for attempt in range(3):
         try:
-            process = subprocess.run(
-                arguments,
-                capture_output=True,
-                text=True,
-                timeout=120,
-                check=False,
-            )
+            with _PROGRESS.heartbeat(
+                f"Azure profile read attempt {attempt + 1}/3"
+            ) as outcome:
+                process = subprocess.run(
+                    arguments,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    check=False,
+                )
+                if process.returncode != 0:
+                    outcome.fail()
         except subprocess.TimeoutExpired:
             if attempt == 2:
                 raise ContractError("Azure read timed out after bounded retries") from None
