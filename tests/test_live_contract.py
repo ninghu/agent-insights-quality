@@ -157,6 +157,35 @@ def test_semantic_assertions_support_structured_and_bounded_evidence() -> None:
     assert all(item.passed for item in results)
 
 
+def test_exact_json_assertions_distinguish_booleans_from_numbers() -> None:
+    response = {
+        "output": [
+            {
+                "type": "message",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": '{"completed":0,"nested":[1]}',
+                    }
+                ],
+            }
+        ]
+    }
+    count, passed, _ = _semantic_assertion_result(
+        response,
+        {
+            "semantic_assertions": {
+                "exact_json": {
+                    "completed": False,
+                    "nested": [True],
+                }
+            }
+        },
+    )
+    assert count == 1
+    assert passed == 0
+
+
 def test_trace_behavior_summary_sanitizes_prompt_tool_sequence() -> None:
     messages = json.dumps(
         [

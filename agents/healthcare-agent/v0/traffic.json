@@ -216,7 +216,8 @@
             "slot": "slot-demo-505",
             "account_scope": "demo-account-b",
             "approval": "pending",
-            "message": "Please confirm"
+            "message": "Please confirm",
+            "warning": "2026-09-15 unavailable"
           }
         }
       }

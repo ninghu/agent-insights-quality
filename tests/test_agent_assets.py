@@ -315,9 +315,11 @@ def test_travel_sources_preserve_bounded_comparison_contract() -> None:
         assert "def bounded_inventory_options(" in options
         assert "selected_kinds" in options
         assert "def first_option_per_itinerary(" in options
+        assert "def requested_inventory_kind(" in options
         assert 'option["source_id"] = option["id"]' in options
         assert 'option["id"] = f"{option[\'trip\']}-{option[\'id\']}"' in options
         assert 'if len(trips) >= 2 and "compare" in text:' in text
+        assert "search_operation(item, include_details)" in text
         if "issue-026" not in source.parts:
             assert 'return {"inventory": first_option_per_itinerary(branches)}' in text
         assert "Showing {shown} of {len(inventory)} synthetic options." in text
@@ -438,6 +440,31 @@ def test_travel_two_trip_comparison_preserves_both_itineraries() -> None:
     )
     assert "trip-alpha-flight-demo-0 for trip-alpha" in rendered
     assert "trip-beta-flight-demo-0 for trip-beta" in rendered
+    assert (
+        options.requested_inventory_kind(
+            "Compare hotel options for trip-alpha and trip-beta."
+        )
+        == "hotel"
+    )
+    hotel_branches = [
+        [
+            {
+                "id": "hotel-demo-0",
+                "kind": "hotel",
+                "trip": trip,
+                "property": "Fabrikam Stay",
+                "rating": 4.5,
+                "price": 120,
+            }
+        ]
+        for trip in trips
+    ]
+    hotels = options.first_option_per_itinerary(hotel_branches)
+    hotel_rendered = options.describe_inventory(
+        options.bounded_inventory_options(hotels)
+    )
+    assert "trip-alpha-hotel-demo-0 for trip-alpha" in hotel_rendered
+    assert "trip-beta-hotel-demo-0 for trip-beta" in hotel_rendered
 
 
 def test_travel_switch_parses_destination_without_comparison() -> None:
@@ -776,8 +803,14 @@ def test_healthcare_action_issues_emit_distinct_json_envelopes() -> None:
             assert envelope["action"] == action
             assert item["expected"]["activation_gate"] is True
             if issue_id == "issue-008":
-                assert set(envelope) == {"action", "provider", "slot"}
+                assert set(envelope) == {
+                    "action",
+                    "provider",
+                    "slot",
+                    "message",
+                }
                 assert envelope["provider"] == "Dr. Rivera"
+                assert envelope["message"] == "Please confirm"
             else:
                 assert {
                     "action",
@@ -791,6 +824,9 @@ def test_healthcare_action_issues_emit_distinct_json_envelopes() -> None:
                 assert envelope["account_scope"] == "demo-account-a"
                 assert envelope["confirmation"] is False
                 assert envelope["state"] == "confirmed"
+                text = item["request"]["body"]["input"][0]["content"][0]["text"]
+                assert "Change" in text
+                assert "not confirmed this transition" in text
     baseline = json.loads(
         (
             ROOT / "agents" / "healthcare-agent" / "v0" / "traffic.json"
@@ -805,7 +841,18 @@ def test_healthcare_action_issues_emit_distinct_json_envelopes() -> None:
         "account_scope": "demo-account-b",
         "approval": "pending",
         "message": "Please confirm",
+        "warning": "2026-09-15 unavailable",
     }
+    baseline_instructions = json.loads(
+        (
+            ROOT / "agents" / "healthcare-agent" / "v0" / "definition.json"
+        ).read_text(encoding="utf-8")
+    )["definition"]["instructions"]
+    assert '"2026-09-15 unavailable"' in baseline_instructions
+    guardrail_text = baseline["requests"][4]["request"]["body"]["input"][0][
+        "content"
+    ][0]["text"]
+    assert "no schedule evidence is available for 2026-09-15" in guardrail_text
 
 
 def test_prompt_substitution_issues_bind_supplied_evidence() -> None:

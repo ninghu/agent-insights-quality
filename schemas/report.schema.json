@@ -4,7 +4,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "report_date", "run_id", "profile", "manifest_reference", "catalog_hashes", "source_integrity", "status", "baseline", "issues", "summary", "delivery"],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"const": "2.0.0"},
     "report_date": {"type": "string", "format": "date"},
     "run_id": {"type": "string"},
     "profile": {"enum": ["daily", "staging"]},

@@ -5,7 +5,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
-from agent_insights_quality.catalogs import source_integrity_digest
+from agent_insights_quality.catalogs import load_catalogs, source_integrity_digest
 from agent_insights_quality.models import AgentResult
 from agent_insights_quality.registry import version_entry
 from agent_insights_quality.util import ROOT, ContractError, content_hash, read_json
@@ -171,7 +171,19 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     }
     if {agent["name"] for agent in manifest["agents"]} != expected_agents:
         raise ContractError("Run manifest Agent identities are inconsistent")
+    current_agents, _ = load_catalogs(require_paths=False)
+    current_by_name = {
+        agent["name"]: agent for agent in current_agents["agents"]
+    }
     for agent in manifest["agents"]:
+        current = current_by_name[agent["name"]]
+        if (
+            agent["type"] != current["type"]
+            or agent["baseline_contract"] != current["baseline_contract"]
+        ):
+            raise ContractError(
+                f"{agent['name']} manifest contract is not current"
+            )
         if (
             agent["baseline"]["logical_version"] != "v0"
             or "issue_id" in agent["baseline"]

@@ -198,6 +198,37 @@ def test_report_requires_bound_source_integrity() -> None:
         validate_report(report)
 
 
+def test_report_rejects_superseded_schema() -> None:
+    manifest = _manifest()
+    _, issues = load_catalogs()
+    report = build_report(
+        manifest,
+        issues,
+        _assessments(manifest),
+        _baseline_assessments(manifest),
+    )
+    report["schema_version"] = "1.0.0"
+    with pytest.raises(ContractError, match="Report is invalid"):
+        validate_report(report)
+
+
+def test_complete_report_rejects_unverified_source_integrity() -> None:
+    manifest = _manifest()
+    _, issues = load_catalogs()
+    report = build_report(
+        manifest,
+        issues,
+        _assessments(manifest),
+        _baseline_assessments(manifest),
+    )
+    report["source_integrity"] = {
+        "verified": False,
+        "contract_digest": None,
+    }
+    with pytest.raises(ContractError, match="source integrity"):
+        validate_report(report)
+
+
 def test_daily_score_compares_with_latest_prior_scored_report(
     tmp_path: Path,
 ) -> None:

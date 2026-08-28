@@ -22,6 +22,28 @@ from agent_insights_quality.cli import _rehydrate_with_retries
 from agent_insights_quality.util import ContractError, content_hash
 
 
+def _trace_proof(
+    *,
+    operation_count: int = 1,
+    terminal_count: int = 1,
+) -> dict:
+    return {
+        "operation_count": operation_count,
+        "tool_call_counts": {},
+        "tool_response_count": 0,
+        "successful_tool_response_count": 0,
+        "error_codes": {},
+        "assistant_response_count": terminal_count,
+        "explicit_terminal_success_count": 0,
+        "explicit_terminal_output_count": 0,
+        "terminal_success_count": terminal_count,
+        "terminal_output_count": terminal_count,
+        "terminal_response_count": terminal_count,
+        "handled_error_count": 0,
+        "unhandled_error_count": 0,
+    }
+
+
 def test_assessment_package_generation_retries_transient_failure(
     tmp_path: Path,
     monkeypatch,
@@ -108,11 +130,7 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
                 "proposed_fix": "Apply the synthetic fix.",
                 "trace_count": 1,
                 "linked_operation_ids": ["a" * 32],
-                "card_linked_trace_proof": {
-                    "operation_count": 1,
-                    "terminal_response_count": 1,
-                    "terminal_output_count": 1,
-                },
+                "card_linked_trace_proof": _trace_proof(),
             }
         ],
         "endpoint_evidence": {
@@ -138,7 +156,7 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
                 }
             ],
         },
-        "full_request_trace_proof": {"operation_count": 1},
+        "full_request_trace_proof": _trace_proof(),
         "expected": {
             "title": "Synthetic finding",
             "root_cause": "One synthetic root cause.",
@@ -318,7 +336,7 @@ def test_valid_baseline_finding_requires_agent_ownership() -> None:
         "title": "Synthetic baseline finding",
         "category": "reliability_errors",
         "severity": "medium",
-        "card_linked_trace_proof": {"operation_count": 1},
+        "card_linked_trace_proof": _trace_proof(),
     }
     assessment = {
         "agent_name": "weather-agent",
@@ -364,17 +382,7 @@ def _complete_prompt_baseline_package() -> dict:
         "semantic_assertions_passed": 5,
         "request_summaries": summaries,
     }
-    proof = {
-        "operation_count": 5,
-        "tool_call_counts": {},
-        "tool_response_count": 0,
-        "assistant_response_count": 5,
-        "terminal_response_count": 5,
-        "terminal_success_count": 5,
-        "terminal_output_count": 5,
-        "handled_error_count": 0,
-        "unhandled_error_count": 0,
-    }
+    proof = _trace_proof(operation_count=5, terminal_count=5)
     contract = {
         "request_count": 5,
         "terminal_response": "direct_prompt",
@@ -397,6 +405,12 @@ def _complete_prompt_baseline_package() -> dict:
 def test_semantic_assertion_failure_prevents_baseline_clean() -> None:
     package = _complete_prompt_baseline_package()
     package["endpoint_evidence"]["semantic_assertions_passed"] = 4
+    assert _baseline_evidence_complete(package) is False
+
+
+def test_truncated_trace_proof_cannot_establish_clean_baseline() -> None:
+    package = _complete_prompt_baseline_package()
+    package["full_request_trace_proof"].pop("error_codes")
     assert _baseline_evidence_complete(package) is False
 
 
@@ -434,12 +448,7 @@ def test_intermediate_card_link_routes_to_framework_or_unresolved() -> None:
         "title": "Synthetic intermediate finding",
         "category": "reliability_errors",
         "severity": "medium",
-        "card_linked_trace_proof": {
-            "operation_count": 1,
-            "terminal_response_count": 0,
-            "terminal_success_count": 0,
-            "terminal_output_count": 0,
-        },
+        "card_linked_trace_proof": _trace_proof(terminal_count=0),
     }
     package["observed_insights"] = [card]
     assessment = {
@@ -500,3 +509,30 @@ def test_issue_card_without_terminal_proof_stays_incomplete() -> None:
     )
     assessment["finding_type"] = "INCOMPLETE"
     _validate_issue_cards(assessment, {"observed_insights": [card]})
+
+
+def test_top_level_result_cannot_contradict_card_result() -> None:
+    card = {
+        "reference": "sha256:" + "a" * 64,
+        "title": "Synthetic card",
+        "category": "output_quality",
+        "severity": "medium",
+        "card_linked_trace_proof": _trace_proof(),
+    }
+    assessment = {
+        "issue_id": "issue-001",
+        "finding_type": "MISMATCHED",
+        "card_evaluations": [
+            {
+                "reference": card["reference"],
+                "title": card["title"],
+                "category": card["category"],
+                "severity": card["severity"],
+                "verdict": "correct",
+                "finding_type": "MATCHED",
+                "ownership": "none",
+            }
+        ],
+    }
+    with pytest.raises(ContractError, match="MISMATCHED assessment"):
+        _validate_issue_cards(assessment, {"observed_insights": [card]})

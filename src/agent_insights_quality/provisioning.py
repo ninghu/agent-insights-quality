@@ -26,7 +26,11 @@ from agent_insights_quality.catalogs import (
     source_integrity_digest,
 )
 from agent_insights_quality.azure_cli import azure_cli
-from agent_insights_quality.live import _azure_cli_token
+from agent_insights_quality.live import (
+    _azure_cli_token,
+    _normalize_fixture,
+    _semantic_assertion_names,
+)
 from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.registry import load_registry, publish_registry
@@ -42,6 +46,7 @@ from agent_insights_quality.util import (
     atomic_json,
     content_hash,
     file_hash,
+    read_json,
     runtime_root,
 )
 from jsonschema import Draft202012Validator
@@ -294,6 +299,7 @@ def create_promotion_receipt(
 ) -> dict[str, Any]:
     validate_staging_report(report, issue_catalog)
     validate_manifest(manifest)
+    _validate_manifest_traffic_evidence(manifest, issue_catalog)
     if manifest["profile"] != "staging":
         raise ContractError("Daily promotion requires a staging run manifest")
     if human_reviewed is not True:
@@ -394,6 +400,57 @@ def create_promotion_receipt(
         ],
         "report_reference": content_hash(report),
     }
+
+
+def _validate_manifest_traffic_evidence(
+    manifest: dict[str, Any],
+    issue_catalog: dict[str, Any],
+) -> None:
+    issue_by_id = {
+        issue["id"]: issue for issue in issue_catalog["issues"]
+    }
+    for agent in manifest["agents"]:
+        for issue in agent["issues"]:
+            issue_id = issue["issue_id"]
+            contract = issue_by_id.get(issue_id)
+            if contract is None or contract["agent"] != agent["name"]:
+                raise ContractError(
+                    "Manifest issue traffic is not in the reviewed catalog"
+                )
+            traffic = read_json(
+                ROOT / contract["implementation"] / "traffic.json"
+            )
+            requests = traffic.get("requests")
+            summaries = issue["endpoint_request_summaries"]
+            if not isinstance(requests, list) or len(requests) != len(summaries):
+                raise ContractError(
+                    f"{issue_id} manifest traffic coverage is inconsistent"
+                )
+            for raw, summary in zip(requests, summaries, strict=True):
+                expected = _normalize_fixture(raw)
+                assertion_names = _semantic_assertion_names(
+                    expected["semantic_assertions"]
+                )
+                observed_names = tuple(
+                    result["assertion"]
+                    for result in summary["assertion_results"]
+                )
+                if (
+                    summary["activation_gate"] != expected["activation_gate"]
+                    or summary["semantic_assertion_count"]
+                    != len(assertion_names)
+                    or observed_names != assertion_names
+                    or summary["semantic_assertions_passed"]
+                    != len(assertion_names)
+                    or any(
+                        result["passed"] is not True
+                        for result in summary["assertion_results"]
+                    )
+                ):
+                    raise ContractError(
+                        f"{issue_id} manifest assertion or activation evidence "
+                        "does not match authoritative traffic"
+                    )
 
 
 def build_artifact(

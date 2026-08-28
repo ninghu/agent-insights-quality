@@ -1701,6 +1701,51 @@ def _response_text(response: dict[str, Any]) -> str:
     return "\n".join(values)
 
 
+def _json_values_equal(actual: Any, expected: Any) -> bool:
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        return set(actual) == set(expected) and all(
+            _json_values_equal(actual[key], value)
+            for key, value in expected.items()
+        )
+    if isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            _json_values_equal(actual_item, expected_item)
+            for actual_item, expected_item in zip(actual, expected, strict=True)
+        )
+    return bool(actual == expected)
+
+
+def _semantic_assertion_names(assertions: dict[str, Any]) -> tuple[str, ...]:
+    ordered = (
+        "response_format",
+        "json_schema",
+        "exact_json_fields",
+        "exact_json",
+        "required_terms_all",
+        "required_terms_any",
+        "forbidden_terms",
+        "required_claims",
+        "forbidden_claims",
+        "max_words",
+        "min_words",
+        "max_characters",
+    )
+    return tuple(
+        name
+        for name in ordered
+        if name in assertions
+        and (
+            name == "exact_json"
+            or (
+                assertions[name] is not None
+                and assertions[name] != []
+            )
+        )
+    )
+
+
 def _semantic_assertion_result(
     response: dict[str, Any],
     fixture: dict[str, Any],
@@ -1744,14 +1789,16 @@ def _semantic_assertion_result(
             "exact_json_fields",
             isinstance(parsed_json, dict)
             and all(
-                key in parsed_json and parsed_json[key] == expected
+                key in parsed_json
+                and _json_values_equal(parsed_json[key], expected)
                 for key, expected in exact_json_fields.items()
             ),
         )
     if "exact_json" in assertions:
         record(
             "exact_json",
-            valid_json and parsed_json == assertions["exact_json"],
+            valid_json
+            and _json_values_equal(parsed_json, assertions["exact_json"]),
         )
     required_all = assertions.get("required_terms_all", [])
     if required_all:

@@ -53,17 +53,84 @@
             }
           },
           "monitor_reference": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-          "baseline": {"$ref": "#/$defs/versionEvidence"},
+          "baseline": {"$ref": "#/$defs/baselineEvidence"},
           "issues": {
             "type": "array",
-            "items": {"$ref": "#/$defs/versionEvidence"}
+            "items": {"$ref": "#/$defs/issueEvidence"}
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"type": {"const": "prompt"}}},
+            "then": {
+              "properties": {
+                "baseline_contract": {
+                  "properties": {
+                    "terminal_response": {"const": "direct_prompt"},
+                    "semantic_assertions": {"const": "required_per_request"},
+                    "function_calling": {"const": "forbidden"}
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {"properties": {"type": {"const": "hosted_code"}}},
+            "then": {
+              "properties": {
+                "baseline_contract": {
+                  "properties": {
+                    "terminal_response": {"const": "standard_assistant_message"},
+                    "function_calling": {"const": "not_applicable"}
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {"properties": {"type": {"const": "hosted_custom_container"}}},
+            "then": {
+              "properties": {
+                "baseline_contract": {
+                  "properties": {
+                    "terminal_response": {"const": "explicit_span_attributes"},
+                    "function_calling": {"const": "not_applicable"}
+                  }
+                }
+              }
+            }
+          }
+        ]
       }
     },
     "manifest_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
   },
   "$defs": {
+    "baselineEvidence": {
+      "allOf": [
+        {"$ref": "#/$defs/versionEvidence"},
+        {
+          "properties": {
+            "logical_version": {"const": "v0"},
+            "status": {"enum": ["passed", "not_at_bar", "inconclusive"]}
+          },
+          "not": {"required": ["issue_id"]}
+        }
+      ]
+    },
+    "issueEvidence": {
+      "allOf": [
+        {"$ref": "#/$defs/versionEvidence"},
+        {
+          "required": ["issue_id"],
+          "properties": {
+            "issue_id": {"type": "string", "pattern": "^issue-[0-9]{3}$"},
+            "logical_version": {"type": "string", "pattern": "^issue-[0-9]{3}$"},
+            "status": {"enum": ["observed", "not_at_bar", "inconclusive", "skipped_baseline"]}
+          }
+        }
+      ]
+    },
     "versionEvidence": {
       "type": "object",
       "additionalProperties": false,

@@ -502,7 +502,7 @@ def build_report(
         else "FAIL"
     )
     return {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "report_date": manifest["report_date"],
         "run_id": manifest["run_id"],
         "profile": manifest["profile"],
@@ -557,7 +557,7 @@ def build_operational_failure_report(
         for issue_id in issue_ids
     ]
     return {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "report_date": report_date.isoformat(),
         "run_id": run_id,
         "profile": profile,
@@ -628,6 +628,12 @@ def validate_report(report: dict[str, Any]) -> None:
     )
     if errors:
         raise ContractError(f"Report is invalid: {errors[0].message}")
+    source_integrity = report["source_integrity"]
+    if report["status"] in {"PASS", "FAIL"} and (
+        source_integrity.get("verified") is not True
+        or not isinstance(source_integrity.get("contract_digest"), str)
+    ):
+        raise ContractError("Complete report source integrity is incomplete")
     if len(report["issues"]) not in {25, 36}:
         raise ContractError("A report must contain the daily 25 or staging 36 issues")
     if any(

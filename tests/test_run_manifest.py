@@ -163,3 +163,26 @@ def test_manifest_rejects_negative_evidence_counts() -> None:
     )
     with pytest.raises(ContractError, match="Run manifest is invalid"):
         validate_manifest(manifest)
+
+
+def test_prompt_manifest_requires_per_request_assertions() -> None:
+    manifest = _manifest()
+    manifest["agents"][0]["baseline_contract"]["semantic_assertions"] = "required"
+    manifest["manifest_hash"] = content_hash(
+        {key: item for key, item in manifest.items() if key != "manifest_hash"}
+    )
+    with pytest.raises(ContractError, match="Run manifest is invalid"):
+        validate_manifest(manifest)
+
+
+def test_issue_manifest_requires_issue_identity_and_issue_status() -> None:
+    manifest = _manifest()
+    issue = deepcopy(manifest["agents"][0]["baseline"])
+    issue["logical_version"] = "issue-001"
+    issue["status"] = "passed"
+    manifest["agents"][0]["issues"] = [issue]
+    manifest["manifest_hash"] = content_hash(
+        {key: item for key, item in manifest.items() if key != "manifest_hash"}
+    )
+    with pytest.raises(ContractError, match="Run manifest is invalid"):
+        validate_manifest(manifest)

@@ -23,9 +23,12 @@ from agent_insights_quality.models import (
     SemanticAssertionEvidence,
     VersionResult,
 )
+from agent_insights_quality.live import (
+    _normalize_fixture,
+    _semantic_assertion_names,
+)
 from agent_insights_quality.run_manifest import _result_payload, build_manifest
-from agent_insights_quality.util import ContractError
-from agent_insights_quality.util import content_hash
+from agent_insights_quality.util import ROOT, ContractError, content_hash, read_json
 
 
 def _request_summaries(
@@ -56,41 +59,66 @@ def _version_evidence(
     foundry_version: str,
     *,
     agent_type: str,
+    traffic_path: Path | None = None,
 ) -> dict:
     prompt = agent_type == "prompt"
+    if traffic_path is None:
+        summaries = _request_summaries(prompt=prompt)
+    else:
+        summaries = []
+        for index, raw in enumerate(read_json(traffic_path)["requests"]):
+            fixture = _normalize_fixture(raw)
+            names = _semantic_assertion_names(fixture["semantic_assertions"])
+            summaries.append(
+                {
+                    "request_index": index,
+                    "response_count": 1,
+                    "usable_response": True,
+                    "semantic_assertion_count": len(names),
+                    "semantic_assertions_passed": len(names),
+                    "assertion_results": [
+                        {"assertion": name, "passed": True} for name in names
+                    ],
+                    "activation_gate": fixture["activation_gate"],
+                    "direct_terminal_response_count": int(prompt),
+                    "function_call_count": 0,
+                }
+            )
+    request_count = len(summaries)
     return {
         "logical_version": logical_version,
         "foundry_version": foundry_version,
         "content_digest": "sha256:" + "a" * 64,
         "status": "passed" if logical_version == "v0" else "observed",
-        "operation_ids": [f"{index + 1:032x}" for index in range(5)],
+        "operation_ids": [f"{index + 1:032x}" for index in range(request_count)],
         "insight_references": (
             [] if logical_version == "v0" else ["sha256:" + "b" * 64]
         ),
         "window_start": "2026-08-28T10:00:00+00:00",
         "window_end": "2026-08-28T10:01:00+00:00",
         "error_code": None,
-        "endpoint_request_count": 5,
-        "endpoint_response_count": 5,
-        "endpoint_usable_response_count": 5,
-        "semantic_assertion_count": 5,
-        "semantic_assertions_passed": 5,
+        "endpoint_request_count": request_count,
+        "endpoint_response_count": request_count,
+        "endpoint_usable_response_count": request_count,
+        "semantic_assertion_count": sum(
+            item["semantic_assertion_count"] for item in summaries
+        ),
+        "semantic_assertions_passed": sum(
+            item["semantic_assertions_passed"] for item in summaries
+        ),
         "trace_contract_verified": True,
         "trace_behavior_summary": {
-            "operation_count": 5,
+            "operation_count": request_count,
             "tool_call_counts": {},
             "tool_response_count": 0,
-            "assistant_response_count": 5,
-            "explicit_terminal_success_count": 5,
-            "explicit_terminal_output_count": 5,
-            "terminal_response_count": 5,
-            "terminal_output_count": 5,
+            "assistant_response_count": request_count,
+            "explicit_terminal_success_count": request_count,
+            "explicit_terminal_output_count": request_count,
+            "terminal_response_count": request_count,
+            "terminal_output_count": request_count,
             "unhandled_error_count": 0,
         },
-        "endpoint_request_summaries": _request_summaries(
-            prompt=prompt,
-            activation=prompt and logical_version != "v0",
-        ),
+        "endpoint_request_summaries": summaries,
         "evidence_reference": (
             None if logical_version == "v0" else "sha256:" + "c" * 64
         ),
@@ -262,6 +290,7 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
             for agent in agents["agents"]
         },
     }
+    issue_by_id = {item["id"]: item for item in issues["issues"]}
     manifest = {
         "schema_version": "4.0.0",
         "run_id": "aiq-20260824",
@@ -299,6 +328,11 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
                                 issue_id
                             ]["foundry_version"],
                             agent_type=agent["type"],
+                            traffic_path=(
+                                ROOT
+                                / issue_by_id[issue_id]["implementation"]
+                                / "traffic.json"
+                            ),
                         ),
                     }
                     for issue_id in agent["issue_ids"]
@@ -311,7 +345,6 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
     manifest["manifest_hash"] = content_hash(
         {key: value for key, value in manifest.items() if key != "manifest_hash"}
     )
-    issue_by_id = {item["id"]: item for item in issues["issues"]}
     fields = {
         "root_cause": True,
         "title": True,
@@ -322,7 +355,7 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
         "linked_traces": True,
     }
     report = {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "report_date": "2026-08-24",
         "run_id": "aiq-20260824",
         "profile": "staging",
@@ -427,6 +460,38 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
             report=incomplete_report,
             registry=registry,
             manifest=incomplete_manifest,
+            issue_catalog=issues,
+            human_reviewed=True,
+        )
+    hosted_manifest = deepcopy(manifest)
+    travel = next(
+        agent
+        for agent in hosted_manifest["agents"]
+        if agent["name"] == "travel-agent"
+    )
+    switch_issue = next(
+        issue for issue in travel["issues"] if issue["issue_id"] == "issue-028"
+    )
+    switch_summary = next(
+        summary
+        for summary in switch_issue["endpoint_request_summaries"]
+        if summary["activation_gate"]
+    )
+    switch_summary["activation_gate"] = False
+    hosted_manifest["manifest_hash"] = content_hash(
+        {
+            key: value
+            for key, value in hosted_manifest.items()
+            if key != "manifest_hash"
+        }
+    )
+    hosted_report = deepcopy(report)
+    hosted_report["manifest_reference"] = hosted_manifest["manifest_hash"]
+    with pytest.raises(ContractError, match="authoritative traffic"):
+        create_promotion_receipt(
+            report=hosted_report,
+            registry=registry,
+            manifest=hosted_manifest,
             issue_catalog=issues,
             human_reviewed=True,
         )

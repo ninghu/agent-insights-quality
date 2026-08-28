@@ -23,6 +23,7 @@ from .options import (
     describe_itineraries,
     first_option_per_itinerary,
     parse_trip,
+    requested_inventory_kind,
     requested_trips,
 )
 
@@ -145,8 +146,13 @@ def build_graph():
         include_details = False
         trips = requested_trips(text)
         if len(trips) >= 2 and "compare" in text:
+            search_operation = (
+                search_hotels
+                if requested_inventory_kind(text) == "hotel"
+                else search_flights
+            )
             branches = await asyncio.gather(
-                *(search_flights(item, include_details) for item in trips)
+                *(search_operation(item, include_details) for item in trips)
             )
             return {"inventory": first_option_per_itinerary(branches)}
         wants_flight = "flight" in text or "compare" in text

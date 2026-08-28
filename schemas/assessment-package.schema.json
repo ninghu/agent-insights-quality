@@ -59,7 +59,12 @@
         }
       }
     },
-    "full_request_trace_proof": {"type": "object"},
+    "full_request_trace_proof": {
+      "oneOf": [
+        {"type": "object", "maxProperties": 0},
+        {"$ref": "#/$defs/traceProof"}
+      ]
+    },
     "behavior_summary": {
       "type": "object",
       "additionalProperties": false,
@@ -93,7 +98,7 @@
           "card_linked_trace_proof"
         ],
         "properties": {
-          "card_linked_trace_proof": {"type": "object"}
+          "card_linked_trace_proof": {"$ref": "#/$defs/traceProof"}
         }
       }
     },
@@ -142,6 +147,46 @@
     }
   ],
   "$defs": {
+    "traceProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_count",
+        "tool_call_counts",
+        "tool_response_count",
+        "successful_tool_response_count",
+        "error_codes",
+        "assistant_response_count",
+        "explicit_terminal_success_count",
+        "explicit_terminal_output_count",
+        "terminal_success_count",
+        "terminal_output_count",
+        "terminal_response_count",
+        "handled_error_count",
+        "unhandled_error_count"
+      ],
+      "properties": {
+        "operation_count": {"type": "integer", "minimum": 0},
+        "tool_call_counts": {
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        },
+        "tool_response_count": {"type": "integer", "minimum": 0},
+        "successful_tool_response_count": {"type": "integer", "minimum": 0},
+        "error_codes": {
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        },
+        "assistant_response_count": {"type": "integer", "minimum": 0},
+        "explicit_terminal_success_count": {"type": "integer", "minimum": 0},
+        "explicit_terminal_output_count": {"type": "integer", "minimum": 0},
+        "terminal_success_count": {"type": "integer", "minimum": 0},
+        "terminal_output_count": {"type": "integer", "minimum": 0},
+        "terminal_response_count": {"type": "integer", "minimum": 0},
+        "handled_error_count": {"type": "integer", "minimum": 0},
+        "unhandled_error_count": {"type": "integer", "minimum": 0}
+      }
+    },
     "baselineContract": {
       "type": "object",
       "additionalProperties": false,

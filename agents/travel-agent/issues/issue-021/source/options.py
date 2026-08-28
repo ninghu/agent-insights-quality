@@ -24,6 +24,11 @@ def parse_trip(text: str) -> str:
     return trips[0] if trips else "trip-alpha"
 
 
+def requested_inventory_kind(text: str) -> str:
+    lowered = text.lower()
+    return "hotel" if "hotel" in lowered and "flight" not in lowered else "flight"
+
+
 def bounded_inventory_options(
     inventory: list[dict],
     limit: int = MAX_RESPONSE_OPTIONS,

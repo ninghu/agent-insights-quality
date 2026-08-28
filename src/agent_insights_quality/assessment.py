@@ -412,6 +412,47 @@ def _issue_activation_complete(package: dict[str, Any]) -> bool:
     )
 
 
+_TRACE_PROOF_COUNT_FIELDS = {
+    "operation_count",
+    "tool_response_count",
+    "successful_tool_response_count",
+    "assistant_response_count",
+    "explicit_terminal_success_count",
+    "explicit_terminal_output_count",
+    "terminal_success_count",
+    "terminal_output_count",
+    "terminal_response_count",
+    "handled_error_count",
+    "unhandled_error_count",
+}
+
+
+def _trace_proof_shape_complete(proof: Any) -> bool:
+    if not isinstance(proof, dict):
+        return False
+    if not _TRACE_PROOF_COUNT_FIELDS.issubset(proof):
+        return False
+    if not all(
+        isinstance(proof[field], int)
+        and not isinstance(proof[field], bool)
+        and proof[field] >= 0
+        for field in _TRACE_PROOF_COUNT_FIELDS
+    ):
+        return False
+    for field in ("tool_call_counts", "error_codes"):
+        counts = proof.get(field)
+        if not isinstance(counts, dict) or not all(
+            isinstance(key, str)
+            and key
+            and isinstance(count, int)
+            and not isinstance(count, bool)
+            and count >= 0
+            for key, count in counts.items()
+        ):
+            return False
+    return True
+
+
 def _baseline_behavior_summary(
     endpoint: dict[str, Any],
     trace_proof: dict[str, Any],
@@ -421,6 +462,7 @@ def _baseline_behavior_summary(
     summaries = endpoint.get("request_summaries")
     summaries = summaries if isinstance(summaries, list) else []
     summaries_valid = _request_summaries_consistent(endpoint)
+    proof_complete = _trace_proof_shape_complete(trace_proof)
     if request_count <= 0:
         return {
             "endpoint_complete": False,
@@ -449,7 +491,8 @@ def _baseline_behavior_summary(
         )
     terminal_mode = contract["terminal_response"]
     terminal_complete = (
-        int(trace_proof.get("terminal_response_count") or 0) == request_count
+        proof_complete
+        and int(trace_proof.get("terminal_response_count") or 0) == request_count
         and int(trace_proof.get("terminal_output_count") or 0) == request_count
         and int(trace_proof.get("unhandled_error_count") or 0) == 0
     )
@@ -759,7 +802,8 @@ def _validate_issue_cards(
         ):
             raise ContractError("Issue card-linked trace proof is incomplete")
         terminal_proven = (
-            int(card_proof.get("terminal_response_count") or 0) >= 1
+            _trace_proof_shape_complete(card_proof)
+            and int(card_proof.get("terminal_response_count") or 0) >= 1
             and int(card_proof.get("terminal_output_count") or 0) >= 1
         )
         if not terminal_proven and (
@@ -794,6 +838,30 @@ def _validate_issue_cards(
         raise ContractError(
             "MATCHED assessment requires one terminal-proven MATCHED card"
         )
+    card_types = [item["finding_type"] for item in evaluations]
+    top_type = assessment["finding_type"]
+    if top_type == "PARTIAL" and (
+        "PARTIAL" not in card_types or "MATCHED" in card_types
+    ):
+        raise ContractError("PARTIAL assessment contradicts card evaluations")
+    if top_type == "MISMATCHED" and (
+        "MISMATCHED" not in card_types
+        or any(value in card_types for value in ("MATCHED", "PARTIAL"))
+    ):
+        raise ContractError("MISMATCHED assessment contradicts card evaluations")
+    if top_type == "NOISE" and (
+        not card_types or any(value != "NOISE" for value in card_types)
+    ):
+        raise ContractError("NOISE assessment contradicts card evaluations")
+    if top_type == "DUPLICATE" and (
+        "DUPLICATE" not in card_types or "INCOMPLETE" in card_types
+    ):
+        raise ContractError("DUPLICATE assessment contradicts card evaluations")
+    if top_type == "MISSING" and any(
+        value in card_types
+        for value in ("MATCHED", "PARTIAL", "MISMATCHED", "DUPLICATE", "INCOMPLETE")
+    ):
+        raise ContractError("MISSING assessment contradicts card evaluations")
 
 
 def _validate_baseline_cards(
@@ -816,6 +884,13 @@ def _validate_baseline_cards(
             or int(card_proof.get("operation_count") or 0) < 1
         ):
             raise ContractError("Baseline card-linked trace proof is incomplete")
+        if not _trace_proof_shape_complete(card_proof) and (
+            evaluation["evaluation"] != "incomplete"
+            or evaluation["ownership"] not in {"test_framework", "unresolved"}
+        ):
+            raise ContractError(
+                "Truncated baseline card proof must remain incomplete"
+            )
         if _baseline_card_has_contradictory_evidence(card, package) and (
             evaluation["evaluation"] != "incomplete"
             or evaluation["ownership"] not in {"test_framework", "unresolved"}

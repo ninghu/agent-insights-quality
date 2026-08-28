@@ -155,6 +155,8 @@ proof. Use GPT-5.6 Sol with
 
 Run manifest schema `4.0.0` binds both the official/test-email delivery mode and verified source,
 activation, endpoint, semantic, and trace evidence. Superseded manifest shapes are rejected.
+Newly finalized reports use schema `2.0.0` and require verified source integrity for every complete
+`PASS` or `FAIL`; immutable historical reports are not rewritten or accepted as current output.
 
 ```powershell
 python -m agent_insights_quality finalize `

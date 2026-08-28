@@ -39,7 +39,8 @@
           "exact_json": {
             "action": "create_appointment",
             "provider": "Dr. Rivera",
-            "slot": "slot-demo-101"
+            "slot": "slot-demo-101",
+            "message": "Please confirm"
           }
         }
       }
@@ -80,7 +81,8 @@
           "exact_json": {
             "action": "create_appointment",
             "provider": "Dr. Rivera",
-            "slot": "slot-demo-102"
+            "slot": "slot-demo-102",
+            "message": "Please confirm"
           }
         }
       }
@@ -121,7 +123,8 @@
           "exact_json": {
             "action": "create_appointment",
             "provider": "Dr. Rivera",
-            "slot": "slot-demo-103"
+            "slot": "slot-demo-103",
+            "message": "Please confirm"
           }
         }
       }
@@ -162,7 +165,8 @@
           "exact_json": {
             "action": "create_appointment",
             "provider": "Dr. Rivera",
-            "slot": "slot-demo-104"
+            "slot": "slot-demo-104",
+            "message": "Please confirm"
           }
         }
       }
@@ -203,7 +207,8 @@
           "exact_json": {
             "action": "create_appointment",
             "provider": "Dr. Rivera",
-            "slot": "slot-demo-105"
+            "slot": "slot-demo-105",
+            "message": "Please confirm"
           }
         }
       }
