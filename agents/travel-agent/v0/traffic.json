@@ -101,7 +101,23 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Runs independent searches concurrently."
+        "behavior": "Runs independent searches concurrently.",
+        "semantic_assertions": {
+          "required_terms_all": [
+            "flight-demo-0",
+            "hotel-demo-0",
+            "price",
+            "USD 200",
+            "USD 120",
+            "Booking not completed",
+            "Showing 2 of 4"
+          ],
+          "forbidden_terms": [
+            "Booking completed",
+            "flight-demo-1",
+            "hotel-demo-1"
+          ]
+        }
       }
     },
     {

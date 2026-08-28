@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import re
@@ -17,6 +18,25 @@ def _is_source_file(path: Path) -> bool:
         and "__pycache__" not in path.parts
         and path.suffix.casefold() not in {".pyc", ".pyo"}
     )
+
+
+def _normalized_source_diff(baseline: str, issue: str) -> str:
+    lines = difflib.unified_diff(
+        baseline.splitlines(),
+        issue.splitlines(),
+        fromfile="baseline",
+        tofile="issue",
+        n=1,
+        lineterm="",
+    )
+    normalized = []
+    for line in lines:
+        if line.startswith(("--- ", "+++ ")):
+            continue
+        normalized.append(
+            re.sub(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@", "@@", line)
+        )
+    return "\n".join(normalized)
 
 
 def test_prompt_definitions_are_complete_and_use_gpt_5_4_mini() -> None:
@@ -266,6 +286,105 @@ def test_support_issue_sources_only_add_their_declared_defect() -> None:
             f'ISSUE_ID = "{issue_id}"',
         )
         assert source == expected_prefix + defect + anchor + baseline_suffix
+
+
+def test_travel_sources_preserve_bounded_comparison_contract() -> None:
+    root = ROOT / "agents" / "travel-agent"
+    sources = [
+        root / "v0" / "source" / "app.py",
+        *sorted((root / "issues").glob("issue-*/source/app.py")),
+    ]
+    assert len(sources) == 9
+    for source in sources:
+        text = source.read_text(encoding="utf-8")
+        assert "MAX_RESPONSE_OPTIONS = 2" in text
+        assert '"carrier": "Contoso Air"' in text
+        assert '"departure": "09:00"' in text
+        assert '"property": "Fabrikam Stay"' in text
+        assert '"rating": 4.5' in text
+        assert "count = 80 if include_details else 2" in text
+        assert "def bounded_inventory_options(" in text
+        assert "Showing {shown} of {len(inventory)} synthetic options." in text
+        if "issue-025" not in source.parts:
+            assert (
+                'return {"booked": bool(state.get("validated") '
+                'and state.get("confirmed"))}'
+            ) in text
+            assert '"booked": True' not in text
+
+    traffic = json.loads((root / "v0" / "traffic.json").read_text(encoding="utf-8"))
+    ordinary = next(
+        item for item in traffic["requests"] if item["id"] == "travel-agent-v0-ordinary"
+    )
+    assertions = ordinary["expected"]["semantic_assertions"]
+    assert assertions["required_terms_all"] == [
+        "flight-demo-0",
+        "hotel-demo-0",
+        "price",
+        "USD 200",
+        "USD 120",
+        "Booking not completed",
+        "Showing 2 of 4",
+    ]
+    assert assertions["forbidden_terms"] == [
+        "Booking completed",
+        "flight-demo-1",
+        "hotel-demo-1",
+    ]
+
+
+def test_travel_issue_sources_match_reviewed_deltas() -> None:
+    root = ROOT / "agents" / "travel-agent"
+    baseline_root = root / "v0" / "source"
+    manifest = yaml.safe_load(
+        (ROOT / "tests" / "fixtures" / "travel_issue_source_deltas.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["contract_version"] == "1.0"
+    assert manifest["baseline"] == "agents/travel-agent/v0/source"
+    issues = manifest["issues"]
+    assert set(issues) == {
+        "issue-021",
+        "issue-022",
+        "issue-023",
+        "issue-024",
+        "issue-025",
+        "issue-026",
+        "issue-027",
+        "issue-028",
+    }
+
+    baseline_files = {
+        path.relative_to(baseline_root).as_posix(): path
+        for path in baseline_root.rglob("*")
+        if _is_source_file(path)
+    }
+    baseline_app = baseline_files["app.py"].read_text(encoding="utf-8")
+    for issue_id, reviewed in issues.items():
+        issue_root = root / "issues" / issue_id
+        implementation = yaml.safe_load(
+            (issue_root / "implementation.yaml").read_text(encoding="utf-8")
+        )
+        assert (
+            reviewed["declared_delta"]
+            == implementation["injected_defect"]["single_root"]
+        )
+        issue_files = {
+            path.relative_to(issue_root / "source").as_posix(): path
+            for path in (issue_root / "source").rglob("*")
+            if _is_source_file(path)
+        }
+        assert set(issue_files) == set(baseline_files)
+        for relative_path, baseline_path in baseline_files.items():
+            if relative_path == "app.py":
+                actual_diff = _normalized_source_diff(
+                    baseline_app,
+                    issue_files[relative_path].read_text(encoding="utf-8"),
+                )
+                assert actual_diff == reviewed["expected_app_diff"]
+            else:
+                assert issue_files[relative_path].read_bytes() == baseline_path.read_bytes()
 
 
 def test_hosted_framework_and_identity_boundaries() -> None:

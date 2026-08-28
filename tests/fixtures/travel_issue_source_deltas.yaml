@@ -1,0 +1,100 @@
+contract_version: '1.0'
+baseline: agents/travel-agent/v0/source
+issues:
+  issue-021:
+    declared_delta: The failed-search branch inserts an invented inventory item.
+    expected_app_diff: |-
+      @@
+               trip = state["trip"]
+      +        await failed_search("search_flights")
+      +        return {
+      +            "errors": ["inventory_search_failed"],
+      +            "inventory": [{"id": "invented-demo-seat", "trip": trip}],
+      +        }
+               if "temporary flight search" in text:
+      @@
+           async def respond(state: TravelState) -> TravelState:
+      -        answer = None
+      +        answer = "A seat is available on invented-demo-seat."
+               inventory = state.get("inventory", [])
+  issue-022:
+    declared_delta: The flight route invokes search_hotels.
+    expected_app_diff: |-
+      @@
+               trip = state["trip"]
+      +        if "flight" in text:
+      +            return {"inventory": await search_hotels(trip)}
+               if "temporary flight search" in text:
+  issue-023:
+    declared_delta: The search graph node is bypassed logically and returns no evidence.
+    expected_app_diff: |-
+      @@
+               trip = state["trip"]
+      +        return {"inventory": []}
+               if "temporary flight search" in text:
+      @@
+           async def respond(state: TravelState) -> TravelState:
+      -        answer = None
+      +        answer = "Inventory is available even though no authoritative search ran."
+               inventory = state.get("inventory", [])
+  issue-024:
+    declared_delta: Both search tools enable expanded details and return 80 items each.
+    expected_app_diff: |-
+      @@
+                   return {"inventory": flights, "errors": ["hotel_search_unavailable"]}
+      -        include_details = False
+      +        include_details = True
+               wants_flight = "flight" in text or "compare" in text
+  issue-025:
+    declared_delta: The search node sets booked before downstream safety checks.
+    expected_app_diff: |-
+      @@
+                   inventory = await search_flights(trip, include_details)
+      -        return {"inventory": inventory}
+      +        return {"inventory": inventory, "booked": True}
+       
+      @@
+           async def book(state: TravelState) -> TravelState:
+      +        return {}
+               return {"booked": bool(state.get("validated") and state.get("confirmed"))}
+  issue-026:
+    declared_delta: Comparison assembly truncates the combined inventory to one item.
+    expected_app_diff: |-
+      @@
+               trip = state["trip"]
+      +        trips = requested_trips(text)
+      +        if len(trips) >= 2:
+      +            branches = await asyncio.gather(*(search_flights(item) for item in trips))
+      +            inventory = [item for branch in branches for item in branch]
+      +            return {
+      +                "inventory": [
+      +                    item for item in inventory if item["trip"] == trips[0]
+      +                ][:1]
+      +            }
+               if "temporary flight search" in text:
+      @@
+                   return {"inventory": flights, "errors": ["hotel_search_unavailable"]}
+      +        trips = requested_trips(text)
+               include_details = False
+  issue-027:
+    declared_delta: The graph search node awaits flight before starting hotel.
+    expected_app_diff: |-
+      @@
+               trip = state["trip"]
+      +        if "flight" in text and "hotel" in text:
+      +            flights = await search_flights(trip)
+      +            hotels = await search_hotels(trip)
+      +            return {"inventory": flights + hotels}
+               if "temporary flight search" in text:
+  issue-028:
+    declared_delta: The plan node preserves the first stored trip instead of parsing the latest turn.
+    expected_app_diff: |-
+      @@
+               text = latest_text(state)
+      +        if state.get("trip"):
+      +            return {
+      +                "trip": state["trip"],
+      +                "confirmed": "confirm" in text.lower(),
+      +                "errors": [],
+      +            }
+               return {
