@@ -26,6 +26,20 @@
     },
     "manifest_reference": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "catalog_hashes": {"type": "object"},
+    "source_integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verified", "contract_digest"],
+      "properties": {
+        "verified": {"type": "boolean"},
+        "contract_digest": {
+          "oneOf": [
+            {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            {"type": "null"}
+          ]
+        }
+      }
+    },
     "status": {"enum": ["PASS", "FAIL", "INCOMPLETE"]},
     "baseline": {"type": "array", "minItems": 5, "maxItems": 5},
     "issues": {"type": "array"},

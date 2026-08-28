@@ -32,6 +32,8 @@ Agents and 36 reviewed, single-root issues.
 - Do not add compatibility readers or restore superseded identifiers and formats.
 - Every issue folder is the complete deployable source authority for that version: Prompt issues own a
   full `definition.json`; Hosted issues own a full `source/` tree containing only that defect.
+- Catalog Prompt Test Agents are pure Prompt: definitions never declare tools, traffic never contains
+  tool fixtures, and any emitted function call fails the qualification contract.
 - Never ship runtime injection selectors, dormant branches for other issues, generic defect hooks, or
   build-time source patches inside an Agent version.
 
@@ -66,7 +68,12 @@ Agents and 36 reviewed, single-root issues.
 - Use independent `endpoint_evidence` and trace proof. Never use a card's own claim to prove the
   Agent defect described by that card.
 - Equal nonzero request, response, and usable-response counts plus a verified natural trace contract
-  prove that the reviewed source-and-traffic contract was exercised. Semantic assertions are optional.
+  prove only endpoint execution. Baselines also require every reviewed semantic assertion and one
+  independently proven terminal success with output per request.
+- Assess card-linked proof against full-request proof. An intermediate-operation contradiction is
+  `test_framework` or `unresolved`, never an unsupported Agent or Insight Engine conclusion.
+- A handled child error may coexist with a successful terminal response; any unhandled baseline error
+  keeps the run incomplete.
 - Assign `insight_engine` only when endpoint behavior and trace contract are proven.
 - Baseline source and configuration must be reviewed healthy, but runtime behavior must still be
   proven. A baseline card supported by independent trace proof is an `agent` finding, not Noise;

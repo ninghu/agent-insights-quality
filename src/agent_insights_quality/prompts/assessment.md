@@ -19,27 +19,45 @@ Classify ownership independently:
 - `unresolved`: evidence cannot distinguish ownership.
 
 Never assign `insight_engine` unless endpoint behavior and trace contract are both proven.
-Use `endpoint_evidence`, not the Insight's own description, as the independent runtime proof.
+Use `endpoint_evidence`, its per-request assertion results, and `full_request_trace_proof`,
+not the Insight's own description, as the independent runtime proof.
 Never infer an Agent defect by treating the observed card's claim as proof of that same defect.
 Before returning an `incomplete` baseline or `INCOMPLETE` issue when runtime evidence is complete,
 perform one focused evidence recheck. Re-read the reviewed Agent source and configuration bound by
-the package digest, the current endpoint evidence, independent trace proof, and the generated card's
-exact claim. Resolve ownership only when that independent evidence proves it; otherwise retain the
-incomplete result. This is a read-only assessment recheck and must never send new Agent traffic.
-Use each baseline card's `independent_trace_proof` as sanitized read-only evidence of actual tool-call
-counts, tool responses, error codes, and user-facing response presence. For a baseline card:
+the package digest, the current endpoint evidence, independent full-request and card-linked trace
+proof, and the generated card's exact claim. Resolve ownership only when that independent evidence
+proves it; otherwise retain the incomplete result. This is a read-only assessment recheck and must
+never send new Agent traffic.
+Use `full_request_trace_proof` for the complete execution and each card's
+`card_linked_trace_proof` for the card-linked subset. Both are sanitized read-only evidence of
+actual function/tool calls, responses, handled or unhandled errors, and terminal output presence.
+For a baseline card:
 
 - use `agent_finding` at the top level and `valid_agent_finding` with `agent` ownership when
   independent trace proof supports at least one card and no card remains incomplete;
 - use `noise` with `insight_engine` ownership when independent proof contradicts the card;
 - use `incomplete` with `unresolved` ownership when the proof cannot distinguish them.
 
-Do not assume a baseline is healthy merely because response counts and the generic trace contract pass.
+If full-request evidence proves complete terminal execution but the card-linked subset contains only
+an intermediate or incomplete operation, do not return `agent_finding` or `noise`. Route the
+contradiction to `inconclusive` with `test_framework` or `unresolved` ownership until independent
+terminal evidence proves the card's claim.
 
-Agent source, traffic, and version digests are reviewed before qualification. Treat the reviewed
-runtime contract as exercised when request, response, and usable-response counts are equal and
-nonzero and `trace_contract_verified` is true. Semantic assertion counts are optional corroboration;
-their absence alone is not incomplete evidence.
+Agent source, traffic, and version digests are reviewed before qualification. A baseline is complete
+only when `behavior_summary` proves endpoint, semantic, and terminal evidence complete. Prompt
+baselines additionally require exactly five request summaries, one direct terminal response and zero
+function calls per request, exactly five complete operations, and every reviewed assertion passing.
+Hosted baselines require one privacy-safe terminal success plus output-presence signal per request;
+HTTP 200 alone is insufficient.
+Any nonzero `unhandled_error_count` makes baseline evidence incomplete. A handled child error may
+still be healthy only when the same request has independently proven terminal success and output.
+Treat `source_integrity` and `manifest_reference` as the digest-bound proof that the reviewed source
+delta and per-request evidence belong to this exact qualification run.
+
+For issues, inspect every `activation_gate` request summary and its named assertion results. If any
+designated activation assertion failed or is absent, return `INCOMPLETE` with `test_framework`
+ownership, never `MISSING` with `insight_engine` ownership. Semantic assertions that are not
+activation gates remain corroborating evidence rather than an independent scoring framework.
 
 Evaluate every object in `observed_insights` independently in `card_evaluations`. Echo each card's
 reference, title, category, and severity exactly. Use one card-level verdict, finding type, ownership,

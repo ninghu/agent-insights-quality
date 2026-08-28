@@ -34,7 +34,38 @@ FIELD_WEIGHTS = {
 }
 
 
-def _runtime_evidence_complete(value: dict[str, Any]) -> bool:
+def _request_summaries_complete(value: dict[str, Any]) -> bool:
+    requests = value.get("endpoint_request_count")
+    summaries = value.get("endpoint_request_summaries")
+    if not isinstance(requests, int) or not isinstance(summaries, list):
+        return False
+    if len(summaries) != requests:
+        return False
+    for index, summary in enumerate(summaries):
+        if (
+            not isinstance(summary, dict)
+            or summary.get("request_index") != index
+            or summary.get("response_count") != 1
+            or summary.get("usable_response") is not True
+        ):
+            return False
+        results = summary.get("assertion_results")
+        if (
+            not isinstance(results, list)
+            or not all(isinstance(item, dict) for item in results)
+            or len(results) != summary.get("semantic_assertion_count")
+            or sum(item.get("passed") is True for item in results)
+            != summary.get("semantic_assertions_passed")
+        ):
+            return False
+    return True
+
+
+def _runtime_evidence_complete(
+    value: dict[str, Any],
+    *,
+    require_activation: bool = False,
+) -> bool:
     requests = value.get("endpoint_request_count")
     responses = value.get("endpoint_response_count")
     usable = value.get("endpoint_usable_response_count")
@@ -50,7 +81,89 @@ def _runtime_evidence_complete(value: dict[str, Any]) -> bool:
         and usable > 0
         and requests == responses == usable
         and value.get("trace_contract_verified") is True
+        and _request_summaries_complete(value)
+        and (
+            not require_activation
+            or (
+                any(
+                    item.get("activation_gate") is True
+                    for item in value["endpoint_request_summaries"]
+                )
+                and all(
+                    item.get("semantic_assertion_count", 0) > 0
+                    and item.get("semantic_assertions_passed")
+                    == item.get("semantic_assertion_count")
+                    for item in value["endpoint_request_summaries"]
+                    if item.get("activation_gate") is True
+                )
+            )
+        )
     )
+
+
+def _baseline_runtime_evidence_complete(
+    agent: dict[str, Any],
+    value: dict[str, Any],
+) -> bool:
+    request_count = value.get("endpoint_request_count")
+    trace = value.get("trace_behavior_summary")
+    summaries = value.get("endpoint_request_summaries")
+    terminal_mode = agent["baseline_contract"]["terminal_response"]
+    if (
+        not _runtime_evidence_complete(value)
+        or request_count != agent["baseline_contract"]["request_count"]
+        or not isinstance(trace, dict)
+        or not isinstance(summaries, list)
+        or int(value.get("semantic_assertion_count") or 0) < 1
+        or value.get("semantic_assertions_passed")
+        != value.get("semantic_assertion_count")
+        or int(trace.get("terminal_response_count") or 0) != request_count
+        or int(trace.get("terminal_output_count") or 0) != request_count
+        or int(trace.get("unhandled_error_count") or 0) != 0
+    ):
+        return False
+    if terminal_mode == "explicit_span_attributes":
+        if (
+            int(trace.get("explicit_terminal_success_count") or 0)
+            != request_count
+            or int(trace.get("explicit_terminal_output_count") or 0)
+            != request_count
+        ):
+            return False
+    elif int(trace.get("assistant_response_count") or 0) != request_count:
+        return False
+    if agent["baseline_contract"]["semantic_assertions"] == "required_per_request":
+        if any(int(item.get("semantic_assertion_count") or 0) < 1 for item in summaries):
+            return False
+    if agent["type"] == "prompt":
+        return (
+            int(trace.get("operation_count") or 0) == request_count
+            and not trace.get("tool_call_counts")
+            and int(trace.get("tool_response_count") or 0) == 0
+            and all(
+                item.get("direct_terminal_response_count") == 1
+                and item.get("function_call_count") == 0
+                for item in summaries
+            )
+        )
+    return True
+
+
+def _activation_evidence(value: dict[str, Any]) -> dict[str, int]:
+    gates = [
+        item
+        for item in value.get("endpoint_request_summaries", [])
+        if isinstance(item, dict) and item.get("activation_gate") is True
+    ]
+    return {
+        "request_count": len(gates),
+        "assertion_count": sum(
+            int(item.get("semantic_assertion_count") or 0) for item in gates
+        ),
+        "assertions_passed": sum(
+            int(item.get("semantic_assertions_passed") or 0) for item in gates
+        ),
+    }
 
 
 def calculate_quality_score(
@@ -258,7 +371,11 @@ def build_report(
     incomplete = False
     for agent in manifest["agents"]:
         baseline_value = agent["baseline"]
-        baseline_runtime_complete = _runtime_evidence_complete(baseline_value)
+        baseline_runtime_complete = _baseline_runtime_evidence_complete(
+            agent,
+            baseline_value,
+        )
+        trace_summary = baseline_value.get("trace_behavior_summary") or {}
         baseline.append(
             {
                 "agent": agent["name"],
@@ -268,6 +385,29 @@ def build_report(
                 "error_code": baseline_value.get("error_code"),
                 "runtime_evidence_complete": baseline_runtime_complete,
                 "insight_count": len(baseline_value["insight_references"]),
+                "terminal_evidence": {
+                    "response_count": int(
+                        trace_summary.get("terminal_response_count") or 0
+                    ),
+                    "success_count": int(
+                        trace_summary.get("terminal_success_count") or 0
+                    ),
+                    "explicit_success_count": int(
+                        trace_summary.get("explicit_terminal_success_count") or 0
+                    ),
+                    "output_count": int(
+                        trace_summary.get("terminal_output_count") or 0
+                    ),
+                    "explicit_output_count": int(
+                        trace_summary.get("explicit_terminal_output_count") or 0
+                    ),
+                    "handled_error_count": int(
+                        trace_summary.get("handled_error_count") or 0
+                    ),
+                    "unhandled_error_count": int(
+                        trace_summary.get("unhandled_error_count") or 0
+                    ),
+                },
                 "assessment": {
                     "verdict": baseline_assessments[agent["name"]]["verdict"],
                     "ownership": baseline_assessments[agent["name"]]["ownership"],
@@ -296,7 +436,10 @@ def build_report(
         for value in agent["issues"]:
             issue_id = value["issue_id"]
             assessment = assessments[issue_id]
-            runtime_complete = _runtime_evidence_complete(value)
+            runtime_complete = _runtime_evidence_complete(
+                value,
+                require_activation=agent["type"] == "prompt",
+            )
             fields_pass = (
                 set(assessment["fields"]) == REQUIRED_FIELDS
                 and all(assessment["fields"].values())
@@ -323,6 +466,7 @@ def build_report(
                     "status": value["status"],
                     "error_code": value.get("error_code"),
                     "runtime_evidence_complete": runtime_complete,
+                    "activation_evidence": _activation_evidence(value),
                     "result": (
                         "INCOMPLETE"
                         if not complete
@@ -364,6 +508,7 @@ def build_report(
         "profile": manifest["profile"],
         "manifest_reference": manifest["manifest_hash"],
         "catalog_hashes": manifest["catalog_hashes"],
+        "source_integrity": manifest["source_integrity"],
         "status": status,
         "baseline": baseline,
         "issues": results,
@@ -425,6 +570,10 @@ def build_operational_failure_report(
             }
         ),
         "catalog_hashes": catalog_hashes,
+        "source_integrity": {
+            "verified": False,
+            "contract_digest": None,
+        },
         "status": "INCOMPLETE",
         "baseline": [
             {

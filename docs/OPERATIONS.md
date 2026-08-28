@@ -50,8 +50,9 @@ context and must never be committed. Daily email uses the reviewed public
 `https://aka.ms/agent-insights/quality` short link, which redirects to the shared dashboard.
 
 Provisioning creates five Agents, 41 immutable versions, and five disabled/manual monitors in exactly
-one selected profile. Every hosted version must activate and bind an exact-version session. Prompt
-traffic uses an exact Agent reference. Provisioning emits flushed, public-safe phase, version,
+one selected profile. Every hosted version must activate and bind an exact-version session. Pure
+Prompt traffic uses an exact Agent reference, declares no tools or tool fixtures, and fails closed if
+the model emits a function call. Provisioning emits flushed, public-safe phase, version,
 activation, retry, image-cache, monitor, and registry progress without exposing private resource IDs.
 
 All potentially long-running repository operations use the same console contract: emit a public-safe
@@ -125,10 +126,14 @@ The runner prints flushed, thread-safe progress lines for each Agent/version and
 telemetry, trace, and Agent Insights stages. Long telemetry waits, Insight runs, and remote retries
 emit periodic heartbeats without exposing URLs, payloads, or private identifiers.
 
-Issue source, traffic, and version digests are reviewed contracts. Equal nonzero request, response,
-and usable-response counts plus a verified natural trace contract prove that the reviewed runtime
-contract was exercised. Optional semantic assertions can add simple output checks without becoming a
-second assertion framework.
+Issue source, traffic, source-delta manifests, and version digests are reviewed contracts. Equal
+nonzero request, response, and usable-response counts plus a verified natural trace contract prove
+endpoint execution. A baseline additionally requires all reviewed deterministic assertions and one
+terminal success plus output-presence signal per request. Prompt baselines require exactly one direct
+terminal response and no function calls per request. A failed baseline assertion or designated issue
+activation assertion makes the evidence incomplete rather than an Insight Engine miss.
+Handled child errors require an independently successful terminal response; unhandled baseline
+errors always keep the run incomplete.
 
 The measured five-Agent-concurrent daily smoke on 2026-08-25 completed in 37.6 minutes: 32.1 minutes
 for endpoint/telemetry/Agent Insights runtime, 5.3 minutes for parallel Sol assessment, and 13 seconds
@@ -143,7 +148,9 @@ stops that Agent.
 
 ## Assessment and finalization
 
-`run-daily` writes private assessment packages beside `run-manifest.json`. Use GPT-5.6 Sol with
+`run-daily` writes private assessment packages beside `run-manifest.json`. Packages contain
+privacy-safe per-request assertion outcomes, full-request trace proof, and separate card-linked trace
+proof. Use GPT-5.6 Sol with
 `src/agent_insights_quality/prompts/assessment.md`, then finalize:
 
 ```powershell

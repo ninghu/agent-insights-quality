@@ -4,6 +4,25 @@ from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
+class SemanticAssertionEvidence:
+    assertion: str
+    passed: bool
+
+
+@dataclass(frozen=True)
+class RequestCompletionEvidence:
+    request_index: int
+    response_count: int
+    usable_response: bool
+    semantic_assertion_count: int
+    semantic_assertions_passed: int
+    assertion_results: tuple[SemanticAssertionEvidence, ...]
+    activation_gate: bool
+    direct_terminal_response_count: int
+    function_call_count: int
+
+
+@dataclass(frozen=True)
 class InvocationEvidence:
     operation_ids: tuple[str, ...]
     response_references: tuple[str, ...]
@@ -15,6 +34,7 @@ class InvocationEvidence:
     usable_response_count: int = 0
     semantic_assertion_count: int = 0
     semantic_assertions_passed: int = 0
+    request_summaries: tuple[RequestCompletionEvidence, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -64,6 +84,10 @@ class VersionResult:
     semantic_assertion_count: int = 0
     semantic_assertions_passed: int = 0
     trace_contract_verified: bool = False
+    trace_behavior_summary: dict[str, object] = field(default_factory=dict)
+    endpoint_request_summaries: list[RequestCompletionEvidence] = field(
+        default_factory=list
+    )
 
 
 @dataclass

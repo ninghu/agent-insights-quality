@@ -61,6 +61,9 @@ def _report() -> dict:
     agents, issues = load_catalogs(require_paths=False)
     report["catalog_hashes"]["agents"] = content_hash(agents)
     report["catalog_hashes"]["issues"] = content_hash(issues)
+    issue_by_id = {item["id"]: item for item in issues["issues"]}
+    for item in report["issues"]:
+        item["title"] = issue_by_id[item["issue_id"]]["title"]
     return report
 
 

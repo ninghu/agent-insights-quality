@@ -21,12 +21,34 @@ import pytest
 
 def _manifest() -> dict:
     agents, _ = load_catalogs()
+
+    def request_summaries(*, prompt: bool, activation: bool) -> list[dict]:
+        return [
+            {
+                "request_index": index,
+                "response_count": 1,
+                "usable_response": True,
+                "semantic_assertion_count": 1,
+                "semantic_assertions_passed": 1,
+                "assertion_results": [
+                    {"assertion": "synthetic_contract", "passed": True}
+                ],
+                "activation_gate": activation,
+                "direct_terminal_response_count": int(prompt),
+                "function_call_count": 0,
+            }
+            for index in range(5)
+        ]
+
     values = []
     for agent in agents["agents"]:
         selected = agent["issue_ids"][:5]
+        prompt = agent["type"] == "prompt"
         values.append(
             {
                 "name": agent["name"],
+                "type": agent["type"],
+                "baseline_contract": agent["baseline_contract"],
                 "baseline": {
                     "foundry_version": "1",
                     "status": "passed",
@@ -34,7 +56,26 @@ def _manifest() -> dict:
                     "endpoint_request_count": 5,
                     "endpoint_response_count": 5,
                     "endpoint_usable_response_count": 5,
+                    "semantic_assertion_count": 5,
+                    "semantic_assertions_passed": 5,
                     "trace_contract_verified": True,
+                    "trace_behavior_summary": {
+                        "operation_count": 5,
+                        "tool_call_counts": {},
+                        "tool_response_count": 0,
+                        "assistant_response_count": 5,
+                        "explicit_terminal_success_count": 5,
+                        "explicit_terminal_output_count": 5,
+                        "terminal_response_count": 5,
+                        "terminal_success_count": 5,
+                        "terminal_output_count": 5,
+                        "handled_error_count": 0,
+                        "unhandled_error_count": 0,
+                    },
+                    "endpoint_request_summaries": request_summaries(
+                        prompt=prompt,
+                        activation=False,
+                    ),
                 },
                 "issues": [
                     {
@@ -46,7 +87,14 @@ def _manifest() -> dict:
                         "endpoint_request_count": 5,
                         "endpoint_response_count": 5,
                         "endpoint_usable_response_count": 5,
+                        "semantic_assertion_count": 5,
+                        "semantic_assertions_passed": 5,
                         "trace_contract_verified": True,
+                        "trace_behavior_summary": {},
+                        "endpoint_request_summaries": request_summaries(
+                            prompt=prompt,
+                            activation=prompt,
+                        ),
                     }
                     for issue_id in selected
                 ],
@@ -61,6 +109,10 @@ def _manifest() -> dict:
             "agents": "sha256:" + "d" * 64,
             "issues": "sha256:" + "e" * 64,
             "artifacts": "sha256:" + "f" * 64,
+        },
+        "source_integrity": {
+            "verified": True,
+            "contract_digest": "sha256:" + "1" * 64,
         },
         "agents": values,
     }
@@ -324,15 +376,12 @@ def test_field_quality_and_clean_card_precision_components() -> None:
     assert threshold["summary"]["quality_score"] == 98.3
     assert threshold["status"] == "PASS"
 
-    manifest["agents"][0]["baseline"] = {
-        "foundry_version": "1",
-        "status": "not_at_bar",
-        "insight_references": ["sha256:" + "1" * 64],
-        "endpoint_request_count": 5,
-        "endpoint_response_count": 5,
-        "endpoint_usable_response_count": 5,
-        "trace_contract_verified": True,
-    }
+    manifest["agents"][0]["baseline"].update(
+        {
+            "status": "not_at_bar",
+            "insight_references": ["sha256:" + "1" * 64],
+        }
+    )
     baseline["weather-agent"] = {
         "verdict": "noise",
         "ownership": "insight_engine",
@@ -391,15 +440,12 @@ def test_incomplete_issue_assessment_prevents_a_numeric_score() -> None:
 def test_inconclusive_assessment_prevents_a_numeric_score() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
-    manifest["agents"][0]["baseline"] = {
-        "foundry_version": "1",
-        "status": "not_at_bar",
-        "insight_references": ["sha256:" + "1" * 64],
-        "endpoint_request_count": 5,
-        "endpoint_response_count": 5,
-        "endpoint_usable_response_count": 5,
-        "trace_contract_verified": True,
-    }
+    manifest["agents"][0]["baseline"].update(
+        {
+            "status": "not_at_bar",
+            "insight_references": ["sha256:" + "1" * 64],
+        }
+    )
     baseline = _baseline_assessments(manifest)
     baseline["weather-agent"] = {
         "verdict": "inconclusive",
@@ -425,15 +471,12 @@ def test_inconclusive_assessment_prevents_a_numeric_score() -> None:
 def test_incomplete_baseline_card_prevents_a_numeric_score() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
-    manifest["agents"][0]["baseline"] = {
-        "foundry_version": "1",
-        "status": "not_at_bar",
-        "insight_references": ["sha256:" + "1" * 64],
-        "endpoint_request_count": 5,
-        "endpoint_response_count": 5,
-        "endpoint_usable_response_count": 5,
-        "trace_contract_verified": True,
-    }
+    manifest["agents"][0]["baseline"].update(
+        {
+            "status": "not_at_bar",
+            "insight_references": ["sha256:" + "1" * 64],
+        }
+    )
     baseline = _baseline_assessments(manifest)
     baseline["weather-agent"] = {
         "verdict": "noise",
@@ -451,15 +494,12 @@ def test_incomplete_baseline_card_prevents_a_numeric_score() -> None:
 def test_valid_baseline_agent_finding_is_not_noise() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
-    manifest["agents"][0]["baseline"] = {
-        "foundry_version": "1",
-        "status": "not_at_bar",
-        "insight_references": ["sha256:" + "1" * 64],
-        "endpoint_request_count": 5,
-        "endpoint_response_count": 5,
-        "endpoint_usable_response_count": 5,
-        "trace_contract_verified": True,
-    }
+    manifest["agents"][0]["baseline"].update(
+        {
+            "status": "not_at_bar",
+            "insight_references": ["sha256:" + "1" * 64],
+        }
+    )
     baseline = _baseline_assessments(manifest)
     baseline["weather-agent"] = {
         "verdict": "agent_finding",

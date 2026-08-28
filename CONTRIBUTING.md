@@ -73,11 +73,16 @@ The `onboard-new-issue` skill is authoritative. A new issue requires:
 - a complete self-contained Prompt `definition.json` or Hosted `source/` tree containing exactly one
   independently fixable root cause;
 - deterministic synthetic endpoint traffic that exercises the defect while `v0` remains healthy;
+- a reviewed source-delta contract and deterministic activation assertions that distinguish the issue
+  from its updated healthy baseline;
 - matching catalog entries and updates to every derived topology, schema, CI, reporting, promotion,
   test, skill, and readable-document contract.
 
 Do not use runtime mode switches, dormant defect branches, generic hooks, source patches, telemetry
 injection, compatibility aliases, or private data.
+
+Prompt Test Agents are pure Prompt contracts. Do not add function tools or traffic tool fixtures;
+multi-turn traffic may use response continuation only for an intentional conversation-memory check.
 
 ## Validate the change
 

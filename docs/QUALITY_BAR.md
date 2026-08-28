@@ -40,8 +40,9 @@ A complete, trustworthy run is `FAIL` when its quality score is below `90/100`.
 
 ## INCOMPLETE
 
-A run is `INCOMPLETE` when identity, quota, deployment, endpoint traffic, trace ingestion, Agent
-Insights execution, exact-version attribution, assessment, or report consistency prevents a trusted
+A run is `INCOMPLETE` when identity, quota, deployment, endpoint traffic, a baseline semantic or
+terminal proof, a designated issue activation assertion, trace ingestion, Agent Insights execution,
+exact-version attribution, assessment, source integrity, or report consistency prevents a trusted
 complete result.
 
 Any baseline assessment with an `inconclusive` verdict or issue assessment with an `INCOMPLETE`

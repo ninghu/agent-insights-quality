@@ -5,6 +5,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
+from agent_insights_quality.catalogs import source_integrity_digest
 from agent_insights_quality.models import AgentResult
 from agent_insights_quality.registry import version_entry
 from agent_insights_quality.util import ROOT, ContractError, content_hash, read_json
@@ -23,11 +24,16 @@ def build_manifest(
     insight_lookback_hours: float,
     telemetry_resource_set: str,
     catalog_hashes: dict[str, str],
+    agent_catalog: dict[str, Any],
+    issue_catalog: dict[str, Any],
     selected: dict[str, list[str]],
     registry: dict[str, Any],
     results: list[AgentResult],
 ) -> dict[str, Any]:
     result_by_agent = {item.agent_name: item for item in results}
+    contract_by_agent = {
+        item["name"]: item for item in agent_catalog["agents"]
+    }
     agents: list[dict[str, Any]] = []
     for agent_name in selected:
         result = result_by_agent[agent_name]
@@ -35,6 +41,10 @@ def build_manifest(
         agents.append(
             {
                 "name": agent_name,
+                "type": contract_by_agent[agent_name]["type"],
+                "baseline_contract": contract_by_agent[agent_name][
+                    "baseline_contract"
+                ],
                 "monitor_reference": content_hash(
                     {"monitor_id": registry["agents"][agent_name]["monitor_id"]}
                 ),
@@ -60,13 +70,20 @@ def build_manifest(
             }
         )
     manifest: dict[str, Any] = {
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "run_id": run_id(report_date, rerun),
         "profile": profile,
         "report_date": report_date.isoformat(),
         "insight_lookback_hours": insight_lookback_hours,
         "telemetry_resource_set": telemetry_resource_set,
         "catalog_hashes": catalog_hashes,
+        "source_integrity": {
+            "verified": True,
+            "contract_digest": source_integrity_digest(
+                agent_catalog,
+                issue_catalog,
+            ),
+        },
         "agents": agents,
         "manifest_hash": "",
     }
@@ -91,6 +108,29 @@ def _result_payload(result: Any) -> dict[str, Any]:
         "semantic_assertion_count": result.semantic_assertion_count,
         "semantic_assertions_passed": result.semantic_assertions_passed,
         "trace_contract_verified": result.trace_contract_verified,
+        "trace_behavior_summary": result.trace_behavior_summary,
+        "endpoint_request_summaries": [
+            {
+                "request_index": item.request_index,
+                "response_count": item.response_count,
+                "usable_response": item.usable_response,
+                "semantic_assertion_count": item.semantic_assertion_count,
+                "semantic_assertions_passed": item.semantic_assertions_passed,
+                "assertion_results": [
+                    {
+                        "assertion": assertion.assertion,
+                        "passed": assertion.passed,
+                    }
+                    for assertion in item.assertion_results
+                ],
+                "activation_gate": item.activation_gate,
+                "direct_terminal_response_count": (
+                    item.direct_terminal_response_count
+                ),
+                "function_call_count": item.function_call_count,
+            }
+            for item in result.endpoint_request_summaries
+        ],
         "evidence_reference": (
             content_hash(
                 {

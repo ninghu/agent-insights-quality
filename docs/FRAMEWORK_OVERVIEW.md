@@ -4,6 +4,12 @@
 
 This framework continuously measures whether Agent Insights detects known Agent defects accurately, completely, and without noise. Five real deployed test Agents exercise Prompt, Microsoft Agent Framework, LangGraph, and custom AgentServer patterns. Every issue is a reviewed single-root defect with deterministic synthetic traffic and an expected Insight contract. The framework invokes deployed endpoints, waits for natural telemetry, verifies trace provenance, runs Agent Insights, and then uses GPT-5.6 Sol to evaluate each generated Insight card and assign ownership. Complete runs receive a field-weighted quality score; operationally incomplete runs never become product failures. Staging validates all 36 issues before a reviewed Agent set is promoted once to daily. Weekday daily runs reuse the deployed versions and test five issues per Agent without redeploying. Authorized operators share the same deployed environment through Entra-authenticated registry blobs that synchronize into a private local runtime cache before traffic.
 
+Weather and Healthcare are pure Prompt controls: they use request-provided synthetic evidence, never
+declare function tools or fixtures, and permit response continuation only for intentional memory
+turns. Baseline decisions require deterministic semantic coverage, full-request proof, and terminal
+output evidence; a card-linked intermediate operation cannot override contradictory full-request
+evidence.
+
 ## High-level flow
 
 ```mermaid

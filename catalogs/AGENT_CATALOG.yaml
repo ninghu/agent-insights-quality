@@ -26,6 +26,11 @@ agents:
     framework: foundry_prompt
     model: gpt-5.4-mini
     baseline_path: agents/weather-agent/v0
+    baseline_contract:
+      request_count: 5
+      terminal_response: direct_prompt
+      semantic_assertions: required_per_request
+      function_calling: forbidden
     issue_ids: [issue-001, issue-002, issue-003, issue-004, issue-005, issue-006]
   - name: healthcare-agent
     owner: Ilya Matiach
@@ -33,6 +38,11 @@ agents:
     framework: foundry_prompt
     model: gpt-5.4-mini
     baseline_path: agents/healthcare-agent/v0
+    baseline_contract:
+      request_count: 5
+      terminal_response: direct_prompt
+      semantic_assertions: required_per_request
+      function_calling: forbidden
     issue_ids: [issue-007, issue-008, issue-009, issue-010, issue-011, issue-012]
   - name: finance-agent
     owner: Han Che
@@ -40,6 +50,11 @@ agents:
     framework: microsoft_agent_framework
     model: gpt-5.4-mini
     baseline_path: agents/finance-agent/v0
+    baseline_contract:
+      request_count: 5
+      terminal_response: standard_assistant_message
+      semantic_assertions: required
+      function_calling: not_applicable
     issue_ids: [issue-013, issue-014, issue-015, issue-016, issue-017, issue-018, issue-019, issue-020]
   - name: travel-agent
     owner: Sean Gayler
@@ -47,6 +62,11 @@ agents:
     framework: langgraph
     model: gpt-5.4-mini
     baseline_path: agents/travel-agent/v0
+    baseline_contract:
+      request_count: 5
+      terminal_response: standard_assistant_message
+      semantic_assertions: required
+      function_calling: not_applicable
     issue_ids: [issue-021, issue-022, issue-023, issue-024, issue-025, issue-026, issue-027, issue-028]
   - name: support-ticket-agent
     owner: Nishal Dsilva
@@ -54,4 +74,9 @@ agents:
     framework: custom_responses
     model: gpt-5.4-mini
     baseline_path: agents/support-ticket-agent/v0
+    baseline_contract:
+      request_count: 5
+      terminal_response: explicit_span_attributes
+      semantic_assertions: required
+      function_calling: not_applicable
     issue_ids: [issue-029, issue-030, issue-031, issue-032, issue-033, issue-034, issue-035, issue-036]

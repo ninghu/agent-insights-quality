@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
+
+import pytest
 
 from agent_insights_quality.catalogs import catalog_hashes, load_catalogs
 from agent_insights_quality.models import (
@@ -11,9 +15,14 @@ from agent_insights_quality.models import (
     InsightRunCheckpoint,
     InsightRunEvidence,
     InvocationEvidence,
+    RequestCompletionEvidence,
+    SemanticAssertionEvidence,
     VersionResult,
 )
-from agent_insights_quality.runner import execute
+from agent_insights_quality.runner import (
+    _validate_baseline_trace_evidence,
+    execute,
+)
 from agent_insights_quality.runtime_state import VersionCheckpointStore
 from agent_insights_quality.selection import select_daily
 from agent_insights_quality.util import ContractError
@@ -98,7 +107,7 @@ class FakeRuntime:
         traffic_path: Path,
         seed: int,
     ) -> InvocationEvidence:
-        del agent_type, traffic_path, seed
+        del seed
         if self.probe_concurrency:
             with self._concurrency_lock:
                 assert agent_name not in self._active_agents
@@ -113,13 +122,37 @@ class FakeRuntime:
         self.invoked.append(foundry_version)
         if foundry_version == self.fail:
             raise RuntimeError("synthetic operational failure")
+        payload = json.loads(traffic_path.read_text(encoding="utf-8"))
+        request_count = len(payload["requests"])
+        issue = "issues" in traffic_path.parts
+        summaries = tuple(
+            RequestCompletionEvidence(
+                request_index=index,
+                response_count=1,
+                usable_response=True,
+                semantic_assertion_count=1,
+                semantic_assertions_passed=1,
+                assertion_results=(
+                    SemanticAssertionEvidence("synthetic_contract", True),
+                ),
+                activation_gate=agent_type == "prompt" and issue,
+                direct_terminal_response_count=int(agent_type == "prompt"),
+                function_call_count=0,
+            )
+            for index in range(request_count)
+        )
         return InvocationEvidence(
             (),
-            (foundry_version,),
+            tuple(f"{foundry_version}-{index}" for index in range(request_count)),
             "2026-08-24T10:00:00+00:00",
             "2026-08-24T10:01:00+00:00",
-            1,
+            request_count,
             False,
+            response_count=request_count,
+            usable_response_count=request_count,
+            semantic_assertion_count=request_count,
+            semantic_assertions_passed=request_count,
+            request_summaries=summaries,
         )
 
     def wait_for_telemetry(
@@ -129,8 +162,31 @@ class FakeRuntime:
         foundry_version: str,
         invocation: InvocationEvidence,
     ) -> tuple[str, ...]:
-        del agent_name, invocation
-        return ((foundry_version.replace("issue-", "") + "0" * 32)[:32],)
+        del agent_name, foundry_version
+        return tuple(
+            f"{index + 1:032x}" for index in range(invocation.request_count)
+        )
+
+    def trace_behavior_evidence(
+        self,
+        operation_ids: tuple[str, ...],
+    ) -> dict:
+        count = len(operation_ids)
+        return {
+            "operation_count": count,
+            "tool_call_counts": {},
+            "tool_response_count": 0,
+            "successful_tool_response_count": 0,
+            "error_codes": {},
+            "assistant_response_count": count,
+            "explicit_terminal_success_count": count,
+            "explicit_terminal_output_count": count,
+            "terminal_success_count": count,
+            "terminal_output_count": count,
+            "terminal_response_count": count,
+            "handled_error_count": 0,
+            "unhandled_error_count": 0,
+        }
 
     def start_insights_run(
         self,
@@ -469,16 +525,39 @@ def test_pending_insight_start_from_crash_forces_clean_retraffic(
         *checkpoint_args,
         InvocationEvidence(
             operation_ids=(),
-            response_references=("private-response",),
+            response_references=tuple(
+                f"private-response-{index}" for index in range(5)
+            ),
             started_at="2026-08-24T10:00:00+00:00",
             completed_at="2026-08-24T10:01:00+00:00",
-            request_count=1,
+            request_count=5,
             allow_window_correlation=False,
-            response_count=1,
-            usable_response_count=1,
+            response_count=5,
+            usable_response_count=5,
+            semantic_assertion_count=5,
+            semantic_assertions_passed=5,
+            request_summaries=tuple(
+                RequestCompletionEvidence(
+                    request_index=index,
+                    response_count=1,
+                    usable_response=True,
+                    semantic_assertion_count=1,
+                    semantic_assertions_passed=1,
+                    assertion_results=(
+                        SemanticAssertionEvidence("synthetic_contract", True),
+                    ),
+                    activation_gate=False,
+                    direct_terminal_response_count=1,
+                    function_call_count=0,
+                )
+                for index in range(5)
+            ),
         ),
     )
-    store.save_operation_ids(*checkpoint_args, ("v0" + "0" * 30,))
+    store.save_operation_ids(
+        *checkpoint_args,
+        tuple(f"{index + 1:032x}" for index in range(5)),
+    )
     store.save_trace_verified(*checkpoint_args)
     store.mark_insight_start_pending(*checkpoint_args)
 
@@ -547,6 +626,114 @@ def test_resume_waits_before_first_version_without_checkpoint(
     )
     assert runtime.clean_agents.count("weather-agent") == 1
     assert runtime.reset_agents.count("weather-agent") == 1
+
+
+def test_baseline_assertion_failure_is_incomplete() -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    registry = _registry(agents, hashes)
+    selected = {
+        agent["name"]: [agent["issue_ids"][0]] for agent in agents["agents"]
+    }
+
+    class FailedBaselineAssertionRuntime(FakeRuntime):
+        def invoke_version(self, **kwargs) -> InvocationEvidence:
+            evidence = super().invoke_version(**kwargs)
+            if kwargs["agent_name"] != "weather-agent" or kwargs[
+                "traffic_path"
+            ].parent.name != "v0":
+                return evidence
+            summaries = list(evidence.request_summaries)
+            summaries[0] = replace(
+                summaries[0],
+                semantic_assertions_passed=0,
+                assertion_results=(
+                    SemanticAssertionEvidence("synthetic_contract", False),
+                ),
+            )
+            return replace(
+                evidence,
+                semantic_assertions_passed=evidence.semantic_assertions_passed - 1,
+                request_summaries=tuple(summaries),
+            )
+
+    result = execute(
+        agents=agents,
+        issues=issues,
+        selected=selected,
+        registry=registry,
+        runtime=FailedBaselineAssertionRuntime(),
+        seed=1,
+    )[0]
+    assert result.baseline.status == "inconclusive"
+    assert result.baseline.error_code == "baseline_assertion_failed"
+    assert result.issues[0].status == "skipped_baseline"
+
+
+def test_failed_prompt_issue_activation_is_incomplete() -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    registry = _registry(agents, hashes)
+    selected = {
+        agent["name"]: [agent["issue_ids"][0]] for agent in agents["agents"]
+    }
+
+    class FailedActivationRuntime(FakeRuntime):
+        def invoke_version(self, **kwargs) -> InvocationEvidence:
+            evidence = super().invoke_version(**kwargs)
+            if kwargs["foundry_version"] != "issue-001":
+                return evidence
+            summaries = list(evidence.request_summaries)
+            summaries[0] = replace(
+                summaries[0],
+                semantic_assertions_passed=0,
+                assertion_results=(
+                    SemanticAssertionEvidence("synthetic_contract", False),
+                ),
+            )
+            return replace(
+                evidence,
+                semantic_assertions_passed=evidence.semantic_assertions_passed - 1,
+                request_summaries=tuple(summaries),
+            )
+
+    result = execute(
+        agents=agents,
+        issues=issues,
+        selected=selected,
+        registry=registry,
+        runtime=FailedActivationRuntime(),
+        seed=1,
+    )[0]
+    assert result.baseline.status == "passed"
+    assert result.issues[0].status == "inconclusive"
+    assert result.issues[0].error_code == "issue_activation_failed"
+
+
+def test_unhandled_baseline_error_fails_terminal_evidence() -> None:
+    agents, _ = load_catalogs()
+    support = next(
+        item for item in agents["agents"] if item["name"] == "support-ticket-agent"
+    )
+    with pytest.raises(ContractError, match="unhandled error"):
+        _validate_baseline_trace_evidence(
+            agent=support,
+            invocation=InvocationEvidence(
+                operation_ids=(),
+                response_references=("synthetic",),
+                started_at="2026-08-24T10:00:00+00:00",
+                completed_at="2026-08-24T10:00:01+00:00",
+                request_count=1,
+                allow_window_correlation=False,
+            ),
+            trace_evidence={
+                "terminal_response_count": 1,
+                "terminal_output_count": 1,
+                "explicit_terminal_success_count": 1,
+                "explicit_terminal_output_count": 1,
+                "unhandled_error_count": 1,
+            },
+        )
 
 
 def test_issue_failure_does_not_stop_later_versions() -> None:

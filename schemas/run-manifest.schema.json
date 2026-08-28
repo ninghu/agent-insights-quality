@@ -2,16 +2,121 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "run_id", "profile", "report_date", "insight_lookback_hours", "telemetry_resource_set", "catalog_hashes", "agents", "manifest_hash"],
+  "required": ["schema_version", "run_id", "profile", "report_date", "insight_lookback_hours", "telemetry_resource_set", "catalog_hashes", "source_integrity", "agents", "manifest_hash"],
   "properties": {
-    "schema_version": {"const": "2.0.0"},
+    "schema_version": {"const": "3.0.0"},
     "run_id": {"type": "string", "pattern": "^aiq-[0-9]{8}(?:-r[0-9]{2,})?$"},
     "profile": {"enum": ["daily", "staging"]},
     "report_date": {"type": "string", "format": "date"},
     "insight_lookback_hours": {"type": "number", "minimum": 0.1},
     "telemetry_resource_set": {"type": "string", "pattern": "^g[1-9][0-9]*$"},
-    "catalog_hashes": {"type": "object"},
-    "agents": {"type": "array", "minItems": 5, "maxItems": 5},
+    "catalog_hashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agents", "issues", "artifacts"],
+      "properties": {
+        "agents": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "issues": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "artifacts": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "source_integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verified", "contract_digest"],
+      "properties": {
+        "verified": {"const": true},
+        "contract_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "agents": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "required": ["name", "type", "baseline_contract", "monitor_reference", "baseline", "issues"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "type": {"enum": ["prompt", "hosted_code", "hosted_custom_container"]},
+          "baseline_contract": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["request_count", "terminal_response", "semantic_assertions", "function_calling"],
+            "properties": {
+              "request_count": {"const": 5},
+              "terminal_response": {"enum": ["direct_prompt", "standard_assistant_message", "explicit_span_attributes"]},
+              "semantic_assertions": {"enum": ["required", "required_per_request"]},
+              "function_calling": {"enum": ["forbidden", "not_applicable"]}
+            }
+          },
+          "monitor_reference": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "baseline": {"$ref": "#/$defs/versionEvidence"},
+          "issues": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/versionEvidence"}
+          }
+        }
+      }
+    },
     "manifest_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  },
+  "$defs": {
+    "versionEvidence": {
+      "type": "object",
+      "required": [
+        "endpoint_request_count",
+        "endpoint_response_count",
+        "endpoint_usable_response_count",
+        "semantic_assertion_count",
+        "semantic_assertions_passed",
+        "trace_contract_verified",
+        "trace_behavior_summary",
+        "endpoint_request_summaries"
+      ],
+      "properties": {
+        "trace_behavior_summary": {"type": "object"},
+        "endpoint_request_summaries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "request_index",
+              "response_count",
+              "usable_response",
+              "semantic_assertion_count",
+              "semantic_assertions_passed",
+              "assertion_results",
+              "activation_gate",
+              "direct_terminal_response_count",
+              "function_call_count"
+            ],
+            "properties": {
+              "request_index": {"type": "integer", "minimum": 0},
+              "response_count": {"type": "integer", "minimum": 0},
+              "usable_response": {"type": "boolean"},
+              "semantic_assertion_count": {"type": "integer", "minimum": 0},
+              "semantic_assertions_passed": {"type": "integer", "minimum": 0},
+              "assertion_results": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["assertion", "passed"],
+                  "properties": {
+                    "assertion": {"type": "string", "minLength": 1},
+                    "passed": {"type": "boolean"}
+                  }
+                }
+              },
+              "activation_gate": {"type": "boolean"},
+              "direct_terminal_response_count": {"type": "integer", "minimum": 0, "maximum": 1},
+              "function_call_count": {"type": "integer", "minimum": 0}
+            }
+          }
+        }
+      }
+    }
   }
 }

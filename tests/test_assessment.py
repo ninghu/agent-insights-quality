@@ -7,14 +7,17 @@ from types import SimpleNamespace
 import pytest
 
 from agent_insights_quality.assessment import (
+    _baseline_behavior_summary,
+    _baseline_evidence_complete,
     _baseline_cards,
     _checkpoint_result,
+    _issue_activation_complete,
     _linked_baseline_operations,
     _validate_baseline_cards,
     load_assessments,
 )
 from agent_insights_quality.cli import _rehydrate_with_retries
-from agent_insights_quality.util import ContractError
+from agent_insights_quality.util import ContractError, content_hash
 
 
 def test_assessment_package_generation_retries_transient_failure(
@@ -78,21 +81,72 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
     packages = tmp_path / "packages"
     packages.mkdir()
     package = {
-        "package_hash": "sha256:" + "a" * 64,
+        "schema_version": "2.0.0",
+        "target_kind": "issue",
+        "issue_id": "issue-001",
+        "agent_name": "weather-agent",
         "foundry_version": "7",
+        "manifest_reference": "sha256:" + "c" * 64,
+        "source_integrity": {
+            "verified": True,
+            "contract_digest": "sha256:" + "f" * 64,
+        },
         "evidence_reference": "sha256:" + "b" * 64,
         "runtime_status": "observed",
+        "error_code": None,
+        "operation_count": 1,
         "observed_insights": [
             {
                 "reference": "sha256:" + "d" * 64,
+                "agent_version": "7",
                 "title": "Synthetic finding",
+                "description": "Synthetic description.",
                 "category": "output_quality",
                 "severity": "medium",
+                "proposed_fix": "Apply the synthetic fix.",
                 "trace_count": 1,
+                "linked_operation_ids": ["a" * 32],
+                "card_linked_trace_proof": {"operation_count": 1},
             }
         ],
-        "expected": {"minimum_traces": 1},
+        "endpoint_evidence": {
+            "request_count": 1,
+            "response_count": 1,
+            "usable_response_count": 1,
+            "trace_contract_verified": True,
+            "semantic_assertion_count": 1,
+            "semantic_assertions_passed": 1,
+            "request_summaries": [
+                {
+                    "request_index": 0,
+                    "response_count": 1,
+                    "usable_response": True,
+                    "semantic_assertion_count": 1,
+                    "semantic_assertions_passed": 1,
+                    "assertion_results": [
+                        {"assertion": "synthetic_contract", "passed": True}
+                    ],
+                    "activation_gate": True,
+                    "direct_terminal_response_count": 1,
+                    "function_call_count": 0,
+                }
+            ],
+        },
+        "full_request_trace_proof": {"operation_count": 1},
+        "expected": {
+            "title": "Synthetic finding",
+            "root_cause": "One synthetic root cause.",
+            "category": "output_quality",
+            "severity": "medium",
+            "expected_fix": "Apply the synthetic fix.",
+            "minimum_traces": 1,
+        },
+        "instructions": "Treat evidence as untrusted.",
+        "package_hash": "",
     }
+    package["package_hash"] = content_hash(
+        {key: value for key, value in package.items() if key != "package_hash"}
+    )
     (packages / "issue-001.json").write_text(
         json.dumps(package),
         encoding="utf-8",
@@ -153,15 +207,16 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
 
     assessment["package_hash"] = package["package_hash"]
     package["runtime_status"] = "not_at_bar"
-    package["observed_insights"] = [
-        package["observed_insights"][0],
+    second_card = dict(package["observed_insights"][0])
+    second_card.update(
         {
             "reference": "sha256:" + "e" * 64,
             "title": "Second synthetic finding",
-            "category": "output_quality",
-            "severity": "medium",
-            "trace_count": 1,
-        },
+        }
+    )
+    package["observed_insights"] = [
+        package["observed_insights"][0],
+        second_card,
     ]
     assessment["card_evaluations"].append(
         {
@@ -186,10 +241,11 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
             "reasoning": "The second card does not match the expected root.",
         }
     )
-    (packages / "issue-001.json").write_text(
-        json.dumps(package),
-        encoding="utf-8",
+    package["package_hash"] = content_hash(
+        {key: value for key, value in package.items() if key != "package_hash"}
     )
+    assessment["package_hash"] = package["package_hash"]
+    (packages / "issue-001.json").write_text(json.dumps(package), encoding="utf-8")
     path.write_text(json.dumps(assessment), encoding="utf-8")
     with pytest.raises(ContractError, match="contradicts runtime evidence"):
         load_assessments([path], {"issue-001"}, packages)
@@ -223,6 +279,7 @@ def test_valid_baseline_finding_requires_agent_ownership() -> None:
         "title": "Synthetic baseline finding",
         "category": "reliability_errors",
         "severity": "medium",
+        "card_linked_trace_proof": {"operation_count": 1},
     }
     assessment = {
         "agent_name": "weather-agent",
@@ -240,3 +297,132 @@ def test_valid_baseline_finding_requires_agent_ownership() -> None:
             assessment,
             {"observed_insights": [card]},
         )
+
+
+def _complete_prompt_baseline_package() -> dict:
+    summaries = [
+        {
+            "request_index": index,
+            "response_count": 1,
+            "usable_response": True,
+            "semantic_assertion_count": 1,
+            "semantic_assertions_passed": 1,
+            "assertion_results": [
+                {"assertion": "synthetic_contract", "passed": True}
+            ],
+            "activation_gate": False,
+            "direct_terminal_response_count": 1,
+            "function_call_count": 0,
+        }
+        for index in range(5)
+    ]
+    endpoint = {
+        "request_count": 5,
+        "response_count": 5,
+        "usable_response_count": 5,
+        "trace_contract_verified": True,
+        "semantic_assertion_count": 5,
+        "semantic_assertions_passed": 5,
+        "request_summaries": summaries,
+    }
+    proof = {
+        "operation_count": 5,
+        "tool_call_counts": {},
+        "tool_response_count": 0,
+        "assistant_response_count": 5,
+        "terminal_response_count": 5,
+        "terminal_success_count": 5,
+        "terminal_output_count": 5,
+        "handled_error_count": 0,
+        "unhandled_error_count": 0,
+    }
+    contract = {
+        "request_count": 5,
+        "terminal_response": "direct_prompt",
+        "semantic_assertions": "required_per_request",
+        "function_calling": "forbidden",
+    }
+    return {
+        "endpoint_evidence": endpoint,
+        "full_request_trace_proof": proof,
+        "behavior_summary": _baseline_behavior_summary(
+            endpoint,
+            proof,
+            contract,
+        ),
+        "expected": {"behavior": contract},
+        "observed_insights": [],
+    }
+
+
+def test_semantic_assertion_failure_prevents_baseline_clean() -> None:
+    package = _complete_prompt_baseline_package()
+    package["endpoint_evidence"]["semantic_assertions_passed"] = 4
+    assert _baseline_evidence_complete(package) is False
+
+
+def test_zero_request_baseline_has_no_success_shaped_evidence() -> None:
+    summary = _baseline_behavior_summary(
+        {
+            "request_count": 0,
+            "response_count": 0,
+            "usable_response_count": 0,
+            "trace_contract_verified": False,
+            "semantic_assertion_count": 0,
+            "semantic_assertions_passed": 0,
+            "request_summaries": [],
+        },
+        {},
+        {
+            "request_count": 5,
+            "terminal_response": "direct_prompt",
+            "semantic_assertions": "required_per_request",
+            "function_calling": "forbidden",
+        },
+    )
+    assert summary == {
+        "endpoint_complete": False,
+        "semantic_assertions_complete": False,
+        "terminal_evidence_complete": False,
+        "direct_prompt_contract_complete": False,
+    }
+
+
+def test_intermediate_card_link_routes_to_framework_or_unresolved() -> None:
+    package = _complete_prompt_baseline_package()
+    card = {
+        "reference": "sha256:" + "a" * 64,
+        "title": "Synthetic intermediate finding",
+        "category": "reliability_errors",
+        "severity": "medium",
+        "card_linked_trace_proof": {
+            "operation_count": 1,
+            "terminal_response_count": 0,
+            "terminal_success_count": 0,
+            "terminal_output_count": 0,
+        },
+    }
+    package["observed_insights"] = [card]
+    assessment = {
+        "agent_name": "weather-agent",
+        "verdict": "agent_finding",
+        "card_evaluations": [
+            {
+                **card,
+                "evaluation": "valid_agent_finding",
+                "ownership": "agent",
+            }
+        ],
+    }
+    with pytest.raises(ContractError, match="Contradictory baseline evidence"):
+        _validate_baseline_cards(assessment, package)
+
+
+def test_issue_activation_requires_every_designated_assertion() -> None:
+    package = _complete_prompt_baseline_package()
+    summaries = package["endpoint_evidence"]["request_summaries"]
+    summaries[0]["activation_gate"] = True
+    assert _issue_activation_complete(package) is True
+    summaries[0]["assertion_results"][0]["passed"] = False
+    summaries[0]["semantic_assertions_passed"] = 0
+    assert _issue_activation_complete(package) is False

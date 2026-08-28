@@ -22,11 +22,14 @@ license: MIT
 5. Assess all five baseline packages and every issue package with GPT-5.6 Sol using the repository
    assessment prompt. Use independent `endpoint_evidence`; never assign `insight_engine` unless
    endpoint behavior and trace contract are both proven. Equal nonzero request, response, and usable
-   response counts plus a verified trace contract prove the reviewed runtime contract was exercised;
-   semantic assertions are optional.
+   response counts plus a verified trace contract prove endpoint execution. Require every reviewed
+   baseline semantic assertion, each designated issue activation assertion, and one terminal success
+   plus output signal per baseline request. Pure Prompt requests must each have one direct terminal
+   response and no function calls.
    Never assume a baseline card is Noise merely because it came from `v0`; use independent trace
-   proof to distinguish an Agent runtime defect, Insight false positive, framework gap, or external
-   infrastructure failure.
+   full-request and separate card-linked proof to distinguish an Agent runtime defect, Insight false
+   positive, framework gap, or external infrastructure failure. Route contradictory intermediate
+   evidence to `test_framework` or `unresolved`.
 6. Before finalization, give every `inconclusive` baseline or `INCOMPLETE` issue with complete runtime
    evidence one focused GPT-5.6 Sol recheck. Re-read the package-bound reviewed Agent source and
    configuration, current endpoint evidence, independent trace proof, and the card's exact claim.

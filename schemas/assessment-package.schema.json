@@ -1,0 +1,207 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "target_kind",
+    "agent_name",
+    "foundry_version",
+    "manifest_reference",
+    "source_integrity",
+    "runtime_status",
+    "operation_count",
+    "endpoint_evidence",
+    "full_request_trace_proof",
+    "observed_insights",
+    "expected",
+    "package_hash"
+  ],
+  "properties": {
+    "schema_version": {"const": "2.0.0"},
+    "target_kind": {"enum": ["baseline", "issue"]},
+    "agent_name": {"type": "string", "minLength": 1},
+    "foundry_version": {"type": "string", "minLength": 1},
+    "manifest_reference": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "source_integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verified", "contract_digest"],
+      "properties": {
+        "verified": {"const": true},
+        "contract_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "runtime_status": {"type": "string", "minLength": 1},
+    "error_code": {"type": ["string", "null"]},
+    "operation_count": {"type": "integer", "minimum": 0},
+    "endpoint_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_count",
+        "response_count",
+        "usable_response_count",
+        "trace_contract_verified",
+        "semantic_assertion_count",
+        "semantic_assertions_passed",
+        "request_summaries"
+      ],
+      "properties": {
+        "request_count": {"type": "integer", "minimum": 0},
+        "response_count": {"type": "integer", "minimum": 0},
+        "usable_response_count": {"type": "integer", "minimum": 0},
+        "trace_contract_verified": {"type": "boolean"},
+        "semantic_assertion_count": {"type": "integer", "minimum": 0},
+        "semantic_assertions_passed": {"type": "integer", "minimum": 0},
+        "request_summaries": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/requestSummary"}
+        }
+      }
+    },
+    "full_request_trace_proof": {"type": "object"},
+    "behavior_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endpoint_complete",
+        "semantic_assertions_complete",
+        "terminal_evidence_complete",
+        "direct_prompt_contract_complete"
+      ],
+      "properties": {
+        "endpoint_complete": {"type": "boolean"},
+        "semantic_assertions_complete": {"type": "boolean"},
+        "terminal_evidence_complete": {"type": "boolean"},
+        "direct_prompt_contract_complete": {"type": ["boolean", "null"]}
+      }
+    },
+    "observed_insights": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "reference",
+          "agent_version",
+          "title",
+          "description",
+          "category",
+          "severity",
+          "proposed_fix",
+          "trace_count",
+          "linked_operation_ids",
+          "card_linked_trace_proof"
+        ],
+        "properties": {
+          "card_linked_trace_proof": {"type": "object"}
+        }
+      }
+    },
+    "expected": {"type": "object"},
+    "issue_id": {"type": "string", "pattern": "^issue-[0-9]{3}$"},
+    "evidence_reference": {
+      "type": ["string", "null"],
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "instructions": {"type": "string", "minLength": 1},
+    "package_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"target_kind": {"const": "baseline"}}},
+      "then": {
+        "required": ["behavior_summary"],
+        "properties": {
+          "expected": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["insight_count", "behavior"],
+            "properties": {
+              "insight_count": {"const": 0},
+              "behavior": {"$ref": "#/$defs/baselineContract"}
+            }
+          }
+        }
+      },
+      "else": {
+        "required": ["issue_id", "evidence_reference", "instructions"],
+        "properties": {
+          "expected": {
+            "type": "object",
+            "required": [
+              "title",
+              "root_cause",
+              "category",
+              "severity",
+              "expected_fix",
+              "minimum_traces"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "baselineContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_count",
+        "terminal_response",
+        "semantic_assertions",
+        "function_calling"
+      ],
+      "properties": {
+        "request_count": {"const": 5},
+        "terminal_response": {
+          "enum": [
+            "direct_prompt",
+            "standard_assistant_message",
+            "explicit_span_attributes"
+          ]
+        },
+        "semantic_assertions": {
+          "enum": ["required", "required_per_request"]
+        },
+        "function_calling": {"enum": ["forbidden", "not_applicable"]}
+      }
+    },
+    "requestSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_index",
+        "response_count",
+        "usable_response",
+        "semantic_assertion_count",
+        "semantic_assertions_passed",
+        "assertion_results",
+        "activation_gate",
+        "direct_terminal_response_count",
+        "function_call_count"
+      ],
+      "properties": {
+        "request_index": {"type": "integer", "minimum": 0},
+        "response_count": {"type": "integer", "minimum": 0},
+        "usable_response": {"type": "boolean"},
+        "semantic_assertion_count": {"type": "integer", "minimum": 0},
+        "semantic_assertions_passed": {"type": "integer", "minimum": 0},
+        "assertion_results": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["assertion", "passed"],
+            "properties": {
+              "assertion": {"type": "string", "minLength": 1},
+              "passed": {"type": "boolean"}
+            }
+          }
+        },
+        "activation_gate": {"type": "boolean"},
+        "direct_terminal_response_count": {"type": "integer", "minimum": 0, "maximum": 1},
+        "function_call_count": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

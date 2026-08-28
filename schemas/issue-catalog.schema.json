@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "selection", "issues"],
+  "required": ["schema_version", "selection", "source_delta_contracts", "issues"],
   "properties": {
     "schema_version": {"const": "1.0.0"},
     "selection": {
@@ -13,6 +13,35 @@
         "issues_per_agent_daily": {"const": 5},
         "weekdays": {"const": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]},
         "full_run_on_change": {"const": true}
+      }
+    },
+    "source_delta_contracts": {
+      "type": "object",
+      "minProperties": 36,
+      "maxProperties": 36,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^issue-[0-9]{3}$": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["authority"],
+          "properties": {
+            "authority": {"enum": ["prompt_definition", "hosted_source"]},
+            "changed_paths": {
+              "const": ["definition.instructions", "metadata.logical_version"]
+            },
+            "changed_files": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1}
+            }
+          },
+          "oneOf": [
+            {"required": ["changed_paths"]},
+            {"required": ["changed_files"]}
+          ]
+        }
       }
     },
     "issues": {

@@ -13,6 +13,8 @@ from agent_insights_quality.models import (
     InsightEvidence,
     InsightRunCheckpoint,
     InvocationEvidence,
+    RequestCompletionEvidence,
+    SemanticAssertionEvidence,
     VersionResult,
 )
 from agent_insights_quality.util import ContractError, atomic_json, read_json, runtime_root
@@ -153,6 +155,30 @@ class VersionCheckpointStore:
                 usable_response_count=int(payload["usable_response_count"]),
                 semantic_assertion_count=int(payload["semantic_assertion_count"]),
                 semantic_assertions_passed=int(payload["semantic_assertions_passed"]),
+                request_summaries=tuple(
+                    RequestCompletionEvidence(
+                        request_index=int(item["request_index"]),
+                        response_count=int(item["response_count"]),
+                        usable_response=bool(item["usable_response"]),
+                        semantic_assertion_count=int(item["semantic_assertion_count"]),
+                        semantic_assertions_passed=int(
+                            item["semantic_assertions_passed"]
+                        ),
+                        assertion_results=tuple(
+                            SemanticAssertionEvidence(
+                                assertion=str(result["assertion"]),
+                                passed=bool(result["passed"]),
+                            )
+                            for result in item["assertion_results"]
+                        ),
+                        activation_gate=bool(item["activation_gate"]),
+                        direct_terminal_response_count=int(
+                            item["direct_terminal_response_count"]
+                        ),
+                        function_call_count=int(item["function_call_count"]),
+                    )
+                    for item in payload["request_summaries"]
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ContractError("Version checkpoint invocation is invalid") from error
@@ -393,6 +419,31 @@ class VersionCheckpointStore:
                     payload["semantic_assertions_passed"]
                 ),
                 trace_contract_verified=bool(payload["trace_contract_verified"]),
+                trace_behavior_summary=dict(payload["trace_behavior_summary"]),
+                endpoint_request_summaries=[
+                    RequestCompletionEvidence(
+                        request_index=int(item["request_index"]),
+                        response_count=int(item["response_count"]),
+                        usable_response=bool(item["usable_response"]),
+                        semantic_assertion_count=int(item["semantic_assertion_count"]),
+                        semantic_assertions_passed=int(
+                            item["semantic_assertions_passed"]
+                        ),
+                        assertion_results=tuple(
+                            SemanticAssertionEvidence(
+                                assertion=str(result["assertion"]),
+                                passed=bool(result["passed"]),
+                            )
+                            for result in item["assertion_results"]
+                        ),
+                        activation_gate=bool(item["activation_gate"]),
+                        direct_terminal_response_count=int(
+                            item["direct_terminal_response_count"]
+                        ),
+                        function_call_count=int(item["function_call_count"]),
+                    )
+                    for item in payload["endpoint_request_summaries"]
+                ],
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ContractError("Version checkpoint result is invalid") from error

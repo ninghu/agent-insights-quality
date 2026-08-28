@@ -19,7 +19,12 @@ import zipfile
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from agent_insights_quality.catalogs import catalog_hashes, agent_model_contract
+from agent_insights_quality.catalogs import (
+    agent_model_contract,
+    catalog_hashes,
+    load_catalogs,
+    source_integrity_digest,
+)
 from agent_insights_quality.azure_cli import azure_cli
 from agent_insights_quality.live import _azure_cli_token
 from agent_insights_quality.progress import ProgressReporter
@@ -262,6 +267,13 @@ def validate_promotion_receipt(
         raise ContractError("Staging promotion receipt Test Agent model is stale")
     if value["artifact_manifest_hash"] != expected_hashes["artifacts"]:
         raise ContractError("Staging promotion receipt artifact manifest is stale")
+    current_agents, current_issues = load_catalogs()
+    expected_integrity = source_integrity_digest(
+        current_agents,
+        current_issues,
+    )
+    if value["source_integrity_digest"] != expected_integrity:
+        raise ContractError("Staging promotion receipt source integrity is stale")
     digests = value["version_content_digests"]
     if value["deployment_manifest_hash"] != content_hash(digests):
         raise ContractError("Staging promotion receipt deployment manifest is invalid")
@@ -289,8 +301,16 @@ def create_promotion_receipt(
     if (
         manifest["catalog_hashes"] != registry["catalog_hashes"]
         or report["manifest_reference"] != manifest["manifest_hash"]
+        or report.get("source_integrity") != manifest["source_integrity"]
+        or manifest["source_integrity"].get("verified") is not True
     ):
         raise ContractError("Staging report, manifest, and registry are not bound")
+    current_agents, current_issues = load_catalogs()
+    if (
+        manifest["source_integrity"]["contract_digest"]
+        != source_integrity_digest(current_agents, current_issues)
+    ):
+        raise ContractError("Staging source integrity evidence is stale")
     manifest_versions = {
         f"{agent['name']}/{value['logical_version']}": value["foundry_version"]
         for agent in manifest["agents"]
@@ -311,7 +331,7 @@ def create_promotion_receipt(
     if len(digests) != 41:
         raise ContractError("Staging registry does not contain all 41 exact versions")
     return {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "profile": "staging",
         "qualified": True,
         "human_reviewed": True,
@@ -322,6 +342,10 @@ def create_promotion_receipt(
         "artifact_manifest_hash": registry["catalog_hashes"]["artifacts"],
         "version_content_digests": digests,
         "deployment_manifest_hash": content_hash(digests),
+        "qualification_manifest_hash": manifest["manifest_hash"],
+        "source_integrity_digest": manifest["source_integrity"][
+            "contract_digest"
+        ],
         "report_reference": content_hash(report),
     }
 

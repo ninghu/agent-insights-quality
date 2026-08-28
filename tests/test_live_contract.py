@@ -91,7 +91,7 @@ def test_semantic_assertions_record_only_counts() -> None:
             }
         ]
     }
-    count, passed = _semantic_assertion_result(
+    count, passed, results = _semantic_assertion_result(
         response,
         {
             "semantic_assertions": {
@@ -103,6 +103,52 @@ def test_semantic_assertions_record_only_counts() -> None:
     )
     assert count == 3
     assert passed == 3
+    assert [item.assertion for item in results] == [
+        "response_format",
+        "required_terms_any",
+        "forbidden_terms",
+    ]
+
+
+def test_semantic_assertions_support_structured_and_bounded_evidence() -> None:
+    response = {
+        "output": [
+            {
+                "type": "message",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": '{"condition":"clear","temperature":21,"unit":"C"}',
+                    }
+                ],
+            }
+        ]
+    }
+    count, passed, results = _semantic_assertion_result(
+        response,
+        {
+            "semantic_assertions": {
+                "response_format": "json",
+                "json_schema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["condition", "temperature", "unit"],
+                    "properties": {
+                        "condition": {"const": "clear"},
+                        "temperature": {"type": "integer"},
+                        "unit": {"const": "C"},
+                    },
+                },
+                "exact_json_fields": {"condition": "clear", "unit": "C"},
+                "required_claims": ['"temperature":21'],
+                "forbidden_claims": ["unavailable"],
+                "max_words": 3,
+                "max_characters": 80,
+            }
+        },
+    )
+    assert count == passed == 7
+    assert all(item.passed for item in results)
 
 
 def test_trace_behavior_summary_sanitizes_prompt_tool_sequence() -> None:
@@ -159,6 +205,13 @@ def test_trace_behavior_summary_sanitizes_prompt_tool_sequence() -> None:
         "successful_tool_response_count": 0,
         "error_codes": {"temporary_unavailable": 1},
         "assistant_response_count": 0,
+        "explicit_terminal_success_count": 0,
+        "explicit_terminal_output_count": 0,
+        "terminal_success_count": 0,
+        "terminal_output_count": 0,
+        "terminal_response_count": 0,
+        "handled_error_count": 0,
+        "unhandled_error_count": 0,
     }
     assert "private" not in json.dumps(summary)
 
@@ -191,6 +244,47 @@ def test_trace_behavior_summary_records_hosted_tool_recovery() -> None:
     assert summary["tool_call_counts"] == {"read_ticket": 2}
     assert summary["successful_tool_response_count"] == 1
     assert summary["error_codes"] == {"tool_error": 1}
+
+
+def test_trace_behavior_summary_records_hosted_terminal_and_handled_error() -> None:
+    operation_id = "a" * 32
+    summary = _trace_behavior_summary(
+        [
+            {
+                "operation_id": operation_id,
+                "operation_name": "execute_tool",
+                "tool_name": "read_ticket",
+                "tool_call_id": "call-1",
+                "error_type": "synthetic_optional_history_failure",
+                "tool_ok": "false",
+                "tool_result": "",
+                "messages": ["", ""],
+                "handled_error": "true",
+                "terminal_success": "",
+                "terminal_output": "",
+            },
+            {
+                "operation_id": operation_id,
+                "operation_name": "invoke_agent",
+                "tool_name": "",
+                "tool_call_id": "",
+                "error_type": "",
+                "tool_ok": "",
+                "tool_result": "",
+                "messages": ["", ""],
+                "handled_error": "",
+                "terminal_success": "true",
+                "terminal_output": "true",
+            },
+        ]
+    )
+    assert summary["handled_error_count"] == 1
+    assert summary["unhandled_error_count"] == 0
+    assert summary["terminal_response_count"] == 1
+    assert summary["explicit_terminal_success_count"] == 1
+    assert summary["explicit_terminal_output_count"] == 1
+    assert summary["terminal_success_count"] == 1
+    assert summary["terminal_output_count"] == 1
 
 
 def test_trace_behavior_summary_requires_terminal_visible_response() -> None:
@@ -368,26 +462,168 @@ def test_trace_behavior_summary_deduplicates_tool_responses() -> None:
     assert summary["error_codes"] == {"temporary_unavailable": 1}
 
 
-def test_repeated_tool_fixtures_are_argument_aware() -> None:
-    value = _normalize_fixture(
-        {
-            "id": "health-baseline",
-            "request": {"body": {"input": "synthetic lookup"}},
-            "tool_fixtures": [
-                {
-                    "tool": "lookup_slots",
-                    "arguments": {"date": "2030-01-01"},
-                    "returns": {"slots": ["a"]},
+def test_tool_fixtures_fail_closed() -> None:
+    with pytest.raises(ContractError, match="cannot contain tool fixtures"):
+        _normalize_fixture(
+            {
+                "id": "health-baseline",
+                "request": {"body": {"input": "synthetic lookup"}},
+                "tool_fixtures": [],
+            }
+        )
+
+
+def test_vacuous_semantic_assertions_fail_closed() -> None:
+    with pytest.raises(ContractError, match="exact JSON"):
+        _normalize_fixture(
+            {
+                "id": "weather-baseline",
+                "request": {"body": {"input": "synthetic evidence"}},
+                "expected": {
+                    "semantic_assertions": {"exact_json_fields": {}}
                 },
-                {
-                    "tool": "lookup_slots",
-                    "arguments": {"date": "2030-01-02"},
-                    "returns": {"slots": ["b"]},
-                },
-            ],
-        }
+            }
+        )
+    with pytest.raises(ContractError, match="JSON schema"):
+        _normalize_fixture(
+            {
+                "id": "weather-baseline",
+                "request": {"body": {"input": "synthetic evidence"}},
+                "expected": {"semantic_assertions": {"json_schema": {}}},
+            }
+        )
+
+
+def test_prompt_function_call_fails_closed() -> None:
+    runtime = _runtime()
+    runtime._traffic_ledger = type(
+        "Ledger",
+        (),
+        {"mark_started": staticmethod(lambda *_args, **_kwargs: None)},
+    )()
+    runtime._json_request = lambda *_args, **_kwargs: {  # type: ignore[method-assign]
+        "id": "synthetic-response",
+        "output": [
+            {
+                "type": "function_call",
+                "call_id": "synthetic-call",
+                "name": "unsupported",
+                "arguments": "{}",
+            }
+        ],
+    }
+    with pytest.raises(ContractError, match="pure Prompt"):
+        runtime._invoke_prompt(
+            "weather-agent",
+            "1",
+            {
+                "body": {"input": "Synthetic request"},
+                "expected_status": 200,
+                "semantic_assertions": {},
+                "activation_gate": False,
+            },
+            1,
+            None,
+        )
+
+
+def test_prompt_group_uses_previous_response_only_for_next_memory_turn() -> None:
+    runtime = _runtime()
+    previous_values = []
+
+    def invoke_prompt(
+        _agent_name,
+        _foundry_version,
+        fixture,
+        _seed,
+        previous_response_id,
+    ):
+        previous_values.append(previous_response_id)
+        index = fixture["_index"]
+        return (
+            [f"response-{index}"],
+            True,
+            1,
+            1,
+            1,
+            0,
+            (),
+            True,
+        )
+
+    runtime._invoke_prompt = invoke_prompt  # type: ignore[method-assign]
+    runtime._invoke_group(
+        "weather-agent",
+        "prompt",
+        "1",
+        [
+            {"_index": 0},
+            {"_index": 1},
+        ],
+        7,
     )
-    assert len(value["tool_outputs"]["lookup_slots"]) == 2
+    assert previous_values == [None, "response-0"]
+
+
+def test_five_prompt_requests_map_to_five_direct_executions(tmp_path: Path) -> None:
+    runtime = _runtime()
+    runtime._traffic_ledger = type(
+        "Ledger",
+        (),
+        {
+            "mark_started": staticmethod(lambda *_args, **_kwargs: None),
+            "mark_completed": staticmethod(lambda *_args, **_kwargs: None),
+        },
+    )()
+
+    def invoke_prompt(
+        _agent_name,
+        _foundry_version,
+        fixture,
+        _seed,
+        previous_response_id,
+    ):
+        assert previous_response_id is None
+        index = fixture["_index"]
+        return ([f"response-{index}"], True, 1, 1, 1, 0, (), False)
+
+    runtime._invoke_prompt = invoke_prompt  # type: ignore[method-assign]
+    traffic = tmp_path / "traffic.json"
+    traffic.write_text(
+        json.dumps(
+            {
+                "requests": [
+                    {
+                        "id": f"request-{index}",
+                        "request": {
+                            "body": {"input": f"Synthetic evidence {index}"}
+                        },
+                        "expected": {
+                            "semantic_assertions": {
+                                "required_claims": ["synthetic"]
+                            }
+                        },
+                    }
+                    for index in range(5)
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    evidence = runtime.invoke_version(
+        agent_name="weather-agent",
+        agent_type="prompt",
+        foundry_version="1",
+        traffic_path=traffic,
+        seed=11,
+    )
+    assert evidence.request_count == evidence.response_count == 5
+    assert len(evidence.response_references) == 5
+    assert all(
+        item.response_count == item.direct_terminal_response_count == 1
+        and item.function_call_count == 0
+        for item in evidence.request_summaries
+    )
 
 
 def test_insight_parser_supports_paged_wire_trace_details() -> None:
@@ -963,8 +1199,16 @@ def test_hosted_invocation_correlates_with_successful_request_reference(
         "agent_insights_quality.live.urllib.request.urlopen",
         open_request,
     )
-    references, usable, assertion_count, assertions_passed = (
-        runtime._invoke_hosted(
+    (
+        references,
+        usable,
+        assertion_count,
+        assertions_passed,
+        direct_terminal_response_count,
+        function_call_count,
+        assertion_results,
+        activation_gate,
+    ) = runtime._invoke_hosted(
             "finance-agent",
             "session-id",
             {
@@ -973,11 +1217,14 @@ def test_hosted_invocation_correlates_with_successful_request_reference(
             },
             1,
         )
-    )
     assert references == [request_reference]
     assert usable is True
     assert assertion_count == 0
     assert assertions_passed == 0
+    assert direct_terminal_response_count == 0
+    assert function_call_count == 0
+    assert assertion_results == ()
+    assert activation_gate is False
     assert timeout_seconds == 600
 
 
@@ -989,7 +1236,7 @@ def test_hosted_cleanup_failure_preserves_completed_responses() -> None:
         lambda *_args: "session-id"
     )
     runtime._invoke_hosted = (  # type: ignore[method-assign]
-        lambda *_args: (["successful-attempt"], True, 0, 0)
+        lambda *_args: (["successful-attempt"], True, 0, 0, 0, 0, (), False)
     )
     runtime._delete_hosted_session = (  # type: ignore[method-assign]
         lambda *_args: (_ for _ in ()).throw(RuntimeError("synthetic cleanup failure"))
@@ -1010,7 +1257,9 @@ def test_hosted_cleanup_failure_preserves_completed_responses() -> None:
         1,
     )
 
-    assert results == [(0, ["successful-attempt"], True, 0, 0)]
+    assert results == [
+        (0, ["successful-attempt"], True, 0, 0, 0, 0, (), False)
+    ]
     assert progress == [
         "finance-agent/19: session cleanup failed after endpoint completion; "
         "preserving completed evidence"

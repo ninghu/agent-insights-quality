@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -9,13 +10,158 @@ from agent_insights_quality.catalogs import (
     catalog_hashes,
     load_catalogs,
     agent_model_contract,
+    source_integrity_digest,
 )
 from agent_insights_quality.provisioning import (
     create_promotion_receipt,
     validate_promotion_receipt,
 )
+from agent_insights_quality.models import (
+    AgentResult,
+    RequestCompletionEvidence,
+    SemanticAssertionEvidence,
+    VersionResult,
+)
+from agent_insights_quality.run_manifest import _result_payload, build_manifest
 from agent_insights_quality.util import ContractError
 from agent_insights_quality.util import content_hash
+
+
+def _request_summaries() -> list[dict]:
+    return [
+        {
+            "request_index": index,
+            "response_count": 1,
+            "usable_response": True,
+            "semantic_assertion_count": 1,
+            "semantic_assertions_passed": 1,
+            "assertion_results": [
+                {"assertion": "synthetic_contract", "passed": True}
+            ],
+            "activation_gate": False,
+            "direct_terminal_response_count": 0,
+            "function_call_count": 0,
+        }
+        for index in range(5)
+    ]
+
+
+def _version_evidence(logical_version: str, foundry_version: str) -> dict:
+    return {
+        "logical_version": logical_version,
+        "foundry_version": foundry_version,
+        "endpoint_request_count": 5,
+        "endpoint_response_count": 5,
+        "endpoint_usable_response_count": 5,
+        "semantic_assertion_count": 5,
+        "semantic_assertions_passed": 5,
+        "trace_contract_verified": True,
+        "trace_behavior_summary": {},
+        "endpoint_request_summaries": _request_summaries(),
+    }
+
+
+def test_manifest_request_assertions_are_json_arrays() -> None:
+    result = VersionResult(
+        logical_version="v0",
+        foundry_version="1",
+        status="passed",
+        endpoint_request_summaries=[
+            RequestCompletionEvidence(
+                request_index=0,
+                response_count=1,
+                usable_response=True,
+                semantic_assertion_count=1,
+                semantic_assertions_passed=1,
+                assertion_results=(
+                    SemanticAssertionEvidence("synthetic_contract", True),
+                ),
+                activation_gate=False,
+                direct_terminal_response_count=1,
+                function_call_count=0,
+            )
+        ],
+    )
+    payload = _result_payload(result)
+    assertions = payload["endpoint_request_summaries"][0][
+        "assertion_results"
+    ]
+    assert assertions == [
+        {"assertion": "synthetic_contract", "passed": True}
+    ]
+    assert isinstance(assertions, list)
+
+
+def test_build_manifest_validates_real_nested_evidence() -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    summary = RequestCompletionEvidence(
+        request_index=0,
+        response_count=1,
+        usable_response=True,
+        semantic_assertion_count=1,
+        semantic_assertions_passed=1,
+        assertion_results=(
+            SemanticAssertionEvidence("synthetic_contract", True),
+        ),
+        activation_gate=False,
+        direct_terminal_response_count=1,
+        function_call_count=0,
+    )
+    results = [
+        AgentResult(
+            agent_name=agent["name"],
+            baseline=VersionResult(
+                logical_version="v0",
+                foundry_version="1",
+                status="passed",
+                endpoint_request_count=1,
+                endpoint_response_count=1,
+                endpoint_usable_response_count=1,
+                semantic_assertion_count=1,
+                semantic_assertions_passed=1,
+                trace_contract_verified=True,
+                endpoint_request_summaries=[summary],
+            ),
+            issues=[],
+        )
+        for agent in agents["agents"]
+    ]
+    registry = {
+        "agents": {
+            agent["name"]: {
+                "monitor_id": f"monitor-{agent['name']}",
+                "versions": {
+                    "v0": {
+                        "foundry_version": "1",
+                        "content_digest": "sha256:" + "a" * 64,
+                    }
+                },
+            }
+            for agent in agents["agents"]
+        }
+    }
+    manifest = build_manifest(
+        report_date=date(2026, 8, 28),
+        profile="staging",
+        rerun=0,
+        insight_lookback_hours=0.1,
+        telemetry_resource_set="g29",
+        catalog_hashes=hashes,
+        agent_catalog=agents,
+        issue_catalog=issues,
+        selected={agent["name"]: [] for agent in agents["agents"]},
+        registry=registry,
+        results=results,
+    )
+    assertions = manifest["agents"][0]["baseline"][
+        "endpoint_request_summaries"
+    ][0]["assertion_results"]
+    assert isinstance(assertions, list)
+    assert (
+        manifest["source_integrity"]["contract_digest"]
+        == source_integrity_digest(agents, issues)
+    )
 
 
 def test_daily_promotion_requires_reviewed_staging_digest(tmp_path: Path) -> None:
@@ -28,7 +174,7 @@ def test_daily_promotion_requires_reviewed_staging_digest(tmp_path: Path) -> Non
         for index, logical in enumerate(["v0", *agent["issue_ids"]])
     }
     receipt = {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "profile": "staging",
         "qualified": True,
         "human_reviewed": True,
@@ -39,6 +185,8 @@ def test_daily_promotion_requires_reviewed_staging_digest(tmp_path: Path) -> Non
         "artifact_manifest_hash": hashes["artifacts"],
         "version_content_digests": digests,
         "deployment_manifest_hash": content_hash(digests),
+        "qualification_manifest_hash": "sha256:" + "c" * 64,
+        "source_integrity_digest": source_integrity_digest(agents, issues),
         "report_reference": "sha256:" + "a" * 64,
     }
     path = tmp_path / "promotion.json"
@@ -75,29 +223,40 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
         },
     }
     manifest = {
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "run_id": "aiq-20260824",
         "profile": "staging",
         "report_date": "2026-08-24",
         "insight_lookback_hours": 0.1,
         "telemetry_resource_set": "g29",
         "catalog_hashes": hashes,
+        "source_integrity": {
+            "verified": True,
+            "contract_digest": source_integrity_digest(agents, issues),
+        },
         "agents": [
             {
                 "name": agent["name"],
+                "type": agent["type"],
+                "baseline_contract": agent["baseline_contract"],
+                "monitor_reference": "sha256:" + "f" * 64,
                 "baseline": {
-                    "logical_version": "v0",
-                    "foundry_version": registry["agents"][agent["name"]]["versions"][
-                        "v0"
-                    ]["foundry_version"],
+                    **_version_evidence(
+                        "v0",
+                        registry["agents"][agent["name"]]["versions"]["v0"][
+                            "foundry_version"
+                        ],
+                    ),
                 },
                 "issues": [
                     {
                         "issue_id": issue_id,
-                        "logical_version": issue_id,
-                        "foundry_version": registry["agents"][agent["name"]]["versions"][
-                            issue_id
-                        ]["foundry_version"],
+                        **_version_evidence(
+                            issue_id,
+                            registry["agents"][agent["name"]]["versions"][
+                                issue_id
+                            ]["foundry_version"],
+                        ),
                     }
                     for issue_id in agent["issue_ids"]
                 ],
@@ -127,6 +286,7 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
         "manifest_reference": manifest["manifest_hash"],
         "status": "PASS",
         "catalog_hashes": hashes,
+        "source_integrity": manifest["source_integrity"],
         "baseline": [
             {
                 "agent": agent["name"],
@@ -193,3 +353,8 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
         human_reviewed=True,
     )
     assert len(receipt["version_content_digests"]) == 41
+    assert receipt["qualification_manifest_hash"] == manifest["manifest_hash"]
+    assert (
+        receipt["source_integrity_digest"]
+        == manifest["source_integrity"]["contract_digest"]
+    )

@@ -344,6 +344,8 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                     insight_lookback_hours=policy.insight_lookback_hours,
                     telemetry_resource_set=policy.telemetry_resource_set,
                     catalog_hashes=hashes,
+                    agent_catalog=agents,
+                    issue_catalog=issues,
                     selected=selected,
                     registry=registry,
                     results=results,

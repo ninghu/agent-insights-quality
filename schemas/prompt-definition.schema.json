@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["name", "definition", "metadata"],
+  "properties": {
+    "name": {"type": "string", "minLength": 1},
+    "definition": {
+      "type": "object",
+      "required": ["kind", "model", "instructions"],
+      "properties": {
+        "kind": {"const": "prompt"},
+        "model": {"const": "gpt-5.4-mini"},
+        "instructions": {"type": "string", "minLength": 1}
+      },
+      "not": {"required": ["tools"]}
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["logical_version"],
+      "properties": {
+        "logical_version": {
+          "anyOf": [
+            {"const": "v0"},
+            {"type": "string", "pattern": "^issue-[0-9]{3}$"}
+          ]
+        }
+      }
+    }
+  }
+}

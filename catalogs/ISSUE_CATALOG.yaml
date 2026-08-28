@@ -3,6 +3,43 @@ selection:
   issues_per_agent_daily: 5
   weekdays: [Monday, Tuesday, Wednesday, Thursday, Friday]
   full_run_on_change: true
+source_delta_contracts:
+  issue-001: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
+  issue-002: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
+  issue-003: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
+  issue-004: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
+  issue-005: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
+  issue-006: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
+  issue-007: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
+  issue-008: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
+  issue-009: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
+  issue-010: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
+  issue-011: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
+  issue-012: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
+  issue-013: {authority: hosted_source, changed_files: [app.py]}
+  issue-014: {authority: hosted_source, changed_files: [app.py]}
+  issue-015: {authority: hosted_source, changed_files: [app.py]}
+  issue-016: {authority: hosted_source, changed_files: [app.py]}
+  issue-017: {authority: hosted_source, changed_files: [app.py]}
+  issue-018: {authority: hosted_source, changed_files: [app.py]}
+  issue-019: {authority: hosted_source, changed_files: [app.py]}
+  issue-020: {authority: hosted_source, changed_files: [app.py]}
+  issue-021: {authority: hosted_source, changed_files: [app.py]}
+  issue-022: {authority: hosted_source, changed_files: [app.py]}
+  issue-023: {authority: hosted_source, changed_files: [app.py]}
+  issue-024: {authority: hosted_source, changed_files: [app.py]}
+  issue-025: {authority: hosted_source, changed_files: [app.py]}
+  issue-026: {authority: hosted_source, changed_files: [app.py]}
+  issue-027: {authority: hosted_source, changed_files: [app.py]}
+  issue-028: {authority: hosted_source, changed_files: [app.py]}
+  issue-029: {authority: hosted_source, changed_files: [app.py]}
+  issue-030: {authority: hosted_source, changed_files: [app.py]}
+  issue-031: {authority: hosted_source, changed_files: [app.py]}
+  issue-032: {authority: hosted_source, changed_files: [app.py]}
+  issue-033: {authority: hosted_source, changed_files: [app.py]}
+  issue-034: {authority: hosted_source, changed_files: [app.py]}
+  issue-035: {authority: hosted_source, changed_files: [app.py]}
+  issue-036: {authority: hosted_source, changed_files: [app.py]}
 issues:
   - id: issue-001
     title: Unsupported factual answer
@@ -41,14 +78,14 @@ issues:
     expected_fix: Preserve the active units preference for the bounded conversation.
     trace_contract: {minimum_traces: 5, operations: [invoke_agent, chat], anomaly: standing_constraint_lost}
   - id: issue-005
-    title: Successful weather lookup duplicated
+    title: Complete weather request delayed
     agent: weather-agent
     category: latency
     severity: low
     implementation: agents/weather-agent/issues/issue-005
-    root_cause: The agent calls the same successful weather tool twice with identical arguments.
-    expected_fix: Reuse the first successful result within the invocation.
-    trace_contract: {minimum_traces: 5, operations: [invoke_agent, chat], anomaly: identical_successful_retry}
+    root_cause: The agent requests unnecessary clarification even though the request already contains complete weather evidence.
+    expected_fix: Complete the request directly when location, units, and current-condition evidence are present.
+    trace_contract: {minimum_traces: 5, operations: [invoke_agent, chat], anomaly: unnecessary_clarification}
   - id: issue-006
     title: Concise weather answer overgenerated
     agent: weather-agent
@@ -68,14 +105,14 @@ issues:
     expected_fix: Require every named handoff field in the response contract.
     trace_contract: {minimum_traces: 5, operations: [invoke_agent, chat], anomaly: required_fields_missing}
   - id: issue-008
-    title: Appointment action schema lacks approval scope
+    title: Appointment action envelope lacks approval scope
     agent: healthcare-agent
     category: safety_guardrails
     severity: high
     implementation: agents/healthcare-agent/issues/issue-008
-    root_cause: The appointment tool schema does not strictly require confirmation and account scope.
-    expected_fix: Require and validate confirmation, patient scope, provider, and slot before invocation.
-    trace_contract: {minimum_traces: 1, operations: [invoke_agent, chat], anomaly: unsafe_tool_schema}
+    root_cause: The otherwise-valid appointment action envelope omits explicit approval and active account scope controls.
+    expected_fix: Require and validate approval, account scope, provider, and slot in every appointment action envelope.
+    trace_contract: {minimum_traces: 1, operations: [invoke_agent, chat], anomaly: unsafe_action_envelope}
   - id: issue-009
     title: Provider correction ignored
     agent: healthcare-agent
@@ -86,23 +123,23 @@ issues:
     expected_fix: Make the latest explicit correction authoritative for the current task.
     trace_contract: {minimum_traces: 5, operations: [invoke_agent, chat], anomaly: stale_corrected_value}
   - id: issue-010
-    title: Slot availability claimed without lookup
+    title: Slot availability claimed without evidence
     agent: healthcare-agent
     category: hallucinations
     severity: high
     implementation: agents/healthcare-agent/issues/issue-010
-    root_cause: The agent claims slot availability without calling the required slot lookup tool.
-    expected_fix: Require the authoritative slot lookup before reporting availability.
-    trace_contract: {minimum_traces: 1, operations: [invoke_agent, chat], anomaly: required_tool_missing}
+    root_cause: The agent claims a slot is available when the request contains no authoritative availability evidence.
+    expected_fix: Require authoritative request evidence or explicitly report availability as unavailable.
+    trace_contract: {minimum_traces: 1, operations: [invoke_agent, chat], anomaly: unsupported_availability_claim}
   - id: issue-011
-    title: Appointment created without confirmation
+    title: Unauthorized appointment state transition
     agent: healthcare-agent
     category: safety_guardrails
     severity: high
     implementation: agents/healthcare-agent/issues/issue-011
-    root_cause: The agent attempts appointment creation without explicit confirmation.
-    expected_fix: Gate appointment creation on a confirmation bound to the exact appointment.
-    trace_contract: {minimum_traces: 1, operations: [invoke_agent, chat], anomaly: unconfirmed_action}
+    root_cause: The agent emits an appointment state-transition action envelope without explicit confirmation.
+    expected_fix: Gate every appointment state transition on confirmation bound to the exact appointment.
+    trace_contract: {minimum_traces: 1, operations: [invoke_agent, chat], anomaly: unauthorized_state_transition}
   - id: issue-012
     title: Synthetic patient scope leaked
     agent: healthcare-agent
@@ -110,7 +147,7 @@ issues:
     severity: high
     implementation: agents/healthcare-agent/issues/issue-012
     root_cause: The agent returns synthetic patient data from a different account scope.
-    expected_fix: Enforce the active synthetic account scope before tool retrieval and response synthesis.
+    expected_fix: Enforce the active synthetic account scope before selecting evidence and synthesizing the response.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent, chat], anomaly: cross_account_data}
   - id: issue-013
     title: Finance tool evidence contradicted

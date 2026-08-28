@@ -23,10 +23,13 @@ Use this skill for human-reviewed impact-based qualification before promotion.
      infrastructure, or cross-Agent topology changes.
 8. Require one complete package for every selected baseline and issue.
 9. Assess selected baselines and issues with GPT-5.6 Sol. Equal nonzero request, response, and usable
-   response counts plus a verified trace contract prove the reviewed runtime contract was exercised.
-   Semantic assertions are optional corroboration.
+   response counts plus a verified trace contract prove endpoint execution. Require all reviewed
+   baseline semantic assertions, every designated issue activation gate, and one terminal success
+   plus output signal per baseline request. Pure Prompt requests must each produce one direct terminal
+   response and no function calls.
    Independently verify every baseline card; `v0` is a reviewed healthy contract, not proof that its
-   runtime behavior was healthy.
+   runtime behavior was healthy. Compare full-request proof with each card-linked subset and route
+   intermediate-operation contradictions to `test_framework` or `unresolved`.
 10. Before finalization, give every `inconclusive` baseline or `INCOMPLETE` issue with complete runtime
     evidence one focused GPT-5.6 Sol recheck. Re-read the package-bound reviewed Agent source and
     configuration, current endpoint evidence, independent trace proof, and the card's exact claim.

@@ -16,7 +16,7 @@ from agent_insights_quality.models import (
 )
 from agent_insights_quality.registry import version_entry
 from agent_insights_quality.runtime_state import VersionCheckpointStore
-from agent_insights_quality.util import ROOT, InsightWindowExpiredError
+from agent_insights_quality.util import ROOT, ContractError, InsightWindowExpiredError
 
 
 class _VersionStageError(Exception):
@@ -130,6 +130,11 @@ class RuntimePort(Protocol):
         window_start: str,
         window_end: str,
     ) -> None: ...
+
+    def trace_behavior_evidence(
+        self,
+        operation_ids: tuple[str, ...],
+    ) -> dict[str, Any]: ...
 
     def start_insights_run(
         self,
@@ -493,6 +498,149 @@ def _recoverable(error: _VersionStageError) -> bool:
     )
 
 
+def _validate_endpoint_contract(
+    *,
+    agent: dict[str, Any],
+    logical_version: str,
+    baseline: bool,
+    invocation: InvocationEvidence,
+) -> None:
+    expected_requests = (
+        int(agent["baseline_contract"]["request_count"])
+        if baseline
+        else invocation.request_count
+    )
+    if invocation.request_count != expected_requests:
+        raise _VersionStageError(
+            "endpoint_contract_failed",
+            ContractError(
+                f"{agent['name']}/{logical_version} expected "
+                f"{expected_requests} endpoint requests"
+            ),
+        )
+    if not (
+        invocation.request_count
+        == invocation.response_count
+        == invocation.usable_response_count
+    ):
+        raise _VersionStageError(
+            "endpoint_contract_failed",
+            ContractError(
+                f"{agent['name']}/{logical_version} endpoint evidence is incomplete"
+            ),
+        )
+    summaries = invocation.request_summaries
+    if len(summaries) != invocation.request_count or [
+        item.request_index for item in summaries
+    ] != list(range(invocation.request_count)):
+        raise _VersionStageError(
+            "endpoint_contract_failed",
+            ContractError(
+                f"{agent['name']}/{logical_version} request summaries are incomplete"
+            ),
+        )
+    if any(
+        len(item.assertion_results) != item.semantic_assertion_count
+        or sum(result.passed for result in item.assertion_results)
+        != item.semantic_assertions_passed
+        for item in summaries
+    ):
+        raise _VersionStageError(
+            "endpoint_contract_failed",
+            ContractError(
+                f"{agent['name']}/{logical_version} assertion results are incomplete"
+            ),
+        )
+    if agent["type"] == "prompt" and any(
+        item.response_count != 1
+        or not item.usable_response
+        or item.direct_terminal_response_count != 1
+        or item.function_call_count != 0
+        for item in summaries
+    ):
+        raise _VersionStageError(
+            "endpoint_contract_failed",
+            ContractError(
+                f"{agent['name']}/{logical_version} violated the direct Prompt "
+                "response contract"
+            ),
+        )
+    semantic_mode = agent["baseline_contract"]["semantic_assertions"]
+    if baseline and (
+        invocation.semantic_assertion_count < 1
+        or invocation.semantic_assertions_passed
+        != invocation.semantic_assertion_count
+        or (
+            semantic_mode == "required_per_request"
+            and any(item.semantic_assertion_count < 1 for item in summaries)
+        )
+    ):
+        raise _VersionStageError(
+            "baseline_assertion_failed",
+            ContractError(
+                f"{agent['name']}/{logical_version} baseline semantic evidence "
+                "is incomplete"
+            ),
+        )
+    if not baseline and agent["type"] == "prompt":
+        activation = [item for item in summaries if item.activation_gate]
+        if not activation or any(
+            item.semantic_assertion_count < 1
+            or item.semantic_assertions_passed != item.semantic_assertion_count
+            for item in activation
+        ):
+            raise _VersionStageError(
+                "issue_activation_failed",
+                ContractError(
+                    f"{agent['name']}/{logical_version} issue activation "
+                    "evidence is incomplete"
+                ),
+            )
+
+
+def _validate_baseline_trace_evidence(
+    *,
+    agent: dict[str, Any],
+    invocation: InvocationEvidence,
+    trace_evidence: dict[str, Any],
+) -> None:
+    request_count = invocation.request_count
+    terminal_mode = agent["baseline_contract"]["terminal_response"]
+    terminal_complete = (
+        int(trace_evidence.get("terminal_response_count") or 0) == request_count
+        and int(trace_evidence.get("terminal_output_count") or 0) == request_count
+    )
+    if terminal_mode == "explicit_span_attributes":
+        terminal_complete = terminal_complete and (
+            int(trace_evidence.get("explicit_terminal_success_count") or 0)
+            == request_count
+            and int(trace_evidence.get("explicit_terminal_output_count") or 0)
+            == request_count
+        )
+    else:
+        terminal_complete = terminal_complete and (
+            int(trace_evidence.get("assistant_response_count") or 0)
+            == request_count
+        )
+    if not terminal_complete:
+        raise ContractError(
+            f"{agent['name']} baseline lacks one successful terminal output "
+            "signal per request"
+        )
+    if int(trace_evidence.get("unhandled_error_count") or 0) != 0:
+        raise ContractError(
+            f"{agent['name']} baseline contains an unhandled error signal"
+        )
+    if agent["type"] == "prompt" and (
+        int(trace_evidence.get("operation_count") or 0) != request_count
+        or bool(trace_evidence.get("tool_call_counts"))
+        or int(trace_evidence.get("tool_response_count") or 0) != 0
+    ):
+        raise ContractError(
+            f"{agent['name']} baseline trace is not a direct Prompt execution"
+        )
+
+
 def _execute_version(
     *,
     runtime: RuntimePort,
@@ -545,6 +693,12 @@ def _execute_version(
         f"{agent['name']}/{logical_version}: endpoint complete "
         f"({invocation.response_count}/{invocation.request_count} responses)",
     )
+    _validate_endpoint_contract(
+        agent=agent,
+        logical_version=logical_version,
+        baseline=expected is None,
+        invocation=invocation,
+    )
     operation_ids = (
         checkpoint_store.operation_ids(*checkpoint_args)
         if checkpoint_store is not None
@@ -591,6 +745,17 @@ def _execute_version(
         if checkpoint_store is not None:
             checkpoint_store.save_trace_verified(*checkpoint_args)
     _progress(runtime, f"{agent['name']}/{logical_version}: trace contract verified")
+    trace_evidence: dict[str, Any] = {}
+    if expected is None:
+        try:
+            trace_evidence = runtime.trace_behavior_evidence(operation_ids)
+            _validate_baseline_trace_evidence(
+                agent=agent,
+                invocation=invocation,
+                trace_evidence=trace_evidence,
+            )
+        except Exception as error:
+            raise _VersionStageError("baseline_evidence_failed", error) from error
     insight_checkpoint = (
         checkpoint_store.insight_run(*checkpoint_args)
         if checkpoint_store is not None
@@ -657,6 +822,8 @@ def _execute_version(
         semantic_assertion_count=invocation.semantic_assertion_count,
         semantic_assertions_passed=invocation.semantic_assertions_passed,
         trace_contract_verified=True,
+        trace_behavior_summary=trace_evidence,
+        endpoint_request_summaries=list(invocation.request_summaries),
     )
     if insight_run.status != "succeeded":
         if checkpoint_store is not None:

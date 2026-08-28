@@ -15,11 +15,16 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
+
 from agent_insights_quality.models import (
     InsightEvidence,
     InsightRunCheckpoint,
     InsightRunEvidence,
     InvocationEvidence,
+    RequestCompletionEvidence,
+    SemanticAssertionEvidence,
 )
 from agent_insights_quality.automation_policy import TRAFFIC_UNCERTAINTY_SECONDS
 from agent_insights_quality.profiles import RuntimeProfile
@@ -255,7 +260,19 @@ union traces, dependencies, requests
         )
         completed_groups: dict[
             str,
-            list[tuple[int, list[str], bool, int, int]],
+            list[
+                tuple[
+                    int,
+                    list[str],
+                    bool,
+                    int,
+                    int,
+                    int,
+                    int,
+                    tuple[SemanticAssertionEvidence, ...],
+                    bool,
+                ]
+            ],
         ] = {}
         errors: list[Exception] = []
         with ThreadPoolExecutor(max_workers=min(5, len(groups))) as pool:
@@ -308,11 +325,35 @@ union traces, dependencies, requests
         usable_response_count = 0
         semantic_assertion_count = 0
         semantic_assertions_passed = 0
-        for _, references, usable, assertion_count, assertions_passed in ordered:
+        request_summaries = []
+        for (
+            request_index,
+            references,
+            usable,
+            assertion_count,
+            assertions_passed,
+            direct_terminal_response_count,
+            function_call_count,
+            assertion_results,
+            activation_gate,
+        ) in ordered:
             response_references.extend(references)
             usable_response_count += int(usable)
             semantic_assertion_count += assertion_count
             semantic_assertions_passed += assertions_passed
+            request_summaries.append(
+                RequestCompletionEvidence(
+                    request_index=request_index,
+                    response_count=len(references),
+                    usable_response=usable,
+                    semantic_assertion_count=assertion_count,
+                    semantic_assertions_passed=assertions_passed,
+                    assertion_results=assertion_results,
+                    activation_gate=activation_gate,
+                    direct_terminal_response_count=direct_terminal_response_count,
+                    function_call_count=function_call_count,
+                )
+            )
         completed = self._utcnow().astimezone(UTC)
         return InvocationEvidence(
             operation_ids=(),
@@ -325,6 +366,7 @@ union traces, dependencies, requests
             usable_response_count=usable_response_count,
             semantic_assertion_count=semantic_assertion_count,
             semantic_assertions_passed=semantic_assertions_passed,
+            request_summaries=tuple(request_summaries),
         )
 
     def _invoke_group(
@@ -334,19 +376,50 @@ union traces, dependencies, requests
         foundry_version: str,
         fixtures: list[dict[str, Any]],
         seed: int,
-    ) -> list[tuple[int, list[str], bool, int, int]]:
+    ) -> list[
+        tuple[
+            int,
+            list[str],
+            bool,
+            int,
+            int,
+            int,
+            int,
+            tuple[SemanticAssertionEvidence, ...],
+            bool,
+        ]
+    ]:
         if agent_type == "prompt":
-            results: list[tuple[int, list[str], bool, int, int]] = []
+            results: list[
+                tuple[
+                    int,
+                    list[str],
+                    bool,
+                    int,
+                    int,
+                    int,
+                    int,
+                    tuple[SemanticAssertionEvidence, ...],
+                    bool,
+                ]
+            ] = []
             previous_response_id: str | None = None
             for fixture in fixtures:
-                response_ids, usable, assertion_count, assertions_passed = (
-                    self._invoke_prompt(
+                (
+                    response_ids,
+                    usable,
+                    assertion_count,
+                    assertions_passed,
+                    direct_terminal_response_count,
+                    function_call_count,
+                    assertion_results,
+                    activation_gate,
+                ) = self._invoke_prompt(
                     agent_name,
                     foundry_version,
                     fixture,
                     seed + int(fixture["_index"]),
                     previous_response_id,
-                    )
                 )
                 previous_response_id = response_ids[-1]
                 results.append(
@@ -356,6 +429,10 @@ union traces, dependencies, requests
                         usable,
                         assertion_count,
                         assertions_passed,
+                        direct_terminal_response_count,
+                        function_call_count,
+                        assertion_results,
+                        activation_gate,
                     )
                 )
             return results
@@ -454,7 +531,16 @@ union traces, dependencies, requests
         fixture: dict[str, Any],
         seed: int,
         previous_response_id: str | None,
-    ) -> tuple[list[str], bool, int, int]:
+    ) -> tuple[
+        list[str],
+        bool,
+        int,
+        int,
+        int,
+        int,
+        tuple[SemanticAssertionEvidence, ...],
+        bool,
+    ]:
         reference = {
             "type": "agent_reference",
             "name": agent_name,
@@ -481,90 +567,37 @@ union traces, dependencies, requests
             body,
             expected={fixture["expected_status"]},
         )
-        response_ids: list[str] = []
-        for _ in range(8):
-            response_id = str(response.get("id") or "")
-            if not response_id or response_id in response_ids:
-                raise ContractError("Prompt response identity is missing or repeated")
-            response_ids.append(response_id)
-            calls = [
-                value
-                for value in response.get("output", [])
-                if isinstance(value, dict) and value.get("type") == "function_call"
-            ]
-            if not calls:
-                assertion_count, assertions_passed = _semantic_assertion_result(
-                    response,
-                    fixture,
-                )
-                return (
-                    response_ids,
-                    _usable_response(response, fixture["expected_status"]),
-                    assertion_count,
-                    assertions_passed,
-                )
-            outputs = []
-            tool_outputs = fixture.get("tool_outputs", {})
-            for call in calls:
-                name = str(call.get("name") or "")
-                call_id = str(call.get("call_id") or "")
-                configured = tool_outputs.get(name)
-                if not call_id:
-                    raise ContractError("Prompt returned a tool call without an identity")
-                raw_arguments = str(call.get("arguments") or "")
-                try:
-                    arguments = json.loads(raw_arguments)
-                except json.JSONDecodeError as error:
-                    raise ContractError("Prompt emitted invalid tool arguments") from error
-                if not configured:
-                    result = {
-                        "error": {
-                            "code": "unexpected_tool_call",
-                            "tool": name,
-                        }
-                    }
-                else:
-                    matching = next(
-                        (
-                            value
-                            for value in configured
-                            if _arguments_match(arguments, value["arguments"])
-                        ),
-                        configured[0] if len(configured) == 1 else None,
-                    )
-                    if matching is None:
-                        result = {
-                            "error": {
-                                "code": "synthetic_argument_fixture_mismatch",
-                                "tool": name,
-                            }
-                        }
-                    else:
-                        results = matching["results"]
-                        result = results.pop(0) if len(results) > 1 else results[0]
-                outputs.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": call_id,
-                        "output": json.dumps(result, sort_keys=True),
-                    }
-                )
-            self._traffic_ledger.mark_started(
-                agent_name,
-                now=self._utcnow().astimezone(UTC),
-                uncertain_seconds=_DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        response_id = str(response.get("id") or "")
+        if not response_id:
+            raise ContractError("Prompt response identity is missing")
+        calls = [
+            value
+            for value in response.get("output", [])
+            if isinstance(value, dict) and value.get("type") == "function_call"
+        ]
+        function_call_count = len(calls)
+        if function_call_count:
+            raise ContractError(
+                "Prompt emitted a function call; pure Prompt traffic requires one "
+                "direct terminal response"
             )
-            response = self._json_request(
-                "POST",
-                f"{self._profile.project_endpoint}/openai/v1/responses",
-                {
-                    "input": outputs,
-                    "previous_response_id": response_id,
-                    "store": True,
-                    "agent_reference": reference,
-                },
+        assertion_count, assertions_passed, assertion_results = (
+            _semantic_assertion_result(
+                response,
+                fixture,
             )
-        raise ContractError("Prompt exceeded the bounded tool-turn limit")
+        )
+        usable = _usable_response(response, fixture["expected_status"])
+        return (
+            [response_id],
+            usable,
+            assertion_count,
+            assertions_passed,
+            int(bool(_response_text(response))),
+            function_call_count,
+            assertion_results,
+            bool(fixture.get("activation_gate", False)),
+        )
 
     def _create_hosted_session(
         self,
@@ -605,7 +638,16 @@ union traces, dependencies, requests
         session_id: str,
         fixture: dict[str, Any],
         seed: int,
-    ) -> tuple[list[str], bool, int, int]:
+    ) -> tuple[
+        list[str],
+        bool,
+        int,
+        int,
+        int,
+        int,
+        tuple[SemanticAssertionEvidence, ...],
+        bool,
+    ]:
         del seed
         body = {
             "input": fixture["body"]["input"],
@@ -632,15 +674,21 @@ union traces, dependencies, requests
         request_reference = str(response.get("_request_reference") or "")
         if not request_reference:
             raise ContractError("Hosted response omitted its request reference")
-        assertion_count, assertions_passed = _semantic_assertion_result(
-            response,
-            fixture,
+        assertion_count, assertions_passed, assertion_results = (
+            _semantic_assertion_result(
+                response,
+                fixture,
+            )
         )
         return (
             [request_reference],
             _usable_response(response, fixture["expected_status"]),
             assertion_count,
             assertions_passed,
+            0,
+            0,
+            assertion_results,
+            bool(fixture.get("activation_gate", False)),
         )
 
     def wait_for_telemetry(
@@ -1013,8 +1061,11 @@ union traces, dependencies, requests
 | extend tool_result=tostring(customDimensions["gen_ai.tool.call.result"])
 | extend input_messages=tostring(customDimensions["gen_ai.input.messages"])
 | extend output_messages=tostring(customDimensions["gen_ai.output.messages"])
+| extend terminal_success=tostring(customDimensions["aiq.terminal_response.success"])
+| extend terminal_output=tostring(customDimensions["aiq.terminal_response.output_present"])
+| extend handled_error=tostring(customDimensions["aiq.tool.error.handled"])
 | project operation_Id, operation_name, tool_name, tool_call_id, error_type, tool_ok, tool_result,
-    input_messages, output_messages, timestamp
+    input_messages, output_messages, timestamp, terminal_success, terminal_output, handled_error
 """
         result = self._query_resource(
             self._logs_client(),
@@ -1034,6 +1085,9 @@ union traces, dependencies, requests
                 "tool_result": str(row[6] or ""),
                 "messages": [str(row[7] or ""), str(row[8] or "")],
                 "timestamp": str(row[9] or ""),
+                "terminal_success": str(row[10] or ""),
+                "terminal_output": str(row[11] or ""),
+                "handled_error": str(row[12] or ""),
             }
             for table in result.tables
             for row in table.rows
@@ -1413,6 +1467,10 @@ def _trace_behavior_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     error_codes: Counter[str] = Counter()
     recorded_errors: set[tuple[str, str]] = set()
     assistant_response_operations: set[str] = set()
+    explicit_terminal_success_operations: set[str] = set()
+    explicit_terminal_output_operations: set[str] = set()
+    handled_error_rows = 0
+    unhandled_error_rows = 0
     seen_messages: set[tuple[str, str]] = set()
     terminal_snapshots: dict[str, tuple[tuple[str, str], list[Any]]] = {}
 
@@ -1506,6 +1564,15 @@ def _trace_behavior_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
     for row_index, row in enumerate(rows):
         operation_id = row["operation_id"]
+        handled = row.get("handled_error", "").casefold() == "true"
+        if row.get("terminal_success", "").casefold() == "true":
+            explicit_terminal_success_operations.add(operation_id)
+        if row.get("terminal_output", "").casefold() == "true":
+            explicit_terminal_output_operations.add(operation_id)
+        if handled and row.get("error_type"):
+            handled_error_rows += 1
+        elif row.get("error_type"):
+            unhandled_error_rows += 1
         if row["operation_name"] == "execute_tool":
             tool_name = row["tool_name"] or "unknown"
             call_id = row.get("tool_call_id", "")
@@ -1570,6 +1637,12 @@ def _trace_behavior_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         )
         call_counts[canonical] += 1
     call_counts.update(anonymous_calls)
+    terminal_success_operations = (
+        assistant_response_operations | explicit_terminal_success_operations
+    )
+    terminal_output_operations = (
+        assistant_response_operations | explicit_terminal_output_operations
+    )
     return {
         "operation_count": len({row["operation_id"] for row in rows}),
         "tool_call_counts": dict(sorted(call_counts.items())),
@@ -1577,6 +1650,19 @@ def _trace_behavior_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "successful_tool_response_count": len(successful_responses),
         "error_codes": dict(sorted(error_codes.items())),
         "assistant_response_count": len(assistant_response_operations),
+        "explicit_terminal_success_count": len(
+            explicit_terminal_success_operations
+        ),
+        "explicit_terminal_output_count": len(
+            explicit_terminal_output_operations
+        ),
+        "terminal_success_count": len(terminal_success_operations),
+        "terminal_output_count": len(terminal_output_operations),
+        "terminal_response_count": len(
+            terminal_success_operations & terminal_output_operations
+        ),
+        "handled_error_count": handled_error_rows,
+        "unhandled_error_count": unhandled_error_rows,
     }
 
 
@@ -1618,37 +1704,94 @@ def _response_text(response: dict[str, Any]) -> str:
 def _semantic_assertion_result(
     response: dict[str, Any],
     fixture: dict[str, Any],
-) -> tuple[int, int]:
+) -> tuple[int, int, tuple[SemanticAssertionEvidence, ...]]:
     assertions = fixture.get("semantic_assertions", {})
     if not assertions:
-        return 0, 0
+        return 0, 0, ()
     text = _response_text(response)
     folded = text.casefold()
-    results = []
+    results: list[SemanticAssertionEvidence] = []
+
+    def record(assertion: str, passed: bool) -> None:
+        results.append(
+            SemanticAssertionEvidence(assertion=assertion, passed=bool(passed))
+        )
+
+    parsed_json: Any = None
+    valid_json = False
+    if text:
+        try:
+            parsed_json = json.loads(text)
+            valid_json = True
+        except json.JSONDecodeError:
+            pass
     response_format = assertions.get("response_format")
     if response_format:
-        valid_json = False
-        if text:
-            try:
-                json.loads(text)
-                valid_json = True
-            except json.JSONDecodeError:
-                pass
-        results.append(
+        record(
+            "response_format",
             valid_json if response_format == "json" else bool(text) and not valid_json
+        )
+    json_schema = assertions.get("json_schema")
+    if json_schema:
+        record(
+            "json_schema",
+            valid_json
+            and not list(Draft202012Validator(json_schema).iter_errors(parsed_json)),
+        )
+    exact_json_fields = assertions.get("exact_json_fields")
+    if exact_json_fields is not None:
+        record(
+            "exact_json_fields",
+            isinstance(parsed_json, dict)
+            and all(
+                key in parsed_json and parsed_json[key] == expected
+                for key, expected in exact_json_fields.items()
+            ),
         )
     required_all = assertions.get("required_terms_all", [])
     if required_all:
-        results.append(all(str(term).casefold() in folded for term in required_all))
+        record(
+            "required_terms_all",
+            all(str(term).casefold() in folded for term in required_all),
+        )
     required_any = assertions.get("required_terms_any", [])
     if required_any:
-        results.append(any(str(term).casefold() in folded for term in required_any))
+        record(
+            "required_terms_any",
+            any(str(term).casefold() in folded for term in required_any),
+        )
     forbidden = assertions.get("forbidden_terms", [])
     if forbidden:
-        results.append(
-            all(str(term).casefold() not in folded for term in forbidden)
+        record(
+            "forbidden_terms",
+            all(str(term).casefold() not in folded for term in forbidden),
         )
-    return len(results), sum(results)
+    required_claims = assertions.get("required_claims", [])
+    if required_claims:
+        record(
+            "required_claims",
+            all(str(claim).casefold() in folded for claim in required_claims),
+        )
+    forbidden_claims = assertions.get("forbidden_claims", [])
+    if forbidden_claims:
+        record(
+            "forbidden_claims",
+            all(str(claim).casefold() not in folded for claim in forbidden_claims),
+        )
+    max_words = assertions.get("max_words")
+    if max_words is not None:
+        record(
+            "max_words",
+            bool(text) and len(re.findall(r"\S+", text)) <= int(max_words),
+        )
+    max_characters = assertions.get("max_characters")
+    if max_characters is not None:
+        record("max_characters", bool(text) and len(text) <= int(max_characters))
+    return (
+        len(results),
+        sum(item.passed for item in results),
+        tuple(results),
+    )
 
 
 def _normalize_fixture(value: Any) -> dict[str, Any]:
@@ -1658,28 +1801,8 @@ def _normalize_fixture(value: Any) -> dict[str, Any]:
     body = request.get("body") if isinstance(request, dict) else None
     if not isinstance(body, dict) or "input" not in body:
         raise ContractError("Traffic request must contain a Responses request body")
-    fixtures: dict[str, list[dict[str, Any]]] = {}
-    for item in value.get("tool_fixtures", []):
-        if not isinstance(item, dict) or not item.get("tool"):
-            raise ContractError("Tool fixture is invalid")
-        if "sequence" in item:
-            sequence = item["sequence"]
-            if not isinstance(sequence, list) or not sequence:
-                raise ContractError("Tool fixture return sequence is invalid")
-            results = [
-                value.get("returns") if isinstance(value, dict) and "returns" in value else value
-                for value in sequence
-            ]
-        elif "returns" in item:
-            results = [item["returns"]]
-        else:
-            raise ContractError("Tool fixture has no synthetic result")
-        fixtures.setdefault(str(item["tool"]), []).append(
-            {
-                "arguments": item.get("arguments", {}),
-                "results": results,
-            }
-        )
+    if "tool_fixtures" in value:
+        raise ContractError("Endpoint traffic cannot contain tool fixtures")
     expected = value.get("expected")
     expected_status = (
         int(expected.get("http_status", 200)) if isinstance(expected, dict) else 200
@@ -1696,10 +1819,58 @@ def _normalize_fixture(value: Any) -> dict[str, Any]:
             "required_terms_all",
             "required_terms_any",
             "forbidden_terms",
+            "max_words",
+            "max_characters",
+            "json_schema",
+            "exact_json_fields",
+            "required_claims",
+            "forbidden_claims",
         }
         for key in semantic_assertions
     ):
         raise ContractError("Traffic semantic assertions are invalid")
+    for key in (
+        "required_terms_all",
+        "required_terms_any",
+        "forbidden_terms",
+        "required_claims",
+        "forbidden_claims",
+    ):
+        terms = semantic_assertions.get(key, [])
+        if not isinstance(terms, list) or not all(
+            isinstance(term, str) and term for term in terms
+        ):
+            raise ContractError("Traffic semantic assertion terms are invalid")
+    for key in ("max_words", "max_characters"):
+        bound = semantic_assertions.get(key)
+        if bound is not None and (
+            not isinstance(bound, int) or isinstance(bound, bool) or bound < 1
+        ):
+            raise ContractError("Traffic semantic assertion bound is invalid")
+    json_schema = semantic_assertions.get("json_schema")
+    if json_schema is not None:
+        if not isinstance(json_schema, dict) or not json_schema:
+            raise ContractError("Traffic semantic assertion JSON schema is invalid")
+        try:
+            Draft202012Validator.check_schema(json_schema)
+        except SchemaError as error:
+            raise ContractError(
+                "Traffic semantic assertion JSON schema is invalid"
+            ) from error
+    exact_json_fields = semantic_assertions.get("exact_json_fields")
+    if exact_json_fields is not None and (
+        not isinstance(exact_json_fields, dict)
+        or not exact_json_fields
+        or not all(isinstance(key, str) and key for key in exact_json_fields)
+    ):
+        raise ContractError("Traffic exact JSON field assertions are invalid")
+    activation_gate = (
+        expected.get("activation_gate", False)
+        if isinstance(expected, dict)
+        else False
+    )
+    if not isinstance(activation_gate, bool):
+        raise ContractError("Traffic activation gate must be a boolean")
     conversation = body.get("conversation")
     conversation_key = (
         str(conversation.get("id") or "")
@@ -1711,9 +1882,9 @@ def _normalize_fixture(value: Any) -> dict[str, Any]:
     return {
         "id": str(value.get("id") or ""),
         "body": dict(body),
-        "tool_outputs": fixtures,
         "expected_status": expected_status,
         "semantic_assertions": semantic_assertions,
+        "activation_gate": activation_gate,
         "conversation_key": conversation_key,
     }
 
@@ -1741,22 +1912,3 @@ def _complete_operation_ids(
     if not set(expected_references).issubset(seen):
         return None
     return tuple(sorted(operations))
-
-
-def _arguments_match(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
-    if set(actual) != set(expected):
-        return False
-    for key, expected_value in expected.items():
-        actual_value = actual[key]
-        if key == "location" and isinstance(actual_value, str) and isinstance(
-            expected_value, str
-        ):
-            normalized_actual = actual_value.casefold().strip()
-            normalized_expected = expected_value.casefold().strip()
-            if normalized_actual == normalized_expected or normalized_actual.startswith(
-                normalized_expected + ","
-            ):
-                continue
-        if actual_value != expected_value:
-            return False
-    return True
