@@ -29,6 +29,9 @@ committed sanitized report; never publish private work items, assessment package
 responses, traces, evidence references, provider IDs, Foundry versions, or private links.
 Application Insights remains read-only.
 
+This is an official scheduled run. Never pass `--test-run`; that explicit mode is reserved for a
+reviewed email-only rerun and intentionally skips ADX and pull-request publication.
+
 Finalization attempts ADX publication and creates an email containing the privately configured
 quality-trend dashboard link. Record the returned ADX status. An ADX failure does not block email or
 the pull request: preserve the generated warning, report the failure in the final result and pull

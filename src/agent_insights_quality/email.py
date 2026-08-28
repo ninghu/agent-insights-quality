@@ -103,23 +103,25 @@ def write_private_report_preview(
     atomic_text(path, rendered)
 
 
-def resolve_recipient() -> str:
+def resolve_recipient(*, test_run: bool = False) -> str:
     reviewed_recipient = str(
         read_yaml(ROOT / "config" / "reporting.yaml").get("recipient") or ""
     ).strip()
     if reviewed_recipient != "agentinsightsteam@microsoft.com":
         raise ContractError("Report recipient does not match the reviewed team mailbox")
+    if not test_run:
+        return _validated_recipient(reviewed_recipient)
     override_path = runtime_root() / "config" / "email-recipient.json"
-    recipient = reviewed_recipient
-    if override_path.is_file():
-        override = read_json(override_path)
-        if (
-            override.get("schema_version") != "1.0.0"
-            or override.get("purpose") != "daily_test"
-            or set(override) != {"schema_version", "purpose", "recipient"}
-        ):
-            raise ContractError("Private test email recipient override is invalid")
-        recipient = str(override.get("recipient") or "").strip()
+    if not override_path.is_file():
+        raise ContractError("Test runs require a private test email recipient")
+    override = read_json(override_path)
+    if (
+        override.get("schema_version") != "1.0.0"
+        or override.get("purpose") != "daily_test"
+        or set(override) != {"schema_version", "purpose", "recipient"}
+    ):
+        raise ContractError("Private test email recipient override is invalid")
+    recipient = str(override.get("recipient") or "").strip()
     return _validated_recipient(recipient)
 
 
@@ -132,9 +134,18 @@ def create_request(
     dashboard_link: str | None = None,
     adx_publication: Mapping[str, Any] | None = None,
     work_items: Mapping[str, Any] | None = None,
+    test_run: bool = False,
 ) -> dict[str, Any]:
     recipient = _validated_recipient(recipient)
-    if report.get("profile") == "daily":
+    if report.get("profile") == "daily" and test_run:
+        if dashboard_link is not None or adx_publication != {
+            "status": "skipped_test",
+            "error_code": None,
+        }:
+            raise ContractError(
+                "Test email requires ADX and dashboard publication to be skipped"
+            )
+    elif report.get("profile") == "daily":
         if dashboard_link is None:
             raise ContractError("Daily email requires the ADX dashboard link")
         if adx_publication is None or adx_publication.get("status") not in {
@@ -144,8 +155,9 @@ def create_request(
         }:
             raise ContractError("Daily email requires explicit ADX publication status")
     score = _overall_score(report)
+    subject_prefix = "[TEST] " if test_run else ""
     subject = (
-        f"[Agent Insights Quality] {report['status']} - {score} - "
+        f"{subject_prefix}[Agent Insights Quality] {report['status']} - {score} - "
         f"{report['report_date']} - {report['summary']['issues_correct']}/"
         f"{report['summary']['issues_expected']} issues"
     )
@@ -156,6 +168,7 @@ def create_request(
         dashboard_link=dashboard_link,
         adx_publication=adx_publication,
         work_items=work_items,
+        test_run=test_run,
     )
     digest = content_hash(
         {"recipient": recipient.lower(), "subject": subject, "html": body}
@@ -169,6 +182,7 @@ def create_request(
         "content_digest": digest,
         "send_once": True,
         "retry_ambiguous": False,
+        "delivery_mode": "test_email_only" if test_run else "official",
     }
 
 
@@ -452,6 +466,13 @@ def _dashboard_source_link(
     dashboard_link: str | None,
     adx_publication: Mapping[str, Any] | None,
 ) -> str:
+    if adx_publication is not None and adx_publication.get("status") == "skipped_test":
+        return (
+            '<p style="margin:0 0 18px 0;padding:10px 12px;'
+            f'background-color:#dbeafe;color:#12304a;{_OUTLOOK_TEXT_STYLE}">'
+            "Test run: this result was intentionally not published to ADX or the "
+            "quality trend dashboard.</p>"
+        )
     if dashboard_link is None:
         return ""
     value = (
@@ -476,6 +497,8 @@ def _dashboard_source_link(
 def _agent_rows(
     report: dict[str, Any],
     agent_links: Mapping[str, str],
+    *,
+    test_run: bool = False,
 ) -> str:
     rows = []
     for baseline in sorted(
@@ -494,6 +517,9 @@ def _agent_rows(
             else '<span style="color:#64748b;">Not available</span>'
         )
         report_link_html = (
+            '<span style="color:#64748b;">Not published</span>'
+            if test_run
+            else
             '<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
             f'href="{html.escape(_agent_report_url(report, name), quote=True)}">'
             "View report</a>"
@@ -593,12 +619,21 @@ def _render_html(
     dashboard_link: str | None = None,
     adx_publication: Mapping[str, Any] | None = None,
     work_items: Mapping[str, Any] | None = None,
+    test_run: bool = False,
 ) -> str:
     status_style = _STATUS_STYLES[report["status"]]
     score = _overall_score(report)
     score_comparison = _score_comparison(report)
     summary = _summary_narrative(report)
-    rows = _agent_rows(report, agent_links or {})
+    rows = _agent_rows(report, agent_links or {}, test_run=test_run)
+    test_banner = (
+        '<tr><td style="padding:18px 32px;background-color:#dbeafe;'
+        f'color:#12304a;font-weight:700;{_OUTLOOK_TEXT_STYLE}">'
+        "TEST RUN &mdash; email-only delivery; no ADX publication or pull request."
+        "</td></tr>"
+        if test_run
+        else ""
+    )
     body = (
         '<!doctype html><html><body bgcolor="#f3f6fa" '
         'style="margin:0;padding:0;background-color:#f3f6fa;font-family:Segoe UI,'
@@ -630,7 +665,8 @@ def _render_html(
         f'<a style="color:#dbeafe;text-decoration:underline;" '
         f'href="{_QUALITY_BAR_URL}">How Scoring Works</a></div>'
         "</td></tr>"
-        '<tr><td style="padding:28px 32px 0 32px;">'
+        + test_banner
+        + '<tr><td style="padding:28px 32px 0 32px;">'
         + _section_heading("Summary")
         + "".join(
             f'<p style="margin:0 0 12px 0;color:#334155;'
