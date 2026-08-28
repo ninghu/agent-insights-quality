@@ -14,10 +14,10 @@ def test_hosted_source_uses_supported_runtime() -> None:
 
 def test_prompt_model_resolves_to_deployment_name() -> None:
     value = _resolve_definition(
-        {"kind": "prompt", "model": "gpt-5.6-terra"},
+        {"kind": "prompt", "model": "gpt-5.4-mini"},
         project_endpoint="https://example.invalid",
     )
-    assert value["model"] == "terra-test-agents"
+    assert value["model"] == "gpt-5.4-mini"
 
 
 def test_infrastructure_grants_automation_data_plane_roles() -> None:
@@ -30,6 +30,9 @@ def test_infrastructure_grants_automation_data_plane_roles() -> None:
     assert "eadc314b-1a2d-4efa-be10-5d325db5065e" in lab
     assert "automationRegistryPush" in lab
     assert "principalType: 'User'" in lab
+    assert "name: 'gpt-5.4-mini'" in lab
+    assert "name: 'terra-insight-generation'" in lab
+    assert "name: 'terra-test-agents'" not in lab
 
 
 def test_support_provisioning_publishes_to_acr() -> None:

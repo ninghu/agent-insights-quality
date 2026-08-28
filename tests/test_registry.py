@@ -7,7 +7,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_insights_quality.catalogs import catalog_hashes, load_catalogs
+from agent_insights_quality.catalogs import (
+    catalog_hashes,
+    load_catalogs,
+    agent_model_contract,
+)
 from agent_insights_quality.registry import (
     _run_registry_command,
     load_registry,
@@ -27,6 +31,7 @@ def _registry(profile: str) -> dict:
             if profile == "daily"
             else "agent-insights-quality-staging"
         ),
+        "test_agent_model": agent_model_contract(agents),
         "catalog_hashes": catalog_hashes(agents, issues),
         "agents": {
             agent["name"]: {

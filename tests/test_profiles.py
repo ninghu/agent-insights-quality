@@ -118,6 +118,43 @@ def test_profile_rejects_mismatched_project_telemetry_connection(
         profile.assert_insights_connection()
 
 
+def test_profile_requires_reviewed_test_agent_model(monkeypatch) -> None:
+    profile = RuntimeProfile(
+        name="staging",
+        project_name="agent-insights-quality-staging",
+        project_endpoint="https://example.invalid",
+        insights_endpoint="https://example.invalid",
+        application_insights_resource_id="/subscriptions/hidden/active",
+        registry_path=SimpleNamespace(),
+        account_name="synthetic-staging",
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.profiles.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "name": "gpt-5.4-mini",
+                    "properties": {
+                        "provisioningState": "Succeeded",
+                        "model": {
+                            "name": "gpt-5.4-mini",
+                            "version": "2026-03-17",
+                        },
+                    },
+                }
+            ),
+        ),
+    )
+    profile.assert_test_agent_model(
+        {
+            "deployment_name": "gpt-5.4-mini",
+            "model_id": "gpt-5.4-mini",
+            "model_version": "2026-03-17",
+        }
+    )
+
+
 def test_azure_resource_reads_retry_transient_failures(monkeypatch) -> None:
     attempts = 0
 

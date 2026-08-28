@@ -1050,6 +1050,57 @@ def test_hosted_cleanup_failure_preserves_primary_invocation_error() -> None:
     assert progress == ["finance-agent/19: session cleanup also failed"]
 
 
+def test_mixed_group_failures_preserve_ambiguous_traffic_horizon(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime()
+    traffic = tmp_path / "traffic.json"
+    traffic.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "known-http",
+                    "request": {"body": {"input": "synthetic one"}},
+                },
+                {
+                    "id": "ambiguous",
+                    "request": {"body": {"input": "synthetic two"}},
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    class Ledger:
+        completed = 0
+
+        @staticmethod
+        def mark_started(*_args, **_kwargs):
+            return None
+
+        def mark_completed(self, *_args, **_kwargs):
+            self.completed += 1
+
+    ledger = Ledger()
+    runtime._traffic_ledger = ledger
+
+    def invoke_group(_agent, _type, _version, fixtures, _seed):
+        if fixtures[0]["id"] == "known-http":
+            raise ContractError("Remote operation failed with HTTP 424")
+        raise ContractError("Remote operation failed before a response was received")
+
+    runtime._invoke_group = invoke_group  # type: ignore[method-assign]
+    with pytest.raises(ContractError, match="before a response"):
+        runtime.invoke_version(
+            agent_name="finance-agent",
+            agent_type="hosted",
+            foundry_version="1",
+            traffic_path=traffic,
+            seed=1,
+        )
+    assert ledger.completed == 0
+
+
 def test_json_request_refreshes_an_expired_credential_once(monkeypatch) -> None:
     tokens = iter(["expired-token", "fresh-token"])
     runtime = LiveRuntime(

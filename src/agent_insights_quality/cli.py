@@ -28,6 +28,7 @@ from agent_insights_quality.catalogs import (
     catalog_summary,
     generate_docs,
     load_catalogs,
+    agent_model_contract,
 )
 from agent_insights_quality.email import (
     build_runtime_links,
@@ -247,7 +248,11 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                 raise ContractError(
                     "Daily provisioning requires a human-reviewed staging promotion receipt"
                 )
-            approved_digests = validate_promotion_receipt(Path(receipt), hashes)
+            approved_digests = validate_promotion_receipt(
+                Path(receipt),
+                hashes,
+                agent_model_contract(agents),
+            )
         provision_profile(
             profile=profile,
             agents=agents,
@@ -279,6 +284,7 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         )
         profile = RuntimeProfile.from_env(profile_name)
         profile.assert_insights_connection()
+        profile.assert_test_agent_model(agent_model_contract(agents))
         sync_registry(profile)
         registry = load_registry(
             profile.registry_path,
@@ -319,6 +325,9 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                         policy.clean_window_max_wait_seconds
                     ),
                     max_recovery_versions=policy.max_recovery_versions,
+                    agent_start_stagger_seconds=(
+                        policy.agent_start_stagger_seconds
+                    ),
                     checkpoint_store=VersionCheckpointStore(
                         state / "stage-checkpoints",
                         run_contract_digest,
@@ -650,6 +659,7 @@ def _run_contract_digest(
             "registry_hash": content_hash(registry),
             "work_items_hash": content_hash(work_items),
             "lookback_hours": policy.insight_lookback_hours,
+            "agent_start_stagger_seconds": policy.agent_start_stagger_seconds,
             "telemetry_resource_set": policy.telemetry_resource_set,
             "seed": seed,
             "runtime_files": runtime_files,

@@ -52,6 +52,23 @@ class _RecoveryBudget:
             return True
 
 
+class _StartStagger:
+    def __init__(self, seconds: int) -> None:
+        self._seconds = seconds
+        self._used = False
+
+    def wait_once(self, runtime: Any, agent_name: str) -> None:
+        if self._used:
+            return
+        self._used = True
+        if self._seconds:
+            _progress(
+                runtime,
+                f"{agent_name}: staggering endpoint traffic by {self._seconds}s",
+            )
+            time.sleep(self._seconds)
+
+
 def _stage_error_code(error: Exception) -> str:
     return (
         error.code
@@ -149,6 +166,7 @@ def execute(
     clean_window_ingestion_margin_seconds: int = 30,
     clean_window_max_wait_seconds: int = 1200,
     max_recovery_versions: int = 3,
+    agent_start_stagger_seconds: int = 0,
     checkpoint_store: VersionCheckpointStore | None = None,
 ) -> list[AgentResult]:
     _progress(
@@ -159,7 +177,6 @@ def execute(
     agent_by_name = {item["name"]: item for item in agents["agents"]}
     issue_by_id = {item["id"]: item for item in issues["issues"]}
     results: dict[str, AgentResult] = {}
-    recovery_budget = _RecoveryBudget(max_recovery_versions)
     with ThreadPoolExecutor(max_workers=5) as pool:
         futures = {
             pool.submit(
@@ -173,10 +190,11 @@ def execute(
                 clean_window_poll_seconds,
                 clean_window_ingestion_margin_seconds,
                 clean_window_max_wait_seconds,
-                recovery_budget,
+                _RecoveryBudget(max_recovery_versions),
                 checkpoint_store,
+                index * agent_start_stagger_seconds,
             ): agent_name
-            for agent_name, issue_ids in selected.items()
+            for index, (agent_name, issue_ids) in enumerate(selected.items())
         }
         for future in as_completed(futures):
             results[futures[future]] = future.result()
@@ -197,8 +215,10 @@ def _execute_agent(
     clean_window_max_wait_seconds: int,
     recovery_budget: _RecoveryBudget,
     checkpoint_store: VersionCheckpointStore | None,
+    start_delay_seconds: int,
 ) -> AgentResult:
     name = agent["name"]
+    start_stagger = _StartStagger(start_delay_seconds)
     monitor_id = registry["agents"][name]["monitor_id"]
     baseline: VersionResult | None = None
     resuming = checkpoint_store is not None and checkpoint_store.has_progress(name)
@@ -279,6 +299,7 @@ def _execute_agent(
                 clean_window_max_wait_seconds=clean_window_max_wait_seconds,
                 recovery_budget=recovery_budget,
                 checkpoint_store=checkpoint_store,
+                start_stagger=start_stagger,
             )
             if resuming and baseline_cached is None:
                 resuming = False
@@ -360,6 +381,7 @@ def _execute_agent(
                 clean_window_max_wait_seconds=clean_window_max_wait_seconds,
                 recovery_budget=recovery_budget,
                 checkpoint_store=checkpoint_store,
+                start_stagger=start_stagger,
             )
             if resuming and issue_cached is None:
                 resuming = False
@@ -398,6 +420,7 @@ def _execute_version_with_recovery(
     clean_window_max_wait_seconds: int,
     recovery_budget: _RecoveryBudget,
     checkpoint_store: VersionCheckpointStore | None,
+    start_stagger: _StartStagger,
 ) -> VersionResult:
     while True:
         try:
@@ -412,6 +435,7 @@ def _execute_version_with_recovery(
                 expected=expected,
                 lookback_hours=lookback_hours,
                 checkpoint_store=checkpoint_store,
+                start_stagger=start_stagger,
             )
         except _VersionStageError as error:
             if (
@@ -481,6 +505,7 @@ def _execute_version(
     expected: dict[str, Any] | None,
     lookback_hours: float,
     checkpoint_store: VersionCheckpointStore | None,
+    start_stagger: _StartStagger,
 ) -> VersionResult:
     foundry_version = registry_entry["foundry_version"]
     checkpoint_args = (
@@ -502,6 +527,7 @@ def _execute_version(
         else None
     )
     if invocation is None:
+        start_stagger.wait_once(runtime, agent["name"])
         try:
             invocation = runtime.invoke_version(
                 agent_name=agent["name"],

@@ -4,7 +4,7 @@ agent_name: healthcare-agent
 framework: foundry-prompt-agent
 deployment:
   kind: native_prompt
-  model: gpt-5.6-terra
+  model: gpt-5.4-mini
   definition: definition.json
 category: context_memory
 severity: medium

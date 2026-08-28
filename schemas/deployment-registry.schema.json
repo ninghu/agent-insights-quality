@@ -2,11 +2,21 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "profile", "project_name", "catalog_hashes", "agents"],
+  "required": ["schema_version", "profile", "project_name", "test_agent_model", "catalog_hashes", "agents"],
   "properties": {
     "schema_version": {"const": "1.0.0"},
     "profile": {"enum": ["daily", "staging"]},
     "project_name": {"enum": ["agent-insights-quality", "agent-insights-quality-staging"]},
+    "test_agent_model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deployment_name", "model_id", "model_version"],
+      "properties": {
+        "deployment_name": {"const": "gpt-5.4-mini"},
+        "model_id": {"const": "gpt-5.4-mini"},
+        "model_version": {"const": "2026-03-17"}
+      }
+    },
     "catalog_hashes": {
       "type": "object",
       "additionalProperties": false,

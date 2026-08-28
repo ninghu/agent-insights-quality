@@ -20,6 +20,7 @@ class AutomationPolicy:
     clean_window_ingestion_margin_seconds: int
     clean_window_max_wait_seconds: int
     max_recovery_versions: int
+    agent_start_stagger_seconds: int
     telemetry_resource_set: str
 
 
@@ -51,6 +52,12 @@ def load_automation_policy(
     )
     if recoveries > 3:
         raise ContractError("Automation recovery limit exceeds the reviewed maximum")
+    stagger = _nonnegative_int(
+        value.get("agent_start_stagger_seconds"),
+        "Agent start stagger",
+    )
+    if stagger > 30:
+        raise ContractError("Automation Agent start stagger is unreasonably long")
     resource_set = str(value.get("telemetry_resource_set") or "")
     if (
         re.fullmatch(r"g[1-9][0-9]*", resource_set) is None
@@ -63,6 +70,7 @@ def load_automation_policy(
         clean_window_ingestion_margin_seconds=margin,
         clean_window_max_wait_seconds=maximum_wait,
         max_recovery_versions=recoveries,
+        agent_start_stagger_seconds=stagger,
         telemetry_resource_set=resource_set,
     )
 

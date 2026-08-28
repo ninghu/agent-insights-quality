@@ -71,7 +71,7 @@ def tool(name: str, result: dict) -> dict:
 
 async def model_response(prompt: str, max_output_tokens: int) -> str:
     with tracer.start_as_current_span("support.model.dispatch") as span:
-        model = os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "terra-test-agents")
+        model = os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-5.4-mini")
         span.set_attribute("gen_ai.operation.name", "chat")
         span.set_attribute("gen_ai.request.model", model)
         client = AsyncOpenAI(

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Mapping
 
 from agent_insights_quality.automation_policy import load_automation_policy
+from agent_insights_quality.catalogs import load_catalogs, agent_model_contract
 from agent_insights_quality.util import ROOT, ContractError
 from agent_insights_quality.azure_cli import azure_cli
 
@@ -16,6 +17,9 @@ def deploy_infrastructure(
 ) -> None:
     del environment
     terra_model_version = resolve_latest_terra_version()
+    test_agent_model_version = agent_model_contract(load_catalogs()[0])[
+        "model_version"
+    ]
     telemetry_resource_set = load_automation_policy().telemetry_resource_set
     principal_id = _current_principal_id()
     _deploy_template(
@@ -24,6 +28,7 @@ def deploy_infrastructure(
             "location=westus2",
             "resourceGroupName=agent-insights-quality-rg",
             f"terraModelVersion={terra_model_version}",
+            f"testAgentModelVersion={test_agent_model_version}",
             f"telemetryGeneration={telemetry_resource_set}",
             "automationOwner=ninghu",
             f"automationPrincipalId={principal_id}",
@@ -86,6 +91,10 @@ def _deploy_template(template: Path, parameters: list[str]) -> None:
 
 
 def resolve_latest_terra_version() -> str:
+    return resolve_latest_model_version("gpt-5.6-terra")
+
+
+def resolve_latest_model_version(model_name: str) -> str:
     account = subprocess.run(
         [azure_cli(), "account", "show", "--output", "json"],
         capture_output=True,
@@ -116,11 +125,11 @@ def resolve_latest_terra_version() -> str:
     versions = []
     for item in json.loads(response.stdout).get("value", []):
         match = re.fullmatch(
-            r"OpenAI\.gpt-5\.6-terra\.(\d{4}-\d{2}-\d{2})",
+            rf"OpenAI\.{re.escape(model_name)}\.(\d{{4}}-\d{{2}}-\d{{2}})",
             str(item.get("name") or ""),
         )
         if match:
             versions.append(match.group(1))
     if not versions:
-        raise ContractError("GPT-5.6 Terra is unavailable in West US 2")
+        raise ContractError(f"{model_name} is unavailable in West US 2")
     return max(versions)

@@ -1,5 +1,6 @@
 param location string
 param terraModelVersion string
+param testAgentModelVersion string
 param automationOwner string
 param automationPrincipalId string
 param telemetryGeneration string
@@ -104,7 +105,7 @@ resource dailyAccount 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
 
 resource dailyTestAgentsModel 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
   parent: dailyAccount
-  name: 'terra-test-agents'
+  name: 'gpt-5.4-mini'
   sku: {
     name: 'GlobalStandard'
     capacity: testAgentCapacity
@@ -112,8 +113,8 @@ resource dailyTestAgentsModel 'Microsoft.CognitiveServices/accounts/deployments@
   properties: {
     model: {
       format: 'OpenAI'
-      name: 'gpt-5.6-terra'
-      version: terraModelVersion
+      name: 'gpt-5.4-mini'
+      version: testAgentModelVersion
     }
     versionUpgradeOption: 'NoAutoUpgrade'
   }
@@ -159,7 +160,7 @@ resource stagingAccount 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
 
 resource stagingTestAgentsModel 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
   parent: stagingAccount
-  name: 'terra-test-agents'
+  name: 'gpt-5.4-mini'
   sku: {
     name: 'GlobalStandard'
     capacity: testAgentCapacity
@@ -167,8 +168,8 @@ resource stagingTestAgentsModel 'Microsoft.CognitiveServices/accounts/deployment
   properties: {
     model: {
       format: 'OpenAI'
-      name: 'gpt-5.6-terra'
-      version: terraModelVersion
+      name: 'gpt-5.4-mini'
+      version: testAgentModelVersion
     }
     versionUpgradeOption: 'NoAutoUpgrade'
   }

@@ -3,12 +3,13 @@ targetScope = 'subscription'
 param resourceGroupName string = 'agent-insights-quality-rg'
 param location string = 'westus2'
 param terraModelVersion string
+param testAgentModelVersion string
 param automationOwner string = 'ninghu'
 param automationPrincipalId string
 param telemetryGeneration string
 @minValue(1)
-@maxValue(1000)
-param testAgentCapacity int = 100
+@maxValue(5000)
+param testAgentCapacity int = 5000
 @minValue(1)
 @maxValue(1000)
 param insightGenerationCapacity int = 100
@@ -32,6 +33,7 @@ module lab 'modules/lab.bicep' = {
   params: {
     location: location
     terraModelVersion: terraModelVersion
+    testAgentModelVersion: testAgentModelVersion
     automationOwner: automationOwner
     automationPrincipalId: automationPrincipalId
     telemetryGeneration: telemetryGeneration

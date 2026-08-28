@@ -10,6 +10,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from agent_insights_quality.azure_cli import azure_cli
+from agent_insights_quality.catalogs import agent_model_contract
 from agent_insights_quality.util import ROOT, ContractError, read_json, read_yaml
 
 PROFILE_PROJECTS = {
@@ -145,6 +146,8 @@ def load_registry(
     if registry["catalog_hashes"] != catalog_hashes:
         raise ContractError("Deployment registry catalog hashes are stale")
     agent_catalog = read_yaml(ROOT / "catalogs" / "AGENT_CATALOG.yaml")
+    if registry["test_agent_model"] != agent_model_contract(agent_catalog):
+        raise ContractError("Deployment registry Test Agent model is stale")
     expected = {
         agent["name"]: {"v0", *agent["issue_ids"]}
         for agent in agent_catalog["agents"]

@@ -19,7 +19,7 @@ def _is_source_file(path: Path) -> bool:
     )
 
 
-def test_prompt_definitions_are_complete_and_use_terra() -> None:
+def test_prompt_definitions_are_complete_and_use_gpt_5_4_mini() -> None:
     paths = sorted(
         [
             *ROOT.glob("agents/weather-agent/**/definition.json"),
@@ -32,7 +32,7 @@ def test_prompt_definitions_are_complete_and_use_terra() -> None:
         value = json.loads(path.read_text(encoding="utf-8"))
         definition = value["definition"]
         assert definition["kind"] == "prompt"
-        assert definition["model"] == "gpt-5.6-terra"
+        assert definition["model"] == "gpt-5.4-mini"
         assert definition["instructions"].strip()
         assert definition["tools"]
         if "healthcare-agent" in path.parts:

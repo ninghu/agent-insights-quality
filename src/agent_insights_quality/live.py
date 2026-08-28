@@ -253,6 +253,11 @@ union traces, dependencies, requests
             now=started,
             uncertain_seconds=TRAFFIC_UNCERTAINTY_SECONDS,
         )
+        completed_groups: dict[
+            str,
+            list[tuple[int, list[str], bool, int, int]],
+        ] = {}
+        errors: list[Exception] = []
         with ThreadPoolExecutor(max_workers=min(5, len(groups))) as pool:
             futures = {
                 pool.submit(
@@ -265,12 +270,29 @@ union traces, dependencies, requests
                 ): key
                 for key, fixtures in groups.items()
             }
-            completed_groups: dict[
-                str,
-                list[tuple[int, list[str], bool, int, int]],
-            ] = {}
             for future in as_completed(futures):
-                completed_groups[futures[future]] = future.result()
+                try:
+                    completed_groups[futures[future]] = future.result()
+                except Exception as error:
+                    errors.append(error)
+        if errors:
+            if all(
+                re.search(r"\bHTTP [0-9]{3}\b", str(error))
+                for error in errors
+            ):
+                self._traffic_ledger.mark_completed(
+                    agent_name,
+                    now=self._utcnow().astimezone(UTC),
+                )
+            primary = next(
+                (
+                    error
+                    for error in errors
+                    if re.search(r"\bHTTP [0-9]{3}\b", str(error)) is None
+                ),
+                errors[0],
+            )
+            raise primary
         self._traffic_ledger.mark_completed(
             agent_name,
             now=self._utcnow().astimezone(UTC),

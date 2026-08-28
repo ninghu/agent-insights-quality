@@ -38,7 +38,7 @@ version and expects exactly one Insight.
 | `travel-agent` | Hosted code | LangGraph | 8 |
 | `support-ticket-agent` | Hosted container | Custom Responses | 8 |
 
-All five test Agents use GPT-5.6 Terra. Agent Insights generation uses a separate GPT-5.6 Terra
+All five test Agents use GPT-5.4 mini. Agent Insights generation uses a separate GPT-5.6 Terra
 deployment. GPT-5.6 Sol performs one structured quality assessment.
 
 ## Daily qualification
@@ -86,8 +86,9 @@ python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD> `
 python -m agent_insights_quality render-adx-dashboard
 ```
 
-Full infrastructure deployment resolves the latest GPT-5.6 Terra version available in West US 2 from
-the Azure ARM model catalog and includes the ADX resources. Use the scoped `deploy-analytics` command
+Full infrastructure deployment pins the GPT-5.4 mini Test Agents to `2026-03-17`, resolves the latest
+GPT-5.6 Terra Insight-generation version available in West US 2 from the Azure ARM model catalog, and
+includes the ADX resources. Use the scoped `deploy-analytics` command
 to create or update only the two-node production ADX trend database in the existing
 `agent-insights-quality-rg` without changing Foundry or telemetry. Daily finalization publishes
 sanitized results and explanations there and includes the reviewed

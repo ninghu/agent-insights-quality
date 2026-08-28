@@ -190,7 +190,7 @@ def build_graph():
 
 
 async def model_answer(prompt: str) -> str:
-    model = os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "terra-test-agents")
+    model = os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-5.4-mini")
     client = AsyncOpenAI(
         base_url=os.environ["FOUNDRY_PROJECT_ENDPOINT"].rstrip("/") + "/openai/v1",
         api_key=token_provider,

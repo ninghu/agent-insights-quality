@@ -16,6 +16,7 @@ def test_repository_uses_fractional_fixed_telemetry_policy() -> None:
     assert policy.insight_lookback_hours == 0.1
     assert policy.telemetry_resource_set == FIXED_TELEMETRY_RESOURCE_SET == "g29"
     assert policy.max_recovery_versions == 3
+    assert policy.agent_start_stagger_seconds == 5
     assert policy.clean_window_max_wait_seconds >= 990
 
 
@@ -25,6 +26,7 @@ def test_repository_uses_fractional_fixed_telemetry_policy() -> None:
         ("insight_lookback_hours", '"0.1"', "numeric"),
         ("insight_lookback_hours", "0.09", "reviewed minimum"),
         ("max_recovery_versions", "4", "reviewed maximum"),
+        ("agent_start_stagger_seconds", "31", "unreasonably long"),
         ("telemetry_resource_set", "g30", "fixed reviewed set"),
     ],
 )

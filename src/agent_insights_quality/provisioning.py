@@ -19,7 +19,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from agent_insights_quality.catalogs import catalog_hashes
+from agent_insights_quality.catalogs import catalog_hashes, agent_model_contract
 from agent_insights_quality.azure_cli import azure_cli
 from agent_insights_quality.live import _azure_cli_token
 from agent_insights_quality.profiles import RuntimeProfile
@@ -66,6 +66,8 @@ def provision_profile(
     token_provider: Callable[[str], str] = _azure_cli_token,
     approved_digests: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    model_contract = agent_model_contract(agents)
+    profile.assert_test_agent_model(model_contract)
     client = FoundryProvisioner(profile, token_provider=token_provider)
     client.wait_project()
     reusable = _reusable_registry(
@@ -127,6 +129,7 @@ def provision_profile(
         "schema_version": "1.0.0",
         "profile": profile.name,
         "project_name": profile.project_name,
+        "test_agent_model": model_contract,
         "catalog_hashes": catalog_hashes(agents, issues),
         "agents": registry_agents,
     }
@@ -201,6 +204,7 @@ def _monitor_inventory_matches(
 def validate_promotion_receipt(
     path: Path,
     expected_hashes: dict[str, str],
+    expected_model: dict[str, str],
 ) -> dict[str, str]:
     value = json.loads(path.read_text(encoding="utf-8"))
     schema = json.loads(
@@ -213,6 +217,8 @@ def validate_promotion_receipt(
         raise ContractError(f"Staging promotion receipt is invalid: {errors[0].message}")
     if value["catalog_hashes"] != expected_hashes:
         raise ContractError("Staging promotion receipt catalog hashes are stale")
+    if value["test_agent_model"] != expected_model:
+        raise ContractError("Staging promotion receipt Test Agent model is stale")
     if value["artifact_manifest_hash"] != expected_hashes["artifacts"]:
         raise ContractError("Staging promotion receipt artifact manifest is stale")
     digests = value["version_content_digests"]
@@ -270,6 +276,7 @@ def create_promotion_receipt(
         "human_reviewed": True,
         "qualification_status": report["status"],
         "quality_score": report["summary"]["quality_score"],
+        "test_agent_model": registry["test_agent_model"],
         "catalog_hashes": registry["catalog_hashes"],
         "artifact_manifest_hash": registry["catalog_hashes"]["artifacts"],
         "version_content_digests": digests,
@@ -651,7 +658,7 @@ def _hosted_definition(
             "dependency_resolution": "remote_build",
         },
         "environment_variables": {
-            "AZURE_AI_MODEL_DEPLOYMENT_NAME": "terra-test-agents",
+            "AZURE_AI_MODEL_DEPLOYMENT_NAME": "gpt-5.4-mini",
         },
     }
 
@@ -664,7 +671,7 @@ def _container_definition(container: dict[str, Any]) -> dict[str, Any]:
         "memory": "2Gi",
         "container_configuration": {"image": "${DIGEST_PINNED_IMAGE}"},
         "environment_variables": {
-            "AZURE_AI_MODEL_DEPLOYMENT_NAME": "terra-test-agents",
+            "AZURE_AI_MODEL_DEPLOYMENT_NAME": "gpt-5.4-mini",
         },
     }
 
@@ -1201,8 +1208,8 @@ def _resolve_definition(
     project_endpoint: str,
 ) -> dict[str, Any]:
     value = copy.deepcopy(definition)
-    if value.get("kind") == "prompt" and value.get("model") == "gpt-5.6-terra":
-        value["model"] = "terra-test-agents"
+    if value.get("kind") == "prompt" and value.get("model") == "gpt-5.4-mini":
+        value["model"] = "gpt-5.4-mini"
     environment = value.get("environment_variables")
     if isinstance(environment, dict):
         for key, item in list(environment.items()):

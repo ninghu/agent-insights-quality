@@ -40,6 +40,7 @@ Agents and 36 reviewed, single-root issues.
 - `daily` and `staging` use separate Foundry accounts, Projects, telemetry, monitors, and private
   registries.
 - Run the five test Agents concurrently.
+- Stagger Agent starts by the reviewed short delay to avoid a simultaneous endpoint burst.
 - Within one Agent, run `v0` and issue versions sequentially.
 - `g29` is the fixed telemetry resource set: one App Insights and Log Analytics pair per profile.
 - `rNN` is a qualification rerun identity.
@@ -48,6 +49,7 @@ Agents and 36 reviewed, single-root issues.
   receipts or Agent content digests.
 - Monitor reset does not delete telemetry. Wait for the reviewed `0.1`-hour clean interval before a
   new traffic attempt.
+- Recover at most three transiently incomplete versions per Agent before declaring the run incomplete.
 - Never send ad-hoc debug traffic to daily or staging before a qualification.
 - Quality-tagged Azure Boards work items are private email context only. Never write their query URL,
   titles, assignees, or links into committed reports.

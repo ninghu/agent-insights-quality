@@ -243,6 +243,27 @@ def test_runner_parallelizes_agents_but_not_versions_within_an_agent() -> None:
     assert runtime.maximum_concurrent_agents > 1
 
 
+def test_runner_staggers_agent_start_burst(monkeypatch) -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    selected = select_daily(date(2026, 8, 24), agents, issues, hashes["issues"])
+    sleeps = []
+    monkeypatch.setattr(
+        "agent_insights_quality.runner.time.sleep",
+        sleeps.append,
+    )
+    execute(
+        agents=agents,
+        issues=issues,
+        selected=selected,
+        registry=_registry(agents, hashes),
+        runtime=FakeRuntime(),
+        seed=1,
+        agent_start_stagger_seconds=2,
+    )
+    assert sorted(sleeps) == [2, 4, 6, 8]
+
+
 def test_telemetry_recovery_reuses_private_invocation_checkpoint(
     tmp_path: Path,
 ) -> None:
@@ -292,6 +313,54 @@ def test_telemetry_recovery_reuses_private_invocation_checkpoint(
     )
     assert runtime.invoked.count(target) == 1
     assert runtime.telemetry_attempts[target] == 2
+
+
+def test_recovery_budget_is_per_agent(tmp_path: Path) -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    selected = select_daily(date(2026, 8, 24), agents, issues, hashes["issues"])
+    targets = {values[0] for values in selected.values()}
+
+    class RecoveringRuntime(FakeRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failed_once = set()
+
+        def wait_for_telemetry(
+            self,
+            *,
+            agent_name: str,
+            foundry_version: str,
+            invocation: InvocationEvidence,
+        ) -> tuple[str, ...]:
+            if foundry_version in targets and foundry_version not in self.failed_once:
+                self.failed_once.add(foundry_version)
+                raise ContractError("Synthetic telemetry deadline")
+            return super().wait_for_telemetry(
+                agent_name=agent_name,
+                foundry_version=foundry_version,
+                invocation=invocation,
+            )
+
+    runtime = RecoveringRuntime()
+    results = execute(
+        agents=agents,
+        issues=issues,
+        selected=selected,
+        registry=_registry(agents, hashes),
+        runtime=runtime,
+        seed=1,
+        checkpoint_store=VersionCheckpointStore(
+            tmp_path / "stages",
+            "sha256:" + "d" * 64,
+        ),
+    )
+    assert runtime.failed_once == targets
+    assert all(
+        result.status == "observed"
+        for agent_result in results
+        for result in agent_result.issues
+    )
 
 
 def test_insight_poll_recovery_reuses_started_run_checkpoint(

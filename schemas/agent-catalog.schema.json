@@ -18,7 +18,34 @@
         "direct_trace_injection": {"const": "forbidden"}
       }
     },
-    "models": {"type": "object"},
+    "models": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["test_agents", "insight_generation", "assessment"],
+      "properties": {
+        "test_agents": {
+          "const": {
+            "name": "GPT-5.4 mini",
+            "id": "gpt-5.4-mini",
+            "version": "2026-03-17",
+            "deployment_role": "test-agent"
+          }
+        },
+        "insight_generation": {
+          "const": {
+            "name": "GPT-5.6 Terra",
+            "id": "gpt-5.6-terra",
+            "deployment_role": "insight-generation"
+          }
+        },
+        "assessment": {
+          "const": {
+            "name": "GPT-5.6 Sol",
+            "id": "gpt-5.6-sol"
+          }
+        }
+      }
+    },
     "agents": {
       "type": "array",
       "minItems": 5,
@@ -32,7 +59,7 @@
           "owner": {"type": "string", "minLength": 1, "maxLength": 100},
           "type": {"enum": ["prompt", "hosted_code", "hosted_custom_container"]},
           "framework": {"enum": ["foundry_prompt", "microsoft_agent_framework", "langgraph", "custom_responses"]},
-          "model": {"const": "gpt-5.6-terra"},
+          "model": {"const": "gpt-5.4-mini"},
           "baseline_path": {"type": "string", "pattern": "^agents/[a-z-]+/v0$"},
           "issue_ids": {
             "type": "array",
