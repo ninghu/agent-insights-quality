@@ -13,6 +13,7 @@ from agent_insights_quality.reporting import (
     render_markdown,
     score_comparison,
     updated_trend,
+    validate_report,
     validate_published_report,
 )
 from agent_insights_quality.util import ContractError
@@ -182,6 +183,19 @@ def test_report_status_uses_ninety_point_threshold() -> None:
     )
     assert failed["summary"]["quality_score"] == 83
     assert failed["status"] == "FAIL"
+
+
+def test_report_requires_bound_source_integrity() -> None:
+    _, issues = load_catalogs()
+    report = build_report(
+        _manifest(),
+        issues,
+        _assessments(_manifest()),
+        _baseline_assessments(_manifest()),
+    )
+    report.pop("source_integrity")
+    with pytest.raises(ContractError, match="Report is invalid"):
+        validate_report(report)
 
 
 def test_daily_score_compares_with_latest_prior_scored_report(

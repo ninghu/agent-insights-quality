@@ -143,7 +143,7 @@ def build_graph():
             return {"inventory": flights, "errors": ["hotel_search_unavailable"]}
         include_details = False
         trips = requested_trips(text)
-        if len(trips) >= 2:
+        if len(trips) >= 2 and "compare" in text:
             branches = await asyncio.gather(
                 *(search_flights(item, include_details) for item in trips)
             )

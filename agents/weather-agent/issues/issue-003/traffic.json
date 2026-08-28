@@ -18,7 +18,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=19, unit=celsius. What are the current conditions?"
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=19, unit=celsius. Separate synthetic forecast evidence: high=27, low=13, unit=celsius. What are the current conditions?"
                 }
               ]
             }
@@ -35,10 +35,13 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "high",
-            "low"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "shape": "forecast",
+            "high": 27,
+            "low": 13,
+            "unit": "celsius"
+          }
         }
       }
     },
@@ -57,7 +60,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature=19, unit=celsius. What are the current conditions?"
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature=19, unit=celsius. Separate synthetic forecast evidence: high=27, low=13, unit=celsius. What are the current conditions?"
                 }
               ]
             }
@@ -74,10 +77,13 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "high",
-            "low"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "shape": "forecast",
+            "high": 27,
+            "low": 13,
+            "unit": "celsius"
+          }
         }
       }
     },
@@ -96,7 +102,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=19, unit=celsius. What are the current conditions?"
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=19, unit=celsius. Separate synthetic forecast evidence: high=27, low=13, unit=celsius. What are the current conditions?"
                 }
               ]
             }
@@ -113,10 +119,13 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "high",
-            "low"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "shape": "forecast",
+            "high": 27,
+            "low": 13,
+            "unit": "celsius"
+          }
         }
       }
     },
@@ -135,7 +144,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature=19, unit=celsius. What are the current conditions?"
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature=19, unit=celsius. Separate synthetic forecast evidence: high=27, low=13, unit=celsius. What are the current conditions?"
                 }
               ]
             }
@@ -152,10 +161,13 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "high",
-            "low"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "shape": "forecast",
+            "high": 27,
+            "low": 13,
+            "unit": "celsius"
+          }
         }
       }
     },
@@ -174,7 +186,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature=19, unit=celsius. What are the current conditions?"
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature=19, unit=celsius. Separate synthetic forecast evidence: high=27, low=13, unit=celsius. What are the current conditions?"
                 }
               ]
             }
@@ -191,10 +203,13 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "high",
-            "low"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "shape": "forecast",
+            "high": 27,
+            "low": 13,
+            "unit": "celsius"
+          }
         }
       }
     }

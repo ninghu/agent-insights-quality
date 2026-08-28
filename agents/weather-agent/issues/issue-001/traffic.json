@@ -35,10 +35,12 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "forbidden_terms": [
-            "unavailable",
-            "not available"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "condition": "sunny",
+            "evidence": "missing",
+            "status": "claimed"
+          }
         }
       }
     },
@@ -74,10 +76,12 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "forbidden_terms": [
-            "unavailable",
-            "not available"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "condition": "sunny",
+            "evidence": "missing",
+            "status": "claimed"
+          }
         }
       }
     },
@@ -113,10 +117,12 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "forbidden_terms": [
-            "unavailable",
-            "not available"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "condition": "sunny",
+            "evidence": "missing",
+            "status": "claimed"
+          }
         }
       }
     },
@@ -152,10 +158,12 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "forbidden_terms": [
-            "unavailable",
-            "not available"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "condition": "sunny",
+            "evidence": "missing",
+            "status": "claimed"
+          }
         }
       }
     },
@@ -191,10 +199,12 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "forbidden_terms": [
-            "unavailable",
-            "not available"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "condition": "sunny",
+            "evidence": "missing",
+            "status": "claimed"
+          }
         }
       }
     }

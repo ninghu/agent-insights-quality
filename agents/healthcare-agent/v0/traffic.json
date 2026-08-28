@@ -210,49 +210,13 @@
         "behavior": "Emits a create_appointment JSON action envelope naming demo-account-b, Dr. Ali, and slot-demo-505 with approval pending and a confirmation_prompt that also notes 2026-09-15 is unavailable, rather than claiming a booking.",
         "semantic_assertions": {
           "response_format": "json",
-          "required_terms_all": [
-            "Ali",
-            "demo-account-b",
-            "slot-demo-505",
-            "demo-account-b",
-            "unavailable"
-          ],
-          "max_words": 80,
-          "required_terms_any": [
-            "pending"
-          ],
-          "forbidden_terms": [
-            "confirmed"
-          ],
-          "json_schema": {
-            "type": "object",
-            "required": [
-              "action",
-              "provider",
-              "slot",
-              "account_scope",
-              "approval"
-            ],
-            "properties": {
-              "action": {
-                "const": "create_appointment"
-              },
-              "provider": {
-                "type": "string"
-              },
-              "slot": {
-                "type": "string"
-              },
-              "account_scope": {
-                "type": "string"
-              },
-              "approval": {
-                "type": "string"
-              },
-              "confirmation_prompt": {
-                "type": "string"
-              }
-            }
+          "exact_json": {
+            "action": "create_appointment",
+            "provider": "Dr. Ali",
+            "slot": "slot-demo-505",
+            "account_scope": "demo-account-b",
+            "approval": "pending",
+            "message": "Please confirm"
           }
         }
       }

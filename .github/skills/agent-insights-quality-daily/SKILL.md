@@ -6,7 +6,7 @@ license: MIT
 
 # Daily Agent Insights Quality
 
-<!-- prompt-version: 2.3.0 -->
+<!-- prompt-version: 2.4.0 -->
 
 1. Set `PYTHONPATH` to the current worktree's `src` directory in the same shell as every repository
    Python command. Verify `agent_insights_quality.__file__` resolves inside the current worktree.
@@ -52,6 +52,13 @@ license: MIT
 10. Create an `aiq-daily/` generated-only pull request. Include the ADX publication status in the
    description without committing the cluster URI, dashboard link, or private receipt.
 11. Enable auto-merge only when the report is `PASS` or trusted `FAIL` and required checks pass.
+
+For a reviewed email-only test, run `run-daily` with both `--test-run` and a nonzero `--rerun N`.
+The private `daily_test` recipient override is required. The test run still uses deployed endpoints,
+the clean-window policy, and private durable runtime state, but finalization must send only the one
+TEST-marked email. It must not contact ADX, write repository report or trend paths, validate generated
+paths, create a pull request, or enable auto-merge. Stop after importing the provider receipt into the
+private run directory. Scheduled official runs never pass `--test-run`.
 
 The runner executes five Agents concurrently and versions sequentially within each Agent. Complete
 runs use the reviewed score threshold of 90.

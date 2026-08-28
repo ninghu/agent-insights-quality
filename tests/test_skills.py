@@ -176,6 +176,11 @@ def test_daily_skill_publishes_adx_without_blocking_email() -> None:
         "one focused GPT-5.6 Sol recheck",
         "Never send new traffic for this recheck",
         "never force a conclusive verdict",
+        "`--test-run`",
+        "nonzero `--rerun N`",
+        "must not contact ADX",
+        "create a pull request",
+        "Scheduled official runs never pass `--test-run`",
     ):
         assert requirement in normalized
     readiness = _text(".github/copilot/daily-readiness-prompt.md")

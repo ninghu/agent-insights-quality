@@ -302,6 +302,15 @@ def _validate_implementation(
             )
         value = json.loads(definition_path.read_text(encoding="utf-8"))
         _validate_prompt_definition(value, f"{issue['id']} definition")
+        declared_definition_hash = (
+            metadata.get("determinism", {}).get("definition_sha256")
+        )
+        if declared_definition_hash != file_hash(definition_path).removeprefix(
+            "sha256:"
+        ):
+            raise ContractError(
+                f"{issue['id']} Prompt definition digest is stale"
+            )
         if (
             value.get("name") != agent["name"]
             or value.get("definition", {}).get("kind") != "prompt"

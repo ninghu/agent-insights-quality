@@ -73,9 +73,12 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "fahrenheit"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "condition": "clear",
+            "temperature": 68,
+            "unit": "fahrenheit"
+          }
         }
       }
     },
@@ -111,9 +114,12 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "fahrenheit"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "condition": "clear",
+            "temperature": 68,
+            "unit": "fahrenheit"
+          }
         }
       }
     },
@@ -149,9 +155,12 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "fahrenheit"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "condition": "clear",
+            "temperature": 68,
+            "unit": "fahrenheit"
+          }
         }
       }
     },
@@ -187,9 +196,12 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "fahrenheit"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "condition": "clear",
+            "temperature": 68,
+            "unit": "fahrenheit"
+          }
         }
       }
     }

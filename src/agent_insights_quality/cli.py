@@ -61,7 +61,13 @@ from agent_insights_quality.reporting import (
     render_markdown,
     render_agent_markdown,
 )
-from agent_insights_quality.run_manifest import build_manifest, run_id, validate_manifest
+from agent_insights_quality.run_manifest import (
+    OFFICIAL_DELIVERY,
+    TEST_EMAIL_ONLY_DELIVERY,
+    build_manifest,
+    run_id,
+    validate_manifest,
+)
 from agent_insights_quality.runner import execute
 from agent_insights_quality.runtime_state import (
     ActiveQualificationError,
@@ -113,6 +119,8 @@ def build_parser() -> argparse.ArgumentParser:
         run.add_argument("--rerun", type=int, default=0)
         run.add_argument("--state-root", type=Path, default=runtime_root())
         run.add_argument("--work-items", type=Path, required=True)
+        if name == "run-daily":
+            run.add_argument("--test-run", action="store_true")
     finalize = commands.add_parser("finalize")
     finalize.add_argument("--manifest", type=Path, required=True)
     finalize.add_argument("--assessment", type=Path, action="append", required=True)
@@ -266,6 +274,12 @@ def _dispatch(args: argparse.Namespace) -> str | None:
     if args.command in {"run-daily", "run-full"}:
         policy = load_automation_policy()
         profile_name = "daily" if args.command == "run-daily" else "staging"
+        test_run = bool(getattr(args, "test_run", False))
+        if test_run and args.rerun <= 0:
+            raise ContractError("Test runs require a nonzero --rerun identity")
+        delivery_mode = (
+            TEST_EMAIL_ONLY_DELIVERY if test_run else OFFICIAL_DELIVERY
+        )
         work_items = load_quality_work_items(
             args.work_items,
             report_date=args.report_date,
@@ -300,6 +314,7 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             profile_name=profile_name,
             report_date=args.report_date.isoformat(),
             rerun=args.rerun,
+            delivery_mode=delivery_mode,
             catalog_hashes=hashes,
             selected=selected,
             registry=registry,
@@ -341,6 +356,7 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                     report_date=args.report_date,
                     profile=profile_name,
                     rerun=args.rerun,
+                    delivery_mode=delivery_mode,
                     insight_lookback_hours=policy.insight_lookback_hours,
                     telemetry_resource_set=policy.telemetry_resource_set,
                     catalog_hashes=hashes,
@@ -362,6 +378,11 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         except ActiveQualificationError:
             raise
         except Exception as error:
+            if (state / "run-manifest.json").is_file():
+                raise ContractError(
+                    "Qualification evidence was checkpointed; resume the same run "
+                    "before finalization"
+                ) from error
             failure = build_operational_failure_report(
                 report_date=args.report_date,
                 run_id=run_id(args.report_date, args.rerun),
@@ -372,7 +393,9 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                 catalog_hashes=hashes,
             )
             failure_root = (
-                ROOT
+                state / "final-report"
+                if test_run
+                else ROOT
                 / "reports"
                 / "daily"
                 / f"{args.report_date:%Y}"
@@ -384,8 +407,11 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             write_report(failure, failure_root)
             handoff_written = False
             try:
-                recipient = resolve_recipient()
+                recipient = resolve_recipient(test_run=test_run)
                 adx_publication = (
+                    {"status": "skipped_test", "error_code": None}
+                    if test_run
+                    else
                     publish_daily_report_best_effort(
                         failure,
                         source_path=failure_root / "report.json",
@@ -394,13 +420,18 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                     if profile_name == "daily"
                     else None
                 )
-                dashboard_link = resolve_dashboard_link()
+                dashboard_link = (
+                    resolve_dashboard_link()
+                    if profile_name == "daily" and not test_run
+                    else None
+                )
                 request = create_request(
                     failure,
                     recipient,
                     dashboard_link=dashboard_link,
                     adx_publication=adx_publication,
                     work_items=work_items,
+                    test_run=test_run,
                 )
                 failure["delivery"]["content_digest"] = request["content_digest"]
                 write_report(failure, failure_root)
@@ -424,12 +455,14 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             {
                 "manifest": str(state / "run-manifest.json"),
                 "assessment_packages": len(packages),
+                "delivery_mode": delivery_mode,
             },
             sort_keys=True,
         )
     if args.command == "finalize":
         manifest = read_json(args.manifest)
         validate_manifest(manifest)
+        test_run = manifest["delivery_mode"] == TEST_EMAIL_ONLY_DELIVERY
         work_items = load_quality_work_items(
             args.work_items,
             report_date=date.fromisoformat(manifest["report_date"]),
@@ -456,10 +489,12 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             args.assessment,
             issue_ids,
             args.manifest.parent / "assessment-packages",
+            manifest,
         )
         baseline_assessments = load_baseline_assessments(
             args.baseline_assessment,
             args.manifest.parent / "assessment-packages",
+            manifest,
         )
         report = build_report(
             manifest,
@@ -475,7 +510,9 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                 runtime_root() / "promotion-receipts",
             )
         output = (
-            args.output_root
+            args.manifest.parent / "final-report"
+            if test_run
+            else args.output_root
             / "daily"
             / manifest["report_date"].replace("-", os.sep)
             if manifest["profile"] == "daily"
@@ -485,9 +522,12 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             / manifest["run_id"]
         )
         write_report(report, output)
-        recipient = resolve_recipient()
+        recipient = resolve_recipient(test_run=test_run)
         runtime_profile = RuntimeProfile.from_env(manifest["profile"])
         adx_publication = (
+            {"status": "skipped_test", "error_code": None}
+            if test_run
+            else
             publish_daily_report_best_effort(
                 report,
                 source_path=output / "report.json",
@@ -496,7 +536,11 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             if manifest["profile"] == "daily"
             else None
         )
-        dashboard_link = resolve_dashboard_link()
+        dashboard_link = (
+            resolve_dashboard_link()
+            if manifest["profile"] == "daily" and not test_run
+            else None
+        )
         project_link, agent_links = build_runtime_links(
             runtime_profile,
             [agent["name"] for agent in manifest["agents"]],
@@ -509,6 +553,7 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             dashboard_link=dashboard_link,
             adx_publication=adx_publication,
             work_items=work_items,
+            test_run=test_run,
         )
         report["delivery"]["content_digest"] = request["content_digest"]
         write_report(report, output)
@@ -516,7 +561,7 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         atomic_json(private_request, request)
         private_preview = args.manifest.parent / "report-preview.html"
         write_private_report_preview(request, private_preview)
-        if manifest["profile"] == "daily":
+        if manifest["profile"] == "daily" and not test_run:
             atomic_json(args.output_root / "latest.json", report)
             (args.output_root / "latest.md").write_text(
                 (output / "report.md").read_text(encoding="utf-8"),
@@ -539,6 +584,15 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                     adx_publication.get("error_code")
                     if adx_publication is not None
                     else None
+                ),
+                "delivery_mode": manifest["delivery_mode"],
+                "generated_report": not test_run,
+                "pull_request": (
+                    "skipped_test"
+                    if test_run
+                    else "required"
+                    if manifest["profile"] == "daily"
+                    else "not_applicable"
                 ),
             },
             sort_keys=True,
@@ -642,6 +696,7 @@ def _run_contract_digest(
     profile_name: str,
     report_date: str,
     rerun: int,
+    delivery_mode: str,
     catalog_hashes: dict[str, str],
     selected: dict[str, list[str]],
     registry: dict[str, Any],
@@ -665,6 +720,7 @@ def _run_contract_digest(
             "profile": profile_name,
             "report_date": report_date,
             "rerun": rerun,
+            "delivery_mode": delivery_mode,
             "catalog_hashes": catalog_hashes,
             "selected": selected,
             "registry_hash": content_hash(registry),

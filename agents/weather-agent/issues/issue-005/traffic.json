@@ -35,12 +35,11 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_claims": [
-            "clarification_required:"
-          ],
-          "forbidden_claims": [
-            "answer_complete:"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "phase": "clarification_required",
+            "completed": false
+          }
         }
       }
     },
@@ -76,12 +75,14 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "answer_complete:",
-            "clear",
-            "20",
-            "celsius"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "phase": "answer_complete",
+            "completed": true,
+            "condition": "clear",
+            "temperature": 20,
+            "unit": "celsius"
+          }
         }
       }
     },
@@ -117,12 +118,11 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_claims": [
-            "clarification_required:"
-          ],
-          "forbidden_claims": [
-            "answer_complete:"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "phase": "clarification_required",
+            "completed": false
+          }
         }
       }
     },
@@ -158,12 +158,14 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "answer_complete:",
-            "clear",
-            "20",
-            "celsius"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "phase": "answer_complete",
+            "completed": true,
+            "condition": "clear",
+            "temperature": 20,
+            "unit": "celsius"
+          }
         }
       }
     },
@@ -199,12 +201,11 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_claims": [
-            "clarification_required:"
-          ],
-          "forbidden_claims": [
-            "answer_complete:"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "phase": "clarification_required",
+            "completed": false
+          }
         }
       }
     },
@@ -240,12 +241,14 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "answer_complete:",
-            "clear",
-            "20",
-            "celsius"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "phase": "answer_complete",
+            "completed": true,
+            "condition": "clear",
+            "temperature": 20,
+            "unit": "celsius"
+          }
         }
       }
     },
@@ -281,12 +284,11 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_claims": [
-            "clarification_required:"
-          ],
-          "forbidden_claims": [
-            "answer_complete:"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "phase": "clarification_required",
+            "completed": false
+          }
         }
       }
     },
@@ -322,12 +324,14 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "answer_complete:",
-            "clear",
-            "20",
-            "celsius"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "phase": "answer_complete",
+            "completed": true,
+            "condition": "clear",
+            "temperature": 20,
+            "unit": "celsius"
+          }
         }
       }
     },
@@ -363,12 +367,11 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_claims": [
-            "clarification_required:"
-          ],
-          "forbidden_claims": [
-            "answer_complete:"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "phase": "clarification_required",
+            "completed": false
+          }
         }
       }
     },
@@ -404,12 +407,14 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "answer_complete:",
-            "clear",
-            "20",
-            "celsius"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "phase": "answer_complete",
+            "completed": true,
+            "condition": "clear",
+            "temperature": 20,
+            "unit": "celsius"
+          }
         }
       }
     }

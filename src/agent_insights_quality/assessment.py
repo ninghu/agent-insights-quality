@@ -513,8 +513,16 @@ def load_assessments(
     paths: list[Path],
     expected_issue_ids: set[str],
     packages_root: Path,
+    manifest: dict[str, Any],
 ) -> dict[str, dict[str, Any]]:
     schema = read_json(ROOT / "schemas" / "assessment.schema.json")
+    bindings = {
+        issue["issue_id"]: (agent["name"], issue["foundry_version"])
+        for agent in manifest["agents"]
+        for issue in agent["issues"]
+    }
+    if set(bindings) != expected_issue_ids:
+        raise ContractError("Manifest issue assessment coverage is inconsistent")
     assessments: dict[str, dict[str, Any]] = {}
     for path in paths:
         value = read_json(path)
@@ -524,17 +532,38 @@ def load_assessments(
         issue_id = value["issue_id"]
         if issue_id in assessments:
             raise ContractError(f"Duplicate assessment for {issue_id}")
+        if issue_id not in bindings:
+            raise ContractError(f"{issue_id} is not in the current manifest")
         package_path = packages_root / f"{issue_id}.json"
         package = _load_package(package_path)
+        expected_agent, expected_version = bindings[issue_id]
         if (
-            value["package_hash"] != package.get("package_hash")
+            package["target_kind"] != "issue"
+            or package["issue_id"] != issue_id
+            or package["agent_name"] != expected_agent
+            or package["foundry_version"] != expected_version
+            or package["manifest_reference"] != manifest["manifest_hash"]
+            or package["source_integrity"] != manifest["source_integrity"]
+            or value["package_hash"] != package.get("package_hash")
             or value["foundry_version"] != package.get("foundry_version")
             or value["evidence_reference"] != package.get("evidence_reference")
         ):
             raise ContractError(f"{issue_id} assessment does not match current evidence")
         _validate_issue_cards(value, package)
-        activation_failed = (
+        request_summaries = package.get("endpoint_evidence", {}).get(
+            "request_summaries",
+            [],
+        )
+        has_activation_gate = any(
+            isinstance(item, dict) and item.get("activation_gate") is True
+            for item in request_summaries
+        )
+        activation_required = (
             issue_id in {f"issue-{number:03d}" for number in range(1, 13)}
+            or has_activation_gate
+        )
+        activation_failed = (
+            activation_required
             and package.get("runtime_status") in {"observed", "not_at_bar"}
             and not _issue_activation_complete(package)
         )
@@ -594,8 +623,13 @@ def load_assessments(
 def load_baseline_assessments(
     paths: list[Path],
     packages_root: Path,
+    manifest: dict[str, Any],
 ) -> dict[str, dict[str, Any]]:
     schema = read_json(ROOT / "schemas" / "baseline-assessment.schema.json")
+    bindings = {
+        agent["name"]: agent["baseline"]["foundry_version"]
+        for agent in manifest["agents"]
+    }
     values: dict[str, dict[str, Any]] = {}
     for path in paths:
         value = read_json(path)
@@ -609,7 +643,12 @@ def load_baseline_assessments(
             packages_root / f"baseline-{agent_name}.json"
         )
         if (
-            value["package_hash"] != package["package_hash"]
+            package["target_kind"] != "baseline"
+            or package["agent_name"] != agent_name
+            or package["foundry_version"] != bindings.get(agent_name)
+            or package["manifest_reference"] != manifest["manifest_hash"]
+            or package["source_integrity"] != manifest["source_integrity"]
+            or value["package_hash"] != package["package_hash"]
             or value["foundry_version"] != package["foundry_version"]
         ):
             raise ContractError(
@@ -708,6 +747,7 @@ def _validate_issue_cards(
         "correct": {"MATCHED"},
         "partially_useful": {"PARTIAL"},
         "incorrect": {"MISMATCHED", "NOISE", "DUPLICATE"},
+        "incomplete": {"INCOMPLETE"},
     }
     for evaluation in evaluations:
         card = cards[evaluation["reference"]]
@@ -718,6 +758,17 @@ def _validate_issue_cards(
             or int(card_proof.get("operation_count") or 0) < 1
         ):
             raise ContractError("Issue card-linked trace proof is incomplete")
+        terminal_proven = (
+            int(card_proof.get("terminal_response_count") or 0) >= 1
+            and int(card_proof.get("terminal_output_count") or 0) >= 1
+        )
+        if not terminal_proven and (
+            evaluation["verdict"] != "incomplete"
+            or evaluation["finding_type"] != "INCOMPLETE"
+        ):
+            raise ContractError(
+                "Issue card without terminal proof must remain INCOMPLETE"
+            )
         if evaluation["finding_type"] not in allowed_types[evaluation["verdict"]]:
             raise ContractError("Card evaluation finding type is inconsistent")
         if (
@@ -728,6 +779,21 @@ def _validate_issue_cards(
             and evaluation["ownership"] == "none"
         ):
             raise ContractError("Card evaluation ownership is inconsistent")
+    incomplete_cards = [
+        item for item in evaluations if item["finding_type"] == "INCOMPLETE"
+    ]
+    if incomplete_cards and assessment["finding_type"] != "INCOMPLETE":
+        raise ContractError(
+            "Incomplete card evidence requires a top-level INCOMPLETE result"
+        )
+    if assessment["finding_type"] == "MATCHED" and (
+        len(evaluations) != 1
+        or evaluations[0]["finding_type"] != "MATCHED"
+        or evaluations[0]["verdict"] != "correct"
+    ):
+        raise ContractError(
+            "MATCHED assessment requires one terminal-proven MATCHED card"
+        )
 
 
 def _validate_baseline_cards(

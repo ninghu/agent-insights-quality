@@ -14,6 +14,12 @@ def requested_trips(text: str) -> list[str]:
 
 
 def parse_trip(text: str) -> str:
+    lowered = text.lower()
+    if "switch" in lowered and " to " in lowered:
+        destination = lowered.rsplit(" to ", 1)[1]
+        switched = requested_trips(destination)
+        if switched:
+            return switched[0]
     trips = requested_trips(text)
     return trips[0] if trips else "trip-alpha"
 
@@ -22,6 +28,12 @@ def bounded_inventory_options(
     inventory: list[dict],
     limit: int = MAX_RESPONSE_OPTIONS,
 ) -> list[dict]:
+    trips = list(dict.fromkeys(option.get("trip") for option in inventory))
+    if len(trips) >= 2:
+        return [
+            next(option for option in inventory if option.get("trip") == trip)
+            for trip in trips
+        ]
     selected = []
     selected_kinds = set()
     for option in inventory:
@@ -36,7 +48,15 @@ def bounded_inventory_options(
 
 
 def first_option_per_itinerary(branches: list[list[dict]]) -> list[dict]:
-    return [branch[0] for branch in branches if branch]
+    selected = []
+    for branch in branches:
+        if not branch:
+            continue
+        option = dict(branch[0])
+        option["source_id"] = option["id"]
+        option["id"] = f"{option['trip']}-{option['id']}"
+        selected.append(option)
+    return selected
 
 
 def describe_itineraries(inventory: list[dict]) -> str:
@@ -53,12 +73,14 @@ def describe_inventory(inventory: list[dict]) -> str:
     for option in inventory:
         if option.get("kind") == "flight":
             details.append(
-                f"Flight {option['id']}: carrier {option['carrier']}, "
+                f"Flight {option['id']} for {option['trip']}: "
+                f"carrier {option['carrier']}, "
                 f"departure {option['departure']}, price USD {option['price']}"
             )
         elif option.get("kind") == "hotel":
             details.append(
-                f"Hotel {option['id']}: property {option['property']}, "
+                f"Hotel {option['id']} for {option['trip']}: "
+                f"property {option['property']}, "
                 f"rating {option['rating']}, nightly rate USD {option['price']}"
             )
     return "; ".join(details) or "No synthetic inventory options"

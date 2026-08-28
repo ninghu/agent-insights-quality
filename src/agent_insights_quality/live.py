@@ -1748,6 +1748,11 @@ def _semantic_assertion_result(
                 for key, expected in exact_json_fields.items()
             ),
         )
+    if "exact_json" in assertions:
+        record(
+            "exact_json",
+            valid_json and parsed_json == assertions["exact_json"],
+        )
     required_all = assertions.get("required_terms_all", [])
     if required_all:
         record(
@@ -1783,6 +1788,12 @@ def _semantic_assertion_result(
         record(
             "max_words",
             bool(text) and len(re.findall(r"\S+", text)) <= int(max_words),
+        )
+    min_words = assertions.get("min_words")
+    if min_words is not None:
+        record(
+            "min_words",
+            bool(text) and len(re.findall(r"\S+", text)) >= int(min_words),
         )
     max_characters = assertions.get("max_characters")
     if max_characters is not None:
@@ -1823,8 +1834,10 @@ def _normalize_fixture(value: Any) -> dict[str, Any]:
             "max_characters",
             "json_schema",
             "exact_json_fields",
+            "exact_json",
             "required_claims",
             "forbidden_claims",
+            "min_words",
         }
         for key in semantic_assertions
     ):
@@ -1841,7 +1854,7 @@ def _normalize_fixture(value: Any) -> dict[str, Any]:
             isinstance(term, str) and term for term in terms
         ):
             raise ContractError("Traffic semantic assertion terms are invalid")
-    for key in ("max_words", "max_characters"):
+    for key in ("min_words", "max_words", "max_characters"):
         bound = semantic_assertions.get(key)
         if bound is not None and (
             not isinstance(bound, int) or isinstance(bound, bool) or bound < 1

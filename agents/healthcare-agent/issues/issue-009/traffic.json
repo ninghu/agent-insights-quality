@@ -73,9 +73,13 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "Dr. Rivera"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "account_scope": "demo-account-a",
+            "provider": "Dr. Rivera",
+            "slot": "slot-demo-stale",
+            "date": "2026-09-21"
+          }
         }
       }
     },
@@ -111,9 +115,13 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "Dr. Rivera"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "account_scope": "demo-account-a",
+            "provider": "Dr. Rivera",
+            "slot": "slot-demo-stale",
+            "date": "2026-09-21"
+          }
         }
       }
     },
@@ -149,9 +157,13 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "Dr. Rivera"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "account_scope": "demo-account-a",
+            "provider": "Dr. Rivera",
+            "slot": "slot-demo-stale",
+            "date": "2026-09-21"
+          }
         }
       }
     },
@@ -187,9 +199,13 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "Dr. Rivera"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "account_scope": "demo-account-a",
+            "provider": "Dr. Rivera",
+            "slot": "slot-demo-stale",
+            "date": "2026-09-21"
+          }
         }
       }
     }

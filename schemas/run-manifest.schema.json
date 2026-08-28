@@ -2,11 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "run_id", "profile", "report_date", "insight_lookback_hours", "telemetry_resource_set", "catalog_hashes", "source_integrity", "agents", "manifest_hash"],
+  "required": ["schema_version", "run_id", "profile", "delivery_mode", "report_date", "insight_lookback_hours", "telemetry_resource_set", "catalog_hashes", "source_integrity", "agents", "manifest_hash"],
   "properties": {
-    "schema_version": {"const": "3.0.0"},
+    "schema_version": {"const": "4.0.0"},
     "run_id": {"type": "string", "pattern": "^aiq-[0-9]{8}(?:-r[0-9]{2,})?$"},
     "profile": {"enum": ["daily", "staging"]},
+    "delivery_mode": {"enum": ["official", "test_email_only"]},
     "report_date": {"type": "string", "format": "date"},
     "insight_lookback_hours": {"type": "number", "minimum": 0.1},
     "telemetry_resource_set": {"type": "string", "pattern": "^g[1-9][0-9]*$"},
@@ -35,6 +36,7 @@
       "maxItems": 5,
       "items": {
         "type": "object",
+        "additionalProperties": false,
         "required": ["name", "type", "baseline_contract", "monitor_reference", "baseline", "issues"],
         "properties": {
           "name": {"type": "string", "minLength": 1},
@@ -64,7 +66,17 @@
   "$defs": {
     "versionEvidence": {
       "type": "object",
+      "additionalProperties": false,
       "required": [
+        "logical_version",
+        "foundry_version",
+        "content_digest",
+        "status",
+        "operation_ids",
+        "insight_references",
+        "window_start",
+        "window_end",
+        "error_code",
         "endpoint_request_count",
         "endpoint_response_count",
         "endpoint_usable_response_count",
@@ -72,10 +84,50 @@
         "semantic_assertions_passed",
         "trace_contract_verified",
         "trace_behavior_summary",
-        "endpoint_request_summaries"
+        "endpoint_request_summaries",
+        "evidence_reference"
       ],
       "properties": {
-        "trace_behavior_summary": {"type": "object"},
+        "issue_id": {"type": "string", "pattern": "^issue-[0-9]{3}$"},
+        "logical_version": {
+          "anyOf": [
+            {"const": "v0"},
+            {"type": "string", "pattern": "^issue-[0-9]{3}$"}
+          ]
+        },
+        "foundry_version": {"type": "string", "minLength": 1},
+        "content_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "status": {"enum": ["passed", "not_at_bar", "observed", "inconclusive", "skipped_baseline"]},
+        "operation_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[0-9a-f]{32}$"}
+        },
+        "insight_references": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+        },
+        "window_start": {
+          "oneOf": [
+            {"type": "string", "format": "date-time"},
+            {"type": "null"}
+          ]
+        },
+        "window_end": {
+          "oneOf": [
+            {"type": "string", "format": "date-time"},
+            {"type": "null"}
+          ]
+        },
+        "error_code": {"type": ["string", "null"]},
+        "endpoint_request_count": {"type": "integer", "minimum": 0},
+        "endpoint_response_count": {"type": "integer", "minimum": 0},
+        "endpoint_usable_response_count": {"type": "integer", "minimum": 0},
+        "semantic_assertion_count": {"type": "integer", "minimum": 0},
+        "semantic_assertions_passed": {"type": "integer", "minimum": 0},
+        "trace_contract_verified": {"type": "boolean"},
+        "trace_behavior_summary": {"$ref": "#/$defs/traceBehaviorSummary"},
         "endpoint_request_summaries": {
           "type": "array",
           "items": {
@@ -100,6 +152,7 @@
               "semantic_assertions_passed": {"type": "integer", "minimum": 0},
               "assertion_results": {
                 "type": "array",
+                "uniqueItems": true,
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
@@ -115,7 +168,38 @@
               "function_call_count": {"type": "integer", "minimum": 0}
             }
           }
+        },
+        "evidence_reference": {
+          "oneOf": [
+            {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            {"type": "null"}
+          ]
         }
+      }
+    },
+    "traceBehaviorSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation_count": {"type": "integer", "minimum": 0},
+        "tool_call_counts": {
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        },
+        "tool_response_count": {"type": "integer", "minimum": 0},
+        "successful_tool_response_count": {"type": "integer", "minimum": 0},
+        "error_codes": {
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        },
+        "assistant_response_count": {"type": "integer", "minimum": 0},
+        "explicit_terminal_success_count": {"type": "integer", "minimum": 0},
+        "explicit_terminal_output_count": {"type": "integer", "minimum": 0},
+        "terminal_success_count": {"type": "integer", "minimum": 0},
+        "terminal_output_count": {"type": "integer", "minimum": 0},
+        "terminal_response_count": {"type": "integer", "minimum": 0},
+        "handled_error_count": {"type": "integer", "minimum": 0},
+        "unhandled_error_count": {"type": "integer", "minimum": 0}
       }
     }
   }

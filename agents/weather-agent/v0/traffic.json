@@ -47,7 +47,9 @@
             "fahrenheit"
           ],
           "forbidden_terms": [
-            "unavailable"
+            "unavailable",
+            "not sunny",
+            "not 86"
           ],
           "max_words": 40
         }
@@ -89,7 +91,12 @@
             "snow",
             "fahrenheit"
           ],
-          "max_words": 40
+          "max_words": 40,
+          "forbidden_terms": [
+            "celsius",
+            "not snow",
+            "not 25"
+          ]
         }
       }
     },
@@ -129,6 +136,12 @@
             "12",
             "7",
             "celsius"
+          ],
+          "forbidden_terms": [
+            "not cloudy",
+            "not 12",
+            "not 7",
+            "fahrenheit"
           ]
         }
       }
@@ -228,7 +241,11 @@
             "5",
             "unavailable"
           ],
-          "max_words": 60
+          "max_words": 60,
+          "forbidden_claims": [
+            "day two is available",
+            "day two: sunny"
+          ]
         }
       }
     }

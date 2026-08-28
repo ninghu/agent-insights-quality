@@ -315,7 +315,9 @@ def test_travel_sources_preserve_bounded_comparison_contract() -> None:
         assert "def bounded_inventory_options(" in options
         assert "selected_kinds" in options
         assert "def first_option_per_itinerary(" in options
-        assert "return [branch[0] for branch in branches if branch]" in options
+        assert 'option["source_id"] = option["id"]' in options
+        assert 'option["id"] = f"{option[\'trip\']}-{option[\'id\']}"' in options
+        assert 'if len(trips) >= 2 and "compare" in text:' in text
         if "issue-026" not in source.parts:
             assert 'return {"inventory": first_option_per_itinerary(branches)}' in text
         assert "Showing {shown} of {len(inventory)} synthetic options." in text
@@ -390,7 +392,7 @@ def test_travel_partial_inventory_returns_one_useful_option() -> None:
     assert len(response_options) == 1
     assert options.describe_itineraries(partial_inventory) == "Itinerary trip-beta"
     assert options.describe_inventory(response_options) == (
-        "Flight flight-demo-0: carrier Contoso Air, "
+        "Flight flight-demo-0 for trip-beta: carrier Contoso Air, "
         "departure 09:00, price USD 200"
     )
 
@@ -401,8 +403,22 @@ def test_travel_two_trip_comparison_preserves_both_itineraries() -> None:
     trips = options.requested_trips(prompt)
     branches = [
         [
-            {"id": f"{trip}-flight-0", "kind": "flight", "trip": trip},
-            {"id": f"{trip}-flight-1", "kind": "flight", "trip": trip},
+            {
+                "id": "flight-demo-0",
+                "kind": "flight",
+                "trip": trip,
+                "carrier": "Contoso Air",
+                "departure": "09:00",
+                "price": 200,
+            },
+            {
+                "id": "flight-demo-1",
+                "kind": "flight",
+                "trip": trip,
+                "carrier": "Contoso Air",
+                "departure": "11:00",
+                "price": 210,
+            },
         ]
         for trip in trips
     ]
@@ -411,12 +427,40 @@ def test_travel_two_trip_comparison_preserves_both_itineraries() -> None:
     assert trips == ["trip-alpha", "trip-beta"]
     assert [option["trip"] for option in inventory] == trips
     assert [option["id"] for option in inventory] == [
-        "trip-alpha-flight-0",
-        "trip-beta-flight-0",
+        "trip-alpha-flight-demo-0",
+        "trip-beta-flight-demo-0",
     ]
     assert options.describe_itineraries(inventory) == (
         "Compared itineraries trip-alpha and trip-beta"
     )
+    rendered = options.describe_inventory(
+        options.bounded_inventory_options(inventory)
+    )
+    assert "trip-alpha-flight-demo-0 for trip-alpha" in rendered
+    assert "trip-beta-flight-demo-0 for trip-beta" in rendered
+
+
+def test_travel_switch_parses_destination_without_comparison() -> None:
+    options = _load_travel_options()
+    prompt = "Switch from trip-alpha to trip-beta and search again."
+    assert options.requested_trips(prompt) == ["trip-alpha", "trip-beta"]
+    assert options.parse_trip(prompt) == "trip-beta"
+    traffic = json.loads(
+        (
+            ROOT
+            / "agents"
+            / "travel-agent"
+            / "issues"
+            / "issue-028"
+            / "traffic.json"
+        ).read_text(encoding="utf-8")
+    )
+    switch = traffic["requests"][-1]
+    assert switch["expected"]["activation_gate"] is True
+    assert switch["expected"]["semantic_assertions"] == {
+        "required_terms_all": ["trip-alpha", "flight-demo-0"],
+        "forbidden_terms": ["trip-beta"],
+    }
 
 
 def test_travel_issue_sources_match_reviewed_deltas() -> None:
@@ -547,10 +591,24 @@ def test_support_baseline_asserts_handled_error_responses() -> None:
     }
     assert expected_by_id["support-ticket-agent-v0-transient"][
         "semantic_assertions"
-    ] == {"required_terms_all": ["succeeded", "retry"]}
+    ] == {
+        "required_terms_all": ["succeeded", "retry"],
+        "forbidden_claims": [
+            "retry failed",
+            "did not succeed",
+            "recovery failed",
+        ],
+    }
     assert expected_by_id["support-ticket-agent-v0-partial"][
         "semantic_assertions"
-    ] == {"required_terms_all": ["ticket", "history", "unavailable"]}
+    ] == {
+        "required_terms_all": ["ticket", "history", "unavailable"],
+        "forbidden_claims": [
+            "ticket unavailable",
+            "core ticket unavailable",
+            "history available",
+        ],
+    }
 
 
 def test_prompt_traffic_has_no_fixtures_and_has_reviewed_assertions() -> None:
@@ -582,6 +640,79 @@ def test_prompt_traffic_has_no_fixtures_and_has_reviewed_assertions() -> None:
             )
 
 
+def test_prompt_activation_gates_are_request_bound() -> None:
+    structured = {
+        "issue-001",
+        "issue-003",
+        "issue-004",
+        "issue-005",
+        "issue-007",
+        "issue-008",
+        "issue-009",
+        "issue-010",
+        "issue-011",
+        "issue-012",
+    }
+    for issue_id in structured:
+        agent = "weather-agent" if int(issue_id[-3:]) <= 6 else "healthcare-agent"
+        value = json.loads(
+            (
+                ROOT
+                / "agents"
+                / agent
+                / "issues"
+                / issue_id
+                / "traffic.json"
+            ).read_text(encoding="utf-8")
+        )
+        gates = [
+            item
+            for item in value["requests"]
+            if item["expected"].get("activation_gate") is True
+        ]
+        assert gates
+        assert all(
+            "exact_json" in item["expected"]["semantic_assertions"]
+            for item in gates
+        )
+    verbose = json.loads(
+        (
+            ROOT
+            / "agents"
+            / "weather-agent"
+            / "issues"
+            / "issue-006"
+            / "traffic.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert all(
+        item["expected"]["semantic_assertions"]["min_words"] == 80
+        for item in verbose["requests"]
+    )
+    schema_violation = json.loads(
+        (
+            ROOT
+            / "agents"
+            / "weather-agent"
+            / "issues"
+            / "issue-002"
+            / "traffic.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert all(
+        item["expected"]["semantic_assertions"] == {
+            "response_format": "non_json",
+            "required_terms_all": [
+                "Weather summary:",
+                "clear",
+                "21",
+                "celsius",
+            ],
+        }
+        for item in schema_violation["requests"]
+    )
+
+
 def test_weather_latency_issue_requires_five_two_turn_groups() -> None:
     value = json.loads(
         (
@@ -607,13 +738,17 @@ def test_weather_latency_issue_requires_five_two_turn_groups() -> None:
         assert "condition=clear" in first_text
         assert "temperature=20" in first_text
         assert "already gave" in second_text
-        assert first["expected"]["semantic_assertions"] == {
-            "required_claims": ["clarification_required:"],
-            "forbidden_claims": ["answer_complete:"],
+        assert first["expected"]["semantic_assertions"]["exact_json"] == {
+            "phase": "clarification_required",
+            "completed": False,
         }
-        assert "answer_complete:" in second["expected"][
-            "semantic_assertions"
-        ]["required_terms_all"]
+        assert second["expected"]["semantic_assertions"]["exact_json"] == {
+            "phase": "answer_complete",
+            "completed": True,
+            "condition": "clear",
+            "temperature": 20,
+            "unit": "celsius",
+        }
         assert all(
             turn["expected"]["activation_gate"] is True for turn in turns
         )
@@ -637,23 +772,13 @@ def test_healthcare_action_issues_emit_distinct_json_envelopes() -> None:
         for item in value["requests"]:
             assertions = item["expected"]["semantic_assertions"]
             assert assertions["response_format"] == "json"
-            assert (
-                assertions["json_schema"]["properties"]["action"]["const"]
-                == action
-            )
+            envelope = assertions["exact_json"]
+            assert envelope["action"] == action
             assert item["expected"]["activation_gate"] is True
             if issue_id == "issue-008":
-                assert (
-                    assertions["json_schema"]["additionalProperties"] is False
-                )
-                assert "approval" not in assertions["json_schema"]["properties"]
-                assert (
-                    "account_scope"
-                    not in assertions["json_schema"]["properties"]
-                )
+                assert set(envelope) == {"action", "provider", "slot"}
+                assert envelope["provider"] == "Dr. Rivera"
             else:
-                properties = assertions["json_schema"]["properties"]
-                assert assertions["json_schema"]["additionalProperties"] is False
                 assert {
                     "action",
                     "provider",
@@ -661,10 +786,64 @@ def test_healthcare_action_issues_emit_distinct_json_envelopes() -> None:
                     "account_scope",
                     "confirmation",
                     "state",
-                } == set(assertions["json_schema"]["required"])
-                assert properties["account_scope"]["const"] == "demo-account-a"
-                assert properties["confirmation"]["const"] is False
-                assert properties["state"]["const"] == "confirmed"
+                } == set(envelope)
+                assert envelope["provider"] == "Dr. Rivera"
+                assert envelope["account_scope"] == "demo-account-a"
+                assert envelope["confirmation"] is False
+                assert envelope["state"] == "confirmed"
+    baseline = json.loads(
+        (
+            ROOT / "agents" / "healthcare-agent" / "v0" / "traffic.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert baseline["requests"][4]["expected"]["semantic_assertions"][
+        "exact_json"
+    ] == {
+        "action": "create_appointment",
+        "provider": "Dr. Ali",
+        "slot": "slot-demo-505",
+        "account_scope": "demo-account-b",
+        "approval": "pending",
+        "message": "Please confirm",
+    }
+
+
+def test_prompt_substitution_issues_bind_supplied_evidence() -> None:
+    weather = json.loads(
+        (
+            ROOT
+            / "agents"
+            / "weather-agent"
+            / "issues"
+            / "issue-003"
+            / "traffic.json"
+        ).read_text(encoding="utf-8")
+    )
+    for item in weather["requests"]:
+        text = json.dumps(item["request"]["body"])
+        assert "high=27" in text and "low=13" in text
+        assert item["expected"]["semantic_assertions"]["exact_json"] == {
+            "shape": "forecast",
+            "high": 27,
+            "low": 13,
+            "unit": "celsius",
+        }
+    healthcare = json.loads(
+        (
+            ROOT
+            / "agents"
+            / "healthcare-agent"
+            / "issues"
+            / "issue-012"
+            / "traffic.json"
+        ).read_text(encoding="utf-8")
+    )
+    for index, item in enumerate(healthcare["requests"], start=1):
+        expected = item["expected"]["semantic_assertions"]["exact_json"]
+        text = json.dumps(item["request"]["body"])
+        assert expected["record_id"] in text
+        assert expected["slot"] in text
+        assert expected["account_scope"] == "demo-account-b"
 
 
 def test_healthcare_corrections_retain_initial_date() -> None:

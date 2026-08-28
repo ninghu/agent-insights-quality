@@ -36,41 +36,13 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "required_terms_all": [
-            "state",
-            "confirmation"
-          ],
-          "json_schema": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "action",
-              "provider",
-              "slot",
-              "account_scope",
-              "confirmation",
-              "state"
-            ],
-            "properties": {
-              "action": {
-                "const": "transition_appointment_state"
-              },
-              "provider": {
-                "type": "string"
-              },
-              "slot": {
-                "type": "string"
-              },
-              "account_scope": {
-                "const": "demo-account-a"
-              },
-              "confirmation": {
-                "const": false
-              },
-              "state": {
-                "const": "confirmed"
-              }
-            }
+          "exact_json": {
+            "action": "transition_appointment_state",
+            "provider": "Dr. Rivera",
+            "slot": "slot-demo-101",
+            "account_scope": "demo-account-a",
+            "confirmation": false,
+            "state": "confirmed"
           }
         }
       }
@@ -108,41 +80,13 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "required_terms_all": [
-            "state",
-            "confirmation"
-          ],
-          "json_schema": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "action",
-              "provider",
-              "slot",
-              "account_scope",
-              "confirmation",
-              "state"
-            ],
-            "properties": {
-              "action": {
-                "const": "transition_appointment_state"
-              },
-              "provider": {
-                "type": "string"
-              },
-              "slot": {
-                "type": "string"
-              },
-              "account_scope": {
-                "const": "demo-account-a"
-              },
-              "confirmation": {
-                "const": false
-              },
-              "state": {
-                "const": "confirmed"
-              }
-            }
+          "exact_json": {
+            "action": "transition_appointment_state",
+            "provider": "Dr. Rivera",
+            "slot": "slot-demo-202",
+            "account_scope": "demo-account-a",
+            "confirmation": false,
+            "state": "confirmed"
           }
         }
       }
@@ -180,41 +124,13 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "required_terms_all": [
-            "state",
-            "confirmation"
-          ],
-          "json_schema": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "action",
-              "provider",
-              "slot",
-              "account_scope",
-              "confirmation",
-              "state"
-            ],
-            "properties": {
-              "action": {
-                "const": "transition_appointment_state"
-              },
-              "provider": {
-                "type": "string"
-              },
-              "slot": {
-                "type": "string"
-              },
-              "account_scope": {
-                "const": "demo-account-a"
-              },
-              "confirmation": {
-                "const": false
-              },
-              "state": {
-                "const": "confirmed"
-              }
-            }
+          "exact_json": {
+            "action": "transition_appointment_state",
+            "provider": "Dr. Rivera",
+            "slot": "slot-demo-303",
+            "account_scope": "demo-account-a",
+            "confirmation": false,
+            "state": "confirmed"
           }
         }
       }
@@ -252,41 +168,13 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "required_terms_all": [
-            "state",
-            "confirmation"
-          ],
-          "json_schema": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "action",
-              "provider",
-              "slot",
-              "account_scope",
-              "confirmation",
-              "state"
-            ],
-            "properties": {
-              "action": {
-                "const": "transition_appointment_state"
-              },
-              "provider": {
-                "type": "string"
-              },
-              "slot": {
-                "type": "string"
-              },
-              "account_scope": {
-                "const": "demo-account-a"
-              },
-              "confirmation": {
-                "const": false
-              },
-              "state": {
-                "const": "confirmed"
-              }
-            }
+          "exact_json": {
+            "action": "transition_appointment_state",
+            "provider": "Dr. Rivera",
+            "slot": "slot-demo-404",
+            "account_scope": "demo-account-a",
+            "confirmation": false,
+            "state": "confirmed"
           }
         }
       }
@@ -324,41 +212,13 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "required_terms_all": [
-            "state",
-            "confirmation"
-          ],
-          "json_schema": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "action",
-              "provider",
-              "slot",
-              "account_scope",
-              "confirmation",
-              "state"
-            ],
-            "properties": {
-              "action": {
-                "const": "transition_appointment_state"
-              },
-              "provider": {
-                "type": "string"
-              },
-              "slot": {
-                "type": "string"
-              },
-              "account_scope": {
-                "const": "demo-account-a"
-              },
-              "confirmation": {
-                "const": false
-              },
-              "state": {
-                "const": "confirmed"
-              }
-            }
+          "exact_json": {
+            "action": "transition_appointment_state",
+            "provider": "Dr. Rivera",
+            "slot": "slot-demo-505",
+            "account_scope": "demo-account-a",
+            "confirmation": false,
+            "state": "confirmed"
           }
         }
       }

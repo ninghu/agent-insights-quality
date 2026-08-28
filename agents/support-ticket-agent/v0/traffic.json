@@ -134,7 +134,15 @@
         "http_status": 200,
         "behavior": "Retries once and recovers.",
         "semantic_assertions": {
-          "required_terms_all": ["succeeded", "retry"]
+          "required_terms_all": [
+            "succeeded",
+            "retry"
+          ],
+          "forbidden_claims": [
+            "retry failed",
+            "did not succeed",
+            "recovery failed"
+          ]
         }
       }
     },
@@ -168,7 +176,16 @@
         "http_status": 200,
         "behavior": "Returns the core ticket and labels history unavailable.",
         "semantic_assertions": {
-          "required_terms_all": ["ticket", "history", "unavailable"]
+          "required_terms_all": [
+            "ticket",
+            "history",
+            "unavailable"
+          ],
+          "forbidden_claims": [
+            "ticket unavailable",
+            "core ticket unavailable",
+            "history available"
+          ]
         }
       }
     }

@@ -35,9 +35,13 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "clear"
-          ]
+          "required_claims": [
+            "overgenerated:",
+            "clear",
+            "22",
+            "celsius"
+          ],
+          "min_words": 80
         }
       }
     },
@@ -73,9 +77,13 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "clear"
-          ]
+          "required_claims": [
+            "overgenerated:",
+            "clear",
+            "22",
+            "celsius"
+          ],
+          "min_words": 80
         }
       }
     },
@@ -111,9 +119,13 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "clear"
-          ]
+          "required_claims": [
+            "overgenerated:",
+            "clear",
+            "22",
+            "celsius"
+          ],
+          "min_words": 80
         }
       }
     },
@@ -149,9 +161,13 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "clear"
-          ]
+          "required_claims": [
+            "overgenerated:",
+            "clear",
+            "22",
+            "celsius"
+          ],
+          "min_words": 80
         }
       }
     },
@@ -187,9 +203,13 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "clear"
-          ]
+          "required_claims": [
+            "overgenerated:",
+            "clear",
+            "22",
+            "celsius"
+          ],
+          "min_words": 80
         }
       }
     }

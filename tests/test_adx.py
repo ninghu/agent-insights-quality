@@ -20,7 +20,7 @@ from agent_insights_quality.adx import (
     resolve_quality_analytics,
     resolve_report_catalogs,
 )
-from agent_insights_quality.catalogs import load_catalogs
+from agent_insights_quality.catalogs import load_catalogs, source_integrity_digest
 from agent_insights_quality.report_summary import (
     improvement_rows,
     working_capabilities,
@@ -61,6 +61,10 @@ def _report() -> dict:
     agents, issues = load_catalogs(require_paths=False)
     report["catalog_hashes"]["agents"] = content_hash(agents)
     report["catalog_hashes"]["issues"] = content_hash(issues)
+    report["source_integrity"] = {
+        "verified": True,
+        "contract_digest": source_integrity_digest(agents, issues),
+    }
     issue_by_id = {item["id"]: item for item in issues["issues"]}
     for item in report["issues"]:
         item["title"] = issue_by_id[item["issue_id"]]["title"]

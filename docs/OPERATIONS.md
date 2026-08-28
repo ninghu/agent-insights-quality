@@ -153,6 +153,9 @@ privacy-safe per-request assertion outcomes, full-request trace proof, and separ
 proof. Use GPT-5.6 Sol with
 `src/agent_insights_quality/prompts/assessment.md`, then finalize:
 
+Run manifest schema `4.0.0` binds both the official/test-email delivery mode and verified source,
+activation, endpoint, semantic, and trace evidence. Superseded manifest shapes are rejected.
+
 ```powershell
 python -m agent_insights_quality finalize `
   --manifest <private-run-manifest> `

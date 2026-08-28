@@ -160,7 +160,17 @@
       "expected": {
         "http_status": 200,
         "behavior": "Uses the earlier trip after an explicit switch.",
-        "defect_observed": true
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "trip-alpha",
+            "flight-demo-0"
+          ],
+          "forbidden_terms": [
+            "trip-beta"
+          ]
+        }
       }
     }
   ],

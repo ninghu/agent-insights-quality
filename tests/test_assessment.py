@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ from agent_insights_quality.assessment import (
     _issue_activation_complete,
     _linked_baseline_operations,
     _validate_baseline_cards,
+    _validate_issue_cards,
     load_assessments,
 )
 from agent_insights_quality.cli import _rehydrate_with_retries
@@ -106,7 +108,11 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
                 "proposed_fix": "Apply the synthetic fix.",
                 "trace_count": 1,
                 "linked_operation_ids": ["a" * 32],
-                "card_linked_trace_proof": {"operation_count": 1},
+                "card_linked_trace_proof": {
+                    "operation_count": 1,
+                    "terminal_response_count": 1,
+                    "terminal_output_count": 1,
+                },
             }
         ],
         "endpoint_evidence": {
@@ -147,6 +153,22 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
     package["package_hash"] = content_hash(
         {key: value for key, value in package.items() if key != "package_hash"}
     )
+    manifest = {
+        "manifest_hash": package["manifest_reference"],
+        "source_integrity": package["source_integrity"],
+        "agents": [
+            {
+                "name": "weather-agent",
+                "baseline": {"foundry_version": "1"},
+                "issues": [
+                    {
+                        "issue_id": "issue-001",
+                        "foundry_version": package["foundry_version"],
+                    }
+                ],
+            }
+        ],
+    }
     (packages / "issue-001.json").write_text(
         json.dumps(package),
         encoding="utf-8",
@@ -199,11 +221,28 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
     }
     path = tmp_path / "assessment.json"
     path.write_text(json.dumps(assessment), encoding="utf-8")
-    assert load_assessments([path], {"issue-001"}, packages)["issue-001"] == assessment
+    assert (
+        load_assessments(
+            [path],
+            {"issue-001"},
+            packages,
+            manifest,
+        )["issue-001"]
+        == assessment
+    )
+    stale_manifest = deepcopy(manifest)
+    stale_manifest["manifest_hash"] = "sha256:" + "9" * 64
+    with pytest.raises(ContractError, match="current evidence"):
+        load_assessments(
+            [path],
+            {"issue-001"},
+            packages,
+            stale_manifest,
+        )
     assessment["package_hash"] = "sha256:" + "c" * 64
     path.write_text(json.dumps(assessment), encoding="utf-8")
     with pytest.raises(ContractError, match="current evidence"):
-        load_assessments([path], {"issue-001"}, packages)
+        load_assessments([path], {"issue-001"}, packages, manifest)
 
     assessment["package_hash"] = package["package_hash"]
     package["runtime_status"] = "not_at_bar"
@@ -247,8 +286,8 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
     assessment["package_hash"] = package["package_hash"]
     (packages / "issue-001.json").write_text(json.dumps(package), encoding="utf-8")
     path.write_text(json.dumps(assessment), encoding="utf-8")
-    with pytest.raises(ContractError, match="contradicts runtime evidence"):
-        load_assessments([path], {"issue-001"}, packages)
+    with pytest.raises(ContractError, match="MATCHED assessment"):
+        load_assessments([path], {"issue-001"}, packages, manifest)
 
 
 def test_baseline_trace_proof_uses_only_baseline_operations() -> None:
@@ -426,3 +465,38 @@ def test_issue_activation_requires_every_designated_assertion() -> None:
     summaries[0]["assertion_results"][0]["passed"] = False
     summaries[0]["semantic_assertions_passed"] = 0
     assert _issue_activation_complete(package) is False
+
+
+def test_issue_card_without_terminal_proof_stays_incomplete() -> None:
+    card = {
+        "reference": "sha256:" + "a" * 64,
+        "title": "Synthetic card",
+        "category": "output_quality",
+        "severity": "medium",
+        "card_linked_trace_proof": {"operation_count": 1},
+    }
+    evaluation = {
+        "reference": card["reference"],
+        "title": card["title"],
+        "category": card["category"],
+        "severity": card["severity"],
+        "verdict": "correct",
+        "finding_type": "MATCHED",
+        "ownership": "none",
+    }
+    assessment = {
+        "issue_id": "issue-001",
+        "finding_type": "MATCHED",
+        "card_evaluations": [evaluation],
+    }
+    with pytest.raises(ContractError, match="terminal proof"):
+        _validate_issue_cards(assessment, {"observed_insights": [card]})
+    evaluation.update(
+        {
+            "verdict": "incomplete",
+            "finding_type": "INCOMPLETE",
+            "ownership": "unresolved",
+        }
+    )
+    assessment["finding_type"] = "INCOMPLETE"
+    _validate_issue_cards(assessment, {"observed_insights": [card]})

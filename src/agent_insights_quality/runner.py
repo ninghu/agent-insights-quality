@@ -582,9 +582,9 @@ def _validate_endpoint_contract(
                 "is incomplete"
             ),
         )
-    if not baseline and agent["type"] == "prompt":
+    if not baseline:
         activation = [item for item in summaries if item.activation_gate]
-        if not activation or any(
+        if (agent["type"] == "prompt" and not activation) or any(
             item.semantic_assertion_count < 1
             or item.semantic_assertions_passed != item.semantic_assertion_count
             for item in activation

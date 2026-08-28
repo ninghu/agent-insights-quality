@@ -83,19 +83,19 @@ def _runtime_evidence_complete(
         and value.get("trace_contract_verified") is True
         and _request_summaries_complete(value)
         and (
-            not require_activation
-            or (
-                any(
+            (
+                not require_activation
+                or any(
                     item.get("activation_gate") is True
                     for item in value["endpoint_request_summaries"]
                 )
-                and all(
-                    item.get("semantic_assertion_count", 0) > 0
-                    and item.get("semantic_assertions_passed")
-                    == item.get("semantic_assertion_count")
-                    for item in value["endpoint_request_summaries"]
-                    if item.get("activation_gate") is True
-                )
+            )
+            and all(
+                item.get("semantic_assertion_count", 0) > 0
+                and item.get("semantic_assertions_passed")
+                == item.get("semantic_assertion_count")
+                for item in value["endpoint_request_summaries"]
+                if item.get("activation_gate") is True
             )
         )
     )
@@ -742,6 +742,11 @@ def validate_published_report(
     expected_selection: dict[str, list[str]] | None = None,
 ) -> None:
     validate_report(report)
+    if (
+        report["source_integrity"].get("verified") is not True
+        or not isinstance(report["source_integrity"].get("contract_digest"), str)
+    ):
+        raise ContractError("Published report source integrity is incomplete")
     if report["profile"] != "daily" or report["status"] not in {"PASS", "FAIL"}:
         raise ContractError("Published report has an ineligible profile or status")
     baseline = report["baseline"]
@@ -858,6 +863,11 @@ def validate_staging_report(
     issue_catalog: dict[str, Any],
 ) -> None:
     validate_report(report)
+    if (
+        report["source_integrity"].get("verified") is not True
+        or not isinstance(report["source_integrity"].get("contract_digest"), str)
+    ):
+        raise ContractError("Staging report source integrity is incomplete")
     if report["profile"] != "staging" or report["status"] not in {"PASS", "FAIL"}:
         raise ContractError("Promotion requires a complete staging PASS or FAIL report")
     baseline = report["baseline"]

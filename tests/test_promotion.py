@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from datetime import date
 from pathlib import Path
 
@@ -27,7 +28,11 @@ from agent_insights_quality.util import ContractError
 from agent_insights_quality.util import content_hash
 
 
-def _request_summaries() -> list[dict]:
+def _request_summaries(
+    *,
+    prompt: bool = False,
+    activation: bool = False,
+) -> list[dict]:
     return [
         {
             "request_index": index,
@@ -38,26 +43,57 @@ def _request_summaries() -> list[dict]:
             "assertion_results": [
                 {"assertion": "synthetic_contract", "passed": True}
             ],
-            "activation_gate": False,
-            "direct_terminal_response_count": 0,
+            "activation_gate": activation,
+            "direct_terminal_response_count": int(prompt),
             "function_call_count": 0,
         }
         for index in range(5)
     ]
 
 
-def _version_evidence(logical_version: str, foundry_version: str) -> dict:
+def _version_evidence(
+    logical_version: str,
+    foundry_version: str,
+    *,
+    agent_type: str,
+) -> dict:
+    prompt = agent_type == "prompt"
     return {
         "logical_version": logical_version,
         "foundry_version": foundry_version,
+        "content_digest": "sha256:" + "a" * 64,
+        "status": "passed" if logical_version == "v0" else "observed",
+        "operation_ids": [f"{index + 1:032x}" for index in range(5)],
+        "insight_references": (
+            [] if logical_version == "v0" else ["sha256:" + "b" * 64]
+        ),
+        "window_start": "2026-08-28T10:00:00+00:00",
+        "window_end": "2026-08-28T10:01:00+00:00",
+        "error_code": None,
         "endpoint_request_count": 5,
         "endpoint_response_count": 5,
         "endpoint_usable_response_count": 5,
         "semantic_assertion_count": 5,
         "semantic_assertions_passed": 5,
         "trace_contract_verified": True,
-        "trace_behavior_summary": {},
-        "endpoint_request_summaries": _request_summaries(),
+        "trace_behavior_summary": {
+            "operation_count": 5,
+            "tool_call_counts": {},
+            "tool_response_count": 0,
+            "assistant_response_count": 5,
+            "explicit_terminal_success_count": 5,
+            "explicit_terminal_output_count": 5,
+            "terminal_response_count": 5,
+            "terminal_output_count": 5,
+            "unhandled_error_count": 0,
+        },
+        "endpoint_request_summaries": _request_summaries(
+            prompt=prompt,
+            activation=prompt and logical_version != "v0",
+        ),
+        "evidence_reference": (
+            None if logical_version == "v0" else "sha256:" + "c" * 64
+        ),
     }
 
 
@@ -121,6 +157,9 @@ def test_build_manifest_validates_real_nested_evidence() -> None:
                 semantic_assertion_count=1,
                 semantic_assertions_passed=1,
                 trace_contract_verified=True,
+                operation_ids=["a" * 32],
+                window_start="2026-08-28T10:00:00+00:00",
+                window_end="2026-08-28T10:01:00+00:00",
                 endpoint_request_summaries=[summary],
             ),
             issues=[],
@@ -145,6 +184,7 @@ def test_build_manifest_validates_real_nested_evidence() -> None:
         report_date=date(2026, 8, 28),
         profile="staging",
         rerun=0,
+        delivery_mode="official",
         insight_lookback_hours=0.1,
         telemetry_resource_set="g29",
         catalog_hashes=hashes,
@@ -223,9 +263,10 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
         },
     }
     manifest = {
-        "schema_version": "3.0.0",
+        "schema_version": "4.0.0",
         "run_id": "aiq-20260824",
         "profile": "staging",
+        "delivery_mode": "official",
         "report_date": "2026-08-24",
         "insight_lookback_hours": 0.1,
         "telemetry_resource_set": "g29",
@@ -246,6 +287,7 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
                         registry["agents"][agent["name"]]["versions"]["v0"][
                             "foundry_version"
                         ],
+                        agent_type=agent["type"],
                     ),
                 },
                 "issues": [
@@ -256,6 +298,7 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
                             registry["agents"][agent["name"]]["versions"][
                                 issue_id
                             ]["foundry_version"],
+                            agent_type=agent["type"],
                         ),
                     }
                     for issue_id in agent["issue_ids"]
@@ -290,6 +333,10 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
         "baseline": [
             {
                 "agent": agent["name"],
+                "logical_version": "v0",
+                "foundry_version": registry["agents"][agent["name"]][
+                    "versions"
+                ]["v0"]["foundry_version"],
                 "status": "passed",
                 "runtime_evidence_complete": True,
                 "insight_count": 0,
@@ -308,6 +355,10 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
             {
                 "issue_id": issue["id"],
                 "agent": issue["agent"],
+                "logical_version": issue["id"],
+                "foundry_version": registry["agents"][issue["agent"]][
+                    "versions"
+                ][issue["id"]]["foundry_version"],
                 "title": issue["title"],
                 "status": "observed",
                 "runtime_evidence_complete": True,
@@ -322,7 +373,7 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
                     "ownership_reason": "The expected Insight is fully correct.",
                     "fields": fields,
                 },
-                "evidence_reference": "sha256:" + "a" * 64,
+                "evidence_reference": "sha256:" + "c" * 64,
             }
             for issue in issue_by_id.values()
         ],
@@ -358,3 +409,24 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
         receipt["source_integrity_digest"]
         == manifest["source_integrity"]["contract_digest"]
     )
+    incomplete_manifest = deepcopy(manifest)
+    first_issue = incomplete_manifest["agents"][0]["issues"][0]
+    for summary in first_issue["endpoint_request_summaries"]:
+        summary["activation_gate"] = False
+    incomplete_manifest["manifest_hash"] = content_hash(
+        {
+            key: value
+            for key, value in incomplete_manifest.items()
+            if key != "manifest_hash"
+        }
+    )
+    incomplete_report = deepcopy(report)
+    incomplete_report["manifest_reference"] = incomplete_manifest["manifest_hash"]
+    with pytest.raises(ContractError, match="activation evidence"):
+        create_promotion_receipt(
+            report=incomplete_report,
+            registry=registry,
+            manifest=incomplete_manifest,
+            issue_catalog=issues,
+            human_reviewed=True,
+        )

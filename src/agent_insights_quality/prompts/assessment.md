@@ -63,6 +63,9 @@ Evaluate every object in `observed_insights` independently in `card_evaluations`
 reference, title, category, and severity exactly. Use one card-level verdict, finding type, ownership,
 field map, confidence, and reasoning per generated card. The set of card references must exactly match
 the package. Keep the top-level assessment as the expected-issue result.
+If a card's linked proof has no terminal response and output, use card-level `incomplete` /
+`INCOMPLETE`; the top level must also remain `INCOMPLETE`. A top-level `MATCHED` result requires one
+terminal-proven card whose card-level result is also `MATCHED`; NOISE-only cards cannot prove a match.
 
 Set one customer-facing `finding_type`:
 

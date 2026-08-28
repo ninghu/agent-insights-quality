@@ -35,11 +35,12 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_any": [
-            "available",
-            "open",
-            "slot"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "availability": "available",
+            "slot": "09:00",
+            "evidence": "missing"
+          }
         }
       }
     },
@@ -75,11 +76,12 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_any": [
-            "available",
-            "open",
-            "slot"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "availability": "available",
+            "slot": "09:00",
+            "evidence": "missing"
+          }
         }
       }
     },
@@ -115,11 +117,12 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_any": [
-            "available",
-            "open",
-            "slot"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "availability": "available",
+            "slot": "09:00",
+            "evidence": "missing"
+          }
         }
       }
     },
@@ -155,11 +158,12 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_any": [
-            "available",
-            "open",
-            "slot"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "availability": "available",
+            "slot": "09:00",
+            "evidence": "missing"
+          }
         }
       }
     },
@@ -195,11 +199,12 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_any": [
-            "available",
-            "open",
-            "slot"
-          ]
+          "response_format": "json",
+          "exact_json": {
+            "availability": "available",
+            "slot": "09:00",
+            "evidence": "missing"
+          }
         }
       }
     }

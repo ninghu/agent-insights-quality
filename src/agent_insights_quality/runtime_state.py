@@ -590,7 +590,6 @@ def profile_run_lock(
         os.fsync(handle.fileno())
         yield
     finally:
-        _unlock_file(handle)
         handle.close()
 
 
@@ -609,15 +608,3 @@ def _lock_file(handle) -> None:
     import fcntl
 
     fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-
-
-def _unlock_file(handle) -> None:
-    if os.name == "nt":
-        import msvcrt
-
-        handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        return
-    import fcntl
-
-    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)

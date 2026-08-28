@@ -10,6 +10,9 @@ from agent_insights_quality.models import AgentResult
 from agent_insights_quality.registry import version_entry
 from agent_insights_quality.util import ROOT, ContractError, content_hash, read_json
 
+OFFICIAL_DELIVERY = "official"
+TEST_EMAIL_ONLY_DELIVERY = "test_email_only"
+
 
 def run_id(report_date: date, rerun: int = 0) -> str:
     base = f"aiq-{report_date:%Y%m%d}"
@@ -21,6 +24,7 @@ def build_manifest(
     report_date: date,
     profile: str,
     rerun: int,
+    delivery_mode: str,
     insight_lookback_hours: float,
     telemetry_resource_set: str,
     catalog_hashes: dict[str, str],
@@ -70,9 +74,10 @@ def build_manifest(
             }
         )
     manifest: dict[str, Any] = {
-        "schema_version": "3.0.0",
+        "schema_version": "4.0.0",
         "run_id": run_id(report_date, rerun),
         "profile": profile,
+        "delivery_mode": delivery_mode,
         "report_date": report_date.isoformat(),
         "insight_lookback_hours": insight_lookback_hours,
         "telemetry_resource_set": telemetry_resource_set,
@@ -157,8 +162,97 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     )
     if errors:
         raise ContractError(f"Run manifest is invalid: {errors[0].message}")
+    expected_agents = {
+        "weather-agent",
+        "healthcare-agent",
+        "finance-agent",
+        "travel-agent",
+        "support-ticket-agent",
+    }
+    if {agent["name"] for agent in manifest["agents"]} != expected_agents:
+        raise ContractError("Run manifest Agent identities are inconsistent")
+    for agent in manifest["agents"]:
+        if (
+            agent["baseline"]["logical_version"] != "v0"
+            or "issue_id" in agent["baseline"]
+        ):
+            raise ContractError("Run manifest baseline identity is inconsistent")
+        _validate_version_evidence(
+            agent["baseline"],
+            f"{agent['name']}/v0",
+        )
+        issue_ids = [issue["issue_id"] for issue in agent["issues"]]
+        if len(issue_ids) != len(set(issue_ids)):
+            raise ContractError("Run manifest issue identities are duplicated")
+        for issue in agent["issues"]:
+            if issue["issue_id"] != issue["logical_version"]:
+                raise ContractError("Run manifest issue identity is inconsistent")
+            _validate_version_evidence(
+                issue,
+                f"{agent['name']}/{issue['issue_id']}",
+            )
+    if manifest["delivery_mode"] == TEST_EMAIL_ONLY_DELIVERY and (
+        manifest["profile"] != "daily" or "-r" not in manifest["run_id"]
+    ):
+        raise ContractError(
+            "Test email-only delivery requires a daily nonzero rerun identity"
+        )
     expected = content_hash(
         {key: value for key, value in manifest.items() if key != "manifest_hash"}
     )
     if manifest["manifest_hash"] != expected:
         raise ContractError("Run manifest hash does not match its content")
+
+
+def _validate_version_evidence(value: dict[str, Any], label: str) -> None:
+    summaries = value["endpoint_request_summaries"]
+    if len(summaries) != value["endpoint_request_count"] or [
+        item["request_index"] for item in summaries
+    ] != list(range(len(summaries))):
+        raise ContractError(f"{label} request summary coverage is inconsistent")
+    if value["semantic_assertions_passed"] > value["semantic_assertion_count"]:
+        raise ContractError(f"{label} semantic assertion totals are inconsistent")
+    response_count = 0
+    usable_count = 0
+    assertion_count = 0
+    assertions_passed = 0
+    for item in summaries:
+        results = item["assertion_results"]
+        if (
+            len(results) != item["semantic_assertion_count"]
+            or sum(result["passed"] for result in results)
+            != item["semantic_assertions_passed"]
+            or item["semantic_assertions_passed"]
+            > item["semantic_assertion_count"]
+        ):
+            raise ContractError(f"{label} request assertion evidence is inconsistent")
+        response_count += item["response_count"]
+        usable_count += int(item["usable_response"])
+        assertion_count += item["semantic_assertion_count"]
+        assertions_passed += item["semantic_assertions_passed"]
+    if (
+        response_count != value["endpoint_response_count"]
+        or usable_count != value["endpoint_usable_response_count"]
+        or assertion_count != value["semantic_assertion_count"]
+        or assertions_passed != value["semantic_assertions_passed"]
+    ):
+        raise ContractError(f"{label} aggregate endpoint evidence is inconsistent")
+    if value["trace_contract_verified"] and not value["operation_ids"]:
+        raise ContractError(f"{label} verified trace evidence has no operations")
+    trace_operation_count = value["trace_behavior_summary"].get(
+        "operation_count"
+    )
+    if (
+        trace_operation_count is not None
+        and trace_operation_count != len(value["operation_ids"])
+    ):
+        raise ContractError(f"{label} trace operation count is inconsistent")
+    if (value["window_start"] is None) != (value["window_end"] is None):
+        raise ContractError(f"{label} operation window is incomplete")
+    if value["status"] == "passed" and value["insight_references"]:
+        raise ContractError(f"{label} passed baseline contains Insights")
+    if value["status"] == "observed" and (
+        len(value["insight_references"]) != 1
+        or value["evidence_reference"] is None
+    ):
+        raise ContractError(f"{label} observed Insight evidence is inconsistent")

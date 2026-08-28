@@ -30,7 +30,11 @@ from agent_insights_quality.live import _azure_cli_token
 from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.registry import load_registry, publish_registry
-from agent_insights_quality.reporting import validate_staging_report
+from agent_insights_quality.reporting import (
+    _baseline_runtime_evidence_complete,
+    _runtime_evidence_complete,
+    validate_staging_report,
+)
 from agent_insights_quality.run_manifest import validate_manifest
 from agent_insights_quality.util import (
     ROOT,
@@ -305,6 +309,48 @@ def create_promotion_receipt(
         or manifest["source_integrity"].get("verified") is not True
     ):
         raise ContractError("Staging report, manifest, and registry are not bound")
+    report_baselines = {item["agent"]: item for item in report["baseline"]}
+    report_issues = {item["issue_id"]: item for item in report["issues"]}
+    for agent in manifest["agents"]:
+        baseline_complete = _baseline_runtime_evidence_complete(
+            agent,
+            agent["baseline"],
+        )
+        report_baseline = report_baselines.get(agent["name"])
+        if (
+            agent["baseline"]["status"] not in {"passed", "not_at_bar"}
+            or
+            not baseline_complete
+            or report_baseline is None
+            or report_baseline.get("foundry_version")
+            != agent["baseline"]["foundry_version"]
+            or report_baseline.get("status") != agent["baseline"]["status"]
+            or report_baseline.get("runtime_evidence_complete") is not True
+        ):
+            raise ContractError(
+                "Staging baseline runtime evidence is incomplete"
+            )
+        for issue in agent["issues"]:
+            runtime_complete = _runtime_evidence_complete(
+                issue,
+                require_activation=agent["type"] == "prompt",
+            )
+            report_issue = report_issues.get(issue["issue_id"])
+            if (
+                issue["status"] not in {"observed", "not_at_bar"}
+                or
+                not runtime_complete
+                or report_issue is None
+                or report_issue.get("foundry_version")
+                != issue["foundry_version"]
+                or report_issue.get("status") != issue["status"]
+                or report_issue.get("evidence_reference")
+                != issue["evidence_reference"]
+                or report_issue.get("runtime_evidence_complete") is not True
+            ):
+                raise ContractError(
+                    "Staging issue runtime or activation evidence is incomplete"
+                )
     current_agents, current_issues = load_catalogs()
     if (
         manifest["source_integrity"]["contract_digest"]

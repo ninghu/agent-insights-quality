@@ -140,14 +140,20 @@ def test_semantic_assertions_support_structured_and_bounded_evidence() -> None:
                     },
                 },
                 "exact_json_fields": {"condition": "clear", "unit": "C"},
+                "exact_json": {
+                    "condition": "clear",
+                    "temperature": 21,
+                    "unit": "C",
+                },
                 "required_claims": ['"temperature":21'],
                 "forbidden_claims": ["unavailable"],
+                "min_words": 1,
                 "max_words": 3,
                 "max_characters": 80,
             }
         },
     )
-    assert count == passed == 7
+    assert count == passed == 9
     assert all(item.passed for item in results)
 
 

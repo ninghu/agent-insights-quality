@@ -36,34 +36,10 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "required_terms_all": [
-            "action",
-            "provider",
-            "slot"
-          ],
-          "forbidden_terms": [
-            "account_scope",
-            "approval"
-          ],
-          "json_schema": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "action",
-              "provider",
-              "slot"
-            ],
-            "properties": {
-              "action": {
-                "const": "create_appointment"
-              },
-              "provider": {
-                "type": "string"
-              },
-              "slot": {
-                "type": "string"
-              }
-            }
+          "exact_json": {
+            "action": "create_appointment",
+            "provider": "Dr. Rivera",
+            "slot": "slot-demo-101"
           }
         }
       }
@@ -101,34 +77,10 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "required_terms_all": [
-            "action",
-            "provider",
-            "slot"
-          ],
-          "forbidden_terms": [
-            "account_scope",
-            "approval"
-          ],
-          "json_schema": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "action",
-              "provider",
-              "slot"
-            ],
-            "properties": {
-              "action": {
-                "const": "create_appointment"
-              },
-              "provider": {
-                "type": "string"
-              },
-              "slot": {
-                "type": "string"
-              }
-            }
+          "exact_json": {
+            "action": "create_appointment",
+            "provider": "Dr. Rivera",
+            "slot": "slot-demo-102"
           }
         }
       }
@@ -166,34 +118,10 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "required_terms_all": [
-            "action",
-            "provider",
-            "slot"
-          ],
-          "forbidden_terms": [
-            "account_scope",
-            "approval"
-          ],
-          "json_schema": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "action",
-              "provider",
-              "slot"
-            ],
-            "properties": {
-              "action": {
-                "const": "create_appointment"
-              },
-              "provider": {
-                "type": "string"
-              },
-              "slot": {
-                "type": "string"
-              }
-            }
+          "exact_json": {
+            "action": "create_appointment",
+            "provider": "Dr. Rivera",
+            "slot": "slot-demo-103"
           }
         }
       }
@@ -231,34 +159,10 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "required_terms_all": [
-            "action",
-            "provider",
-            "slot"
-          ],
-          "forbidden_terms": [
-            "account_scope",
-            "approval"
-          ],
-          "json_schema": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "action",
-              "provider",
-              "slot"
-            ],
-            "properties": {
-              "action": {
-                "const": "create_appointment"
-              },
-              "provider": {
-                "type": "string"
-              },
-              "slot": {
-                "type": "string"
-              }
-            }
+          "exact_json": {
+            "action": "create_appointment",
+            "provider": "Dr. Rivera",
+            "slot": "slot-demo-104"
           }
         }
       }
@@ -296,34 +200,10 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "required_terms_all": [
-            "action",
-            "provider",
-            "slot"
-          ],
-          "forbidden_terms": [
-            "account_scope",
-            "approval"
-          ],
-          "json_schema": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "action",
-              "provider",
-              "slot"
-            ],
-            "properties": {
-              "action": {
-                "const": "create_appointment"
-              },
-              "provider": {
-                "type": "string"
-              },
-              "slot": {
-                "type": "string"
-              }
-            }
+          "exact_json": {
+            "action": "create_appointment",
+            "provider": "Dr. Rivera",
+            "slot": "slot-demo-105"
           }
         }
       }
