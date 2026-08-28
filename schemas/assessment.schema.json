@@ -36,9 +36,9 @@
         "required": ["reference", "title", "category", "severity", "verdict", "finding_type", "ownership", "ownership_reason", "fields", "confidence", "reasoning"],
         "properties": {
           "reference": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-          "title": {"type": "string", "minLength": 1, "maxLength": 300},
-          "category": {"type": "string", "minLength": 1, "maxLength": 100},
-          "severity": {"type": "string", "minLength": 1, "maxLength": 50},
+          "title": {"type": "string", "maxLength": 300},
+          "category": {"type": "string", "maxLength": 100},
+          "severity": {"type": "string", "maxLength": 50},
           "verdict": {"enum": ["correct", "partially_useful", "incorrect", "incomplete"]},
           "finding_type": {"enum": ["MATCHED", "PARTIAL", "MISMATCHED", "NOISE", "DUPLICATE", "INCOMPLETE"]},
           "ownership": {"enum": ["none", "agent", "insight_engine", "test_framework", "infrastructure", "unresolved"]},

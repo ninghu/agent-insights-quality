@@ -197,6 +197,11 @@ def _field_score(fields: dict[str, Any]) -> float:
 
 
 def _issue_field_score(item: dict[str, Any]) -> float:
+    if (
+        item["assessment"].get("finding_type") == "MATCHED"
+        and not all(item["assessment"].get("fields", {}).values())
+    ):
+        return 0.0
     cards = item["assessment"].get("card_evaluations", [])
     attributable = [
         _field_score(card["fields"])

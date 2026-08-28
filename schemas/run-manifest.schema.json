@@ -37,10 +37,11 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "type", "baseline_contract", "monitor_reference", "baseline", "issues"],
+        "required": ["name", "type", "framework", "baseline_contract", "monitor_reference", "baseline", "issues"],
         "properties": {
           "name": {"type": "string", "minLength": 1},
           "type": {"enum": ["prompt", "hosted_code", "hosted_custom_container"]},
+          "framework": {"enum": ["foundry_prompt", "microsoft_agent_framework", "langgraph", "custom_responses"]},
           "baseline_contract": {
             "type": "object",
             "additionalProperties": false,

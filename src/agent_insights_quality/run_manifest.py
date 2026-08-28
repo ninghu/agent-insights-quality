@@ -5,9 +5,14 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
-from agent_insights_quality.catalogs import load_catalogs, source_integrity_digest
+from agent_insights_quality.catalogs import (
+    catalog_hashes as current_catalog_hashes,
+    load_catalogs,
+    source_integrity_digest,
+)
 from agent_insights_quality.models import AgentResult
 from agent_insights_quality.registry import version_entry
+from agent_insights_quality.selection import select_daily
 from agent_insights_quality.util import ROOT, ContractError, content_hash, read_json
 
 OFFICIAL_DELIVERY = "official"
@@ -46,6 +51,7 @@ def build_manifest(
             {
                 "name": agent_name,
                 "type": contract_by_agent[agent_name]["type"],
+                "framework": contract_by_agent[agent_name]["framework"],
                 "baseline_contract": contract_by_agent[agent_name][
                     "baseline_contract"
                 ],
@@ -171,7 +177,15 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     }
     if {agent["name"] for agent in manifest["agents"]} != expected_agents:
         raise ContractError("Run manifest Agent identities are inconsistent")
-    current_agents, _ = load_catalogs(require_paths=False)
+    current_agents, current_issues = load_catalogs(require_paths=False)
+    hashes = current_catalog_hashes(current_agents, current_issues)
+    if manifest["catalog_hashes"] != hashes:
+        raise ContractError("Run manifest catalog hashes are not current")
+    if (
+        manifest["source_integrity"]["contract_digest"]
+        != source_integrity_digest(current_agents, current_issues)
+    ):
+        raise ContractError("Run manifest source integrity is not current")
     current_by_name = {
         agent["name"]: agent for agent in current_agents["agents"]
     }
@@ -179,6 +193,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         current = current_by_name[agent["name"]]
         if (
             agent["type"] != current["type"]
+            or agent["framework"] != current["framework"]
             or agent["baseline_contract"] != current["baseline_contract"]
         ):
             raise ContractError(
@@ -203,6 +218,25 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                 issue,
                 f"{agent['name']}/{issue['issue_id']}",
             )
+    actual_selection = {
+        agent["name"]: [issue["issue_id"] for issue in agent["issues"]]
+        for agent in manifest["agents"]
+    }
+    expected_selection = (
+        {
+            agent["name"]: list(agent["issue_ids"])
+            for agent in current_agents["agents"]
+        }
+        if manifest["profile"] == "staging"
+        else select_daily(
+            date.fromisoformat(manifest["report_date"]),
+            current_agents,
+            current_issues,
+            hashes["issues"],
+        )
+    )
+    if actual_selection != expected_selection:
+        raise ContractError("Run manifest issue inventory is not current")
     if manifest["delivery_mode"] == TEST_EMAIL_ONLY_DELIVERY and (
         manifest["profile"] != "daily" or "-r" not in manifest["run_id"]
     ):

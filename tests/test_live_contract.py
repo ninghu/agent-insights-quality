@@ -186,6 +186,40 @@ def test_exact_json_assertions_distinguish_booleans_from_numbers() -> None:
     assert passed == 0
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "overgenerated: not clear, 22 celsius",
+        "overgenerated: clear, 210 celsius",
+        "overgenerated: clear, not 22 celsius",
+    ],
+)
+def test_affirmative_claims_reject_negation_and_wrong_numbers(text: str) -> None:
+    response = {
+        "output": [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": text}],
+            }
+        ]
+    }
+    count, passed, _ = _semantic_assertion_result(
+        response,
+        {
+            "semantic_assertions": {
+                "affirmative_claims": [
+                    "overgenerated:",
+                    "clear",
+                    "22",
+                    "celsius",
+                ]
+            }
+        },
+    )
+    assert count == 1
+    assert passed == 0
+
+
 def test_trace_behavior_summary_sanitizes_prompt_tool_sequence() -> None:
     messages = json.dumps(
         [

@@ -369,6 +369,8 @@ def _request_summaries_consistent(endpoint: dict[str, Any]) -> bool:
         or len(summaries) != request_count
     ):
         return False
+    semantic_count = 0
+    semantic_passed = 0
     for index, summary in enumerate(summaries):
         if (
             not isinstance(summary, dict)
@@ -392,7 +394,14 @@ def _request_summaries_consistent(endpoint: dict[str, Any]) -> bool:
             != summary.get("semantic_assertions_passed")
         ):
             return False
-    return True
+        semantic_count += summary["semantic_assertion_count"]
+        semantic_passed += summary["semantic_assertions_passed"]
+    return (
+        endpoint.get("response_count") == request_count
+        and endpoint.get("usable_response_count") == request_count
+        and endpoint.get("semantic_assertion_count") == semantic_count
+        and endpoint.get("semantic_assertions_passed") == semantic_passed
+    )
 
 
 def _issue_activation_complete(package: dict[str, Any]) -> bool:
@@ -823,6 +832,13 @@ def _validate_issue_cards(
             and evaluation["ownership"] == "none"
         ):
             raise ContractError("Card evaluation ownership is inconsistent")
+        if evaluation["finding_type"] == "MATCHED" and (
+            evaluation["verdict"] != "correct"
+            or not all(evaluation["fields"].values())
+        ):
+            raise ContractError(
+                "Correct MATCHED card requires every field to pass"
+            )
     incomplete_cards = [
         item for item in evaluations if item["finding_type"] == "INCOMPLETE"
     ]
@@ -834,6 +850,8 @@ def _validate_issue_cards(
         len(evaluations) != 1
         or evaluations[0]["finding_type"] != "MATCHED"
         or evaluations[0]["verdict"] != "correct"
+        or assessment["fields"] != evaluations[0]["fields"]
+        or not all(assessment["fields"].values())
     ):
         raise ContractError(
             "MATCHED assessment requires one terminal-proven MATCHED card"

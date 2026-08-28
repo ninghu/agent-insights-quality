@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import date
 
 import pytest
 
+from agent_insights_quality.catalogs import (
+    catalog_hashes,
+    load_catalogs,
+    source_integrity_digest,
+)
 from agent_insights_quality.run_manifest import (
     OFFICIAL_DELIVERY,
     TEST_EMAIL_ONLY_DELIVERY,
     validate_manifest,
 )
+from agent_insights_quality.selection import select_daily
 from agent_insights_quality.util import ContractError, content_hash
 
 
@@ -38,28 +45,29 @@ def _manifest(
         "endpoint_request_summaries": [],
         "evidence_reference": None,
     }
-    agent_contracts = [
-        ("weather-agent", "prompt", "direct_prompt", "forbidden"),
-        ("healthcare-agent", "prompt", "direct_prompt", "forbidden"),
-        (
-            "finance-agent",
-            "hosted_code",
-            "standard_assistant_message",
-            "not_applicable",
-        ),
-        (
-            "travel-agent",
-            "hosted_code",
-            "standard_assistant_message",
-            "not_applicable",
-        ),
-        (
-            "support-ticket-agent",
-            "hosted_custom_container",
-            "explicit_span_attributes",
-            "not_applicable",
-        ),
-    ]
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    selection = (
+        {agent["name"]: list(agent["issue_ids"]) for agent in agents["agents"]}
+        if profile == "staging"
+        else select_daily(
+            date(2026, 8, 28),
+            agents,
+            issues,
+            hashes["issues"],
+        )
+    )
+
+    def issue_version(issue_id: str) -> dict:
+        value = dict(version)
+        value.update(
+            {
+                "issue_id": issue_id,
+                "logical_version": issue_id,
+                "status": "skipped_baseline",
+            }
+        )
+        return value
     value = {
         "schema_version": "4.0.0",
         "run_id": run_id,
@@ -68,34 +76,25 @@ def _manifest(
         "report_date": "2026-08-28",
         "insight_lookback_hours": 0.1,
         "telemetry_resource_set": "g29",
-        "catalog_hashes": {
-            "agents": "sha256:" + "b" * 64,
-            "issues": "sha256:" + "c" * 64,
-            "artifacts": "sha256:" + "d" * 64,
-        },
+        "catalog_hashes": hashes,
         "source_integrity": {
             "verified": True,
-            "contract_digest": "sha256:" + "e" * 64,
+            "contract_digest": source_integrity_digest(agents, issues),
         },
         "agents": [
             {
-                "name": name,
-                "type": agent_type,
-                "baseline_contract": {
-                    "request_count": 5,
-                    "terminal_response": terminal,
-                    "semantic_assertions": (
-                        "required_per_request"
-                        if agent_type == "prompt"
-                        else "required"
-                    ),
-                    "function_calling": function_calling,
-                },
+                "name": agent["name"],
+                "type": agent["type"],
+                "framework": agent["framework"],
+                "baseline_contract": agent["baseline_contract"],
                 "monitor_reference": "sha256:" + "f" * 64,
                 "baseline": dict(version),
-                "issues": [],
+                "issues": [
+                    issue_version(issue_id)
+                    for issue_id in selection[agent["name"]]
+                ],
             }
-            for name, agent_type, terminal, function_calling in agent_contracts
+            for agent in agents["agents"]
         ],
         "manifest_hash": "",
     }
@@ -185,4 +184,22 @@ def test_issue_manifest_requires_issue_identity_and_issue_status() -> None:
         {key: item for key, item in manifest.items() if key != "manifest_hash"}
     )
     with pytest.raises(ContractError, match="Run manifest is invalid"):
+        validate_manifest(manifest)
+
+
+def test_manifest_rejects_fabricated_catalog_and_zero_issue_inventory() -> None:
+    manifest = _manifest()
+    manifest["catalog_hashes"]["issues"] = "sha256:" + "0" * 64
+    manifest["manifest_hash"] = content_hash(
+        {key: item for key, item in manifest.items() if key != "manifest_hash"}
+    )
+    with pytest.raises(ContractError, match="catalog hashes"):
+        validate_manifest(manifest)
+    manifest = _manifest()
+    for agent in manifest["agents"]:
+        agent["issues"] = []
+    manifest["manifest_hash"] = content_hash(
+        {key: item for key, item in manifest.items() if key != "manifest_hash"}
+    )
+    with pytest.raises(ContractError, match="issue inventory"):
         validate_manifest(manifest)

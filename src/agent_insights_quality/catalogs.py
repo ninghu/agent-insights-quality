@@ -14,6 +14,7 @@ from agent_insights_quality.util import (
     ContractError,
     content_hash,
     file_hash,
+    json_values_equal,
     read_json,
     read_yaml,
 )
@@ -71,11 +72,28 @@ def _validate_prompt_traffic(
     require_activation: bool,
     require_all_assertions: bool,
 ) -> None:
-    requests = value.get("requests")
-    if isinstance(requests, list) and any(
-        isinstance(item, dict) and "tool_fixtures" in item for item in requests
-    ):
-        raise ContractError(f"{label} pure Prompt traffic cannot contain tool fixtures")
+    forbidden_tool_keys = {
+        "tools",
+        "tool",
+        "tool_choice",
+        "tool_config",
+        "tool_fixtures",
+        "functions",
+    }
+
+    def contains_tool_configuration(item: Any) -> bool:
+        if isinstance(item, dict):
+            return bool(forbidden_tool_keys.intersection(item)) or any(
+                contains_tool_configuration(child) for child in item.values()
+            )
+        if isinstance(item, list):
+            return any(contains_tool_configuration(child) for child in item)
+        return False
+
+    if contains_tool_configuration(value):
+        raise ContractError(
+            f"{label} pure Prompt traffic cannot contain tool configuration"
+        )
     _validate_schema(value, PROMPT_TRAFFIC_SCHEMA_PATH, label)
     if require_all_assertions and any(
         not isinstance(item.get("expected"), dict)
@@ -124,7 +142,7 @@ def _validate_prompt_issue_delta(
     normalized["metadata"]["logical_version"] = baseline["metadata"][
         "logical_version"
     ]
-    if normalized != baseline:
+    if not json_values_equal(normalized, baseline):
         raise ContractError(
             f"{label} Prompt definition differs outside the reviewed defect paths"
         )
@@ -167,6 +185,21 @@ def validate_semantics(
         "travel-agent": "standard_assistant_message",
         "support-ticket-agent": "explicit_span_attributes",
     }
+    reviewed_types = {
+        "weather-agent": ("prompt", "foundry_prompt"),
+        "healthcare-agent": ("prompt", "foundry_prompt"),
+        "finance-agent": ("hosted_code", "microsoft_agent_framework"),
+        "travel-agent": ("hosted_code", "langgraph"),
+        "support-ticket-agent": (
+            "hosted_custom_container",
+            "custom_responses",
+        ),
+    }
+    if any(
+        (agent["type"], agent["framework"]) != reviewed_types[agent_name]
+        for agent_name, agent in by_agent.items()
+    ):
+        raise ContractError("Agent type and framework tuples are not reviewed")
     if any(
         agent["baseline_contract"]["terminal_response"]
         != terminal_modes[agent_name]

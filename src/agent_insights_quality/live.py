@@ -30,7 +30,11 @@ from agent_insights_quality.automation_policy import TRAFFIC_UNCERTAINTY_SECONDS
 from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.runtime_state import TrafficLedger
-from agent_insights_quality.util import ContractError, InsightWindowExpiredError
+from agent_insights_quality.util import (
+    ContractError,
+    InsightWindowExpiredError,
+    json_values_equal,
+)
 from agent_insights_quality.azure_cli import azure_cli
 
 try:
@@ -1701,25 +1705,10 @@ def _response_text(response: dict[str, Any]) -> str:
     return "\n".join(values)
 
 
-def _json_values_equal(actual: Any, expected: Any) -> bool:
-    if type(actual) is not type(expected):
-        return False
-    if isinstance(expected, dict):
-        return set(actual) == set(expected) and all(
-            _json_values_equal(actual[key], value)
-            for key, value in expected.items()
-        )
-    if isinstance(expected, list):
-        return len(actual) == len(expected) and all(
-            _json_values_equal(actual_item, expected_item)
-            for actual_item, expected_item in zip(actual, expected, strict=True)
-        )
-    return bool(actual == expected)
-
-
 def _semantic_assertion_names(assertions: dict[str, Any]) -> tuple[str, ...]:
     ordered = (
         "response_format",
+        "exact_text",
         "json_schema",
         "exact_json_fields",
         "exact_json",
@@ -1727,6 +1716,7 @@ def _semantic_assertion_names(assertions: dict[str, Any]) -> tuple[str, ...]:
         "required_terms_any",
         "forbidden_terms",
         "required_claims",
+        "affirmative_claims",
         "forbidden_claims",
         "max_words",
         "min_words",
@@ -1744,6 +1734,19 @@ def _semantic_assertion_names(assertions: dict[str, Any]) -> tuple[str, ...]:
             )
         )
     )
+
+
+def _contains_affirmative_claim(text: str, claim: str) -> bool:
+    pattern = re.compile(
+        rf"(?<![A-Za-z0-9]){re.escape(claim)}(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    )
+    negations = {"not", "no", "never", "without", "isn't", "isnt"}
+    for match in pattern.finditer(text):
+        preceding = re.findall(r"[A-Za-z0-9']+", text[: match.start()].casefold())
+        if not negations.intersection(preceding[-3:]):
+            return True
+    return False
 
 
 def _semantic_assertion_result(
@@ -1776,6 +1779,9 @@ def _semantic_assertion_result(
             "response_format",
             valid_json if response_format == "json" else bool(text) and not valid_json
         )
+    exact_text = assertions.get("exact_text")
+    if exact_text is not None:
+        record("exact_text", text == exact_text)
     json_schema = assertions.get("json_schema")
     if json_schema:
         record(
@@ -1790,7 +1796,7 @@ def _semantic_assertion_result(
             isinstance(parsed_json, dict)
             and all(
                 key in parsed_json
-                and _json_values_equal(parsed_json[key], expected)
+                and json_values_equal(parsed_json[key], expected)
                 for key, expected in exact_json_fields.items()
             ),
         )
@@ -1798,7 +1804,7 @@ def _semantic_assertion_result(
         record(
             "exact_json",
             valid_json
-            and _json_values_equal(parsed_json, assertions["exact_json"]),
+            and json_values_equal(parsed_json, assertions["exact_json"]),
         )
     required_all = assertions.get("required_terms_all", [])
     if required_all:
@@ -1823,6 +1829,15 @@ def _semantic_assertion_result(
         record(
             "required_claims",
             all(str(claim).casefold() in folded for claim in required_claims),
+        )
+    affirmative_claims = assertions.get("affirmative_claims", [])
+    if affirmative_claims:
+        record(
+            "affirmative_claims",
+            all(
+                _contains_affirmative_claim(text, str(claim))
+                for claim in affirmative_claims
+            ),
         )
     forbidden_claims = assertions.get("forbidden_claims", [])
     if forbidden_claims:
@@ -1874,6 +1889,7 @@ def _normalize_fixture(value: Any) -> dict[str, Any]:
         key
         not in {
             "response_format",
+            "exact_text",
             "required_terms_all",
             "required_terms_any",
             "forbidden_terms",
@@ -1883,6 +1899,7 @@ def _normalize_fixture(value: Any) -> dict[str, Any]:
             "exact_json_fields",
             "exact_json",
             "required_claims",
+            "affirmative_claims",
             "forbidden_claims",
             "min_words",
         }
@@ -1894,6 +1911,7 @@ def _normalize_fixture(value: Any) -> dict[str, Any]:
         "required_terms_any",
         "forbidden_terms",
         "required_claims",
+        "affirmative_claims",
         "forbidden_claims",
     ):
         terms = semantic_assertions.get(key, [])

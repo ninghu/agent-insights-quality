@@ -7,6 +7,7 @@ import pytest
 
 from agent_insights_quality.catalogs import (
     _validate_prompt_definition,
+    _validate_prompt_issue_delta,
     _validate_prompt_traffic,
     catalog_hashes,
     load_catalogs,
@@ -58,6 +59,18 @@ def test_catalog_semantics_reject_old_source_delta_shape_cleanly() -> None:
         validate_semantics(agents, historical, require_paths=False)
 
 
+def test_catalog_rejects_reclassified_fixed_agent() -> None:
+    agents, issues = load_catalogs(require_paths=False)
+    tampered = deepcopy(agents)
+    finance = next(
+        item for item in tampered["agents"] if item["name"] == "finance-agent"
+    )
+    finance["type"] = "hosted_custom_container"
+    finance["framework"] = "custom_responses"
+    with pytest.raises(ContractError, match="type and framework"):
+        validate_semantics(tampered, issues, require_paths=False)
+
+
 def test_prompt_contract_rejects_tools_and_tool_fixtures() -> None:
     with pytest.raises(ContractError, match="cannot contain tools"):
         _validate_prompt_definition(
@@ -73,7 +86,28 @@ def test_prompt_contract_rejects_tools_and_tool_fixtures() -> None:
             },
             "synthetic definition",
         )
-    with pytest.raises(ContractError, match="cannot contain tool fixtures"):
+
+
+def test_prompt_source_delta_requires_exact_json_types() -> None:
+    baseline = {
+        "name": "weather-agent",
+        "definition": {
+            "kind": "prompt",
+            "model": "gpt-5.4-mini",
+            "instructions": "Healthy instructions.",
+        },
+        "metadata": {
+            "logical_version": "v0",
+            "typed_marker": True,
+        },
+    }
+    issue = deepcopy(baseline)
+    issue["definition"]["instructions"] += "\nOne defect."
+    issue["metadata"]["logical_version"] = "issue-001"
+    issue["metadata"]["typed_marker"] = 1
+    with pytest.raises(ContractError, match="outside the reviewed defect"):
+        _validate_prompt_issue_delta(baseline, issue, "issue-001")
+    with pytest.raises(ContractError, match="tool configuration"):
         _validate_prompt_traffic(
             {
                 "agent_name": "weather-agent",

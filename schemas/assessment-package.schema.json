@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
+  "additionalProperties": false,
   "required": [
     "schema_version",
     "target_kind",
@@ -19,7 +20,7 @@
   "properties": {
     "schema_version": {"const": "2.0.0"},
     "target_kind": {"enum": ["baseline", "issue"]},
-    "agent_name": {"type": "string", "minLength": 1},
+    "agent_name": {"enum": ["weather-agent", "healthcare-agent", "finance-agent", "travel-agent", "support-ticket-agent"]},
     "foundry_version": {"type": "string", "minLength": 1},
     "manifest_reference": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "source_integrity": {
@@ -31,7 +32,7 @@
         "contract_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
       }
     },
-    "runtime_status": {"type": "string", "minLength": 1},
+    "runtime_status": {"enum": ["passed", "not_at_bar", "observed", "inconclusive", "skipped_baseline"]},
     "error_code": {"type": ["string", "null"]},
     "operation_count": {"type": "integer", "minimum": 0},
     "endpoint_evidence": {
@@ -85,6 +86,7 @@
       "type": "array",
       "items": {
         "type": "object",
+        "additionalProperties": false,
         "required": [
           "reference",
           "agent_version",
@@ -98,6 +100,20 @@
           "card_linked_trace_proof"
         ],
         "properties": {
+          "reference": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "agent_version": {"type": "string", "maxLength": 100},
+          "title": {"type": "string", "maxLength": 300},
+          "description": {"type": "string", "maxLength": 4000},
+          "category": {"type": "string", "maxLength": 100},
+          "severity": {"type": "string", "maxLength": 50},
+          "proposed_fix": {"type": "string", "maxLength": 4000},
+          "trace_count": {"type": "integer", "minimum": 0},
+          "linked_operation_ids": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"type": "string", "pattern": "^[0-9a-f]{32}$"}
+          },
           "card_linked_trace_proof": {"$ref": "#/$defs/traceProof"}
         }
       }
@@ -116,6 +132,13 @@
       "if": {"properties": {"target_kind": {"const": "baseline"}}},
       "then": {
         "required": ["behavior_summary"],
+        "not": {
+          "anyOf": [
+            {"required": ["issue_id"]},
+            {"required": ["evidence_reference"]},
+            {"required": ["instructions"]}
+          ]
+        },
         "properties": {
           "expected": {
             "type": "object",
@@ -130,9 +153,11 @@
       },
       "else": {
         "required": ["issue_id", "evidence_reference", "instructions"],
+        "not": {"required": ["behavior_summary"]},
         "properties": {
           "expected": {
             "type": "object",
+            "additionalProperties": false,
             "required": [
               "title",
               "root_cause",
@@ -140,7 +165,15 @@
               "severity",
               "expected_fix",
               "minimum_traces"
-            ]
+            ],
+            "properties": {
+              "title": {"type": "string", "minLength": 1, "maxLength": 300},
+              "root_cause": {"type": "string", "minLength": 1, "maxLength": 4000},
+              "category": {"type": "string", "minLength": 1, "maxLength": 100},
+              "severity": {"enum": ["low", "medium", "high"]},
+              "expected_fix": {"type": "string", "minLength": 1, "maxLength": 4000},
+              "minimum_traces": {"type": "integer", "minimum": 1}
+            }
           }
         }
       }

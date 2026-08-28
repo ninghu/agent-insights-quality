@@ -713,7 +713,15 @@ def test_prompt_activation_gates_are_request_bound() -> None:
         ).read_text(encoding="utf-8")
     )
     assert all(
-        item["expected"]["semantic_assertions"]["min_words"] == 80
+        item["expected"]["semantic_assertions"] == {
+            "min_words": 80,
+            "affirmative_claims": [
+                "overgenerated:",
+                "clear",
+                "22",
+                "celsius",
+            ],
+        }
         for item in verbose["requests"]
     )
     schema_violation = json.loads(
@@ -729,12 +737,7 @@ def test_prompt_activation_gates_are_request_bound() -> None:
     assert all(
         item["expected"]["semantic_assertions"] == {
             "response_format": "non_json",
-            "required_terms_all": [
-                "Weather summary:",
-                "clear",
-                "21",
-                "celsius",
-            ],
+            "exact_text": "Weather summary: clear, 21 celsius.",
         }
         for item in schema_violation["requests"]
     )

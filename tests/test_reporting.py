@@ -441,6 +441,26 @@ def test_field_quality_and_clean_card_precision_components() -> None:
     assert penalized["status"] == "PASS"
 
 
+def test_failed_matched_fields_cannot_score_one_hundred() -> None:
+    manifest = _manifest()
+    _, issues = load_catalogs()
+    assessments = _assessments(manifest)
+    first = next(iter(assessments.values()))
+    first["fields"]["severity"] = False
+    report = build_report(
+        manifest,
+        issues,
+        assessments,
+        _baseline_assessments(manifest),
+    )
+    failed_issue = next(
+        item for item in report["issues"] if item["issue_id"] == first["issue_id"]
+    )
+    assert failed_issue["result"] == "FAIL"
+    assert report["summary"]["field_quality_score"] < 100
+    assert report["summary"]["quality_score"] < 100
+
+
 def test_incomplete_issue_is_inconclusive() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()

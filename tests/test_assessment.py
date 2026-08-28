@@ -16,6 +16,7 @@ from agent_insights_quality.assessment import (
     _linked_baseline_operations,
     _validate_baseline_cards,
     _validate_issue_cards,
+    _validate_package,
     load_assessments,
 )
 from agent_insights_quality.cli import _rehydrate_with_retries
@@ -257,6 +258,51 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
             packages,
             stale_manifest,
         )
+    invalid_package = deepcopy(package)
+    invalid_package["unexpected"] = True
+    invalid_package["package_hash"] = content_hash(
+        {
+            key: value
+            for key, value in invalid_package.items()
+            if key != "package_hash"
+        }
+    )
+    with pytest.raises(ContractError, match="assessment package is invalid"):
+        _validate_package(tmp_path / "invalid.json", invalid_package)
+    incomplete_card_package = deepcopy(package)
+    card = incomplete_card_package["observed_insights"][0]
+    card.update(
+        {
+            "agent_version": "",
+            "title": "",
+            "description": "",
+            "category": "",
+            "severity": "Medium",
+            "proposed_fix": "",
+        }
+    )
+    incomplete_card_package["package_hash"] = content_hash(
+        {
+            key: value
+            for key, value in incomplete_card_package.items()
+            if key != "package_hash"
+        }
+    )
+    _validate_package(
+        tmp_path / "incomplete-card.json",
+        incomplete_card_package,
+    )
+    invalid_package = deepcopy(package)
+    invalid_package["observed_insights"][0]["trace_count"] = "1"
+    invalid_package["package_hash"] = content_hash(
+        {
+            key: value
+            for key, value in invalid_package.items()
+            if key != "package_hash"
+        }
+    )
+    with pytest.raises(ContractError, match="assessment package is invalid"):
+        _validate_package(tmp_path / "invalid.json", invalid_package)
     assessment["package_hash"] = "sha256:" + "c" * 64
     path.write_text(json.dumps(assessment), encoding="utf-8")
     with pytest.raises(ContractError, match="current evidence"):
@@ -414,6 +460,12 @@ def test_truncated_trace_proof_cannot_establish_clean_baseline() -> None:
     assert _baseline_evidence_complete(package) is False
 
 
+def test_baseline_aggregate_assertion_totals_must_match_requests() -> None:
+    package = _complete_prompt_baseline_package()
+    package["endpoint_evidence"]["semantic_assertion_count"] += 1
+    assert _baseline_evidence_complete(package) is False
+
+
 def test_zero_request_baseline_has_no_success_shaped_evidence() -> None:
     summary = _baseline_behavior_summary(
         {
@@ -492,6 +544,15 @@ def test_issue_card_without_terminal_proof_stays_incomplete() -> None:
         "verdict": "correct",
         "finding_type": "MATCHED",
         "ownership": "none",
+        "fields": {
+            "root_cause": True,
+            "title": True,
+            "description": True,
+            "category": True,
+            "severity": True,
+            "proposed_fix": True,
+            "linked_traces": True,
+        },
     }
     assessment = {
         "issue_id": "issue-001",
@@ -531,6 +592,15 @@ def test_top_level_result_cannot_contradict_card_result() -> None:
                 "verdict": "correct",
                 "finding_type": "MATCHED",
                 "ownership": "none",
+                "fields": {
+                    "root_cause": True,
+                    "title": True,
+                    "description": True,
+                    "category": True,
+                    "severity": True,
+                    "proposed_fix": True,
+                    "linked_traces": True,
+                },
             }
         ],
     }

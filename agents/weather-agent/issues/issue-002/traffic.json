@@ -36,12 +36,7 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "non_json",
-          "required_terms_all": [
-            "Weather summary:",
-            "clear",
-            "21",
-            "celsius"
-          ]
+          "exact_text": "Weather summary: clear, 21 celsius."
         }
       }
     },
@@ -78,12 +73,7 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "non_json",
-          "required_terms_all": [
-            "Weather summary:",
-            "clear",
-            "21",
-            "celsius"
-          ]
+          "exact_text": "Weather summary: clear, 21 celsius."
         }
       }
     },
@@ -120,12 +110,7 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "non_json",
-          "required_terms_all": [
-            "Weather summary:",
-            "clear",
-            "21",
-            "celsius"
-          ]
+          "exact_text": "Weather summary: clear, 21 celsius."
         }
       }
     },
@@ -162,12 +147,7 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "non_json",
-          "required_terms_all": [
-            "Weather summary:",
-            "clear",
-            "21",
-            "celsius"
-          ]
+          "exact_text": "Weather summary: clear, 21 celsius."
         }
       }
     },
@@ -204,12 +184,7 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "non_json",
-          "required_terms_all": [
-            "Weather summary:",
-            "clear",
-            "21",
-            "celsius"
-          ]
+          "exact_text": "Weather summary: clear, 21 celsius."
         }
       }
     }
