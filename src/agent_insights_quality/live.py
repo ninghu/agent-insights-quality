@@ -30,7 +30,11 @@ from agent_insights_quality.automation_policy import TRAFFIC_UNCERTAINTY_SECONDS
 from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.runtime_state import TrafficLedger
-from agent_insights_quality.util import ContractError, InsightWindowExpiredError
+from agent_insights_quality.util import (
+    ContractError,
+    InsightWindowExpiredError,
+    json_values_equal,
+)
 from agent_insights_quality.azure_cli import azure_cli
 
 try:
@@ -1701,20 +1705,48 @@ def _response_text(response: dict[str, Any]) -> str:
     return "\n".join(values)
 
 
-def _json_values_equal(actual: Any, expected: Any) -> bool:
-    if type(actual) is not type(expected):
+_NEGATION_WORDS = {
+    "arent",
+    "cannot",
+    "cant",
+    "couldnt",
+    "didnt",
+    "doesnt",
+    "dont",
+    "hadnt",
+    "hasnt",
+    "havent",
+    "isnt",
+    "never",
+    "no",
+    "not",
+    "shouldnt",
+    "wasnt",
+    "werent",
+    "without",
+    "wont",
+    "wouldnt",
+}
+
+
+def _affirmative_claim_present(text: str, claim: str) -> bool:
+    value = claim.strip()
+    if not value:
         return False
-    if isinstance(expected, dict):
-        return set(actual) == set(expected) and all(
-            _json_values_equal(actual[key], value)
-            for key, value in expected.items()
-        )
-    if isinstance(expected, list):
-        return len(actual) == len(expected) and all(
-            _json_values_equal(actual_item, expected_item)
-            for actual_item, expected_item in zip(actual, expected, strict=True)
-        )
-    return bool(actual == expected)
+    escaped = re.sub(r"\\\s+", r"\\s+", re.escape(value))
+    if re.fullmatch(r"[+-]?\d+(?:\.\d+)?", value):
+        pattern = rf"(?<![\w.+-]){escaped}(?![\w.+-])"
+    else:
+        prefix = r"(?<!\w)" if value[0].isalnum() else ""
+        suffix = r"(?!\w)" if value[-1].isalnum() else ""
+        pattern = f"{prefix}{escaped}{suffix}"
+    for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+        clause = re.split(r"[.!?;:\n]", text[: match.start()])[-1]
+        words = re.findall(r"[a-z]+(?:'[a-z]+)?", clause.casefold())
+        normalized = [word.replace("'", "") for word in words[-5:]]
+        if not any(word in _NEGATION_WORDS for word in normalized):
+            return True
+    return False
 
 
 def _semantic_assertion_names(assertions: dict[str, Any]) -> tuple[str, ...]:
@@ -1790,7 +1822,7 @@ def _semantic_assertion_result(
             isinstance(parsed_json, dict)
             and all(
                 key in parsed_json
-                and _json_values_equal(parsed_json[key], expected)
+                and json_values_equal(parsed_json[key], expected)
                 for key, expected in exact_json_fields.items()
             ),
         )
@@ -1798,19 +1830,25 @@ def _semantic_assertion_result(
         record(
             "exact_json",
             valid_json
-            and _json_values_equal(parsed_json, assertions["exact_json"]),
+            and json_values_equal(parsed_json, assertions["exact_json"]),
         )
     required_all = assertions.get("required_terms_all", [])
     if required_all:
         record(
             "required_terms_all",
-            all(str(term).casefold() in folded for term in required_all),
+            all(
+                _affirmative_claim_present(text, str(term))
+                for term in required_all
+            ),
         )
     required_any = assertions.get("required_terms_any", [])
     if required_any:
         record(
             "required_terms_any",
-            any(str(term).casefold() in folded for term in required_any),
+            any(
+                _affirmative_claim_present(text, str(term))
+                for term in required_any
+            ),
         )
     forbidden = assertions.get("forbidden_terms", [])
     if forbidden:
@@ -1822,7 +1860,10 @@ def _semantic_assertion_result(
     if required_claims:
         record(
             "required_claims",
-            all(str(claim).casefold() in folded for claim in required_claims),
+            all(
+                _affirmative_claim_present(text, str(claim))
+                for claim in required_claims
+            ),
         )
     forbidden_claims = assertions.get("forbidden_claims", [])
     if forbidden_claims:

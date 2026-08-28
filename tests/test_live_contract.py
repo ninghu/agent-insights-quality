@@ -186,6 +186,58 @@ def test_exact_json_assertions_distinguish_booleans_from_numbers() -> None:
     assert passed == 0
 
 
+@pytest.mark.parametrize(
+    ("text", "assertion", "claims"),
+    [
+        (
+            "Weather summary: not clear, 21 celsius.",
+            "required_terms_all",
+            ["clear", "21", "celsius"],
+        ),
+        (
+            "overgenerated: not clear, 22 celsius.",
+            "required_claims",
+            ["overgenerated:", "clear", "22", "celsius"],
+        ),
+        (
+            "Weather summary: clear, not 210 celsius.",
+            "required_claims",
+            ["clear", "21", "celsius"],
+        ),
+        (
+            "Weather summary: clear, 210 celsius.",
+            "required_terms_all",
+            ["clear", "21", "celsius"],
+        ),
+        (
+            "Weather summary: clear, 22 celsius.",
+            "required_claims",
+            ["clear", "21", "celsius"],
+        ),
+    ],
+)
+def test_affirmative_assertions_reject_negation_and_wrong_numeric_values(
+    text: str,
+    assertion: str,
+    claims: list[str],
+) -> None:
+    response = {
+        "output": [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": text}],
+            }
+        ]
+    }
+    count, passed, results = _semantic_assertion_result(
+        response,
+        {"semantic_assertions": {assertion: claims}},
+    )
+    assert count == 1
+    assert passed == 0
+    assert results[0].passed is False
+
+
 def test_trace_behavior_summary_sanitizes_prompt_tool_sequence() -> None:
     messages = json.dumps(
         [

@@ -14,6 +14,7 @@ from agent_insights_quality.util import (
     ContractError,
     content_hash,
     file_hash,
+    json_values_equal,
     read_json,
     read_yaml,
 )
@@ -32,6 +33,85 @@ EXPECTED_ASSIGNMENTS = {
     "travel-agent": 8,
     "support-ticket-agent": 8,
 }
+
+EXPECTED_AGENT_CONTRACTS = {
+    "weather-agent": {
+        "type": "prompt",
+        "framework": "foundry_prompt",
+        "baseline_contract": {
+            "request_count": 5,
+            "terminal_response": "direct_prompt",
+            "semantic_assertions": "required_per_request",
+            "function_calling": "forbidden",
+        },
+    },
+    "healthcare-agent": {
+        "type": "prompt",
+        "framework": "foundry_prompt",
+        "baseline_contract": {
+            "request_count": 5,
+            "terminal_response": "direct_prompt",
+            "semantic_assertions": "required_per_request",
+            "function_calling": "forbidden",
+        },
+    },
+    "finance-agent": {
+        "type": "hosted_code",
+        "framework": "microsoft_agent_framework",
+        "baseline_contract": {
+            "request_count": 5,
+            "terminal_response": "standard_assistant_message",
+            "semantic_assertions": "required",
+            "function_calling": "not_applicable",
+        },
+    },
+    "travel-agent": {
+        "type": "hosted_code",
+        "framework": "langgraph",
+        "baseline_contract": {
+            "request_count": 5,
+            "terminal_response": "standard_assistant_message",
+            "semantic_assertions": "required",
+            "function_calling": "not_applicable",
+        },
+    },
+    "support-ticket-agent": {
+        "type": "hosted_custom_container",
+        "framework": "custom_responses",
+        "baseline_contract": {
+            "request_count": 5,
+            "terminal_response": "explicit_span_attributes",
+            "semantic_assertions": "required",
+            "function_calling": "not_applicable",
+        },
+    },
+}
+
+_PROMPT_TOOL_CONFIGURATION_KEYS = {
+    "parallel_tool_calls",
+    "tool_choice",
+    "tool_config",
+    "tool_configuration",
+    "tool_fixtures",
+    "tool_resources",
+    "tools",
+}
+
+
+def _contains_prompt_tool_configuration(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(
+            (
+                isinstance(key, str)
+                and key.casefold().replace("-", "_")
+                in _PROMPT_TOOL_CONFIGURATION_KEYS
+            )
+            or _contains_prompt_tool_configuration(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return any(_contains_prompt_tool_configuration(item) for item in value)
+    return False
 
 
 def _validate_schema(value: dict[str, Any], schema_path: Path, label: str) -> None:
@@ -76,6 +156,10 @@ def _validate_prompt_traffic(
         isinstance(item, dict) and "tool_fixtures" in item for item in requests
     ):
         raise ContractError(f"{label} pure Prompt traffic cannot contain tool fixtures")
+    if _contains_prompt_tool_configuration(value):
+        raise ContractError(
+            f"{label} pure Prompt traffic cannot contain tool configuration"
+        )
     _validate_schema(value, PROMPT_TRAFFIC_SCHEMA_PATH, label)
     if require_all_assertions and any(
         not isinstance(item.get("expected"), dict)
@@ -91,6 +175,20 @@ def _validate_prompt_traffic(
             else None
         )
         schema = assertions.get("json_schema") if isinstance(assertions, dict) else None
+        if (
+            isinstance(expected, dict)
+            and expected.get("activation_gate") is True
+            and (
+                not isinstance(assertions, dict)
+                or (
+                    "exact_json" not in assertions
+                    and not assertions.get("required_claims")
+                )
+            )
+        ):
+            raise ContractError(
+                f"{label} activation gates require exact JSON or affirmative claims"
+            )
         if schema is None:
             continue
         try:
@@ -124,7 +222,7 @@ def _validate_prompt_issue_delta(
     normalized["metadata"]["logical_version"] = baseline["metadata"][
         "logical_version"
     ]
-    if normalized != baseline:
+    if not json_values_equal(normalized, baseline):
         raise ContractError(
             f"{label} Prompt definition differs outside the reviewed defect paths"
         )
@@ -160,19 +258,16 @@ def validate_semantics(
     by_agent = {item["name"]: item for item in agent_items}
     if set(by_agent) != set(EXPECTED_ASSIGNMENTS):
         raise ContractError("Agent Catalog must contain the five fixed Agents")
-    terminal_modes = {
-        "weather-agent": "direct_prompt",
-        "healthcare-agent": "direct_prompt",
-        "finance-agent": "standard_assistant_message",
-        "travel-agent": "standard_assistant_message",
-        "support-ticket-agent": "explicit_span_attributes",
-    }
     if any(
-        agent["baseline_contract"]["terminal_response"]
-        != terminal_modes[agent_name]
+        {
+            "type": agent["type"],
+            "framework": agent["framework"],
+            "baseline_contract": agent["baseline_contract"],
+        }
+        != EXPECTED_AGENT_CONTRACTS[agent_name]
         for agent_name, agent in by_agent.items()
     ):
-        raise ContractError("Agent baseline terminal-evidence modes are not reviewed")
+        raise ContractError("Agent type, framework, or baseline contract is not reviewed")
 
     ids = [item["id"] for item in issue_items]
     expected_ids = [f"issue-{number:03d}" for number in range(1, 37)]

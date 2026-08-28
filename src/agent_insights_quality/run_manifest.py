@@ -5,9 +5,14 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
-from agent_insights_quality.catalogs import load_catalogs, source_integrity_digest
+from agent_insights_quality.catalogs import (
+    catalog_hashes as current_catalog_hashes,
+    load_catalogs,
+    source_integrity_digest,
+)
 from agent_insights_quality.models import AgentResult
 from agent_insights_quality.registry import version_entry
+from agent_insights_quality.selection import select_daily, select_full
 from agent_insights_quality.util import ROOT, ContractError, content_hash, read_json
 
 OFFICIAL_DELIVERY = "official"
@@ -162,18 +167,40 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     )
     if errors:
         raise ContractError(f"Run manifest is invalid: {errors[0].message}")
-    expected_agents = {
-        "weather-agent",
-        "healthcare-agent",
-        "finance-agent",
-        "travel-agent",
-        "support-ticket-agent",
-    }
-    if {agent["name"] for agent in manifest["agents"]} != expected_agents:
+    current_agents, current_issues = load_catalogs()
+    expected_agent_names = [
+        agent["name"] for agent in current_agents["agents"]
+    ]
+    if [agent["name"] for agent in manifest["agents"]] != expected_agent_names:
         raise ContractError("Run manifest Agent identities are inconsistent")
-    current_agents, _ = load_catalogs(require_paths=False)
+    expected_hashes = current_catalog_hashes(current_agents, current_issues)
+    if manifest["catalog_hashes"] != expected_hashes:
+        raise ContractError("Run manifest catalog hashes are not current")
+    expected_source_integrity = {
+        "verified": True,
+        "contract_digest": source_integrity_digest(
+            current_agents,
+            current_issues,
+        ),
+    }
+    if manifest["source_integrity"] != expected_source_integrity:
+        raise ContractError("Run manifest source integrity is not current")
+    report_date = date.fromisoformat(manifest["report_date"])
+    expected_selection = (
+        select_daily(
+            report_date,
+            current_agents,
+            current_issues,
+            expected_hashes["issues"],
+        )
+        if manifest["profile"] == "daily"
+        else select_full(current_agents)
+    )
     current_by_name = {
         agent["name"]: agent for agent in current_agents["agents"]
+    }
+    issue_by_id = {
+        issue["id"]: issue for issue in current_issues["issues"]
     }
     for agent in manifest["agents"]:
         current = current_by_name[agent["name"]]
@@ -196,8 +223,17 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         issue_ids = [issue["issue_id"] for issue in agent["issues"]]
         if len(issue_ids) != len(set(issue_ids)):
             raise ContractError("Run manifest issue identities are duplicated")
+        if issue_ids != expected_selection[agent["name"]]:
+            raise ContractError(
+                f"{agent['name']} manifest issue selection is not current"
+            )
         for issue in agent["issues"]:
-            if issue["issue_id"] != issue["logical_version"]:
+            issue_contract = issue_by_id.get(issue["issue_id"])
+            if (
+                issue["issue_id"] != issue["logical_version"]
+                or issue_contract is None
+                or issue_contract["agent"] != agent["name"]
+            ):
                 raise ContractError("Run manifest issue identity is inconsistent")
             _validate_version_evidence(
                 issue,

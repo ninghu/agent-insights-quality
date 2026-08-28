@@ -159,6 +159,9 @@ def test_manifest_request_assertions_are_json_arrays() -> None:
 def test_build_manifest_validates_real_nested_evidence() -> None:
     agents, issues = load_catalogs()
     hashes = catalog_hashes(agents, issues)
+    selected = {
+        agent["name"]: list(agent["issue_ids"]) for agent in agents["agents"]
+    }
     summary = RequestCompletionEvidence(
         request_index=0,
         response_count=1,
@@ -190,7 +193,15 @@ def test_build_manifest_validates_real_nested_evidence() -> None:
                 window_end="2026-08-28T10:01:00+00:00",
                 endpoint_request_summaries=[summary],
             ),
-            issues=[],
+            issues=[
+                VersionResult(
+                    logical_version=issue_id,
+                    foundry_version="1",
+                    status="inconclusive",
+                    error_code="synthetic_incomplete",
+                )
+                for issue_id in selected[agent["name"]]
+            ],
         )
         for agent in agents["agents"]
     ]
@@ -199,10 +210,11 @@ def test_build_manifest_validates_real_nested_evidence() -> None:
             agent["name"]: {
                 "monitor_id": f"monitor-{agent['name']}",
                 "versions": {
-                    "v0": {
+                    logical_version: {
                         "foundry_version": "1",
                         "content_digest": "sha256:" + "a" * 64,
                     }
+                    for logical_version in ["v0", *agent["issue_ids"]]
                 },
             }
             for agent in agents["agents"]
@@ -218,7 +230,7 @@ def test_build_manifest_validates_real_nested_evidence() -> None:
         catalog_hashes=hashes,
         agent_catalog=agents,
         issue_catalog=issues,
-        selected={agent["name"]: [] for agent in agents["agents"]},
+        selected=selected,
         registry=registry,
         results=results,
     )

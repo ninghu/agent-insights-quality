@@ -392,7 +392,20 @@ def _request_summaries_consistent(endpoint: dict[str, Any]) -> bool:
             != summary.get("semantic_assertions_passed")
         ):
             return False
-    return True
+    return (
+        sum(summary["response_count"] for summary in summaries)
+        == endpoint.get("response_count")
+        and sum(summary["usable_response"] for summary in summaries)
+        == endpoint.get("usable_response_count")
+        and sum(
+            summary["semantic_assertion_count"] for summary in summaries
+        )
+        == endpoint.get("semantic_assertion_count")
+        and sum(
+            summary["semantic_assertions_passed"] for summary in summaries
+        )
+        == endpoint.get("semantic_assertions_passed")
+    )
 
 
 def _issue_activation_complete(package: dict[str, Any]) -> bool:
@@ -817,6 +830,17 @@ def _validate_issue_cards(
             raise ContractError("Card evaluation finding type is inconsistent")
         if (
             evaluation["verdict"] == "correct"
+            or evaluation["finding_type"] == "MATCHED"
+        ) and (
+            not isinstance(evaluation.get("fields"), dict)
+            or not evaluation["fields"]
+            or any(value is not True for value in evaluation["fields"].values())
+        ):
+            raise ContractError(
+                "Correct MATCHED card evaluations require every field to pass"
+            )
+        if (
+            evaluation["verdict"] == "correct"
             and evaluation["ownership"] != "none"
         ) or (
             evaluation["verdict"] != "correct"
@@ -834,9 +858,14 @@ def _validate_issue_cards(
         len(evaluations) != 1
         or evaluations[0]["finding_type"] != "MATCHED"
         or evaluations[0]["verdict"] != "correct"
+        or assessment.get("fields") != evaluations[0].get("fields")
+        or not isinstance(assessment.get("fields"), dict)
+        or not assessment["fields"]
+        or any(value is not True for value in assessment["fields"].values())
     ):
         raise ContractError(
-            "MATCHED assessment requires one terminal-proven MATCHED card"
+            "MATCHED assessment requires one identical all-fields-passing "
+            "terminal-proven MATCHED card"
         )
     card_types = [item["finding_type"] for item in evaluations]
     top_type = assessment["finding_type"]

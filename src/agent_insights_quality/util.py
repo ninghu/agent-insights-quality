@@ -47,6 +47,22 @@ def content_hash(value: Any) -> str:
     return "sha256:" + hashlib.sha256(canonical_bytes(value)).hexdigest()
 
 
+def json_values_equal(actual: Any, expected: Any) -> bool:
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        return set(actual) == set(expected) and all(
+            json_values_equal(actual[key], value)
+            for key, value in expected.items()
+        )
+    if isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            json_values_equal(actual_item, expected_item)
+            for actual_item, expected_item in zip(actual, expected, strict=True)
+        )
+    return bool(actual == expected)
+
+
 def file_hash(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:

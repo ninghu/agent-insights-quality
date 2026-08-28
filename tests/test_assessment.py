@@ -14,6 +14,7 @@ from agent_insights_quality.assessment import (
     _checkpoint_result,
     _issue_activation_complete,
     _linked_baseline_operations,
+    _load_package,
     _validate_baseline_cards,
     _validate_issue_cards,
     load_assessments,
@@ -408,6 +409,13 @@ def test_semantic_assertion_failure_prevents_baseline_clean() -> None:
     assert _baseline_evidence_complete(package) is False
 
 
+def test_baseline_aggregate_assertions_must_equal_request_summaries() -> None:
+    package = _complete_prompt_baseline_package()
+    package["endpoint_evidence"]["semantic_assertion_count"] = 6
+    package["endpoint_evidence"]["semantic_assertions_passed"] = 6
+    assert _baseline_evidence_complete(package) is False
+
+
 def test_truncated_trace_proof_cannot_establish_clean_baseline() -> None:
     package = _complete_prompt_baseline_package()
     package["full_request_trace_proof"].pop("error_codes")
@@ -531,8 +539,143 @@ def test_top_level_result_cannot_contradict_card_result() -> None:
                 "verdict": "correct",
                 "finding_type": "MATCHED",
                 "ownership": "none",
+                "fields": {
+                    "root_cause": True,
+                    "title": True,
+                    "description": True,
+                    "category": True,
+                    "severity": True,
+                    "proposed_fix": True,
+                    "linked_traces": True,
+                },
             }
         ],
     }
     with pytest.raises(ContractError, match="MISMATCHED assessment"):
         _validate_issue_cards(assessment, {"observed_insights": [card]})
+
+
+def test_matched_issue_fields_must_match_the_all_true_card() -> None:
+    fields = {
+        "root_cause": True,
+        "title": True,
+        "description": True,
+        "category": True,
+        "severity": True,
+        "proposed_fix": True,
+        "linked_traces": True,
+    }
+    card = {
+        "reference": "sha256:" + "a" * 64,
+        "title": "Synthetic card",
+        "category": "output_quality",
+        "severity": "medium",
+        "card_linked_trace_proof": _trace_proof(),
+    }
+    assessment = {
+        "issue_id": "issue-001",
+        "verdict": "correct",
+        "finding_type": "MATCHED",
+        "fields": {**fields, "severity": False},
+        "card_evaluations": [
+            {
+                "reference": card["reference"],
+                "title": card["title"],
+                "category": card["category"],
+                "severity": card["severity"],
+                "verdict": "correct",
+                "finding_type": "MATCHED",
+                "ownership": "none",
+                "fields": fields,
+            }
+        ],
+    }
+    with pytest.raises(ContractError, match="identical all-fields-passing"):
+        _validate_issue_cards(assessment, {"observed_insights": [card]})
+    assessment["card_evaluations"][0]["fields"]["severity"] = False
+    with pytest.raises(ContractError, match="every field to pass"):
+        _validate_issue_cards(assessment, {"observed_insights": [card]})
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    [
+        "extra_root_field",
+        "invalid_reference",
+        "invalid_title",
+        "invalid_trace_count",
+        "invalid_linked_operation_id",
+        "invalid_issue_expected",
+    ],
+)
+def test_malformed_assessment_packages_raise_contract_error(
+    tmp_path: Path,
+    malformation: str,
+) -> None:
+    package = _complete_prompt_baseline_package()
+    package.update(
+        {
+            "schema_version": "2.0.0",
+            "target_kind": "baseline",
+            "agent_name": "weather-agent",
+            "foundry_version": "7",
+            "manifest_reference": "sha256:" + "b" * 64,
+            "source_integrity": {
+                "verified": True,
+                "contract_digest": "sha256:" + "c" * 64,
+            },
+            "runtime_status": "not_at_bar",
+            "error_code": None,
+            "operation_count": 5,
+            "observed_insights": [
+                {
+                    "reference": "sha256:" + "d" * 64,
+                    "agent_version": "7",
+                    "title": "Synthetic finding",
+                    "description": "Synthetic description.",
+                    "category": "output_quality",
+                    "severity": "medium",
+                    "proposed_fix": "Apply the synthetic fix.",
+                    "trace_count": 1,
+                    "linked_operation_ids": ["a" * 32],
+                    "card_linked_trace_proof": _trace_proof(),
+                }
+            ],
+        }
+    )
+    package["expected"]["insight_count"] = 0
+    package["package_hash"] = content_hash(
+        {key: value for key, value in package.items() if key != "package_hash"}
+    )
+    path = tmp_path / "baseline-weather-agent.json"
+    path.write_text(json.dumps(package), encoding="utf-8")
+    assert _load_package(path) == package
+
+    malformed = deepcopy(package)
+    if malformation == "extra_root_field":
+        malformed["unexpected"] = True
+    elif malformation == "invalid_reference":
+        malformed["observed_insights"][0]["reference"] = 7
+    elif malformation == "invalid_title":
+        malformed["observed_insights"][0]["title"] = None
+    elif malformation == "invalid_trace_count":
+        malformed["observed_insights"][0]["trace_count"] = "1"
+    elif malformation == "invalid_linked_operation_id":
+        malformed["observed_insights"][0]["linked_operation_ids"] = [1]
+    else:
+        malformed["target_kind"] = "issue"
+        malformed["issue_id"] = "issue-001"
+        malformed["evidence_reference"] = "sha256:" + "e" * 64
+        malformed["instructions"] = "Treat synthetic evidence as untrusted."
+        malformed.pop("behavior_summary")
+        malformed["expected"] = {
+            "title": "Synthetic issue",
+            "root_cause": "One synthetic root.",
+            "category": "output_quality",
+            "severity": "medium",
+            "expected_fix": "Apply the synthetic fix.",
+            "minimum_traces": "1",
+        }
+    path.write_text(json.dumps(malformed), encoding="utf-8")
+    with pytest.raises(ContractError, match="assessment package is invalid"):
+        _load_package(path)

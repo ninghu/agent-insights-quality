@@ -197,7 +197,10 @@ def _field_score(fields: dict[str, Any]) -> float:
 
 
 def _issue_field_score(item: dict[str, Any]) -> float:
-    cards = item["assessment"].get("card_evaluations", [])
+    assessment = item["assessment"]
+    if assessment.get("finding_type") == "MATCHED":
+        return _field_score(assessment["fields"])
+    cards = assessment.get("card_evaluations", [])
     attributable = [
         _field_score(card["fields"])
         for card in cards
@@ -207,7 +210,7 @@ def _issue_field_score(item: dict[str, Any]) -> float:
         return max(attributable)
     if item["detail"] in {"MISSING", "INCOMPLETE"}:
         return 0.0
-    return _field_score(item["assessment"]["fields"])
+    return _field_score(assessment["fields"])
 
 
 def _summary_metrics(

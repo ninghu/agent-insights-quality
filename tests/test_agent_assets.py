@@ -729,7 +729,7 @@ def test_prompt_activation_gates_are_request_bound() -> None:
     assert all(
         item["expected"]["semantic_assertions"] == {
             "response_format": "non_json",
-            "required_terms_all": [
+            "required_claims": [
                 "Weather summary:",
                 "clear",
                 "21",

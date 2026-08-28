@@ -7,6 +7,7 @@ import pytest
 
 from agent_insights_quality.catalogs import (
     _validate_prompt_definition,
+    _validate_prompt_issue_delta,
     _validate_prompt_traffic,
     catalog_hashes,
     load_catalogs,
@@ -14,7 +15,7 @@ from agent_insights_quality.catalogs import (
     render_issue_catalog,
     validate_semantics,
 )
-from agent_insights_quality.util import ContractError
+from agent_insights_quality.util import ROOT, ContractError, read_json
 
 
 def test_catalogs_define_fixed_inventory() -> None:
@@ -58,6 +59,38 @@ def test_catalog_semantics_reject_old_source_delta_shape_cleanly() -> None:
         validate_semantics(agents, historical, require_paths=False)
 
 
+def test_catalog_semantics_bind_each_fixed_agent_contract() -> None:
+    agents, issues = load_catalogs(require_paths=False)
+    reclassified = deepcopy(agents)
+    finance = next(
+        item for item in reclassified["agents"] if item["name"] == "finance-agent"
+    )
+    finance["type"] = "hosted_custom_container"
+    with pytest.raises(ContractError, match="type, framework, or baseline contract"):
+        validate_semantics(reclassified, issues, require_paths=False)
+
+
+@pytest.mark.parametrize(
+    ("baseline_value", "issue_value"),
+    [(True, 1), (1, 1.0)],
+)
+def test_prompt_delta_equality_distinguishes_json_types(
+    baseline_value: object,
+    issue_value: object,
+) -> None:
+    baseline = {
+        "definition": {"instructions": "Healthy synthetic instructions."},
+        "metadata": {"logical_version": "v0"},
+        "typed_value": baseline_value,
+    }
+    issue = deepcopy(baseline)
+    issue["definition"]["instructions"] += "\nInject one synthetic defect."
+    issue["metadata"]["logical_version"] = "issue-001"
+    issue["typed_value"] = issue_value
+    with pytest.raises(ContractError, match="differs outside"):
+        _validate_prompt_issue_delta(baseline, issue, "issue-001")
+
+
 def test_prompt_contract_rejects_tools_and_tool_fixtures() -> None:
     with pytest.raises(ContractError, match="cannot contain tools"):
         _validate_prompt_definition(
@@ -96,6 +129,43 @@ def test_prompt_contract_rejects_tools_and_tool_fixtures() -> None:
                     for index in range(5)
                 ],
             },
+            "synthetic traffic",
+            require_activation=False,
+            require_all_assertions=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("max_output_tokens", 0),
+        ("max_output_tokens", 4097),
+        ("max_output_tokens", True),
+        ("max_output_tokens", "400"),
+    ],
+)
+def test_prompt_traffic_closes_and_bounds_request_body(
+    field: str,
+    value: object,
+) -> None:
+    traffic = read_json(ROOT / "agents" / "weather-agent" / "v0" / "traffic.json")
+    traffic["requests"][0]["request"]["body"][field] = value
+    with pytest.raises(ContractError, match="schema error"):
+        _validate_prompt_traffic(
+            traffic,
+            "synthetic traffic",
+            require_activation=False,
+            require_all_assertions=True,
+        )
+
+
+@pytest.mark.parametrize("key", ["tools", "tool_choice", "tool_configuration"])
+def test_prompt_traffic_forbids_nested_tool_configuration(key: str) -> None:
+    traffic = read_json(ROOT / "agents" / "weather-agent" / "v0" / "traffic.json")
+    traffic["requests"][0]["request"]["body"][key] = []
+    with pytest.raises(ContractError, match="cannot contain tool configuration"):
+        _validate_prompt_traffic(
+            traffic,
             "synthetic traffic",
             require_activation=False,
             require_all_assertions=True,

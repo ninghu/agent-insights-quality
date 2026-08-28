@@ -36,7 +36,7 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "non_json",
-          "required_terms_all": [
+          "required_claims": [
             "Weather summary:",
             "clear",
             "21",
@@ -78,7 +78,7 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "non_json",
-          "required_terms_all": [
+          "required_claims": [
             "Weather summary:",
             "clear",
             "21",
@@ -120,7 +120,7 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "non_json",
-          "required_terms_all": [
+          "required_claims": [
             "Weather summary:",
             "clear",
             "21",
@@ -162,7 +162,7 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "non_json",
-          "required_terms_all": [
+          "required_claims": [
             "Weather summary:",
             "clear",
             "21",
@@ -204,7 +204,7 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "non_json",
-          "required_terms_all": [
+          "required_claims": [
             "Weather summary:",
             "clear",
             "21",
