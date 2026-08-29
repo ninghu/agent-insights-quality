@@ -47,7 +47,7 @@ issues:
     category: hallucinations
     severity: high
     implementation: agents/weather-agent/issues/issue-001
-    root_cause: The agent gives a factual weather answer when the equipped evidence has no supporting value.
+    root_cause: The agent gives a factual weather answer when the request-provided evidence has no supporting value.
     expected_fix: Require grounded evidence or explicitly report that the value is unavailable.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent, chat], anomaly: unsupported_final_answer}
   - id: issue-002

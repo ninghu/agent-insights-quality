@@ -38,20 +38,9 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Establishes the Fahrenheit preference and reports the grounded 86 F sunny result from the request evidence.",
+        "behavior": "Establishes the Fahrenheit preference and returns only the deterministic grounded current-conditions sentence.",
         "semantic_assertions": {
-          "required_terms_all": [
-            "Austin",
-            "86",
-            "sunny",
-            "fahrenheit"
-          ],
-          "forbidden_terms": [
-            "unavailable",
-            "not sunny",
-            "not 86"
-          ],
-          "max_words": 40
+          "exact_text": "Austin: sunny, 86 Fahrenheit."
         }
       }
     },
@@ -83,20 +72,9 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Applies the retained Fahrenheit preference from the earlier turn and reports 25 degrees Fahrenheit with snow, without asking again.",
+        "behavior": "Applies the retained Fahrenheit preference and returns only the deterministic grounded current-conditions sentence.",
         "semantic_assertions": {
-          "required_terms_all": [
-            "Denver",
-            "25",
-            "snow",
-            "fahrenheit"
-          ],
-          "max_words": 40,
-          "forbidden_terms": [
-            "celsius",
-            "not snow",
-            "not 25"
-          ]
+          "exact_text": "Denver: snow, 25 Fahrenheit."
         }
       }
     },
@@ -128,21 +106,9 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Answers the one-day forecast in at most 20 words using only the given evidence.",
+        "behavior": "Returns only the deterministic one-day forecast sentence using the request evidence.",
         "semantic_assertions": {
-          "max_words": 20,
-          "required_terms_all": [
-            "cloudy",
-            "12",
-            "7",
-            "celsius"
-          ],
-          "forbidden_terms": [
-            "not cloudy",
-            "not 12",
-            "not 7",
-            "fahrenheit"
-          ]
+          "exact_text": "Oslo tomorrow: cloudy, high 12 Celsius, low 7 Celsius."
         }
       }
     },
@@ -177,30 +143,10 @@
         "behavior": "Returns valid JSON with exactly the requested keys and grounded values.",
         "semantic_assertions": {
           "response_format": "json",
-          "required_terms_all": [
-            "clear",
-            "21",
-            "celsius"
-          ],
-          "json_schema": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "condition",
-              "temperature",
-              "unit"
-            ],
-            "properties": {
-              "condition": {
-                "const": "clear"
-              },
-              "temperature": {
-                "const": 21
-              },
-              "unit": {
-                "const": "celsius"
-              }
-            }
+          "exact_json": {
+            "condition": "clear",
+            "temperature": 21,
+            "unit": "celsius"
           }
         }
       }
@@ -233,19 +179,9 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Reports day one from the evidence and explicitly labels day two as unavailable instead of guessing.",
+        "behavior": "Returns only the deterministic partial forecast sentence and marks day two unavailable.",
         "semantic_assertions": {
-          "required_terms_all": [
-            "windy",
-            "9",
-            "5",
-            "unavailable"
-          ],
-          "max_words": 60,
-          "forbidden_claims": [
-            "day two is available",
-            "day two: sunny"
-          ]
+          "exact_text": "Reykjavik day one: windy, high 9 Celsius, low 5 Celsius. Day two: unavailable."
         }
       }
     }

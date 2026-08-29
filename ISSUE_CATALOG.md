@@ -6,7 +6,7 @@ Every issue represents one independently fixable defect and expects exactly one 
 
 | Issue | Agent | Category | Severity | Expected defect |
 | --- | --- | --- | --- | --- |
-| <a id="issue-001"></a>`issue-001` - Unsupported factual answer | `weather-agent` | `hallucinations` | `high` | The agent gives a factual weather answer when the equipped evidence has no supporting value. |
+| <a id="issue-001"></a>`issue-001` - Unsupported factual answer | `weather-agent` | `hallucinations` | `high` | The agent gives a factual weather answer when the request-provided evidence has no supporting value. |
 | <a id="issue-002"></a>`issue-002` - Explicit response schema violated | `weather-agent` | `output_quality` | `medium` | The response violates the explicit machine-readable schema requested by the user. |
 | <a id="issue-003"></a>`issue-003` - Current conditions answer uses forecast-shaped data | `weather-agent` | `output_quality` | `high` | The final answer substitutes forecast high and low values for the requested current condition and temperature. |
 | <a id="issue-004"></a>`issue-004` - Standing units preference forgotten | `weather-agent` | `context_memory` | `medium` | The agent drops the user's standing temperature-unit preference on a follow-up turn. |

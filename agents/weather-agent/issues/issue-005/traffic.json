@@ -35,11 +35,7 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "response_format": "json",
-          "exact_json": {
-            "phase": "clarification_required",
-            "completed": false
-          }
+          "exact_text": "Would you like me to use the complete weather evidence already provided?"
         }
       }
     },
@@ -71,9 +67,8 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Turn two adds no material new evidence, yet only now completes the answer using the original evidence, proving an unnecessary extra round trip.",
-        "defect_observed": true,
-        "activation_gate": true,
+        "behavior": "Turn two adds no material new evidence and correctly completes the answer using the original evidence, corroborating the delay on turn one.",
+        "defect_observed": false,
         "semantic_assertions": {
           "response_format": "json",
           "exact_json": {
@@ -118,11 +113,7 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "response_format": "json",
-          "exact_json": {
-            "phase": "clarification_required",
-            "completed": false
-          }
+          "exact_text": "Would you like me to use the complete weather evidence already provided?"
         }
       }
     },
@@ -154,9 +145,8 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Turn two adds no material new evidence, yet only now completes the answer using the original evidence, proving an unnecessary extra round trip.",
-        "defect_observed": true,
-        "activation_gate": true,
+        "behavior": "Turn two adds no material new evidence and correctly completes the answer using the original evidence, corroborating the delay on turn one.",
+        "defect_observed": false,
         "semantic_assertions": {
           "response_format": "json",
           "exact_json": {
@@ -201,11 +191,7 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "response_format": "json",
-          "exact_json": {
-            "phase": "clarification_required",
-            "completed": false
-          }
+          "exact_text": "Would you like me to use the complete weather evidence already provided?"
         }
       }
     },
@@ -237,9 +223,8 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Turn two adds no material new evidence, yet only now completes the answer using the original evidence, proving an unnecessary extra round trip.",
-        "defect_observed": true,
-        "activation_gate": true,
+        "behavior": "Turn two adds no material new evidence and correctly completes the answer using the original evidence, corroborating the delay on turn one.",
+        "defect_observed": false,
         "semantic_assertions": {
           "response_format": "json",
           "exact_json": {
@@ -284,11 +269,7 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "response_format": "json",
-          "exact_json": {
-            "phase": "clarification_required",
-            "completed": false
-          }
+          "exact_text": "Would you like me to use the complete weather evidence already provided?"
         }
       }
     },
@@ -320,9 +301,8 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Turn two adds no material new evidence, yet only now completes the answer using the original evidence, proving an unnecessary extra round trip.",
-        "defect_observed": true,
-        "activation_gate": true,
+        "behavior": "Turn two adds no material new evidence and correctly completes the answer using the original evidence, corroborating the delay on turn one.",
+        "defect_observed": false,
         "semantic_assertions": {
           "response_format": "json",
           "exact_json": {
@@ -367,11 +347,7 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "response_format": "json",
-          "exact_json": {
-            "phase": "clarification_required",
-            "completed": false
-          }
+          "exact_text": "Would you like me to use the complete weather evidence already provided?"
         }
       }
     },
@@ -403,9 +379,8 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Turn two adds no material new evidence, yet only now completes the answer using the original evidence, proving an unnecessary extra round trip.",
-        "defect_observed": true,
-        "activation_gate": true,
+        "behavior": "Turn two adds no material new evidence and correctly completes the answer using the original evidence, corroborating the delay on turn one.",
+        "defect_observed": false,
         "semantic_assertions": {
           "response_format": "json",
           "exact_json": {

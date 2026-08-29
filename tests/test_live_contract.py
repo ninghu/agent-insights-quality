@@ -192,6 +192,59 @@ def test_exact_json_assertions_distinguish_booleans_from_numbers() -> None:
     assert passed == 0
 
 
+def test_weather_v0_assertions_reject_additional_fabricated_claims() -> None:
+    requests = read_json(
+        ROOT / "agents" / "weather-agent" / "v0" / "traffic.json"
+    )["requests"]
+    for request in requests:
+        assertions = request["expected"]["semantic_assertions"]
+        canonical = assertions.get("exact_text")
+        if canonical is None:
+            canonical = json.dumps(
+                assertions["exact_json"],
+                separators=(",", ":"),
+            )
+        response = {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": canonical}],
+                }
+            ]
+        }
+        count, passed, _ = _semantic_assertion_result(
+            response,
+            request["expected"],
+        )
+        assert count == passed
+
+    adversarial_outputs = (
+        "Austin: sunny, 86 Fahrenheit. Humidity is 45 percent.",
+        "Denver: snow, 25 Fahrenheit. Visibility is 10 miles.",
+        "Oslo tomorrow: cloudy, high 12 Celsius, low 7 Celsius. Rain is likely.",
+        '{"condition":"clear","temperature":21,"unit":"celsius","humidity":45}',
+        (
+            "Reykjavik day one: windy, high 9 Celsius, low 5 Celsius. "
+            "Day two: unavailable. Day two will be sunny."
+        ),
+    )
+    for request, text in zip(requests, adversarial_outputs, strict=True):
+        response = {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": text}],
+                }
+            ]
+        }
+        count, passed, _ = _semantic_assertion_result(
+            response,
+            request["expected"],
+        )
+        assert count > 0
+        assert passed < count
+
+
 @pytest.mark.parametrize(
     "text",
     [

@@ -722,8 +722,9 @@ def test_prompt_activation_gates_are_request_bound() -> None:
             if item["expected"].get("activation_gate") is True
         ]
         assert gates
+        assertion_key = "exact_text" if issue_id == "issue-005" else "exact_json"
         assert all(
-            "exact_json" in item["expected"]["semantic_assertions"]
+            assertion_key in item["expected"]["semantic_assertions"]
             for item in gates
         )
     verbose = json.loads(
@@ -791,10 +792,11 @@ def test_weather_latency_issue_requires_five_two_turn_groups() -> None:
         assert "condition=clear" in first_text
         assert "temperature=20" in first_text
         assert "already gave" in second_text
-        assert first["expected"]["semantic_assertions"]["exact_json"] == {
-            "phase": "clarification_required",
-            "completed": False,
-        }
+        assert first["expected"]["semantic_assertions"]["exact_text"] == (
+            "Would you like me to use the complete weather evidence already provided?"
+        )
+        assert first["expected"]["activation_gate"] is True
+        assert first["expected"]["defect_observed"] is True
         assert second["expected"]["semantic_assertions"]["exact_json"] == {
             "phase": "answer_complete",
             "completed": True,
@@ -802,9 +804,8 @@ def test_weather_latency_issue_requires_five_two_turn_groups() -> None:
             "temperature": 20,
             "unit": "celsius",
         }
-        assert all(
-            turn["expected"]["activation_gate"] is True for turn in turns
-        )
+        assert second["expected"].get("activation_gate") is not True
+        assert second["expected"]["defect_observed"] is False
 
 
 def test_healthcare_action_issues_emit_distinct_json_envelopes() -> None:

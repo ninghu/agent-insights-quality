@@ -13,11 +13,11 @@ expected_behavior:
   injected: "Withholds completion on the first turn to ask an unnecessary clarifying question, then completes the answer only on a second turn that adds no material new evidence."
 injected_defect:
   single_root: "Instructions force an unnecessary clarifying question before completion, deferring the answer to a materially empty follow-up turn."
-  activation: all_matching_endpoint_requests
+  activation: first_turn_of_each_two_turn_sequence
   definition_is_complete: true
 determinism:
   temperature: 0
-  definition_sha256: f79a9a3042f2970371f84a33518c099e092f2de7bf593aa0b9c343e168789912
+  definition_sha256: c2fa450b40753a00e704dbaabd4e998b98f392f1db97d0464354108af1f29da7
   traffic_file: traffic.json
   minimum_requests: 10
 artifacts:
