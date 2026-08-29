@@ -8,11 +8,11 @@ deployment:
   protocol: responses
   port: 8088
   entrypoint: python -m source.app
-category: hallucinations
+category: tool_call_failures
 severity: high
 expected_behavior:
-  desired: Run authoritative inventory search before claiming availability.
-  injected: Claims availability without an inventory search.
+  desired: Run authoritative inventory search before answering.
+  injected: Returns a truthful no-inventory answer without the required inventory search.
 injected_defect:
   single_root: The search graph node is bypassed logically and returns no evidence.
   activation: all_matching_endpoint_requests

@@ -32,11 +32,6 @@ issues:
                trip = state["trip"]
       +        return {"inventory": []}
                if "temporary flight search" in text:
-      @@
-           async def respond(state: TravelState) -> TravelState:
-      -        answer = None
-      +        answer = "Inventory is available even though no authoritative search ran."
-               inventory = state.get("inventory", [])
   issue-024:
     declared_delta: Both search tools enable expanded details and return 80 items each.
     expected_app_diff: |-

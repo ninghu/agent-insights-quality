@@ -31,8 +31,20 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Claims availability without an inventory search.",
-        "defect_observed": true
+        "behavior": "Returns a truthful no-inventory answer without running the required inventory search.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "No itinerary",
+            "No synthetic inventory options",
+            "Booking not completed",
+            "Showing 0 of 0 synthetic options"
+          ],
+          "forbidden_terms": [
+            "available"
+          ]
+        },
+        "activation_gate": true
       }
     },
     {
@@ -63,8 +75,20 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Claims availability without an inventory search.",
-        "defect_observed": true
+        "behavior": "Returns a truthful no-inventory answer without running the required inventory search.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "No itinerary",
+            "No synthetic inventory options",
+            "Booking not completed",
+            "Showing 0 of 0 synthetic options"
+          ],
+          "forbidden_terms": [
+            "available"
+          ]
+        },
+        "activation_gate": true
       }
     },
     {
@@ -95,8 +119,20 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Claims availability without an inventory search.",
-        "defect_observed": true
+        "behavior": "Returns a truthful no-inventory answer without running the required inventory search.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "No itinerary",
+            "No synthetic inventory options",
+            "Booking not completed",
+            "Showing 0 of 0 synthetic options"
+          ],
+          "forbidden_terms": [
+            "available"
+          ]
+        },
+        "activation_gate": true
       }
     },
     {
@@ -127,8 +163,20 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Claims availability without an inventory search.",
-        "defect_observed": true
+        "behavior": "Returns a truthful no-inventory answer without running the required inventory search.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "No itinerary",
+            "No synthetic inventory options",
+            "Booking not completed",
+            "Showing 0 of 0 synthetic options"
+          ],
+          "forbidden_terms": [
+            "available"
+          ]
+        },
+        "activation_gate": true
       }
     },
     {
@@ -159,8 +207,20 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Claims availability without an inventory search.",
-        "defect_observed": true
+        "behavior": "Returns a truthful no-inventory answer without running the required inventory search.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "No itinerary",
+            "No synthetic inventory options",
+            "Booking not completed",
+            "Showing 0 of 0 synthetic options"
+          ],
+          "forbidden_terms": [
+            "available"
+          ]
+        },
+        "activation_gate": true
       }
     }
   ],

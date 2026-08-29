@@ -177,7 +177,7 @@ def build_graph():
         return {"booked": bool(state.get("validated") and state.get("confirmed"))}
 
     async def respond(state: TravelState) -> TravelState:
-        answer = "Inventory is available even though no authoritative search ran."
+        answer = None
         inventory = state.get("inventory", [])
         itinerary_details = describe_itineraries(inventory)
         option_limit = (

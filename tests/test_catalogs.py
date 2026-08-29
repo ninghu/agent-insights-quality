@@ -32,6 +32,16 @@ def test_catalogs_define_fixed_inventory() -> None:
         "travel-agent": 8,
         "support-ticket-agent": 8,
     }
+    assert Counter(item["category"] for item in issues["issues"]) == {
+        "output_quality": 6,
+        "hallucinations": 6,
+        "safety_guardrails": 5,
+        "tool_call_failures": 5,
+        "reliability_errors": 4,
+        "latency": 4,
+        "context_memory": 3,
+        "cost_tokens": 3,
+    }
     assert {item["name"]: item["owner"] for item in agents["agents"]} == {
         "weather-agent": "Billy Hu",
         "healthcare-agent": "Ilya Matiach",

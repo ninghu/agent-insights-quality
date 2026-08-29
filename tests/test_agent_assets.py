@@ -543,6 +543,30 @@ def test_travel_issue_sources_match_reviewed_deltas() -> None:
             else:
                 assert issue_files[relative_path].read_bytes() == baseline_path.read_bytes()
 
+    issue_023_root = root / "issues" / "issue-023"
+    issue_023_source = (issue_023_root / "source" / "app.py").read_text(
+        encoding="utf-8"
+    )
+    assert issue_023_source.count('return {"inventory": []}') == 1
+    assert "Inventory is available even though no authoritative search ran." not in (
+        issue_023_source
+    )
+    issue_023_traffic = json.loads(
+        (issue_023_root / "traffic.json").read_text(encoding="utf-8")
+    )
+    for request in issue_023_traffic["requests"]:
+        expected = request["expected"]
+        assert expected["activation_gate"] is True
+        assert expected["semantic_assertions"] == {
+            "required_terms_all": [
+                "No itinerary",
+                "No synthetic inventory options",
+                "Booking not completed",
+                "Showing 0 of 0 synthetic options",
+            ],
+            "forbidden_terms": ["available"],
+        }
+
 
 def test_hosted_framework_and_identity_boundaries() -> None:
     finance = (

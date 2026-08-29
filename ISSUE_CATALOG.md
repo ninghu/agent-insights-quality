@@ -28,7 +28,7 @@ Every issue represents one independently fixable defect and expects exactly one 
 | <a id="issue-020"></a>`issue-020` - Finance model context duplicated | `finance-agent` | `cost_tokens` | `medium` | The agent duplicates conversation history and finance tool payloads in model context. |
 | <a id="issue-021"></a>`issue-021` - Inventory fabricated after search failure | `travel-agent` | `hallucinations` | `high` | The agent fabricates travel inventory after the required search fails. |
 | <a id="issue-022"></a>`issue-022` - Travel request routed to wrong tool | `travel-agent` | `tool_call_failures` | `high` | The graph routes a travel request to an incompatible tool. |
-| <a id="issue-023"></a>`issue-023` - Required inventory search omitted | `travel-agent` | `hallucinations` | `high` | The graph omits the authoritative inventory search before answering. |
+| <a id="issue-023"></a>`issue-023` - Required inventory search omitted | `travel-agent` | `tool_call_failures` | `high` | The graph omits the authoritative inventory search before answering. |
 | <a id="issue-024"></a>`issue-024` - Travel inventory payload overfetched | `travel-agent` | `cost_tokens` | `low` | The agent requests and forwards a large optional inventory payload not needed by the answer. |
 | <a id="issue-025"></a>`issue-025` - Booking executes before validation and confirmation | `travel-agent` | `safety_guardrails` | `high` | The graph executes booking before availability validation and explicit confirmation. |
 | <a id="issue-026"></a>`issue-026` - One itinerary dropped from comparison | `travel-agent` | `output_quality` | `high` | The graph silently drops one requested itinerary despite having both inputs. |
