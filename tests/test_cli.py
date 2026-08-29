@@ -27,6 +27,13 @@ def test_test_run_requires_nonzero_rerun(monkeypatch, tmp_path: Path) -> None:
         cli._dispatch(args)
 
 
+def test_unresolved_insight_state_blocks_immutable_manifest() -> None:
+    store = SimpleNamespace(has_unresolved_insight_state=lambda: True)
+
+    with pytest.raises(ContractError, match="resume before creating"):
+        cli._assert_insight_state_resolved(store)
+
+
 def test_post_manifest_failure_does_not_publish_operational_result(
     monkeypatch,
     tmp_path: Path,
@@ -44,7 +51,6 @@ def test_post_manifest_failure_does_not_publish_operational_result(
         "load_automation_policy",
         lambda: SimpleNamespace(
             insight_lookback_hours=0.1,
-            trace_assertion_stabilization_seconds=180,
             clean_window_poll_seconds=1,
             clean_window_ingestion_margin_seconds=1,
             clean_window_max_wait_seconds=1,

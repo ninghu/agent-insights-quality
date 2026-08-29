@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Iterator
 
 from agent_insights_quality.models import (
     InsightEvidence,
@@ -128,6 +128,26 @@ class VersionCheckpointStore:
 
     def has_version_progress(self, agent_name: str, logical_version: str) -> bool:
         return self._path(agent_name, logical_version).exists()
+
+    def has_unresolved_insight_state(self) -> bool:
+        for path in self._root.glob("*.json"):
+            value = read_json(path)
+            try:
+                self._validate_header(
+                    value,
+                    str(value["agent_name"]),
+                    str(value["logical_version"]),
+                    str(value["foundry_version"]),
+                    str(value["content_digest"]),
+                )
+            except KeyError as error:
+                raise ContractError("Version checkpoint identity is invalid") from error
+            if (
+                value.get("insight_start_pending") is True
+                or value.get("insight_drain_pending") is True
+            ):
+                return True
+        return False
 
     def claim_agent_recovery(self, agent_name: str, maximum: int) -> bool:
         if (
@@ -329,54 +349,6 @@ class VersionCheckpointStore:
         value["trace_verified"] = True
         self._write(agent_name, logical_version, value)
 
-    def activation_rejection(
-        self,
-        agent_name: str,
-        logical_version: str,
-        foundry_version: str,
-        content_digest: str,
-    ) -> tuple[str, dict[str, Any]] | None:
-        value = self._load(
-            agent_name,
-            logical_version,
-            foundry_version,
-            content_digest,
-        )
-        payload = value.get("activation_rejection")
-        if payload is None:
-            return None
-        if (
-            not isinstance(payload, dict)
-            or not isinstance(payload.get("error_code"), str)
-            or not payload["error_code"]
-            or not isinstance(payload.get("trace_behavior_summary"), dict)
-        ):
-            raise ContractError("Version checkpoint activation rejection is invalid")
-        return str(payload["error_code"]), dict(payload["trace_behavior_summary"])
-
-    def save_activation_rejection(
-        self,
-        agent_name: str,
-        logical_version: str,
-        foundry_version: str,
-        content_digest: str,
-        trace_behavior_summary: dict[str, Any],
-        error_code: str = "issue_activation_failed",
-    ) -> None:
-        if not error_code:
-            raise ContractError("Version checkpoint activation rejection code is invalid")
-        value = self._load(
-            agent_name,
-            logical_version,
-            foundry_version,
-            content_digest,
-        )
-        value["activation_rejection"] = {
-            "error_code": error_code,
-            "trace_behavior_summary": trace_behavior_summary,
-        }
-        self._write(agent_name, logical_version, value)
-
     def insight_run(
         self,
         agent_name: str,
@@ -440,6 +412,22 @@ class VersionCheckpointStore:
             content_digest,
         )
         value["insight_start_pending"] = True
+        self._write(agent_name, logical_version, value)
+
+    def clear_insight_start_pending(
+        self,
+        agent_name: str,
+        logical_version: str,
+        foundry_version: str,
+        content_digest: str,
+    ) -> None:
+        value = self._load(
+            agent_name,
+            logical_version,
+            foundry_version,
+            content_digest,
+        )
+        value.pop("insight_start_pending", None)
         self._write(agent_name, logical_version, value)
 
     def save_insight_run(

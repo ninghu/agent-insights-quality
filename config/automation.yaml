@@ -7,7 +7,6 @@ auto_merge_statuses: [PASS, FAIL]
 issues_per_agent_daily: 4
 max_parallel_agents: 5
 insight_lookback_hours: 0.1
-trace_assertion_stabilization_seconds: 180
 clean_window_poll_seconds: 15
 clean_window_ingestion_margin_seconds: 30
 clean_window_max_wait_seconds: 1200

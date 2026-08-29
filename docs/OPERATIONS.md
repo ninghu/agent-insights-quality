@@ -138,6 +138,10 @@ for the deadline, and only a stable failure can return there; an unstabilized pa
 run started before later invalidation is drained but its cards are never scored. Exact Foundry-version
 and operation filtering prevents those late cards or spans from contaminating another version.
 Monotonic proof that response-to-operation correlation is ambiguous may still fail immediately.
+Recovery claims are durably capped per Agent across resumes. A quarantined Insight run must drain
+before later versions for that Agent can send traffic; an unresolved start without a run ID requires
+a clean-window reset on resume instead of new target traffic. The immutable run manifest is deferred
+until no start or drain quarantine remains.
 
 Issue source, traffic, source-delta manifests, and version digests are reviewed contracts. Equal
 nonzero request, response, and usable-response counts plus a verified natural trace contract prove

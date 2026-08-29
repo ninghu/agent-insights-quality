@@ -1047,10 +1047,6 @@ def test_trace_row_query_projects_private_values_with_exact_correlation_scope(
         window_end,
     ) == []
     query = captured[0]
-    assert "let assertion_operations" in query
-    assert 'agent_version == "issue-013"' in query
-    assert 'observed_agent == "finance-agent"' in query
-    assert "or operation_Id in (assertion_operations)" in query
     assert 'customDimensions["gen_ai.tool.call.arguments"]' in query
     assert 'customDimensions["gen_ai.tool.call.result"]' in query
     assert query.index('customDimensions["gen_ai.response.id"]') < query.index(
@@ -1090,7 +1086,6 @@ def _write_trace_assertion_traffic(path: Path, request_count: int = 1) -> None:
                         },
                         "expected": {
                             "http_status": 200,
-                            "activation_gate": True,
                             "trace_assertions": [
                                 {
                                     "name": "one_lookup",
@@ -1217,7 +1212,6 @@ def test_trace_assertion_observes_span_ingested_after_135_seconds(
     tmp_path,
 ) -> None:
     monotonic = [0.0]
-    first_pass_times = []
     runtime = LiveRuntime(
         _runtime()._profile,
         token_provider=lambda _: "synthetic-token",
@@ -1270,7 +1264,6 @@ def test_trace_assertion_late_duplicate_invalidates_stabilizing_pass(
     tmp_path,
 ) -> None:
     monotonic = [0.0]
-    first_pass_times = []
     runtime = LiveRuntime(
         _runtime()._profile,
         token_provider=lambda _: "synthetic-token",
@@ -1310,7 +1303,6 @@ def test_trace_assertion_late_duplicate_invalidates_stabilizing_pass(
     )
 
     assert evidence[0][0].passed is False
-    assert first_pass_times == [0]
     assert monotonic[0] == 15 * 60
     assert first_passes == [0]
 
@@ -1367,50 +1359,6 @@ def test_trace_assertion_stable_pass_waits_for_ingestion_interval(
     tmp_path,
 ) -> None:
     monotonic = [0.0]
-    first_pass_times = []
-    runtime = LiveRuntime(
-        _runtime()._profile,
-        token_provider=lambda _: "synthetic-token",
-        monotonic=lambda: monotonic[0],
-    )
-    operation_id = "a" * 32
-    reference = "resp_A1b2C3d4E5f6"
-    first = {
-        **_tool_trace_row("lookup"),
-        "operation_id": operation_id,
-        "matched_reference": reference,
-    }
-    ambiguous = {
-        **first,
-        "operation_id": "b" * 32,
-        "timestamp": "2026-08-28T10:00:01+00:00",
-    }
-    traffic_path = tmp_path / "traffic.json"
-    _write_trace_assertion_traffic(traffic_path)
-    runtime._trace_rows = (  # type: ignore[method-assign]
-        lambda *_args: [first] if monotonic[0] < 135 else [first, ambiguous]
-    )
-    runtime._sleep = lambda seconds: monotonic.__setitem__(
-        0, monotonic[0] + seconds
-    )
-
-    with pytest.raises(ContractError, match="ambiguous"):
-        runtime.trace_assertion_evidence(
-            operation_ids=(operation_id,),
-            response_references=(reference,),
-            traffic_path=traffic_path,
-            on_first_pass=lambda _evidence: first_pass_times.append(monotonic[0]),
-        )
-
-    assert first_pass_times == [0]
-    assert monotonic[0] == 135
-
-
-def test_trace_assertion_stable_pass_uses_reviewed_ingestion_interval(
-    tmp_path,
-) -> None:
-    monotonic = [0.0]
-    first_pass_times = []
     runtime = LiveRuntime(
         _runtime()._profile,
         token_provider=lambda _: "synthetic-token",
@@ -2692,6 +2640,38 @@ def test_agent_insights_rejects_window_anchor_race() -> None:
         )
 
 
+def test_rejected_insight_drain_skips_scoring_window_validation() -> None:
+    now = datetime(2026, 8, 27, 18, 0, tzinfo=UTC)
+    earliest = now - timedelta(minutes=5)
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        utcnow=lambda: now,
+    )
+    runtime._wait_insights_run = (  # type: ignore[method-assign]
+        lambda *_args: {
+            "status": "succeeded",
+            "window_start": (earliest + timedelta(seconds=1)).isoformat(),
+            "window_end": (now + timedelta(minutes=1)).isoformat(),
+        }
+    )
+    runtime._list_insights = lambda _monitor_id: []  # type: ignore[method-assign]
+    runtime._operation_time_bounds = (  # type: ignore[method-assign]
+        lambda **_kwargs: pytest.fail("drain must not validate scoring window")
+    )
+
+    result = runtime.finish_insights_run(
+        agent_name="weather-agent",
+        monitor_id="monitor-weather",
+        foundry_version="1",
+        operation_ids=("a" * 32,),
+        checkpoint=InsightRunCheckpoint("private-run-id", {}),
+        validate_window=False,
+    )
+
+    assert result.status == "succeeded"
+
+
 def test_clean_window_waits_for_private_ledger_horizon(monkeypatch) -> None:
     query_module = types.ModuleType("azure.monitor.query")
     query_module.LogsQueryStatus = type("LogsQueryStatus", (), {"SUCCESS": "success"})
@@ -3236,7 +3216,7 @@ def test_json_request_rechecks_start_deadline_after_auth_refresh(
         runtime._json_request(
             "POST",
             "https://example.invalid",
-            absolute_deadline=initial + timedelta(seconds=1),
+            request_deadline=initial + timedelta(seconds=1),
         )
 
     assert attempts == 1

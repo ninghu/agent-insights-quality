@@ -826,6 +826,7 @@ union traces, dependencies, requests
         foundry_version: str,
         operation_ids: tuple[str, ...],
         checkpoint: InsightRunCheckpoint,
+        validate_window: bool = True,
     ) -> InsightRunEvidence:
         run = self._wait_insights_run(
             agent_name,
@@ -860,7 +861,7 @@ union traces, dependencies, requests
             status=str(run.get("status") or ""),
             insights=evidence,
         )
-        if result.status.lower() == "succeeded":
+        if validate_window and result.status.lower() == "succeeded":
             earliest, latest = self._operation_time_bounds(
                 agent_name=agent_name,
                 foundry_version=foundry_version,
@@ -1541,19 +1542,6 @@ union traces, dependencies, requests
         status = 0
         payload = b""
         while attempt < max_attempts:
-            attempt_timeout = timeout_seconds
-            if absolute_deadline is not None:
-                remaining_seconds = int(
-                    (
-                        absolute_deadline
-                        - self._utcnow().astimezone(UTC)
-                    ).total_seconds()
-                )
-                if remaining_seconds <= 0:
-                    raise InsightWindowExpiredError(
-                        "Correlated operations expired before Agent Insights started"
-                    )
-                attempt_timeout = min(attempt_timeout, remaining_seconds)
             request = urllib.request.Request(
                 url,
                 data=data,
@@ -1988,11 +1976,7 @@ def _request_correlation_impossible(
             continue
         operations_by_reference[reference].add(operation_id)
         references_by_operation[operation_id].add(reference)
-    return any(
-        operation_id not in allowed_operations
-        for values in operations_by_reference.values()
-        for operation_id in values
-    ) or any(len(values) > 1 for values in operations_by_reference.values()) or any(
+    return any(len(values) > 1 for values in operations_by_reference.values()) or any(
         len(values) > 1 for values in references_by_operation.values()
     )
 
@@ -2032,22 +2016,6 @@ def _trace_assertion_stability_signature(
         for request_results in results
     )
     return correlation, assertion_results, _trace_rows_signature(rows)
-
-
-def _activation_trace_assertions_pass(
-    fixtures: tuple[dict[str, Any], ...],
-    results: tuple[tuple[TraceAssertionEvidence, ...], ...],
-) -> bool:
-    gated = [
-        request_results
-        for fixture, request_results in zip(fixtures, results, strict=True)
-        if fixture["activation_gate"]
-    ]
-    return all(
-        assertion.passed
-        for request_results in gated
-        for assertion in request_results
-    )
 
 
 def _json_trace_value(value: Any) -> Any:

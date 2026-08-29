@@ -20,7 +20,6 @@ TRACE_ASSERTION_POLL_SECONDS = 15
 class AutomationPolicy:
     issues_per_agent_daily: int
     insight_lookback_hours: float
-    trace_assertion_stabilization_seconds: int
     clean_window_poll_seconds: int
     clean_window_ingestion_margin_seconds: int
     clean_window_max_wait_seconds: int
@@ -46,15 +45,6 @@ def load_automation_policy(
     lookback = _finite_number(value.get("insight_lookback_hours"), "lookback")
     if lookback < MINIMUM_LOOKBACK_HOURS:
         raise ContractError("Automation lookback is below the reviewed minimum")
-    stabilization = _positive_int(
-        value.get("trace_assertion_stabilization_seconds"),
-        "trace assertion stabilization interval",
-    )
-    if stabilization != TRACE_ASSERTION_STABILIZATION_SECONDS:
-        raise ContractError(
-            "Automation trace assertion stabilization does not match "
-            "the reviewed interval"
-        )
     poll = _positive_int(value.get("clean_window_poll_seconds"), "poll interval")
     margin = _nonnegative_int(
         value.get("clean_window_ingestion_margin_seconds"),
@@ -110,7 +100,6 @@ def load_automation_policy(
     return AutomationPolicy(
         issues_per_agent_daily=daily_issues,
         insight_lookback_hours=lookback,
-        trace_assertion_stabilization_seconds=stabilization,
         clean_window_poll_seconds=poll,
         clean_window_ingestion_margin_seconds=margin,
         clean_window_max_wait_seconds=maximum_wait,

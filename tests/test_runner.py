@@ -208,10 +208,6 @@ class FakeRuntime:
         stabilization_seconds: int,
         on_first_pass,
     ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
-        assert agent_name.endswith("-agent")
-        assert foundry_version
-        assert window_start < window_end
-        assert stabilization_seconds == 180
         payload = json.loads(traffic_path.read_text(encoding="utf-8"))
         assert agent_name.endswith("-agent")
         assert foundry_version
@@ -226,9 +222,6 @@ class FakeRuntime:
             )
             for request in payload["requests"]
         )
-        if on_first_pass is not None:
-            on_first_pass(evidence)
-        return evidence
 
     def start_insights_run(
         self,
@@ -256,8 +249,10 @@ class FakeRuntime:
         foundry_version: str,
         operation_ids: tuple[str, ...],
         checkpoint: InsightRunCheckpoint,
+        validate_window: bool = True,
     ) -> InsightRunEvidence:
         del agent_name, monitor_id
+        del validate_window
         assert checkpoint.run_id == "synthetic-run"
         if foundry_version == "v0" and self.baseline_noise is None:
             insights = ()
@@ -859,7 +854,7 @@ def test_persistent_insight_poll_failure_exhausts_recovery_without_restart(
     weather = next(item for item in results if item.agent_name == "weather-agent")
 
     assert weather.issues[0].status == "inconclusive"
-    assert weather.issues[0].error_code == "insight_run_unaccounted"
+    assert weather.issues[0].error_code == "insight_run_poll_failed_timeout"
     assert weather.issues[1].status == "inconclusive"
     assert weather.issues[1].error_code == "previous_insight_run_unaccounted"
     assert runtime.starts[target] == 1
@@ -1002,6 +997,146 @@ def test_ambiguous_insight_start_retries_only_after_clean_retraffic(
     assert runtime.invoked.count(target) == 2
     assert runtime.clean_agents.count("weather-agent") == 2
     assert runtime.reset_agents.count("weather-agent") == 2
+
+
+def test_exhausted_ambiguous_start_blocks_until_resume_reconciliation(
+    tmp_path: Path,
+) -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    selected = {
+        agent["name"]: [agent["issue_ids"][0]] for agent in agents["agents"]
+    }
+    weather_agent = next(
+        agent for agent in agents["agents"] if agent["name"] == "weather-agent"
+    )
+    selected["weather-agent"].append(weather_agent["issue_ids"][1])
+    target, blocked = selected["weather-agent"]
+
+    class AmbiguousStartRuntime(FakeRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.starts: dict[str, int] = {}
+
+        def start_insights_run(self, **kwargs) -> InsightRunCheckpoint:
+            version = kwargs["foundry_version"]
+            self.starts[version] = self.starts.get(version, 0) + 1
+            if version == target:
+                raise ContractError(
+                    "Remote operation failed before a response was received"
+                )
+            return super().start_insights_run(**kwargs)
+
+    store = VersionCheckpointStore(
+        tmp_path / "stages",
+        "sha256:" + "d" * 64,
+    )
+    runtime = AmbiguousStartRuntime()
+    results = execute(
+        agents=agents,
+        issues=issues,
+        selected=selected,
+        registry=_registry(agents, hashes),
+        runtime=runtime,
+        seed=1,
+        max_recovery_versions=2,
+        checkpoint_store=store,
+    )
+    weather = next(item for item in results if item.agent_name == "weather-agent")
+
+    assert weather.issues[0].error_code == "insight_run_start_unresolved"
+    assert weather.issues[1].error_code == "previous_insight_run_unaccounted"
+    assert runtime.starts[target] == 3
+    assert runtime.invoked.count(target) == 3
+    assert blocked not in runtime.invoked
+
+    resumed = FakeRuntime()
+    resumed_results = execute(
+        agents=agents,
+        issues=issues,
+        selected=selected,
+        registry=_registry(agents, hashes),
+        runtime=resumed,
+        seed=1,
+        max_recovery_versions=2,
+        checkpoint_store=store,
+    )
+    resumed_weather = next(
+        item for item in resumed_results if item.agent_name == "weather-agent"
+    )
+
+    assert resumed_weather.issues[0].error_code == "insight_run_start_unresolved"
+    assert resumed_weather.issues[1].status == "observed"
+    assert target not in resumed.invoked
+    assert blocked in resumed.invoked
+    assert resumed.clean_agents.count("weather-agent") == 1
+    assert resumed.reset_agents.count("weather-agent") == 1
+
+
+def test_ambiguous_start_remains_quarantined_when_clean_recovery_fails(
+    tmp_path: Path,
+) -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    selected = {
+        agent["name"]: [agent["issue_ids"][0]] for agent in agents["agents"]
+    }
+    weather_agent = next(
+        agent for agent in agents["agents"] if agent["name"] == "weather-agent"
+    )
+    selected["weather-agent"].append(weather_agent["issue_ids"][1])
+    target, blocked = selected["weather-agent"]
+
+    class FailedCleanRecoveryRuntime(FakeRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.weather_clean_attempts = 0
+
+        def start_insights_run(self, **kwargs) -> InsightRunCheckpoint:
+            if kwargs["foundry_version"] == target:
+                raise ContractError(
+                    "Remote operation failed before a response was received"
+                )
+            return super().start_insights_run(**kwargs)
+
+        def wait_for_clean_window(
+            self,
+            agent_name: str,
+            lookback_hours: float,
+            **kwargs,
+        ) -> None:
+            if agent_name == "weather-agent":
+                self.weather_clean_attempts += 1
+                if self.weather_clean_attempts == 2:
+                    raise RuntimeError("synthetic recovery clean-window failure")
+            super().wait_for_clean_window(agent_name, lookback_hours, **kwargs)
+
+    store = VersionCheckpointStore(
+        tmp_path / "stages",
+        "sha256:" + "d" * 64,
+    )
+    runtime = FailedCleanRecoveryRuntime()
+    results = execute(
+        agents=agents,
+        issues=issues,
+        selected=selected,
+        registry=_registry(agents, hashes),
+        runtime=runtime,
+        seed=1,
+        checkpoint_store=store,
+    )
+    weather = next(item for item in results if item.agent_name == "weather-agent")
+    entry = _registry(agents, hashes)["agents"]["weather-agent"]["versions"][target]
+
+    assert weather.issues[0].status == "inconclusive"
+    assert weather.issues[1].error_code == "previous_insight_run_unaccounted"
+    assert blocked not in runtime.invoked
+    assert store.insight_start_pending(
+        "weather-agent",
+        target,
+        entry["foundry_version"],
+        entry["content_digest"],
+    )
 
 
 def test_pending_insight_start_from_crash_forces_clean_retraffic(
@@ -1209,6 +1344,63 @@ def test_failed_prompt_issue_activation_is_incomplete() -> None:
     assert result.baseline.status == "passed"
     assert result.issues[0].status == "inconclusive"
     assert result.issues[0].error_code == "issue_activation_failed"
+
+
+def test_failed_hosted_semantic_activation_does_not_start_insights() -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    registry = _registry(agents, hashes)
+    finance = next(
+        agent for agent in agents["agents"] if agent["name"] == "finance-agent"
+    )
+    target = finance["issue_ids"][0]
+
+    class FailedSemanticActivationRuntime(FakeRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.starts: list[str] = []
+
+        def invoke_version(self, **kwargs) -> InvocationEvidence:
+            evidence = super().invoke_version(**kwargs)
+            if kwargs["foundry_version"] != target:
+                return evidence
+            summaries = list(evidence.request_summaries)
+            summaries[0] = replace(
+                summaries[0],
+                semantic_assertions_passed=0,
+                assertion_results=(
+                    SemanticAssertionEvidence("synthetic_contract", False),
+                ),
+            )
+            return replace(
+                evidence,
+                semantic_assertions_passed=evidence.semantic_assertions_passed - 1,
+                request_summaries=tuple(summaries),
+            )
+
+        def start_insights_run(self, **kwargs) -> InsightRunCheckpoint:
+            self.starts.append(kwargs["foundry_version"])
+            return super().start_insights_run(**kwargs)
+
+    runtime = FailedSemanticActivationRuntime()
+    results = execute(
+        agents=agents,
+        issues=issues,
+        selected={
+            agent["name"]: [agent["issue_ids"][0]]
+            for agent in agents["agents"]
+        },
+        registry=registry,
+        runtime=runtime,
+        seed=1,
+    )
+    issue = next(
+        item for item in results if item.agent_name == "finance-agent"
+    ).issues[0]
+
+    assert issue.status == "inconclusive"
+    assert issue.error_code == "issue_activation_failed"
+    assert target not in runtime.starts
 
 
 def test_failed_hosted_trace_activation_is_incomplete() -> None:

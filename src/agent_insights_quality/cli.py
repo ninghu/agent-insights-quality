@@ -339,9 +339,6 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                     runtime=runtime,
                     seed=seed,
                     lookback_hours=policy.insight_lookback_hours,
-                    trace_assertion_stabilization_seconds=(
-                        policy.trace_assertion_stabilization_seconds
-                    ),
                     clean_window_poll_seconds=policy.clean_window_poll_seconds,
                     clean_window_ingestion_margin_seconds=(
                         policy.clean_window_ingestion_margin_seconds
@@ -359,6 +356,7 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                     ),
                     checkpoint_store=checkpoint_store,
                 )
+                _assert_insight_state_resolved(checkpoint_store)
                 manifest = build_manifest(
                     report_date=args.report_date,
                     profile=profile_name,
@@ -737,15 +735,22 @@ def _run_contract_digest(
             "registry_hash": content_hash(registry),
             "work_items_hash": content_hash(work_items),
             "lookback_hours": policy.insight_lookback_hours,
-            "trace_assertion_stabilization_seconds": (
-                policy.trace_assertion_stabilization_seconds
-            ),
             "agent_start_stagger_seconds": policy.agent_start_stagger_seconds,
             "telemetry_resource_set": policy.telemetry_resource_set,
             "seed": seed,
             "runtime_files": runtime_files,
         }
     )
+
+
+def _assert_insight_state_resolved(
+    checkpoint_store: VersionCheckpointStore,
+) -> None:
+    if checkpoint_store.has_unresolved_insight_state():
+        raise ContractError(
+            "Qualification has unresolved Agent Insights state; resume before "
+            "creating the immutable manifest"
+        )
 
 
 def _rehydrate_with_retries(
