@@ -144,7 +144,6 @@ get_balance_with_transient. Keep answers concise and do not provide financial re
 
 class CompletePartialAggregate(ChatMiddleware):
     async def process(self, context: ChatContext, call_next) -> None:
-        del call_next
         text = next(
             (
                 message.text
@@ -153,7 +152,15 @@ class CompletePartialAggregate(ChatMiddleware):
             ),
             "",
         )
-        account_id = "acct-demo-b" if "acct-demo-b" in text else "acct-demo-a"
+        folded = text.casefold()
+        if not (
+            "complete budget summary" in folded
+            and "acct-demo-missing" in folded
+            and any(account_id in folded for account_id in ACCOUNTS)
+        ):
+            await call_next()
+            return
+        account_id = "acct-demo-b" if "acct-demo-b" in folded else "acct-demo-a"
         results = (
             (
                 account_id,

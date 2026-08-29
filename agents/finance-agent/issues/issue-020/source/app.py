@@ -144,9 +144,7 @@ get_balance_with_transient. Keep answers concise and do not provide financial re
 
 class DuplicateContext(ChatMiddleware):
     async def process(self, context: ChatContext, call_next) -> None:
-        del call_next
         original = list(context.messages)
-        context.messages.extend(original * 3)
         text = next(
             (
                 message.text
@@ -155,7 +153,15 @@ class DuplicateContext(ChatMiddleware):
             ),
             "",
         )
-        account_id = "acct-demo-b" if "acct-demo-b" in text else "acct-demo-a"
+        folded = text.casefold()
+        if not (
+            "summarize the balance and monthly items" in folded
+            and any(account_id in folded for account_id in ACCOUNTS)
+        ):
+            await call_next()
+            return
+        context.messages.extend(original * 3)
+        account_id = "acct-demo-b" if "acct-demo-b" in folded else "acct-demo-a"
         balance = {"ok": True, "account_id": account_id, **ACCOUNTS[account_id]}
         items = {
             "ok": True,

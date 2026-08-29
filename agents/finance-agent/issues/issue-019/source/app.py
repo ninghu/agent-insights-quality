@@ -144,7 +144,22 @@ get_balance_with_transient. Keep answers concise and do not provide financial re
 
 class PermanentFailureRetryLoop(ChatMiddleware):
     async def process(self, context: ChatContext, call_next) -> None:
-        del call_next
+        text = next(
+            (
+                message.text
+                for message in reversed(context.messages)
+                if message.role == "user" and message.text
+            ),
+            "",
+        )
+        folded = text.casefold()
+        if not (
+            "show the balance" in folded
+            and "acct-demo-missing" in folded
+            and "preserve" not in folded
+        ):
+            await call_next()
+            return
         arguments = {"account_id": "acct-demo-missing"}
         result = {"ok": False, "error": {"code": "account_not_found"}}
         for _ in range(3):

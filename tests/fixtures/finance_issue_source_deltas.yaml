@@ -26,7 +26,6 @@ issues:
       +
       +class ContradictedBalance(ChatMiddleware):
       +    async def process(self, context: ChatContext, call_next) -> None:
-      +        del call_next
       +        text = next(
       +            (
       +                message.text
@@ -35,7 +34,15 @@ issues:
       +            ),
       +            "",
       +        )
-      +        account_id = "acct-demo-b" if "acct-demo-b" in text else "acct-demo-a"
+      +        folded = text.casefold()
+      +        if not (
+      +            "show the balance" in folded
+      +            and any(account_id in folded for account_id in ACCOUNTS)
+      +            and "transient" not in folded
+      +        ):
+      +            await call_next()
+      +            return
+      +        account_id = "acct-demo-b" if "acct-demo-b" in folded else "acct-demo-a"
       +        result = {"ok": True, "account_id": account_id, **ACCOUNTS[account_id]}
       +        with tracer.start_as_current_span("finance.tool.get_balance") as span:
       +            span.set_attribute("gen_ai.operation.name", "execute_tool")
@@ -115,7 +122,22 @@ issues:
       +
       +class MissingAccountIdentifier(ChatMiddleware):
       +    async def process(self, context: ChatContext, call_next) -> None:
-      +        del call_next
+      +        text = next(
+      +            (
+      +                message.text
+      +                for message in reversed(context.messages)
+      +                if message.role == "user" and message.text
+      +            ),
+      +            "",
+      +        )
+      +        folded = text.casefold()
+      +        if not (
+      +            "show the balance" in folded
+      +            and any(account_id in folded for account_id in ACCOUNTS)
+      +            and "transient" not in folded
+      +        ):
+      +            await call_next()
+      +            return
       +        result = {"ok": False, "error": {"code": "account_id_required"}}
       +        with tracer.start_as_current_span("finance.tool.get_balance") as span:
       +            span.set_attribute("gen_ai.operation.name", "execute_tool")
@@ -191,7 +213,6 @@ issues:
       +
       +class OppositeAccountScope(ChatMiddleware):
       +    async def process(self, context: ChatContext, call_next) -> None:
-      +        del call_next
       +        text = next(
       +            (
       +                message.text
@@ -200,7 +221,15 @@ issues:
       +            ),
       +            "",
       +        )
-      +        requested = "acct-demo-b" if "acct-demo-b" in text else "acct-demo-a"
+      +        folded = text.casefold()
+      +        if not (
+      +            "use only" in folded
+      +            and "show its balance" in folded
+      +            and any(account_id in folded for account_id in ACCOUNTS)
+      +        ):
+      +            await call_next()
+      +            return
+      +        requested = "acct-demo-b" if "acct-demo-b" in folded else "acct-demo-a"
       +        account_id = (
       +            "acct-demo-a" if requested == "acct-demo-b" else "acct-demo-b"
       +        )
@@ -285,7 +314,21 @@ issues:
       +
       +class StructuredErrorAsBalance(ChatMiddleware):
       +    async def process(self, context: ChatContext, call_next) -> None:
-      +        del call_next
+      +        text = next(
+      +            (
+      +                message.text
+      +                for message in reversed(context.messages)
+      +                if message.role == "user" and message.text
+      +            ),
+      +            "",
+      +        )
+      +        folded = text.casefold()
+      +        if not (
+      +            "acct-demo-missing" in folded
+      +            and "preserve the tool error" in folded
+      +        ):
+      +            await call_next()
+      +            return
       +        result = {"ok": False, "error": {"code": "account_not_found"}}
       +        with tracer.start_as_current_span("finance.tool.get_balance") as span:
       +            span.set_attribute("gen_ai.operation.name", "execute_tool")
@@ -364,7 +407,6 @@ issues:
       +
       +class CompletePartialAggregate(ChatMiddleware):
       +    async def process(self, context: ChatContext, call_next) -> None:
-      +        del call_next
       +        text = next(
       +            (
       +                message.text
@@ -373,7 +415,15 @@ issues:
       +            ),
       +            "",
       +        )
-      +        account_id = "acct-demo-b" if "acct-demo-b" in text else "acct-demo-a"
+      +        folded = text.casefold()
+      +        if not (
+      +            "complete budget summary" in folded
+      +            and "acct-demo-missing" in folded
+      +            and any(account_id in folded for account_id in ACCOUNTS)
+      +        ):
+      +            await call_next()
+      +            return
+      +        account_id = "acct-demo-b" if "acct-demo-b" in folded else "acct-demo-a"
       +        results = (
       +            (
       +                account_id,
@@ -473,7 +523,6 @@ issues:
       +
       +class MissingTransientRetry(ChatMiddleware):
       +    async def process(self, context: ChatContext, call_next) -> None:
-      +        del call_next
       +        text = next(
       +            (
       +                message.text
@@ -482,7 +531,14 @@ issues:
       +            ),
       +            "",
       +        )
-      +        account_id = "acct-demo-b" if "acct-demo-b" in text else "acct-demo-a"
+      +        folded = text.casefold()
+      +        if not (
+      +            "transient balance lookup" in folded
+      +            and any(account_id in folded for account_id in ACCOUNTS)
+      +        ):
+      +            await call_next()
+      +            return
+      +        account_id = "acct-demo-b" if "acct-demo-b" in folded else "acct-demo-a"
       +        result = {
       +            "ok": False,
       +            "error": {"code": "temporary_unavailable", "retryable": True},
@@ -572,7 +628,22 @@ issues:
       +
       +class PermanentFailureRetryLoop(ChatMiddleware):
       +    async def process(self, context: ChatContext, call_next) -> None:
-      +        del call_next
+      +        text = next(
+      +            (
+      +                message.text
+      +                for message in reversed(context.messages)
+      +                if message.role == "user" and message.text
+      +            ),
+      +            "",
+      +        )
+      +        folded = text.casefold()
+      +        if not (
+      +            "show the balance" in folded
+      +            and "acct-demo-missing" in folded
+      +            and "preserve" not in folded
+      +        ):
+      +            await call_next()
+      +            return
       +        arguments = {"account_id": "acct-demo-missing"}
       +        result = {"ok": False, "error": {"code": "account_not_found"}}
       +        for _ in range(3):
@@ -656,9 +727,7 @@ issues:
       +
       +class DuplicateContext(ChatMiddleware):
       +    async def process(self, context: ChatContext, call_next) -> None:
-      +        del call_next
       +        original = list(context.messages)
-      +        context.messages.extend(original * 3)
       +        text = next(
       +            (
       +                message.text
@@ -667,7 +736,15 @@ issues:
       +            ),
       +            "",
       +        )
-      +        account_id = "acct-demo-b" if "acct-demo-b" in text else "acct-demo-a"
+      +        folded = text.casefold()
+      +        if not (
+      +            "summarize the balance and monthly items" in folded
+      +            and any(account_id in folded for account_id in ACCOUNTS)
+      +        ):
+      +            await call_next()
+      +            return
+      +        context.messages.extend(original * 3)
+      +        account_id = "acct-demo-b" if "acct-demo-b" in folded else "acct-demo-a"
       +        balance = {"ok": True, "account_id": account_id, **ACCOUNTS[account_id]}
       +        items = {
       +            "ok": True,

@@ -144,7 +144,6 @@ get_balance_with_transient. Keep answers concise and do not provide financial re
 
 class ContradictedBalance(ChatMiddleware):
     async def process(self, context: ChatContext, call_next) -> None:
-        del call_next
         text = next(
             (
                 message.text
@@ -153,7 +152,15 @@ class ContradictedBalance(ChatMiddleware):
             ),
             "",
         )
-        account_id = "acct-demo-b" if "acct-demo-b" in text else "acct-demo-a"
+        folded = text.casefold()
+        if not (
+            "show the balance" in folded
+            and any(account_id in folded for account_id in ACCOUNTS)
+            and "transient" not in folded
+        ):
+            await call_next()
+            return
+        account_id = "acct-demo-b" if "acct-demo-b" in folded else "acct-demo-a"
         result = {"ok": True, "account_id": account_id, **ACCOUNTS[account_id]}
         with tracer.start_as_current_span("finance.tool.get_balance") as span:
             span.set_attribute("gen_ai.operation.name", "execute_tool")

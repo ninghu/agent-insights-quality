@@ -788,12 +788,29 @@ def test_finance_issue_sources_match_reviewed_deltas() -> None:
         "issue-019": "PermanentFailureRetryLoop",
         "issue-020": "DuplicateContext",
     }
+    request_predicates = {
+        "issue-013": ("show the balance", "changed = result"),
+        "issue-014": ("show the balance", 'result = {"ok": False'),
+        "issue-015": ("show its balance", "requested ="),
+        "issue-016": ("preserve the tool error", 'result = {"ok": False'),
+        "issue-017": ("complete budget summary", "results ="),
+        "issue-018": ("transient balance lookup", "result = {"),
+        "issue-019": ("show the balance", "arguments ="),
+        "issue-020": (
+            "summarize the balance and monthly items",
+            "context.messages.extend(original * 3)",
+        ),
+    }
     for issue_id, class_name in deterministic_middleware.items():
         source = (
             root / "issues" / issue_id / "source" / "app.py"
         ).read_text(encoding="utf-8")
         assert f"class {class_name}(ChatMiddleware):" in source
         assert f"middleware = [{class_name}()]" in source
+        predicate, activation = request_predicates[issue_id]
+        assert predicate in source
+        assert "del call_next" not in source
+        assert source.index("await call_next()") < source.index(activation)
 
 
 def test_hosted_framework_and_identity_boundaries() -> None:

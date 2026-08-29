@@ -144,7 +144,22 @@ get_balance_with_transient. Keep answers concise and do not provide financial re
 
 class MissingAccountIdentifier(ChatMiddleware):
     async def process(self, context: ChatContext, call_next) -> None:
-        del call_next
+        text = next(
+            (
+                message.text
+                for message in reversed(context.messages)
+                if message.role == "user" and message.text
+            ),
+            "",
+        )
+        folded = text.casefold()
+        if not (
+            "show the balance" in folded
+            and any(account_id in folded for account_id in ACCOUNTS)
+            and "transient" not in folded
+        ):
+            await call_next()
+            return
         result = {"ok": False, "error": {"code": "account_id_required"}}
         with tracer.start_as_current_span("finance.tool.get_balance") as span:
             span.set_attribute("gen_ai.operation.name", "execute_tool")
