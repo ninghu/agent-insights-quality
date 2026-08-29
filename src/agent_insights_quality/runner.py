@@ -23,6 +23,7 @@ from agent_insights_quality.util import (
     ContractError,
     InsightWindowExpiredError,
     TraceAssertionActivationError,
+    read_json,
 )
 
 
@@ -108,6 +109,44 @@ def _progress(runtime: Any, message: str) -> None:
         reporter(message)
 
 
+def _required_trace_operations(
+    *,
+    agent: dict[str, Any],
+    expected: dict[str, Any] | None,
+    traffic_path: Path,
+    request_count: int,
+) -> tuple[tuple[str, ...], ...]:
+    if (
+        expected is not None
+        or agent["baseline_contract"]["trace_operations"] == "uniform"
+    ):
+        operations = tuple(
+            expected["trace_contract"]["operations"]
+            if expected is not None
+            else ("invoke_agent", "chat")
+        )
+        return tuple(operations for _ in range(request_count))
+
+    traffic = read_json(traffic_path)
+    requests = traffic.get("requests") if isinstance(traffic, dict) else None
+    if not isinstance(requests, list) or len(requests) != request_count:
+        raise ContractError("Traffic request operation contract is incomplete")
+    required: list[tuple[str, ...]] = []
+    for request in requests:
+        expected_request = (
+            request.get("expected") if isinstance(request, dict) else None
+        )
+        operations = (
+            expected_request.get("required_operations")
+            if isinstance(expected_request, dict)
+            else None
+        )
+        if not isinstance(operations, list) or not operations:
+            raise ContractError("Traffic request operation contract is incomplete")
+        required.append(tuple(str(operation) for operation in operations))
+    return tuple(required)
+
+
 class RuntimePort(Protocol):
     def reset_monitor(self, agent_name: str, monitor_id: str) -> None: ...
 
@@ -145,7 +184,7 @@ class RuntimePort(Protocol):
         agent_name: str,
         foundry_version: str,
         operation_ids: tuple[str, ...],
-        required_operations: tuple[str, ...],
+        required_operations_by_request: tuple[tuple[str, ...], ...],
         window_start: str,
         window_end: str,
     ) -> None: ...
@@ -1096,10 +1135,11 @@ def _execute_version(
     if agent["type"] != "prompt":
         start_insight_run_once()
 
-    required_operations = tuple(
-        expected["trace_contract"]["operations"]
-        if expected is not None
-        else ("invoke_agent", "chat")
+    required_operations_by_request = _required_trace_operations(
+        agent=agent,
+        expected=expected,
+        traffic_path=traffic_path,
+        request_count=invocation.request_count,
     )
     trace_verified = (
         checkpoint_store.trace_verified(*checkpoint_args)
@@ -1112,7 +1152,7 @@ def _execute_version(
                 agent_name=agent["name"],
                 foundry_version=foundry_version,
                 operation_ids=operation_ids,
-                required_operations=required_operations,
+                required_operations_by_request=required_operations_by_request,
                 window_start=invocation.started_at,
                 window_end=invocation.completed_at,
             )

@@ -466,6 +466,7 @@ def _complete_prompt_baseline_package() -> dict:
         "terminal_response": "direct_prompt",
         "semantic_assertions": "required_per_request",
         "function_calling": "forbidden",
+        "trace_operations": "uniform",
     }
     return {
         "endpoint_evidence": endpoint,
@@ -522,6 +523,7 @@ def test_zero_request_baseline_has_no_success_shaped_evidence() -> None:
             "terminal_response": "direct_prompt",
             "semantic_assertions": "required_per_request",
             "function_calling": "forbidden",
+            "trace_operations": "uniform",
         },
     )
     assert summary == {

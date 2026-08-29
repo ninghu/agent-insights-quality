@@ -36,7 +36,22 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
+          "json_schema": {
+            "type": "object",
+            "required": [
+              "shape",
+              "high",
+              "low",
+              "unit"
+            ],
+            "not": {
+              "anyOf": [
+                {"required": ["condition"]},
+                {"required": ["temperature"]}
+              ]
+            }
+          },
+          "exact_json_fields": {
             "shape": "forecast",
             "high": 27,
             "low": 13,
@@ -78,7 +93,22 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
+          "json_schema": {
+            "type": "object",
+            "required": [
+              "shape",
+              "high",
+              "low",
+              "unit"
+            ],
+            "not": {
+              "anyOf": [
+                {"required": ["condition"]},
+                {"required": ["temperature"]}
+              ]
+            }
+          },
+          "exact_json_fields": {
             "shape": "forecast",
             "high": 27,
             "low": 13,
@@ -120,7 +150,22 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
+          "json_schema": {
+            "type": "object",
+            "required": [
+              "shape",
+              "high",
+              "low",
+              "unit"
+            ],
+            "not": {
+              "anyOf": [
+                {"required": ["condition"]},
+                {"required": ["temperature"]}
+              ]
+            }
+          },
+          "exact_json_fields": {
             "shape": "forecast",
             "high": 27,
             "low": 13,
@@ -162,7 +207,22 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
+          "json_schema": {
+            "type": "object",
+            "required": [
+              "shape",
+              "high",
+              "low",
+              "unit"
+            ],
+            "not": {
+              "anyOf": [
+                {"required": ["condition"]},
+                {"required": ["temperature"]}
+              ]
+            }
+          },
+          "exact_json_fields": {
             "shape": "forecast",
             "high": 27,
             "low": 13,
@@ -204,7 +264,22 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
+          "json_schema": {
+            "type": "object",
+            "required": [
+              "shape",
+              "high",
+              "low",
+              "unit"
+            ],
+            "not": {
+              "anyOf": [
+                {"required": ["condition"]},
+                {"required": ["temperature"]}
+              ]
+            }
+          },
+          "exact_json_fields": {
             "shape": "forecast",
             "high": 27,
             "low": 13,

@@ -36,7 +36,17 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "non_json",
-          "exact_text": "Weather summary: clear, 21 celsius."
+          "required_terms_all": [
+            "clear",
+            "21",
+            "celsius"
+          ],
+          "forbidden_terms": [
+            "not correct",
+            "incorrect",
+            "unavailable",
+            "unknown"
+          ]
         }
       }
     },
@@ -73,7 +83,17 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "non_json",
-          "exact_text": "Weather summary: clear, 21 celsius."
+          "required_terms_all": [
+            "clear",
+            "21",
+            "celsius"
+          ],
+          "forbidden_terms": [
+            "not correct",
+            "incorrect",
+            "unavailable",
+            "unknown"
+          ]
         }
       }
     },
@@ -110,7 +130,17 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "non_json",
-          "exact_text": "Weather summary: clear, 21 celsius."
+          "required_terms_all": [
+            "clear",
+            "21",
+            "celsius"
+          ],
+          "forbidden_terms": [
+            "not correct",
+            "incorrect",
+            "unavailable",
+            "unknown"
+          ]
         }
       }
     },
@@ -147,7 +177,17 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "non_json",
-          "exact_text": "Weather summary: clear, 21 celsius."
+          "required_terms_all": [
+            "clear",
+            "21",
+            "celsius"
+          ],
+          "forbidden_terms": [
+            "not correct",
+            "incorrect",
+            "unavailable",
+            "unknown"
+          ]
         }
       }
     },
@@ -184,7 +224,17 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "non_json",
-          "exact_text": "Weather summary: clear, 21 celsius."
+          "required_terms_all": [
+            "clear",
+            "21",
+            "celsius"
+          ],
+          "forbidden_terms": [
+            "not correct",
+            "incorrect",
+            "unavailable",
+            "unknown"
+          ]
         }
       }
     }

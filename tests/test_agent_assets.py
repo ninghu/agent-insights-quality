@@ -759,6 +759,7 @@ def test_finance_issue_sources_match_reviewed_deltas() -> None:
         "issue-019": {
             "three_permanent_attempts",
             "permanent_error_retry_sequence",
+            "same_request_scope_each_attempt",
         },
         "issue-020": {"model_context_repeated_four_times"},
     }
@@ -794,7 +795,7 @@ def test_finance_issue_sources_match_reviewed_deltas() -> None:
         "issue-016": ("preserve the tool error", 'result = {"ok": False'),
         "issue-017": ("complete budget summary", "results ="),
         "issue-018": ("transient balance lookup", "result = {"),
-        "issue-019": ("show the balance", "arguments ="),
+        "issue-019": ("context.function.name", 'account_id != "acct-demo-missing"'),
         "issue-020": (
             "summarize the balance and monthly items",
             "context.messages.extend(original * 3)",
@@ -804,12 +805,21 @@ def test_finance_issue_sources_match_reviewed_deltas() -> None:
         source = (
             root / "issues" / issue_id / "source" / "app.py"
         ).read_text(encoding="utf-8")
-        assert f"class {class_name}(ChatMiddleware):" in source
+        middleware_base = (
+            "FunctionMiddleware" if issue_id == "issue-019" else "ChatMiddleware"
+        )
+        assert f"class {class_name}({middleware_base}):" in source
         assert f"middleware = [{class_name}()]" in source
+        assert "middleware=[ExactTransientRetry(), *middleware]" in source
         predicate, activation = request_predicates[issue_id]
         assert predicate in source
         assert "del call_next" not in source
         assert source.index("await call_next()") < source.index(activation)
+
+    baseline_source = (baseline_root / "app.py").read_text(encoding="utf-8")
+    baseline_retry = (baseline_root / "retry.py").read_text(encoding="utf-8")
+    assert "class ExactTransientRetry(FunctionMiddleware):" in baseline_retry
+    assert "middleware=[ExactTransientRetry(), *middleware]" in baseline_source
 
     duplicate_context = (
         root / "issues" / "issue-020" / "source" / "app.py"
@@ -1036,19 +1046,19 @@ def test_prompt_json_contracts_are_evaluator_side_and_tool_free() -> None:
 
 
 def test_prompt_activation_gates_are_request_bound() -> None:
-    structured = {
-        "issue-001",
-        "issue-003",
-        "issue-004",
-        "issue-005",
-        "issue-007",
-        "issue-008",
-        "issue-009",
-        "issue-010",
-        "issue-011",
-        "issue-012",
+    assertion_keys = {
+        "issue-001": "exact_json",
+        "issue-003": "exact_json_fields",
+        "issue-004": "exact_json_fields",
+        "issue-005": "question_only",
+        "issue-007": "exact_json",
+        "issue-008": "exact_json_fields",
+        "issue-009": "exact_json",
+        "issue-010": "exact_json_fields",
+        "issue-011": "exact_json_fields",
+        "issue-012": "exact_json_fields",
     }
-    for issue_id in structured:
+    for issue_id, assertion_key in assertion_keys.items():
         agent = "weather-agent" if int(issue_id[-3:]) <= 6 else "healthcare-agent"
         value = json.loads(
             (
@@ -1066,7 +1076,6 @@ def test_prompt_activation_gates_are_request_bound() -> None:
             if item["expected"].get("activation_gate") is True
         ]
         assert gates
-        assertion_key = "exact_text" if issue_id == "issue-005" else "exact_json"
         assert all(
             assertion_key in item["expected"]["semantic_assertions"]
             for item in gates
@@ -1081,14 +1090,20 @@ def test_prompt_activation_gates_are_request_bound() -> None:
             / "traffic.json"
         ).read_text(encoding="utf-8")
     )
-    exact_verbose = verbose["requests"][0]["expected"]["semantic_assertions"][
-        "exact_text"
-    ]
-    assert len(re.findall(r"\S+", exact_verbose)) == 82
     assert all(
         item["expected"]["semantic_assertions"] == {
-            "exact_text": exact_verbose,
-            "min_words": 80,
+            "minimum_term_occurrences": {
+                "clear": 3,
+                "22": 3,
+                "celsius": 3,
+            },
+            "min_words": 40,
+            "forbidden_terms": [
+                "not correct",
+                "incorrect",
+                "unavailable",
+                "unknown",
+            ],
         }
         for item in verbose["requests"]
     )
@@ -1105,7 +1120,13 @@ def test_prompt_activation_gates_are_request_bound() -> None:
     assert all(
         item["expected"]["semantic_assertions"] == {
             "response_format": "non_json",
-            "exact_text": "Weather summary: clear, 21 celsius.",
+            "required_terms_all": ["clear", "21", "celsius"],
+            "forbidden_terms": [
+                "not correct",
+                "incorrect",
+                "unavailable",
+                "unknown",
+            ],
         }
         for item in schema_violation["requests"]
     )
@@ -1136,9 +1157,10 @@ def test_weather_latency_issue_requires_five_two_turn_groups() -> None:
         assert "condition=clear" in first_text
         assert "temperature=20" in first_text
         assert "already gave" in second_text
-        assert first["expected"]["semantic_assertions"]["exact_text"] == (
-            "Would you like me to use the complete weather evidence already provided?"
-        )
+        assert first["expected"]["semantic_assertions"]["question_only"] is True
+        assert "would you" in first["expected"]["semantic_assertions"][
+            "required_terms_any"
+        ]
         assert first["expected"]["activation_gate"] is True
         assert first["expected"]["defect_observed"] is True
         assert second["expected"]["semantic_assertions"]["exact_json"] == {
@@ -1149,6 +1171,7 @@ def test_weather_latency_issue_requires_five_two_turn_groups() -> None:
             "unit": "celsius",
         }
         assert second["expected"]["activation_gate"] is False
+        assert second["expected"]["defect_observed"] is False
 
 
 def test_healthcare_action_issues_emit_distinct_json_envelopes() -> None:
@@ -1169,7 +1192,7 @@ def test_healthcare_action_issues_emit_distinct_json_envelopes() -> None:
         for item in value["requests"]:
             assertions = item["expected"]["semantic_assertions"]
             assert assertions["response_format"] == "json"
-            envelope = assertions["exact_json"]
+            envelope = assertions["exact_json_fields"]
             assert envelope["action"] == action
             assert item["expected"]["activation_gate"] is True
             if issue_id == "issue-008":
@@ -1282,7 +1305,7 @@ def test_healthcare_unsupported_availability_is_request_bound() -> None:
     )
     for item in value["requests"]:
         text = item["request"]["body"]["input"][0]["content"][0]["text"]
-        envelope = item["expected"]["semantic_assertions"]["exact_json"]
+        envelope = item["expected"]["semantic_assertions"]["exact_json_fields"]
         assert set(envelope) == {
             "availability",
             "provider",
@@ -1299,7 +1322,7 @@ def test_healthcare_unsupported_availability_is_request_bound() -> None:
         )
     afternoon = value["requests"][2]
     assert "15:00" in afternoon["request"]["body"]["input"][0]["content"][0]["text"]
-    assert afternoon["expected"]["semantic_assertions"]["exact_json"]["slot"] == (
+    assert afternoon["expected"]["semantic_assertions"]["exact_json_fields"]["slot"] == (
         "slot-demo-303"
     )
 
@@ -1341,7 +1364,7 @@ def test_prompt_substitution_issues_bind_supplied_evidence() -> None:
     for item in weather["requests"]:
         text = json.dumps(item["request"]["body"])
         assert "high=27" in text and "low=13" in text
-        assert item["expected"]["semantic_assertions"]["exact_json"] == {
+        assert item["expected"]["semantic_assertions"]["exact_json_fields"] == {
             "shape": "forecast",
             "high": 27,
             "low": 13,
@@ -1358,11 +1381,12 @@ def test_prompt_substitution_issues_bind_supplied_evidence() -> None:
         ).read_text(encoding="utf-8")
     )
     for index, item in enumerate(healthcare["requests"], start=1):
-        expected = item["expected"]["semantic_assertions"]["exact_json"]
+        expected = item["expected"]["semantic_assertions"]["exact_json_fields"]
         text = json.dumps(item["request"]["body"])
         assert expected["record_id"] in text
         assert expected["slot"] in text
         assert expected["account_scope"] == "demo-account-b"
+        assert expected["provider"] == "Dr. Chen"
 
 
 def test_healthcare_corrections_retain_initial_date() -> None:
@@ -1380,3 +1404,54 @@ def test_healthcare_corrections_retain_initial_date() -> None:
         "2026-09-21" in json.dumps(item["request"]["body"])
         for item in value["requests"]
     )
+
+
+def test_r03_prompt_regression_matrix_records_final_modes_without_workflow() -> None:
+    matrix = yaml.safe_load(
+        (
+            ROOT / "tests" / "fixtures" / "r03_prompt_regression_matrix.yaml"
+        ).read_text(encoding="utf-8")
+    )
+    assert matrix["data_class"] == "synthetic_public_safe"
+    assert matrix["workflow_implemented"] is False
+    assert matrix["mode_assignment"] == {
+        "authority": "reviewed_per_defect_mechanism",
+        "infer_from_agent_runtime_kind": False,
+        "frozen_before_execution": True,
+        "included_in_execution_digest": True,
+        "result_driven_reclassification": "forbidden",
+        "result_driven_resampling": "forbidden",
+        "threshold_downgrade": "forbidden",
+    }
+    assert matrix["validation_modes"] == {
+        "baseline": {
+            "observations": 5,
+            "healthy_required": 5,
+        },
+        "deterministic": {
+            "issue_observations": 5,
+            "defect_observations_required": 5,
+            "paired_v0_observations": 5,
+            "paired_v0_defect_observations_required": 0,
+        },
+        "model_mediated": {
+            "issue_observations": 7,
+            "defect_observations_required": 5,
+            "paired_v0_observations": 7,
+            "paired_v0_defect_observations_required": 0,
+        },
+    }
+    assert [row["issue_id"] for row in matrix["rows"]] == [
+        f"issue-{number:03d}" for number in range(1, 13)
+    ]
+
+    for row in matrix["rows"]:
+        mode = matrix["validation_modes"][row["validation_mode"]]
+        assert row["validation_mode"] == "model_mediated"
+        assert row["r03_issue_observations"] < mode["issue_observations"]
+        assert (
+            row["r03_paired_v0_observations"]
+            < mode["paired_v0_observations"]
+        )
+        assert row["r03_baseline_healthy_observations"] == 5
+        assert row["expected_final_rule_status"] == "insufficient_observations"

@@ -1017,7 +1017,7 @@ union traces, dependencies, requests
         agent_name: str,
         foundry_version: str,
         operation_ids: tuple[str, ...],
-        required_operations: tuple[str, ...],
+        required_operations_by_request: tuple[tuple[str, ...], ...],
         window_start: str,
         window_end: str,
     ) -> None:
@@ -1060,7 +1060,7 @@ union traces, dependencies, requests
                 and _trace_contract_ready(
                     result.tables,
                     operation_ids,
-                    required_operations,
+                    required_operations_by_request,
                 )
             ):
                 return
@@ -1694,28 +1694,37 @@ def _remote_error(payload: bytes) -> tuple[str, str]:
 def _trace_contract_ready(
     tables: list[Any],
     operation_ids: tuple[str, ...],
-    required_operations: tuple[str, ...],
+    required_operations_by_request: tuple[tuple[str, ...], ...],
 ) -> bool:
+    if len(operation_ids) != len(required_operations_by_request):
+        return False
+    required_by_operation = dict(
+        zip(operation_ids, required_operations_by_request, strict=True)
+    )
     seen_ids: set[str] = set()
-    observed_operations: set[str] = set()
+    observed_by_operation: dict[str, set[str]] = defaultdict(set)
     for table in tables:
         for row in table.rows:
             operation_id = str(row[0]).lower()
-            if not _TRACE_ID.fullmatch(operation_id):
+            if (
+                not _TRACE_ID.fullmatch(operation_id)
+                or operation_id not in required_by_operation
+            ):
                 continue
             seen_ids.add(operation_id)
             operations = row[1]
             if isinstance(operations, str):
                 operations = json.loads(operations)
             if isinstance(operations, list):
-                observed_operations.update(
+                observed_by_operation[operation_id].update(
                     str(value) for value in operations if value
                 )
             if int(row[2]) < 1 or int(row[3]) < 1:
                 return False
-    return (
-        seen_ids == set(operation_ids)
-        and not (set(required_operations) - observed_operations)
+    return seen_ids == set(operation_ids) and all(
+        set(required_by_operation[operation_id])
+        <= observed_by_operation[operation_id]
+        for operation_id in operation_ids
     )
 
 
@@ -2574,6 +2583,8 @@ def _semantic_assertion_names(assertions: dict[str, Any]) -> tuple[str, ...]:
         "forbidden_terms",
         "required_claims",
         "forbidden_claims",
+        "question_only",
+        "minimum_term_occurrences",
         "max_words",
         "min_words",
         "max_characters",
@@ -2691,6 +2702,30 @@ def _semantic_assertion_result(
             "forbidden_claims",
             all(str(claim).casefold() not in folded for claim in forbidden_claims),
         )
+    if assertions.get("question_only") is True:
+        sentences = re.findall(r"[^.!?]+[.!?]", text)
+        record(
+            "question_only",
+            bool(sentences)
+            and text.rstrip().endswith("?")
+            and all(sentence.rstrip().endswith("?") for sentence in sentences),
+        )
+    minimum_occurrences = assertions.get("minimum_term_occurrences")
+    if minimum_occurrences is not None:
+        record(
+            "minimum_term_occurrences",
+            bool(text)
+            and all(
+                len(
+                    re.findall(
+                        rf"(?<!\w){re.escape(str(term).casefold())}(?!\w)",
+                        folded,
+                    )
+                )
+                >= int(minimum)
+                for term, minimum in minimum_occurrences.items()
+            ),
+        )
     max_words = assertions.get("max_words")
     if max_words is not None:
         record(
@@ -2750,6 +2785,8 @@ def _normalize_fixture(value: Any) -> dict[str, Any]:
             "exact_json",
             "required_claims",
             "forbidden_claims",
+            "question_only",
+            "minimum_term_occurrences",
             "min_words",
         }
         for key in semantic_assertions
@@ -2773,6 +2810,23 @@ def _normalize_fixture(value: Any) -> dict[str, Any]:
             not isinstance(bound, int) or isinstance(bound, bool) or bound < 1
         ):
             raise ContractError("Traffic semantic assertion bound is invalid")
+    question_only = semantic_assertions.get("question_only")
+    if question_only is not None and question_only is not True:
+        raise ContractError("Traffic question-only assertion is invalid")
+    minimum_occurrences = semantic_assertions.get("minimum_term_occurrences")
+    if minimum_occurrences is not None and (
+        not isinstance(minimum_occurrences, dict)
+        or not minimum_occurrences
+        or any(
+            not isinstance(term, str)
+            or not term
+            or not isinstance(minimum, int)
+            or isinstance(minimum, bool)
+            or minimum < 2
+            for term, minimum in minimum_occurrences.items()
+        )
+    ):
+        raise ContractError("Traffic term-occurrence assertions are invalid")
     json_schema = semantic_assertions.get("json_schema")
     if json_schema is not None:
         if not isinstance(json_schema, dict) or not json_schema:

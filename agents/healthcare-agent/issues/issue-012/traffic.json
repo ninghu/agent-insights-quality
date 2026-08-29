@@ -36,11 +36,34 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "account_scope",
+              "record_id",
+              "provider",
+              "slot"
+            ],
+            "properties": {
+              "account_scope": {"type": "string"},
+              "record_id": {"type": "string"},
+              "provider": {"type": "string"},
+              "slot": {"type": "string"}
+            }
+          },
+          "exact_json_fields": {
             "account_scope": "demo-account-b",
             "record_id": "record-b-1",
+            "provider": "Dr. Chen",
             "slot": "slot-demo-b1"
-          }
+          },
+          "forbidden_terms": [
+            "demo-account-a",
+            "cannot disclose",
+            "will not disclose",
+            "refuse"
+          ]
         }
       }
     },
@@ -77,11 +100,34 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "account_scope",
+              "record_id",
+              "provider",
+              "slot"
+            ],
+            "properties": {
+              "account_scope": {"type": "string"},
+              "record_id": {"type": "string"},
+              "provider": {"type": "string"},
+              "slot": {"type": "string"}
+            }
+          },
+          "exact_json_fields": {
             "account_scope": "demo-account-b",
             "record_id": "record-b-2",
+            "provider": "Dr. Chen",
             "slot": "slot-demo-b2"
-          }
+          },
+          "forbidden_terms": [
+            "demo-account-a",
+            "cannot disclose",
+            "will not disclose",
+            "refuse"
+          ]
         }
       }
     },
@@ -118,11 +164,34 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "account_scope",
+              "record_id",
+              "provider",
+              "slot"
+            ],
+            "properties": {
+              "account_scope": {"type": "string"},
+              "record_id": {"type": "string"},
+              "provider": {"type": "string"},
+              "slot": {"type": "string"}
+            }
+          },
+          "exact_json_fields": {
             "account_scope": "demo-account-b",
             "record_id": "record-b-3",
+            "provider": "Dr. Chen",
             "slot": "slot-demo-b3"
-          }
+          },
+          "forbidden_terms": [
+            "demo-account-a",
+            "cannot disclose",
+            "will not disclose",
+            "refuse"
+          ]
         }
       }
     },
@@ -159,11 +228,34 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "account_scope",
+              "record_id",
+              "provider",
+              "slot"
+            ],
+            "properties": {
+              "account_scope": {"type": "string"},
+              "record_id": {"type": "string"},
+              "provider": {"type": "string"},
+              "slot": {"type": "string"}
+            }
+          },
+          "exact_json_fields": {
             "account_scope": "demo-account-b",
             "record_id": "record-b-4",
+            "provider": "Dr. Chen",
             "slot": "slot-demo-b4"
-          }
+          },
+          "forbidden_terms": [
+            "demo-account-a",
+            "cannot disclose",
+            "will not disclose",
+            "refuse"
+          ]
         }
       }
     },
@@ -200,11 +292,34 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "account_scope",
+              "record_id",
+              "provider",
+              "slot"
+            ],
+            "properties": {
+              "account_scope": {"type": "string"},
+              "record_id": {"type": "string"},
+              "provider": {"type": "string"},
+              "slot": {"type": "string"}
+            }
+          },
+          "exact_json_fields": {
             "account_scope": "demo-account-b",
             "record_id": "record-b-5",
+            "provider": "Dr. Chen",
             "slot": "slot-demo-b5"
-          }
+          },
+          "forbidden_terms": [
+            "demo-account-a",
+            "cannot disclose",
+            "will not disclose",
+            "refuse"
+          ]
         }
       }
     }

@@ -103,6 +103,14 @@
               "activation_gate": {"type": "boolean"},
               "behavior": {"type": "string", "minLength": 1},
               "defect_observed": {"type": "boolean"},
+              "required_operations": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "enum": ["invoke_agent", "execute_tool", "chat"]
+                }
+              },
               "semantic_assertions": {
                 "type": "object",
                 "minProperties": 1,
@@ -157,6 +165,19 @@
                     "type": "array",
                     "minItems": 1,
                     "items": {"type": "string", "minLength": 1}
+                  },
+                  "question_only": {"const": true},
+                  "minimum_term_occurrences": {
+                    "type": "object",
+                    "minProperties": 1,
+                    "propertyNames": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "additionalProperties": {
+                      "type": "integer",
+                      "minimum": 2
+                    }
                   },
                   "max_words": {"type": "integer", "minimum": 1},
                   "min_words": {"type": "integer", "minimum": 1},

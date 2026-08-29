@@ -94,6 +94,35 @@ def test_catalogs_define_fixed_inventory() -> None:
         "weather-agent": "forbidden",
         "healthcare-agent": "forbidden",
     }
+    assert {
+        item["name"]: item["baseline_contract"]["trace_operations"]
+        for item in agents["agents"]
+    } == {
+        "weather-agent": "uniform",
+        "healthcare-agent": "uniform",
+        "finance-agent": "uniform",
+        "travel-agent": "uniform",
+        "support-ticket-agent": "required_per_request",
+    }
+    support_traffic = json.loads(
+        (
+            ROOT
+            / "agents"
+            / "support-ticket-agent"
+            / "v0"
+            / "traffic.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert [
+        request["expected"]["required_operations"]
+        for request in support_traffic["requests"]
+    ] == [
+        ["invoke_agent", "execute_tool", "chat"],
+        ["invoke_agent", "execute_tool", "chat"],
+        ["invoke_agent", "execute_tool", "chat"],
+        ["invoke_agent", "execute_tool", "chat"],
+        ["invoke_agent", "execute_tool"],
+    ]
     assert len(issues["source_delta_contracts"]) == 36
     assert "Daily qualification rotates 4 issues per Agent" in render_issue_catalog(
         issues
@@ -400,6 +429,7 @@ def test_weather_latency_contract_accepts_five_ordered_gate_pairs() -> None:
         "wrong_conversation",
         "wrong_request_id",
         "missing_delay_manifestation",
+        "second_turn_marked_observed",
         "incorrect_completion",
     ],
 )
@@ -421,9 +451,9 @@ def test_weather_latency_contract_rejects_malformed_gate_pairs(
     elif malformation == "wrong_request_id":
         requests[0]["id"] = "issue-005-request-2"
     elif malformation == "missing_delay_manifestation":
-        requests[0]["expected"]["semantic_assertions"]["exact_text"] = (
-            "Would you like me to ignore the complete weather evidence?"
-        )
+        requests[0]["expected"]["semantic_assertions"]["question_only"] = False
+    elif malformation == "second_turn_marked_observed":
+        requests[1]["expected"]["defect_observed"] = True
     else:
         requests[1]["expected"]["semantic_assertions"]["exact_json"]["completed"] = (
             False

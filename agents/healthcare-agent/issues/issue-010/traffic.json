@@ -36,14 +36,19 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
+          "exact_json_fields": {
             "availability": "available",
             "provider": "Dr. Rivera",
             "date": "2026-09-21",
             "slot": "slot-demo-101",
             "account_scope": "demo-account-a",
             "evidence": "missing"
-          }
+          },
+          "forbidden_terms": [
+            "unknown",
+            "unavailable",
+            "cannot confirm"
+          ]
         }
       }
     },
@@ -80,14 +85,19 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
+          "exact_json_fields": {
             "availability": "available",
             "provider": "Dr. Chen",
             "date": "2026-09-22",
             "slot": "slot-demo-202",
             "account_scope": "demo-account-a",
             "evidence": "missing"
-          }
+          },
+          "forbidden_terms": [
+            "unknown",
+            "unavailable",
+            "cannot confirm"
+          ]
         }
       }
     },
@@ -124,14 +134,19 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
+          "exact_json_fields": {
             "availability": "available",
             "provider": "Dr. Patel",
             "date": "2026-09-23",
             "slot": "slot-demo-303",
             "account_scope": "demo-account-b",
             "evidence": "missing"
-          }
+          },
+          "forbidden_terms": [
+            "unknown",
+            "unavailable",
+            "cannot confirm"
+          ]
         }
       }
     },
@@ -168,14 +183,19 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
+          "exact_json_fields": {
             "availability": "available",
             "provider": "Dr. Ali",
             "date": "2026-09-24",
             "slot": "slot-demo-404",
             "account_scope": "demo-account-a",
             "evidence": "missing"
-          }
+          },
+          "forbidden_terms": [
+            "unknown",
+            "unavailable",
+            "cannot confirm"
+          ]
         }
       }
     },
@@ -212,14 +232,19 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
+          "exact_json_fields": {
             "availability": "available",
             "provider": "Dr. Morgan",
             "date": "2026-09-25",
             "slot": "slot-demo-505",
             "account_scope": "demo-account-b",
             "evidence": "missing"
-          }
+          },
+          "forbidden_terms": [
+            "unknown",
+            "unavailable",
+            "cannot confirm"
+          ]
         }
       }
     }

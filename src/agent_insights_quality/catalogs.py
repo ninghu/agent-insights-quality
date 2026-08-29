@@ -188,7 +188,7 @@ def _validate_prompt_issue_delta(
 
 
 def _validate_weather_latency_traffic(requests: list[Any]) -> None:
-    expected_turns: list[tuple[str, str, bool, dict[str, Any]]] = []
+    expected_turns: list[tuple[str, str, bool, bool, dict[str, Any]]] = []
     for conversation_number in range(1, 6):
         conversation_id = f"conv-weather-issue-005-{conversation_number}"
         first_request_number = (conversation_number * 2) - 1
@@ -198,16 +198,24 @@ def _validate_weather_latency_traffic(requests: list[Any]) -> None:
                     f"issue-005-request-{first_request_number}",
                     conversation_id,
                     True,
+                    True,
                     {
-                        "exact_text": (
-                            "Would you like me to use the complete weather "
-                            "evidence already provided?"
-                        ),
+                        "response_format": "non_json",
+                        "question_only": True,
+                        "required_terms_any": [
+                            "would you",
+                            "should i",
+                            "do you want",
+                            "can you confirm",
+                            "could you confirm",
+                            "please clarify",
+                        ],
                     },
                 ),
                 (
                     f"issue-005-request-{first_request_number + 1}",
                     conversation_id,
+                    False,
                     False,
                     {
                         "response_format": "json",
@@ -238,6 +246,7 @@ def _validate_weather_latency_traffic(requests: list[Any]) -> None:
         .get("id")
         == expected_conversation_id
         and request.get("expected", {}).get("activation_gate") is expected_gate
+        and request.get("expected", {}).get("defect_observed") is defect_observed
         and request.get("expected", {})
         .get("semantic_assertions")
         == expected_assertions
@@ -245,6 +254,7 @@ def _validate_weather_latency_traffic(requests: list[Any]) -> None:
             expected_id,
             expected_conversation_id,
             expected_gate,
+            defect_observed,
             expected_assertions,
         ) in zip(requests, expected_turns, strict=True)
     )
@@ -296,6 +306,13 @@ def validate_semantics(
         "travel-agent": "standard_assistant_message",
         "support-ticket-agent": "explicit_span_attributes",
     }
+    trace_operation_modes = {
+        "weather-agent": "uniform",
+        "healthcare-agent": "uniform",
+        "finance-agent": "uniform",
+        "travel-agent": "uniform",
+        "support-ticket-agent": "required_per_request",
+    }
     reviewed_types = {
         "weather-agent": ("prompt", "foundry_prompt"),
         "healthcare-agent": ("prompt", "foundry_prompt"),
@@ -317,6 +334,12 @@ def validate_semantics(
         for agent_name, agent in by_agent.items()
     ):
         raise ContractError("Agent baseline terminal-evidence modes are not reviewed")
+    if any(
+        agent["baseline_contract"]["trace_operations"]
+        != trace_operation_modes[agent_name]
+        for agent_name, agent in by_agent.items()
+    ):
+        raise ContractError("Agent baseline trace-operation modes are not reviewed")
 
     ids = [item["id"] for item in issue_items]
     expected_ids = [f"issue-{number:03d}" for number in range(1, 37)]
@@ -409,6 +432,22 @@ def _validate_baseline(agent: dict[str, Any]) -> None:
         raise ContractError(
             f"{agent['name']} baseline request count does not match its contract"
         )
+    if agent["baseline_contract"]["trace_operations"] == "required_per_request":
+        for request in requests:
+            expected = request.get("expected") if isinstance(request, dict) else None
+            operations = (
+                expected.get("required_operations")
+                if isinstance(expected, dict)
+                else None
+            )
+            if (
+                not isinstance(operations, list)
+                or not operations
+                or operations[0] != "invoke_agent"
+            ):
+                raise ContractError(
+                    f"{agent['name']} baseline requires ordered operations per request"
+                )
     if agent["type"] == "prompt":
         definition = json.loads((root / "definition.json").read_text(encoding="utf-8"))
         _validate_prompt_definition(definition, f"{agent['name']} baseline")
@@ -664,8 +703,8 @@ def render_agent_catalog(agents: dict[str, Any]) -> str:
         "",
         "<!-- Generated from catalogs/AGENT_CATALOG.yaml; do not edit. -->",
         "",
-        "| Agent | Owner | Type | Framework | Model | Terminal evidence | Semantic assertions | Issue count |",
-        "| --- | --- | --- | --- | --- | --- | --- | ---: |",
+        "| Agent | Owner | Type | Framework | Model | Terminal evidence | Semantic assertions | Trace operations | Issue count |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | ---: |",
     ]
     for agent in agents["agents"]:
         lines.append(
@@ -674,6 +713,7 @@ def render_agent_catalog(agents: dict[str, Any]) -> str:
             f"`{agent['model']}` | "
             f"`{agent['baseline_contract']['terminal_response']}` | "
             f"`{agent['baseline_contract']['semantic_assertions']}` | "
+            f"`{agent['baseline_contract']['trace_operations']}` | "
             f"{len(agent['issue_ids'])} |"
         )
     lines.append("")

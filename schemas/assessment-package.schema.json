@@ -231,7 +231,8 @@
         "request_count",
         "terminal_response",
         "semantic_assertions",
-        "function_calling"
+        "function_calling",
+        "trace_operations"
       ],
       "properties": {
         "request_count": {"const": 5},
@@ -245,7 +246,8 @@
         "semantic_assertions": {
           "enum": ["required", "required_per_request"]
         },
-        "function_calling": {"enum": ["forbidden", "not_applicable"]}
+        "function_calling": {"enum": ["forbidden", "not_applicable"]},
+        "trace_operations": {"enum": ["uniform", "required_per_request"]}
       }
     },
     "requestSummary": {

@@ -12,6 +12,7 @@ from opentelemetry import trace
 from pydantic import Field
 
 from .observability import configure_observability
+from .retry import ExactTransientRetry
 from .tools import ACCOUNTS
 
 
@@ -126,8 +127,11 @@ def list_monthly_items(
 BASE_INSTRUCTIONS = """You are a synthetic finance assistant.
 Use typed tools for every factual value. Preserve account scope exactly. Treat structured errors as
 errors, label incomplete aggregates as partial, retry one transient failure once, and never retry a
-permanent failure. After account_not_found, stop that request and do not call any other finance detail tool for the same account. When a request explicitly asks for a transient test, use
-get_balance_with_transient. Keep answers concise and do not provide financial recommendations."""
+permanent failure. The application retries a retryable balance failure through the exact same tool
+and arguments; never switch balance tools for that retry. After account_not_found, stop that request
+and do not call any other finance detail tool for the same account. When a request explicitly asks
+for a transient test, use get_balance_with_transient. Keep answers concise and do not provide
+financial recommendations."""
 
 def build_agent() -> Agent:
     client = FoundryChatClient(
@@ -147,7 +151,7 @@ def build_agent() -> Agent:
             get_budget_summary,
             list_monthly_items,
         ],
-        middleware=middleware,
+        middleware=[ExactTransientRetry(), *middleware],
         default_options={"store": False},
     )
 

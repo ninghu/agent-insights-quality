@@ -49,6 +49,38 @@ def _runtime() -> LiveRuntime:
     )
 
 
+def _text_response(text: str) -> dict:
+    return {
+        "output": [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": text}],
+            }
+        ]
+    }
+
+
+def _prompt_issue_fixture(
+    agent_name: str,
+    issue_id: str,
+    request_index: int = 0,
+) -> dict:
+    traffic = read_json(
+        ROOT
+        / "agents"
+        / agent_name
+        / "issues"
+        / issue_id
+        / "traffic.json"
+    )
+    return _normalize_fixture(traffic["requests"][request_index])
+
+
+def _all_semantic_assertions_pass(fixture: dict, text: str) -> bool:
+    count, passed, _ = _semantic_assertion_result(_text_response(text), fixture)
+    return count > 0 and passed == count
+
+
 def test_fixture_preserves_expected_failure_and_conversation() -> None:
     value = _normalize_fixture(
         {
@@ -163,6 +195,87 @@ def test_semantic_assertions_support_structured_and_bounded_evidence() -> None:
     )
     assert count == passed == 9
     assert all(item.passed for item in results)
+
+
+@pytest.mark.parametrize(
+    ("agent_name", "issue_id", "request_index", "defect_text", "healthy_text"),
+    [
+        (
+            "weather-agent",
+            "issue-002",
+            0,
+            "Clear conditions, 21 celsius.",
+            '{"condition":"clear","temperature":21,"unit":"celsius"}',
+        ),
+        (
+            "weather-agent",
+            "issue-003",
+            0,
+            '{"shape":"forecast","high":27,"low":13,"unit":"celsius","note":"forecast evidence"}',
+            '{"condition":"clear","temperature":19,"unit":"celsius"}',
+        ),
+        (
+            "weather-agent",
+            "issue-004",
+            1,
+            '{"condition":"clear","temperature":68,"unit":"fahrenheit","source":"request"}',
+            '{"condition":"clear","temperature":68,"unit":"celsius"}',
+        ),
+        (
+            "weather-agent",
+            "issue-005",
+            0,
+            "Should I use the complete evidence you supplied?",
+            "Conditions are clear at 20 celsius. Would you like anything else?",
+        ),
+        (
+            "weather-agent",
+            "issue-006",
+            0,
+            "Clear at 22 celsius. " * 10,
+            "Clear at 22 celsius.",
+        ),
+        (
+            "healthcare-agent",
+            "issue-008",
+            0,
+            '{"action":"create_appointment","provider":"Dr. Rivera","slot":"slot-demo-101","message":"Please confirm"}',
+            '{"action":"create_appointment","provider":"Dr. Rivera","slot":"slot-demo-101","account_scope":"demo-account-a","approval":"pending","message":"Please confirm"}',
+        ),
+        (
+            "healthcare-agent",
+            "issue-010",
+            0,
+            '{"availability":"available","provider":"Dr. Rivera","date":"2026-09-21","slot":"slot-demo-101","account_scope":"demo-account-a","evidence":"missing"}',
+            '{"availability":"unknown","provider":"Dr. Rivera","date":"2026-09-21","slot":"slot-demo-101","account_scope":"demo-account-a","evidence":"missing"}',
+        ),
+        (
+            "healthcare-agent",
+            "issue-011",
+            0,
+            '{"action":"transition_appointment_state","provider":"Dr. Rivera","slot":"slot-demo-101","account_scope":"demo-account-a","confirmation":false,"state":"confirmed"}',
+            '{"action":"transition_appointment_state","provider":"Dr. Rivera","slot":"slot-demo-101","account_scope":"demo-account-a","confirmation":false,"state":"pending"}',
+        ),
+        (
+            "healthcare-agent",
+            "issue-012",
+            0,
+            '{"account_scope":"demo-account-b","record_id":"record-b-1","provider":"Dr. Chen","slot":"slot-demo-b1"}',
+            '{"account_scope":"demo-account-a","appointments":[],"message":"I cannot disclose foreign records"}',
+        ),
+    ],
+)
+def test_r03_prompt_oracles_accept_defects_and_reject_healthy_contradictions(
+    agent_name: str,
+    issue_id: str,
+    request_index: int,
+    defect_text: str,
+    healthy_text: str,
+) -> None:
+    fixture = _prompt_issue_fixture(agent_name, issue_id, request_index)
+
+    assert _all_semantic_assertions_pass(fixture, defect_text)
+    assert not _all_semantic_assertions_pass(fixture, healthy_text)
 
 
 def test_exact_json_assertions_distinguish_booleans_from_numbers() -> None:
@@ -415,7 +528,9 @@ def test_healthcare_v0_exact_text_rejects_contradictory_answers() -> None:
         "Weather summary: clear, 21 celsius. That complete summary is not correct.",
     ],
 )
-def test_issue_002_exact_text_rejects_postposed_contradiction(text: str) -> None:
+def test_issue_002_structural_oracle_rejects_postposed_contradiction(
+    text: str,
+) -> None:
     expected = read_json(
         ROOT
         / "agents"
@@ -436,11 +551,11 @@ def test_issue_002_exact_text_rejects_postposed_contradiction(text: str) -> None
         response,
         expected,
     )
-    assert count == 2
-    assert passed == 1
+    assert count == 3
+    assert passed == 2
 
 
-def test_issue_006_exact_text_rejects_long_postposed_contradiction() -> None:
+def test_issue_006_structural_oracle_rejects_long_postposed_contradiction() -> None:
     expected = read_json(
         ROOT
         / "agents"
@@ -449,13 +564,11 @@ def test_issue_006_exact_text_rejects_long_postposed_contradiction() -> None:
         / "issue-006"
         / "traffic.json"
     )["requests"][0]["expected"]
-    exact_text = expected["semantic_assertions"]["exact_text"]
     contradicted = (
-        exact_text
-        + " Despite all of that repeated detail, this complete weather summary "
-        "is not correct."
+        ("Clear at 22 celsius. " * 10)
+        + "Despite all of that repeated detail, this summary is not correct."
     )
-    assert len(re.findall(r"\S+", contradicted)) > 80
+    assert len(re.findall(r"\S+", contradicted)) > 40
     response = {
         "output": [
             {
@@ -465,20 +578,19 @@ def test_issue_006_exact_text_rejects_long_postposed_contradiction() -> None:
         ]
     }
     count, passed, _ = _semantic_assertion_result(response, expected)
-    assert count == 2
-    assert passed == 1
+    assert count == 3
+    assert passed == 2
 
 
 @pytest.mark.parametrize(
-    ("issue_id", "old_value", "wrong_value"),
+    ("issue_id", "wrong_value"),
     [
-        ("issue-002", "21 celsius", "20 celsius"),
-        ("issue-006", "22 celsius", "23 celsius"),
+        ("issue-002", "20 celsius"),
+        ("issue-006", "23 celsius"),
     ],
 )
-def test_exact_weather_gates_reject_wrong_numeric_claims(
+def test_structural_weather_gates_reject_wrong_numeric_claims(
     issue_id: str,
-    old_value: str,
     wrong_value: str,
 ) -> None:
     expected = read_json(
@@ -489,8 +601,11 @@ def test_exact_weather_gates_reject_wrong_numeric_claims(
         / issue_id
         / "traffic.json"
     )["requests"][0]["expected"]
-    exact_text = expected["semantic_assertions"]["exact_text"]
-    wrong_text = exact_text.replace(old_value, wrong_value)
+    wrong_text = (
+        f"Clear conditions at {wrong_value}."
+        if issue_id == "issue-002"
+        else (f"Clear at {wrong_value}. " * 10)
+    )
     response = {
         "output": [
             {
@@ -822,6 +937,7 @@ def _terminal_trace_row(
             [
                 _tool_trace_row(
                     "get_balance",
+                    arguments={"account_id": "acct-demo-missing"},
                     result={"ok": False, "error": {"code": "account_not_found"}},
                     ok=False,
                     timestamp=f"2026-08-28T10:00:00.{index}00+00:00",
@@ -831,6 +947,7 @@ def _terminal_trace_row(
             [
                 _tool_trace_row(
                     "get_balance",
+                    arguments={"account_id": "acct-demo-missing"},
                     result={"ok": False, "error": {"code": "account_not_found"}},
                     ok=False,
                 )
@@ -2368,7 +2485,7 @@ def test_trace_contract_waits_for_child_span_hydration() -> None:
         _trace_contract_ready(
             [Partial()],
             (operation_id,),
-            ("invoke_agent", "chat"),
+            (("invoke_agent", "chat"),),
         )
         is False
     )
@@ -2376,9 +2493,42 @@ def test_trace_contract_waits_for_child_span_hydration() -> None:
         _trace_contract_ready(
             [Complete()],
             (operation_id,),
-            ("invoke_agent", "chat"),
+            (("invoke_agent", "chat"),),
         )
         is True
+    )
+
+
+def test_trace_contract_correlates_required_operations_per_request() -> None:
+    first = "a" * 32
+    second = "b" * 32
+
+    class Complete:
+        rows = [
+            [first, ["invoke_agent", "execute_tool", "chat"], 1, 3],
+            [second, ["invoke_agent", "execute_tool"], 1, 2],
+        ]
+
+    required = (
+        ("invoke_agent", "execute_tool", "chat"),
+        ("invoke_agent", "execute_tool"),
+    )
+    assert _trace_contract_ready([Complete()], (first, second), required) is True
+    assert (
+        _trace_contract_ready(
+            [Complete()],
+            (first, second),
+            (required[0], required[0]),
+        )
+        is False
+    )
+    assert (
+        _trace_contract_ready(
+            [Complete()],
+            (second, first),
+            required,
+        )
+        is False
     )
 
 

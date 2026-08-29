@@ -135,7 +135,30 @@
         "behavior": "Retries once and recovers.",
         "semantic_assertions": {
           "required_terms_any": ["1250.50", "1,250.50", "1250", "USD", "balance"]
-        }
+        },
+        "trace_assertions": [
+          {
+            "name": "exact_transient_retry_count",
+            "kind": "tool_call_count",
+            "tool_name": "get_balance_with_transient",
+            "count": 2
+          },
+          {
+            "name": "exact_transient_retry_sequence",
+            "kind": "retry_sequence",
+            "tool_name": "get_balance_with_transient",
+            "result_sequence": ["error", "success"]
+          },
+          {
+            "name": "exact_transient_retry_scope",
+            "kind": "scope_relation",
+            "tool_name": "get_balance_with_transient",
+            "scope_kind": "account",
+            "request_scope": "first",
+            "argument": "account_id",
+            "request_tool_equal": true
+          }
+        ]
       }
     },
     {

@@ -35,7 +35,16 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "exact_text": "Would you like me to use the complete weather evidence already provided?"
+          "response_format": "non_json",
+          "question_only": true,
+          "required_terms_any": [
+            "would you",
+            "should i",
+            "do you want",
+            "can you confirm",
+            "could you confirm",
+            "please clarify"
+          ]
         }
       }
     },
@@ -68,7 +77,7 @@
       "expected": {
         "http_status": 200,
         "behavior": "Turn two adds no material new evidence, yet only now completes the answer using the original evidence, proving an unnecessary extra round trip.",
-        "defect_observed": true,
+        "defect_observed": false,
         "activation_gate": false,
         "semantic_assertions": {
           "response_format": "json",
@@ -114,7 +123,16 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "exact_text": "Would you like me to use the complete weather evidence already provided?"
+          "response_format": "non_json",
+          "question_only": true,
+          "required_terms_any": [
+            "would you",
+            "should i",
+            "do you want",
+            "can you confirm",
+            "could you confirm",
+            "please clarify"
+          ]
         }
       }
     },
@@ -147,7 +165,7 @@
       "expected": {
         "http_status": 200,
         "behavior": "Turn two adds no material new evidence, yet only now completes the answer using the original evidence, proving an unnecessary extra round trip.",
-        "defect_observed": true,
+        "defect_observed": false,
         "activation_gate": false,
         "semantic_assertions": {
           "response_format": "json",
@@ -193,7 +211,16 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "exact_text": "Would you like me to use the complete weather evidence already provided?"
+          "response_format": "non_json",
+          "question_only": true,
+          "required_terms_any": [
+            "would you",
+            "should i",
+            "do you want",
+            "can you confirm",
+            "could you confirm",
+            "please clarify"
+          ]
         }
       }
     },
@@ -226,7 +253,7 @@
       "expected": {
         "http_status": 200,
         "behavior": "Turn two adds no material new evidence, yet only now completes the answer using the original evidence, proving an unnecessary extra round trip.",
-        "defect_observed": true,
+        "defect_observed": false,
         "activation_gate": false,
         "semantic_assertions": {
           "response_format": "json",
@@ -272,7 +299,16 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "exact_text": "Would you like me to use the complete weather evidence already provided?"
+          "response_format": "non_json",
+          "question_only": true,
+          "required_terms_any": [
+            "would you",
+            "should i",
+            "do you want",
+            "can you confirm",
+            "could you confirm",
+            "please clarify"
+          ]
         }
       }
     },
@@ -305,7 +341,7 @@
       "expected": {
         "http_status": 200,
         "behavior": "Turn two adds no material new evidence, yet only now completes the answer using the original evidence, proving an unnecessary extra round trip.",
-        "defect_observed": true,
+        "defect_observed": false,
         "activation_gate": false,
         "semantic_assertions": {
           "response_format": "json",
@@ -351,7 +387,16 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "exact_text": "Would you like me to use the complete weather evidence already provided?"
+          "response_format": "non_json",
+          "question_only": true,
+          "required_terms_any": [
+            "would you",
+            "should i",
+            "do you want",
+            "can you confirm",
+            "could you confirm",
+            "please clarify"
+          ]
         }
       }
     },
@@ -384,7 +429,7 @@
       "expected": {
         "http_status": 200,
         "behavior": "Turn two adds no material new evidence, yet only now completes the answer using the original evidence, proving an unnecessary extra round trip.",
-        "defect_observed": true,
+        "defect_observed": false,
         "activation_gate": false,
         "semantic_assertions": {
           "response_format": "json",

@@ -39,7 +39,12 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Returns the grounded synthetic ticket."
+        "behavior": "Returns the grounded synthetic ticket.",
+        "required_operations": [
+          "invoke_agent",
+          "execute_tool",
+          "chat"
+        ]
       }
     },
     {
@@ -70,7 +75,12 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Returns a bounded response."
+        "behavior": "Returns a bounded response.",
+        "required_operations": [
+          "invoke_agent",
+          "execute_tool",
+          "chat"
+        ]
       }
     },
     {
@@ -101,7 +111,12 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Validates revision before updating."
+        "behavior": "Validates revision before updating.",
+        "required_operations": [
+          "invoke_agent",
+          "execute_tool",
+          "chat"
+        ]
       }
     },
     {
@@ -133,6 +148,11 @@
       "expected": {
         "http_status": 200,
         "behavior": "Retries once and recovers.",
+        "required_operations": [
+          "invoke_agent",
+          "execute_tool",
+          "chat"
+        ],
         "semantic_assertions": {
           "required_terms_all": [
             "succeeded",
@@ -175,6 +195,10 @@
       "expected": {
         "http_status": 200,
         "behavior": "Returns the core ticket and labels history unavailable.",
+        "required_operations": [
+          "invoke_agent",
+          "execute_tool"
+        ],
         "semantic_assertions": {
           "exact_text": "Ticket ID ticket-demo-1; revision 3; status open; summary Synthetic printer setup; optional history unavailable."
         }

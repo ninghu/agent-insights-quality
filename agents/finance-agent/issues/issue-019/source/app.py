@@ -1,20 +1,13 @@
 from __future__ import annotations
 
-import json
 import os
 import threading
 from typing import Annotated
 
 from agent_framework import (
     Agent,
-    ChatContext,
-    ChatMiddleware,
-    ChatResponse,
-    ChatResponseUpdate,
-    Content,
-    Message,
-    MiddlewareTermination,
-    ResponseStream,
+    FunctionInvocationContext,
+    FunctionMiddleware,
     tool,
 )
 from agent_framework.foundry import FoundryChatClient
@@ -24,6 +17,7 @@ from opentelemetry import trace
 from pydantic import Field
 
 from .observability import configure_observability
+from .retry import ExactTransientRetry, tool_result_payload
 from .tools import ACCOUNTS
 
 
@@ -138,78 +132,39 @@ def list_monthly_items(
 BASE_INSTRUCTIONS = """You are a synthetic finance assistant.
 Use typed tools for every factual value. Preserve account scope exactly. Treat structured errors as
 errors, label incomplete aggregates as partial, retry one transient failure once, and never retry a
-permanent failure. After account_not_found, stop that request and do not call any other finance detail tool for the same account. When a request explicitly asks for a transient test, use
-get_balance_with_transient. Keep answers concise and do not provide financial recommendations."""
+permanent failure. The application retries a retryable balance failure through the exact same tool
+and arguments; never switch balance tools for that retry. After account_not_found, stop that request
+and do not call any other finance detail tool for the same account. When a request explicitly asks
+for a transient test, use get_balance_with_transient. Keep answers concise and do not provide
+financial recommendations."""
 
 
-class PermanentFailureRetryLoop(ChatMiddleware):
-    async def process(self, context: ChatContext, call_next) -> None:
-        text = next(
-            (
-                message.text
-                for message in reversed(context.messages)
-                if message.role == "user" and message.text
-            ),
-            "",
+class PermanentFailureRetryLoop(FunctionMiddleware):
+    async def process(
+        self,
+        context: FunctionInvocationContext,
+        call_next,
+    ) -> None:
+        await call_next()
+        arguments = context.arguments
+        account_id = (
+            arguments.get("account_id")
+            if isinstance(arguments, dict)
+            else getattr(arguments, "account_id", None)
         )
-        folded = text.casefold()
-        if not (
-            "show the balance" in folded
-            and "acct-demo-missing" in folded
-            and "preserve" not in folded
+        result = tool_result_payload(context.result)
+        error = result.get("error") if isinstance(result, dict) else None
+        if (
+            context.function.name != "get_balance"
+            or account_id != "acct-demo-missing"
+            or result is None
+            or result.get("ok") is not False
+            or not isinstance(error, dict)
+            or error.get("code") != "account_not_found"
         ):
-            await call_next()
             return
-        arguments = {"account_id": "acct-demo-missing"}
-        result = {"ok": False, "error": {"code": "account_not_found"}}
-        for _ in range(3):
-            with tracer.start_as_current_span("finance.tool.get_balance") as span:
-                span.set_attribute("gen_ai.operation.name", "execute_tool")
-                span.set_attribute("gen_ai.tool.name", "get_balance")
-                span.set_attribute(
-                    "gen_ai.tool.call.arguments",
-                    json.dumps(arguments, sort_keys=True),
-                )
-                span.set_attribute(
-                    "gen_ai.tool.call.result",
-                    json.dumps(result, sort_keys=True),
-                )
-                span.set_attribute("tool.ok", False)
-        answer = (
-            "The permanent account_not_found lookup failed after three "
-            "identical attempts."
-        )
-        with tracer.start_as_current_span("finance.model.respond") as span:
-            span.set_attribute("gen_ai.operation.name", "chat")
-            span.set_attribute(
-                "gen_ai.output.messages",
-                json.dumps(
-                    [
-                        {
-                            "role": "assistant",
-                            "parts": [{"type": "text", "content": answer}],
-                        }
-                    ],
-                    sort_keys=True,
-                ),
-            )
-        response = ChatResponse(
-            messages=[Message(role="assistant", contents=[answer])]
-        )
-        if context.stream:
-            async def updates():
-                yield ChatResponseUpdate(
-                    role="assistant",
-                    contents=[Content.from_text(answer)],
-                )
-
-            context.result = ResponseStream(
-                updates(),
-                finalizer=ChatResponse.from_updates,
-            )
-        else:
-            context.result = response
-        raise MiddlewareTermination
+        await call_next()
+        await call_next()
 
 
 def build_agent() -> Agent:
@@ -230,7 +185,7 @@ def build_agent() -> Agent:
             get_budget_summary,
             list_monthly_items,
         ],
-        middleware=middleware,
+        middleware=[ExactTransientRetry(), *middleware],
         default_options={"store": False},
     )
 

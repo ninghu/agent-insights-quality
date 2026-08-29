@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import inspect
 import json
 import sys
 import types
@@ -11,7 +12,7 @@ from agent_insights_quality.live import _normalize_fixture, _trace_assertion_res
 from agent_insights_quality.util import ROOT, read_json
 
 
-def _load_issue_020(monkeypatch):
+def _load_finance_app(monkeypatch, logical_version: str):
     agent_framework = types.ModuleType("agent_framework")
 
     class Agent:
@@ -23,12 +24,20 @@ def _load_issue_020(monkeypatch):
     class ChatMiddleware:
         pass
 
+    class FunctionInvocationContext:
+        pass
+
+    class FunctionMiddleware:
+        pass
+
     def tool(**_kwargs):
         return lambda function: function
 
     agent_framework.Agent = Agent
     agent_framework.ChatContext = ChatContext
     agent_framework.ChatMiddleware = ChatMiddleware
+    agent_framework.FunctionInvocationContext = FunctionInvocationContext
+    agent_framework.FunctionMiddleware = FunctionMiddleware
     agent_framework.tool = tool
 
     foundry = types.ModuleType("agent_framework.foundry")
@@ -46,7 +55,7 @@ def _load_issue_020(monkeypatch):
     pydantic = types.ModuleType("pydantic")
     pydantic.Field = lambda **_kwargs: None
 
-    package_name = "finance_issue_020_test"
+    package_name = f"finance_{logical_version.replace('-', '_')}_test"
     package = types.ModuleType(package_name)
     package.__path__ = []
     observability = types.ModuleType(f"{package_name}.observability")
@@ -72,15 +81,23 @@ def _load_issue_020(monkeypatch):
     for name, value in modules.items():
         monkeypatch.setitem(sys.modules, name, value)
 
-    path = (
-        ROOT
-        / "agents"
-        / "finance-agent"
-        / "issues"
-        / "issue-020"
-        / "source"
-        / "app.py"
+    finance_root = ROOT / "agents" / "finance-agent"
+    version_root = (
+        finance_root / "v0"
+        if logical_version == "v0"
+        else finance_root / "issues" / logical_version
     )
+    retry_path = version_root / "source" / "retry.py"
+    retry_spec = importlib.util.spec_from_file_location(
+        f"{package_name}.retry",
+        retry_path,
+    )
+    assert retry_spec is not None and retry_spec.loader is not None
+    retry_module = importlib.util.module_from_spec(retry_spec)
+    monkeypatch.setitem(sys.modules, retry_spec.name, retry_module)
+    retry_spec.loader.exec_module(retry_module)
+
+    path = version_root / "source" / "app.py"
     spec = importlib.util.spec_from_file_location(f"{package_name}.app", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -96,7 +113,7 @@ def _message(text: str):
 def test_duplicate_context_delegates_real_model_input_and_natural_evidence(
     monkeypatch,
 ) -> None:
-    module = _load_issue_020(monkeypatch)
+    module = _load_finance_app(monkeypatch, "issue-020")
     original = [_message("Summarize the balance and monthly items for acct-demo-a.")]
     context = SimpleNamespace(messages=list(original), result=None)
     delegated_messages = []
@@ -136,7 +153,7 @@ def test_duplicate_context_delegates_real_model_input_and_natural_evidence(
 
 
 def test_duplicate_context_unmatched_request_delegates_unchanged(monkeypatch) -> None:
-    module = _load_issue_020(monkeypatch)
+    module = _load_finance_app(monkeypatch, "issue-020")
     original = [_message("Show the balance for acct-demo-a.")]
     context = SimpleNamespace(messages=list(original), result=None)
     delegated_messages = []
@@ -150,3 +167,117 @@ def test_duplicate_context_unmatched_request_delegates_unchanged(monkeypatch) ->
     assert context.result == "unchanged-model-response"
     assert context.messages == original
     assert delegated_messages == original
+
+
+def test_exact_transient_retry_reuses_the_same_function_and_arguments(
+    monkeypatch,
+) -> None:
+    module = _load_finance_app(monkeypatch, "v0")
+    context = SimpleNamespace(
+        function=SimpleNamespace(name="get_balance_with_transient"),
+        arguments={"account_id": "acct-demo-a"},
+        result=None,
+    )
+    attempts = []
+    results = [
+        {
+            "ok": False,
+            "error": {"code": "temporary_unavailable", "retryable": True},
+        },
+        {
+            "ok": True,
+            "account_id": "acct-demo-a",
+            "balance": 1250.5,
+            "currency": "USD",
+        },
+    ]
+
+    async def call_next() -> None:
+        attempts.append((context.function.name, dict(context.arguments)))
+        context.result = [SimpleNamespace(text=json.dumps(results[len(attempts) - 1]))]
+
+    asyncio.run(module.ExactTransientRetry().process(context, call_next))
+
+    assert attempts == [
+        ("get_balance_with_transient", {"account_id": "acct-demo-a"}),
+        ("get_balance_with_transient", {"account_id": "acct-demo-a"}),
+    ]
+    retry_module = sys.modules[module.ExactTransientRetry.__module__]
+    assert retry_module.tool_result_payload(context.result) == results[-1]
+
+
+def test_exact_transient_retry_does_not_retry_permanent_errors(monkeypatch) -> None:
+    module = _load_finance_app(monkeypatch, "v0")
+    context = SimpleNamespace(
+        function=SimpleNamespace(name="get_balance"),
+        arguments={"account_id": "acct-demo-missing"},
+        result=None,
+    )
+    attempts = 0
+
+    async def call_next() -> None:
+        nonlocal attempts
+        attempts += 1
+        context.result = {
+            "ok": False,
+            "error": {"code": "account_not_found"},
+        }
+
+    asyncio.run(module.ExactTransientRetry().process(context, call_next))
+
+    assert attempts == 1
+
+
+def test_issue_019_repeats_real_matching_function_invocation_three_times(
+    monkeypatch,
+) -> None:
+    module = _load_finance_app(monkeypatch, "issue-019")
+    context = SimpleNamespace(
+        function=SimpleNamespace(name="get_balance"),
+        arguments={"account_id": "acct-demo-missing"},
+        result=None,
+    )
+    attempts = []
+
+    async def call_next() -> None:
+        attempts.append((context.function.name, dict(context.arguments)))
+        context.result = {
+            "ok": False,
+            "error": {"code": "account_not_found"},
+        }
+
+    asyncio.run(module.PermanentFailureRetryLoop().process(context, call_next))
+
+    assert attempts == [
+        ("get_balance", {"account_id": "acct-demo-missing"}),
+        ("get_balance", {"account_id": "acct-demo-missing"}),
+        ("get_balance", {"account_id": "acct-demo-missing"}),
+    ]
+    source = inspect.getsource(module.PermanentFailureRetryLoop)
+    assert "start_as_current_span" not in source
+    assert "ChatResponse" not in source
+    assert "context.messages" not in source
+
+
+def test_issue_019_leaves_nonmatching_invocations_single_attempt(monkeypatch) -> None:
+    module = _load_finance_app(monkeypatch, "issue-019")
+    context = SimpleNamespace(
+        function=SimpleNamespace(name="get_balance"),
+        arguments={"account_id": "acct-demo-a"},
+        result=None,
+    )
+    attempts = 0
+
+    async def call_next() -> None:
+        nonlocal attempts
+        attempts += 1
+        context.result = {
+            "ok": True,
+            "account_id": "acct-demo-a",
+            "balance": 1250.5,
+            "currency": "USD",
+        }
+
+    asyncio.run(module.PermanentFailureRetryLoop().process(context, call_next))
+
+    assert attempts == 1

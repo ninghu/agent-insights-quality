@@ -26,12 +26,13 @@ from agent_insights_quality.runner import (
     _StartStagger,
     _execute_version,
     _execute_version_with_recovery,
+    _required_trace_operations,
     _validate_baseline_trace_evidence,
     execute,
 )
 from agent_insights_quality.runtime_state import VersionCheckpointStore
 from agent_insights_quality.selection import select_daily
-from agent_insights_quality.util import ContractError, InsightWindowExpiredError
+from agent_insights_quality.util import ROOT, ContractError, InsightWindowExpiredError
 
 
 def _registry(agents: dict, hashes: dict[str, str]) -> dict:
@@ -299,14 +300,18 @@ class FakeRuntime:
         agent_name: str,
         foundry_version: str,
         operation_ids: tuple[str, ...],
-        required_operations: tuple[str, ...],
+        required_operations_by_request: tuple[tuple[str, ...], ...],
         window_start: str,
         window_end: str,
     ) -> None:
         assert agent_name.endswith("-agent")
         assert foundry_version
         assert operation_ids
-        assert "invoke_agent" in required_operations
+        assert len(required_operations_by_request) == len(operation_ids)
+        assert all(
+            "invoke_agent" in operations
+            for operations in required_operations_by_request
+        )
         assert window_start < window_end
 
 
@@ -474,6 +479,7 @@ def _timed_version_kwargs(
                     else "standard_assistant_message"
                 ),
                 "semantic_assertions": "required",
+                "trace_operations": "uniform",
             },
         },
         "monitor_id": f"monitor-{agent_name}",
@@ -500,6 +506,27 @@ def _timed_version_kwargs(
         "checkpoint_store": checkpoint_store,
         "start_stagger": _StartStagger(0),
     }
+
+
+def test_support_baseline_uses_request_bound_trace_operations() -> None:
+    agents, _ = load_catalogs()
+    support = next(
+        agent
+        for agent in agents["agents"]
+        if agent["name"] == "support-ticket-agent"
+    )
+
+    operations = _required_trace_operations(
+        agent=support,
+        expected=None,
+        traffic_path=ROOT / support["baseline_path"] / "traffic.json",
+        request_count=5,
+    )
+
+    assert operations[:4] == (
+        ("invoke_agent", "execute_tool", "chat"),
+    ) * 4
+    assert operations[4] == ("invoke_agent", "execute_tool")
 
 
 def test_first_exact_hosted_mapping_starts_insights_before_stabilization(
@@ -894,14 +921,9 @@ def test_runner_executes_20_issues() -> None:
         for agent_name, foundry_version, _ in runtime.hosted_stabilizations
     } == expected_hosted_stabilizations
     assert len(runtime.hosted_stabilizations) == 15
-    assert all(
-        (agent_name, "v0", False) in runtime.hosted_stabilizations
-        for agent_name in (
-            "finance-agent",
-            "travel-agent",
-            "support-ticket-agent",
-        )
-    )
+    assert ("finance-agent", "v0", True) in runtime.hosted_stabilizations
+    assert ("travel-agent", "v0", False) in runtime.hosted_stabilizations
+    assert ("support-ticket-agent", "v0", False) in runtime.hosted_stabilizations
     assert all(
         agent_name not in {"weather-agent", "healthcare-agent"}
         for agent_name, _, _ in runtime.hosted_stabilizations

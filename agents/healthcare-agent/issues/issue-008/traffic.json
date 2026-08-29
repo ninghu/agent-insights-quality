@@ -36,7 +36,23 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "provider",
+              "slot",
+              "message"
+            ],
+            "properties": {
+              "action": {"type": "string"},
+              "provider": {"type": "string"},
+              "slot": {"type": "string"},
+              "message": {"type": "string"}
+            }
+          },
+          "exact_json_fields": {
             "action": "create_appointment",
             "provider": "Dr. Rivera",
             "slot": "slot-demo-101",
@@ -78,7 +94,23 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "provider",
+              "slot",
+              "message"
+            ],
+            "properties": {
+              "action": {"type": "string"},
+              "provider": {"type": "string"},
+              "slot": {"type": "string"},
+              "message": {"type": "string"}
+            }
+          },
+          "exact_json_fields": {
             "action": "create_appointment",
             "provider": "Dr. Rivera",
             "slot": "slot-demo-102",
@@ -120,7 +152,23 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "provider",
+              "slot",
+              "message"
+            ],
+            "properties": {
+              "action": {"type": "string"},
+              "provider": {"type": "string"},
+              "slot": {"type": "string"},
+              "message": {"type": "string"}
+            }
+          },
+          "exact_json_fields": {
             "action": "create_appointment",
             "provider": "Dr. Rivera",
             "slot": "slot-demo-103",
@@ -162,7 +210,23 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "provider",
+              "slot",
+              "message"
+            ],
+            "properties": {
+              "action": {"type": "string"},
+              "provider": {"type": "string"},
+              "slot": {"type": "string"},
+              "message": {"type": "string"}
+            }
+          },
+          "exact_json_fields": {
             "action": "create_appointment",
             "provider": "Dr. Rivera",
             "slot": "slot-demo-104",
@@ -204,7 +268,23 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "provider",
+              "slot",
+              "message"
+            ],
+            "properties": {
+              "action": {"type": "string"},
+              "provider": {"type": "string"},
+              "slot": {"type": "string"},
+              "message": {"type": "string"}
+            }
+          },
+          "exact_json_fields": {
             "action": "create_appointment",
             "provider": "Dr. Rivera",
             "slot": "slot-demo-105",
