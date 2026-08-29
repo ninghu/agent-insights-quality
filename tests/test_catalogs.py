@@ -315,6 +315,84 @@ def test_prompt_structured_output_is_exact_and_tool_free() -> None:
         )
 
 
+def test_prompt_activation_output_is_not_constrained_by_request_schema() -> None:
+    for agent_name in ("weather-agent", "healthcare-agent"):
+        for traffic_path in sorted(
+            (ROOT / "agents" / agent_name / "issues").glob("issue-*/traffic.json")
+        ):
+            issue_traffic = json.loads(traffic_path.read_text(encoding="utf-8"))
+            for request in issue_traffic["requests"]:
+                if request["expected"].get("activation_gate") is True:
+                    assert "text" not in request["request"]["body"]
+
+    traffic = json.loads(
+        (
+            ROOT
+            / "agents"
+            / "weather-agent"
+            / "issues"
+            / "issue-001"
+            / "traffic.json"
+        ).read_text(encoding="utf-8")
+    )
+    activation = traffic["requests"][0]
+    assertions = activation["expected"]["semantic_assertions"]
+    healthy_output = {
+        "condition": "unknown",
+        "evidence": "missing",
+        "status": "unavailable",
+    }
+    assert assertions["exact_json"] != healthy_output
+    _validate_prompt_traffic(
+        traffic,
+        "weather issue activation",
+        require_activation=True,
+        require_all_assertions=True,
+    )
+
+
+def test_prompt_activation_rejects_defect_forcing_structured_output() -> None:
+    traffic = json.loads(
+        (
+            ROOT
+            / "agents"
+            / "weather-agent"
+            / "issues"
+            / "issue-001"
+            / "traffic.json"
+        ).read_text(encoding="utf-8")
+    )
+    activation = traffic["requests"][0]
+    exact_json = activation["expected"]["semantic_assertions"]["exact_json"]
+    activation["request"]["body"]["text"] = {
+        "format": {
+            "type": "json_schema",
+            "name": "defect_forcing_response",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": list(exact_json),
+                "properties": {
+                    key: {"type": "string", "enum": [value]}
+                    for key, value in exact_json.items()
+                },
+            },
+        }
+    }
+
+    with pytest.raises(
+        ContractError,
+        match="activation requests cannot contain structured-output constraints",
+    ):
+        _validate_prompt_traffic(
+            traffic,
+            "weather issue activation",
+            require_activation=True,
+            require_all_assertions=True,
+        )
+
+
 def _weather_latency_traffic() -> dict:
     return json.loads(
         (

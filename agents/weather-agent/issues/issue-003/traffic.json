@@ -26,50 +26,7 @@
           "conversation": {
             "id": "conv-weather-issue-003-1"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-003-request-1_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "shape",
-                  "high",
-                  "low",
-                  "unit"
-                ],
-                "properties": {
-                  "shape": {
-                    "type": "string",
-                    "enum": [
-                      "forecast"
-                    ]
-                  },
-                  "high": {
-                    "type": "integer",
-                    "enum": [
-                      27
-                    ]
-                  },
-                  "low": {
-                    "type": "integer",
-                    "enum": [
-                      13
-                    ]
-                  },
-                  "unit": {
-                    "type": "string",
-                    "enum": [
-                      "celsius"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {
@@ -111,50 +68,7 @@
           "conversation": {
             "id": "conv-weather-issue-003-2"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-003-request-2_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "shape",
-                  "high",
-                  "low",
-                  "unit"
-                ],
-                "properties": {
-                  "shape": {
-                    "type": "string",
-                    "enum": [
-                      "forecast"
-                    ]
-                  },
-                  "high": {
-                    "type": "integer",
-                    "enum": [
-                      27
-                    ]
-                  },
-                  "low": {
-                    "type": "integer",
-                    "enum": [
-                      13
-                    ]
-                  },
-                  "unit": {
-                    "type": "string",
-                    "enum": [
-                      "celsius"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {
@@ -196,50 +110,7 @@
           "conversation": {
             "id": "conv-weather-issue-003-3"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-003-request-3_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "shape",
-                  "high",
-                  "low",
-                  "unit"
-                ],
-                "properties": {
-                  "shape": {
-                    "type": "string",
-                    "enum": [
-                      "forecast"
-                    ]
-                  },
-                  "high": {
-                    "type": "integer",
-                    "enum": [
-                      27
-                    ]
-                  },
-                  "low": {
-                    "type": "integer",
-                    "enum": [
-                      13
-                    ]
-                  },
-                  "unit": {
-                    "type": "string",
-                    "enum": [
-                      "celsius"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {
@@ -281,50 +152,7 @@
           "conversation": {
             "id": "conv-weather-issue-003-4"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-003-request-4_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "shape",
-                  "high",
-                  "low",
-                  "unit"
-                ],
-                "properties": {
-                  "shape": {
-                    "type": "string",
-                    "enum": [
-                      "forecast"
-                    ]
-                  },
-                  "high": {
-                    "type": "integer",
-                    "enum": [
-                      27
-                    ]
-                  },
-                  "low": {
-                    "type": "integer",
-                    "enum": [
-                      13
-                    ]
-                  },
-                  "unit": {
-                    "type": "string",
-                    "enum": [
-                      "celsius"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {
@@ -366,50 +194,7 @@
           "conversation": {
             "id": "conv-weather-issue-003-5"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-003-request-5_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "shape",
-                  "high",
-                  "low",
-                  "unit"
-                ],
-                "properties": {
-                  "shape": {
-                    "type": "string",
-                    "enum": [
-                      "forecast"
-                    ]
-                  },
-                  "high": {
-                    "type": "integer",
-                    "enum": [
-                      27
-                    ]
-                  },
-                  "low": {
-                    "type": "integer",
-                    "enum": [
-                      13
-                    ]
-                  },
-                  "unit": {
-                    "type": "string",
-                    "enum": [
-                      "celsius"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {

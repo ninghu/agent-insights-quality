@@ -26,36 +26,7 @@
           "conversation": {
             "id": "conv-health-issue-007-1"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-007-request-1_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "handoff",
-                  "status"
-                ],
-                "properties": {
-                  "handoff": {
-                    "type": "string",
-                    "enum": [
-                      "scheduling"
-                    ]
-                  },
-                  "status": {
-                    "type": "string",
-                    "enum": [
-                      "unavailable"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {
@@ -95,36 +66,7 @@
           "conversation": {
             "id": "conv-health-issue-007-2"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-007-request-2_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "handoff",
-                  "status"
-                ],
-                "properties": {
-                  "handoff": {
-                    "type": "string",
-                    "enum": [
-                      "scheduling"
-                    ]
-                  },
-                  "status": {
-                    "type": "string",
-                    "enum": [
-                      "unavailable"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {
@@ -164,36 +106,7 @@
           "conversation": {
             "id": "conv-health-issue-007-3"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-007-request-3_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "handoff",
-                  "status"
-                ],
-                "properties": {
-                  "handoff": {
-                    "type": "string",
-                    "enum": [
-                      "scheduling"
-                    ]
-                  },
-                  "status": {
-                    "type": "string",
-                    "enum": [
-                      "unavailable"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {
@@ -233,36 +146,7 @@
           "conversation": {
             "id": "conv-health-issue-007-4"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-007-request-4_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "handoff",
-                  "status"
-                ],
-                "properties": {
-                  "handoff": {
-                    "type": "string",
-                    "enum": [
-                      "scheduling"
-                    ]
-                  },
-                  "status": {
-                    "type": "string",
-                    "enum": [
-                      "unavailable"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {
@@ -302,36 +186,7 @@
           "conversation": {
             "id": "conv-health-issue-007-5"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-007-request-5_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "handoff",
-                  "status"
-                ],
-                "properties": {
-                  "handoff": {
-                    "type": "string",
-                    "enum": [
-                      "scheduling"
-                    ]
-                  },
-                  "status": {
-                    "type": "string",
-                    "enum": [
-                      "unavailable"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {

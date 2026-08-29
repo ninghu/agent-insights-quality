@@ -138,12 +138,22 @@ def _validate_prompt_traffic(
             else None
         )
         assertions = assertions if isinstance(assertions, dict) else {}
+        activation_gate = (
+            expected.get("activation_gate") is True
+            if isinstance(expected, dict)
+            else False
+        )
         output_format = body.get("text", {}).get("format")
         exact_json = assertions.get("exact_json")
         has_exact_json = "exact_json" in assertions
         expects_json = assertions.get("response_format") == "json"
+        if activation_gate and output_format is not None:
+            raise ContractError(
+                f"{label} activation requests cannot contain structured-output "
+                "constraints"
+            )
         if output_format is None:
-            if has_exact_json or expects_json:
+            if not activation_gate and (has_exact_json or expects_json):
                 raise ContractError(
                     f"{label} JSON response contract requires a "
                     "structured-output request"

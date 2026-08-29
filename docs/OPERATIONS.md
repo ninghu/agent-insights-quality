@@ -132,6 +132,9 @@ endpoint execution. A baseline additionally requires all reviewed deterministic 
 terminal success plus output-presence signal per request. Prompt baselines require exactly one direct
 terminal response and no function calls per request. A failed baseline assertion or designated issue
 activation assertion makes the evidence incomplete rather than an Insight Engine miss.
+Prompt baselines retain strict structured-output requests where required for deterministic stability.
+Prompt issue activation requests never constrain endpoint output with a response schema; evaluator-side
+`exact_json` assertions verify the response without manufacturing the defect under test.
 Handled child errors require an independently successful terminal response; unhandled baseline
 errors always keep the run incomplete.
 

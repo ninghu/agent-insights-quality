@@ -1456,6 +1456,19 @@ def test_prompt_structured_output_is_forwarded_without_tools() -> None:
     assert result[5] == 0
 
 
+def test_runtime_rejects_structured_output_on_activation_traffic() -> None:
+    request = read_json(
+        ROOT / "agents" / "weather-agent" / "v0" / "traffic.json"
+    )["requests"][3]
+    request["expected"]["activation_gate"] = True
+
+    with pytest.raises(
+        ContractError,
+        match="Activation traffic cannot contain structured-output constraints",
+    ):
+        _normalize_fixture(request)
+
+
 def test_prompt_group_uses_previous_response_only_for_next_memory_turn() -> None:
     runtime = _runtime()
     previous_values = []

@@ -2533,6 +2533,10 @@ def _normalize_fixture(value: Any) -> dict[str, Any]:
     )
     if not isinstance(activation_gate, bool):
         raise ContractError("Traffic activation gate must be a boolean")
+    if activation_gate and "text" in body:
+        raise ContractError(
+            "Activation traffic cannot contain structured-output constraints"
+        )
     conversation = body.get("conversation")
     conversation_key = (
         str(conversation.get("id") or "")

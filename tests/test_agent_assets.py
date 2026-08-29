@@ -969,6 +969,9 @@ def test_prompt_exact_json_uses_closed_tool_free_structured_output() -> None:
             assert forbidden.isdisjoint(keys(body))
             assertions = item["expected"].get("semantic_assertions", {})
             exact_json = assertions.get("exact_json")
+            if item["expected"].get("activation_gate") is True:
+                assert "text" not in body
+                continue
             if assertions.get("response_format") != "json" or not isinstance(
                 exact_json, dict
             ):

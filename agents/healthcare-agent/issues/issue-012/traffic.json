@@ -26,43 +26,7 @@
           "conversation": {
             "id": "conv-health-issue-012-1"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-012-request-1_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "account_scope",
-                  "record_id",
-                  "slot"
-                ],
-                "properties": {
-                  "account_scope": {
-                    "type": "string",
-                    "enum": [
-                      "demo-account-b"
-                    ]
-                  },
-                  "record_id": {
-                    "type": "string",
-                    "enum": [
-                      "record-b-1"
-                    ]
-                  },
-                  "slot": {
-                    "type": "string",
-                    "enum": [
-                      "slot-demo-b1"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {
@@ -103,43 +67,7 @@
           "conversation": {
             "id": "conv-health-issue-012-2"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-012-request-2_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "account_scope",
-                  "record_id",
-                  "slot"
-                ],
-                "properties": {
-                  "account_scope": {
-                    "type": "string",
-                    "enum": [
-                      "demo-account-b"
-                    ]
-                  },
-                  "record_id": {
-                    "type": "string",
-                    "enum": [
-                      "record-b-2"
-                    ]
-                  },
-                  "slot": {
-                    "type": "string",
-                    "enum": [
-                      "slot-demo-b2"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {
@@ -180,43 +108,7 @@
           "conversation": {
             "id": "conv-health-issue-012-3"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-012-request-3_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "account_scope",
-                  "record_id",
-                  "slot"
-                ],
-                "properties": {
-                  "account_scope": {
-                    "type": "string",
-                    "enum": [
-                      "demo-account-b"
-                    ]
-                  },
-                  "record_id": {
-                    "type": "string",
-                    "enum": [
-                      "record-b-3"
-                    ]
-                  },
-                  "slot": {
-                    "type": "string",
-                    "enum": [
-                      "slot-demo-b3"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {
@@ -257,43 +149,7 @@
           "conversation": {
             "id": "conv-health-issue-012-4"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-012-request-4_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "account_scope",
-                  "record_id",
-                  "slot"
-                ],
-                "properties": {
-                  "account_scope": {
-                    "type": "string",
-                    "enum": [
-                      "demo-account-b"
-                    ]
-                  },
-                  "record_id": {
-                    "type": "string",
-                    "enum": [
-                      "record-b-4"
-                    ]
-                  },
-                  "slot": {
-                    "type": "string",
-                    "enum": [
-                      "slot-demo-b4"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {
@@ -334,43 +190,7 @@
           "conversation": {
             "id": "conv-health-issue-012-5"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-012-request-5_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "account_scope",
-                  "record_id",
-                  "slot"
-                ],
-                "properties": {
-                  "account_scope": {
-                    "type": "string",
-                    "enum": [
-                      "demo-account-b"
-                    ]
-                  },
-                  "record_id": {
-                    "type": "string",
-                    "enum": [
-                      "record-b-5"
-                    ]
-                  },
-                  "slot": {
-                    "type": "string",
-                    "enum": [
-                      "slot-demo-b5"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {

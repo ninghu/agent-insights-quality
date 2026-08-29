@@ -26,50 +26,7 @@
           "conversation": {
             "id": "conv-health-issue-008-1"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-008-request-1_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "action",
-                  "provider",
-                  "slot",
-                  "message"
-                ],
-                "properties": {
-                  "action": {
-                    "type": "string",
-                    "enum": [
-                      "create_appointment"
-                    ]
-                  },
-                  "provider": {
-                    "type": "string",
-                    "enum": [
-                      "Dr. Rivera"
-                    ]
-                  },
-                  "slot": {
-                    "type": "string",
-                    "enum": [
-                      "slot-demo-101"
-                    ]
-                  },
-                  "message": {
-                    "type": "string",
-                    "enum": [
-                      "Please confirm"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {
@@ -111,50 +68,7 @@
           "conversation": {
             "id": "conv-health-issue-008-2"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-008-request-2_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "action",
-                  "provider",
-                  "slot",
-                  "message"
-                ],
-                "properties": {
-                  "action": {
-                    "type": "string",
-                    "enum": [
-                      "create_appointment"
-                    ]
-                  },
-                  "provider": {
-                    "type": "string",
-                    "enum": [
-                      "Dr. Rivera"
-                    ]
-                  },
-                  "slot": {
-                    "type": "string",
-                    "enum": [
-                      "slot-demo-102"
-                    ]
-                  },
-                  "message": {
-                    "type": "string",
-                    "enum": [
-                      "Please confirm"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {
@@ -196,50 +110,7 @@
           "conversation": {
             "id": "conv-health-issue-008-3"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-008-request-3_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "action",
-                  "provider",
-                  "slot",
-                  "message"
-                ],
-                "properties": {
-                  "action": {
-                    "type": "string",
-                    "enum": [
-                      "create_appointment"
-                    ]
-                  },
-                  "provider": {
-                    "type": "string",
-                    "enum": [
-                      "Dr. Rivera"
-                    ]
-                  },
-                  "slot": {
-                    "type": "string",
-                    "enum": [
-                      "slot-demo-103"
-                    ]
-                  },
-                  "message": {
-                    "type": "string",
-                    "enum": [
-                      "Please confirm"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {
@@ -281,50 +152,7 @@
           "conversation": {
             "id": "conv-health-issue-008-4"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-008-request-4_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "action",
-                  "provider",
-                  "slot",
-                  "message"
-                ],
-                "properties": {
-                  "action": {
-                    "type": "string",
-                    "enum": [
-                      "create_appointment"
-                    ]
-                  },
-                  "provider": {
-                    "type": "string",
-                    "enum": [
-                      "Dr. Rivera"
-                    ]
-                  },
-                  "slot": {
-                    "type": "string",
-                    "enum": [
-                      "slot-demo-104"
-                    ]
-                  },
-                  "message": {
-                    "type": "string",
-                    "enum": [
-                      "Please confirm"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {
@@ -366,50 +194,7 @@
           "conversation": {
             "id": "conv-health-issue-008-5"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-008-request-5_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "action",
-                  "provider",
-                  "slot",
-                  "message"
-                ],
-                "properties": {
-                  "action": {
-                    "type": "string",
-                    "enum": [
-                      "create_appointment"
-                    ]
-                  },
-                  "provider": {
-                    "type": "string",
-                    "enum": [
-                      "Dr. Rivera"
-                    ]
-                  },
-                  "slot": {
-                    "type": "string",
-                    "enum": [
-                      "slot-demo-105"
-                    ]
-                  },
-                  "message": {
-                    "type": "string",
-                    "enum": [
-                      "Please confirm"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {

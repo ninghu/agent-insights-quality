@@ -64,43 +64,7 @@
           "conversation": {
             "id": "conv-issue-004-shared"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-004-request-2_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "condition",
-                  "temperature",
-                  "unit"
-                ],
-                "properties": {
-                  "condition": {
-                    "type": "string",
-                    "enum": [
-                      "clear"
-                    ]
-                  },
-                  "temperature": {
-                    "type": "integer",
-                    "enum": [
-                      68
-                    ]
-                  },
-                  "unit": {
-                    "type": "string",
-                    "enum": [
-                      "fahrenheit"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {
@@ -141,43 +105,7 @@
           "conversation": {
             "id": "conv-issue-004-shared"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-004-request-3_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "condition",
-                  "temperature",
-                  "unit"
-                ],
-                "properties": {
-                  "condition": {
-                    "type": "string",
-                    "enum": [
-                      "clear"
-                    ]
-                  },
-                  "temperature": {
-                    "type": "integer",
-                    "enum": [
-                      68
-                    ]
-                  },
-                  "unit": {
-                    "type": "string",
-                    "enum": [
-                      "fahrenheit"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {
@@ -218,43 +146,7 @@
           "conversation": {
             "id": "conv-issue-004-shared"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-004-request-4_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "condition",
-                  "temperature",
-                  "unit"
-                ],
-                "properties": {
-                  "condition": {
-                    "type": "string",
-                    "enum": [
-                      "clear"
-                    ]
-                  },
-                  "temperature": {
-                    "type": "integer",
-                    "enum": [
-                      68
-                    ]
-                  },
-                  "unit": {
-                    "type": "string",
-                    "enum": [
-                      "fahrenheit"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {
@@ -295,43 +187,7 @@
           "conversation": {
             "id": "conv-issue-004-shared"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "issue-004-request-5_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "condition",
-                  "temperature",
-                  "unit"
-                ],
-                "properties": {
-                  "condition": {
-                    "type": "string",
-                    "enum": [
-                      "clear"
-                    ]
-                  },
-                  "temperature": {
-                    "type": "integer",
-                    "enum": [
-                      68
-                    ]
-                  },
-                  "unit": {
-                    "type": "string",
-                    "enum": [
-                      "fahrenheit"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {
