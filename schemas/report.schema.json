@@ -8,13 +8,21 @@
       "if": {"properties": {"profile": {"const": "staging"}}},
       "then": {
         "properties": {
-          "issues": {"items": {"required": ["shadow_v2_primary"]}},
+          "issues": {
+            "minItems": 36,
+            "maxItems": 36,
+            "items": {"required": ["shadow_v2_primary"]}
+          },
           "summary": {"required": ["shadow_quality_score"]}
         }
       },
       "else": {
         "properties": {
-          "issues": {"items": {"not": {"required": ["shadow_v2_primary"]}}},
+          "issues": {
+            "minItems": 20,
+            "maxItems": 20,
+            "items": {"not": {"required": ["shadow_v2_primary"]}}
+          },
           "summary": {"not": {"required": ["shadow_quality_score"]}}
         }
       }
@@ -183,7 +191,7 @@
       ],
       "properties": {
         "baseline_passed": {"type": "integer", "minimum": 0, "maximum": 5},
-        "issues_expected": {"enum": [25, 36]},
+        "issues_expected": {"enum": [20, 36]},
         "issues_correct": {"type": "integer", "minimum": 0, "maximum": 36},
         "issues_partial": {"type": "integer", "minimum": 0, "maximum": 36},
         "quality_failures": {"type": "integer", "minimum": 0, "maximum": 41},

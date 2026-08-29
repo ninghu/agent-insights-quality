@@ -21,7 +21,7 @@ from agent_insights_quality.util import ContractError
 import pytest
 
 
-def _manifest() -> dict:
+def _manifest(*, full: bool = False) -> dict:
     agents, _ = load_catalogs()
 
     def request_summaries(*, prompt: bool, activation: bool) -> list[dict]:
@@ -47,7 +47,7 @@ def _manifest() -> dict:
 
     values = []
     for agent in agents["agents"]:
-        selected = agent["issue_ids"][:5]
+        selected = agent["issue_ids"] if full else agent["issue_ids"][:4]
         prompt = agent["type"] == "prompt"
         values.append(
             {
@@ -112,7 +112,7 @@ def _manifest() -> dict:
     return {
         "report_date": "2026-08-24",
         "run_id": "aiq-20260824",
-        "profile": "daily",
+        "profile": "staging" if full else "daily",
         "manifest_hash": "sha256:" + "c" * 64,
         "catalog_hashes": {
             "agents": "sha256:" + "d" * 64,
@@ -191,7 +191,7 @@ def test_report_status_uses_ninety_point_threshold() -> None:
     )
     assert report["status"] == "PASS"
     changed = deepcopy(assessments)
-    for assessment in list(changed.values())[:5]:
+    for assessment in list(changed.values())[:4]:
         assessment["verdict"] = "incorrect"
         assessment["finding_type"] = "MISMATCHED"
         assessment["fields"] = {
@@ -244,8 +244,7 @@ def test_rejected_foreign_operation_card_does_not_enter_report_scoring() -> None
 
 def test_staging_shadow_score_does_not_change_v1_or_daily_reports() -> None:
     _, issues = load_catalogs()
-    manifest = _manifest()
-    manifest["profile"] = "staging"
+    manifest = _manifest(full=True)
     assessments = _with_card_evaluations(_assessments(manifest))
     first = next(iter(assessments.values()))
     first["verdict"] = "partially_useful"
@@ -262,28 +261,29 @@ def test_staging_shadow_score_does_not_change_v1_or_daily_reports() -> None:
     )
 
     assert staging["summary"]["quality_score_formula"] == "field_weighted_v1"
-    assert staging["summary"]["quality_score"] == 99.1
+    assert staging["summary"]["quality_score"] == 99.4
     assert staging["status"] == "PASS"
     shadow = staging["summary"]["shadow_quality_score"]
     assert shadow["formula"] == "coverage_quality_precision_v2"
     assert shadow["automation_authority"] is False
     assert shadow["components"] == {
         "coverage": 100.0,
-        "diagnosis_recall": 96.0,
-        "selected_card_quality": 96.0,
-        "useful_coverage": 96.0,
+        "diagnosis_recall": 97.2,
+        "selected_card_quality": 97.2,
+        "useful_coverage": 97.2,
         "precision": 100.0,
     }
-    assert shadow["score"] == 96.8
+    assert shadow["score"] == 97.8
     assert shadow["gate_failures"] == []
     assert staging["issues"][0]["shadow_v2_primary"]["quality"] == 0.0
     validate_report(staging)
     markdown = render_markdown(staging)
     assert "## Staging shadow calibration" in markdown
     assert "`coverage_quality_precision_v2`" in markdown
-    assert "| Total | 96.8/100 |" in markdown
+    assert "| Total | 97.8/100 |" in markdown
 
-    manifest["profile"] = "daily"
+    manifest = _manifest()
+    assessments = _with_card_evaluations(_assessments(manifest))
     daily = build_report(
         manifest,
         issues,
@@ -298,8 +298,7 @@ def test_staging_shadow_score_does_not_change_v1_or_daily_reports() -> None:
 
 def test_incomplete_staging_shadow_keeps_counts_but_nulls_metrics() -> None:
     _, issues = load_catalogs()
-    manifest = _manifest()
-    manifest["profile"] = "staging"
+    manifest = _manifest(full=True)
     manifest["agents"][0]["issues"][0]["endpoint_usable_response_count"] = 4
     assessments = _with_card_evaluations(_assessments(manifest))
 
@@ -314,10 +313,10 @@ def test_incomplete_staging_shadow_keeps_counts_but_nulls_metrics() -> None:
     assert report["summary"]["quality_score"] is None
     shadow = report["summary"]["shadow_quality_score"]
     assert shadow["counts"] == {
-        "expected_issues": 25,
-        "detected_issues": 24,
-        "correct_diagnosis_primaries": 24,
-        "generated_issue_cards": 25,
+        "expected_issues": 36,
+        "detected_issues": 35,
+        "correct_diagnosis_primaries": 35,
+        "generated_issue_cards": 36,
         "baseline_noise_cards": 0,
     }
     assert all(value is None for value in shadow["components"].values())
@@ -407,6 +406,20 @@ def test_report_rejects_superseded_schema() -> None:
         _baseline_assessments(manifest),
     )
     report["schema_version"] = "1.0.0"
+    with pytest.raises(ContractError, match="Report is invalid"):
+        validate_report(report)
+
+
+def test_daily_report_schema_requires_exactly_20_issues() -> None:
+    manifest = _manifest()
+    _, issues = load_catalogs()
+    report = build_report(
+        manifest,
+        issues,
+        _assessments(manifest),
+        _baseline_assessments(manifest),
+    )
+    report["issues"].append(deepcopy(report["issues"][0]))
     with pytest.raises(ContractError, match="Report is invalid"):
         validate_report(report)
 
@@ -561,7 +574,7 @@ def test_score_comparison_uses_immutable_base_trend() -> None:
                 "status": "FAIL",
                 "baseline_passed": 1,
                 "issues_correct": 4,
-                "issues_expected": 25,
+                "issues_expected": 20,
                 "quality_score": 44.1,
             }
         ],
@@ -594,7 +607,7 @@ def test_scored_trend_day_cannot_be_replaced() -> None:
                 "status": "FAIL",
                 "baseline_passed": 1,
                 "issues_correct": 4,
-                "issues_expected": 25,
+                "issues_expected": 20,
                 "quality_score": 44.1,
             }
         ],
@@ -607,14 +620,14 @@ def test_field_quality_and_clean_card_precision_components() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
     assessments = _assessments(manifest)
-    for assessment in list(assessments.values())[:5]:
+    for assessment in list(assessments.values())[:4]:
         assessment["verdict"] = "partially_useful"
         assessment["finding_type"] = "PARTIAL"
         assessment["fields"]["severity"] = False
     baseline = _baseline_assessments(manifest)
     threshold = build_report(manifest, issues, assessments, baseline)
-    assert threshold["summary"]["issues_correct"] == 20
-    assert threshold["summary"]["issues_partial"] == 5
+    assert threshold["summary"]["issues_correct"] == 16
+    assert threshold["summary"]["issues_partial"] == 4
     assert threshold["summary"]["field_quality_score"] == 98
     assert threshold["summary"]["clean_card_precision"] == 100
     assert threshold["summary"]["quality_score"] == 98.3
@@ -635,8 +648,8 @@ def test_field_quality_and_clean_card_precision_components() -> None:
     }
     penalized = build_report(manifest, issues, assessments, baseline)
     assert penalized["summary"]["noise_cards"] == 1
-    assert penalized["summary"]["clean_card_precision"] == 96.2
-    assert penalized["summary"]["quality_score"] == 97.7
+    assert penalized["summary"]["clean_card_precision"] == 95.2
+    assert penalized["summary"]["quality_score"] == 97.6
     assert penalized["status"] == "PASS"
 
 
@@ -902,7 +915,7 @@ def test_complete_rendered_reports_hide_internal_verdict_labels() -> None:
         _baseline_assessments(manifest),
     )
     failing_assessments = deepcopy(assessments)
-    for assessment in list(failing_assessments.values())[:5]:
+    for assessment in list(failing_assessments.values())[:4]:
         assessment["verdict"] = "incorrect"
         assessment["finding_type"] = "MISMATCHED"
         assessment["fields"] = {

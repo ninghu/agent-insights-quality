@@ -44,6 +44,8 @@ Agents and 36 reviewed, single-root issues.
 - Run the five test Agents concurrently.
 - Stagger Agent starts by the reviewed short delay to avoid a simultaneous endpoint burst.
 - Within one Agent, run `v0` and issue versions sequentially.
+- Daily rotates exactly four issues per Agent: 20 issues plus five baselines, for 25 packages.
+- Full staging remains all 36 issues plus five baselines, for 41 packages.
 - Every potentially long-running operation emits public-safe start, elapsed heartbeat, and
   completion/failure progress. Progress-output failures must never abort the operation.
 - `g29` is the fixed telemetry resource set: one App Insights and Log Analytics pair per profile.

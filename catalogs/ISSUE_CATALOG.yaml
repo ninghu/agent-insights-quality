@@ -1,6 +1,6 @@
 schema_version: "1.0.0"
 selection:
-  issues_per_agent_daily: 5
+  issues_per_agent_daily: 4
   weekdays: [Monday, Tuesday, Wednesday, Thursday, Friday]
   full_run_on_change: true
 source_delta_contracts:

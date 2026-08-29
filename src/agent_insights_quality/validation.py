@@ -24,14 +24,21 @@ from agent_insights_quality.shadow_scoring import (
     SHADOW_SCORE_REPORT_PROFILES,
     SHADOW_USEFUL_COVERAGE_WEIGHT,
 )
+from agent_insights_quality.selection import DAILY_ISSUES_PER_AGENT
 from agent_insights_quality.util import ROOT, ContractError, read_yaml
 
 _REMOVED_TERMS = re.compile(
     r"(?i)\b(?:" + "s" + r"cenario|" + "s" + r"cn)\b|aiq-" + "s" + "cn"
 )
 def validate_repository() -> None:
-    load_catalogs()
-    load_automation_policy()
+    _, issues = load_catalogs()
+    policy = load_automation_policy()
+    if (
+        issues["selection"]["issues_per_agent_daily"]
+        != policy.issues_per_agent_daily
+        or policy.issues_per_agent_daily != DAILY_ISSUES_PER_AGENT
+    ):
+        raise ContractError("Daily selection contracts are inconsistent")
     generate_docs(check=True)
     _validate_reporting_policy()
     _validate_removed_terms()

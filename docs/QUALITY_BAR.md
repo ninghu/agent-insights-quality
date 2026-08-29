@@ -19,7 +19,7 @@ score = 0.85 * field_quality + 0.15 * clean_card_precision
 - A missing expected issue receives zero field quality.
 - Noise and extra duplicates reduce the clean-card precision component, which contributes 15% of the
   final score.
-- Daily uses 25 expected issues; full staging uses 36.
+- Daily uses 20 expected issues (four per Agent); full staging uses all 36.
 - Ownership does not change the score. It identifies whether remediation belongs to the Agent, Insight
   Engine, test framework, infrastructure, or remains unresolved.
 - A trace-proven valid Agent finding on `v0` is not Insight noise and does not reduce clean-card

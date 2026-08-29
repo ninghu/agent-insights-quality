@@ -3,6 +3,7 @@
 <!-- Generated from catalogs/ISSUE_CATALOG.yaml; do not edit. -->
 
 Every issue represents one independently fixable defect and expects exactly one Insight.
+Daily qualification rotates 4 issues per Agent; full staging qualifies all 36 issues.
 
 | Issue | Agent | Category | Severity | Expected defect |
 | --- | --- | --- | --- | --- |

@@ -12,6 +12,11 @@ from agent_insights_quality.shadow_scoring import (
     calculate_shadow_quality_score,
     select_shadow_primary,
 )
+from agent_insights_quality.selection import (
+    DAILY_ISSUE_COUNT,
+    DAILY_ISSUES_PER_AGENT,
+    STAGING_ISSUE_COUNT,
+)
 from agent_insights_quality.util import ROOT, ContractError, atomic_json, read_json
 from agent_insights_quality.util import content_hash
 
@@ -684,8 +689,10 @@ def validate_report(report: dict[str, Any]) -> None:
         or not isinstance(source_integrity.get("contract_digest"), str)
     ):
         raise ContractError("Complete report source integrity is incomplete")
-    if len(report["issues"]) not in {25, 36}:
-        raise ContractError("A report must contain the daily 25 or staging 36 issues")
+    if len(report["issues"]) not in {DAILY_ISSUE_COUNT, STAGING_ISSUE_COUNT}:
+        raise ContractError(
+            "A report must contain the daily 20 or staging 36 issues"
+        )
     if any(
         not isinstance(item, dict)
         or not isinstance(item.get("runtime_evidence_complete"), bool)
@@ -859,8 +866,8 @@ def validate_published_report(
         else None
     )
     if (
-        len(issues) != 25
-        or len({item.get("issue_id") for item in issues}) != 25
+        len(issues) != DAILY_ISSUE_COUNT
+        or len({item.get("issue_id") for item in issues}) != DAILY_ISSUE_COUNT
         or any(
             item.get("status") in {"inconclusive", "skipped_baseline", None}
             or not isinstance(item.get("observed_count"), int)
@@ -909,8 +916,8 @@ def validate_published_report(
         if {
             agent: sum(item["agent"] == agent for item in issues)
             for agent in expected_agents
-        } != {agent: 5 for agent in expected_agents}:
-            raise ContractError("Published report must contain five issues per Agent")
+        } != {agent: DAILY_ISSUES_PER_AGENT for agent in expected_agents}:
+            raise ContractError("Published report must contain four issues per Agent")
     if expected_selection is not None:
         actual = {
             agent: {
@@ -924,7 +931,11 @@ def validate_published_report(
         }
         if actual != expected:
             raise ContractError("Published report does not match deterministic daily selection")
-    _validate_complete_summary(report, expected_count=25, label="Published")
+    _validate_complete_summary(
+        report,
+        expected_count=DAILY_ISSUE_COUNT,
+        label="Published",
+    )
     if report["delivery"]["content_digest"] == "sha256:" + "0" * 64:
         raise ContractError("Published report has no bound email content digest")
 

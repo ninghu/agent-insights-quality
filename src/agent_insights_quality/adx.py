@@ -21,6 +21,7 @@ from agent_insights_quality.report_summary import (
     working_capabilities,
 )
 from agent_insights_quality.reporting import REQUIRED_FIELDS, validate_report
+from agent_insights_quality.selection import DAILY_ISSUE_COUNT
 from agent_insights_quality.util import (
     ROOT,
     ContractError,
@@ -822,12 +823,13 @@ def _validate_daily_source(report: dict[str, Any]) -> None:
     summary = report["summary"]
     if (
         report["profile"] != "daily"
-        or len(report["issues"]) != 25
-        or summary["issues_expected"] != 25
-        or len({item["issue_id"] for item in report["issues"]}) != 25
+        or len(report["issues"]) != DAILY_ISSUE_COUNT
+        or summary["issues_expected"] != DAILY_ISSUE_COUNT
+        or len({item["issue_id"] for item in report["issues"]})
+        != DAILY_ISSUE_COUNT
     ):
         raise AdxError(
-            "ADX publication requires one valid 25-issue daily report",
+            "ADX publication requires one valid 20-issue daily report",
             code="invalid_report",
         )
     baseline_agents = {item["agent"] for item in report["baseline"]}

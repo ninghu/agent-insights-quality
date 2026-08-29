@@ -10,7 +10,7 @@
       "additionalProperties": false,
       "required": ["issues_per_agent_daily", "weekdays", "full_run_on_change"],
       "properties": {
-        "issues_per_agent_daily": {"const": 5},
+        "issues_per_agent_daily": {"const": 4},
         "weekdays": {"const": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]},
         "full_run_on_change": {"const": true}
       }

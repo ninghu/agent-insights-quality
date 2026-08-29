@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from agent_insights_quality.selection import DAILY_ISSUES_PER_AGENT
 from agent_insights_quality.util import ROOT, ContractError, read_yaml
 
 FIXED_TELEMETRY_RESOURCE_SET = "g29"
@@ -17,6 +18,7 @@ TRACE_ASSERTION_POLL_SECONDS = 15
 
 @dataclass(frozen=True)
 class AutomationPolicy:
+    issues_per_agent_daily: int
     insight_lookback_hours: float
     clean_window_poll_seconds: int
     clean_window_ingestion_margin_seconds: int
@@ -34,6 +36,12 @@ def load_automation_policy(
     value = read_yaml(path)
     if value.get("schema_version") != "2.0.0":
         raise ContractError("Automation policy schema version is invalid")
+    daily_issues = _positive_int(
+        value.get("issues_per_agent_daily"),
+        "daily issue count",
+    )
+    if daily_issues != DAILY_ISSUES_PER_AGENT:
+        raise ContractError("Automation daily issue count is not the reviewed value")
     lookback = _finite_number(value.get("insight_lookback_hours"), "lookback")
     if lookback < MINIMUM_LOOKBACK_HOURS:
         raise ContractError("Automation lookback is below the reviewed minimum")
@@ -90,6 +98,7 @@ def load_automation_policy(
     ):
         raise ContractError("Automation telemetry resource set is not the fixed reviewed set")
     return AutomationPolicy(
+        issues_per_agent_daily=daily_issues,
         insight_lookback_hours=lookback,
         clean_window_poll_seconds=poll,
         clean_window_ingestion_margin_seconds=margin,

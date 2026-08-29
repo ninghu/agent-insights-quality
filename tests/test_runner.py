@@ -590,7 +590,7 @@ def test_transient_trace_query_failure_uses_existing_recovery(
     assert len(runtime.starts) == 1
 
 
-def test_runner_executes_25_issues() -> None:
+def test_runner_executes_20_issues() -> None:
     agents, issues = load_catalogs()
     hashes = catalog_hashes(agents, issues)
     selected = select_daily(date(2026, 8, 24), agents, issues, hashes["issues"])
@@ -604,7 +604,7 @@ def test_runner_executes_25_issues() -> None:
         seed=1,
     )
     assert len(results) == 5
-    assert sum(len(item.issues) for item in results) == 25
+    assert sum(len(item.issues) for item in results) == 20
     assert all(item.baseline.status == "passed" for item in results)
     assert all(
         value.status == "observed" for item in results for value in item.issues

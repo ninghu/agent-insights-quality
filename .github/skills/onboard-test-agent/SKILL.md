@@ -22,7 +22,7 @@ Add one new synthetic Test Agent only as a human-reviewed fixed-topology migrati
    deterministically.
 5. Add the Agent, owner, and permanent issue assignments to both reviewed catalogs.
 6. Derive `agent_count`, `staging_issue_count`,
-   `daily_issue_count = sum(min(5, assigned_issue_count))`, and
+   `daily_issue_count = sum(min(4, assigned_issue_count))`, and
    `version_count = agent_count + staging_issue_count`, then update every fixed-count contract:
    - Agent and Issue catalog schemas;
    - run-manifest and report schemas;
@@ -33,7 +33,7 @@ Add one new synthetic Test Agent only as a human-reviewed fixed-topology migrati
    - hosted Agent import/build CI matrix when applicable.
    - promotion/deployment registry schemas and checks, runtime validators, explicit Agent-name
     allowlists, skills, and generated-change workflow constraints.
-   - daily selection and report validation so each Agent contributes `min(5, assigned issues)`.
+   - daily selection and report validation so each Agent contributes `min(4, assigned issues)`.
 7. For Hosted code, include `implementation.yaml`, `traffic.json`, `source/`, `host.yaml`,
    `requirements.txt`, and deterministic `package.py`; include the container contract and CI build
    entry for Hosted containers.

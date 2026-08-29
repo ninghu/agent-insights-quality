@@ -21,7 +21,8 @@ Use this skill for human-reviewed impact-based qualification before promotion.
      unchanged;
    - use full-catalog qualification for shared runtime, telemetry, assessment, scoring, schema,
      infrastructure, or cross-Agent topology changes.
-8. Require one complete package for every selected baseline and issue.
+8. For full-catalog staging, require all 36 issue packages and five baseline packages, 41 total.
+   Daily remains a separate 20-issue plus five-baseline contract.
 9. Assess selected baselines and issues with GPT-5.6 Sol. Equal nonzero request, response, and usable
    response counts plus a verified trace contract prove endpoint execution. Require all reviewed
    baseline semantic assertions, every designated issue activation gate, and one terminal success

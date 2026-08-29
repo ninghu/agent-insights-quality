@@ -56,13 +56,13 @@ def test_email_requires_reviewed_domain_and_one_success(
             "delta": 5.9,
         },
         "summary": {
-            "issues_correct": 25,
-            "issues_expected": 25,
+            "issues_correct": 20,
+            "issues_expected": 20,
             "baseline_passed": 5,
             "issues_partial": 0,
             "noise_cards": 0,
             "unverified_cards": 0,
-            "observed_cards": 25,
+            "observed_cards": 20,
             "field_quality_score": 100,
             "clean_card_precision": 100,
             "quality_score": 100,
@@ -122,7 +122,7 @@ def test_email_requires_reviewed_domain_and_one_success(
         "How Scoring Works"
     )
     assert request["subject"] == (
-        "[Agent Insights Quality] 100/100 - 2026-08-24 - 25/25 issues"
+        "[Agent Insights Quality] 100/100 - 2026-08-24 - 20/20 issues"
     )
     assert re.search(r"\b(?:PASS|FAIL)\b", request["subject"]) is None
     assert re.search(r"\b(?:PASS|FAIL)\b", request["html"]) is None

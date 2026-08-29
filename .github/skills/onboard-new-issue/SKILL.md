@@ -30,7 +30,7 @@ Add one independently fixable issue only after human review.
    test, skill, generated view, and readable document, including promotion/deployment registry schemas
    and generated-change validation.
 12. Confirm the Agent has at least one assigned issue and daily selection uses
-   `min(5, assigned issues)`.
+   `min(4, assigned issues)`.
 13. Run repository validation, Ruff, tests, and Bicep compilation.
 14. Deploy the affected Agent digests to staging, qualify that Agent's `v0` and all assigned issues,
     complete Sol assessment, and require human review before daily promotion. Reuse other Agents'

@@ -6,7 +6,7 @@ license: MIT
 
 # Daily Agent Insights Quality
 
-<!-- prompt-version: 2.4.0 -->
+<!-- prompt-version: 2.4.1 -->
 
 1. Set `PYTHONPATH` to the current worktree's `src` directory in the same shell as every repository
    Python command. Verify `agent_insights_quality.__file__` resolves inside the current worktree.
@@ -19,8 +19,9 @@ license: MIT
    connection, stagger concurrent Agent starts, and wait for the configured clean interval before any
    Agent traffic. It may recover at most three transiently incomplete versions per Agent before
    finalization.
-5. Assess all five baseline packages and every issue package with GPT-5.6 Sol using the repository
-   assessment prompt. Use independent `endpoint_evidence`; never assign `insight_engine` unless
+5. Assess all five baseline packages and the four deterministically selected issues per Agent with
+   GPT-5.6 Sol using the repository assessment prompt. The daily run contains 20 issue packages and
+   five baseline packages, 25 total. Use independent `endpoint_evidence`; never assign `insight_engine` unless
    endpoint behavior and trace contract are both proven. Equal nonzero request, response, and usable
    response counts plus a verified trace contract prove endpoint execution. Require every reviewed
    baseline semantic assertion, each designated issue activation assertion, and one terminal success
@@ -61,7 +62,8 @@ paths, create a pull request, or enable auto-merge. Stop after importing the pro
 private run directory. Scheduled official runs never pass `--test-run`.
 
 The runner executes five Agents concurrently and versions sequentially within each Agent. Complete
-runs use the reviewed score threshold of 90.
+runs use the reviewed score threshold of 90. Full staging remains 36 issues plus five baselines,
+41 packages total.
 
 Any `inconclusive` baseline assessment or `INCOMPLETE` issue assessment makes the whole run
 `INCOMPLETE` with no numeric quality score.

@@ -25,6 +25,7 @@ from agent_insights_quality.report_summary import (
     improvement_rows,
     working_capabilities,
 )
+from agent_insights_quality.reporting import _summary_metrics
 from agent_insights_quality.util import ROOT, content_hash, read_json
 
 
@@ -67,6 +68,24 @@ def _report() -> dict:
         "contract_digest": source_integrity_digest(agents, issues),
     }
     issue_by_id = {item["id"]: item for item in issues["issues"]}
+    selected: list[dict] = []
+    for agent in agents["agents"]:
+        selected.extend(
+            [
+                item
+                for item in report["issues"]
+                if item["agent"] == agent["name"]
+            ][:4]
+        )
+    report["issues"] = selected
+    report["summary"] = _summary_metrics(
+        report["baseline"],
+        report["issues"],
+        incomplete=False,
+    )
+    report["status"] = (
+        "PASS" if report["summary"]["quality_score"] >= 90 else "FAIL"
+    )
     for item in report["issues"]:
         item["title"] = issue_by_id[item["issue_id"]]["title"]
     return report
@@ -98,10 +117,12 @@ def test_publication_payload_contains_public_safe_explanations() -> None:
     assert payload["schema_version"] == PAYLOAD_VERSION
     assert len(payload["agents"]) == 5
     assert len(payload["baselines"]) == 5
-    assert len(payload["issues"]) == 25
-    assert len(payload["cards"]) == 36
-    assert len(payload["fields"]) == 175
-    assert len(payload["highlights"]) == 8
+    assert len(payload["issues"]) == 20
+    assert len(payload["cards"]) == sum(
+        len(item["assessment"]["card_evaluations"])
+        for item in [*report["baseline"], *report["issues"]]
+    )
+    assert len(payload["fields"]) == 140
     assert payload["run"]["quality_score_formula"] == "field_weighted_v1"
     assert "shadow_quality_score" not in payload["run"]
     assert payload["run"]["report_url"].endswith(

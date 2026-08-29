@@ -58,7 +58,7 @@ invoke a runtime-packaged skill by name.
 
 ## First-run observation
 
-Verify live progress output, 30 assessment packages, active and yesterday-closed Quality work-item
+Verify live progress output, 25 assessment packages (20 issues plus five baselines), active and yesterday-closed Quality work-item
 sections, one immutable HTML send attempt with the dashboard link, explicit ADX publication status,
 five per-Agent reports, all seven public-safe ADX views, generated-path validation, required checks,
 and auto-merge. A complete trusted FAIL is a valid product-quality result; INCOMPLETE is not

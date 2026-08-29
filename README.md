@@ -46,8 +46,11 @@ deployment. GPT-5.6 Sol performs one structured quality assessment.
 Monday through Friday, each Agent runs:
 
 1. its exact `v0` version, which must produce zero Insights;
-2. five deterministically rotated issue versions;
+2. four deterministically rotated issue versions;
 3. one on-demand Agent Insights run after each exact version's telemetry arrives.
+
+Daily therefore evaluates 20 issues plus five baselines (25 assessment packages). Full staging
+qualification remains all 36 issues plus five baselines (41 assessment packages).
 
 The first run after monitor reset uses the reviewed `0.1`-hour lookback. The runner waits for natural
 telemetry and trace proof before Agent Insights, guards against expired operations, and automatically

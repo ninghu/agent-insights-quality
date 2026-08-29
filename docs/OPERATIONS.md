@@ -110,7 +110,7 @@ python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD> `
 ```
 
 The runner validates catalog hashes against the protected daily registry, resets each monitor once,
-waits for the reviewed `0.1`-hour clean interval, runs `v0`, then runs five deterministic issues per
+waits for the reviewed `0.1`-hour clean interval, runs `v0`, then runs four deterministic issues per
 Agent. Agent starts are staggered by five seconds to avoid a simultaneous endpoint burst while all
 five Agents still execute concurrently; exact versions for one Agent execute sequentially. Before each
 Hosted version, the runner patches the Agent endpoint to one `FixedRatio` rule with 100% traffic on
@@ -196,7 +196,7 @@ It may contain private work-item context and runtime links, so it must never be 
 For `daily`, finalization also derives one public-safe payload and publishes it atomically to ADX.
 The v2 payload exposes logical `AIQDailyRuns`, `AIQDailyAgents`, `AIQDailyBaselines`,
 `AIQDailyIssues`, `AIQDailyCards`, `AIQDailyFields`, and `AIQDailyHighlights` views. It contains the
-25 tested issues, matching public catalog expectations, current maintenance owners, outcome and
+20 tested issues, matching public catalog expectations, current maintenance owners, outcome and
 field detail, generated-card metadata, full reasoning already present in the committed sanitized
 report, and the same aggregate highlights rendered in email. Historical publication resolves the
 exact reviewed catalog snapshot from the report's publishing commit before attaching expected root

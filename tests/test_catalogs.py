@@ -57,6 +57,7 @@ def test_catalogs_define_fixed_inventory() -> None:
     agents, issues = load_catalogs()
     assert len(agents["agents"]) == 5
     assert len(issues["issues"]) == 36
+    assert issues["selection"]["issues_per_agent_daily"] == 4
     assert [item["id"] for item in issues["issues"]] == [
         f"issue-{number:03d}" for number in range(1, 37)
     ]
@@ -94,6 +95,9 @@ def test_catalogs_define_fixed_inventory() -> None:
         "healthcare-agent": "forbidden",
     }
     assert len(issues["source_delta_contracts"]) == 36
+    assert "Daily qualification rotates 4 issues per Agent" in render_issue_catalog(
+        issues
+    )
 
 
 def test_catalog_semantics_reject_old_source_delta_shape_cleanly() -> None:

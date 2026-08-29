@@ -127,6 +127,9 @@ Targeted qualification requires reviewed CLI support for both targeted reports a
 receipts. The current CLI cannot produce both, so use full-catalog qualification and never combine
 evidence or receipts manually.
 
+The fixed daily contract selects four issues per Agent: 20 issues plus five baselines, for 25
+assessment packages. Full staging remains all 36 issues plus five baselines, for 41 packages.
+
 Promote only complete, human-reviewed `PASS` or `FAIL` evidence; `INCOMPLETE` is never promotable or
 reusable. After daily provisioning, use read-only readiness and registry reconciliation rather than
 smoke traffic.

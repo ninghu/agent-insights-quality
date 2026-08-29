@@ -681,12 +681,15 @@ def render_agent_catalog(agents: dict[str, Any]) -> str:
 
 
 def render_issue_catalog(issues: dict[str, Any]) -> str:
+    daily_count = int(issues["selection"]["issues_per_agent_daily"])
     lines = [
         "# Issue Catalog",
         "",
         "<!-- Generated from catalogs/ISSUE_CATALOG.yaml; do not edit. -->",
         "",
         "Every issue represents one independently fixable defect and expects exactly one Insight.",
+        f"Daily qualification rotates {daily_count} issues per Agent; full staging "
+        f"qualifies all {len(issues['issues'])} issues.",
         "",
         "| Issue | Agent | Category | Severity | Expected defect |",
         "| --- | --- | --- | --- | --- |",
