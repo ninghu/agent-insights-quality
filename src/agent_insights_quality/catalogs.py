@@ -172,6 +172,74 @@ def _validate_prompt_issue_delta(
         )
 
 
+def _validate_weather_latency_traffic(requests: list[Any]) -> None:
+    expected_turns: list[tuple[str, str, bool, dict[str, Any]]] = []
+    for conversation_number in range(1, 6):
+        conversation_id = f"conv-weather-issue-005-{conversation_number}"
+        first_request_number = (conversation_number * 2) - 1
+        expected_turns.extend(
+            [
+                (
+                    f"issue-005-request-{first_request_number}",
+                    conversation_id,
+                    True,
+                    {
+                        "phase": "clarification_required",
+                        "completed": False,
+                    },
+                ),
+                (
+                    f"issue-005-request-{first_request_number + 1}",
+                    conversation_id,
+                    False,
+                    {
+                        "phase": "answer_complete",
+                        "completed": True,
+                        "condition": "clear",
+                        "temperature": 20,
+                        "unit": "celsius",
+                    },
+                ),
+            ]
+        )
+
+    gates = [
+        request.get("expected", {}).get("activation_gate")
+        if isinstance(request, dict)
+        else None
+        for request in requests
+    ]
+    valid_turns = len(requests) == len(expected_turns) and all(
+        isinstance(request, dict)
+        and request.get("id") == expected_id
+        and request.get("request", {})
+        .get("body", {})
+        .get("conversation", {})
+        .get("id")
+        == expected_conversation_id
+        and request.get("expected", {}).get("activation_gate") is expected_gate
+        and request.get("expected", {})
+        .get("semantic_assertions", {})
+        .get("exact_json")
+        == expected_result
+        for request, (
+            expected_id,
+            expected_conversation_id,
+            expected_gate,
+            expected_result,
+        ) in zip(requests, expected_turns, strict=True)
+    )
+    if (
+        not valid_turns
+        or sum(gate is True for gate in gates) != 5
+        or sum(gate is False for gate in gates) != 5
+    ):
+        raise ContractError(
+            "issue-005 requires five ordered two-turn conversations with "
+            "active clarification turns and non-active completion turns"
+        )
+
+
 def load_catalogs(*, require_paths: bool = True) -> tuple[dict[str, Any], dict[str, Any]]:
     agents = read_yaml(AGENT_CATALOG_PATH)
     issues = read_yaml(ISSUE_CATALOG_PATH)
@@ -428,25 +496,7 @@ def _validate_implementation(
         ):
             raise ContractError(f"{issue['id']} contains invalid endpoint traffic")
     if issue["id"] == "issue-005":
-        conversations = Counter(
-            str(
-                request["request"]["body"].get("conversation", {}).get("id", "")
-            )
-            for request in requests
-        )
-        if (
-            len(requests) != 10
-            or len(conversations) != 5
-            or "" in conversations
-            or set(conversations.values()) != {2}
-            or not all(
-                request["expected"].get("activation_gate") is True
-                for request in requests
-            )
-        ):
-            raise ContractError(
-                "issue-005 requires five independent two-turn activation groups"
-            )
+        _validate_weather_latency_traffic(requests)
 
 
 def _validate_source_delta(

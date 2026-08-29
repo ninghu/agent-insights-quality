@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from copy import deepcopy
+import json
 
 import pytest
 
@@ -9,13 +10,14 @@ from agent_insights_quality.catalogs import (
     _validate_prompt_definition,
     _validate_prompt_issue_delta,
     _validate_prompt_traffic,
+    _validate_weather_latency_traffic,
     catalog_hashes,
     load_catalogs,
     render_agent_catalog,
     render_issue_catalog,
     validate_semantics,
 )
-from agent_insights_quality.util import ContractError
+from agent_insights_quality.util import ROOT, ContractError
 
 
 def test_catalogs_define_fixed_inventory() -> None:
@@ -206,6 +208,66 @@ def test_prompt_source_delta_requires_exact_json_types() -> None:
             require_activation=False,
             require_all_assertions=True,
         )
+
+
+def _weather_latency_traffic() -> dict:
+    return json.loads(
+        (
+            ROOT
+            / "agents"
+            / "weather-agent"
+            / "issues"
+            / "issue-005"
+            / "traffic.json"
+        ).read_text(encoding="utf-8")
+    )
+
+
+def test_weather_latency_contract_accepts_five_ordered_gate_pairs() -> None:
+    _validate_weather_latency_traffic(_weather_latency_traffic()["requests"])
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    [
+        "all_true",
+        "swapped",
+        "missing",
+        "malformed_gate_pair",
+        "wrong_conversation",
+        "wrong_request_id",
+        "missing_delay_manifestation",
+        "incorrect_completion",
+    ],
+)
+def test_weather_latency_contract_rejects_malformed_gate_pairs(
+    malformation: str,
+) -> None:
+    requests = deepcopy(_weather_latency_traffic()["requests"])
+    if malformation == "all_true":
+        for request in requests:
+            request["expected"]["activation_gate"] = True
+    elif malformation == "swapped":
+        requests[0], requests[1] = requests[1], requests[0]
+    elif malformation == "missing":
+        requests.pop()
+    elif malformation == "malformed_gate_pair":
+        requests[1]["expected"].pop("activation_gate")
+    elif malformation == "wrong_conversation":
+        requests[1]["request"]["body"]["conversation"]["id"] = "unpaired"
+    elif malformation == "wrong_request_id":
+        requests[0]["id"] = "issue-005-request-2"
+    elif malformation == "missing_delay_manifestation":
+        requests[0]["expected"]["semantic_assertions"]["exact_json"]["phase"] = (
+            "answer_complete"
+        )
+    else:
+        requests[1]["expected"]["semantic_assertions"]["exact_json"]["completed"] = (
+            False
+        )
+
+    with pytest.raises(ContractError, match="five ordered two-turn conversations"):
+        _validate_weather_latency_traffic(requests)
 
 
 def test_generated_catalog_views_are_complete() -> None:

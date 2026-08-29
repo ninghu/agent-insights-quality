@@ -67,8 +67,9 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Turn two adds no material new evidence and correctly completes the answer using the original evidence, corroborating the delay on turn one.",
-        "defect_observed": false,
+        "behavior": "Turn two adds no material new evidence, yet only now completes the answer using the original evidence, proving an unnecessary extra round trip.",
+        "defect_observed": true,
+        "activation_gate": false,
         "semantic_assertions": {
           "response_format": "json",
           "exact_json": {
@@ -145,8 +146,9 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Turn two adds no material new evidence and correctly completes the answer using the original evidence, corroborating the delay on turn one.",
-        "defect_observed": false,
+        "behavior": "Turn two adds no material new evidence, yet only now completes the answer using the original evidence, proving an unnecessary extra round trip.",
+        "defect_observed": true,
+        "activation_gate": false,
         "semantic_assertions": {
           "response_format": "json",
           "exact_json": {
@@ -223,8 +225,9 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Turn two adds no material new evidence and correctly completes the answer using the original evidence, corroborating the delay on turn one.",
-        "defect_observed": false,
+        "behavior": "Turn two adds no material new evidence, yet only now completes the answer using the original evidence, proving an unnecessary extra round trip.",
+        "defect_observed": true,
+        "activation_gate": false,
         "semantic_assertions": {
           "response_format": "json",
           "exact_json": {
@@ -301,8 +304,9 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Turn two adds no material new evidence and correctly completes the answer using the original evidence, corroborating the delay on turn one.",
-        "defect_observed": false,
+        "behavior": "Turn two adds no material new evidence, yet only now completes the answer using the original evidence, proving an unnecessary extra round trip.",
+        "defect_observed": true,
+        "activation_gate": false,
         "semantic_assertions": {
           "response_format": "json",
           "exact_json": {
@@ -379,8 +383,9 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Turn two adds no material new evidence and correctly completes the answer using the original evidence, corroborating the delay on turn one.",
-        "defect_observed": false,
+        "behavior": "Turn two adds no material new evidence, yet only now completes the answer using the original evidence, proving an unnecessary extra round trip.",
+        "defect_observed": true,
+        "activation_gate": false,
         "semantic_assertions": {
           "response_format": "json",
           "exact_json": {
