@@ -14,6 +14,7 @@ from agent_insights_quality.models import (
     InsightRunEvidence,
     InvocationEvidence,
     VersionResult,
+    linked_operations_match_scope,
 )
 from agent_insights_quality.registry import version_entry
 from agent_insights_quality.runtime_state import VersionCheckpointStore
@@ -145,9 +146,12 @@ class RuntimePort(Protocol):
     def trace_assertion_evidence(
         self,
         *,
+        agent_name: str,
         foundry_version: str,
         operation_ids: tuple[str, ...],
         response_references: tuple[str, ...],
+        window_start: str,
+        window_end: str,
         traffic_path: Path,
         stabilization_seconds: int,
         on_first_pass: Callable[[], None],
@@ -1016,9 +1020,12 @@ def _execute_version(
             invocation = _with_trace_assertions(
                 invocation,
                 runtime.trace_assertion_evidence(
+                    agent_name=agent["name"],
                     foundry_version=foundry_version,
                     operation_ids=operation_ids,
                     response_references=invocation.response_references,
+                    window_start=invocation.started_at,
+                    window_end=invocation.completed_at,
                     traffic_path=traffic_path,
                     stabilization_seconds=trace_assertion_stabilization_seconds,
                     on_first_pass=start_insight_run_once,
@@ -1089,20 +1096,29 @@ def _execute_version(
         )
     except Exception as error:
         raise _VersionStageError("insight_run_poll_failed", error) from error
+    scoped_insights = tuple(
+        item
+        for item in insight_run.insights
+        if item.agent_version == foundry_version
+        and linked_operations_match_scope(
+            item.linked_operation_ids,
+            operation_ids,
+        )
+    )
     _progress(
         runtime,
         f"{agent['name']}/{logical_version}: Agent Insights "
-        f"{insight_run.status.lower()} ({len(insight_run.insights)} cards)",
+        f"{insight_run.status.lower()} ({len(scoped_insights)} cards)",
     )
     result = VersionResult(
         logical_version=logical_version,
         foundry_version=foundry_version,
         status="inconclusive",
         operation_ids=list(operation_ids),
-        insight_references=[item.reference for item in insight_run.insights],
+        insight_references=[item.reference for item in scoped_insights],
         window_start=insight_run.window_start,
         window_end=insight_run.window_end,
-        observed_insights=list(insight_run.insights),
+        observed_insights=list(scoped_insights),
         endpoint_request_count=invocation.request_count,
         endpoint_response_count=invocation.response_count,
         endpoint_usable_response_count=invocation.usable_response_count,
@@ -1122,17 +1138,11 @@ def _execute_version(
             RuntimeError("Agent Insights run did not succeed"),
         )
     if expected is None:
-        result.status = "passed" if not insight_run.insights else "not_at_bar"
+        result.status = "passed" if not scoped_insights else "not_at_bar"
         if checkpoint_store is not None:
             checkpoint_store.save_result(*checkpoint_args, result)
         return result
-    matching = [
-        item
-        for item in insight_run.insights
-        if item.agent_version == foundry_version
-        and set(item.linked_operation_ids).issubset(set(operation_ids))
-        and set(item.linked_operation_ids)
-    ]
+    matching = list(scoped_insights)
     if len(matching) != 1:
         result.status = "not_at_bar"
         result.error_code = "expected_exactly_one_insight"

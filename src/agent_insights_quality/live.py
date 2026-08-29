@@ -26,6 +26,7 @@ from agent_insights_quality.models import (
     RequestCompletionEvidence,
     SemanticAssertionEvidence,
     TraceAssertionEvidence,
+    linked_operations_match_scope,
 )
 from agent_insights_quality.automation_policy import (
     TRACE_ASSERTION_DEADLINE_SECONDS,
@@ -803,18 +804,16 @@ union traces, dependencies, requests
             foundry_version=foundry_version,
             operation_ids=operation_ids,
         )
-        cutoff = (
-            self._utcnow().astimezone(UTC)
-            - timedelta(hours=lookback_hours)
-            + timedelta(seconds=start_margin_seconds)
+        start_deadline = (
+            earliest
+            + timedelta(hours=lookback_hours)
+            - timedelta(seconds=start_margin_seconds)
         )
-        if earliest < cutoff:
-            raise InsightWindowExpiredError(
-                "Correlated operations expired into the guarded Agent Insights start margin"
-            )
+        self._remaining_insight_start_seconds(start_deadline)
         checkpoint = self._start_insights_once(
             monitor_id=monitor_id,
             lookback_hours=lookback_hours,
+            start_deadline=start_deadline,
         )
         persist(checkpoint)
         return checkpoint
@@ -849,7 +848,10 @@ union traces, dependencies, requests
             for value in changed
             if str(value.get("agent_version") or value.get("agentVersion") or "")
             == foundry_version
-            and set(self._linked_ids(value)).intersection(operation_ids)
+            and linked_operations_match_scope(
+                self._linked_ids(value),
+                operation_ids,
+            )
         )
         result = InsightRunEvidence(
             run_reference=_opaque(checkpoint.run_id),
@@ -872,13 +874,22 @@ union traces, dependencies, requests
         *,
         monitor_id: str,
         lookback_hours: float,
+        start_deadline: datetime | None = None,
     ) -> InsightRunCheckpoint:
         before = self._insight_revisions(monitor_id)
+        if start_deadline is not None:
+            self._remaining_insight_start_seconds(start_deadline)
         service_lookback: int | float = (
             int(lookback_hours)
             if float(lookback_hours).is_integer()
             else lookback_hours
         )
+        timeout_seconds: int | float = _DEFAULT_REQUEST_TIMEOUT_SECONDS
+        if start_deadline is not None:
+            timeout_seconds = min(
+                timeout_seconds,
+                self._remaining_insight_start_seconds(start_deadline),
+            )
         run = self._json_request(
             "POST",
             self._insights_url(
@@ -886,6 +897,8 @@ union traces, dependencies, requests
             ),
             {"lookback_hours": service_lookback},
             expected={200, 201, 202},
+            timeout_seconds=timeout_seconds,
+            request_deadline=start_deadline,
         )
         run_id = str(run.get("id") or "")
         if not run_id:
@@ -894,6 +907,16 @@ union traces, dependencies, requests
             run_id=run_id,
             before_revisions=before,
         )
+
+    def _remaining_insight_start_seconds(self, deadline: datetime) -> float:
+        remaining = (
+            deadline.astimezone(UTC) - self._utcnow().astimezone(UTC)
+        ).total_seconds()
+        if remaining <= 0:
+            raise InsightWindowExpiredError(
+                "Correlated operations expired into the guarded Agent Insights start margin"
+            )
+        return remaining
 
     def _wait_insights_run(
         self,
@@ -1052,9 +1075,12 @@ union traces, dependencies, requests
     def trace_assertion_evidence(
         self,
         *,
+        agent_name: str,
         foundry_version: str,
         operation_ids: tuple[str, ...],
         response_references: tuple[str, ...],
+        window_start: str,
+        window_end: str,
         traffic_path: Path,
         stabilization_seconds: int,
         on_first_pass: Callable[[], None],
@@ -1087,16 +1113,18 @@ union traces, dependencies, requests
                 operation_ids,
                 response_references,
                 foundry_version,
+                agent_name,
+                window_start,
+                window_end,
             )
             correlated = _correlated_request_rows(
                 rows,
                 response_references,
                 operation_ids,
             )
-            if correlated is None and _request_correlation_impossible(
+            if _request_correlation_impossible(
                 rows,
                 response_references,
-                operation_ids,
             ):
                 raise TraceAssertionActivationError(
                     "Trace assertions found ambiguous response-to-operation correlation"
@@ -1178,6 +1206,9 @@ union traces, dependencies, requests
         operation_ids: tuple[str, ...],
         response_references: tuple[str, ...] = (),
         foundry_version: str | None = None,
+        agent_name: str | None = None,
+        window_start: str | None = None,
+        window_end: str | None = None,
     ) -> list[dict[str, Any]]:
         try:
             from azure.monitor.query import LogsQueryStatus
@@ -1194,9 +1225,59 @@ union traces, dependencies, requests
             f'"{value.replace(chr(34), chr(92) + chr(34))}"'
             for value in response_references
         ) or '""'
+        scoped_operations = ""
+        operation_filter = f"| where operation_Id in ({values})"
+        timespan: timedelta | tuple[datetime, datetime] = timedelta(days=90)
+        if response_references:
+            if not agent_name or not foundry_version or not window_start or not window_end:
+                raise ContractError(
+                    "Trace assertion correlation requires exact Agent and invocation scope"
+                )
+            try:
+                start = datetime.fromisoformat(window_start).astimezone(UTC)
+                traffic_end = datetime.fromisoformat(window_end).astimezone(UTC)
+            except (TypeError, ValueError) as error:
+                raise ContractError(
+                    "Trace assertion correlation has an invalid invocation window"
+                ) from error
+            if traffic_end < start:
+                raise ContractError(
+                    "Trace assertion correlation has an invalid invocation window"
+                )
+            query_end = traffic_end + timedelta(minutes=15)
+            scoped_operations = f"""
+let scoped_reference_operations =
+    union traces, dependencies, requests
+    | where timestamp >= datetime({start.isoformat()})
+      and timestamp < datetime({query_end.isoformat()})
+    | extend response_id=coalesce(
+        tostring(customDimensions["gen_ai.response.id"]),
+        tostring(customDimensions["azure.ai.agentserver.response_id"]),
+        tostring(customDimensions["response_id"]))
+    | extend request_id=coalesce(
+        tostring(customDimensions["x-ms-client-request-id"]),
+        tostring(customDimensions["client_request_id"]),
+        tostring(customDimensions["request_id"]))
+    | extend observed_agent=tostring(customDimensions["gen_ai.agent.name"])
+    | extend agent_version=tostring(customDimensions["gen_ai.agent.version"])
+    | extend matched_reference=case(
+        response_id in ({references}), response_id,
+        request_id in ({references}), request_id,
+        "")
+    | where matched_reference in ({references})
+      and observed_agent == "{agent_name}"
+      and agent_version == "{foundry_version}"
+    | distinct operation_Id;
+"""
+            operation_filter = (
+                f"| where operation_Id in ({values}) "
+                "or operation_Id in (scoped_reference_operations)"
+            )
+            timespan = (start, query_end)
         query = f"""
+{scoped_operations}
 union traces, dependencies, requests
-| where operation_Id in ({values})
+{operation_filter}
 | extend agent_version=tostring(customDimensions["gen_ai.agent.version"])
 {f'| where agent_version == "{foundry_version}"' if foundry_version else ''}
 | extend operation_name=tostring(customDimensions["gen_ai.operation.name"])
@@ -1234,7 +1315,7 @@ union traces, dependencies, requests
         result = self._query_resource(
             self._logs_client(),
             query,
-            timespan=timedelta(days=90),
+            timespan=timespan,
         )
         if result.status != LogsQueryStatus.SUCCESS:
             raise ContractError("Trace behavior evidence query failed")
@@ -1428,7 +1509,8 @@ union traces, dependencies, requests
         content_type: str = "application/json",
         retry_statuses: set[int] | None = None,
         retry_no_response: bool = False,
-        timeout_seconds: int = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        timeout_seconds: int | float = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        request_deadline: datetime | None = None,
     ) -> dict[str, Any]:
         data = json.dumps(body).encode("utf-8") if body is not None else None
         headers = {
@@ -1465,11 +1547,17 @@ union traces, dependencies, requests
                 headers=headers,
                 method=method,
             )
+            attempt_timeout = timeout_seconds
+            if request_deadline is not None:
+                attempt_timeout = min(
+                    attempt_timeout,
+                    self._remaining_insight_start_seconds(request_deadline),
+                )
             try:
                 with self._progress.heartbeat(f"remote {method} request"):
                     with urllib.request.urlopen(
                         request,
-                        timeout=timeout_seconds,
+                        timeout=attempt_timeout,
                     ) as response:
                         status = response.status
                         payload = response.read()
@@ -1873,16 +1961,17 @@ def _correlated_request_rows(
 def _request_correlation_impossible(
     rows: list[dict[str, Any]],
     response_references: tuple[str, ...],
-    operation_ids: tuple[str, ...],
 ) -> bool:
     expected_references = set(response_references)
-    allowed_operations = set(operation_ids)
     operations_by_reference: dict[str, set[str]] = defaultdict(set)
     references_by_operation: dict[str, set[str]] = defaultdict(set)
     for row in rows:
         operation_id = str(row.get("operation_id") or "").lower()
         reference = str(row.get("matched_reference") or "")
-        if operation_id not in allowed_operations or reference not in expected_references:
+        if (
+            _TRACE_ID.fullmatch(operation_id) is None
+            or reference not in expected_references
+        ):
             continue
         operations_by_reference[reference].add(operation_id)
         references_by_operation[operation_id].add(reference)

@@ -1008,7 +1008,7 @@ def test_negative_argument_assertions_require_parsed_telemetry() -> None:
     )[0].passed is True
 
 
-def test_trace_row_query_projects_private_values_only_for_in_memory_evaluation(
+def test_trace_row_query_projects_private_values_with_exact_correlation_scope(
     monkeypatch,
 ) -> None:
     query_module = types.ModuleType("azure.monitor.query")
@@ -1019,6 +1019,7 @@ def test_trace_row_query_projects_private_values_only_for_in_memory_evaluation(
     monkeypatch.setitem(sys.modules, "azure.monitor", monitor_module)
     monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
     captured = []
+    timespans = []
 
     class Table:
         rows = []
@@ -1029,13 +1030,21 @@ def test_trace_row_query_projects_private_values_only_for_in_memory_evaluation(
 
     runtime = _runtime()
     runtime._logs_client = lambda: object()  # type: ignore[method-assign]
-    runtime._query_resource = (  # type: ignore[method-assign]
-        lambda _client, query, **_kwargs: captured.append(query) or Result()
-    )
+    def query_resource(_client, query, **kwargs):
+        captured.append(query)
+        timespans.append(kwargs["timespan"])
+        return Result()
+
+    runtime._query_resource = query_resource  # type: ignore[method-assign]
+    window_start = "2026-08-28T10:00:00+00:00"
+    window_end = "2026-08-28T10:00:30+00:00"
     assert runtime._trace_rows(
         ("a" * 32,),
         ("response-reference",),
         "issue-013",
+        "finance-agent",
+        window_start,
+        window_end,
     ) == []
     query = captured[0]
     assert 'customDimensions["gen_ai.tool.call.arguments"]' in query
@@ -1049,6 +1058,15 @@ def test_trace_row_query_projects_private_values_only_for_in_memory_evaluation(
     assert "request_id in" in query
     assert "matched_reference" in query
     assert 'agent_version == "issue-013"' in query
+    assert 'observed_agent == "finance-agent"' in query
+    assert "scoped_reference_operations" in query
+    assert "operation_Id in (scoped_reference_operations)" in query
+    assert timespans == [
+        (
+            datetime.fromisoformat(window_start),
+            datetime.fromisoformat(window_end) + timedelta(minutes=15),
+        )
+    ]
 
 
 def _write_trace_assertion_traffic(path: Path, request_count: int = 1) -> None:
@@ -1125,9 +1143,12 @@ def test_trace_assertion_correlation_fails_immediately_when_ambiguous(
 
     with pytest.raises(ContractError, match="ambiguous"):
         runtime.trace_assertion_evidence(
+            agent_name="finance-agent",
             foundry_version="issue-013",
             operation_ids=(operation_a, operation_b),
             response_references=(reference_a, reference_b),
+            window_start="2026-08-28T10:00:00+00:00",
+            window_end="2026-08-28T10:00:30+00:00",
             traffic_path=traffic_path,
             stabilization_seconds=180,
             on_first_pass=lambda: first_passes.append(monotonic[0]),
@@ -1168,9 +1189,12 @@ def test_trace_assertion_stable_failure_waits_for_deadline(
     first_passes = []
 
     evidence = runtime.trace_assertion_evidence(
+        agent_name="finance-agent",
         foundry_version="issue-013",
         operation_ids=(operation_id,),
         response_references=(reference,),
+        window_start="2026-08-28T10:00:00+00:00",
+        window_end="2026-08-28T10:00:30+00:00",
         traffic_path=traffic_path,
         stabilization_seconds=180,
         on_first_pass=lambda: first_passes.append(monotonic[0]),
@@ -1220,9 +1244,12 @@ def test_trace_assertion_observes_span_ingested_after_135_seconds(
     first_passes = []
 
     evidence = runtime.trace_assertion_evidence(
+        agent_name="finance-agent",
         foundry_version="issue-013",
         operation_ids=(operation_id,),
         response_references=(reference,),
+        window_start="2026-08-28T10:00:00+00:00",
+        window_end="2026-08-28T10:00:30+00:00",
         traffic_path=traffic_path,
         stabilization_seconds=180,
         on_first_pass=lambda: first_passes.append(monotonic[0]),
@@ -1264,9 +1291,12 @@ def test_trace_assertion_late_duplicate_invalidates_stabilizing_pass(
     first_passes = []
 
     evidence = runtime.trace_assertion_evidence(
+        agent_name="finance-agent",
         foundry_version="issue-013",
         operation_ids=(operation_id,),
         response_references=(reference,),
+        window_start="2026-08-28T10:00:00+00:00",
+        window_end="2026-08-28T10:00:30+00:00",
         traffic_path=traffic_path,
         stabilization_seconds=180,
         on_first_pass=lambda: first_passes.append(monotonic[0]),
@@ -1274,6 +1304,54 @@ def test_trace_assertion_late_duplicate_invalidates_stabilizing_pass(
 
     assert evidence[0][0].passed is False
     assert monotonic[0] == 15 * 60
+    assert first_passes == [0]
+
+
+def test_trace_assertion_late_external_operation_is_ambiguous(
+    tmp_path,
+) -> None:
+    monotonic = [0.0]
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+    )
+    operation_id = "a" * 32
+    reference = "resp_A1b2C3d4E5f6"
+    target = {
+        **_tool_trace_row("lookup"),
+        "operation_id": operation_id,
+        "matched_reference": reference,
+    }
+    external = {
+        **target,
+        "operation_id": "b" * 32,
+        "timestamp": "2026-08-28T10:00:01+00:00",
+    }
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(traffic_path)
+    runtime._trace_rows = (  # type: ignore[method-assign]
+        lambda *_args: [target] if monotonic[0] < 135 else [target, external]
+    )
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
+    )
+    first_passes = []
+
+    with pytest.raises(ContractError, match="ambiguous"):
+        runtime.trace_assertion_evidence(
+            agent_name="finance-agent",
+            foundry_version="issue-013",
+            operation_ids=(operation_id,),
+            response_references=(reference,),
+            window_start="2026-08-28T10:00:00+00:00",
+            window_end="2026-08-28T10:00:30+00:00",
+            traffic_path=traffic_path,
+            stabilization_seconds=180,
+            on_first_pass=lambda: first_passes.append(monotonic[0]),
+        )
+
+    assert monotonic[0] == 135
     assert first_passes == [0]
 
 
@@ -1304,9 +1382,12 @@ def test_trace_assertion_stable_pass_waits_for_ingestion_interval(
     first_passes = []
 
     evidence = runtime.trace_assertion_evidence(
+        agent_name="finance-agent",
         foundry_version="issue-013",
         operation_ids=(operation_id,),
         response_references=(reference,),
+        window_start="2026-08-28T10:00:00+00:00",
+        window_end="2026-08-28T10:00:30+00:00",
         traffic_path=traffic_path,
         stabilization_seconds=180,
         on_first_pass=lambda: first_passes.append(monotonic[0]),
@@ -1346,9 +1427,12 @@ def test_trace_assertion_requires_correlation_in_final_snapshot(
 
     with pytest.raises(ContractError, match="exact response-to-operation correlation"):
         runtime.trace_assertion_evidence(
+            agent_name="finance-agent",
             foundry_version="issue-013",
             operation_ids=(operation_id,),
             response_references=(reference,),
+            window_start="2026-08-28T10:00:00+00:00",
+            window_end="2026-08-28T10:00:30+00:00",
             traffic_path=traffic_path,
             stabilization_seconds=180,
             on_first_pass=lambda: pytest.fail("failure must not start Insights"),
@@ -1389,9 +1473,12 @@ def test_trace_assertion_rejects_pass_first_seen_near_deadline(
 
     with pytest.raises(ContractError, match="did not stabilize"):
         runtime.trace_assertion_evidence(
+            agent_name="finance-agent",
             foundry_version="issue-013",
             operation_ids=(operation_id,),
             response_references=(reference,),
+            window_start="2026-08-28T10:00:00+00:00",
+            window_end="2026-08-28T10:00:30+00:00",
             traffic_path=traffic_path,
             stabilization_seconds=180,
             on_first_pass=lambda: first_passes.append(monotonic[0]),
@@ -2042,6 +2129,58 @@ def test_insight_parser_supports_paged_wire_trace_details() -> None:
     assert insight.proposed_fix == "Apply the bounded correction."
 
 
+def test_finished_insights_exclude_cards_linked_to_foreign_operations() -> None:
+    runtime = _runtime()
+    target_operation = "a" * 32
+    foreign_operation = "b" * 32
+    earliest = datetime(2026, 8, 24, 10, 0, tzinfo=UTC)
+    latest = earliest + timedelta(seconds=30)
+    runtime._wait_insights_run = (  # type: ignore[method-assign]
+        lambda *_args: {
+            "status": "succeeded",
+            "window_start": (earliest - timedelta(seconds=1)).isoformat(),
+            "window_end": (latest + timedelta(seconds=1)).isoformat(),
+        }
+    )
+    runtime._operation_time_bounds = (  # type: ignore[method-assign]
+        lambda **_kwargs: (earliest, latest)
+    )
+
+    def insight(
+        reference: str,
+        linked_operation_ids: tuple[str, ...],
+    ) -> dict:
+        return {
+            "id": reference,
+            "agentVersion": "issue-013",
+            "title": reference,
+            "updatedAt": "2026-08-24T10:01:00+00:00",
+            "details": {
+                "linkedTraces": [
+                    {"traceId": operation_id}
+                    for operation_id in linked_operation_ids
+                ]
+            },
+        }
+
+    runtime._list_insights = lambda _monitor_id: [  # type: ignore[method-assign]
+        insight("target-only", (target_operation,)),
+        insight("mixed", (target_operation, foreign_operation)),
+        insight("foreign-only", (foreign_operation,)),
+        insight("unlinked", ()),
+    ]
+
+    result = runtime.finish_insights_run(
+        agent_name="finance-agent",
+        monitor_id="monitor-finance",
+        foundry_version="issue-013",
+        operation_ids=(target_operation,),
+        checkpoint=InsightRunCheckpoint("private-run-id", {}),
+    )
+
+    assert [item.title for item in result.insights] == ["target-only"]
+
+
 def test_telemetry_requires_every_request_reference() -> None:
     class Table:
         rows = [
@@ -2376,6 +2515,98 @@ def test_agent_insights_rejects_operations_outside_short_window() -> None:
             start_margin_seconds=30,
             persist=lambda _checkpoint: None,
         )
+
+
+def test_agent_insights_rechecks_age_after_revision_fetch() -> None:
+    now = [datetime(2026, 8, 27, 18, 0, tzinfo=UTC)]
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        utcnow=lambda: now[0],
+    )
+    runtime._operation_time_bounds = (  # type: ignore[method-assign]
+        lambda **_kwargs: (
+            now[0] - timedelta(minutes=5),
+            now[0] - timedelta(minutes=4, seconds=30),
+        )
+    )
+
+    def delayed_revisions(_monitor_id: str) -> dict:
+        now[0] += timedelta(seconds=31)
+        return {}
+
+    runtime._insight_revisions = delayed_revisions  # type: ignore[method-assign]
+    runtime._json_request = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: pytest.fail(
+            "expired operation window must not send an Insights POST"
+        )
+    )
+
+    with pytest.raises(InsightWindowExpiredError, match="expired"):
+        runtime.start_insights_run(
+            agent_name="weather-agent",
+            monitor_id="monitor-weather",
+            foundry_version="1",
+            operation_ids=("a" * 32,),
+            lookback_hours=0.1,
+            start_margin_seconds=30,
+            persist=lambda _checkpoint: pytest.fail(
+                "expired Insight start must not persist a checkpoint"
+            ),
+        )
+
+
+def test_agent_insights_auth_retry_stops_at_start_deadline(monkeypatch) -> None:
+    now = [datetime(2026, 8, 27, 18, 0, tzinfo=UTC)]
+    tokens = iter(["expired-token", "fresh-token"])
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _scope: next(tokens),
+        utcnow=lambda: now[0],
+    )
+    runtime._operation_time_bounds = (  # type: ignore[method-assign]
+        lambda **_kwargs: (
+            now[0] - timedelta(minutes=5, seconds=29),
+            now[0] - timedelta(minutes=5),
+        )
+    )
+    runtime._insight_revisions = lambda _monitor: {}  # type: ignore[method-assign]
+    attempts = 0
+    timeouts = []
+
+    def open_request(*_args, timeout):
+        nonlocal attempts
+        attempts += 1
+        timeouts.append(timeout)
+        now[0] += timedelta(seconds=1)
+        raise urllib.error.HTTPError(
+            "https://example.invalid",
+            401,
+            "Unauthorized",
+            {},
+            io.BytesIO(b"{}"),
+        )
+
+    monkeypatch.setattr(
+        "agent_insights_quality.live.urllib.request.urlopen",
+        open_request,
+    )
+
+    with pytest.raises(InsightWindowExpiredError, match="expired"):
+        runtime.start_insights_run(
+            agent_name="weather-agent",
+            monitor_id="monitor-weather",
+            foundry_version="1",
+            operation_ids=("a" * 32,),
+            lookback_hours=0.1,
+            start_margin_seconds=30,
+            persist=lambda _checkpoint: pytest.fail(
+                "expired retry must not persist a checkpoint"
+            ),
+        )
+
+    assert attempts == 1
+    assert timeouts == [1.0]
 
 
 def test_agent_insights_rejects_window_anchor_race() -> None:

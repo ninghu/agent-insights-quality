@@ -207,6 +207,41 @@ def test_report_status_uses_ninety_point_threshold() -> None:
     assert failed["status"] == "FAIL"
 
 
+def test_rejected_foreign_operation_card_does_not_enter_report_scoring() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    assessments = _assessments(manifest)
+    target = manifest["agents"][0]["issues"][0]
+    target["status"] = "not_at_bar"
+    target["error_code"] = "expected_exactly_one_insight"
+    target["insight_references"] = []
+    target["evidence_reference"] = None
+    assessment = assessments[target["issue_id"]]
+    assessment["verdict"] = "missing"
+    assessment["finding_type"] = "MISSING"
+    assessment["fields"] = {
+        field: False for field in assessment["fields"]
+    }
+    assessment["card_evaluations"] = []
+
+    report = build_report(
+        manifest,
+        issues,
+        assessments,
+        _baseline_assessments(manifest),
+    )
+    result = next(
+        item for item in report["issues"] if item["issue_id"] == target["issue_id"]
+    )
+
+    assert result["observed_count"] == 0
+    assert result["detail"] == "MISSING"
+    assert report["summary"]["observed_cards"] == (
+        report["summary"]["issues_expected"] - 1
+    )
+    assert report["summary"]["clean_card_precision"] == 100.0
+
+
 def test_staging_shadow_score_does_not_change_v1_or_daily_reports() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()

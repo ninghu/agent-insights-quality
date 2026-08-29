@@ -10,6 +10,7 @@ from agent_insights_quality.models import (
     SemanticAssertionEvidence,
     TraceAssertionEvidence,
     VersionResult,
+    linked_operations_match_scope,
     request_completion_payload,
 )
 from agent_insights_quality.runtime_state import VersionCheckpointStore
@@ -322,7 +323,7 @@ def _cards_for_operations(
     return [
         value
         for value in insights
-        if set(value.linked_operation_ids).intersection(operation_ids)
+        if linked_operations_match_scope(value.linked_operation_ids, operation_ids)
     ]
 
 
@@ -342,12 +343,14 @@ def _linked_baseline_operations(
     insight: Any,
     baseline_operation_ids: set[str],
 ) -> tuple[str, ...]:
-    values = tuple(
-        sorted(set(insight.linked_operation_ids) & baseline_operation_ids)
-    )
-    if not values:
-        raise ContractError("Baseline card has no linked baseline operation")
-    return values
+    if not linked_operations_match_scope(
+        insight.linked_operation_ids,
+        baseline_operation_ids,
+    ):
+        raise ContractError(
+            "Baseline card has no exclusively linked baseline operations"
+        )
+    return tuple(sorted(set(insight.linked_operation_ids)))
 
 
 def _insight_payload(value: Any) -> dict[str, Any]:

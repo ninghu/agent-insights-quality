@@ -11,6 +11,7 @@ from agent_insights_quality.assessment import (
     _baseline_behavior_summary,
     _baseline_evidence_complete,
     _baseline_cards,
+    _cards_for_operations,
     _checkpoint_result,
     _issue_activation_complete,
     _linked_baseline_operations,
@@ -370,11 +371,21 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
         load_assessments([path], {"issue-001"}, packages, manifest)
 
 
-def test_baseline_trace_proof_uses_only_baseline_operations() -> None:
-    insight = SimpleNamespace(linked_operation_ids=("a" * 32, "b" * 32))
-    assert _linked_baseline_operations(insight, {"a" * 32}) == ("a" * 32,)
-    with pytest.raises(ContractError, match="no linked baseline"):
-        _linked_baseline_operations(insight, {"c" * 32})
+def test_assessment_excludes_cards_linked_to_foreign_operations() -> None:
+    exact = SimpleNamespace(linked_operation_ids=("a" * 32,))
+    mixed = SimpleNamespace(linked_operation_ids=("a" * 32, "b" * 32))
+    foreign = SimpleNamespace(linked_operation_ids=("b" * 32,))
+    unlinked = SimpleNamespace(linked_operation_ids=())
+
+    assert _cards_for_operations(
+        [exact, mixed, foreign, unlinked],
+        {"a" * 32},
+    ) == [exact]
+    assert _linked_baseline_operations(exact, {"a" * 32}) == ("a" * 32,)
+    with pytest.raises(ContractError, match="exclusively linked"):
+        _linked_baseline_operations(mixed, {"a" * 32})
+    with pytest.raises(ContractError, match="exclusively linked"):
+        _linked_baseline_operations(foreign, {"a" * 32})
 
 
 def test_baseline_card_attribution_requires_exact_version() -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass, field
 
 
@@ -60,6 +61,14 @@ class InsightEvidence:
     linked_operation_ids: tuple[str, ...]
     trace_count: int
     updated_at: str
+
+
+def linked_operations_match_scope(
+    linked_operation_ids: Collection[str],
+    operation_ids: Collection[str],
+) -> bool:
+    linked = set(linked_operation_ids)
+    return bool(linked) and linked.issubset(operation_ids)
 
 
 @dataclass(frozen=True)

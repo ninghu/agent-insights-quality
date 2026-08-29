@@ -198,16 +198,21 @@ class FakeRuntime:
     def trace_assertion_evidence(
         self,
         *,
+        agent_name: str,
         foundry_version: str,
         operation_ids: tuple[str, ...],
         response_references: tuple[str, ...],
+        window_start: str,
+        window_end: str,
         traffic_path: Path,
         stabilization_seconds: int,
         on_first_pass,
     ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
         payload = json.loads(traffic_path.read_text(encoding="utf-8"))
+        assert agent_name.endswith("-agent")
         assert foundry_version
         assert len(operation_ids) == len(response_references)
+        assert window_start < window_end
         assert stabilization_seconds == 180
         on_first_pass()
         return tuple(
@@ -327,10 +332,21 @@ class TimedTraceRuntime(FakeRuntime):
         self.monotonic += seconds
         self.wall += timedelta(seconds=seconds)
 
-    def _trace_rows(self, operation_ids, response_references=(), foundry_version=None):
+    def _trace_rows(
+        self,
+        operation_ids,
+        response_references=(),
+        foundry_version=None,
+        agent_name=None,
+        window_start=None,
+        window_end=None,
+    ):
         assert operation_ids == (f"{1:032x}",)
         assert response_references == ("issue-synthetic-0",)
         assert foundry_version == "issue-synthetic"
+        assert agent_name == "finance-agent"
+        assert window_start == "2026-08-24T10:00:00+00:00"
+        assert window_end == "2026-08-24T10:01:00+00:00"
         return self.rows_at(self.monotonic)
 
     def trace_assertion_evidence(self, **kwargs):
@@ -452,6 +468,35 @@ def test_late_duplicate_quarantines_started_run_and_resume_reuses_result(
     assert result.insight_references == []
     assert result.observed_insights == []
     assert [start[0] for start in runtime.starts] == [0]
+    assert runtime.finishes == 1
+    assert runtime.invoked.count("issue-synthetic") == 1
+
+
+def test_late_external_operation_quarantines_started_run(
+    tmp_path: Path,
+) -> None:
+    first = _timed_trace_row("lookup", timestamp="2026-08-29T12:00:00Z")
+    external = {
+        **first,
+        "operation_id": f"{2:032x}",
+        "timestamp": "2026-08-29T12:00:01Z",
+    }
+    runtime = TimedTraceRuntime(
+        lambda elapsed: [first] if elapsed < 135 else [first, external]
+    )
+    store = VersionCheckpointStore(tmp_path / "stages", "sha256:" + "d" * 64)
+    kwargs = _timed_version_kwargs(tmp_path, runtime, store)
+
+    result = _execute_version(**kwargs)
+    resumed = _execute_version(**kwargs)
+
+    assert result == resumed
+    assert result.status == "inconclusive"
+    assert result.error_code == "issue_activation_failed"
+    assert result.insight_references == []
+    assert result.observed_insights == []
+    assert [start[0] for start in runtime.starts] == [0]
+    assert runtime.monotonic == 135
     assert runtime.finishes == 1
     assert runtime.invoked.count("issue-synthetic") == 1
 
@@ -1117,6 +1162,65 @@ def test_baseline_noise_continues_issue_diagnostics() -> None:
     )
     assert all(item.baseline.status == "not_at_bar" for item in results)
     assert all(value.status == "observed" for item in results for value in item.issues)
+
+
+def test_foreign_operation_card_is_not_persisted(tmp_path: Path) -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    selected = select_daily(date(2026, 8, 24), agents, issues, hashes["issues"])
+    selected_issue = selected["weather-agent"][0]
+
+    class ForeignOperationCardRuntime(FakeRuntime):
+        def finish_insights_run(self, **kwargs) -> InsightRunEvidence:
+            result = super().finish_insights_run(**kwargs)
+            if kwargs["foundry_version"] == "v0":
+                return result
+            card = result.insights[0]
+            return replace(
+                result,
+                insights=(
+                    replace(
+                        card,
+                        linked_operation_ids=(
+                            *card.linked_operation_ids,
+                            "f" * 32,
+                        ),
+                        trace_count=card.trace_count + 1,
+                    ),
+                ),
+            )
+
+    store = VersionCheckpointStore(
+        tmp_path / "stages",
+        "sha256:" + "d" * 64,
+    )
+    results = execute(
+        agents=agents,
+        issues=issues,
+        selected=selected,
+        registry=_registry(agents, hashes),
+        runtime=ForeignOperationCardRuntime(),
+        seed=1,
+        checkpoint_store=store,
+    )
+    weather = next(item for item in results if item.agent_name == "weather-agent")
+    issue = weather.issues[0]
+    entry = _registry(agents, hashes)["agents"]["weather-agent"]["versions"][
+        selected_issue
+    ]
+    persisted = store.result(
+        "weather-agent",
+        selected_issue,
+        entry["foundry_version"],
+        entry["content_digest"],
+    )
+
+    assert issue.status == "not_at_bar"
+    assert issue.error_code == "expected_exactly_one_insight"
+    assert issue.insight_references == []
+    assert issue.observed_insights == []
+    assert issue.observed_insight is None
+    assert persisted == issue
 
 
 def test_baseline_operational_failure_stops_only_one_agent() -> None:
