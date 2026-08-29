@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from pathlib import Path
 
@@ -746,3 +747,54 @@ def test_agent_report_is_a_human_validation_handoff() -> None:
     assert "root cause, title, description, category, linked traces" in markdown
     assert "severity, proposed fix" in markdown
     assert "| Ownership |" not in markdown
+
+
+def test_complete_rendered_reports_hide_internal_verdict_labels() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    assessments = _assessments(manifest)
+    passing = build_report(
+        manifest,
+        issues,
+        assessments,
+        _baseline_assessments(manifest),
+    )
+    failing_assessments = deepcopy(assessments)
+    for assessment in list(failing_assessments.values())[:5]:
+        assessment["verdict"] = "incorrect"
+        assessment["finding_type"] = "MISMATCHED"
+        assessment["fields"] = {
+            field: False for field in assessment["fields"]
+        }
+    failing = build_report(
+        manifest,
+        issues,
+        failing_assessments,
+        _baseline_assessments(manifest),
+    )
+
+    for report, expected_status in ((passing, "PASS"), (failing, "FAIL")):
+        aggregate = render_markdown(report)
+        assert report["status"] == expected_status
+        assert re.search(r"\b(?:PASS|FAIL)\b", aggregate) is None
+        assert "| Issue | Agent | Finding | Ownership |" in aggregate
+        for baseline in report["baseline"]:
+            agent = render_agent_markdown(report, baseline["agent"])
+            assert re.search(r"\b(?:PASS|FAIL)\b", agent) is None
+            assert "Quality score:" in agent
+
+
+def test_incomplete_rendered_reports_keep_safety_state_visible() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    manifest["agents"][0]["baseline"]["status"] = "inconclusive"
+    report = build_report(
+        manifest,
+        issues,
+        _assessments(manifest),
+        _baseline_assessments(manifest),
+    )
+
+    assert report["status"] == "INCOMPLETE"
+    assert "**INCOMPLETE**" in render_markdown(report)
+    assert "**INCOMPLETE**" in render_agent_markdown(report, "weather-agent")

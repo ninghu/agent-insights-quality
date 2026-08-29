@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from copy import deepcopy
 from pathlib import Path
 
@@ -115,11 +116,17 @@ def test_email_requires_reviewed_domain_and_one_success(
     assert ">Report</th>" in request["html"]
     assert ">Ownership</th>" not in request["html"]
     assert "Quality Score: 100/100" in request["html"]
-    assert "(+5.9) &middot; PASS</span>" in request["html"]
+    assert "(+5.9)</span>" in request["html"]
     assert "How Scoring Works" in request["html"]
-    assert request["html"].index("PASS</span>") < request["html"].index(
+    assert request["html"].index("Quality Score:") < request["html"].index(
         "How Scoring Works"
     )
+    assert request["subject"] == (
+        "[Agent Insights Quality] 100/100 - 2026-08-24 - 25/25 issues"
+    )
+    assert re.search(r"\b(?:PASS|FAIL)\b", request["subject"]) is None
+    assert re.search(r"\b(?:PASS|FAIL)\b", request["html"]) is None
+    assert report["status"] == "PASS"
     assert 'style="color:#dbeafe;text-decoration:underline;"' in request["html"]
     assert "(<a" not in request["html"]
     assert "Works</a>)" not in request["html"]
@@ -144,6 +151,10 @@ def test_email_requires_reviewed_domain_and_one_success(
     preview = runtime_root / "staging" / "run" / "report-preview.html"
     write_private_report_preview(request, preview)
     assert preview.read_text(encoding="utf-8") == request["html"]
+    assert re.search(
+        r"\b(?:PASS|FAIL)\b",
+        preview.read_text(encoding="utf-8"),
+    ) is None
     with pytest.raises(ContractError, match="private runtime root"):
         write_private_report_preview(request, tmp_path / "public-preview.html")
     for owner in (
@@ -227,6 +238,10 @@ def test_email_requires_reviewed_domain_and_one_success(
         adx_publication={"status": "failed", "error_code": "query_failed"},
     )
     assert "Quality Score: N/A (change N/A)" in incomplete_request["html"]
+    assert "INCOMPLETE" in incomplete_request["subject"]
+    assert "INCOMPLETE" in incomplete_request["html"]
+    assert "Run status</td>" in incomplete_request["html"]
+    assert "Overall judgment" not in incomplete_request["html"]
     assert "pre-existing telemetry" in incomplete_request["html"]
     assert "no Agent traffic was sent" in incomplete_request["html"]
     assert "ADX publication failed for this run" in incomplete_request["html"]
@@ -242,7 +257,23 @@ def test_email_requires_reviewed_domain_and_one_success(
         staging,
         "synthetic@microsoft.com",
     )
-    assert "(+0.5) &middot; PASS</span>" in staging_request["html"]
+    assert "(+0.5)</span>" in staging_request["html"]
+    failed = deepcopy(report)
+    failed["status"] = "FAIL"
+    failed["summary"]["quality_score"] = 83
+    failed["summary"]["issues_correct"] = 20
+    failed_request = create_request(
+        failed,
+        "synthetic@microsoft.com",
+        dashboard_link=_DASHBOARD_LINK,
+        adx_publication=_ADX_PUBLICATION,
+    )
+    assert "83/100" in failed_request["subject"]
+    assert "Quality Score: 83/100" in failed_request["html"]
+    assert re.search(r"\b(?:PASS|FAIL)\b", failed_request["subject"]) is None
+    assert re.search(r"\b(?:PASS|FAIL)\b", failed_request["html"]) is None
+    assert "Overall judgment" not in failed_request["html"]
+    assert failed["status"] == "FAIL"
     receipt = {
         "schema_version": "2.0.0",
         "content_digest": request["content_digest"],

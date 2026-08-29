@@ -55,8 +55,9 @@ waits for a clean short interval before a recovery attempt. The service checkpoi
 effective windows. Exact Agent version and operation IDs remain mandatory evidence.
 
 The daily quality score is 85% field quality across expected issues and 15% clean-card precision.
-A complete run is `PASS` at `90/100` or above and `FAIL` below `90/100`; incomplete or ambiguous
-evidence is `INCOMPLETE`.
+Internally, a complete run stores `PASS` at `90/100` or above and `FAIL` below `90/100`.
+User-facing reports present the numeric score and finding details without those verdict labels;
+incomplete or ambiguous evidence remains explicitly `INCOMPLETE`.
 
 ## Commands
 

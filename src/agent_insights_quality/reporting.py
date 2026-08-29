@@ -961,14 +961,19 @@ def render_markdown(report: dict[str, Any]) -> str:
         else f"{summary['clean_card_precision']:g}/100"
     )
     comparison = _score_comparison_text(report)
+    score_label = (
+        "**INCOMPLETE**"
+        if report["status"] == "INCOMPLETE"
+        else "Quality score"
+    )
     lines = [
         f"# Agent Insights Quality - {report['report_date']}",
         "",
         "## Summary",
         "",
-        "| Grade | Findings |",
+        "| Metric | Findings |",
         "| --- | --- |",
-        f"| **{report['status']}** | Score **{score}**{comparison} (PASS threshold "
+        f"| {score_label} | Score **{score}**{comparison} (quality threshold "
         f"{summary['quality_threshold']}/100); "
         f"{summary['issues_correct']} matched, {summary['issues_partial']} partial, "
         f"{summary['noise_cards']} noise cards |",
@@ -1001,7 +1006,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         "## What needs improvement",
         "",
-        "| Issue | Agent | Result | Ownership |",
+        "| Issue | Agent | Finding | Ownership |",
         "| --- | --- | --- | --- |",
     ]
     failures = [
@@ -1015,7 +1020,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         for item in failures:
             lines.append(
                 f"| `{item['issue_id']}` - {item['title']} | `{item['agent']}` | "
-                f"`{item['result']}` / {_evaluation_label(item['detail'])} |"
+                f"{_evaluation_label(item['detail'])} |"
                 f" `{item['assessment']['ownership']}` |"
             )
     else:
@@ -1098,12 +1103,22 @@ def render_agent_markdown(report: dict[str, Any], agent_name: str) -> str:
     missing_count = sum(
         not item["assessment"].get("card_evaluations") for item in issues
     )
+    score = (
+        "N/A"
+        if report["summary"]["quality_score"] is None
+        else f"{report['summary']['quality_score']:g}/100"
+    )
     lines = [
         f"# {agent_name} - Insight Evaluation",
         "",
         f"- Report date: `{report['report_date']}`",
         f"- Run: `{report['run_id']}`",
-        f"- Run result: `{report['status']}`",
+        f"- Quality score: **{score}**{_score_comparison_text(report)}",
+        *(
+            ["- Run status: **INCOMPLETE**"]
+            if report["status"] == "INCOMPLETE"
+            else []
+        ),
         "",
         "## Review summary",
         "",

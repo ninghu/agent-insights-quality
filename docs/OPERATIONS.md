@@ -170,6 +170,9 @@ Finalization writes sanitized per-Agent Markdown under the report's `agents/` di
 one generated Insight card, plus an explicit row for each missing expected issue. Email links to these
 GitHub-rendered Markdown reports; private prompts, responses, traces, and resource identifiers remain
 excluded. Each report includes a review summary, evaluation legend, and human-validation checklist.
+Complete email, preview, aggregate Markdown, and per-Agent Markdown surfaces show the numeric score,
+comparison, and finding details without displaying the internal `PASS` or `FAIL` status. They keep
+`INCOMPLETE` prominent because it indicates an unsafe evidence state rather than a quality verdict.
 Finalization also writes private `report-preview.html` beside the run manifest. Staging human review
 uses this preview because it is rendered by the exact same Outlook-safe HTML path as the daily email.
 It may contain private work-item context and runtime links, so it must never be committed.

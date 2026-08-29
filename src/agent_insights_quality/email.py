@@ -156,8 +156,9 @@ def create_request(
             raise ContractError("Daily email requires explicit ADX publication status")
     score = _overall_score(report)
     subject_prefix = "[TEST] " if test_run else ""
+    status_prefix = "INCOMPLETE - " if report["status"] == "INCOMPLETE" else ""
     subject = (
-        f"{subject_prefix}[Agent Insights Quality] {report['status']} - {score} - "
+        f"{subject_prefix}[Agent Insights Quality] {status_prefix}{score} - "
         f"{report['report_date']} - {report['summary']['issues_correct']}/"
         f"{report['summary']['issues_expected']} issues"
     )
@@ -363,7 +364,6 @@ def _grade_rows(report: dict[str, Any]) -> list[tuple[str, str]]:
     noise = int(report["summary"]["noise_cards"])
     missing = sum(item.get("detail") == "MISSING" for item in issues)
     rows = [
-        ("Overall judgment", report["status"]),
         ("Expected issue insights", str(report["summary"]["issues_expected"])),
         ("Observed Insights", str(report["summary"]["observed_cards"])),
         ("Fully correct Insights", str(correct)),
@@ -373,13 +373,13 @@ def _grade_rows(report: dict[str, Any]) -> list[tuple[str, str]]:
         ("Missing expected issues", str(missing)),
     ]
     if report["status"] == "INCOMPLETE":
-        rows.insert(
-            1,
+        rows[0:0] = [
+            ("Run status", "INCOMPLETE"),
             (
                 "Run status reason",
                 _incomplete_reason(report["summary"].get("incomplete_reasons", [])),
             ),
-        )
+        ]
     return rows
 
 
@@ -626,6 +626,9 @@ def _render_html(
     score_comparison = _score_comparison(report)
     summary = _summary_narrative(report)
     rows = _agent_rows(report, agent_links or {}, test_run=test_run)
+    status_suffix = (
+        " &middot; INCOMPLETE" if report["status"] == "INCOMPLETE" else ""
+    )
     test_banner = (
         '<tr><td style="padding:18px 32px;background-color:#dbeafe;'
         f'color:#12304a;font-weight:700;{_OUTLOOK_TEXT_STYLE}">'
@@ -659,8 +662,7 @@ def _render_html(
         f'{status_style["background"]};color:{status_style["foreground"]};'
         'font-size:12px;line-height:16px;font-weight:700;">'
         f"Quality Score: {html.escape(score)}"
-        f"{html.escape(score_comparison)} &middot; "
-        f"{html.escape(report['status'])}</span>"
+        f"{html.escape(score_comparison)}{status_suffix}</span>"
         '<div style="margin-top:8px;font-size:12px;line-height:16px;">'
         f'<a style="color:#dbeafe;text-decoration:underline;" '
         f'href="{_QUALITY_BAR_URL}">How Scoring Works</a></div>'
@@ -674,7 +676,7 @@ def _render_html(
             for paragraph in summary
         )
         + _dashboard_source_link(dashboard_link, adx_publication)
-        + _data_table(("Grade", "Findings"), _grade_rows(report), (38, 62))
+        + _data_table(("Metric", "Findings"), _grade_rows(report), (38, 62))
         + _insight_results_link()
         + "</td></tr>"
         '<tr><td style="padding:30px 32px 0 32px;">'
