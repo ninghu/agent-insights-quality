@@ -184,8 +184,10 @@ def _validate_weather_latency_traffic(requests: list[Any]) -> None:
                     conversation_id,
                     True,
                     {
-                        "phase": "clarification_required",
-                        "completed": False,
+                        "exact_text": (
+                            "Would you like me to use the complete weather "
+                            "evidence already provided?"
+                        ),
                     },
                 ),
                 (
@@ -193,11 +195,14 @@ def _validate_weather_latency_traffic(requests: list[Any]) -> None:
                     conversation_id,
                     False,
                     {
-                        "phase": "answer_complete",
-                        "completed": True,
-                        "condition": "clear",
-                        "temperature": 20,
-                        "unit": "celsius",
+                        "response_format": "json",
+                        "exact_json": {
+                            "phase": "answer_complete",
+                            "completed": True,
+                            "condition": "clear",
+                            "temperature": 20,
+                            "unit": "celsius",
+                        },
                     },
                 ),
             ]
@@ -219,14 +224,13 @@ def _validate_weather_latency_traffic(requests: list[Any]) -> None:
         == expected_conversation_id
         and request.get("expected", {}).get("activation_gate") is expected_gate
         and request.get("expected", {})
-        .get("semantic_assertions", {})
-        .get("exact_json")
-        == expected_result
+        .get("semantic_assertions")
+        == expected_assertions
         for request, (
             expected_id,
             expected_conversation_id,
             expected_gate,
-            expected_result,
+            expected_assertions,
         ) in zip(requests, expected_turns, strict=True)
     )
     if (

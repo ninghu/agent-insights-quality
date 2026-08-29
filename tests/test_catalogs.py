@@ -258,8 +258,8 @@ def test_weather_latency_contract_rejects_malformed_gate_pairs(
     elif malformation == "wrong_request_id":
         requests[0]["id"] = "issue-005-request-2"
     elif malformation == "missing_delay_manifestation":
-        requests[0]["expected"]["semantic_assertions"]["exact_json"]["phase"] = (
-            "answer_complete"
+        requests[0]["expected"]["semantic_assertions"]["exact_text"] = (
+            "Would you like me to ignore the complete weather evidence?"
         )
     else:
         requests[1]["expected"]["semantic_assertions"]["exact_json"]["completed"] = (

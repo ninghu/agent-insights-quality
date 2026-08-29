@@ -940,7 +940,6 @@ def test_weather_latency_issue_requires_five_two_turn_groups() -> None:
             "temperature": 20,
             "unit": "celsius",
         }
-        assert first["expected"]["activation_gate"] is True
         assert second["expected"]["activation_gate"] is False
 
 
