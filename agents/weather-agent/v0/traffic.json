@@ -135,43 +135,7 @@
           "conversation": {
             "id": "conv-weather-v0-c"
           },
-          "max_output_tokens": 400,
-          "text": {
-            "format": {
-              "type": "json_schema",
-              "name": "weather-v0-json_response",
-              "strict": true,
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "condition",
-                  "temperature",
-                  "unit"
-                ],
-                "properties": {
-                  "condition": {
-                    "type": "string",
-                    "enum": [
-                      "clear"
-                    ]
-                  },
-                  "temperature": {
-                    "type": "integer",
-                    "enum": [
-                      21
-                    ]
-                  },
-                  "unit": {
-                    "type": "string",
-                    "enum": [
-                      "celsius"
-                    ]
-                  }
-                }
-              }
-            }
-          }
+          "max_output_tokens": 400
         }
       },
       "expected": {
@@ -179,9 +143,31 @@
         "behavior": "Returns valid JSON with exactly the requested keys and grounded values.",
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "condition",
+              "temperature",
+              "unit"
+            ],
+            "properties": {
+              "condition": {
+                "type": "string"
+              },
+              "temperature": {
+                "type": "integer"
+              },
+              "unit": {
+                "type": "string"
+              }
+            }
+          },
+          "exact_json_fields": {
+            "temperature": 21
+          },
+          "casefold_json_fields": {
             "condition": "clear",
-            "temperature": 21,
             "unit": "celsius"
           }
         }

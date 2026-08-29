@@ -546,6 +546,10 @@ union traces, dependencies, requests
         tuple[SemanticAssertionEvidence, ...],
         bool,
     ]:
+        if "text" in fixture["body"]:
+            raise ContractError(
+                "Prompt traffic cannot contain unsupported request-side text formatting"
+            )
         reference = {
             "type": "agent_reference",
             "name": agent_name,
@@ -2317,6 +2321,7 @@ def _semantic_assertion_names(assertions: dict[str, Any]) -> tuple[str, ...]:
         "exact_text",
         "json_schema",
         "exact_json_fields",
+        "casefold_json_fields",
         "exact_json",
         "required_terms_all",
         "required_terms_any",
@@ -2390,6 +2395,18 @@ def _semantic_assertion_result(
                 key in parsed_json
                 and json_values_equal(parsed_json[key], expected)
                 for key, expected in exact_json_fields.items()
+            ),
+        )
+    casefold_json_fields = assertions.get("casefold_json_fields")
+    if casefold_json_fields is not None:
+        record(
+            "casefold_json_fields",
+            isinstance(parsed_json, dict)
+            and all(
+                key in parsed_json
+                and isinstance(parsed_json[key], str)
+                and parsed_json[key].casefold() == expected.casefold()
+                for key, expected in casefold_json_fields.items()
             ),
         )
     if "exact_json" in assertions:
@@ -2483,6 +2500,7 @@ def _normalize_fixture(value: Any) -> dict[str, Any]:
             "max_characters",
             "json_schema",
             "exact_json_fields",
+            "casefold_json_fields",
             "exact_json",
             "required_claims",
             "forbidden_claims",
@@ -2526,6 +2544,18 @@ def _normalize_fixture(value: Any) -> dict[str, Any]:
         or not all(isinstance(key, str) and key for key in exact_json_fields)
     ):
         raise ContractError("Traffic exact JSON field assertions are invalid")
+    casefold_json_fields = semantic_assertions.get("casefold_json_fields")
+    if casefold_json_fields is not None and (
+        not isinstance(casefold_json_fields, dict)
+        or not casefold_json_fields
+        or not all(
+            isinstance(key, str)
+            and key
+            and isinstance(expected, str)
+            for key, expected in casefold_json_fields.items()
+        )
+    ):
+        raise ContractError("Traffic casefold JSON field assertions are invalid")
     activation_gate = (
         expected.get("activation_gate", False)
         if isinstance(expected, dict)
@@ -2533,10 +2563,6 @@ def _normalize_fixture(value: Any) -> dict[str, Any]:
     )
     if not isinstance(activation_gate, bool):
         raise ContractError("Traffic activation gate must be a boolean")
-    if activation_gate and "text" in body:
-        raise ContractError(
-            "Activation traffic cannot contain structured-output constraints"
-        )
     conversation = body.get("conversation")
     conversation_key = (
         str(conversation.get("id") or "")

@@ -202,8 +202,12 @@ def test_weather_v0_assertions_reject_additional_fabricated_claims() -> None:
         assertions = request["expected"]["semantic_assertions"]
         canonical = assertions.get("exact_text")
         if canonical is None:
+            canonical_json = {
+                **assertions["casefold_json_fields"],
+                **assertions["exact_json_fields"],
+            }
             canonical = json.dumps(
-                assertions["exact_json"],
+                canonical_json,
                 separators=(",", ":"),
             )
         response = {
@@ -250,13 +254,23 @@ def test_weather_v0_assertions_reject_additional_fabricated_claims() -> None:
 @pytest.mark.parametrize(
     ("text", "expected_passed"),
     [
-        ('{"condition":"clear","temperature":21,"unit":"celsius"}', 2),
+        ('{"condition":"clear","temperature":21,"unit":"celsius"}', 4),
+        ('{"unit":"CELSIUS","temperature":21,"condition":"CLEAR"}', 4),
         ("Weather summary: clear, 21 celsius.", 0),
         (
             '```json\n{"condition":"clear","temperature":21,"unit":"celsius"}\n```',
             0,
         ),
-        ('{"condition":"rain","temperature":21,"unit":"celsius"}', 1),
+        ('{"condition":"rain","temperature":21,"unit":"celsius"}', 3),
+        ('{"condition":"not clear","temperature":21,"unit":"celsius"}', 3),
+        ('{"condition":"clear skies","temperature":21,"unit":"celsius"}', 3),
+        ('{"condition":["clear"],"temperature":21,"unit":"celsius"}', 2),
+        ('{"condition":"clear","temperature":"21","unit":"celsius"}', 2),
+        (
+            '{"condition":"clear","temperature":21,"unit":"celsius",'
+            '"humidity":45}',
+            3,
+        ),
     ],
 )
 def test_weather_structured_output_assertions_reject_drift(
@@ -275,7 +289,7 @@ def test_weather_structured_output_assertions_reject_drift(
         ]
     }
     count, passed, _ = _semantic_assertion_result(response, expected)
-    assert count == 2
+    assert count == 4
     assert passed == expected_passed
 
 
@@ -287,7 +301,14 @@ def test_weather_structured_output_assertions_reject_drift(
             '"slot":"slot-demo-505","account_scope":"demo-account-b",'
             '"approval":"pending","message":"Please confirm",'
             '"warning":"2026-09-15 unavailable"}',
-            2,
+            3,
+        ),
+        (
+            '{"warning":"2026-09-15 unavailable","message":"Please confirm",'
+            '"approval":"pending","account_scope":"demo-account-b",'
+            '"slot":"slot-demo-505","provider":"Dr. Ali",'
+            '"action":"create_appointment"}',
+            3,
         ),
         ("Please confirm the appointment.", 0),
         (
@@ -299,6 +320,27 @@ def test_weather_structured_output_assertions_reject_drift(
             '"slot":"slot-demo-505","account_scope":"demo-account-b",'
             '"approval":"confirmed","message":"Please confirm",'
             '"warning":"2026-09-15 unavailable"}',
+            2,
+        ),
+        (
+            '{"action":"create_appointment","provider":"Dr. Ali",'
+            '"slot":"slot-demo-999","account_scope":"demo-account-b",'
+            '"approval":"pending","message":"Please confirm",'
+            '"warning":"2026-09-15 unavailable"}',
+            2,
+        ),
+        (
+            '{"action":"create_appointment","provider":"Dr. Ali",'
+            '"slot":505,"account_scope":"demo-account-b",'
+            '"approval":"pending","message":"Please confirm",'
+            '"warning":"2026-09-15 unavailable"}',
+            1,
+        ),
+        (
+            '{"action":"create_appointment","provider":"Dr. Ali",'
+            '"slot":"slot-demo-505","account_scope":"demo-account-b",'
+            '"approval":"pending","message":"Please confirm",'
+            '"warning":"2026-09-15 unavailable","extra":"unsafe"}',
             1,
         ),
     ],
@@ -319,7 +361,7 @@ def test_healthcare_structured_output_assertions_reject_drift(
         ]
     }
     count, passed, _ = _semantic_assertion_result(response, expected)
-    assert count == 2
+    assert count == 3
     assert passed == expected_passed
 
 
@@ -1354,6 +1396,38 @@ def test_vacuous_semantic_assertions_fail_closed() -> None:
                 "expected": {"semantic_assertions": {"json_schema": {}}},
             }
         )
+    with pytest.raises(ContractError, match="casefold JSON"):
+        _normalize_fixture(
+            {
+                "id": "weather-baseline",
+                "request": {"body": {"input": "synthetic evidence"}},
+                "expected": {
+                    "semantic_assertions": {
+                        "casefold_json_fields": {"temperature": 21}
+                    }
+                },
+            }
+        )
+
+
+def test_prompt_runtime_rejects_unsupported_text_format() -> None:
+    runtime = _runtime()
+    with pytest.raises(ContractError, match="unsupported request-side text formatting"):
+        runtime._invoke_prompt(
+            "weather-agent",
+            "1",
+            {
+                "body": {
+                    "input": "synthetic evidence",
+                    "text": {"format": {"type": "json_schema"}},
+                },
+                "expected_status": 200,
+                "semantic_assertions": {},
+                "activation_gate": False,
+            },
+            1,
+            None,
+        )
 
 
 def test_prompt_function_call_fails_closed() -> None:
@@ -1389,7 +1463,7 @@ def test_prompt_function_call_fails_closed() -> None:
         )
 
 
-def test_prompt_structured_output_is_forwarded_without_tools() -> None:
+def test_prompt_json_contract_is_not_forwarded_to_endpoint() -> None:
     runtime = _runtime()
     runtime._traffic_ledger = type(
         "Ledger",
@@ -1419,9 +1493,9 @@ def test_prompt_structured_output_is_forwarded_without_tools() -> None:
                     "content": [
                         {
                             "type": "output_text",
-                            "text": json.dumps(
-                                request["expected"]["semantic_assertions"]["exact_json"],
-                                separators=(",", ":"),
+                            "text": (
+                                '{"condition":"clear","temperature":21,'
+                                '"unit":"celsius"}'
                             ),
                         }
                     ],
@@ -1440,7 +1514,7 @@ def test_prompt_structured_output_is_forwarded_without_tools() -> None:
 
     forwarded = captured["body"]
     assert isinstance(forwarded, dict)
-    assert forwarded["text"] == request["request"]["body"]["text"]
+    assert "text" not in forwarded
     assert "conversation" not in forwarded
     assert forwarded["store"] is True
     assert not {
@@ -1452,21 +1526,8 @@ def test_prompt_structured_output_is_forwarded_without_tools() -> None:
         "tools",
     }.intersection(forwarded)
     assert result[1] is True
-    assert result[2] == result[3] == 2
+    assert result[2] == result[3] == 4
     assert result[5] == 0
-
-
-def test_runtime_rejects_structured_output_on_activation_traffic() -> None:
-    request = read_json(
-        ROOT / "agents" / "weather-agent" / "v0" / "traffic.json"
-    )["requests"][3]
-    request["expected"]["activation_gate"] = True
-
-    with pytest.raises(
-        ContractError,
-        match="Activation traffic cannot contain structured-output constraints",
-    ):
-        _normalize_fixture(request)
 
 
 def test_prompt_group_uses_previous_response_only_for_next_memory_turn() -> None:

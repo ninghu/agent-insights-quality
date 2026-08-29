@@ -243,7 +243,7 @@ def test_prompt_source_delta_requires_exact_json_types() -> None:
         )
 
 
-def test_prompt_structured_output_is_exact_and_tool_free() -> None:
+def test_prompt_json_assertions_are_evaluator_side_and_tool_free() -> None:
     traffic = json.loads(
         (
             ROOT / "agents" / "weather-agent" / "v0" / "traffic.json"
@@ -256,36 +256,13 @@ def test_prompt_structured_output_is_exact_and_tool_free() -> None:
         require_all_assertions=True,
     )
 
-    wrong_value = deepcopy(traffic)
-    schema = wrong_value["requests"][3]["request"]["body"]["text"]["format"]["schema"]
-    schema["properties"]["condition"]["enum"][0] = "rain"
-    with pytest.raises(ContractError, match="values must match exact JSON"):
+    unsupported_text_format = deepcopy(traffic)
+    unsupported_text_format["requests"][3]["request"]["body"]["text"] = {
+        "format": {"type": "json_schema"}
+    }
+    with pytest.raises(ContractError, match="unsupported request-side text formatting"):
         _validate_prompt_traffic(
-            wrong_value,
-            "weather baseline",
-            require_activation=False,
-            require_all_assertions=True,
-        )
-
-    missing_format = deepcopy(traffic)
-    missing_format["requests"][3]["request"]["body"].pop("text")
-    with pytest.raises(ContractError, match="requires a structured-output request"):
-        _validate_prompt_traffic(
-            missing_format,
-            "weather baseline",
-            require_activation=False,
-            require_all_assertions=True,
-        )
-
-    missing_response_format = deepcopy(traffic)
-    assertions = missing_response_format["requests"][3]["expected"][
-        "semantic_assertions"
-    ]
-    assertions.pop("response_format")
-    missing_response_format["requests"][3]["request"]["body"].pop("text")
-    with pytest.raises(ContractError, match="requires a structured-output request"):
-        _validate_prompt_traffic(
-            missing_response_format,
+            unsupported_text_format,
             "weather baseline",
             require_activation=False,
             require_all_assertions=True,
@@ -295,7 +272,6 @@ def test_prompt_structured_output_is_exact_and_tool_free() -> None:
     non_object_exact_json["requests"][3]["expected"]["semantic_assertions"][
         "exact_json"
     ] = ["clear", 21, "celsius"]
-    non_object_exact_json["requests"][3]["request"]["body"].pop("text")
     with pytest.raises(ContractError, match="schema error"):
         _validate_prompt_traffic(
             non_object_exact_json,
@@ -351,7 +327,7 @@ def test_prompt_activation_output_is_not_constrained_by_request_schema() -> None
     )
 
 
-def test_prompt_activation_rejects_defect_forcing_structured_output() -> None:
+def test_prompt_activation_rejects_unsupported_text_format() -> None:
     traffic = json.loads(
         (
             ROOT
@@ -383,7 +359,7 @@ def test_prompt_activation_rejects_defect_forcing_structured_output() -> None:
 
     with pytest.raises(
         ContractError,
-        match="activation requests cannot contain structured-output constraints",
+        match="unsupported request-side text formatting",
     ):
         _validate_prompt_traffic(
             traffic,

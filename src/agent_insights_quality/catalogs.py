@@ -122,6 +122,16 @@ def _validate_prompt_traffic(
         raise ContractError(
             f"{label} pure Prompt traffic cannot contain tool configuration"
         )
+    if any(
+        isinstance(item, dict)
+        and isinstance(item.get("request"), dict)
+        and isinstance(item["request"].get("body"), dict)
+        and "text" in item["request"]["body"]
+        for item in value.get("requests", [])
+    ):
+        raise ContractError(
+            f"{label} cannot contain unsupported request-side text formatting"
+        )
     _validate_schema(value, PROMPT_TRAFFIC_SCHEMA_PATH, label)
     if require_all_assertions and any(
         not isinstance(item.get("expected"), dict)
@@ -130,7 +140,6 @@ def _validate_prompt_traffic(
     ):
         raise ContractError(f"{label} requires assertions for every request")
     for item in value["requests"]:
-        body = item["request"]["body"]
         expected = item.get("expected")
         assertions = (
             expected.get("semantic_assertions")
@@ -138,58 +147,6 @@ def _validate_prompt_traffic(
             else None
         )
         assertions = assertions if isinstance(assertions, dict) else {}
-        activation_gate = (
-            expected.get("activation_gate") is True
-            if isinstance(expected, dict)
-            else False
-        )
-        output_format = body.get("text", {}).get("format")
-        exact_json = assertions.get("exact_json")
-        has_exact_json = "exact_json" in assertions
-        expects_json = assertions.get("response_format") == "json"
-        if activation_gate and output_format is not None:
-            raise ContractError(
-                f"{label} activation requests cannot contain structured-output "
-                "constraints"
-            )
-        if output_format is None:
-            if not activation_gate and (has_exact_json or expects_json):
-                raise ContractError(
-                    f"{label} JSON response contract requires a "
-                    "structured-output request"
-                )
-        else:
-            output_schema = output_format["schema"]
-            try:
-                Draft202012Validator.check_schema(output_schema)
-            except SchemaError as error:
-                raise ContractError(
-                    f"{label} contains an invalid structured-output JSON schema"
-                ) from error
-            properties = output_schema["properties"]
-            required = output_schema["required"]
-            if (
-                not expects_json
-                or not has_exact_json
-                or not isinstance(exact_json, dict)
-                or not exact_json
-                or set(required) != set(properties)
-                or set(properties) != set(exact_json)
-            ):
-                raise ContractError(
-                    f"{label} structured output must bind the exact JSON assertion"
-                )
-            schema_value = {
-                key: property_schema["enum"][0]
-                for key, property_schema in properties.items()
-            }
-            if not all(
-                Draft202012Validator(property_schema).is_valid(schema_value[key])
-                for key, property_schema in properties.items()
-            ) or not json_values_equal(schema_value, exact_json):
-                raise ContractError(
-                    f"{label} structured output values must match exact JSON"
-                )
         schema = assertions.get("json_schema") if isinstance(assertions, dict) else None
         if schema is None:
             continue

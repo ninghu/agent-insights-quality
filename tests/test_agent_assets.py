@@ -935,7 +935,7 @@ def test_prompt_traffic_has_no_fixtures_and_has_reviewed_assertions() -> None:
             )
 
 
-def test_prompt_exact_json_uses_closed_tool_free_structured_output() -> None:
+def test_prompt_json_contracts_are_evaluator_side_and_tool_free() -> None:
     paths = sorted(
         [
             *ROOT.glob("agents/weather-agent/**/traffic.json"),
@@ -967,29 +967,51 @@ def test_prompt_exact_json_uses_closed_tool_free_structured_output() -> None:
         for item in value["requests"]:
             body = item["request"]["body"]
             assert forbidden.isdisjoint(keys(body))
-            assertions = item["expected"].get("semantic_assertions", {})
-            exact_json = assertions.get("exact_json")
-            if item["expected"].get("activation_gate") is True:
-                assert "text" not in body
-                continue
-            if assertions.get("response_format") != "json" or not isinstance(
-                exact_json, dict
-            ):
-                assert "text" not in body
-                continue
-            output_format = body["text"]["format"]
-            assert output_format["type"] == "json_schema"
-            assert output_format["strict"] is True
-            schema = output_format["schema"]
-            assert schema["type"] == "object"
-            assert schema["additionalProperties"] is False
-            assert set(schema["required"]) == set(schema["properties"]) == set(
-                exact_json
-            )
-            assert {
-                key: property_schema["enum"][0]
-                for key, property_schema in schema["properties"].items()
-            } == exact_json
+            assert "text" not in body
+
+    weather = json.loads(
+        (ROOT / "agents" / "weather-agent" / "v0" / "traffic.json").read_text(
+            encoding="utf-8"
+        )
+    )["requests"][3]["expected"]["semantic_assertions"]
+    assert weather["response_format"] == "json"
+    assert weather["exact_json_fields"] == {"temperature": 21}
+    assert weather["casefold_json_fields"] == {
+        "condition": "clear",
+        "unit": "celsius",
+    }
+    weather_schema = weather["json_schema"]
+    assert weather_schema["type"] == "object"
+    assert weather_schema["additionalProperties"] is False
+    assert set(weather_schema["required"]) == set(weather_schema["properties"]) == {
+        "condition",
+        "temperature",
+        "unit",
+    }
+    assert {
+        key: value["type"]
+        for key, value in weather_schema["properties"].items()
+    } == {
+        "condition": "string",
+        "temperature": "integer",
+        "unit": "string",
+    }
+
+    healthcare = json.loads(
+        (ROOT / "agents" / "healthcare-agent" / "v0" / "traffic.json").read_text(
+            encoding="utf-8"
+        )
+    )["requests"][4]["expected"]["semantic_assertions"]
+    healthcare_schema = healthcare["json_schema"]
+    assert healthcare["response_format"] == "json"
+    assert healthcare_schema["type"] == "object"
+    assert healthcare_schema["additionalProperties"] is False
+    assert set(healthcare_schema["required"]) == set(
+        healthcare_schema["properties"]
+    ) == set(healthcare["exact_json"])
+    assert {
+        value["type"] for value in healthcare_schema["properties"].values()
+    } == {"string"}
 
     issue_002 = json.loads(
         (
