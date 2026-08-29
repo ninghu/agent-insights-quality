@@ -30,6 +30,7 @@ from agent_insights_quality.live import (
     _azure_cli_token,
     _normalize_fixture,
     _semantic_assertion_names,
+    _trace_assertion_names,
 )
 from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.profiles import RuntimeProfile
@@ -435,6 +436,13 @@ def _validate_manifest_traffic_evidence(
                     result["assertion"]
                     for result in summary["assertion_results"]
                 )
+                trace_assertion_names = _trace_assertion_names(
+                    expected["trace_assertions"]
+                )
+                observed_trace_names = tuple(
+                    result["assertion"]
+                    for result in summary["trace_assertion_results"]
+                )
                 if (
                     summary["activation_gate"] != expected["activation_gate"]
                     or summary["semantic_assertion_count"]
@@ -445,6 +453,15 @@ def _validate_manifest_traffic_evidence(
                     or any(
                         result["passed"] is not True
                         for result in summary["assertion_results"]
+                    )
+                    or summary["trace_assertion_count"]
+                    != len(trace_assertion_names)
+                    or observed_trace_names != trace_assertion_names
+                    or summary["trace_assertions_passed"]
+                    != len(trace_assertion_names)
+                    or any(
+                        result["passed"] is not True
+                        for result in summary["trace_assertion_results"]
                     )
                 ):
                     raise ContractError(

@@ -9,6 +9,8 @@ from agent_insights_quality.models import (
     InsightEvidence,
     InsightRunCheckpoint,
     InvocationEvidence,
+    RequestCompletionEvidence,
+    TraceAssertionEvidence,
     VersionResult,
 )
 from agent_insights_quality.runtime_state import (
@@ -66,6 +68,26 @@ def test_version_checkpoint_round_trips_private_stages(tmp_path: Path) -> None:
         allow_window_correlation=False,
         response_count=1,
         usable_response_count=1,
+        trace_assertion_count=1,
+        trace_assertions_passed=1,
+        request_summaries=(
+            RequestCompletionEvidence(
+                request_index=0,
+                response_count=1,
+                usable_response=True,
+                semantic_assertion_count=0,
+                semantic_assertions_passed=0,
+                assertion_results=(),
+                activation_gate=True,
+                direct_terminal_response_count=0,
+                function_call_count=0,
+                trace_assertion_count=1,
+                trace_assertions_passed=1,
+                trace_assertion_results=(
+                    TraceAssertionEvidence("one_tool_call", True),
+                ),
+            ),
+        ),
     )
     insight = InsightEvidence(
         reference="sha256:" + "b" * 64,
@@ -92,7 +114,10 @@ def test_version_checkpoint_round_trips_private_stages(tmp_path: Path) -> None:
         endpoint_request_count=1,
         endpoint_response_count=1,
         endpoint_usable_response_count=1,
+        trace_assertion_count=1,
+        trace_assertions_passed=1,
         trace_contract_verified=True,
+        endpoint_request_summaries=list(invocation.request_summaries),
     )
     store.save_invocation(*args, invocation)
     store.save_operation_ids(*args, ("c" * 32,))

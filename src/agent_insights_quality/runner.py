@@ -4,6 +4,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
@@ -135,6 +136,14 @@ class RuntimePort(Protocol):
         self,
         operation_ids: tuple[str, ...],
     ) -> dict[str, Any]: ...
+
+    def trace_assertion_evidence(
+        self,
+        *,
+        operation_ids: tuple[str, ...],
+        response_references: tuple[str, ...],
+        traffic_path: Path,
+    ) -> tuple[tuple[Any, ...], ...]: ...
 
     def start_insights_run(
         self,
@@ -582,20 +591,60 @@ def _validate_endpoint_contract(
                 "is incomplete"
             ),
         )
-    if not baseline:
-        activation = [item for item in summaries if item.activation_gate]
-        if (agent["type"] == "prompt" and not activation) or any(
-            item.semantic_assertion_count < 1
-            or item.semantic_assertions_passed != item.semantic_assertion_count
-            for item in activation
-        ):
-            raise _VersionStageError(
-                "issue_activation_failed",
-                ContractError(
-                    f"{agent['name']}/{logical_version} issue activation "
-                    "evidence is incomplete"
-                ),
-            )
+    if not baseline and agent["type"] == "prompt" and not any(
+        item.activation_gate for item in summaries
+    ):
+        raise _VersionStageError(
+            "issue_activation_failed",
+            ContractError(
+                f"{agent['name']}/{logical_version} issue activation "
+                "evidence is incomplete"
+            ),
+        )
+
+
+def _with_trace_assertions(
+    invocation: InvocationEvidence,
+    results: tuple[tuple[Any, ...], ...],
+) -> InvocationEvidence:
+    if len(results) != invocation.request_count:
+        raise ContractError("Trace assertion request coverage is incomplete")
+    summaries = tuple(
+        replace(
+            summary,
+            trace_assertion_count=len(assertions),
+            trace_assertions_passed=sum(item.passed for item in assertions),
+            trace_assertion_results=assertions,
+        )
+        for summary, assertions in zip(
+            invocation.request_summaries,
+            results,
+            strict=True,
+        )
+    )
+    return replace(
+        invocation,
+        trace_assertion_count=sum(item.trace_assertion_count for item in summaries),
+        trace_assertions_passed=sum(
+            item.trace_assertions_passed for item in summaries
+        ),
+        request_summaries=summaries,
+    )
+
+
+def _issue_activation_evidence_complete(
+    agent: dict[str, Any],
+    invocation: InvocationEvidence,
+) -> bool:
+    gates = [item for item in invocation.request_summaries if item.activation_gate]
+    if not gates:
+        return agent["type"] != "prompt"
+    return all(
+        item.semantic_assertion_count + item.trace_assertion_count > 0
+        and item.semantic_assertions_passed == item.semantic_assertion_count
+        and item.trace_assertions_passed == item.trace_assertion_count
+        for item in gates
+    )
 
 
 def _validate_baseline_trace_evidence(
@@ -745,17 +794,55 @@ def _execute_version(
         if checkpoint_store is not None:
             checkpoint_store.save_trace_verified(*checkpoint_args)
     _progress(runtime, f"{agent['name']}/{logical_version}: trace contract verified")
-    trace_evidence: dict[str, Any] = {}
-    if expected is None:
-        try:
-            trace_evidence = runtime.trace_behavior_evidence(operation_ids)
+    try:
+        trace_evidence = runtime.trace_behavior_evidence(operation_ids)
+        if expected is None:
             _validate_baseline_trace_evidence(
                 agent=agent,
                 invocation=invocation,
                 trace_evidence=trace_evidence,
             )
-        except Exception as error:
+    except Exception as error:
+        if expected is None:
             raise _VersionStageError("baseline_evidence_failed", error) from error
+        raise _VersionStageError("trace_evidence_failed", error) from error
+    if expected is not None:
+        try:
+            invocation = _with_trace_assertions(
+                invocation,
+                runtime.trace_assertion_evidence(
+                    operation_ids=operation_ids,
+                    response_references=invocation.response_references,
+                    traffic_path=traffic_path,
+                ),
+            )
+        except Exception as error:
+            raise _VersionStageError("issue_activation_failed", error) from error
+        if checkpoint_store is not None:
+            checkpoint_store.save_invocation(*checkpoint_args, invocation)
+        if not _issue_activation_evidence_complete(agent, invocation):
+            result = VersionResult(
+                logical_version=logical_version,
+                foundry_version=foundry_version,
+                status="inconclusive",
+                operation_ids=list(operation_ids),
+                window_start=invocation.started_at,
+                window_end=invocation.completed_at,
+                error_code="issue_activation_failed",
+                endpoint_request_count=invocation.request_count,
+                endpoint_response_count=invocation.response_count,
+                endpoint_usable_response_count=invocation.usable_response_count,
+                semantic_assertion_count=invocation.semantic_assertion_count,
+                semantic_assertions_passed=invocation.semantic_assertions_passed,
+                trace_assertion_count=invocation.trace_assertion_count,
+                trace_assertions_passed=invocation.trace_assertions_passed,
+                trace_contract_verified=True,
+                trace_behavior_summary=trace_evidence,
+                endpoint_request_summaries=list(invocation.request_summaries),
+            )
+            if checkpoint_store is not None:
+                checkpoint_store.save_result(*checkpoint_args, result)
+            return result
     insight_checkpoint = (
         checkpoint_store.insight_run(*checkpoint_args)
         if checkpoint_store is not None
@@ -821,6 +908,8 @@ def _execute_version(
         endpoint_usable_response_count=invocation.usable_response_count,
         semantic_assertion_count=invocation.semantic_assertion_count,
         semantic_assertions_passed=invocation.semantic_assertions_passed,
+        trace_assertion_count=invocation.trace_assertion_count,
+        trace_assertions_passed=invocation.trace_assertions_passed,
         trace_contract_verified=True,
         trace_behavior_summary=trace_evidence,
         endpoint_request_summaries=list(invocation.request_summaries),

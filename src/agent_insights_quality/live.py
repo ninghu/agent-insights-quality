@@ -25,6 +25,7 @@ from agent_insights_quality.models import (
     InvocationEvidence,
     RequestCompletionEvidence,
     SemanticAssertionEvidence,
+    TraceAssertionEvidence,
 )
 from agent_insights_quality.automation_policy import TRAFFIC_UNCERTAINTY_SECONDS
 from agent_insights_quality.profiles import RuntimeProfile
@@ -1039,6 +1040,65 @@ union traces, dependencies, requests
         self,
         operation_ids: tuple[str, ...],
     ) -> dict[str, Any]:
+        return _trace_behavior_summary(self._trace_rows(operation_ids))
+
+    def trace_assertion_evidence(
+        self,
+        *,
+        operation_ids: tuple[str, ...],
+        response_references: tuple[str, ...],
+        traffic_path: Path,
+    ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
+        payload = json.loads(traffic_path.read_text(encoding="utf-8"))
+        requests = payload if isinstance(payload, list) else payload.get("requests")
+        if not isinstance(requests, list) or len(requests) != len(response_references):
+            raise ContractError("Trace assertion traffic coverage is inconsistent")
+        fixtures = tuple(_normalize_fixture(item) for item in requests)
+        if not any(fixture["trace_assertions"] for fixture in fixtures):
+            return tuple(() for _ in fixtures)
+        deadline = time.monotonic() + 15 * 60
+        next_progress = time.monotonic() + 60
+        last_results: tuple[tuple[TraceAssertionEvidence, ...], ...] | None = None
+        while time.monotonic() < deadline:
+            rows = self._trace_rows(operation_ids, response_references)
+            correlated = _correlated_request_rows(
+                rows,
+                response_references,
+                operation_ids,
+            )
+            if correlated is not None:
+                last_results = tuple(
+                    _trace_assertion_result(request_rows, fixture)
+                    for request_rows, fixture in zip(
+                        correlated,
+                        fixtures,
+                        strict=True,
+                    )
+                )
+                if all(
+                    assertion.passed
+                    for request_results in last_results
+                    for assertion in request_results
+                ):
+                    return last_results
+            if time.monotonic() >= next_progress:
+                elapsed = int(15 * 60 - max(deadline - time.monotonic(), 0))
+                self.report_progress(
+                    f"trace activation evidence is stabilizing ({elapsed}s)"
+                )
+                next_progress = time.monotonic() + 60
+            self._sleep(15)
+        if last_results is not None:
+            return last_results
+        raise ContractError(
+            "Trace assertions require exact response-to-operation correlation"
+        )
+
+    def _trace_rows(
+        self,
+        operation_ids: tuple[str, ...],
+        response_references: tuple[str, ...] = (),
+    ) -> list[dict[str, Any]]:
         try:
             from azure.monitor.query import LogsQueryStatus
         except ImportError as error:
@@ -1050,6 +1110,10 @@ union traces, dependencies, requests
         ):
             raise ContractError("Trace behavior evidence has invalid operation identities")
         values = ", ".join(f'"{value}"' for value in operation_ids)
+        references = ", ".join(
+            f'"{value.replace(chr(34), chr(92) + chr(34))}"'
+            for value in response_references
+        ) or '""'
         query = f"""
 union traces, dependencies, requests
 | where operation_Id in ({values})
@@ -1060,6 +1124,7 @@ union traces, dependencies, requests
 | extend tool_call_id=coalesce(
     tostring(customDimensions["gen_ai.tool.call.id"]),
     tostring(customDimensions["tool.call.id"]))
+| extend tool_arguments=tostring(customDimensions["gen_ai.tool.call.arguments"])
 | extend error_type=tostring(customDimensions["error.type"])
 | extend tool_ok=tostring(customDimensions["tool.ok"])
 | extend tool_result=tostring(customDimensions["gen_ai.tool.call.result"])
@@ -1068,8 +1133,15 @@ union traces, dependencies, requests
 | extend terminal_success=tostring(customDimensions["aiq.terminal_response.success"])
 | extend terminal_output=tostring(customDimensions["aiq.terminal_response.output_present"])
 | extend handled_error=tostring(customDimensions["aiq.tool.error.handled"])
+| extend response_id=tostring(customDimensions["gen_ai.response.id"])
+| extend request_id=coalesce(
+    tostring(customDimensions["x-ms-client-request-id"]),
+    tostring(customDimensions["client_request_id"]),
+    tostring(customDimensions["request_id"]))
+| extend matched_reference=iff(response_id in ({references}), response_id, request_id)
 | project operation_Id, operation_name, tool_name, tool_call_id, error_type, tool_ok, tool_result,
-    input_messages, output_messages, timestamp, terminal_success, terminal_output, handled_error
+    tool_arguments, input_messages, output_messages, timestamp, duration, name,
+    terminal_success, terminal_output, handled_error, matched_reference
 """
         result = self._query_resource(
             self._logs_client(),
@@ -1087,16 +1159,20 @@ union traces, dependencies, requests
                 "error_type": str(row[4] or ""),
                 "tool_ok": str(row[5] or ""),
                 "tool_result": str(row[6] or ""),
-                "messages": [str(row[7] or ""), str(row[8] or "")],
-                "timestamp": str(row[9] or ""),
-                "terminal_success": str(row[10] or ""),
-                "terminal_output": str(row[11] or ""),
-                "handled_error": str(row[12] or ""),
+                "tool_arguments": str(row[7] or ""),
+                "messages": [str(row[8] or ""), str(row[9] or "")],
+                "timestamp": str(row[10] or ""),
+                "duration": row[11],
+                "span_name": str(row[12] or ""),
+                "terminal_success": str(row[13] or ""),
+                "terminal_output": str(row[14] or ""),
+                "handled_error": str(row[15] or ""),
+                "matched_reference": str(row[16] or ""),
             }
             for table in result.tables
             for row in table.rows
         ]
-        return _trace_behavior_summary(rows)
+        return rows
 
     def replay_manifest(self, manifest: dict[str, Any]) -> dict[str, Any]:
         evidence = []
@@ -1670,6 +1746,536 @@ def _trace_behavior_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _correlated_request_rows(
+    rows: list[dict[str, Any]],
+    response_references: tuple[str, ...],
+    operation_ids: tuple[str, ...],
+) -> tuple[list[dict[str, Any]], ...] | None:
+    allowed_operations = set(operation_ids)
+    operations_by_reference: dict[str, set[str]] = defaultdict(set)
+    rows_by_operation: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        operation_id = str(row.get("operation_id") or "").lower()
+        if operation_id not in allowed_operations:
+            continue
+        rows_by_operation[operation_id].append(row)
+        reference = str(row.get("matched_reference") or "")
+        if reference in response_references:
+            operations_by_reference[reference].add(operation_id)
+    ordered_operations: list[str] = []
+    for reference in response_references:
+        matched = operations_by_reference.get(reference, set())
+        if len(matched) != 1:
+            return None
+        ordered_operations.append(next(iter(matched)))
+    if len(set(ordered_operations)) != len(ordered_operations):
+        return None
+    return tuple(rows_by_operation[operation_id] for operation_id in ordered_operations)
+
+
+def _json_trace_value(value: Any) -> Any:
+    parsed = value
+    for _ in range(2):
+        if not isinstance(parsed, str) or not parsed.strip().startswith(("{", "[")):
+            break
+        try:
+            parsed = json.loads(parsed)
+        except json.JSONDecodeError:
+            break
+    return parsed
+
+
+def _nested_value(value: Any, path: str) -> Any:
+    current = value
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def _result_class(row: dict[str, Any]) -> str:
+    if str(row.get("error_type") or ""):
+        return "error"
+    tool_ok = str(row.get("tool_ok") or "").casefold()
+    result = _json_trace_value(row.get("tool_result"))
+    if tool_ok == "false" or (
+        isinstance(result, dict) and isinstance(result.get("error"), dict)
+    ):
+        return "error"
+    if tool_ok == "true" or result not in (None, ""):
+        return "success"
+    return "unknown"
+
+
+def _tool_rows(
+    rows: list[dict[str, Any]],
+    tool_name: str,
+) -> list[dict[str, Any]]:
+    return sorted(
+        [
+            row
+            for row in rows
+            if row.get("operation_name") == "execute_tool"
+            and row.get("tool_name") == tool_name
+        ],
+        key=lambda row: (str(row.get("timestamp") or ""), str(row.get("span_name") or "")),
+    )
+
+
+def _terminal_text(rows: list[dict[str, Any]]) -> str:
+    candidates: list[tuple[str, str]] = []
+    for row in rows:
+        messages = row.get("messages")
+        if not isinstance(messages, list) or len(messages) < 2:
+            continue
+        parsed = _json_trace_value(messages[1])
+        if not isinstance(parsed, list) or not parsed:
+            continue
+        message = parsed[-1]
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        parts = message.get("parts")
+        if not isinstance(parts, list):
+            parts = message.get("content")
+        if not isinstance(parts, list):
+            continue
+        text = " ".join(
+            str(part.get("content") or part.get("text") or "").strip()
+            for part in parts
+            if isinstance(part, dict)
+            and part.get("type") in {"text", "output_text"}
+            and str(part.get("content") or part.get("text") or "").strip()
+        )
+        if text:
+            candidates.append((str(row.get("timestamp") or ""), text))
+    return max(candidates, default=("", ""))[1]
+
+
+def _request_text(body: dict[str, Any]) -> str:
+    values: list[str] = []
+    for message in body.get("input", []):
+        if not isinstance(message, dict):
+            continue
+        for content in message.get("content", []):
+            if isinstance(content, dict) and isinstance(content.get("text"), str):
+                values.append(content["text"])
+    return "\n".join(values)
+
+
+def _scope_values(text: str, scope_kind: str) -> list[str]:
+    patterns = {
+        "account": r"\bacct-demo-[a-z]+\b",
+        "trip": r"\btrip-[a-z]+\b",
+    }
+    return re.findall(patterns[scope_kind], text.casefold())
+
+
+def _duration_seconds(value: Any) -> float:
+    if hasattr(value, "total_seconds"):
+        return float(value.total_seconds())
+    text = str(value or "")
+    match = re.fullmatch(
+        r"(?:(\d+)\.)?(\d{1,2}):(\d{2}):(\d{2}(?:\.\d+)?)",
+        text,
+    )
+    if not match:
+        return 0.0
+    days, hours, minutes, seconds = match.groups()
+    return (
+        float(days or 0) * 86400
+        + float(hours) * 3600
+        + float(minutes) * 60
+        + float(seconds)
+    )
+
+
+def _span_interval(row: dict[str, Any]) -> tuple[datetime, datetime] | None:
+    try:
+        start = datetime.fromisoformat(str(row.get("timestamp") or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return start, start + timedelta(seconds=_duration_seconds(row.get("duration")))
+
+
+_TRACE_ASSERTION_FIELDS = {
+    "tool_call_count": {"name", "kind", "tool_name", "count"},
+    "tool_argument_presence": {
+        "name",
+        "kind",
+        "tool_name",
+        "argument",
+        "present",
+    },
+    "scope_relation": {
+        "name",
+        "kind",
+        "tool_name",
+        "scope_kind",
+        "request_scope",
+        "argument",
+        "result_field",
+        "request_tool_equal",
+        "request_result_equal",
+        "tool_result_equal",
+    },
+    "tool_result_class": {"name", "kind", "tool_name", "result_class"},
+    "retry_sequence": {"name", "kind", "tool_name", "result_sequence"},
+    "terminal_claim_relation": {
+        "name",
+        "kind",
+        "tool_name",
+        "result_class",
+        "result_path",
+        "relation",
+        "required_terms_all",
+        "forbidden_terms",
+    },
+    "payload_multiplicity": {
+        "name",
+        "kind",
+        "source",
+        "tool_name",
+        "path",
+        "minimum",
+        "maximum",
+    },
+    "span_relation": {
+        "name",
+        "kind",
+        "first_tool",
+        "second_tool",
+        "relation",
+    },
+}
+
+
+def _normalize_trace_assertions(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ContractError("Traffic trace assertions must be an array")
+    assertions: list[dict[str, Any]] = []
+    names: set[str] = set()
+    for raw in value:
+        if not isinstance(raw, dict):
+            raise ContractError("Traffic trace assertion must be an object")
+        name = raw.get("name")
+        kind = raw.get("kind")
+        if (
+            not isinstance(name, str)
+            or re.fullmatch(r"[a-z][a-z0-9_]*", name) is None
+            or name in names
+            or kind not in _TRACE_ASSERTION_FIELDS
+            or not set(raw).issubset(_TRACE_ASSERTION_FIELDS[str(kind)])
+        ):
+            raise ContractError("Traffic trace assertion definition is invalid")
+        names.add(name)
+        assertion = dict(raw)
+        tool_name = assertion.get("tool_name")
+        if kind in {
+            "tool_call_count",
+            "tool_argument_presence",
+            "scope_relation",
+            "tool_result_class",
+            "retry_sequence",
+            "terminal_claim_relation",
+        } and (not isinstance(tool_name, str) or not tool_name):
+            raise ContractError("Traffic trace assertion tool name is invalid")
+        if kind == "tool_call_count" and (
+            not isinstance(assertion.get("count"), int)
+            or isinstance(assertion["count"], bool)
+            or assertion["count"] < 0
+        ):
+            raise ContractError("Traffic trace assertion count is invalid")
+        if kind == "tool_argument_presence" and (
+            not isinstance(assertion.get("argument"), str)
+            or not assertion["argument"]
+            or not isinstance(assertion.get("present"), bool)
+        ):
+            raise ContractError("Traffic trace argument assertion is invalid")
+        if kind == "scope_relation":
+            if (
+                assertion.get("scope_kind") not in {"account", "trip"}
+                or assertion.get("request_scope") not in {"first", "last"}
+                or not isinstance(assertion.get("argument"), str)
+                or not assertion["argument"]
+                or not isinstance(assertion.get("request_tool_equal"), bool)
+            ):
+                raise ContractError("Traffic trace scope assertion is invalid")
+            for key in ("request_result_equal", "tool_result_equal"):
+                if key in assertion and not isinstance(assertion[key], bool):
+                    raise ContractError("Traffic trace scope assertion is invalid")
+            if any(
+                key in assertion
+                for key in ("request_result_equal", "tool_result_equal")
+            ) and (
+                not isinstance(assertion.get("result_field"), str)
+                or not assertion["result_field"]
+            ):
+                raise ContractError("Traffic trace result scope is invalid")
+        if kind == "tool_result_class" and assertion.get("result_class") not in {
+            "success",
+            "error",
+        }:
+            raise ContractError("Traffic trace result class is invalid")
+        if kind == "retry_sequence":
+            sequence = assertion.get("result_sequence")
+            if (
+                not isinstance(sequence, list)
+                or not sequence
+                or any(item not in {"success", "error"} for item in sequence)
+            ):
+                raise ContractError("Traffic trace retry sequence is invalid")
+        if kind == "terminal_claim_relation":
+            if assertion.get("result_class") not in {
+                None,
+                "success",
+                "error",
+                "mixed",
+            }:
+                raise ContractError("Traffic terminal result class is invalid")
+            relation = assertion.get("relation")
+            if relation not in {None, "includes_result", "excludes_result"}:
+                raise ContractError("Traffic terminal relation is invalid")
+            if relation and (
+                not isinstance(assertion.get("result_path"), str)
+                or not assertion["result_path"]
+            ):
+                raise ContractError("Traffic terminal result path is invalid")
+            for key in ("required_terms_all", "forbidden_terms"):
+                terms = assertion.get(key, [])
+                if not isinstance(terms, list) or not all(
+                    isinstance(term, str) and term for term in terms
+                ):
+                    raise ContractError("Traffic terminal terms are invalid")
+            if not any(
+                key in assertion
+                for key in (
+                    "result_class",
+                    "relation",
+                    "required_terms_all",
+                    "forbidden_terms",
+                )
+            ):
+                raise ContractError("Traffic terminal relation is empty")
+        if kind == "payload_multiplicity":
+            source = assertion.get("source")
+            if source not in {"input_messages", "tool_result"}:
+                raise ContractError("Traffic payload source is invalid")
+            if source == "tool_result" and (
+                not isinstance(assertion.get("tool_name"), str)
+                or not assertion["tool_name"]
+                or not isinstance(assertion.get("path"), str)
+                or not assertion["path"]
+            ):
+                raise ContractError("Traffic tool payload assertion is invalid")
+            for key in ("minimum", "maximum"):
+                if key in assertion and (
+                    not isinstance(assertion[key], int)
+                    or isinstance(assertion[key], bool)
+                    or assertion[key] < 1
+                ):
+                    raise ContractError("Traffic payload bound is invalid")
+            if "minimum" not in assertion:
+                raise ContractError("Traffic payload minimum is required")
+            if assertion.get("maximum", assertion["minimum"]) < assertion["minimum"]:
+                raise ContractError("Traffic payload bounds are invalid")
+        if kind == "span_relation" and (
+            not isinstance(assertion.get("first_tool"), str)
+            or not assertion["first_tool"]
+            or not isinstance(assertion.get("second_tool"), str)
+            or not assertion["second_tool"]
+            or assertion.get("relation") not in {"overlap", "ordered"}
+        ):
+            raise ContractError("Traffic span relation is invalid")
+        assertions.append(assertion)
+    return assertions
+
+
+def _trace_assertion_names(assertions: list[dict[str, Any]]) -> tuple[str, ...]:
+    return tuple(assertion["name"] for assertion in _normalize_trace_assertions(assertions))
+
+
+def _trace_assertion_result(
+    rows: list[dict[str, Any]],
+    fixture: dict[str, Any],
+) -> tuple[TraceAssertionEvidence, ...]:
+    results: list[TraceAssertionEvidence] = []
+    request_text = _request_text(fixture["body"])
+    for assertion in fixture.get("trace_assertions", []):
+        kind = assertion["kind"]
+        tool_name = str(assertion.get("tool_name") or "")
+        tools = _tool_rows(rows, tool_name) if tool_name else []
+        passed = False
+        if kind == "tool_call_count":
+            passed = len(tools) == assertion["count"]
+        elif kind == "tool_argument_presence":
+            passed = bool(tools) and all(
+                (
+                    assertion["argument"]
+                    in (
+                        value
+                        if isinstance(
+                            value := _json_trace_value(row.get("tool_arguments")),
+                            dict,
+                        )
+                        else {}
+                    )
+                )
+                is assertion["present"]
+                for row in tools
+            )
+        elif kind == "scope_relation":
+            scopes = _scope_values(request_text, assertion["scope_kind"])
+            selected = (
+                scopes[0]
+                if scopes and assertion["request_scope"] == "first"
+                else scopes[-1] if scopes else None
+            )
+            comparisons: list[bool] = []
+            for row in tools:
+                arguments = _json_trace_value(row.get("tool_arguments"))
+                result = _json_trace_value(row.get("tool_result"))
+                tool_scope = (
+                    _nested_value(arguments, assertion["argument"])
+                    if isinstance(arguments, dict)
+                    else None
+                )
+                result_scope = (
+                    _nested_value(result, assertion["result_field"])
+                    if isinstance(result, dict) and assertion.get("result_field")
+                    else None
+                )
+                checks = [
+                    bool(tool_scope == selected)
+                    is assertion["request_tool_equal"]
+                ]
+                if "request_result_equal" in assertion:
+                    checks.append(
+                        bool(result_scope == selected)
+                        is assertion["request_result_equal"]
+                    )
+                if "tool_result_equal" in assertion:
+                    checks.append(
+                        bool(tool_scope == result_scope)
+                        is assertion["tool_result_equal"]
+                    )
+                comparisons.append(all(checks))
+            passed = bool(scopes and tools) and all(comparisons)
+        elif kind == "tool_result_class":
+            passed = bool(tools) and all(
+                _result_class(row) == assertion["result_class"] for row in tools
+            )
+        elif kind == "retry_sequence":
+            passed = [
+                _result_class(row) for row in tools
+            ] == assertion["result_sequence"]
+        elif kind == "terminal_claim_relation":
+            text = _terminal_text(rows)
+            folded = text.casefold()
+            classes = {_result_class(row) for row in tools}
+            expected_class = assertion.get("result_class")
+            class_matches = (
+                expected_class is None
+                or (expected_class == "mixed" and {"error", "success"} <= classes)
+                or (expected_class != "mixed" and classes == {expected_class})
+            )
+            relation = assertion.get("relation")
+            relation_matches = True
+            if relation:
+                values = [
+                    _nested_value(
+                        _json_trace_value(row.get("tool_result")),
+                        assertion["result_path"],
+                    )
+                    for row in tools
+                ]
+                rendered = [
+                    str(value).casefold() for value in values if value is not None
+                ]
+                relation_matches = bool(rendered) and (
+                    all(value in folded for value in rendered)
+                    if relation == "includes_result"
+                    else all(value not in folded for value in rendered)
+                )
+            passed = (
+                bool(text)
+                and class_matches
+                and relation_matches
+                and all(
+                    str(term).casefold() in folded
+                    for term in assertion.get("required_terms_all", [])
+                )
+                and all(
+                    str(term).casefold() not in folded
+                    for term in assertion.get("forbidden_terms", [])
+                )
+            )
+        elif kind == "payload_multiplicity":
+            counts: list[int] = []
+            if assertion["source"] == "input_messages":
+                for row in rows:
+                    messages = row.get("messages")
+                    if not isinstance(messages, list) or not messages:
+                        continue
+                    parsed = _json_trace_value(messages[0])
+                    if not isinstance(parsed, list):
+                        continue
+                    item_counts = Counter(
+                        json.dumps(item, sort_keys=True, ensure_ascii=True)
+                        for item in parsed
+                    )
+                    counts.append(max(item_counts.values(), default=0))
+            else:
+                for row in tools:
+                    value = _nested_value(
+                        _json_trace_value(row.get("tool_result")),
+                        assertion["path"],
+                    )
+                    if isinstance(value, int) and not isinstance(value, bool):
+                        counts.append(value)
+            observed_counts = (
+                [max(counts)]
+                if counts and assertion["source"] == "input_messages"
+                else counts
+            )
+            passed = bool(observed_counts) and all(
+                count >= assertion["minimum"]
+                and (
+                    "maximum" not in assertion
+                    or count <= assertion["maximum"]
+                )
+                for count in observed_counts
+            )
+        elif kind == "span_relation":
+            first = _tool_rows(rows, assertion["first_tool"])
+            second = _tool_rows(rows, assertion["second_tool"])
+            pairs = [
+                (left_interval, right_interval)
+                for left in first
+                for right in second
+                if (left_interval := _span_interval(left)) is not None
+                and (right_interval := _span_interval(right)) is not None
+            ]
+            if assertion["relation"] == "overlap":
+                passed = bool(pairs) and any(
+                    left[0] < right[1] and right[0] < left[1]
+                    for left, right in pairs
+                )
+            else:
+                passed = bool(pairs) and all(
+                    left[1] <= right[0] for left, right in pairs
+                )
+        results.append(
+            TraceAssertionEvidence(
+                assertion=str(assertion["name"]),
+                passed=bool(passed),
+            )
+        )
+    return tuple(results)
+
+
 def _usable_response(response: dict[str, Any], expected_status: int) -> bool:
     if expected_status >= 400:
         return True
@@ -1862,6 +2468,9 @@ def _normalize_fixture(value: Any) -> dict[str, Any]:
         if isinstance(expected, dict)
         else {}
     )
+    trace_assertions = _normalize_trace_assertions(
+        expected.get("trace_assertions") if isinstance(expected, dict) else None
+    )
     if not isinstance(semantic_assertions, dict) or any(
         key
         not in {
@@ -1937,6 +2546,7 @@ def _normalize_fixture(value: Any) -> dict[str, Any]:
         "body": dict(body),
         "expected_status": expected_status,
         "semantic_assertions": semantic_assertions,
+        "trace_assertions": trace_assertions,
         "activation_gate": activation_gate,
         "conversation_key": conversation_key,
     }
@@ -1946,14 +2556,12 @@ def _complete_operation_ids(
     tables: Any,
     expected_references: tuple[str, ...],
 ) -> tuple[str, ...] | None:
-    operations: set[str] = set()
-    seen: set[str] = set()
+    operations_by_reference: dict[str, set[str]] = defaultdict(set)
     for table in tables:
         for row in table.rows:
             operation_id = str(row[0]).lower()
             if not _TRACE_ID.fullmatch(operation_id):
                 continue
-            operations.add(operation_id)
             references = row[1] if len(row) > 1 else []
             if isinstance(references, str):
                 try:
@@ -1961,7 +2569,15 @@ def _complete_operation_ids(
                 except json.JSONDecodeError:
                     references = [references]
             if isinstance(references, list):
-                seen.update(str(value) for value in references)
-    if not set(expected_references).issubset(seen):
+                for reference in references:
+                    if str(reference) in expected_references:
+                        operations_by_reference[str(reference)].add(operation_id)
+    ordered: list[str] = []
+    for reference in expected_references:
+        matched = operations_by_reference.get(reference, set())
+        if len(matched) != 1:
+            return None
+        ordered.append(next(iter(matched)))
+    if len(set(ordered)) != len(ordered):
         return None
-    return tuple(sorted(operations))
+    return tuple(ordered)

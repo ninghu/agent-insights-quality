@@ -45,6 +45,8 @@
         "trace_contract_verified",
         "semantic_assertion_count",
         "semantic_assertions_passed",
+        "trace_assertion_count",
+        "trace_assertions_passed",
         "request_summaries"
       ],
       "properties": {
@@ -54,6 +56,8 @@
         "trace_contract_verified": {"type": "boolean"},
         "semantic_assertion_count": {"type": "integer", "minimum": 0},
         "semantic_assertions_passed": {"type": "integer", "minimum": 0},
+        "trace_assertion_count": {"type": "integer", "minimum": 0},
+        "trace_assertions_passed": {"type": "integer", "minimum": 0},
         "request_summaries": {
           "type": "array",
           "items": {"$ref": "#/$defs/requestSummary"}
@@ -254,6 +258,9 @@
         "semantic_assertion_count",
         "semantic_assertions_passed",
         "assertion_results",
+        "trace_assertion_count",
+        "trace_assertions_passed",
+        "trace_assertion_results",
         "activation_gate",
         "direct_terminal_response_count",
         "function_call_count"
@@ -266,6 +273,21 @@
         "semantic_assertions_passed": {"type": "integer", "minimum": 0},
         "assertion_results": {
           "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["assertion", "passed"],
+            "properties": {
+              "assertion": {"type": "string", "minLength": 1},
+              "passed": {"type": "boolean"}
+            }
+          }
+        },
+        "trace_assertion_count": {"type": "integer", "minimum": 0},
+        "trace_assertions_passed": {"type": "integer", "minimum": 0},
+        "trace_assertion_results": {
+          "type": "array",
+          "uniqueItems": true,
           "items": {
             "type": "object",
             "additionalProperties": false,

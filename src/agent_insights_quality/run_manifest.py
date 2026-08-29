@@ -10,7 +10,7 @@ from agent_insights_quality.catalogs import (
     load_catalogs,
     source_integrity_digest,
 )
-from agent_insights_quality.models import AgentResult
+from agent_insights_quality.models import AgentResult, request_completion_payload
 from agent_insights_quality.registry import version_entry
 from agent_insights_quality.selection import select_daily
 from agent_insights_quality.util import ROOT, ContractError, content_hash, read_json
@@ -118,28 +118,12 @@ def _result_payload(result: Any) -> dict[str, Any]:
         "endpoint_usable_response_count": result.endpoint_usable_response_count,
         "semantic_assertion_count": result.semantic_assertion_count,
         "semantic_assertions_passed": result.semantic_assertions_passed,
+        "trace_assertion_count": result.trace_assertion_count,
+        "trace_assertions_passed": result.trace_assertions_passed,
         "trace_contract_verified": result.trace_contract_verified,
         "trace_behavior_summary": result.trace_behavior_summary,
         "endpoint_request_summaries": [
-            {
-                "request_index": item.request_index,
-                "response_count": item.response_count,
-                "usable_response": item.usable_response,
-                "semantic_assertion_count": item.semantic_assertion_count,
-                "semantic_assertions_passed": item.semantic_assertions_passed,
-                "assertion_results": [
-                    {
-                        "assertion": assertion.assertion,
-                        "passed": assertion.passed,
-                    }
-                    for assertion in item.assertion_results
-                ],
-                "activation_gate": item.activation_gate,
-                "direct_terminal_response_count": (
-                    item.direct_terminal_response_count
-                ),
-                "function_call_count": item.function_call_count,
-            }
+            request_completion_payload(item)
             for item in result.endpoint_request_summaries
         ],
         "evidence_reference": (
@@ -258,12 +242,17 @@ def _validate_version_evidence(value: dict[str, Any], label: str) -> None:
         raise ContractError(f"{label} request summary coverage is inconsistent")
     if value["semantic_assertions_passed"] > value["semantic_assertion_count"]:
         raise ContractError(f"{label} semantic assertion totals are inconsistent")
+    if value["trace_assertions_passed"] > value["trace_assertion_count"]:
+        raise ContractError(f"{label} trace assertion totals are inconsistent")
     response_count = 0
     usable_count = 0
     assertion_count = 0
     assertions_passed = 0
+    trace_assertion_count = 0
+    trace_assertions_passed = 0
     for item in summaries:
         results = item["assertion_results"]
+        trace_results = item["trace_assertion_results"]
         if (
             len(results) != item["semantic_assertion_count"]
             or sum(result["passed"] for result in results)
@@ -272,15 +261,28 @@ def _validate_version_evidence(value: dict[str, Any], label: str) -> None:
             > item["semantic_assertion_count"]
         ):
             raise ContractError(f"{label} request assertion evidence is inconsistent")
+        if (
+            len(trace_results) != item["trace_assertion_count"]
+            or sum(result["passed"] for result in trace_results)
+            != item["trace_assertions_passed"]
+            or item["trace_assertions_passed"] > item["trace_assertion_count"]
+        ):
+            raise ContractError(
+                f"{label} request trace assertion evidence is inconsistent"
+            )
         response_count += item["response_count"]
         usable_count += int(item["usable_response"])
         assertion_count += item["semantic_assertion_count"]
         assertions_passed += item["semantic_assertions_passed"]
+        trace_assertion_count += item["trace_assertion_count"]
+        trace_assertions_passed += item["trace_assertions_passed"]
     if (
         response_count != value["endpoint_response_count"]
         or usable_count != value["endpoint_usable_response_count"]
         or assertion_count != value["semantic_assertion_count"]
         or assertions_passed != value["semantic_assertions_passed"]
+        or trace_assertion_count != value["trace_assertion_count"]
+        or trace_assertions_passed != value["trace_assertions_passed"]
     ):
         raise ContractError(f"{label} aggregate endpoint evidence is inconsistent")
     if value["trace_contract_verified"] and not value["operation_ids"]:

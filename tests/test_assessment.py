@@ -97,6 +97,16 @@ def test_incomplete_manifest_result_does_not_require_checkpoint() -> None:
             "window_start": None,
             "window_end": None,
             "error_code": "invocation_failed",
+            "endpoint_request_count": 0,
+            "endpoint_response_count": 0,
+            "endpoint_usable_response_count": 0,
+            "semantic_assertion_count": 0,
+            "semantic_assertions_passed": 0,
+            "trace_assertion_count": 0,
+            "trace_assertions_passed": 0,
+            "trace_contract_verified": False,
+            "trace_behavior_summary": {},
+            "endpoint_request_summaries": [],
         },
     )
     assert result.status == "inconclusive"
@@ -142,6 +152,8 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
             "trace_contract_verified": True,
             "semantic_assertion_count": 1,
             "semantic_assertions_passed": 1,
+            "trace_assertion_count": 0,
+            "trace_assertions_passed": 0,
             "request_summaries": [
                 {
                     "request_index": 0,
@@ -152,6 +164,9 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
                     "assertion_results": [
                         {"assertion": "synthetic_contract", "passed": True}
                     ],
+                    "trace_assertion_count": 0,
+                    "trace_assertions_passed": 0,
+                    "trace_assertion_results": [],
                     "activation_gate": True,
                     "direct_terminal_response_count": 1,
                     "function_call_count": 0,
@@ -414,6 +429,9 @@ def _complete_prompt_baseline_package() -> dict:
             "assertion_results": [
                 {"assertion": "synthetic_contract", "passed": True}
             ],
+            "trace_assertion_count": 0,
+            "trace_assertions_passed": 0,
+            "trace_assertion_results": [],
             "activation_gate": False,
             "direct_terminal_response_count": 1,
             "function_call_count": 0,
@@ -427,6 +445,8 @@ def _complete_prompt_baseline_package() -> dict:
         "trace_contract_verified": True,
         "semantic_assertion_count": 5,
         "semantic_assertions_passed": 5,
+        "trace_assertion_count": 0,
+        "trace_assertions_passed": 0,
         "request_summaries": summaries,
     }
     proof = _trace_proof(operation_count=5, terminal_count=5)
@@ -528,12 +548,43 @@ def test_intermediate_card_link_routes_to_framework_or_unresolved() -> None:
 
 def test_issue_activation_requires_every_designated_assertion() -> None:
     package = _complete_prompt_baseline_package()
+    package["source_integrity"] = {
+        "verified": True,
+        "contract_digest": "sha256:" + "a" * 64,
+    }
     summaries = package["endpoint_evidence"]["request_summaries"]
     summaries[0]["activation_gate"] = True
+    summaries[0]["trace_assertion_count"] = 1
+    summaries[0]["trace_assertions_passed"] = 1
+    summaries[0]["trace_assertion_results"] = [
+        {"assertion": "synthetic_trace_contract", "passed": True}
+    ]
+    package["endpoint_evidence"]["trace_assertion_count"] = 1
+    package["endpoint_evidence"]["trace_assertions_passed"] = 1
     assert _issue_activation_complete(package) is True
+    summaries[0]["trace_assertion_results"][0]["passed"] = False
+    summaries[0]["trace_assertions_passed"] = 0
+    package["endpoint_evidence"]["trace_assertions_passed"] = 0
+    assert _issue_activation_complete(package) is False
+    summaries[0]["trace_assertion_results"][0]["passed"] = True
+    summaries[0]["trace_assertions_passed"] = 1
+    package["endpoint_evidence"]["trace_assertions_passed"] = 1
     summaries[0]["assertion_results"][0]["passed"] = False
     summaries[0]["semantic_assertions_passed"] = 0
     assert _issue_activation_complete(package) is False
+
+
+def test_assessment_prompt_rejects_self_reported_activation() -> None:
+    prompt = (
+        Path("src")
+        / "agent_insights_quality"
+        / "prompts"
+        / "assessment.md"
+    ).read_text(encoding="utf-8")
+    assert "Passed human-reviewed activation assertions" in prompt
+    assert "exact `source_integrity` digest" in prompt
+    assert "self-reported defect flag" in prompt
+    assert "`INCOMPLETE` with `test_framework` ownership" in prompt
 
 
 def test_issue_card_without_terminal_proof_stays_incomplete() -> None:

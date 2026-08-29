@@ -5,163 +5,28 @@
   "requests": [
     {
       "id": "issue-018-request-1",
-      "request": {
-        "method": "POST",
-        "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
-        "body": {
-          "input": [
-            {
-              "role": "user",
-              "content": [
-                {
-                  "type": "input_text",
-                  "text": "Use the transient balance lookup for acct-demo-a."
-                }
-              ]
-            }
-          ],
-          "conversation": {
-            "id": "conv-finance-agent-issue-018-1"
-          },
-          "max_output_tokens": 400
-        }
-      },
-      "expected": {
-        "http_status": 200,
-        "behavior": "Stops after the first retryable failure.",
-        "defect_observed": true
-      }
+      "request": {"method": "POST", "path": "/responses", "headers": {"content-type": "application/json"}, "body": {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Use the transient balance lookup for acct-demo-a."}]}], "conversation": {"id": "conv-finance-agent-issue-018-1"}, "max_output_tokens": 400}},
+      "expected": {"http_status": 200, "behavior": "Stops after the first retryable failure.", "defect_observed": true, "semantic_assertions": {"required_terms_all": ["temporary_unavailable", "without a retry"]}, "trace_assertions": [{"name": "one_transient_attempt", "kind": "tool_call_count", "tool_name": "get_balance_with_transient", "count": 1}, {"name": "retry_sequence_stops_on_error", "kind": "retry_sequence", "tool_name": "get_balance_with_transient", "result_sequence": ["error"]}], "activation_gate": true}
     },
     {
       "id": "issue-018-request-2",
-      "request": {
-        "method": "POST",
-        "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
-        "body": {
-          "input": [
-            {
-              "role": "user",
-              "content": [
-                {
-                  "type": "input_text",
-                  "text": "Use the transient balance lookup for acct-demo-b."
-                }
-              ]
-            }
-          ],
-          "conversation": {
-            "id": "conv-finance-agent-issue-018-2"
-          },
-          "max_output_tokens": 400
-        }
-      },
-      "expected": {
-        "http_status": 200,
-        "behavior": "Stops after the first retryable failure.",
-        "defect_observed": true
-      }
+      "request": {"method": "POST", "path": "/responses", "headers": {"content-type": "application/json"}, "body": {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Use the transient balance lookup for acct-demo-b."}]}], "conversation": {"id": "conv-finance-agent-issue-018-2"}, "max_output_tokens": 400}},
+      "expected": {"http_status": 200, "behavior": "Stops after the first retryable failure.", "defect_observed": true, "semantic_assertions": {"required_terms_all": ["temporary_unavailable", "without a retry"]}, "trace_assertions": [{"name": "one_transient_attempt", "kind": "tool_call_count", "tool_name": "get_balance_with_transient", "count": 1}, {"name": "retry_sequence_stops_on_error", "kind": "retry_sequence", "tool_name": "get_balance_with_transient", "result_sequence": ["error"]}], "activation_gate": true}
     },
     {
       "id": "issue-018-request-3",
-      "request": {
-        "method": "POST",
-        "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
-        "body": {
-          "input": [
-            {
-              "role": "user",
-              "content": [
-                {
-                  "type": "input_text",
-                  "text": "Use the transient balance lookup for acct-demo-a."
-                }
-              ]
-            }
-          ],
-          "conversation": {
-            "id": "conv-finance-agent-issue-018-3"
-          },
-          "max_output_tokens": 400
-        }
-      },
-      "expected": {
-        "http_status": 200,
-        "behavior": "Stops after the first retryable failure.",
-        "defect_observed": true
-      }
+      "request": {"method": "POST", "path": "/responses", "headers": {"content-type": "application/json"}, "body": {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Use the transient balance lookup for acct-demo-a."}]}], "conversation": {"id": "conv-finance-agent-issue-018-3"}, "max_output_tokens": 400}},
+      "expected": {"http_status": 200, "behavior": "Stops after the first retryable failure.", "defect_observed": true, "semantic_assertions": {"required_terms_all": ["temporary_unavailable", "without a retry"]}, "trace_assertions": [{"name": "one_transient_attempt", "kind": "tool_call_count", "tool_name": "get_balance_with_transient", "count": 1}, {"name": "retry_sequence_stops_on_error", "kind": "retry_sequence", "tool_name": "get_balance_with_transient", "result_sequence": ["error"]}], "activation_gate": true}
     },
     {
       "id": "issue-018-request-4",
-      "request": {
-        "method": "POST",
-        "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
-        "body": {
-          "input": [
-            {
-              "role": "user",
-              "content": [
-                {
-                  "type": "input_text",
-                  "text": "Use the transient balance lookup for acct-demo-b."
-                }
-              ]
-            }
-          ],
-          "conversation": {
-            "id": "conv-finance-agent-issue-018-4"
-          },
-          "max_output_tokens": 400
-        }
-      },
-      "expected": {
-        "http_status": 200,
-        "behavior": "Stops after the first retryable failure.",
-        "defect_observed": true
-      }
+      "request": {"method": "POST", "path": "/responses", "headers": {"content-type": "application/json"}, "body": {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Use the transient balance lookup for acct-demo-b."}]}], "conversation": {"id": "conv-finance-agent-issue-018-4"}, "max_output_tokens": 400}},
+      "expected": {"http_status": 200, "behavior": "Stops after the first retryable failure.", "defect_observed": true, "semantic_assertions": {"required_terms_all": ["temporary_unavailable", "without a retry"]}, "trace_assertions": [{"name": "one_transient_attempt", "kind": "tool_call_count", "tool_name": "get_balance_with_transient", "count": 1}, {"name": "retry_sequence_stops_on_error", "kind": "retry_sequence", "tool_name": "get_balance_with_transient", "result_sequence": ["error"]}], "activation_gate": true}
     },
     {
       "id": "issue-018-request-5",
-      "request": {
-        "method": "POST",
-        "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
-        "body": {
-          "input": [
-            {
-              "role": "user",
-              "content": [
-                {
-                  "type": "input_text",
-                  "text": "Use the transient balance lookup for acct-demo-a."
-                }
-              ]
-            }
-          ],
-          "conversation": {
-            "id": "conv-finance-agent-issue-018-5"
-          },
-          "max_output_tokens": 400
-        }
-      },
-      "expected": {
-        "http_status": 200,
-        "behavior": "Stops after the first retryable failure.",
-        "defect_observed": true
-      }
+      "request": {"method": "POST", "path": "/responses", "headers": {"content-type": "application/json"}, "body": {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Use the transient balance lookup for acct-demo-a."}]}], "conversation": {"id": "conv-finance-agent-issue-018-5"}, "max_output_tokens": 400}},
+      "expected": {"http_status": 200, "behavior": "Stops after the first retryable failure.", "defect_observed": true, "semantic_assertions": {"required_terms_all": ["temporary_unavailable", "without a retry"]}, "trace_assertions": [{"name": "one_transient_attempt", "kind": "tool_call_count", "tool_name": "get_balance_with_transient", "count": 1}, {"name": "retry_sequence_stops_on_error", "kind": "retry_sequence", "tool_name": "get_balance_with_transient", "result_sequence": ["error"]}], "activation_gate": true}
     }
   ],
   "data_class": "synthetic_public_safe",

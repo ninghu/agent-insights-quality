@@ -76,13 +76,15 @@ issues:
       +            return {"inventory": flights + hotels}
                if "temporary flight search" in text:
   issue-028:
-    declared_delta: The plan node preserves the first stored trip instead of parsing the latest turn.
+    declared_delta: The plan node binds an explicit switch to its source trip instead of its destination.
     expected_app_diff: |-
       @@
                text = latest_text(state)
-      +        if state.get("trip"):
+      +        lowered = text.lower()
+      +        if "switch" in lowered and " to " in lowered:
+      +            source_trips = requested_trips(lowered.split(" to ", 1)[0])
       +            return {
-      +                "trip": state["trip"],
+      +                "trip": source_trips[0],
       +                "confirmed": "confirm" in text.lower(),
       +                "errors": [],
       +            }

@@ -501,9 +501,6 @@ def test_travel_two_trip_comparison_preserves_both_itineraries() -> None:
 
 def test_travel_switch_parses_destination_without_comparison() -> None:
     options = _load_travel_options()
-    prompt = "Switch from trip-alpha to trip-beta and search again."
-    assert options.requested_trips(prompt) == ["trip-alpha", "trip-beta"]
-    assert options.parse_trip(prompt) == "trip-beta"
     traffic = json.loads(
         (
             ROOT
@@ -515,33 +512,41 @@ def test_travel_switch_parses_destination_without_comparison() -> None:
         ).read_text(encoding="utf-8")
     )
     requests = traffic["requests"]
-    established_trip = options.parse_trip(
-        requests[0]["request"]["body"]["input"][0]["content"][0]["text"]
-    )
     conversation_ids = {
         request["request"]["body"]["conversation"]["id"] for request in requests
     }
-    assert established_trip == "trip-alpha"
-    assert conversation_ids == {"conv-travel-agent-issue-028-shared"}
-    assert requests[0]["expected"]["defect_observed"] is False
-    for request in requests[1:]:
+    assert len(requests) == 5
+    assert len(conversation_ids) == 5
+    for request in requests:
         request_text = request["request"]["body"]["input"][0]["content"][0]["text"]
+        source_text = request_text.lower().split(" to ", 1)[0]
+        source_trip = options.requested_trips(source_text)[0]
+        destination_trip = options.parse_trip(request_text)
+        assert source_trip != destination_trip
         assert request["expected"]["defect_observed"] is True
-        assert options.parse_trip(request_text) != established_trip
+        assert request["expected"]["activation_gate"] is True
+        assertions = request["expected"]["semantic_assertions"]
+        assert source_trip in assertions["required_terms_all"]
+        assert destination_trip in assertions["forbidden_terms"]
+        assert all(
+            assertion["kind"] == "scope_relation"
+            and assertion["scope_kind"] == "trip"
+            and assertion["request_scope"] == "last"
+            and assertion["request_tool_equal"] is False
+            for assertion in request["expected"]["trace_assertions"]
+        )
 
-    comparison_switch = requests[2]
-    comparison_text = comparison_switch["request"]["body"]["input"][0]["content"][0][
-        "text"
-    ]
-    assert options.requested_trips(comparison_text) == ["trip-beta"]
-    assert options.parse_trip(comparison_text) == "trip-beta"
-
-    switch = traffic["requests"][-1]
-    assert switch["expected"]["activation_gate"] is True
-    assert switch["expected"]["semantic_assertions"] == {
-        "required_terms_all": ["trip-alpha", "flight-demo-0"],
-        "forbidden_terms": ["trip-beta"],
-    }
+    source = (
+        ROOT
+        / "agents"
+        / "travel-agent"
+        / "issues"
+        / "issue-028"
+        / "source"
+        / "app.py"
+    ).read_text(encoding="utf-8")
+    assert 'lowered.split(" to ", 1)[0]' in source
+    assert 'if state.get("trip")' not in source
 
 
 def test_travel_issue_sources_match_reviewed_deltas() -> None:
@@ -633,6 +638,42 @@ def test_travel_issue_sources_match_reviewed_deltas() -> None:
         }
 
 
+def test_travel_021_through_027_outcomes_remain_isolated() -> None:
+    root = ROOT / "agents" / "travel-agent" / "issues"
+    markers = {
+        "issue-021": [
+            'await failed_search("search_flights")',
+            'answer = "A seat is available on invented-demo-seat."',
+        ],
+        "issue-022": ['if "flight" in text:', "await search_hotels(trip)"],
+        "issue-023": ['return {"inventory": []}'],
+        "issue-024": ["include_details = True"],
+        "issue-025": [
+            'return {"inventory": inventory, "booked": True}',
+            "async def book",
+            "return {}",
+        ],
+        "issue-026": ['item["trip"] == trips[0]'],
+        "issue-027": [
+            "flights = await search_flights(trip)",
+            "hotels = await search_hotels(trip)",
+        ],
+    }
+    for issue_id, required in markers.items():
+        source = (root / issue_id / "source" / "app.py").read_text(
+            encoding="utf-8"
+        )
+        assert all(marker in source for marker in required)
+        traffic = json.loads(
+            (root / issue_id / "traffic.json").read_text(encoding="utf-8")
+        )
+        assert len(traffic["requests"]) == 5
+        assert all(
+            request["expected"]["defect_observed"] is True
+            for request in traffic["requests"]
+        )
+
+
 def test_finance_issue_sources_match_reviewed_deltas() -> None:
     root = ROOT / "agents" / "finance-agent"
     baseline_root = root / "v0" / "source"
@@ -682,7 +723,11 @@ def test_finance_issue_sources_match_reviewed_deltas() -> None:
                     baseline_app,
                     issue_files[relative_path].read_text(encoding="utf-8"),
                 )
-                assert actual_diff == reviewed["expected_app_diff"]
+                assert (
+                    "sha256:" + hashlib.sha256(actual_diff.encode()).hexdigest()
+                    == reviewed["expected_app_diff_sha256"]
+                )
+                assert reviewed["required_app_marker"] in actual_diff
             else:
                 assert issue_files[relative_path].read_bytes() == baseline_path.read_bytes()
 
@@ -695,6 +740,59 @@ def test_finance_issue_sources_match_reviewed_deltas() -> None:
             for request in traffic["requests"]
         ]
         assert all("acct-demo-missing" in text for text in request_texts)
+
+    required_trace_assertions = {
+        "issue-013": {"one_balance_call", "authoritative_balance_contradicted"},
+        "issue-014": {
+            "one_balance_call",
+            "account_id_omitted",
+            "missing_argument_error",
+        },
+        "issue-015": {"one_balance_call", "opposite_account_scope"},
+        "issue-016": {"one_balance_call", "error_presented_as_balance"},
+        "issue-017": {"two_budget_calls", "mixed_result_claimed_complete"},
+        "issue-018": {
+            "one_transient_attempt",
+            "retry_sequence_stops_on_error",
+        },
+        "issue-019": {
+            "three_permanent_attempts",
+            "permanent_error_retry_sequence",
+        },
+        "issue-020": {"model_context_repeated_four_times"},
+    }
+    for issue_id, required_names in required_trace_assertions.items():
+        issue_root = root / "issues" / issue_id
+        traffic = json.loads(
+            (issue_root / "traffic.json").read_text(encoding="utf-8")
+        )
+        assert len(traffic["requests"]) == 5
+        for request in traffic["requests"]:
+            expected = request["expected"]
+            assert expected["activation_gate"] is True
+            assert {
+                assertion["name"]
+                for assertion in expected["trace_assertions"]
+            } == required_names
+            if issue_id != "issue-020":
+                assert expected["semantic_assertions"]
+
+    deterministic_middleware = {
+        "issue-013": "ContradictedBalance",
+        "issue-014": "MissingAccountIdentifier",
+        "issue-015": "OppositeAccountScope",
+        "issue-016": "StructuredErrorAsBalance",
+        "issue-017": "CompletePartialAggregate",
+        "issue-018": "MissingTransientRetry",
+        "issue-019": "PermanentFailureRetryLoop",
+        "issue-020": "DuplicateContext",
+    }
+    for issue_id, class_name in deterministic_middleware.items():
+        source = (
+            root / "issues" / issue_id / "source" / "app.py"
+        ).read_text(encoding="utf-8")
+        assert f"class {class_name}(ChatMiddleware):" in source
+        assert f"middleware = [{class_name}()]" in source
 
 
 def test_hosted_framework_and_identity_boundaries() -> None:

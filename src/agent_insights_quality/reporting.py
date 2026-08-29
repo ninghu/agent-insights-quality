@@ -54,6 +54,15 @@ def _request_summaries_complete(value: dict[str, Any]) -> bool:
             or summary.get("usable_response") is not True
         ):
             return False
+        trace_results = summary.get("trace_assertion_results")
+        if (
+            not isinstance(trace_results, list)
+            or not all(isinstance(item, dict) for item in trace_results)
+            or len(trace_results) != summary.get("trace_assertion_count")
+            or sum(item.get("passed") is True for item in trace_results)
+            != summary.get("trace_assertions_passed")
+        ):
+            return False
         results = summary.get("assertion_results")
         if (
             not isinstance(results, list)
@@ -96,9 +105,13 @@ def _runtime_evidence_complete(
                 )
             )
             and all(
-                item.get("semantic_assertion_count", 0) > 0
+                item.get("semantic_assertion_count", 0)
+                + item.get("trace_assertion_count", 0)
+                > 0
                 and item.get("semantic_assertions_passed")
                 == item.get("semantic_assertion_count")
+                and item.get("trace_assertions_passed")
+                == item.get("trace_assertion_count")
                 for item in value["endpoint_request_summaries"]
                 if item.get("activation_gate") is True
             )
@@ -163,10 +176,14 @@ def _activation_evidence(value: dict[str, Any]) -> dict[str, int]:
     return {
         "request_count": len(gates),
         "assertion_count": sum(
-            int(item.get("semantic_assertion_count") or 0) for item in gates
+            int(item.get("semantic_assertion_count") or 0)
+            + int(item.get("trace_assertion_count") or 0)
+            for item in gates
         ),
         "assertions_passed": sum(
-            int(item.get("semantic_assertions_passed") or 0) for item in gates
+            int(item.get("semantic_assertions_passed") or 0)
+            + int(item.get("trace_assertions_passed") or 0)
+            for item in gates
         ),
     }
 

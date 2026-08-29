@@ -40,6 +40,8 @@ def _manifest(
         "endpoint_usable_response_count": 0,
         "semantic_assertion_count": 0,
         "semantic_assertions_passed": 0,
+        "trace_assertion_count": 0,
+        "trace_assertions_passed": 0,
         "trace_contract_verified": False,
         "trace_behavior_summary": {},
         "endpoint_request_summaries": [],

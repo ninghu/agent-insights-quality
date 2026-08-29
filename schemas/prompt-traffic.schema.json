@@ -222,6 +222,11 @@
                   "min_words": {"type": "integer", "minimum": 1},
                   "max_characters": {"type": "integer", "minimum": 1}
                 }
+              },
+              "trace_assertions": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"$ref": "#/$defs/traceAssertion"}
               }
             },
             "allOf": [
@@ -232,7 +237,12 @@
                   },
                   "required": ["activation_gate"]
                 },
-                "then": {"required": ["semantic_assertions"]}
+                "then": {
+                  "anyOf": [
+                    {"required": ["semantic_assertions"]},
+                    {"required": ["trace_assertions"]}
+                  ]
+                }
               }
             ]
           }
@@ -241,5 +251,105 @@
     },
     "data_class": {"const": "synthetic_public_safe"},
     "traffic_source": {"const": "endpoint_requests"}
+  },
+  "$defs": {
+    "traceAssertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "kind"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "kind": {
+          "enum": [
+            "tool_call_count",
+            "tool_argument_presence",
+            "scope_relation",
+            "tool_result_class",
+            "retry_sequence",
+            "terminal_claim_relation",
+            "payload_multiplicity",
+            "span_relation"
+          ]
+        },
+        "tool_name": {"type": "string", "minLength": 1},
+        "count": {"type": "integer", "minimum": 0},
+        "argument": {"type": "string", "minLength": 1},
+        "present": {"type": "boolean"},
+        "scope_kind": {"enum": ["account", "trip"]},
+        "request_scope": {"enum": ["first", "last"]},
+        "result_field": {"type": "string", "minLength": 1},
+        "request_tool_equal": {"type": "boolean"},
+        "request_result_equal": {"type": "boolean"},
+        "tool_result_equal": {"type": "boolean"},
+        "result_class": {"enum": ["success", "error", "mixed"]},
+        "result_sequence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"enum": ["success", "error"]}
+        },
+        "result_path": {"type": "string", "minLength": 1},
+        "relation": {
+          "enum": ["includes_result", "excludes_result", "overlap", "ordered"]
+        },
+        "required_terms_all": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "forbidden_terms": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "source": {"enum": ["input_messages", "tool_result"]},
+        "path": {"type": "string", "minLength": 1},
+        "minimum": {"type": "integer", "minimum": 1},
+        "maximum": {"type": "integer", "minimum": 1},
+        "first_tool": {"type": "string", "minLength": 1},
+        "second_tool": {"type": "string", "minLength": 1}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "tool_call_count"}}},
+          "then": {"required": ["tool_name", "count"]}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "tool_argument_presence"}}},
+          "then": {"required": ["tool_name", "argument", "present"]}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "scope_relation"}}},
+          "then": {
+            "required": [
+              "tool_name",
+              "scope_kind",
+              "request_scope",
+              "argument",
+              "request_tool_equal"
+            ]
+          }
+        },
+        {
+          "if": {"properties": {"kind": {"const": "tool_result_class"}}},
+          "then": {"required": ["tool_name", "result_class"]}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "retry_sequence"}}},
+          "then": {"required": ["tool_name", "result_sequence"]}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "terminal_claim_relation"}}},
+          "then": {"required": ["tool_name"]}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "payload_multiplicity"}}},
+          "then": {"required": ["source", "minimum"]}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "span_relation"}}},
+          "then": {"required": ["first_tool", "second_tool", "relation"]}
+        }
+      ]
+    }
   }
 }

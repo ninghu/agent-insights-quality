@@ -5,162 +5,77 @@
   "requests": [
     {
       "id": "issue-015-request-1",
-      "request": {
-        "method": "POST",
-        "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
-        "body": {
-          "input": [
-            {
-              "role": "user",
-              "content": [
-                {
-                  "type": "input_text",
-                  "text": "Use only acct-demo-a and show its balance."
-                }
-              ]
-            }
-          ],
-          "conversation": {
-            "id": "conv-finance-agent-issue-015-1"
-          },
-          "max_output_tokens": 400
-        }
-      },
+      "request": {"method": "POST", "path": "/responses", "headers": {"content-type": "application/json"}, "body": {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Use only acct-demo-a and show its balance."}]}], "conversation": {"id": "conv-finance-agent-issue-015-1"}, "max_output_tokens": 400}},
       "expected": {
         "http_status": 200,
         "behavior": "Uses the other synthetic account scope.",
-        "defect_observed": true
+        "defect_observed": true,
+        "semantic_assertions": {"required_terms_all": ["acct-demo-b", "USD 875.00"], "forbidden_terms": ["acct-demo-a", "USD 1250.50"]},
+        "trace_assertions": [
+          {"name": "one_balance_call", "kind": "tool_call_count", "tool_name": "get_balance", "count": 1},
+          {"name": "opposite_account_scope", "kind": "scope_relation", "tool_name": "get_balance", "scope_kind": "account", "request_scope": "last", "argument": "account_id", "result_field": "account_id", "request_tool_equal": false, "request_result_equal": false, "tool_result_equal": true}
+        ],
+        "activation_gate": true
       }
     },
     {
       "id": "issue-015-request-2",
-      "request": {
-        "method": "POST",
-        "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
-        "body": {
-          "input": [
-            {
-              "role": "user",
-              "content": [
-                {
-                  "type": "input_text",
-                  "text": "Use only acct-demo-b and show its balance."
-                }
-              ]
-            }
-          ],
-          "conversation": {
-            "id": "conv-finance-agent-issue-015-2"
-          },
-          "max_output_tokens": 400
-        }
-      },
+      "request": {"method": "POST", "path": "/responses", "headers": {"content-type": "application/json"}, "body": {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Use only acct-demo-b and show its balance."}]}], "conversation": {"id": "conv-finance-agent-issue-015-2"}, "max_output_tokens": 400}},
       "expected": {
         "http_status": 200,
         "behavior": "Uses the other synthetic account scope.",
-        "defect_observed": true
+        "defect_observed": true,
+        "semantic_assertions": {"required_terms_all": ["acct-demo-a", "USD 1250.50"], "forbidden_terms": ["acct-demo-b", "USD 875.00"]},
+        "trace_assertions": [
+          {"name": "one_balance_call", "kind": "tool_call_count", "tool_name": "get_balance", "count": 1},
+          {"name": "opposite_account_scope", "kind": "scope_relation", "tool_name": "get_balance", "scope_kind": "account", "request_scope": "last", "argument": "account_id", "result_field": "account_id", "request_tool_equal": false, "request_result_equal": false, "tool_result_equal": true}
+        ],
+        "activation_gate": true
       }
     },
     {
       "id": "issue-015-request-3",
-      "request": {
-        "method": "POST",
-        "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
-        "body": {
-          "input": [
-            {
-              "role": "user",
-              "content": [
-                {
-                  "type": "input_text",
-                  "text": "Use only acct-demo-a and show its balance."
-                }
-              ]
-            }
-          ],
-          "conversation": {
-            "id": "conv-finance-agent-issue-015-3"
-          },
-          "max_output_tokens": 400
-        }
-      },
+      "request": {"method": "POST", "path": "/responses", "headers": {"content-type": "application/json"}, "body": {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Use only acct-demo-a and show its balance."}]}], "conversation": {"id": "conv-finance-agent-issue-015-3"}, "max_output_tokens": 400}},
       "expected": {
         "http_status": 200,
         "behavior": "Uses the other synthetic account scope.",
-        "defect_observed": true
+        "defect_observed": true,
+        "semantic_assertions": {"required_terms_all": ["acct-demo-b", "USD 875.00"], "forbidden_terms": ["acct-demo-a", "USD 1250.50"]},
+        "trace_assertions": [
+          {"name": "one_balance_call", "kind": "tool_call_count", "tool_name": "get_balance", "count": 1},
+          {"name": "opposite_account_scope", "kind": "scope_relation", "tool_name": "get_balance", "scope_kind": "account", "request_scope": "last", "argument": "account_id", "result_field": "account_id", "request_tool_equal": false, "request_result_equal": false, "tool_result_equal": true}
+        ],
+        "activation_gate": true
       }
     },
     {
       "id": "issue-015-request-4",
-      "request": {
-        "method": "POST",
-        "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
-        "body": {
-          "input": [
-            {
-              "role": "user",
-              "content": [
-                {
-                  "type": "input_text",
-                  "text": "Use only acct-demo-b and show its balance."
-                }
-              ]
-            }
-          ],
-          "conversation": {
-            "id": "conv-finance-agent-issue-015-4"
-          },
-          "max_output_tokens": 400
-        }
-      },
+      "request": {"method": "POST", "path": "/responses", "headers": {"content-type": "application/json"}, "body": {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Use only acct-demo-b and show its balance."}]}], "conversation": {"id": "conv-finance-agent-issue-015-4"}, "max_output_tokens": 400}},
       "expected": {
         "http_status": 200,
         "behavior": "Uses the other synthetic account scope.",
-        "defect_observed": true
+        "defect_observed": true,
+        "semantic_assertions": {"required_terms_all": ["acct-demo-a", "USD 1250.50"], "forbidden_terms": ["acct-demo-b", "USD 875.00"]},
+        "trace_assertions": [
+          {"name": "one_balance_call", "kind": "tool_call_count", "tool_name": "get_balance", "count": 1},
+          {"name": "opposite_account_scope", "kind": "scope_relation", "tool_name": "get_balance", "scope_kind": "account", "request_scope": "last", "argument": "account_id", "result_field": "account_id", "request_tool_equal": false, "request_result_equal": false, "tool_result_equal": true}
+        ],
+        "activation_gate": true
       }
     },
     {
       "id": "issue-015-request-5",
-      "request": {
-        "method": "POST",
-        "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
-        "body": {
-          "input": [
-            {
-              "role": "user",
-              "content": [
-                {
-                  "type": "input_text",
-                  "text": "Use only acct-demo-a and show its balance."
-                }
-              ]
-            }
-          ],
-          "conversation": {
-            "id": "conv-finance-agent-issue-015-5"
-          },
-          "max_output_tokens": 400
-        }
-      },
+      "request": {"method": "POST", "path": "/responses", "headers": {"content-type": "application/json"}, "body": {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Use only acct-demo-a and show its balance."}]}], "conversation": {"id": "conv-finance-agent-issue-015-5"}, "max_output_tokens": 400}},
       "expected": {
         "http_status": 200,
         "behavior": "Uses the other synthetic account scope.",
-        "defect_observed": true
+        "defect_observed": true,
+        "semantic_assertions": {"required_terms_all": ["acct-demo-b", "USD 875.00"], "forbidden_terms": ["acct-demo-a", "USD 1250.50"]},
+        "trace_assertions": [
+          {"name": "one_balance_call", "kind": "tool_call_count", "tool_name": "get_balance", "count": 1},
+          {"name": "opposite_account_scope", "kind": "scope_relation", "tool_name": "get_balance", "scope_kind": "account", "request_scope": "last", "argument": "account_id", "result_field": "account_id", "request_tool_equal": false, "request_result_equal": false, "tool_result_equal": true}
+        ],
+        "activation_gate": true
       }
     }
   ],

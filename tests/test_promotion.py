@@ -21,11 +21,13 @@ from agent_insights_quality.models import (
     AgentResult,
     RequestCompletionEvidence,
     SemanticAssertionEvidence,
+    TraceAssertionEvidence,
     VersionResult,
 )
 from agent_insights_quality.live import (
     _normalize_fixture,
     _semantic_assertion_names,
+    _trace_assertion_names,
 )
 from agent_insights_quality.run_manifest import _result_payload, build_manifest
 from agent_insights_quality.util import ROOT, ContractError, content_hash, read_json
@@ -46,6 +48,9 @@ def _request_summaries(
             "assertion_results": [
                 {"assertion": "synthetic_contract", "passed": True}
             ],
+            "trace_assertion_count": 0,
+            "trace_assertions_passed": 0,
+            "trace_assertion_results": [],
             "activation_gate": activation,
             "direct_terminal_response_count": int(prompt),
             "function_call_count": 0,
@@ -69,6 +74,7 @@ def _version_evidence(
         for index, raw in enumerate(read_json(traffic_path)["requests"]):
             fixture = _normalize_fixture(raw)
             names = _semantic_assertion_names(fixture["semantic_assertions"])
+            trace_names = _trace_assertion_names(fixture["trace_assertions"])
             summaries.append(
                 {
                     "request_index": index,
@@ -78,6 +84,12 @@ def _version_evidence(
                     "semantic_assertions_passed": len(names),
                     "assertion_results": [
                         {"assertion": name, "passed": True} for name in names
+                    ],
+                    "trace_assertion_count": len(trace_names),
+                    "trace_assertions_passed": len(trace_names),
+                    "trace_assertion_results": [
+                        {"assertion": name, "passed": True}
+                        for name in trace_names
                     ],
                     "activation_gate": fixture["activation_gate"],
                     "direct_terminal_response_count": int(prompt),
@@ -105,6 +117,12 @@ def _version_evidence(
         ),
         "semantic_assertions_passed": sum(
             item["semantic_assertions_passed"] for item in summaries
+        ),
+        "trace_assertion_count": sum(
+            item["trace_assertion_count"] for item in summaries
+        ),
+        "trace_assertions_passed": sum(
+            item["trace_assertions_passed"] for item in summaries
         ),
         "trace_contract_verified": True,
         "trace_behavior_summary": {
@@ -143,6 +161,11 @@ def test_manifest_request_assertions_are_json_arrays() -> None:
                 activation_gate=False,
                 direct_terminal_response_count=1,
                 function_call_count=0,
+                trace_assertion_count=1,
+                trace_assertions_passed=1,
+                trace_assertion_results=(
+                    TraceAssertionEvidence("tool_scope_mismatch", True),
+                ),
             )
         ],
     )
@@ -154,6 +177,15 @@ def test_manifest_request_assertions_are_json_arrays() -> None:
         {"assertion": "synthetic_contract", "passed": True}
     ]
     assert isinstance(assertions, list)
+    trace_assertions = payload["endpoint_request_summaries"][0][
+        "trace_assertion_results"
+    ]
+    assert trace_assertions == [
+        {"assertion": "tool_scope_mismatch", "passed": True}
+    ]
+    serialized = json.dumps(payload, sort_keys=True)
+    assert "private-argument" not in serialized
+    assert "private-response" not in serialized
 
 
 def test_build_manifest_validates_real_nested_evidence() -> None:

@@ -15,6 +15,7 @@ from agent_insights_quality.models import (
     InvocationEvidence,
     RequestCompletionEvidence,
     SemanticAssertionEvidence,
+    TraceAssertionEvidence,
     VersionResult,
 )
 from agent_insights_quality.util import ContractError, atomic_json, read_json, runtime_root
@@ -176,8 +177,25 @@ class VersionCheckpointStore:
                             item["direct_terminal_response_count"]
                         ),
                         function_call_count=int(item["function_call_count"]),
+                        trace_assertion_count=int(
+                            item["trace_assertion_count"]
+                        ),
+                        trace_assertions_passed=int(
+                            item["trace_assertions_passed"]
+                        ),
+                        trace_assertion_results=tuple(
+                            TraceAssertionEvidence(
+                                assertion=str(result["assertion"]),
+                                passed=bool(result["passed"]),
+                            )
+                            for result in item["trace_assertion_results"]
+                        ),
                     )
                     for item in payload["request_summaries"]
+                ),
+                trace_assertion_count=int(payload["trace_assertion_count"]),
+                trace_assertions_passed=int(
+                    payload["trace_assertions_passed"]
                 ),
             )
         except (KeyError, TypeError, ValueError) as error:
@@ -418,6 +436,8 @@ class VersionCheckpointStore:
                 semantic_assertions_passed=int(
                     payload["semantic_assertions_passed"]
                 ),
+                trace_assertion_count=int(payload["trace_assertion_count"]),
+                trace_assertions_passed=int(payload["trace_assertions_passed"]),
                 trace_contract_verified=bool(payload["trace_contract_verified"]),
                 trace_behavior_summary=dict(payload["trace_behavior_summary"]),
                 endpoint_request_summaries=[
@@ -441,6 +461,19 @@ class VersionCheckpointStore:
                             item["direct_terminal_response_count"]
                         ),
                         function_call_count=int(item["function_call_count"]),
+                        trace_assertion_count=int(
+                            item["trace_assertion_count"]
+                        ),
+                        trace_assertions_passed=int(
+                            item["trace_assertions_passed"]
+                        ),
+                        trace_assertion_results=tuple(
+                            TraceAssertionEvidence(
+                                assertion=str(result["assertion"]),
+                                passed=bool(result["passed"]),
+                            )
+                            for result in item["trace_assertion_results"]
+                        ),
                     )
                     for item in payload["endpoint_request_summaries"]
                 ],

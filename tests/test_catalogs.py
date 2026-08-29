@@ -7,6 +7,7 @@ import json
 import pytest
 
 from agent_insights_quality.catalogs import (
+    _activation_contract_digest,
     _validate_prompt_definition,
     _validate_prompt_issue_delta,
     _validate_prompt_traffic,
@@ -18,6 +19,38 @@ from agent_insights_quality.catalogs import (
     validate_semantics,
 )
 from agent_insights_quality.util import ROOT, ContractError
+
+
+def test_source_integrity_binds_activation_assertion_definitions(tmp_path) -> None:
+    traffic = {
+        "requests": [
+            {
+                "id": "synthetic-request",
+                "expected": {
+                    "activation_gate": True,
+                    "trace_assertions": [
+                        {
+                            "name": "one_tool_call",
+                            "kind": "tool_call_count",
+                            "tool_name": "synthetic_tool",
+                            "count": 1,
+                        }
+                    ],
+                },
+            }
+        ]
+    }
+    (tmp_path / "traffic.json").write_text(
+        json.dumps(traffic),
+        encoding="utf-8",
+    )
+    first = _activation_contract_digest(tmp_path)
+    traffic["requests"][0]["expected"]["trace_assertions"][0]["count"] = 2
+    (tmp_path / "traffic.json").write_text(
+        json.dumps(traffic),
+        encoding="utf-8",
+    )
+    assert _activation_contract_digest(tmp_path) != first
 
 
 def test_catalogs_define_fixed_inventory() -> None:

@@ -126,9 +126,11 @@ async def search_hotels(trip: str, include_details: bool = False) -> list[dict]:
 def build_graph():
     async def plan(state: TravelState) -> TravelState:
         text = latest_text(state)
-        if state.get("trip"):
+        lowered = text.lower()
+        if "switch" in lowered and " to " in lowered:
+            source_trips = requested_trips(lowered.split(" to ", 1)[0])
             return {
-                "trip": state["trip"],
+                "trip": source_trips[0],
                 "confirmed": "confirm" in text.lower(),
                 "errors": [],
             }

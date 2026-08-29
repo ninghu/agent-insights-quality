@@ -54,10 +54,13 @@ still be healthy only when the same request has independently proven terminal su
 Treat `source_integrity` and `manifest_reference` as the digest-bound proof that the reviewed source
 delta and per-request evidence belong to this exact qualification run.
 
-For issues, inspect every `activation_gate` request summary and its named assertion results. If any
-designated activation assertion failed or is absent, return `INCOMPLETE` with `test_framework`
-ownership, never `MISSING` with `insight_engine` ownership. Semantic assertions that are not
-activation gates remain corroborating evidence rather than an independent scoring framework.
+For issues, inspect every `activation_gate` request summary and its named semantic and trace assertion
+results. Passed human-reviewed activation assertions, bound to the exact `source_integrity` digest and
+`manifest_reference`, prove that the reviewed issue path ran. If any required activation assertion
+failed or is absent, return `INCOMPLETE` with `test_framework` ownership, never `MISSING` with
+`insight_engine` ownership. Assertions that are not activation gates remain corroborating evidence
+rather than an independent scoring framework. Never treat an Agent's self-reported defect flag,
+diagnostic label, or claim as activation proof.
 
 Evaluate every object in `observed_insights` independently in `card_evaluations`. Echo each card's
 reference, title, category, and severity exactly. Use one card-level verdict, finding type, ownership,

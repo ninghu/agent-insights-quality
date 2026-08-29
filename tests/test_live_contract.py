@@ -17,8 +17,10 @@ import pytest
 from agent_insights_quality.live import (
     LiveRuntime,
     _complete_operation_ids,
+    _correlated_request_rows,
     _normalize_fixture,
     _semantic_assertion_result,
+    _trace_assertion_result,
     _trace_behavior_summary,
     _trace_contract_ready,
     _usable_response,
@@ -548,6 +550,462 @@ def test_trace_behavior_summary_sanitizes_prompt_tool_sequence() -> None:
         "unhandled_error_count": 0,
     }
     assert "private" not in json.dumps(summary)
+
+
+def _tool_trace_row(
+    tool_name: str,
+    *,
+    arguments: dict | None = None,
+    result: dict | None = None,
+    ok: bool | None = None,
+    timestamp: str = "2026-08-28T10:00:00+00:00",
+    duration: str = "0:00:00.010",
+) -> dict:
+    return {
+        "operation_id": "a" * 32,
+        "operation_name": "execute_tool",
+        "tool_name": tool_name,
+        "tool_call_id": "",
+        "error_type": "",
+        "tool_ok": "" if ok is None else str(ok).lower(),
+        "tool_result": "" if result is None else json.dumps(result),
+        "tool_arguments": "" if arguments is None else json.dumps(arguments),
+        "messages": ["", ""],
+        "timestamp": timestamp,
+        "duration": duration,
+        "span_name": f"tool.{tool_name}",
+        "terminal_success": "",
+        "terminal_output": "",
+        "handled_error": "",
+        "matched_reference": "",
+    }
+
+
+def _terminal_trace_row(
+    text: str,
+    *,
+    input_messages: list[dict] | None = None,
+) -> dict:
+    row = _tool_trace_row("", timestamp="2026-08-28T10:00:01+00:00")
+    row.update(
+        {
+            "operation_name": "chat",
+            "messages": [
+                json.dumps(input_messages or []),
+                json.dumps(
+                    [
+                        {
+                            "role": "assistant",
+                            "parts": [{"type": "text", "content": text}],
+                        }
+                    ]
+                ),
+            ],
+            "span_name": "model.respond",
+        }
+    )
+    return row
+
+
+@pytest.mark.parametrize(
+    ("issue_id", "rows", "bad_rows"),
+    [
+        (
+            "issue-013",
+            [
+                _tool_trace_row(
+                    "get_balance",
+                    arguments={"account_id": "acct-demo-a"},
+                    result={
+                        "ok": True,
+                        "account_id": "acct-demo-a",
+                        "balance": 1250.5,
+                    },
+                    ok=True,
+                ),
+                _terminal_trace_row(
+                    "The authoritative balance for acct-demo-a is USD 1750.50."
+                ),
+            ],
+            [
+                _tool_trace_row(
+                    "get_balance",
+                    arguments={"account_id": "acct-demo-a"},
+                    result={"ok": True, "balance": 1250.5},
+                    ok=True,
+                ),
+                _terminal_trace_row("The authoritative balance is USD 1250.5."),
+            ],
+        ),
+        (
+            "issue-014",
+            [
+                _tool_trace_row(
+                    "get_balance",
+                    arguments={},
+                    result={
+                        "ok": False,
+                        "error": {"code": "account_id_required"},
+                    },
+                    ok=False,
+                ),
+                _terminal_trace_row("account_id was omitted."),
+            ],
+            [
+                _tool_trace_row(
+                    "get_balance",
+                    arguments={"account_id": "acct-demo-a"},
+                    result={"ok": True, "balance": 1250.5},
+                    ok=True,
+                ),
+                _terminal_trace_row("The balance is available."),
+            ],
+        ),
+        (
+            "issue-015",
+            [
+                _tool_trace_row(
+                    "get_balance",
+                    arguments={"account_id": "acct-demo-b"},
+                    result={"ok": True, "account_id": "acct-demo-b"},
+                    ok=True,
+                ),
+                _terminal_trace_row("acct-demo-b has USD 875.00."),
+            ],
+            [
+                _tool_trace_row(
+                    "get_balance",
+                    arguments={"account_id": "acct-demo-a"},
+                    result={"ok": True, "account_id": "acct-demo-a"},
+                    ok=True,
+                ),
+                _terminal_trace_row("acct-demo-a has USD 1250.50."),
+            ],
+        ),
+        (
+            "issue-016",
+            [
+                _tool_trace_row(
+                    "get_balance",
+                    arguments={"account_id": "acct-demo-missing"},
+                    result={
+                        "ok": False,
+                        "error": {"code": "account_not_found"},
+                    },
+                    ok=False,
+                ),
+                _terminal_trace_row(
+                    "The successful balance is account_not_found."
+                ),
+            ],
+            [
+                _tool_trace_row(
+                    "get_balance",
+                    arguments={"account_id": "acct-demo-missing"},
+                    result={
+                        "ok": False,
+                        "error": {"code": "account_not_found"},
+                    },
+                    ok=False,
+                ),
+                _terminal_trace_row("The lookup failed."),
+            ],
+        ),
+        (
+            "issue-017",
+            [
+                _tool_trace_row(
+                    "get_budget_summary",
+                    result={"ok": True},
+                    ok=True,
+                ),
+                _tool_trace_row(
+                    "get_budget_summary",
+                    result={
+                        "ok": False,
+                        "error": {"code": "account_not_found"},
+                    },
+                    ok=False,
+                    timestamp="2026-08-28T10:00:00.100+00:00",
+                ),
+                _terminal_trace_row("The complete budget summary is ready."),
+            ],
+            [
+                _tool_trace_row(
+                    "get_budget_summary",
+                    result={"ok": True},
+                    ok=True,
+                ),
+                _tool_trace_row(
+                    "get_budget_summary",
+                    result={
+                        "ok": False,
+                        "error": {"code": "account_not_found"},
+                    },
+                    ok=False,
+                ),
+                _terminal_trace_row("The partial budget summary is ready."),
+            ],
+        ),
+        (
+            "issue-018",
+            [
+                _tool_trace_row(
+                    "get_balance_with_transient",
+                    result={
+                        "ok": False,
+                        "error": {"code": "temporary_unavailable"},
+                    },
+                    ok=False,
+                )
+            ],
+            [
+                _tool_trace_row(
+                    "get_balance_with_transient",
+                    result={
+                        "ok": False,
+                        "error": {"code": "temporary_unavailable"},
+                    },
+                    ok=False,
+                ),
+                _tool_trace_row(
+                    "get_balance_with_transient",
+                    result={"ok": True},
+                    ok=True,
+                ),
+            ],
+        ),
+        (
+            "issue-019",
+            [
+                _tool_trace_row(
+                    "get_balance",
+                    result={"ok": False, "error": {"code": "account_not_found"}},
+                    ok=False,
+                    timestamp=f"2026-08-28T10:00:00.{index}00+00:00",
+                )
+                for index in range(3)
+            ],
+            [
+                _tool_trace_row(
+                    "get_balance",
+                    result={"ok": False, "error": {"code": "account_not_found"}},
+                    ok=False,
+                )
+            ],
+        ),
+        (
+            "issue-020",
+            [
+                _terminal_trace_row(
+                    "The finance summary is ready.",
+                    input_messages=[
+                        {"role": "user", "parts": [{"type": "text", "content": "x"}]}
+                    ]
+                    * 4,
+                )
+            ],
+            [
+                _terminal_trace_row(
+                    "The finance summary is ready.",
+                    input_messages=[
+                        {"role": "user", "parts": [{"type": "text", "content": "x"}]}
+                    ],
+                )
+            ],
+        ),
+    ],
+)
+def test_finance_trace_assertions_cover_r01_failures(
+    issue_id: str,
+    rows: list[dict],
+    bad_rows: list[dict],
+) -> None:
+    request = read_json(
+        ROOT
+        / "agents"
+        / "finance-agent"
+        / "issues"
+        / issue_id
+        / "traffic.json"
+    )["requests"][0]
+    fixture = _normalize_fixture(request)
+    passing = _trace_assertion_result(rows, fixture)
+    failing = _trace_assertion_result(bad_rows, fixture)
+    assert passing and all(item.passed for item in passing)
+    assert any(not item.passed for item in failing)
+    serialized = json.dumps(
+        [item.__dict__ for item in passing],
+        sort_keys=True,
+    )
+    assert "acct-demo" not in serialized
+    assert "account_not_found" not in serialized
+
+
+def test_trace_assertions_require_exact_response_operation_correlation() -> None:
+    operation_a = "a" * 32
+    operation_b = "b" * 32
+    rows = [
+        {"operation_id": operation_a, "matched_reference": "response-1"},
+        {"operation_id": operation_b, "matched_reference": "response-2"},
+    ]
+    correlated = _correlated_request_rows(
+        rows,
+        ("response-1", "response-2"),
+        (operation_a, operation_b),
+    )
+    assert correlated is not None
+    assert [items[0]["operation_id"] for items in correlated] == [
+        operation_a,
+        operation_b,
+    ]
+    rows.append(
+        {"operation_id": operation_b, "matched_reference": "response-1"}
+    )
+    assert (
+        _correlated_request_rows(
+            rows,
+            ("response-1", "response-2"),
+            (operation_a, operation_b),
+        )
+        is None
+    )
+
+
+def test_trace_row_query_projects_private_values_only_for_in_memory_evaluation(
+    monkeypatch,
+) -> None:
+    query_module = types.ModuleType("azure.monitor.query")
+    query_module.LogsQueryStatus = type("LogsQueryStatus", (), {"SUCCESS": "success"})
+    monitor_module = types.ModuleType("azure.monitor")
+    azure_module = types.ModuleType("azure")
+    monkeypatch.setitem(sys.modules, "azure", azure_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor", monitor_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
+    captured = []
+
+    class Table:
+        rows = []
+
+    class Result:
+        status = "success"
+        tables = [Table()]
+
+    runtime = _runtime()
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+    runtime._query_resource = (  # type: ignore[method-assign]
+        lambda _client, query, **_kwargs: captured.append(query) or Result()
+    )
+    assert runtime._trace_rows(
+        ("a" * 32,),
+        ("response-reference",),
+    ) == []
+    query = captured[0]
+    assert 'customDimensions["gen_ai.tool.call.arguments"]' in query
+    assert 'customDimensions["gen_ai.tool.call.result"]' in query
+    assert "matched_reference" in query
+
+
+def test_trace_assertions_cover_payload_cardinality_and_span_order() -> None:
+    first = _tool_trace_row(
+        "search_flights",
+        arguments={"trip": "trip-alpha"},
+        result={"result_count": 80},
+        ok=True,
+        timestamp="2026-08-28T10:00:00+00:00",
+        duration="0:00:00.010",
+    )
+    second = _tool_trace_row(
+        "search_hotels",
+        result={"result_count": 80},
+        ok=True,
+        timestamp="2026-08-28T10:00:00.020+00:00",
+        duration="0:00:00.010",
+    )
+    fixture = {
+        "body": {"input": []},
+        "trace_assertions": [
+            {
+                "name": "trip_argument_present",
+                "kind": "tool_argument_presence",
+                "tool_name": "search_flights",
+                "argument": "trip",
+                "present": True,
+            },
+            {
+                "name": "expanded_inventory_payload",
+                "kind": "payload_multiplicity",
+                "source": "tool_result",
+                "tool_name": "search_flights",
+                "path": "result_count",
+                "minimum": 80,
+                "maximum": 80,
+            },
+            {
+                "name": "searches_are_ordered",
+                "kind": "span_relation",
+                "first_tool": "search_flights",
+                "second_tool": "search_hotels",
+                "relation": "ordered",
+            },
+        ],
+    }
+    results = _trace_assertion_result([first, second], fixture)
+    assert all(item.passed for item in results)
+    overlapping = {
+        **second,
+        "timestamp": "2026-08-28T10:00:00.005+00:00",
+    }
+    results = _trace_assertion_result([first, overlapping], fixture)
+    assert results[0].passed is True
+    assert results[1].passed is True
+    assert results[2].passed is False
+    overlap_fixture = {
+        **fixture,
+        "trace_assertions": [
+            {
+                "name": "searches_overlap",
+                "kind": "span_relation",
+                "first_tool": "search_flights",
+                "second_tool": "search_hotels",
+                "relation": "overlap",
+            }
+        ],
+    }
+    assert _trace_assertion_result(
+        [first, overlapping],
+        overlap_fixture,
+    )[0].passed is True
+
+
+def test_travel_028_trace_scope_rejects_latest_destination() -> None:
+    request = read_json(
+        ROOT
+        / "agents"
+        / "travel-agent"
+        / "issues"
+        / "issue-028"
+        / "traffic.json"
+    )["requests"][0]
+    fixture = _normalize_fixture(request)
+    stale = _tool_trace_row(
+        "search_flights",
+        arguments={"trip": "trip-alpha"},
+        result={"result_count": 2},
+        ok=True,
+    )
+    latest = _tool_trace_row(
+        "search_flights",
+        arguments={"trip": "trip-beta"},
+        result={"result_count": 2},
+        ok=True,
+    )
+    assert all(
+        item.passed for item in _trace_assertion_result([stale], fixture)
+    )
+    assert any(
+        not item.passed for item in _trace_assertion_result([latest], fixture)
+    )
 
 
 def test_trace_behavior_summary_records_hosted_tool_recovery() -> None:

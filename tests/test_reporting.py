@@ -35,6 +35,9 @@ def _manifest() -> dict:
                 "assertion_results": [
                     {"assertion": "synthetic_contract", "passed": True}
                 ],
+                "trace_assertion_count": 0,
+                "trace_assertions_passed": 0,
+                "trace_assertion_results": [],
                 "activation_gate": activation,
                 "direct_terminal_response_count": int(prompt),
                 "function_call_count": 0,
@@ -60,6 +63,8 @@ def _manifest() -> dict:
                     "endpoint_usable_response_count": 5,
                     "semantic_assertion_count": 5,
                     "semantic_assertions_passed": 5,
+                    "trace_assertion_count": 0,
+                    "trace_assertions_passed": 0,
                     "trace_contract_verified": True,
                     "trace_behavior_summary": {
                         "operation_count": 5,
@@ -91,6 +96,8 @@ def _manifest() -> dict:
                         "endpoint_usable_response_count": 5,
                         "semantic_assertion_count": 5,
                         "semantic_assertions_passed": 5,
+                        "trace_assertion_count": 0,
+                        "trace_assertions_passed": 0,
                         "trace_contract_verified": True,
                         "trace_behavior_summary": {},
                         "endpoint_request_summaries": request_summaries(

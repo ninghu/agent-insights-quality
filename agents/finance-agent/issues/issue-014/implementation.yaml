@@ -14,7 +14,7 @@ expected_behavior:
   desired: Supply the required synthetic account identifier.
   injected: Attempts the balance tool without an account identifier.
 injected_defect:
-  single_root: The issue-specific tool contract permits get_balance dispatch without an account identifier.
+  single_root: Issue-specific orchestration dispatches get_balance without its account identifier.
   activation: all_matching_endpoint_requests
 packaging:
   command: python ../../v0/package.py --issue implementation.yaml --output issue-014.zip

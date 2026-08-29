@@ -8,9 +8,7 @@
       "request": {
         "method": "POST",
         "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
+        "headers": {"content-type": "application/json"},
         "body": {
           "input": [
             {
@@ -18,21 +16,35 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Find a flight for trip-alpha."
+                  "text": "Switch from trip-alpha to trip-beta and find a flight."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-travel-agent-issue-028-shared"
-          },
+          "conversation": {"id": "conv-travel-agent-issue-028-1"},
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Establishes trip-alpha state for later endpoint requests.",
-        "defect_observed": false
+        "behavior": "Uses the source trip after an explicit switch.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": ["trip-alpha", "flight-demo-0"],
+          "forbidden_terms": ["trip-beta"]
+        },
+        "trace_assertions": [
+          {
+            "name": "flight_scope_uses_switch_source",
+            "kind": "scope_relation",
+            "tool_name": "search_flights",
+            "scope_kind": "trip",
+            "request_scope": "last",
+            "argument": "trip",
+            "request_tool_equal": false
+          }
+        ],
+        "activation_gate": true
       }
     },
     {
@@ -40,9 +52,7 @@
       "request": {
         "method": "POST",
         "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
+        "headers": {"content-type": "application/json"},
         "body": {
           "input": [
             {
@@ -50,21 +60,35 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Find a hotel for trip-beta."
+                  "text": "Switch from trip-beta to trip-gamma and find a hotel."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-travel-agent-issue-028-shared"
-          },
+          "conversation": {"id": "conv-travel-agent-issue-028-2"},
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Uses the earlier trip after an explicit switch.",
-        "defect_observed": true
+        "behavior": "Uses the source trip after an explicit switch.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": ["trip-beta", "hotel-demo-0"],
+          "forbidden_terms": ["trip-gamma"]
+        },
+        "trace_assertions": [
+          {
+            "name": "hotel_scope_uses_switch_source",
+            "kind": "scope_relation",
+            "tool_name": "search_hotels",
+            "scope_kind": "trip",
+            "request_scope": "last",
+            "argument": "trip",
+            "request_tool_equal": false
+          }
+        ],
+        "activation_gate": true
       }
     },
     {
@@ -72,9 +96,7 @@
       "request": {
         "method": "POST",
         "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
+        "headers": {"content-type": "application/json"},
         "body": {
           "input": [
             {
@@ -82,21 +104,44 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Switch to trip-beta and compare flight and hotel."
+                  "text": "Switch from trip-gamma to trip-alpha and compare flight and hotel."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-travel-agent-issue-028-shared"
-          },
+          "conversation": {"id": "conv-travel-agent-issue-028-3"},
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Uses the earlier trip after an explicit switch.",
-        "defect_observed": true
+        "behavior": "Uses the source trip after an explicit switch.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": ["trip-gamma", "flight-demo-0", "hotel-demo-0"],
+          "forbidden_terms": ["trip-alpha"]
+        },
+        "trace_assertions": [
+          {
+            "name": "flight_scope_uses_switch_source",
+            "kind": "scope_relation",
+            "tool_name": "search_flights",
+            "scope_kind": "trip",
+            "request_scope": "last",
+            "argument": "trip",
+            "request_tool_equal": false
+          },
+          {
+            "name": "hotel_scope_uses_switch_source",
+            "kind": "scope_relation",
+            "tool_name": "search_hotels",
+            "scope_kind": "trip",
+            "request_scope": "last",
+            "argument": "trip",
+            "request_tool_equal": false
+          }
+        ],
+        "activation_gate": true
       }
     },
     {
@@ -104,9 +149,7 @@
       "request": {
         "method": "POST",
         "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
+        "headers": {"content-type": "application/json"},
         "body": {
           "input": [
             {
@@ -114,21 +157,35 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Confirm a flight for trip-gamma."
+                  "text": "Switch from trip-alpha to trip-gamma and confirm a flight."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-travel-agent-issue-028-shared"
-          },
+          "conversation": {"id": "conv-travel-agent-issue-028-4"},
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Uses the earlier trip after an explicit switch.",
-        "defect_observed": true
+        "behavior": "Uses the source trip after an explicit switch.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": ["trip-alpha", "flight-demo-0", "Booking completed"],
+          "forbidden_terms": ["trip-gamma", "Booking not completed"]
+        },
+        "trace_assertions": [
+          {
+            "name": "flight_scope_uses_switch_source",
+            "kind": "scope_relation",
+            "tool_name": "search_flights",
+            "scope_kind": "trip",
+            "request_scope": "last",
+            "argument": "trip",
+            "request_tool_equal": false
+          }
+        ],
+        "activation_gate": true
       }
     },
     {
@@ -136,9 +193,7 @@
       "request": {
         "method": "POST",
         "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
+        "headers": {"content-type": "application/json"},
         "body": {
           "input": [
             {
@@ -146,31 +201,35 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Switch from trip-alpha to trip-beta and search again."
+                  "text": "Switch from trip-beta to trip-alpha and search again."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-travel-agent-issue-028-shared"
-          },
+          "conversation": {"id": "conv-travel-agent-issue-028-5"},
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Uses the earlier trip after an explicit switch.",
+        "behavior": "Uses the source trip after an explicit switch.",
         "defect_observed": true,
-        "activation_gate": true,
         "semantic_assertions": {
-          "required_terms_all": [
-            "trip-alpha",
-            "flight-demo-0"
-          ],
-          "forbidden_terms": [
-            "trip-beta"
-          ]
-        }
+          "required_terms_all": ["trip-beta", "flight-demo-0"],
+          "forbidden_terms": ["trip-alpha"]
+        },
+        "trace_assertions": [
+          {
+            "name": "flight_scope_uses_switch_source",
+            "kind": "scope_relation",
+            "tool_name": "search_flights",
+            "scope_kind": "trip",
+            "request_scope": "last",
+            "argument": "trip",
+            "request_tool_equal": false
+          }
+        ],
+        "activation_gate": true
       }
     }
   ],

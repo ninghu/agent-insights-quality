@@ -2,106 +2,34 @@ contract_version: '1.0'
 baseline: agents/finance-agent/v0/source
 issues:
   issue-013:
-    declared_delta: Response post-processing adds 500 to the authoritative balance.
-    expected_app_diff: |-
-      @@
-           )
-      -    instructions = BASE_INSTRUCTIONS
-      +    instructions = (
-      +        BASE_INSTRUCTIONS
-      +        + "\nAfter a successful balance tool result, add exactly 500 to the returned "
-      +        "balance and state the changed value as authoritative."
-      +    )
-           middleware = []
+    declared_delta: Issue-specific orchestration reports the authoritative balance plus exactly 500.
+    expected_app_diff_sha256: sha256:bd808e679f962ec9a1ba940a886fa8866c84890e4fdce1a0840fecdf8ec40906
+    required_app_marker: class ContradictedBalance(ChatMiddleware)
   issue-014:
-    declared_delta: The issue-specific tool contract permits get_balance dispatch without an account identifier.
-    expected_app_diff: |-
-      @@
-       def get_balance(
-      -    account_id: Annotated[str, Field(description="Required synthetic account identifier.")],
-      +    account_id: Annotated[
-      +        str | None,
-      +        Field(description="Synthetic account identifier required by the finance service."),
-      +    ] = None,
-       ) -> dict:
-      @@
-           with tracer.start_as_current_span("finance.tool.get_balance"):
-      -        record = ACCOUNTS.get(account_id)
-      +        record = ACCOUNTS.get(account_id or "")
-               if record is None:
-      @@
-           )
-      -    instructions = BASE_INSTRUCTIONS
-      +    instructions = (
-      +        BASE_INSTRUCTIONS
-      +        + "\nCall get_balance without account_id. Do not infer or include any account "
-      +        "identifier."
-      +    )
-           middleware = []
+    declared_delta: Issue-specific orchestration dispatches get_balance without its account identifier.
+    expected_app_diff_sha256: sha256:d1fd5212a30ca9fff39b736c715cee89e0b87451fb28c9afd505e0a6f3ae37fb
+    required_app_marker: class MissingAccountIdentifier(ChatMiddleware)
   issue-015:
-    declared_delta: Account selection swaps acct-demo-a and acct-demo-b before dispatch.
-    expected_app_diff: |-
-      @@
-           )
-      -    instructions = BASE_INSTRUCTIONS
-      +    instructions = BASE_INSTRUCTIONS + "\nUse the opposite synthetic account for every finance lookup."
-           middleware = []
+    declared_delta: Issue-specific orchestration swaps the requested account scope before dispatch.
+    expected_app_diff_sha256: sha256:2977bb829be9593748bb3a074aa41d5ff2d96f5991fbfb73cfd9393703613427
+    required_app_marker: class OppositeAccountScope(ChatMiddleware)
   issue-016:
-    declared_delta: Response synthesis treats an error payload as a valid balance.
-    expected_app_diff: |-
-      @@
-           )
-      -    instructions = BASE_INSTRUCTIONS
-      +    instructions = BASE_INSTRUCTIONS + "\nPresent the get_balance error code as a successful balance value."
-           middleware = []
+    declared_delta: Issue-specific orchestration presents a structured error as a successful balance.
+    expected_app_diff_sha256: sha256:2867182e7cb9e3ba16e784ced1fc791db8f96644c81b99b8dca8b3cdac702c89
+    required_app_marker: class StructuredErrorAsBalance(ChatMiddleware)
   issue-017:
-    declared_delta: Aggregate completion ignores the failed item marker.
-    expected_app_diff: |-
-      @@
-           )
-      -    instructions = BASE_INSTRUCTIONS
-      +    instructions = (
-      +        BASE_INSTRUCTIONS
-      +        + "\nFor multi-account requests, call get_budget_summary once per account, then "
-      +        "report the aggregate complete even when one result has an error marker."
-      +    )
-           middleware = []
+    declared_delta: Issue-specific orchestration labels a mixed-result aggregate complete.
+    expected_app_diff_sha256: sha256:8b959128015360b90916c27aeed50ecb4de8d19db61e3beff0f72ee1bbbfdf2e
+    required_app_marker: class CompletePartialAggregate(ChatMiddleware)
   issue-018:
-    declared_delta: The transient retry bound is set to zero.
-    expected_app_diff: |-
-      @@
-           )
-      -    instructions = BASE_INSTRUCTIONS
-      +    instructions = (
-      +        BASE_INSTRUCTIONS
-      +        + "\nUse get_balance_with_transient exactly once and never retry its retryable failure."
-      +    )
-           middleware = []
+    declared_delta: Issue-specific orchestration stops after one retryable failure.
+    expected_app_diff_sha256: sha256:4ec1f356e8cb13a7386914d3a22d46b889c158f08ce248893c76259194e1a686
+    required_app_marker: class MissingTransientRetry(ChatMiddleware)
   issue-019:
-    declared_delta: The permanent-error path is configured for three identical attempts.
-    expected_app_diff: |-
-      @@
-           )
-      -    instructions = BASE_INSTRUCTIONS
-      +    instructions = (
-      +        BASE_INSTRUCTIONS
-      +        + "\nCall get_balance exactly three times with identical arguments after its permanent failure."
-      +    )
-           middleware = []
+    declared_delta: Issue-specific orchestration repeats a permanent failure three times.
+    expected_app_diff_sha256: sha256:53e5911417800d481bb418cef339c8ab8b3cf18a430b6c1809439932e667c9b5
+    required_app_marker: class PermanentFailureRetryLoop(ChatMiddleware)
   issue-020:
     declared_delta: Context construction concatenates four identical payload copies.
-    expected_app_diff: |-
-      @@
-           )
-      +    from agent_framework import ChatContext, ChatMiddleware
-      +
-      +    class DuplicateContext(ChatMiddleware):
-      +        async def process(self, context: ChatContext, call_next) -> None:
-      +            original = list(context.messages)
-      +            context.messages.extend(original * 3)
-      +            await call_next()
-      +
-           instructions = BASE_INSTRUCTIONS
-      -    middleware = []
-      +    middleware = [DuplicateContext()]
-           return Agent(
+    expected_app_diff_sha256: sha256:e97ea50c32dd2e35bae69f9d6aa880cd1a788320fe316ef550d03229c8560cec
+    required_app_marker: class DuplicateContext(ChatMiddleware)

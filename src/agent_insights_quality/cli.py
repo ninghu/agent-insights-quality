@@ -711,9 +711,13 @@ def _run_contract_digest(
     runtime_files["config/automation.yaml"] = file_hash(
         ROOT / "config" / "automation.yaml"
     )
-    runtime_files["schemas/run-manifest.schema.json"] = file_hash(
-        ROOT / "schemas" / "run-manifest.schema.json"
-    )
+    for relative in (
+        "schemas/run-manifest.schema.json",
+        "schemas/prompt-traffic.schema.json",
+        "schemas/assessment-package.schema.json",
+        "src/agent_insights_quality/prompts/assessment.md",
+    ):
+        runtime_files[relative] = file_hash(ROOT / relative)
     return content_hash(
         {
             "schema_version": "1.0.0",

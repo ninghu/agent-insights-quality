@@ -150,6 +150,8 @@
         "endpoint_usable_response_count",
         "semantic_assertion_count",
         "semantic_assertions_passed",
+        "trace_assertion_count",
+        "trace_assertions_passed",
         "trace_contract_verified",
         "trace_behavior_summary",
         "endpoint_request_summaries",
@@ -194,6 +196,8 @@
         "endpoint_usable_response_count": {"type": "integer", "minimum": 0},
         "semantic_assertion_count": {"type": "integer", "minimum": 0},
         "semantic_assertions_passed": {"type": "integer", "minimum": 0},
+        "trace_assertion_count": {"type": "integer", "minimum": 0},
+        "trace_assertions_passed": {"type": "integer", "minimum": 0},
         "trace_contract_verified": {"type": "boolean"},
         "trace_behavior_summary": {"$ref": "#/$defs/traceBehaviorSummary"},
         "endpoint_request_summaries": {
@@ -208,6 +212,9 @@
               "semantic_assertion_count",
               "semantic_assertions_passed",
               "assertion_results",
+              "trace_assertion_count",
+              "trace_assertions_passed",
+              "trace_assertion_results",
               "activation_gate",
               "direct_terminal_response_count",
               "function_call_count"
@@ -219,6 +226,21 @@
               "semantic_assertion_count": {"type": "integer", "minimum": 0},
               "semantic_assertions_passed": {"type": "integer", "minimum": 0},
               "assertion_results": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["assertion", "passed"],
+                  "properties": {
+                    "assertion": {"type": "string", "minLength": 1},
+                    "passed": {"type": "boolean"}
+                  }
+                }
+              },
+              "trace_assertion_count": {"type": "integer", "minimum": 0},
+              "trace_assertions_passed": {"type": "integer", "minimum": 0},
+              "trace_assertion_results": {
                 "type": "array",
                 "uniqueItems": true,
                 "items": {

@@ -523,6 +523,11 @@ def _validate_implementation(
                 f"{issue['id']} Hosted source tree is not self-contained"
             )
     traffic = json.loads((root / "traffic.json").read_text(encoding="utf-8"))
+    _validate_schema(
+        traffic,
+        PROMPT_TRAFFIC_SCHEMA_PATH,
+        f"{issue['id']} traffic",
+    )
     if agent["type"] == "prompt":
         _validate_prompt_traffic(
             traffic,
@@ -547,6 +552,19 @@ def _validate_implementation(
             or "input" not in remote["body"]
         ):
             raise ContractError(f"{issue['id']} contains invalid endpoint traffic")
+    if (
+        issue["agent"] == "finance-agent" or issue["id"] == "issue-028"
+    ) and any(
+        request["expected"].get("activation_gate") is not True
+        or not (
+            request["expected"].get("semantic_assertions")
+            or request["expected"].get("trace_assertions")
+        )
+        for request in requests
+    ):
+        raise ContractError(
+            f"{issue['id']} requires request-bound activation assertions"
+        )
     if issue["id"] == "issue-005":
         _validate_weather_latency_traffic(requests)
 
@@ -575,6 +593,7 @@ def _validate_source_delta(
             "changed_paths": contract["changed_paths"],
             "baseline_digest": file_hash(baseline_path),
             "issue_digest": file_hash(issue_path),
+            "activation_contract_digest": _activation_contract_digest(root),
         }
     if contract.get("authority") != "hosted_source":
         raise ContractError(f"{issue['id']} Hosted source delta is not reviewed")
@@ -618,7 +637,32 @@ def _validate_source_delta(
                 for name, path in sorted(issue_files.items())
             }
         ),
+        "activation_contract_digest": _activation_contract_digest(root),
     }
+
+
+def _activation_contract_digest(root: Path) -> str:
+    traffic = read_json(root / "traffic.json")
+    return content_hash(
+        [
+            {
+                "request_id": request["id"],
+                "activation_gate": request["expected"].get(
+                    "activation_gate",
+                    False,
+                ),
+                "semantic_assertions": request["expected"].get(
+                    "semantic_assertions",
+                    {},
+                ),
+                "trace_assertions": request["expected"].get(
+                    "trace_assertions",
+                    [],
+                ),
+            }
+            for request in traffic["requests"]
+        ]
+    )
 
 
 def source_integrity_digest(

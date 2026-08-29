@@ -5,162 +5,82 @@
   "requests": [
     {
       "id": "issue-014-request-1",
-      "request": {
-        "method": "POST",
-        "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
-        "body": {
-          "input": [
-            {
-              "role": "user",
-              "content": [
-                {
-                  "type": "input_text",
-                  "text": "Show the balance for acct-demo-a."
-                }
-              ]
-            }
-          ],
-          "conversation": {
-            "id": "conv-finance-agent-issue-014-1"
-          },
-          "max_output_tokens": 400
-        }
-      },
+      "request": {"method": "POST", "path": "/responses", "headers": {"content-type": "application/json"}, "body": {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Show the balance for acct-demo-a."}]}], "conversation": {"id": "conv-finance-agent-issue-014-1"}, "max_output_tokens": 400}},
       "expected": {
         "http_status": 200,
         "behavior": "Attempts the balance tool without an account identifier.",
-        "defect_observed": true
+        "defect_observed": true,
+        "semantic_assertions": {"required_terms_all": ["account_id", "omitted"]},
+        "trace_assertions": [
+          {"name": "one_balance_call", "kind": "tool_call_count", "tool_name": "get_balance", "count": 1},
+          {"name": "account_id_omitted", "kind": "tool_argument_presence", "tool_name": "get_balance", "argument": "account_id", "present": false},
+          {"name": "missing_argument_error", "kind": "tool_result_class", "tool_name": "get_balance", "result_class": "error"}
+        ],
+        "activation_gate": true
       }
     },
     {
       "id": "issue-014-request-2",
-      "request": {
-        "method": "POST",
-        "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
-        "body": {
-          "input": [
-            {
-              "role": "user",
-              "content": [
-                {
-                  "type": "input_text",
-                  "text": "Show the balance for acct-demo-b."
-                }
-              ]
-            }
-          ],
-          "conversation": {
-            "id": "conv-finance-agent-issue-014-2"
-          },
-          "max_output_tokens": 400
-        }
-      },
+      "request": {"method": "POST", "path": "/responses", "headers": {"content-type": "application/json"}, "body": {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Show the balance for acct-demo-b."}]}], "conversation": {"id": "conv-finance-agent-issue-014-2"}, "max_output_tokens": 400}},
       "expected": {
         "http_status": 200,
         "behavior": "Attempts the balance tool without an account identifier.",
-        "defect_observed": true
+        "defect_observed": true,
+        "semantic_assertions": {"required_terms_all": ["account_id", "omitted"]},
+        "trace_assertions": [
+          {"name": "one_balance_call", "kind": "tool_call_count", "tool_name": "get_balance", "count": 1},
+          {"name": "account_id_omitted", "kind": "tool_argument_presence", "tool_name": "get_balance", "argument": "account_id", "present": false},
+          {"name": "missing_argument_error", "kind": "tool_result_class", "tool_name": "get_balance", "result_class": "error"}
+        ],
+        "activation_gate": true
       }
     },
     {
       "id": "issue-014-request-3",
-      "request": {
-        "method": "POST",
-        "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
-        "body": {
-          "input": [
-            {
-              "role": "user",
-              "content": [
-                {
-                  "type": "input_text",
-                  "text": "Show the balance for acct-demo-a."
-                }
-              ]
-            }
-          ],
-          "conversation": {
-            "id": "conv-finance-agent-issue-014-3"
-          },
-          "max_output_tokens": 400
-        }
-      },
+      "request": {"method": "POST", "path": "/responses", "headers": {"content-type": "application/json"}, "body": {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Show the balance for acct-demo-a."}]}], "conversation": {"id": "conv-finance-agent-issue-014-3"}, "max_output_tokens": 400}},
       "expected": {
         "http_status": 200,
         "behavior": "Attempts the balance tool without an account identifier.",
-        "defect_observed": true
+        "defect_observed": true,
+        "semantic_assertions": {"required_terms_all": ["account_id", "omitted"]},
+        "trace_assertions": [
+          {"name": "one_balance_call", "kind": "tool_call_count", "tool_name": "get_balance", "count": 1},
+          {"name": "account_id_omitted", "kind": "tool_argument_presence", "tool_name": "get_balance", "argument": "account_id", "present": false},
+          {"name": "missing_argument_error", "kind": "tool_result_class", "tool_name": "get_balance", "result_class": "error"}
+        ],
+        "activation_gate": true
       }
     },
     {
       "id": "issue-014-request-4",
-      "request": {
-        "method": "POST",
-        "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
-        "body": {
-          "input": [
-            {
-              "role": "user",
-              "content": [
-                {
-                  "type": "input_text",
-                  "text": "Show the balance for acct-demo-b."
-                }
-              ]
-            }
-          ],
-          "conversation": {
-            "id": "conv-finance-agent-issue-014-4"
-          },
-          "max_output_tokens": 400
-        }
-      },
+      "request": {"method": "POST", "path": "/responses", "headers": {"content-type": "application/json"}, "body": {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Show the balance for acct-demo-b."}]}], "conversation": {"id": "conv-finance-agent-issue-014-4"}, "max_output_tokens": 400}},
       "expected": {
         "http_status": 200,
         "behavior": "Attempts the balance tool without an account identifier.",
-        "defect_observed": true
+        "defect_observed": true,
+        "semantic_assertions": {"required_terms_all": ["account_id", "omitted"]},
+        "trace_assertions": [
+          {"name": "one_balance_call", "kind": "tool_call_count", "tool_name": "get_balance", "count": 1},
+          {"name": "account_id_omitted", "kind": "tool_argument_presence", "tool_name": "get_balance", "argument": "account_id", "present": false},
+          {"name": "missing_argument_error", "kind": "tool_result_class", "tool_name": "get_balance", "result_class": "error"}
+        ],
+        "activation_gate": true
       }
     },
     {
       "id": "issue-014-request-5",
-      "request": {
-        "method": "POST",
-        "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
-        "body": {
-          "input": [
-            {
-              "role": "user",
-              "content": [
-                {
-                  "type": "input_text",
-                  "text": "Show the balance for acct-demo-a."
-                }
-              ]
-            }
-          ],
-          "conversation": {
-            "id": "conv-finance-agent-issue-014-5"
-          },
-          "max_output_tokens": 400
-        }
-      },
+      "request": {"method": "POST", "path": "/responses", "headers": {"content-type": "application/json"}, "body": {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Show the balance for acct-demo-a."}]}], "conversation": {"id": "conv-finance-agent-issue-014-5"}, "max_output_tokens": 400}},
       "expected": {
         "http_status": 200,
         "behavior": "Attempts the balance tool without an account identifier.",
-        "defect_observed": true
+        "defect_observed": true,
+        "semantic_assertions": {"required_terms_all": ["account_id", "omitted"]},
+        "trace_assertions": [
+          {"name": "one_balance_call", "kind": "tool_call_count", "tool_name": "get_balance", "count": 1},
+          {"name": "account_id_omitted", "kind": "tool_argument_presence", "tool_name": "get_balance", "argument": "account_id", "present": false},
+          {"name": "missing_argument_error", "kind": "tool_result_class", "tool_name": "get_balance", "result_class": "error"}
+        ],
+        "activation_gate": true
       }
     }
   ],

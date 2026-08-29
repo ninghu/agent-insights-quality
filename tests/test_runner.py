@@ -17,6 +17,7 @@ from agent_insights_quality.models import (
     InvocationEvidence,
     RequestCompletionEvidence,
     SemanticAssertionEvidence,
+    TraceAssertionEvidence,
     VersionResult,
 )
 from agent_insights_quality.runner import (
@@ -124,7 +125,6 @@ class FakeRuntime:
             raise RuntimeError("synthetic operational failure")
         payload = json.loads(traffic_path.read_text(encoding="utf-8"))
         request_count = len(payload["requests"])
-        issue = "issues" in traffic_path.parts
         summaries = tuple(
             RequestCompletionEvidence(
                 request_index=index,
@@ -135,11 +135,13 @@ class FakeRuntime:
                 assertion_results=(
                     SemanticAssertionEvidence("synthetic_contract", True),
                 ),
-                activation_gate=agent_type == "prompt" and issue,
+                activation_gate=bool(
+                    request.get("expected", {}).get("activation_gate")
+                ),
                 direct_terminal_response_count=int(agent_type == "prompt"),
                 function_call_count=0,
             )
-            for index in range(request_count)
+            for index, request in enumerate(payload["requests"])
         )
         return InvocationEvidence(
             (),
@@ -187,6 +189,23 @@ class FakeRuntime:
             "handled_error_count": 0,
             "unhandled_error_count": 0,
         }
+
+    def trace_assertion_evidence(
+        self,
+        *,
+        operation_ids: tuple[str, ...],
+        response_references: tuple[str, ...],
+        traffic_path: Path,
+    ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
+        payload = json.loads(traffic_path.read_text(encoding="utf-8"))
+        assert len(operation_ids) == len(response_references)
+        return tuple(
+            tuple(
+                TraceAssertionEvidence(item["name"], True)
+                for item in request["expected"].get("trace_assertions", [])
+            )
+            for request in payload["requests"]
+        )
 
     def start_insights_run(
         self,
@@ -708,6 +727,46 @@ def test_failed_prompt_issue_activation_is_incomplete() -> None:
     assert result.baseline.status == "passed"
     assert result.issues[0].status == "inconclusive"
     assert result.issues[0].error_code == "issue_activation_failed"
+
+
+def test_failed_hosted_trace_activation_is_incomplete() -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    registry = _registry(agents, hashes)
+
+    class FailedTraceActivationRuntime(FakeRuntime):
+        def trace_assertion_evidence(self, **kwargs):
+            evidence = list(super().trace_assertion_evidence(**kwargs))
+            if kwargs["traffic_path"].parent.name == "issue-013":
+                assertions = list(evidence[0])
+                assertions[0] = TraceAssertionEvidence(
+                    assertions[0].assertion,
+                    False,
+                )
+                evidence[0] = tuple(assertions)
+            return tuple(evidence)
+
+    result = execute(
+        agents=agents,
+        issues=issues,
+        selected={
+            agent["name"]: [agent["issue_ids"][0]]
+            for agent in agents["agents"]
+        },
+        registry=registry,
+        runtime=FailedTraceActivationRuntime(),
+        seed=1,
+    )
+    issue = next(
+        item for item in result if item.agent_name == "finance-agent"
+    ).issues[0]
+    assert issue.status == "inconclusive"
+    assert issue.error_code == "issue_activation_failed"
+    assert issue.trace_assertion_count == 10
+    assert issue.trace_assertions_passed == 9
+    assert issue.endpoint_request_summaries[0].trace_assertion_results[0] == (
+        TraceAssertionEvidence("one_balance_call", False)
+    )
 
 
 def test_unhandled_baseline_error_fails_terminal_evidence() -> None:

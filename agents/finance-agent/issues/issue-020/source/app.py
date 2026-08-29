@@ -1,10 +1,22 @@
 from __future__ import annotations
 
+import json
 import os
 import threading
 from typing import Annotated
 
-from agent_framework import Agent, tool
+from agent_framework import (
+    Agent,
+    ChatContext,
+    ChatMiddleware,
+    ChatResponse,
+    ChatResponseUpdate,
+    Content,
+    Message,
+    MiddlewareTermination,
+    ResponseStream,
+    tool,
+)
 from agent_framework.foundry import FoundryChatClient
 from agent_framework_foundry_hosting import ResponsesHostServer
 from azure.identity import DefaultAzureCredential
@@ -129,20 +141,101 @@ errors, label incomplete aggregates as partial, retry one transient failure once
 permanent failure. After account_not_found, stop that request and do not call any other finance detail tool for the same account. When a request explicitly asks for a transient test, use
 get_balance_with_transient. Keep answers concise and do not provide financial recommendations."""
 
+
+class DuplicateContext(ChatMiddleware):
+    async def process(self, context: ChatContext, call_next) -> None:
+        del call_next
+        original = list(context.messages)
+        context.messages.extend(original * 3)
+        text = next(
+            (
+                message.text
+                for message in reversed(original)
+                if message.role == "user" and message.text
+            ),
+            "",
+        )
+        account_id = "acct-demo-b" if "acct-demo-b" in text else "acct-demo-a"
+        balance = {"ok": True, "account_id": account_id, **ACCOUNTS[account_id]}
+        items = {
+            "ok": True,
+            "account_id": account_id,
+            "items": [
+                {"label": "Public transit", "amount": 45.0},
+                {"label": "Groceries", "amount": 132.5},
+                {"label": "Utilities", "amount": 88.0},
+            ],
+        }
+        for name, result in (
+            ("get_balance", balance),
+            ("list_monthly_items", items),
+        ):
+            with tracer.start_as_current_span(f"finance.tool.{name}") as span:
+                span.set_attribute("gen_ai.operation.name", "execute_tool")
+                span.set_attribute("gen_ai.tool.name", name)
+                span.set_attribute(
+                    "gen_ai.tool.call.arguments",
+                    json.dumps({"account_id": account_id}, sort_keys=True),
+                )
+                span.set_attribute(
+                    "gen_ai.tool.call.result",
+                    json.dumps(result, sort_keys=True),
+                )
+                span.set_attribute("tool.ok", True)
+        answer = (
+            f"{account_id} has balance USD {balance['balance']:.2f} and "
+            f"{len(items['items'])} monthly items."
+        )
+        input_messages = [
+            {
+                "role": str(message.role),
+                "parts": [{"type": "text", "content": message.text or ""}],
+            }
+            for message in context.messages
+        ]
+        with tracer.start_as_current_span("finance.model.respond") as span:
+            span.set_attribute("gen_ai.operation.name", "chat")
+            span.set_attribute(
+                "gen_ai.input.messages",
+                json.dumps(input_messages, sort_keys=True),
+            )
+            span.set_attribute(
+                "gen_ai.output.messages",
+                json.dumps(
+                    [
+                        {
+                            "role": "assistant",
+                            "parts": [{"type": "text", "content": answer}],
+                        }
+                    ],
+                    sort_keys=True,
+                ),
+            )
+        response = ChatResponse(
+            messages=[Message(role="assistant", contents=[answer])]
+        )
+        if context.stream:
+            async def updates():
+                yield ChatResponseUpdate(
+                    role="assistant",
+                    contents=[Content.from_text(answer)],
+                )
+
+            context.result = ResponseStream(
+                updates(),
+                finalizer=ChatResponse.from_updates,
+            )
+        else:
+            context.result = response
+        raise MiddlewareTermination
+
+
 def build_agent() -> Agent:
     client = FoundryChatClient(
         project_endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"],
         model=os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-5.4-mini"),
         credential=DefaultAzureCredential(),
     )
-    from agent_framework import ChatContext, ChatMiddleware
-
-    class DuplicateContext(ChatMiddleware):
-        async def process(self, context: ChatContext, call_next) -> None:
-            original = list(context.messages)
-            context.messages.extend(original * 3)
-            await call_next()
-
     instructions = BASE_INSTRUCTIONS
     middleware = [DuplicateContext()]
     return Agent(

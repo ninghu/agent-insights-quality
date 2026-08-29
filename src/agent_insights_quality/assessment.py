@@ -8,7 +8,9 @@ from jsonschema import Draft202012Validator
 from agent_insights_quality.models import (
     RequestCompletionEvidence,
     SemanticAssertionEvidence,
+    TraceAssertionEvidence,
     VersionResult,
+    request_completion_payload,
 )
 from agent_insights_quality.runtime_state import VersionCheckpointStore
 from agent_insights_quality.util import ROOT, ContractError, atomic_json, content_hash, read_json
@@ -140,8 +142,11 @@ def rehydrate_packages(
             )
             issue_operation_ids = set(value.get("operation_ids") or [])
             issue_endpoint_evidence = _endpoint_evidence(value)
-            issue_full_trace_proof = trace_proof(
-                tuple(sorted(issue_operation_ids))
+            recorded_issue_trace = value.get("trace_behavior_summary") or {}
+            issue_full_trace_proof = (
+                dict(recorded_issue_trace)
+                if recorded_issue_trace
+                else trace_proof(tuple(sorted(issue_operation_ids)))
             )
 
             def issue_insight_payload(item: Any) -> dict[str, Any]:
@@ -232,6 +237,12 @@ def _checkpoint_result(
             semantic_assertions_passed=int(
                 value.get("semantic_assertions_passed") or 0
             ),
+            trace_assertion_count=int(
+                value.get("trace_assertion_count") or 0
+            ),
+            trace_assertions_passed=int(
+                value.get("trace_assertions_passed") or 0
+            ),
             trace_contract_verified=bool(
                 value.get("trace_contract_verified")
             ),
@@ -259,6 +270,17 @@ def _checkpoint_result(
                         item["direct_terminal_response_count"]
                     ),
                     function_call_count=int(item["function_call_count"]),
+                    trace_assertion_count=int(item["trace_assertion_count"]),
+                    trace_assertions_passed=int(
+                        item["trace_assertions_passed"]
+                    ),
+                    trace_assertion_results=tuple(
+                        TraceAssertionEvidence(
+                            assertion=str(result["assertion"]),
+                            passed=bool(result["passed"]),
+                        )
+                        for result in item["trace_assertion_results"]
+                    ),
                 )
                 for item in value.get("endpoint_request_summaries", [])
             ],
@@ -269,6 +291,23 @@ def _checkpoint_result(
         or result.insight_references != value.get("insight_references", [])
         or result.window_start != value.get("window_start")
         or result.window_end != value.get("window_end")
+        or result.error_code != value.get("error_code")
+        or result.endpoint_request_count != value["endpoint_request_count"]
+        or result.endpoint_response_count != value["endpoint_response_count"]
+        or result.endpoint_usable_response_count
+        != value["endpoint_usable_response_count"]
+        or result.semantic_assertion_count != value["semantic_assertion_count"]
+        or result.semantic_assertions_passed
+        != value["semantic_assertions_passed"]
+        or result.trace_assertion_count != value["trace_assertion_count"]
+        or result.trace_assertions_passed != value["trace_assertions_passed"]
+        or result.trace_contract_verified != value["trace_contract_verified"]
+        or result.trace_behavior_summary != value["trace_behavior_summary"]
+        or [
+            request_completion_payload(item)
+            for item in result.endpoint_request_summaries
+        ]
+        != value["endpoint_request_summaries"]
     ):
         raise ContractError("Assessment package checkpoint result does not match manifest")
     return result
@@ -339,6 +378,12 @@ def _endpoint_evidence(value: dict[str, Any]) -> dict[str, Any]:
         "semantic_assertions_passed": int(
             value.get("semantic_assertions_passed") or 0
         ),
+        "trace_assertion_count": int(
+            value.get("trace_assertion_count") or 0
+        ),
+        "trace_assertions_passed": int(
+            value.get("trace_assertions_passed") or 0
+        ),
         "request_summaries": list(
             value.get("endpoint_request_summaries") or []
         ),
@@ -371,6 +416,8 @@ def _request_summaries_consistent(endpoint: dict[str, Any]) -> bool:
         return False
     semantic_count = 0
     semantic_passed = 0
+    trace_count = 0
+    trace_passed = 0
     for index, summary in enumerate(summaries):
         if (
             not isinstance(summary, dict)
@@ -380,6 +427,7 @@ def _request_summaries_consistent(endpoint: dict[str, Any]) -> bool:
         ):
             return False
         results = summary.get("assertion_results")
+        trace_results = summary.get("trace_assertion_results")
         if (
             not isinstance(results, list)
             or not all(
@@ -392,15 +440,30 @@ def _request_summaries_consistent(endpoint: dict[str, Any]) -> bool:
             or len(results) != summary.get("semantic_assertion_count")
             or sum(result["passed"] for result in results)
             != summary.get("semantic_assertions_passed")
+            or not isinstance(trace_results, list)
+            or not all(
+                isinstance(result, dict)
+                and isinstance(result.get("assertion"), str)
+                and result.get("assertion")
+                and isinstance(result.get("passed"), bool)
+                for result in trace_results
+            )
+            or len(trace_results) != summary.get("trace_assertion_count")
+            or sum(result["passed"] for result in trace_results)
+            != summary.get("trace_assertions_passed")
         ):
             return False
         semantic_count += summary["semantic_assertion_count"]
         semantic_passed += summary["semantic_assertions_passed"]
+        trace_count += summary["trace_assertion_count"]
+        trace_passed += summary["trace_assertions_passed"]
     return (
         endpoint.get("response_count") == request_count
         and endpoint.get("usable_response_count") == request_count
         and endpoint.get("semantic_assertion_count") == semantic_count
         and endpoint.get("semantic_assertions_passed") == semantic_passed
+        and endpoint.get("trace_assertion_count") == trace_count
+        and endpoint.get("trace_assertions_passed") == trace_passed
     )
 
 
@@ -413,11 +476,23 @@ def _issue_activation_complete(package: dict[str, Any]) -> bool:
         for summary in endpoint["request_summaries"]
         if summary.get("activation_gate") is True
     ]
-    return bool(gates) and all(
-        int(summary.get("semantic_assertion_count") or 0) > 0
-        and summary.get("semantic_assertions_passed")
-        == summary.get("semantic_assertion_count")
-        for summary in gates
+    return (
+        package.get("source_integrity", {}).get("verified") is True
+        and isinstance(
+            package.get("source_integrity", {}).get("contract_digest"),
+            str,
+        )
+        and bool(gates)
+        and all(
+            int(summary.get("semantic_assertion_count") or 0)
+            + int(summary.get("trace_assertion_count") or 0)
+            > 0
+            and summary.get("semantic_assertions_passed")
+            == summary.get("semantic_assertion_count")
+            and summary.get("trace_assertions_passed")
+            == summary.get("trace_assertion_count")
+            for summary in gates
+        )
     )
 
 
@@ -657,6 +732,10 @@ def load_assessments(
                 or int(observed[0].get("trace_count") or 0) < minimum_traces
                 or not isinstance(endpoint, dict)
                 or not _endpoint_evidence_complete(endpoint)
+                or (
+                    activation_required
+                    and not _issue_activation_complete(package)
+                )
                 or not isinstance(full_trace_proof, dict)
                 or int(full_trace_proof.get("operation_count") or 0)
                 < minimum_traces

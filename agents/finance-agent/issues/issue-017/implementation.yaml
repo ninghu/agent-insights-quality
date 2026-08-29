@@ -14,7 +14,7 @@ expected_behavior:
   desired: Mark an aggregate result partial when any item fails.
   injected: Reports a multi-item result complete despite one failed item.
 injected_defect:
-  single_root: Aggregate completion ignores the failed item marker.
+  single_root: Issue-specific orchestration labels a mixed-result aggregate complete.
   activation: all_matching_endpoint_requests
 packaging:
   command: python ../../v0/package.py --issue implementation.yaml --output issue-017.zip
