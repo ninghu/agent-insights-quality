@@ -8,6 +8,9 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
+from agent_insights_quality.automation_policy import (
+    TRACE_ASSERTION_STABILIZATION_SECONDS,
+)
 from agent_insights_quality.models import (
     AgentResult,
     InsightRunCheckpoint,
@@ -46,12 +49,24 @@ class _VersionStageError(Exception):
 
 
 class _RecoveryBudget:
-    def __init__(self, maximum: int) -> None:
+    def __init__(
+        self,
+        maximum: int,
+        checkpoint_store: VersionCheckpointStore | None = None,
+        agent_name: str | None = None,
+    ) -> None:
         self._maximum = maximum
+        self._checkpoint_store = checkpoint_store
+        self._agent_name = agent_name
         self._claimed = 0
         self._lock = threading.Lock()
 
     def claim(self) -> bool:
+        if self._checkpoint_store is not None and self._agent_name is not None:
+            return self._checkpoint_store.claim_agent_recovery(
+                self._agent_name,
+                self._maximum,
+            )
         with self._lock:
             if self._claimed >= self._maximum:
                 return False
@@ -189,6 +204,9 @@ def execute(
     runtime: RuntimePort,
     seed: int,
     lookback_hours: float = 0.1,
+    trace_assertion_stabilization_seconds: int = (
+        TRACE_ASSERTION_STABILIZATION_SECONDS
+    ),
     clean_window_poll_seconds: int = 15,
     clean_window_ingestion_margin_seconds: int = 30,
     clean_window_max_wait_seconds: int = 1200,
@@ -216,6 +234,7 @@ def execute(
                 runtime,
                 seed,
                 lookback_hours,
+                trace_assertion_stabilization_seconds,
                 clean_window_poll_seconds,
                 clean_window_ingestion_margin_seconds,
                 clean_window_max_wait_seconds,
@@ -241,6 +260,7 @@ def _execute_agent(
     runtime: RuntimePort,
     seed: int,
     lookback_hours: float,
+    trace_assertion_stabilization_seconds: int,
     clean_window_poll_seconds: int,
     clean_window_ingestion_margin_seconds: int,
     clean_window_max_wait_seconds: int,
@@ -325,6 +345,9 @@ def _execute_agent(
                 seed=seed,
                 expected=None,
                 lookback_hours=lookback_hours,
+                trace_assertion_stabilization_seconds=(
+                    trace_assertion_stabilization_seconds
+                ),
                 clean_window_poll_seconds=clean_window_poll_seconds,
                 clean_window_ingestion_margin_seconds=(
                     clean_window_ingestion_margin_seconds
@@ -372,8 +395,25 @@ def _execute_agent(
         return AgentResult(name, baseline, skipped)
 
     results = []
+    blocked_by_unaccounted_run = False
     for index, issue in enumerate(issue_items, start=1):
         started = time.monotonic()
+        if blocked_by_unaccounted_run:
+            result = VersionResult(
+                logical_version=issue["id"],
+                foundry_version=version_entry(registry, name, issue["id"])[
+                    "foundry_version"
+                ],
+                status="inconclusive",
+                error_code="previous_insight_run_unaccounted",
+            )
+            _progress(
+                runtime,
+                f"{name}/{issue['id']}: inconclusive "
+                "(previous_insight_run_unaccounted)",
+            )
+            results.append(result)
+            continue
         _progress(runtime, f"{name}/{issue['id']}: started")
         try:
             issue_had_progress = (
@@ -411,6 +451,9 @@ def _execute_agent(
                 seed=seed + index,
                 expected=issue,
                 lookback_hours=lookback_hours,
+                trace_assertion_stabilization_seconds=(
+                    trace_assertion_stabilization_seconds
+                ),
                 clean_window_poll_seconds=clean_window_poll_seconds,
                 clean_window_ingestion_margin_seconds=(
                     clean_window_ingestion_margin_seconds
@@ -442,6 +485,8 @@ def _execute_agent(
             + f" in {time.monotonic() - started:.1f}s",
         )
         results.append(result)
+        if (result.error_code or "").startswith("insight_run_unaccounted"):
+            blocked_by_unaccounted_run = True
     return AgentResult(name, baseline, results)
 
 
@@ -456,6 +501,7 @@ def _execute_version_with_recovery(
     seed: int,
     expected: dict[str, Any] | None,
     lookback_hours: float,
+    trace_assertion_stabilization_seconds: int,
     clean_window_poll_seconds: int,
     clean_window_ingestion_margin_seconds: int,
     clean_window_max_wait_seconds: int,
@@ -490,6 +536,17 @@ def _execute_version_with_recovery(
                 or not _recoverable(error)
                 or not recovery_budget.claim()
             ):
+                quarantined = _quarantine_started_insight(
+                    runtime=runtime,
+                    agent=agent,
+                    monitor_id=monitor_id,
+                    logical_version=logical_version,
+                    registry_entry=registry_entry,
+                    error=error,
+                    checkpoint_store=checkpoint_store,
+                )
+                if quarantined is not None:
+                    return quarantined
                 raise
             _progress(
                 runtime,
@@ -499,6 +556,8 @@ def _execute_version_with_recovery(
                 "invocation_failed"
             ) or error.code.startswith(
                 "insight_run_start_failed"
+            ) or error.code.startswith(
+                "insight_run_terminal_failed"
             ) or error.code == "insight_window_expired":
                 if checkpoint_store is not None:
                     checkpoint_store.clear(
@@ -534,6 +593,8 @@ def _recoverable(error: _VersionStageError) -> bool:
         (
             "telemetry_failed",
             "trace_contract_failed",
+            "trace_evidence_failed",
+            "trace_assertion_failed",
             "insight_run_poll_failed",
             "insight_run_terminal_failed",
         )
@@ -951,6 +1012,41 @@ def _execute_version(
         if checkpoint_store is not None:
             checkpoint_store.save_trace_verified(*checkpoint_args)
     _progress(runtime, f"{agent['name']}/{logical_version}: trace contract verified")
+    insight_checkpoint = (
+        checkpoint_store.insight_run(*checkpoint_args)
+        if checkpoint_store is not None
+        else None
+    )
+    activation_rejection = (
+        checkpoint_store.activation_rejection(*checkpoint_args)
+        if checkpoint_store is not None and expected is not None
+        else None
+    )
+    if activation_rejection is not None:
+        rejection_code, rejection_trace_evidence = activation_rejection
+        return _activation_failure_result(
+            runtime=runtime,
+            agent=agent,
+            monitor_id=monitor_id,
+            logical_version=logical_version,
+            foundry_version=foundry_version,
+            operation_ids=operation_ids,
+            invocation=invocation,
+            trace_evidence=rejection_trace_evidence,
+            insight_checkpoint=insight_checkpoint,
+            checkpoint_store=checkpoint_store,
+            checkpoint_args=checkpoint_args,
+            error_code=rejection_code,
+        )
+    if (
+        insight_checkpoint is None
+        and checkpoint_store is not None
+        and checkpoint_store.insight_start_pending(*checkpoint_args)
+    ):
+        raise _VersionStageError(
+            "insight_run_start_failed",
+            RuntimeError("Remote operation failed before a response was received"),
+        )
     try:
         trace_evidence = runtime.trace_behavior_evidence(operation_ids)
         if expected is None:
@@ -1131,8 +1227,6 @@ def _execute_version(
         endpoint_request_summaries=list(invocation.request_summaries),
     )
     if insight_run.status != "succeeded":
-        if checkpoint_store is not None:
-            checkpoint_store.clear_insight_run(*checkpoint_args)
         raise _VersionStageError(
             "insight_run_terminal_failed",
             RuntimeError("Agent Insights run did not succeed"),
@@ -1161,3 +1255,130 @@ def _execute_version(
     if checkpoint_store is not None:
         checkpoint_store.save_result(*checkpoint_args, result)
     return result
+
+
+def _activation_failure_result(
+    *,
+    runtime: RuntimePort,
+    agent: dict[str, Any],
+    monitor_id: str,
+    logical_version: str,
+    foundry_version: str,
+    operation_ids: tuple[str, ...],
+    invocation: InvocationEvidence,
+    trace_evidence: dict[str, Any],
+    insight_checkpoint: InsightRunCheckpoint | None,
+    checkpoint_store: VersionCheckpointStore | None,
+    checkpoint_args: tuple[str, str, str, str],
+    error_code: str = "issue_activation_failed",
+) -> VersionResult:
+    if checkpoint_store is not None:
+        checkpoint_store.save_activation_rejection(
+            *checkpoint_args,
+            trace_evidence,
+            error_code,
+        )
+    window_start = invocation.started_at
+    window_end = invocation.completed_at
+    if insight_checkpoint is not None:
+        try:
+            discarded = runtime.finish_insights_run(
+                agent_name=agent["name"],
+                monitor_id=monitor_id,
+                foundry_version=foundry_version,
+                operation_ids=operation_ids,
+                checkpoint=insight_checkpoint,
+            )
+        except Exception as error:
+            raise _VersionStageError("insight_run_poll_failed", error) from error
+        window_start = discarded.window_start
+        window_end = discarded.window_end
+        _progress(
+            runtime,
+            f"{agent['name']}/{logical_version}: activation failed; "
+            f"discarded {len(discarded.insights)} Agent Insights cards",
+        )
+    result = VersionResult(
+        logical_version=logical_version,
+        foundry_version=foundry_version,
+        status="inconclusive",
+        operation_ids=list(operation_ids),
+        window_start=window_start,
+        window_end=window_end,
+        error_code=error_code,
+        endpoint_request_count=invocation.request_count,
+        endpoint_response_count=invocation.response_count,
+        endpoint_usable_response_count=invocation.usable_response_count,
+        semantic_assertion_count=invocation.semantic_assertion_count,
+        semantic_assertions_passed=invocation.semantic_assertions_passed,
+        trace_assertion_count=invocation.trace_assertion_count,
+        trace_assertions_passed=invocation.trace_assertions_passed,
+        trace_contract_verified=True,
+        trace_behavior_summary=trace_evidence,
+        endpoint_request_summaries=list(invocation.request_summaries),
+    )
+    if checkpoint_store is not None:
+        checkpoint_store.save_result(*checkpoint_args, result)
+    return result
+
+
+def _quarantine_started_insight(
+    *,
+    runtime: RuntimePort,
+    agent: dict[str, Any],
+    monitor_id: str,
+    logical_version: str,
+    registry_entry: dict[str, str],
+    error: _VersionStageError,
+    checkpoint_store: VersionCheckpointStore | None,
+) -> VersionResult | None:
+    if checkpoint_store is None:
+        return None
+    checkpoint_args = (
+        agent["name"],
+        logical_version,
+        registry_entry["foundry_version"],
+        registry_entry["content_digest"],
+    )
+    insight_checkpoint = checkpoint_store.insight_run(*checkpoint_args)
+    invocation = checkpoint_store.invocation(*checkpoint_args)
+    operation_ids = checkpoint_store.operation_ids(*checkpoint_args)
+    if (
+        insight_checkpoint is None
+        or invocation is None
+        or operation_ids is None
+    ):
+        return None
+    existing_rejection = checkpoint_store.activation_rejection(*checkpoint_args)
+    if existing_rejection is not None:
+        raise _VersionStageError(
+            "insight_run_unaccounted",
+            RuntimeError("Started Agent Insights run could not be safely accounted"),
+        )
+    rejection_code = error.code
+    trace_evidence: dict[str, Any] = {}
+    checkpoint_store.save_activation_rejection(
+        *checkpoint_args,
+        trace_evidence,
+        rejection_code,
+    )
+    try:
+        return _activation_failure_result(
+            runtime=runtime,
+            agent=agent,
+            monitor_id=monitor_id,
+            logical_version=logical_version,
+            foundry_version=registry_entry["foundry_version"],
+            operation_ids=operation_ids,
+            invocation=invocation,
+            trace_evidence=trace_evidence,
+            insight_checkpoint=insight_checkpoint,
+            checkpoint_store=checkpoint_store,
+            checkpoint_args=checkpoint_args,
+            error_code=rejection_code,
+        )
+    except _VersionStageError as drain_error:
+        raise _VersionStageError(
+            "insight_run_unaccounted",
+            RuntimeError("Started Agent Insights run could not be safely accounted"),
+        ) from drain_error

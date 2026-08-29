@@ -44,6 +44,7 @@ def test_post_manifest_failure_does_not_publish_operational_result(
         "load_automation_policy",
         lambda: SimpleNamespace(
             insight_lookback_hours=0.1,
+            trace_assertion_stabilization_seconds=180,
             clean_window_poll_seconds=1,
             clean_window_ingestion_margin_seconds=1,
             clean_window_max_wait_seconds=1,

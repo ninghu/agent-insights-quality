@@ -122,6 +122,13 @@ def test_version_checkpoint_round_trips_private_stages(tmp_path: Path) -> None:
     store.save_invocation(*args, invocation)
     store.save_operation_ids(*args, ("c" * 32,))
     store.save_trace_verified(*args)
+    assert store.activation_rejection(*args) is None
+    trace_summary = {"operation_count": 1}
+    store.save_activation_rejection(*args, trace_summary)
+    assert store.activation_rejection(*args) == (
+        "issue_activation_failed",
+        trace_summary,
+    )
     store.mark_insight_start_pending(*args)
     assert store.insight_start_pending(*args) is True
     checkpoint = InsightRunCheckpoint(

@@ -1047,6 +1047,10 @@ def test_trace_row_query_projects_private_values_with_exact_correlation_scope(
         window_end,
     ) == []
     query = captured[0]
+    assert "let assertion_operations" in query
+    assert 'agent_version == "issue-013"' in query
+    assert 'observed_agent == "finance-agent"' in query
+    assert "or operation_Id in (assertion_operations)" in query
     assert 'customDimensions["gen_ai.tool.call.arguments"]' in query
     assert 'customDimensions["gen_ai.tool.call.result"]' in query
     assert query.index('customDimensions["gen_ai.response.id"]') < query.index(
@@ -1086,6 +1090,7 @@ def _write_trace_assertion_traffic(path: Path, request_count: int = 1) -> None:
                         },
                         "expected": {
                             "http_status": 200,
+                            "activation_gate": True,
                             "trace_assertions": [
                                 {
                                     "name": "one_lookup",
@@ -1212,6 +1217,7 @@ def test_trace_assertion_observes_span_ingested_after_135_seconds(
     tmp_path,
 ) -> None:
     monotonic = [0.0]
+    first_pass_times = []
     runtime = LiveRuntime(
         _runtime()._profile,
         token_provider=lambda _: "synthetic-token",
@@ -1264,6 +1270,7 @@ def test_trace_assertion_late_duplicate_invalidates_stabilizing_pass(
     tmp_path,
 ) -> None:
     monotonic = [0.0]
+    first_pass_times = []
     runtime = LiveRuntime(
         _runtime()._profile,
         token_provider=lambda _: "synthetic-token",
@@ -1303,6 +1310,7 @@ def test_trace_assertion_late_duplicate_invalidates_stabilizing_pass(
     )
 
     assert evidence[0][0].passed is False
+    assert first_pass_times == [0]
     assert monotonic[0] == 15 * 60
     assert first_passes == [0]
 
@@ -1359,6 +1367,50 @@ def test_trace_assertion_stable_pass_waits_for_ingestion_interval(
     tmp_path,
 ) -> None:
     monotonic = [0.0]
+    first_pass_times = []
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+    )
+    operation_id = "a" * 32
+    reference = "resp_A1b2C3d4E5f6"
+    first = {
+        **_tool_trace_row("lookup"),
+        "operation_id": operation_id,
+        "matched_reference": reference,
+    }
+    ambiguous = {
+        **first,
+        "operation_id": "b" * 32,
+        "timestamp": "2026-08-28T10:00:01+00:00",
+    }
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(traffic_path)
+    runtime._trace_rows = (  # type: ignore[method-assign]
+        lambda *_args: [first] if monotonic[0] < 135 else [first, ambiguous]
+    )
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
+    )
+
+    with pytest.raises(ContractError, match="ambiguous"):
+        runtime.trace_assertion_evidence(
+            operation_ids=(operation_id,),
+            response_references=(reference,),
+            traffic_path=traffic_path,
+            on_first_pass=lambda _evidence: first_pass_times.append(monotonic[0]),
+        )
+
+    assert first_pass_times == [0]
+    assert monotonic[0] == 135
+
+
+def test_trace_assertion_stable_pass_uses_reviewed_ingestion_interval(
+    tmp_path,
+) -> None:
+    monotonic = [0.0]
+    first_pass_times = []
     runtime = LiveRuntime(
         _runtime()._profile,
         token_provider=lambda _: "synthetic-token",
@@ -3150,6 +3202,44 @@ def test_json_request_refreshes_an_expired_credential_once(monkeypatch) -> None:
     value = runtime._json_request("POST", "https://example.invalid")
     assert value["value"] == "ok"
     assert authorization == ["Bearer expired-token", "Bearer fresh-token"]
+
+
+def test_json_request_rechecks_start_deadline_after_auth_refresh(
+    monkeypatch,
+) -> None:
+    initial = datetime(2026, 8, 29, 12, tzinfo=UTC)
+    now = [initial]
+    attempts = 0
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _scope: "synthetic-token",
+        utcnow=lambda: now[0],
+    )
+
+    def open_request(_request, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        now[0] += timedelta(seconds=2)
+        raise urllib.error.HTTPError(
+            "https://example.invalid",
+            401,
+            "synthetic expired credential",
+            {},
+            io.BytesIO(b"{}"),
+        )
+
+    monkeypatch.setattr(
+        "agent_insights_quality.live.urllib.request.urlopen",
+        open_request,
+    )
+    with pytest.raises(InsightWindowExpiredError, match="expired"):
+        runtime._json_request(
+            "POST",
+            "https://example.invalid",
+            absolute_deadline=initial + timedelta(seconds=1),
+        )
+
+    assert attempts == 1
 
 
 def test_json_request_reserves_auth_refresh_after_transient_retries(

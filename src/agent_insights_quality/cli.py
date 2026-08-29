@@ -339,6 +339,9 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                     runtime=runtime,
                     seed=seed,
                     lookback_hours=policy.insight_lookback_hours,
+                    trace_assertion_stabilization_seconds=(
+                        policy.trace_assertion_stabilization_seconds
+                    ),
                     clean_window_poll_seconds=policy.clean_window_poll_seconds,
                     clean_window_ingestion_margin_seconds=(
                         policy.clean_window_ingestion_margin_seconds
@@ -734,6 +737,9 @@ def _run_contract_digest(
             "registry_hash": content_hash(registry),
             "work_items_hash": content_hash(work_items),
             "lookback_hours": policy.insight_lookback_hours,
+            "trace_assertion_stabilization_seconds": (
+                policy.trace_assertion_stabilization_seconds
+            ),
             "agent_start_stagger_seconds": policy.agent_start_stagger_seconds,
             "telemetry_resource_set": policy.telemetry_resource_set,
             "seed": seed,

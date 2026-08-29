@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 from agent_insights_quality.models import (
     InsightEvidence,
@@ -121,12 +121,51 @@ class VersionCheckpointStore:
     def __init__(self, root: Path, run_contract_digest: str) -> None:
         self._root = root
         self._run_contract_digest = run_contract_digest
+        self._recovery_lock = threading.Lock()
 
     def has_progress(self, agent_name: str) -> bool:
         return any(self._root.glob(f"{agent_name}-*.json"))
 
     def has_version_progress(self, agent_name: str, logical_version: str) -> bool:
         return self._path(agent_name, logical_version).exists()
+
+    def claim_agent_recovery(self, agent_name: str, maximum: int) -> bool:
+        if (
+            isinstance(maximum, bool)
+            or not isinstance(maximum, int)
+            or maximum < 0
+        ):
+            raise ContractError("Recovery checkpoint maximum is invalid")
+        path = self._recovery_path(agent_name)
+        with self._recovery_lock:
+            value = (
+                read_json(path)
+                if path.exists()
+                else {
+                    "schema_version": "1.0.0",
+                    "run_contract_digest": self._run_contract_digest,
+                    "agent_name": agent_name,
+                    "maximum": maximum,
+                    "claimed": 0,
+                }
+            )
+            claimed = value.get("claimed")
+            if (
+                value.get("schema_version") != "1.0.0"
+                or value.get("run_contract_digest") != self._run_contract_digest
+                or value.get("agent_name") != agent_name
+                or value.get("maximum") != maximum
+                or isinstance(claimed, bool)
+                or not isinstance(claimed, int)
+                or claimed < 0
+                or claimed > maximum
+            ):
+                raise ContractError("Recovery checkpoint is invalid")
+            if claimed == maximum:
+                return False
+            value["claimed"] = claimed + 1
+            atomic_json(path, value)
+            return True
 
     def invocation(
         self,
@@ -288,6 +327,54 @@ class VersionCheckpointStore:
             content_digest,
         )
         value["trace_verified"] = True
+        self._write(agent_name, logical_version, value)
+
+    def activation_rejection(
+        self,
+        agent_name: str,
+        logical_version: str,
+        foundry_version: str,
+        content_digest: str,
+    ) -> tuple[str, dict[str, Any]] | None:
+        value = self._load(
+            agent_name,
+            logical_version,
+            foundry_version,
+            content_digest,
+        )
+        payload = value.get("activation_rejection")
+        if payload is None:
+            return None
+        if (
+            not isinstance(payload, dict)
+            or not isinstance(payload.get("error_code"), str)
+            or not payload["error_code"]
+            or not isinstance(payload.get("trace_behavior_summary"), dict)
+        ):
+            raise ContractError("Version checkpoint activation rejection is invalid")
+        return str(payload["error_code"]), dict(payload["trace_behavior_summary"])
+
+    def save_activation_rejection(
+        self,
+        agent_name: str,
+        logical_version: str,
+        foundry_version: str,
+        content_digest: str,
+        trace_behavior_summary: dict[str, Any],
+        error_code: str = "issue_activation_failed",
+    ) -> None:
+        if not error_code:
+            raise ContractError("Version checkpoint activation rejection code is invalid")
+        value = self._load(
+            agent_name,
+            logical_version,
+            foundry_version,
+            content_digest,
+        )
+        value["activation_rejection"] = {
+            "error_code": error_code,
+            "trace_behavior_summary": trace_behavior_summary,
+        }
         self._write(agent_name, logical_version, value)
 
     def insight_run(
@@ -614,6 +701,15 @@ class VersionCheckpointStore:
         ):
             raise ContractError("Version checkpoint identity is invalid")
         return self._root / f"{agent_name}-{logical_version}.json"
+
+    def _recovery_path(self, agent_name: str) -> Path:
+        if (
+            not agent_name.endswith("-agent")
+            or "/" in agent_name
+            or "\\" in agent_name
+        ):
+            raise ContractError("Recovery checkpoint identity is invalid")
+        return self._root / "recovery" / f"{agent_name}.json"
 
     def _validate_header(
         self,

@@ -208,6 +208,10 @@ class FakeRuntime:
         stabilization_seconds: int,
         on_first_pass,
     ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
+        assert agent_name.endswith("-agent")
+        assert foundry_version
+        assert window_start < window_end
+        assert stabilization_seconds == 180
         payload = json.loads(traffic_path.read_text(encoding="utf-8"))
         assert agent_name.endswith("-agent")
         assert foundry_version
@@ -222,6 +226,9 @@ class FakeRuntime:
             )
             for request in payload["requests"]
         )
+        if on_first_pass is not None:
+            on_first_pass(evidence)
+        return evidence
 
     def start_insights_run(
         self,
@@ -792,6 +799,168 @@ def test_insight_poll_recovery_reuses_started_run_checkpoint(
     )
     assert runtime.starts[target] == 1
     assert runtime.polls[target] == 2
+
+
+def test_persistent_insight_poll_failure_exhausts_recovery_without_restart(
+    tmp_path: Path,
+) -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    selected = {
+        agent["name"]: [agent["issue_ids"][0]] for agent in agents["agents"]
+    }
+    selected["weather-agent"].append(
+        next(
+            issue_id
+            for issue_id in next(
+                agent
+                for agent in agents["agents"]
+                if agent["name"] == "weather-agent"
+            )["issue_ids"]
+            if issue_id != selected["weather-agent"][0]
+        )
+    )
+    target = selected["weather-agent"][0]
+    blocked = selected["weather-agent"][1]
+
+    class FailingRuntime(FakeRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.starts: dict[str, int] = {}
+            self.polls: dict[str, int] = {}
+
+        def start_insights_run(self, **kwargs) -> InsightRunCheckpoint:
+            version = kwargs["foundry_version"]
+            self.starts[version] = self.starts.get(version, 0) + 1
+            return super().start_insights_run(**kwargs)
+
+        def finish_insights_run(self, **kwargs) -> InsightRunEvidence:
+            version = kwargs["foundry_version"]
+            self.polls[version] = self.polls.get(version, 0) + 1
+            if version == target:
+                raise ContractError("Synthetic Insight polling deadline")
+            return super().finish_insights_run(**kwargs)
+
+    runtime = FailingRuntime()
+    store = VersionCheckpointStore(
+        tmp_path / "stages",
+        "sha256:" + "d" * 64,
+    )
+    results = execute(
+        agents=agents,
+        issues=issues,
+        selected=selected,
+        registry=_registry(agents, hashes),
+        runtime=runtime,
+        seed=1,
+        max_recovery_versions=2,
+        checkpoint_store=store,
+    )
+    weather = next(item for item in results if item.agent_name == "weather-agent")
+
+    assert weather.issues[0].status == "inconclusive"
+    assert weather.issues[0].error_code == "insight_run_unaccounted"
+    assert weather.issues[1].status == "inconclusive"
+    assert weather.issues[1].error_code == "previous_insight_run_unaccounted"
+    assert runtime.starts[target] == 1
+    assert runtime.polls[target] == 4
+    assert blocked not in runtime.invoked
+
+    class DrainingRuntime(FakeRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.starts: dict[str, int] = {}
+            self.polls: dict[str, int] = {}
+
+        def start_insights_run(self, **kwargs) -> InsightRunCheckpoint:
+            version = kwargs["foundry_version"]
+            self.starts[version] = self.starts.get(version, 0) + 1
+            return super().start_insights_run(**kwargs)
+
+        def finish_insights_run(self, **kwargs) -> InsightRunEvidence:
+            version = kwargs["foundry_version"]
+            self.polls[version] = self.polls.get(version, 0) + 1
+            return super().finish_insights_run(**kwargs)
+
+    resumed = DrainingRuntime()
+    resumed_results = execute(
+        agents=agents,
+        issues=issues,
+        selected=selected,
+        registry=_registry(agents, hashes),
+        runtime=resumed,
+        seed=1,
+        max_recovery_versions=2,
+        checkpoint_store=store,
+    )
+    resumed_weather = next(
+        item for item in resumed_results if item.agent_name == "weather-agent"
+    )
+
+    assert resumed_weather.issues[0].status == "inconclusive"
+    assert resumed_weather.issues[0].error_code == "insight_run_poll_failed_timeout"
+    assert resumed_weather.issues[1].status == "observed"
+    assert resumed.starts.get(target, 0) == 0
+    assert resumed.polls[target] == 1
+    assert target not in resumed.invoked
+    assert blocked in resumed.invoked
+
+
+def test_terminal_failed_insight_retries_only_with_clean_retraffic(
+    tmp_path: Path,
+) -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    selected = {
+        agent["name"]: [agent["issue_ids"][0]] for agent in agents["agents"]
+    }
+    weather_agent = next(
+        agent for agent in agents["agents"] if agent["name"] == "weather-agent"
+    )
+    selected["weather-agent"].append(weather_agent["issue_ids"][1])
+    target, later = selected["weather-agent"]
+
+    class TerminalRetryRuntime(FakeRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.starts: dict[str, int] = {}
+            self.finishes: dict[str, int] = {}
+
+        def start_insights_run(self, **kwargs) -> InsightRunCheckpoint:
+            version = kwargs["foundry_version"]
+            self.starts[version] = self.starts.get(version, 0) + 1
+            return super().start_insights_run(**kwargs)
+
+        def finish_insights_run(self, **kwargs) -> InsightRunEvidence:
+            version = kwargs["foundry_version"]
+            self.finishes[version] = self.finishes.get(version, 0) + 1
+            evidence = super().finish_insights_run(**kwargs)
+            if version == target and self.finishes[version] == 1:
+                return replace(evidence, status="failed", insights=())
+            return evidence
+
+    runtime = TerminalRetryRuntime()
+    results = execute(
+        agents=agents,
+        issues=issues,
+        selected=selected,
+        registry=_registry(agents, hashes),
+        runtime=runtime,
+        seed=1,
+        checkpoint_store=VersionCheckpointStore(
+            tmp_path / "stages",
+            "sha256:" + "d" * 64,
+        ),
+    )
+    weather = next(item for item in results if item.agent_name == "weather-agent")
+
+    assert [item.status for item in weather.issues] == ["observed", "observed"]
+    assert runtime.starts[target] == 2
+    assert runtime.finishes[target] == 2
+    assert runtime.invoked.count(target) == 2
+    assert later in runtime.invoked
+    assert runtime.clean_agents.count("weather-agent") == 2
+    assert runtime.reset_agents.count("weather-agent") == 2
 
 
 def test_ambiguous_insight_start_retries_only_after_clean_retraffic(
