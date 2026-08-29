@@ -712,15 +712,14 @@ def test_prompt_activation_gates_are_request_bound() -> None:
             / "traffic.json"
         ).read_text(encoding="utf-8")
     )
+    exact_verbose = verbose["requests"][0]["expected"]["semantic_assertions"][
+        "exact_text"
+    ]
+    assert len(re.findall(r"\S+", exact_verbose)) == 82
     assert all(
         item["expected"]["semantic_assertions"] == {
+            "exact_text": exact_verbose,
             "min_words": 80,
-            "affirmative_claims": [
-                "overgenerated:",
-                "clear",
-                "22",
-                "celsius",
-            ],
         }
         for item in verbose["requests"]
     )

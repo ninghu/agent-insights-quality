@@ -209,10 +209,14 @@ def _issue_field_score(item: dict[str, Any]) -> float:
         if card.get("finding_type") != "NOISE"
     ]
     if attributable:
-        return max(attributable)
-    if item["detail"] in {"MISSING", "INCOMPLETE"}:
+        score = max(attributable)
+    elif item["detail"] in {"MISSING", "INCOMPLETE"}:
+        score = 0.0
+    else:
+        score = _field_score(item["assessment"]["fields"])
+    if item["result"] != "PASS" and score >= 100.0:
         return 0.0
-    return _field_score(item["assessment"]["fields"])
+    return score
 
 
 def _summary_metrics(

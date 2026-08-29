@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import sys
 import threading
 import time
@@ -24,7 +25,12 @@ from agent_insights_quality.live import (
 )
 from agent_insights_quality.models import InsightRunCheckpoint
 from agent_insights_quality.profiles import RuntimeProfile
-from agent_insights_quality.util import ContractError, InsightWindowExpiredError
+from agent_insights_quality.util import (
+    ROOT,
+    ContractError,
+    InsightWindowExpiredError,
+    read_json,
+)
 
 
 def _runtime() -> LiveRuntime:
@@ -189,12 +195,19 @@ def test_exact_json_assertions_distinguish_booleans_from_numbers() -> None:
 @pytest.mark.parametrize(
     "text",
     [
-        "overgenerated: not clear, 22 celsius",
-        "overgenerated: clear, 210 celsius",
-        "overgenerated: clear, not 22 celsius",
+        "Weather summary: clear, 21 celsius is not correct.",
+        "Weather summary: clear, 21 celsius. That complete summary is not correct.",
     ],
 )
-def test_affirmative_claims_reject_negation_and_wrong_numbers(text: str) -> None:
+def test_issue_002_exact_text_rejects_postposed_contradiction(text: str) -> None:
+    expected = read_json(
+        ROOT
+        / "agents"
+        / "weather-agent"
+        / "issues"
+        / "issue-002"
+        / "traffic.json"
+    )["requests"][0]["expected"]
     response = {
         "output": [
             {
@@ -205,19 +218,73 @@ def test_affirmative_claims_reject_negation_and_wrong_numbers(text: str) -> None
     }
     count, passed, _ = _semantic_assertion_result(
         response,
-        {
-            "semantic_assertions": {
-                "affirmative_claims": [
-                    "overgenerated:",
-                    "clear",
-                    "22",
-                    "celsius",
-                ]
-            }
-        },
+        expected,
     )
-    assert count == 1
-    assert passed == 0
+    assert count == 2
+    assert passed == 1
+
+
+def test_issue_006_exact_text_rejects_long_postposed_contradiction() -> None:
+    expected = read_json(
+        ROOT
+        / "agents"
+        / "weather-agent"
+        / "issues"
+        / "issue-006"
+        / "traffic.json"
+    )["requests"][0]["expected"]
+    exact_text = expected["semantic_assertions"]["exact_text"]
+    contradicted = (
+        exact_text
+        + " Despite all of that repeated detail, this complete weather summary "
+        "is not correct."
+    )
+    assert len(re.findall(r"\S+", contradicted)) > 80
+    response = {
+        "output": [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": contradicted}],
+            }
+        ]
+    }
+    count, passed, _ = _semantic_assertion_result(response, expected)
+    assert count == 2
+    assert passed == 1
+
+
+@pytest.mark.parametrize(
+    ("issue_id", "old_value", "wrong_value"),
+    [
+        ("issue-002", "21 celsius", "20 celsius"),
+        ("issue-006", "22 celsius", "23 celsius"),
+    ],
+)
+def test_exact_weather_gates_reject_wrong_numeric_claims(
+    issue_id: str,
+    old_value: str,
+    wrong_value: str,
+) -> None:
+    expected = read_json(
+        ROOT
+        / "agents"
+        / "weather-agent"
+        / "issues"
+        / issue_id
+        / "traffic.json"
+    )["requests"][0]["expected"]
+    exact_text = expected["semantic_assertions"]["exact_text"]
+    wrong_text = exact_text.replace(old_value, wrong_value)
+    response = {
+        "output": [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": wrong_text}],
+            }
+        ]
+    }
+    count, passed, _ = _semantic_assertion_result(response, expected)
+    assert passed < count
 
 
 def test_trace_behavior_summary_sanitizes_prompt_tool_sequence() -> None:

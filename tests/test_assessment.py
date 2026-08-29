@@ -659,6 +659,110 @@ def test_matched_issue_fields_must_match_the_all_true_card() -> None:
 
 
 @pytest.mark.parametrize(
+    ("verdict", "finding_type"),
+    [
+        ("partially_useful", "PARTIAL"),
+        ("incorrect", "MISMATCHED"),
+    ],
+)
+def test_related_noncorrect_card_requires_a_failed_field(
+    verdict: str,
+    finding_type: str,
+) -> None:
+    fields = {
+        "root_cause": True,
+        "title": True,
+        "description": True,
+        "category": True,
+        "severity": True,
+        "proposed_fix": True,
+        "linked_traces": True,
+    }
+    card = {
+        "reference": "sha256:" + "a" * 64,
+        "title": "Synthetic card",
+        "category": "output_quality",
+        "severity": "medium",
+        "card_linked_trace_proof": _trace_proof(),
+    }
+    evaluation = {
+        "reference": card["reference"],
+        "title": card["title"],
+        "category": card["category"],
+        "severity": card["severity"],
+        "verdict": verdict,
+        "finding_type": finding_type,
+        "ownership": "insight_engine",
+        "fields": fields,
+    }
+    assessment = {
+        "issue_id": "issue-001",
+        "verdict": verdict,
+        "finding_type": finding_type,
+        "fields": fields,
+        "card_evaluations": [evaluation],
+    }
+    with pytest.raises(ContractError, match="at least one failed field"):
+        _validate_issue_cards(assessment, {"observed_insights": [card]})
+
+    evaluation["fields"] = {**fields, "severity": False}
+    with pytest.raises(ContractError, match="assessments require"):
+        _validate_issue_cards(assessment, {"observed_insights": [card]})
+
+    assessment["fields"] = {**fields, "severity": False}
+    _validate_issue_cards(assessment, {"observed_insights": [card]})
+
+
+@pytest.mark.parametrize(
+    ("verdict", "finding_type"),
+    [
+        ("incorrect", "NOISE"),
+        ("incorrect", "DUPLICATE"),
+    ],
+)
+def test_all_other_noncorrect_cards_require_a_failed_field(
+    verdict: str,
+    finding_type: str,
+) -> None:
+    fields = {
+        "root_cause": True,
+        "title": True,
+        "description": True,
+        "category": True,
+        "severity": True,
+        "proposed_fix": True,
+        "linked_traces": True,
+    }
+    card = {
+        "reference": "sha256:" + "a" * 64,
+        "title": "Synthetic card",
+        "category": "output_quality",
+        "severity": "medium",
+        "card_linked_trace_proof": _trace_proof(),
+    }
+    assessment = {
+        "issue_id": "issue-001",
+        "verdict": "incorrect",
+        "finding_type": finding_type,
+        "fields": fields,
+        "card_evaluations": [
+            {
+                "reference": card["reference"],
+                "title": card["title"],
+                "category": card["category"],
+                "severity": card["severity"],
+                "verdict": verdict,
+                "finding_type": finding_type,
+                "ownership": "unresolved",
+                "fields": fields,
+            }
+        ],
+    }
+    with pytest.raises(ContractError, match="at least one failed field"):
+        _validate_issue_cards(assessment, {"observed_insights": [card]})
+
+
+@pytest.mark.parametrize(
     "malformation",
     [
         "extra_root_field",

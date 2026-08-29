@@ -1716,7 +1716,6 @@ def _semantic_assertion_names(assertions: dict[str, Any]) -> tuple[str, ...]:
         "required_terms_any",
         "forbidden_terms",
         "required_claims",
-        "affirmative_claims",
         "forbidden_claims",
         "max_words",
         "min_words",
@@ -1734,19 +1733,6 @@ def _semantic_assertion_names(assertions: dict[str, Any]) -> tuple[str, ...]:
             )
         )
     )
-
-
-def _contains_affirmative_claim(text: str, claim: str) -> bool:
-    pattern = re.compile(
-        rf"(?<![A-Za-z0-9]){re.escape(claim)}(?![A-Za-z0-9])",
-        re.IGNORECASE,
-    )
-    negations = {"not", "no", "never", "without", "isn't", "isnt"}
-    for match in pattern.finditer(text):
-        preceding = re.findall(r"[A-Za-z0-9']+", text[: match.start()].casefold())
-        if not negations.intersection(preceding[-3:]):
-            return True
-    return False
 
 
 def _semantic_assertion_result(
@@ -1830,15 +1816,6 @@ def _semantic_assertion_result(
             "required_claims",
             all(str(claim).casefold() in folded for claim in required_claims),
         )
-    affirmative_claims = assertions.get("affirmative_claims", [])
-    if affirmative_claims:
-        record(
-            "affirmative_claims",
-            all(
-                _contains_affirmative_claim(text, str(claim))
-                for claim in affirmative_claims
-            ),
-        )
     forbidden_claims = assertions.get("forbidden_claims", [])
     if forbidden_claims:
         record(
@@ -1899,7 +1876,6 @@ def _normalize_fixture(value: Any) -> dict[str, Any]:
             "exact_json_fields",
             "exact_json",
             "required_claims",
-            "affirmative_claims",
             "forbidden_claims",
             "min_words",
         }
@@ -1911,7 +1887,6 @@ def _normalize_fixture(value: Any) -> dict[str, Any]:
         "required_terms_any",
         "forbidden_terms",
         "required_claims",
-        "affirmative_claims",
         "forbidden_claims",
     ):
         terms = semantic_assertions.get(key, [])

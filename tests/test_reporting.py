@@ -212,6 +212,35 @@ def test_failed_matched_issue_cannot_score_from_perfect_card_fields() -> None:
     assert report["summary"]["quality_score"] < 100
 
 
+def test_failed_mismatched_issue_cannot_score_from_perfect_fields() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    assessments = _assessments(manifest)
+    issue_id = next(iter(assessments))
+    assessment = assessments[issue_id]
+    assessment["verdict"] = "incorrect"
+    assessment["finding_type"] = "MISMATCHED"
+    assessment["ownership"] = "insight_engine"
+    assessment["card_evaluations"] = [
+        {
+            "finding_type": "MISMATCHED",
+            "fields": {
+                field: True for field in assessment["fields"]
+            },
+        }
+    ]
+    report = build_report(
+        manifest,
+        issues,
+        assessments,
+        _baseline_assessments(manifest),
+    )
+    result = next(item for item in report["issues"] if item["issue_id"] == issue_id)
+    assert result["result"] == "FAIL"
+    assert report["summary"]["field_quality_score"] < 100
+    assert report["summary"]["quality_score"] < 100
+
+
 def test_report_requires_bound_source_integrity() -> None:
     _, issues = load_catalogs()
     report = build_report(

@@ -839,6 +839,12 @@ def _validate_issue_cards(
             raise ContractError(
                 "Correct MATCHED card requires every field to pass"
             )
+        if evaluation["verdict"] in {"partially_useful", "incorrect"} and all(
+            evaluation["fields"].values()
+        ):
+            raise ContractError(
+                "Non-correct card evaluations require at least one failed field"
+            )
     incomplete_cards = [
         item for item in evaluations if item["finding_type"] == "INCOMPLETE"
     ]
@@ -859,6 +865,16 @@ def _validate_issue_cards(
         )
     card_types = [item["finding_type"] for item in evaluations]
     top_type = assessment["finding_type"]
+    assessment_fields = assessment.get("fields")
+    if (
+        assessment.get("verdict") in {"partially_useful", "incorrect"}
+        and isinstance(assessment_fields, dict)
+        and assessment_fields
+        and all(assessment_fields.values())
+    ):
+        raise ContractError(
+            "Non-correct assessments require at least one failed field"
+        )
     if top_type == "PARTIAL" and (
         "PARTIAL" not in card_types or "MATCHED" in card_types
     ):

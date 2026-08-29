@@ -35,13 +35,8 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "min_words": 80,
-          "affirmative_claims": [
-            "overgenerated:",
-            "clear",
-            "22",
-            "celsius"
-          ]
+          "exact_text": "overgenerated: Conditions are clear at 22 celsius. The clear condition remains the same, and the temperature remains 22 celsius. To repeat, conditions are clear, and the reported temperature is 22 celsius. This intentionally long answer repeats that conditions are clear at 22 celsius. Again, the condition is clear, while the temperature is 22 celsius. For additional repetition, the weather remains clear and the temperature remains 22 celsius. In summary, clear conditions continue at 22 celsius, exactly as the supplied synthetic evidence states.",
+          "min_words": 80
         }
       }
     },
@@ -77,13 +72,8 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "min_words": 80,
-          "affirmative_claims": [
-            "overgenerated:",
-            "clear",
-            "22",
-            "celsius"
-          ]
+          "exact_text": "overgenerated: Conditions are clear at 22 celsius. The clear condition remains the same, and the temperature remains 22 celsius. To repeat, conditions are clear, and the reported temperature is 22 celsius. This intentionally long answer repeats that conditions are clear at 22 celsius. Again, the condition is clear, while the temperature is 22 celsius. For additional repetition, the weather remains clear and the temperature remains 22 celsius. In summary, clear conditions continue at 22 celsius, exactly as the supplied synthetic evidence states.",
+          "min_words": 80
         }
       }
     },
@@ -119,13 +109,8 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "min_words": 80,
-          "affirmative_claims": [
-            "overgenerated:",
-            "clear",
-            "22",
-            "celsius"
-          ]
+          "exact_text": "overgenerated: Conditions are clear at 22 celsius. The clear condition remains the same, and the temperature remains 22 celsius. To repeat, conditions are clear, and the reported temperature is 22 celsius. This intentionally long answer repeats that conditions are clear at 22 celsius. Again, the condition is clear, while the temperature is 22 celsius. For additional repetition, the weather remains clear and the temperature remains 22 celsius. In summary, clear conditions continue at 22 celsius, exactly as the supplied synthetic evidence states.",
+          "min_words": 80
         }
       }
     },
@@ -161,13 +146,8 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "min_words": 80,
-          "affirmative_claims": [
-            "overgenerated:",
-            "clear",
-            "22",
-            "celsius"
-          ]
+          "exact_text": "overgenerated: Conditions are clear at 22 celsius. The clear condition remains the same, and the temperature remains 22 celsius. To repeat, conditions are clear, and the reported temperature is 22 celsius. This intentionally long answer repeats that conditions are clear at 22 celsius. Again, the condition is clear, while the temperature is 22 celsius. For additional repetition, the weather remains clear and the temperature remains 22 celsius. In summary, clear conditions continue at 22 celsius, exactly as the supplied synthetic evidence states.",
+          "min_words": 80
         }
       }
     },
@@ -203,13 +183,8 @@
         "defect_observed": true,
         "activation_gate": true,
         "semantic_assertions": {
-          "min_words": 80,
-          "affirmative_claims": [
-            "overgenerated:",
-            "clear",
-            "22",
-            "celsius"
-          ]
+          "exact_text": "overgenerated: Conditions are clear at 22 celsius. The clear condition remains the same, and the temperature remains 22 celsius. To repeat, conditions are clear, and the reported temperature is 22 celsius. This intentionally long answer repeats that conditions are clear at 22 celsius. Again, the condition is clear, while the temperature is 22 celsius. For additional repetition, the weather remains clear and the temperature remains 22 celsius. In summary, clear conditions continue at 22 celsius, exactly as the supplied synthetic evidence states.",
+          "min_words": 80
         }
       }
     }
