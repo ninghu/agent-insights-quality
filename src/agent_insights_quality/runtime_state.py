@@ -388,6 +388,40 @@ class VersionCheckpointStore:
         )
         value.pop("insight_run", None)
         value.pop("insight_start_pending", None)
+        value.pop("insight_drain_pending", None)
+        self._write(agent_name, logical_version, value)
+
+    def insight_drain_pending(
+        self,
+        agent_name: str,
+        logical_version: str,
+        foundry_version: str,
+        content_digest: str,
+    ) -> bool:
+        return (
+            self._load(
+                agent_name,
+                logical_version,
+                foundry_version,
+                content_digest,
+            ).get("insight_drain_pending")
+            is True
+        )
+
+    def clear_insight_drain_pending(
+        self,
+        agent_name: str,
+        logical_version: str,
+        foundry_version: str,
+        content_digest: str,
+    ) -> None:
+        value = self._load(
+            agent_name,
+            logical_version,
+            foundry_version,
+            content_digest,
+        )
+        value.pop("insight_drain_pending", None)
         self._write(agent_name, logical_version, value)
 
     def result(
@@ -496,6 +530,29 @@ class VersionCheckpointStore:
             content_digest,
         )
         value["result"] = asdict(result)
+        self._write(agent_name, logical_version, value)
+
+    def save_rejected_result(
+        self,
+        agent_name: str,
+        logical_version: str,
+        foundry_version: str,
+        content_digest: str,
+        result: VersionResult,
+        *,
+        drain_pending: bool,
+    ) -> None:
+        value = self._load(
+            agent_name,
+            logical_version,
+            foundry_version,
+            content_digest,
+        )
+        value["result"] = asdict(result)
+        if drain_pending:
+            value["insight_drain_pending"] = True
+        else:
+            value.pop("insight_drain_pending", None)
         self._write(agent_name, logical_version, value)
 
     def clear(

@@ -136,6 +136,10 @@ def test_version_checkpoint_round_trips_private_stages(tmp_path: Path) -> None:
     assert store.trace_verified(*args) is True
     assert store.insight_run(*args) == checkpoint
     assert store.result(*args) == result
+    store.save_rejected_result(*args, result, drain_pending=True)
+    assert store.insight_drain_pending(*args) is True
+    store.clear_insight_drain_pending(*args)
+    assert store.insight_drain_pending(*args) is False
     different_contract = VersionCheckpointStore(
         tmp_path / "stages",
         "sha256:" + "e" * 64,

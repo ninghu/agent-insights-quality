@@ -1035,6 +1035,7 @@ def test_trace_row_query_projects_private_values_only_for_in_memory_evaluation(
     assert runtime._trace_rows(
         ("a" * 32,),
         ("response-reference",),
+        "issue-013",
     ) == []
     query = captured[0]
     assert 'customDimensions["gen_ai.tool.call.arguments"]' in query
@@ -1047,6 +1048,7 @@ def test_trace_row_query_projects_private_values_only_for_in_memory_evaluation(
     ) < query.index('customDimensions["response_id"]')
     assert "request_id in" in query
     assert "matched_reference" in query
+    assert 'agent_version == "issue-013"' in query
 
 
 def _write_trace_assertion_traffic(path: Path, request_count: int = 1) -> None:
@@ -1119,14 +1121,19 @@ def test_trace_assertion_correlation_fails_immediately_when_ambiguous(
     _write_trace_assertion_traffic(traffic_path, request_count=2)
     runtime._trace_rows = lambda *_args: rows  # type: ignore[method-assign]
     runtime._sleep = sleeps.append
+    first_passes = []
 
     with pytest.raises(ContractError, match="ambiguous"):
         runtime.trace_assertion_evidence(
+            foundry_version="issue-013",
             operation_ids=(operation_a, operation_b),
             response_references=(reference_a, reference_b),
             traffic_path=traffic_path,
+            stabilization_seconds=180,
+            on_first_pass=lambda: first_passes.append(monotonic[0]),
         )
     assert sleeps == []
+    assert first_passes == []
 
 
 def test_trace_assertion_stable_failure_waits_for_deadline(
@@ -1158,11 +1165,15 @@ def test_trace_assertion_stable_failure_waits_for_deadline(
         0, monotonic[0] + seconds
     )
     runtime.report_progress = progress.append  # type: ignore[method-assign]
+    first_passes = []
 
     evidence = runtime.trace_assertion_evidence(
+        foundry_version="issue-013",
         operation_ids=(operation_id,),
         response_references=(reference,),
         traffic_path=traffic_path,
+        stabilization_seconds=180,
+        on_first_pass=lambda: first_passes.append(monotonic[0]),
     )
 
     assert evidence[0][0].passed is False
@@ -1170,6 +1181,7 @@ def test_trace_assertion_stable_failure_waits_for_deadline(
     assert poll_times[-1] == 15 * 60
     assert progress
     assert "failing evidence is stabilizing" in progress[-1]
+    assert first_passes == []
 
 
 def test_trace_assertion_observes_span_ingested_after_135_seconds(
@@ -1205,15 +1217,20 @@ def test_trace_assertion_observes_span_ingested_after_135_seconds(
     runtime._sleep = lambda seconds: monotonic.__setitem__(
         0, monotonic[0] + seconds
     )
+    first_passes = []
 
     evidence = runtime.trace_assertion_evidence(
+        foundry_version="issue-013",
         operation_ids=(operation_id,),
         response_references=(reference,),
         traffic_path=traffic_path,
+        stabilization_seconds=180,
+        on_first_pass=lambda: first_passes.append(monotonic[0]),
     )
 
     assert evidence[0][0].passed is True
-    assert monotonic[0] == 135 + 10 * 60
+    assert monotonic[0] == 135 + 180
+    assert first_passes == [135]
 
 
 def test_trace_assertion_late_duplicate_invalidates_stabilizing_pass(
@@ -1244,18 +1261,23 @@ def test_trace_assertion_late_duplicate_invalidates_stabilizing_pass(
     runtime._sleep = lambda seconds: monotonic.__setitem__(
         0, monotonic[0] + seconds
     )
+    first_passes = []
 
     evidence = runtime.trace_assertion_evidence(
+        foundry_version="issue-013",
         operation_ids=(operation_id,),
         response_references=(reference,),
         traffic_path=traffic_path,
+        stabilization_seconds=180,
+        on_first_pass=lambda: first_passes.append(monotonic[0]),
     )
 
     assert evidence[0][0].passed is False
     assert monotonic[0] == 15 * 60
+    assert first_passes == [0]
 
 
-def test_trace_assertion_stable_pass_waits_for_uncertainty_horizon(
+def test_trace_assertion_stable_pass_waits_for_ingestion_interval(
     tmp_path,
 ) -> None:
     monotonic = [0.0]
@@ -1279,15 +1301,20 @@ def test_trace_assertion_stable_pass_waits_for_uncertainty_horizon(
     runtime._sleep = lambda seconds: monotonic.__setitem__(
         0, monotonic[0] + seconds
     )
+    first_passes = []
 
     evidence = runtime.trace_assertion_evidence(
+        foundry_version="issue-013",
         operation_ids=(operation_id,),
         response_references=(reference,),
         traffic_path=traffic_path,
+        stabilization_seconds=180,
+        on_first_pass=lambda: first_passes.append(monotonic[0]),
     )
 
     assert evidence[0][0].passed is True
-    assert monotonic[0] == 10 * 60
+    assert monotonic[0] == 180
+    assert first_passes == [0]
 
 
 def test_trace_assertion_requires_correlation_in_final_snapshot(
@@ -1319,11 +1346,58 @@ def test_trace_assertion_requires_correlation_in_final_snapshot(
 
     with pytest.raises(ContractError, match="exact response-to-operation correlation"):
         runtime.trace_assertion_evidence(
+            foundry_version="issue-013",
             operation_ids=(operation_id,),
             response_references=(reference,),
             traffic_path=traffic_path,
+            stabilization_seconds=180,
+            on_first_pass=lambda: pytest.fail("failure must not start Insights"),
         )
     assert monotonic[0] == 15 * 60
+
+
+def test_trace_assertion_rejects_pass_first_seen_near_deadline(
+    tmp_path,
+) -> None:
+    monotonic = [0.0]
+    first_passes = []
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+    )
+    operation_id = "a" * 32
+    reference = "resp_A1b2C3d4E5f6"
+    failing = {
+        **_tool_trace_row("different_lookup"),
+        "operation_id": operation_id,
+        "matched_reference": reference,
+    }
+    passing = {
+        **_tool_trace_row("lookup"),
+        "operation_id": operation_id,
+        "matched_reference": reference,
+    }
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(traffic_path)
+    runtime._trace_rows = (  # type: ignore[method-assign]
+        lambda *_args: [failing] if monotonic[0] < 885 else [passing]
+    )
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
+    )
+
+    with pytest.raises(ContractError, match="did not stabilize"):
+        runtime.trace_assertion_evidence(
+            foundry_version="issue-013",
+            operation_ids=(operation_id,),
+            response_references=(reference,),
+            traffic_path=traffic_path,
+            stabilization_seconds=180,
+            on_first_pass=lambda: first_passes.append(monotonic[0]),
+        )
+    assert monotonic[0] == 15 * 60
+    assert first_passes == [885]
 
 
 def test_trace_assertions_cover_payload_cardinality_and_span_order() -> None:
@@ -2249,6 +2323,7 @@ def test_agent_insights_checkpoint_is_persisted_before_polling() -> None:
         foundry_version="1",
         operation_ids=("a" * 32,),
         lookback_hours=0.1,
+        start_margin_seconds=30,
         persist=persisted.append,
     )
     assert result == checkpoint
@@ -2298,6 +2373,7 @@ def test_agent_insights_rejects_operations_outside_short_window() -> None:
             foundry_version="1",
             operation_ids=("a" * 32,),
             lookback_hours=0.1,
+            start_margin_seconds=30,
             persist=lambda _checkpoint: None,
         )
 

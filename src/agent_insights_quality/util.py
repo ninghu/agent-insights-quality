@@ -20,6 +20,10 @@ class InsightWindowExpiredError(ContractError):
     """Correlated evidence is outside the requested Agent Insights window."""
 
 
+class TraceAssertionActivationError(ContractError):
+    """Trace assertion evidence cannot become a trusted activation result."""
+
+
 def runtime_root() -> Path:
     configured = os.environ.get("AIQ_RUNTIME_ROOT")
     if configured and not Path(configured).expanduser().is_absolute():

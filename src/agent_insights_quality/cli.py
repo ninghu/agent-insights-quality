@@ -346,6 +346,10 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                     clean_window_max_wait_seconds=(
                         policy.clean_window_max_wait_seconds
                     ),
+                    trace_assertion_stabilization_seconds=(
+                        policy.trace_assertion_stabilization_seconds
+                    ),
+                    insight_start_margin_seconds=policy.insight_start_margin_seconds,
                     max_recovery_versions=policy.max_recovery_versions,
                     agent_start_stagger_seconds=(
                         policy.agent_start_stagger_seconds

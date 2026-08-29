@@ -10,6 +10,8 @@ insight_lookback_hours: 0.1
 clean_window_poll_seconds: 15
 clean_window_ingestion_margin_seconds: 30
 clean_window_max_wait_seconds: 1200
+trace_assertion_stabilization_seconds: 180
+insight_start_margin_seconds: 30
 max_recovery_versions: 3
 agent_start_stagger_seconds: 5
 qualification_profiles_allow_debug_traffic: false

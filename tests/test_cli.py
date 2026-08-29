@@ -47,6 +47,8 @@ def test_post_manifest_failure_does_not_publish_operational_result(
             clean_window_poll_seconds=1,
             clean_window_ingestion_margin_seconds=1,
             clean_window_max_wait_seconds=1,
+            trace_assertion_stabilization_seconds=1,
+            insight_start_margin_seconds=1,
             max_recovery_versions=3,
             agent_start_stagger_seconds=1,
             telemetry_resource_set="g29",

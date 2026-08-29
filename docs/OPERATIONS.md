@@ -127,9 +127,16 @@ telemetry, trace, and Agent Insights stages. Long telemetry waits, Insight runs,
 emit periodic heartbeats without exposing URLs, payloads, or private identifiers.
 
 Hosted trace assertions poll every 15 seconds through the existing 15-minute bounded ingestion
-deadline. Missing or failing evidence waits for that deadline; passing evidence returns early only
-after its response-to-operation mapping, assertion outcomes, and correlated trace rows remain
-unchanged for the reviewed 10-minute traffic uncertainty horizon. New evidence resets that interval.
+deadline. At the first fully passing, exactly response-correlated snapshot, the runner starts and
+persists the one Agent Insights run immediately, while every operation is still inside the guarded
+lookback window. Starting is safe because the required issue-activation evidence is already present;
+cards remain quarantined until the same mapping, assertion outcomes, and correlated rows stay
+unchanged for the reviewed 180-second ingestion interval. This interval exceeds the reproduced
+135-second late-span delay by three poll periods and is intentionally separate from the 10-minute
+traffic uncertainty horizon. New evidence resets stabilization. Missing or failing evidence waits
+for the deadline, and only a stable failure can return there; an unstabilized pass is rejected. Any
+run started before later invalidation is drained but its cards are never scored. Exact Foundry-version
+and operation filtering prevents those late cards or spans from contaminating another version.
 Monotonic proof that response-to-operation correlation is ambiguous may still fail immediately.
 
 Issue source, traffic, source-delta manifests, and version digests are reviewed contracts. Equal

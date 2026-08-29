@@ -27,13 +27,18 @@ from agent_insights_quality.models import (
     SemanticAssertionEvidence,
     TraceAssertionEvidence,
 )
-from agent_insights_quality.automation_policy import TRAFFIC_UNCERTAINTY_SECONDS
+from agent_insights_quality.automation_policy import (
+    TRACE_ASSERTION_DEADLINE_SECONDS,
+    TRACE_ASSERTION_POLL_SECONDS,
+    TRAFFIC_UNCERTAINTY_SECONDS,
+)
 from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.runtime_state import TrafficLedger
 from agent_insights_quality.util import (
     ContractError,
     InsightWindowExpiredError,
+    TraceAssertionActivationError,
     json_values_equal,
 )
 from agent_insights_quality.azure_cli import azure_cli
@@ -62,11 +67,7 @@ _LOGS_SCOPE = "https://api.loganalytics.io/.default"
 _TRANSIENT_HTTP = {408, 424, 429, 500, 502, 503, 504}
 _DEFAULT_REQUEST_TIMEOUT_SECONDS = 300
 _HOSTED_RESPONSE_TIMEOUT_SECONDS = 600
-_TRACE_ASSERTION_DEADLINE_SECONDS = 15 * 60
-_TRACE_ASSERTION_POLL_SECONDS = 15
 _TRACE_ASSERTION_PROGRESS_SECONDS = 60
-# Reuse the reviewed clean-window uncertainty horizon for late trace ingestion.
-_TRACE_ASSERTION_STABLE_SECONDS = TRAFFIC_UNCERTAINTY_SECONDS
 _AUTH_PROGRESS = ProgressReporter("aiq-auth")
 
 
@@ -794,6 +795,7 @@ union traces, dependencies, requests
         foundry_version: str,
         operation_ids: tuple[str, ...],
         lookback_hours: float,
+        start_margin_seconds: int,
         persist: Callable[[InsightRunCheckpoint], None],
     ) -> InsightRunCheckpoint:
         earliest, _ = self._operation_time_bounds(
@@ -801,11 +803,14 @@ union traces, dependencies, requests
             foundry_version=foundry_version,
             operation_ids=operation_ids,
         )
-        if earliest < self._utcnow().astimezone(UTC) - timedelta(
-            hours=lookback_hours
-        ):
+        cutoff = (
+            self._utcnow().astimezone(UTC)
+            - timedelta(hours=lookback_hours)
+            + timedelta(seconds=start_margin_seconds)
+        )
+        if earliest < cutoff:
             raise InsightWindowExpiredError(
-                "Correlated operations expired before Agent Insights started"
+                "Correlated operations expired into the guarded Agent Insights start margin"
             )
         checkpoint = self._start_insights_once(
             monitor_id=monitor_id,
@@ -1002,6 +1007,8 @@ union traces, dependencies, requests
         query = f"""
 union traces, dependencies, requests
 | where operation_Id in ({values})
+| extend agent_version=tostring(customDimensions["gen_ai.agent.version"])
+{f'| where agent_version == "{foundry_version}"' if foundry_version else ''}
 | extend operation_name=tostring(customDimensions["gen_ai.operation.name"])
 | extend observed_agent=tostring(customDimensions["gen_ai.agent.name"])
 | extend agent_version=tostring(customDimensions["gen_ai.agent.version"])
@@ -1045,10 +1052,15 @@ union traces, dependencies, requests
     def trace_assertion_evidence(
         self,
         *,
+        foundry_version: str,
         operation_ids: tuple[str, ...],
         response_references: tuple[str, ...],
         traffic_path: Path,
+        stabilization_seconds: int,
+        on_first_pass: Callable[[], None],
     ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
+        if stabilization_seconds <= 0:
+            raise ContractError("Trace assertion stabilization interval must be positive")
         payload = json.loads(traffic_path.read_text(encoding="utf-8"))
         requests = payload if isinstance(payload, list) else payload.get("requests")
         if not isinstance(requests, list) or len(requests) != len(response_references):
@@ -1058,7 +1070,7 @@ union traces, dependencies, requests
         fixtures = tuple(_normalize_fixture(item) for item in requests)
         if not any(fixture["trace_assertions"] for fixture in fixtures):
             return tuple(() for _ in fixtures)
-        deadline = self._monotonic() + _TRACE_ASSERTION_DEADLINE_SECONDS
+        deadline = self._monotonic() + TRACE_ASSERTION_DEADLINE_SECONDS
         next_progress = self._monotonic() + _TRACE_ASSERTION_PROGRESS_SECONDS
         last_results: tuple[tuple[TraceAssertionEvidence, ...], ...] | None = None
         stable_signature: tuple[
@@ -1067,8 +1079,15 @@ union traces, dependencies, requests
             tuple[str, ...],
         ] | None = None
         stable_since: float | None = None
+        first_pass_observed = False
+        passing = False
+        correlated: tuple[list[dict[str, Any]], ...] | None = None
         while True:
-            rows = self._trace_rows(operation_ids, response_references)
+            rows = self._trace_rows(
+                operation_ids,
+                response_references,
+                foundry_version,
+            )
             correlated = _correlated_request_rows(
                 rows,
                 response_references,
@@ -1079,7 +1098,7 @@ union traces, dependencies, requests
                 response_references,
                 operation_ids,
             ):
-                raise ContractError(
+                raise TraceAssertionActivationError(
                     "Trace assertions found ambiguous response-to-operation correlation"
                 )
             if correlated is not None:
@@ -1096,25 +1115,25 @@ union traces, dependencies, requests
                     for request_results in last_results
                     for assertion in request_results
                 )
-                if passing:
-                    signature = _trace_assertion_stability_signature(
-                        rows,
-                        correlated,
-                        response_references,
-                        last_results,
-                    )
-                    now = self._monotonic()
-                    if signature != stable_signature:
-                        stable_signature = signature
-                        stable_since = now
-                    elif (
-                        stable_since is not None
-                        and now - stable_since >= _TRACE_ASSERTION_STABLE_SECONDS
-                    ):
-                        return last_results
-                else:
-                    stable_signature = None
-                    stable_since = None
+                signature = _trace_assertion_stability_signature(
+                    rows,
+                    correlated,
+                    response_references,
+                    last_results,
+                )
+                now = self._monotonic()
+                if signature != stable_signature:
+                    stable_signature = signature
+                    stable_since = now
+                if passing and not first_pass_observed:
+                    first_pass_observed = True
+                    on_first_pass()
+                if (
+                    passing
+                    and stable_since is not None
+                    and now - stable_since >= stabilization_seconds
+                ):
+                    return last_results
             else:
                 passing = False
                 stable_signature = None
@@ -1124,7 +1143,7 @@ union traces, dependencies, requests
                 break
             if now >= next_progress:
                 elapsed = int(
-                    _TRACE_ASSERTION_DEADLINE_SECONDS - max(deadline - now, 0)
+                    TRACE_ASSERTION_DEADLINE_SECONDS - max(deadline - now, 0)
                 )
                 state = (
                     "passing"
@@ -1137,10 +1156,20 @@ union traces, dependencies, requests
                     f"trace activation {state} evidence is stabilizing ({elapsed}s)"
                 )
                 next_progress = now + _TRACE_ASSERTION_PROGRESS_SECONDS
-            self._sleep(min(_TRACE_ASSERTION_POLL_SECONDS, deadline - now))
-        if correlated is not None and last_results is not None:
+            self._sleep(min(TRACE_ASSERTION_POLL_SECONDS, deadline - now))
+        if (
+            correlated is not None
+            and last_results is not None
+            and not passing
+            and stable_since is not None
+            and self._monotonic() - stable_since >= stabilization_seconds
+        ):
             return last_results
-        raise ContractError(
+        if correlated is not None:
+            raise TraceAssertionActivationError(
+                "Trace assertion evidence did not stabilize before the bounded deadline"
+            )
+        raise TraceAssertionActivationError(
             "Trace assertions require exact response-to-operation correlation"
         )
 
@@ -1148,6 +1177,7 @@ union traces, dependencies, requests
         self,
         operation_ids: tuple[str, ...],
         response_references: tuple[str, ...] = (),
+        foundry_version: str | None = None,
     ) -> list[dict[str, Any]]:
         try:
             from azure.monitor.query import LogsQueryStatus
@@ -1167,6 +1197,8 @@ union traces, dependencies, requests
         query = f"""
 union traces, dependencies, requests
 | where operation_Id in ({values})
+| extend agent_version=tostring(customDimensions["gen_ai.agent.version"])
+{f'| where agent_version == "{foundry_version}"' if foundry_version else ''}
 | extend operation_name=tostring(customDimensions["gen_ai.operation.name"])
 | extend tool_name=coalesce(
     tostring(customDimensions["gen_ai.tool.name"]),

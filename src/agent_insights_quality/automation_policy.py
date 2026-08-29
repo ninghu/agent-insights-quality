@@ -11,6 +11,8 @@ from agent_insights_quality.util import ROOT, ContractError, read_yaml
 FIXED_TELEMETRY_RESOURCE_SET = "g29"
 MINIMUM_LOOKBACK_HOURS = 0.1
 TRAFFIC_UNCERTAINTY_SECONDS = 10 * 60
+TRACE_ASSERTION_DEADLINE_SECONDS = 15 * 60
+TRACE_ASSERTION_POLL_SECONDS = 15
 
 
 @dataclass(frozen=True)
@@ -19,6 +21,8 @@ class AutomationPolicy:
     clean_window_poll_seconds: int
     clean_window_ingestion_margin_seconds: int
     clean_window_max_wait_seconds: int
+    trace_assertion_stabilization_seconds: int
+    insight_start_margin_seconds: int
     max_recovery_versions: int
     agent_start_stagger_seconds: int
     telemetry_resource_set: str
@@ -42,9 +46,30 @@ def load_automation_policy(
         value.get("clean_window_max_wait_seconds"),
         "maximum clean-window wait",
     )
+    assertion_stabilization = _positive_int(
+        value.get("trace_assertion_stabilization_seconds"),
+        "trace assertion stabilization interval",
+    )
+    start_margin = _positive_int(
+        value.get("insight_start_margin_seconds"),
+        "Insight start margin",
+    )
     if maximum_wait < TRAFFIC_UNCERTAINTY_SECONDS + lookback * 3600 + margin:
         raise ContractError(
             "Maximum clean-window wait is shorter than the uncertainty horizon"
+        )
+    if assertion_stabilization <= 2 * TRACE_ASSERTION_POLL_SECONDS + margin:
+        raise ContractError(
+            "Trace assertion stabilization interval is shorter than the reviewed "
+            "ingestion margin"
+        )
+    if assertion_stabilization >= TRACE_ASSERTION_DEADLINE_SECONDS:
+        raise ContractError(
+            "Trace assertion stabilization interval must fit within its bounded deadline"
+        )
+    if start_margin + TRACE_ASSERTION_POLL_SECONDS >= lookback * 3600:
+        raise ContractError(
+            "Insight start margin leaves no time to observe activation within lookback"
         )
     recoveries = _nonnegative_int(
         value.get("max_recovery_versions"),
@@ -69,6 +94,8 @@ def load_automation_policy(
         clean_window_poll_seconds=poll,
         clean_window_ingestion_margin_seconds=margin,
         clean_window_max_wait_seconds=maximum_wait,
+        trace_assertion_stabilization_seconds=assertion_stabilization,
+        insight_start_margin_seconds=start_margin,
         max_recovery_versions=recoveries,
         agent_start_stagger_seconds=stagger,
         telemetry_resource_set=resource_set,

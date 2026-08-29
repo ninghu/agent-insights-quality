@@ -4,12 +4,13 @@ import json
 import threading
 import time
 from dataclasses import replace
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from agent_insights_quality.catalogs import catalog_hashes, load_catalogs
+from agent_insights_quality.live import LiveRuntime
 from agent_insights_quality.models import (
     InsightEvidence,
     InsightRunCheckpoint,
@@ -21,12 +22,16 @@ from agent_insights_quality.models import (
     VersionResult,
 )
 from agent_insights_quality.runner import (
+    _RecoveryBudget,
+    _StartStagger,
+    _execute_version,
+    _execute_version_with_recovery,
     _validate_baseline_trace_evidence,
     execute,
 )
 from agent_insights_quality.runtime_state import VersionCheckpointStore
 from agent_insights_quality.selection import select_daily
-from agent_insights_quality.util import ContractError
+from agent_insights_quality.util import ContractError, InsightWindowExpiredError
 
 
 def _registry(agents: dict, hashes: dict[str, str]) -> dict:
@@ -193,12 +198,18 @@ class FakeRuntime:
     def trace_assertion_evidence(
         self,
         *,
+        foundry_version: str,
         operation_ids: tuple[str, ...],
         response_references: tuple[str, ...],
         traffic_path: Path,
+        stabilization_seconds: int,
+        on_first_pass,
     ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
         payload = json.loads(traffic_path.read_text(encoding="utf-8"))
+        assert foundry_version
         assert len(operation_ids) == len(response_references)
+        assert stabilization_seconds == 180
+        on_first_pass()
         return tuple(
             tuple(
                 TraceAssertionEvidence(item["name"], True)
@@ -215,10 +226,12 @@ class FakeRuntime:
         foundry_version: str,
         operation_ids: tuple[str, ...],
         lookback_hours: float,
+        start_margin_seconds: int,
         persist,
     ) -> InsightRunCheckpoint:
         del agent_name, monitor_id, foundry_version, operation_ids
         assert lookback_hours == 0.1
+        assert start_margin_seconds == 30
         checkpoint = InsightRunCheckpoint("synthetic-run", {})
         persist(checkpoint)
         return checkpoint
@@ -275,6 +288,261 @@ class FakeRuntime:
         assert operation_ids
         assert "invoke_agent" in required_operations
         assert window_start < window_end
+
+
+def _timed_trace_row(tool_name: str, *, timestamp: str) -> dict:
+    return {
+        "operation_id": f"{1:032x}",
+        "operation_name": "execute_tool",
+        "tool_name": tool_name,
+        "tool_call_id": "",
+        "error_type": "",
+        "tool_ok": "",
+        "tool_result": "",
+        "tool_arguments": "",
+        "messages": ["", ""],
+        "timestamp": timestamp,
+        "duration": 1.0,
+        "span_name": f"tool.{tool_name}",
+        "terminal_success": "",
+        "terminal_output": "",
+        "handled_error": "",
+        "matched_reference": "issue-synthetic-0",
+    }
+
+
+class TimedTraceRuntime(FakeRuntime):
+    def __init__(self, rows_at, *, finish_failures: int = 0) -> None:
+        super().__init__()
+        self.monotonic = 0.0
+        self.wall = datetime(2026, 8, 29, 12, 0, tzinfo=UTC)
+        self.rows_at = rows_at
+        self.starts: list[tuple[float, datetime]] = []
+        self.finishes = 0
+        self.finish_failures = finish_failures
+        self._monotonic = lambda: self.monotonic
+        self._sleep = self._advance
+
+    def _advance(self, seconds: float) -> None:
+        self.monotonic += seconds
+        self.wall += timedelta(seconds=seconds)
+
+    def _trace_rows(self, operation_ids, response_references=(), foundry_version=None):
+        assert operation_ids == (f"{1:032x}",)
+        assert response_references == ("issue-synthetic-0",)
+        assert foundry_version == "issue-synthetic"
+        return self.rows_at(self.monotonic)
+
+    def trace_assertion_evidence(self, **kwargs):
+        return LiveRuntime.trace_assertion_evidence(self, **kwargs)
+
+    def start_insights_run(self, **kwargs) -> InsightRunCheckpoint:
+        self.starts.append((self.monotonic, self.wall))
+        if self.monotonic > 360 - kwargs["start_margin_seconds"]:
+            raise InsightWindowExpiredError("synthetic guarded start expiry")
+        return super().start_insights_run(**kwargs)
+
+    def finish_insights_run(self, **kwargs) -> InsightRunEvidence:
+        self.finishes += 1
+        if self.finishes <= self.finish_failures:
+            raise ContractError("synthetic drain interruption")
+        return super().finish_insights_run(**kwargs)
+
+
+def _write_timed_trace_traffic(path: Path) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "requests": [
+                    {
+                        "id": "request_A1b2C3d4",
+                        "request": {"body": {"input": "synthetic request"}},
+                        "expected": {
+                            "http_status": 200,
+                            "activation_gate": True,
+                            "trace_assertions": [
+                                {
+                                    "name": "one_lookup",
+                                    "kind": "tool_call_count",
+                                    "tool_name": "lookup",
+                                    "count": 1,
+                                }
+                            ],
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _timed_version_kwargs(
+    tmp_path: Path,
+    runtime: TimedTraceRuntime,
+    checkpoint_store: VersionCheckpointStore,
+) -> dict:
+    traffic_path = tmp_path / "traffic.json"
+    _write_timed_trace_traffic(traffic_path)
+    return {
+        "runtime": runtime,
+        "agent": {
+            "name": "finance-agent",
+            "type": "hosted",
+            "baseline_contract": {"semantic_assertions": "required_per_request"},
+        },
+        "monitor_id": "monitor-finance-agent",
+        "logical_version": "issue-synthetic",
+        "registry_entry": {
+            "foundry_version": "issue-synthetic",
+            "content_digest": "sha256:" + "a" * 64,
+        },
+        "traffic_path": traffic_path,
+        "seed": 1,
+        "expected": {
+            "trace_contract": {
+                "operations": ["invoke_agent"],
+                "minimum_traces": 1,
+            }
+        },
+        "lookback_hours": 0.1,
+        "trace_assertion_stabilization_seconds": 180,
+        "insight_start_margin_seconds": 30,
+        "checkpoint_store": checkpoint_store,
+        "start_stagger": _StartStagger(0),
+    }
+
+
+def test_first_passing_trace_starts_insights_before_stabilization(
+    tmp_path: Path,
+) -> None:
+    failing = [_timed_trace_row("different_lookup", timestamp="2026-08-29T12:00:00Z")]
+    passing = [_timed_trace_row("lookup", timestamp="2026-08-29T12:02:15Z")]
+    runtime = TimedTraceRuntime(
+        lambda elapsed: failing if elapsed < 135 else passing
+    )
+    store = VersionCheckpointStore(tmp_path / "stages", "sha256:" + "d" * 64)
+
+    result = _execute_version(**_timed_version_kwargs(tmp_path, runtime, store))
+
+    assert result.status == "observed"
+    assert [start[0] for start in runtime.starts] == [135]
+    assert runtime.starts[0][0] < 360
+    assert runtime.monotonic == 315
+    assert runtime.finishes == 1
+
+
+def test_late_duplicate_quarantines_started_run_and_resume_reuses_result(
+    tmp_path: Path,
+) -> None:
+    first = _timed_trace_row("lookup", timestamp="2026-08-29T12:00:00Z")
+    duplicate = _timed_trace_row("lookup", timestamp="2026-08-29T12:02:15Z")
+    runtime = TimedTraceRuntime(
+        lambda elapsed: [first] if elapsed < 135 else [first, duplicate]
+    )
+    store = VersionCheckpointStore(tmp_path / "stages", "sha256:" + "d" * 64)
+    kwargs = _timed_version_kwargs(tmp_path, runtime, store)
+
+    result = _execute_version(**kwargs)
+    resumed = _execute_version(**kwargs)
+
+    assert result == resumed
+    assert result.status == "inconclusive"
+    assert result.error_code == "issue_activation_failed"
+    assert result.insight_references == []
+    assert result.observed_insights == []
+    assert [start[0] for start in runtime.starts] == [0]
+    assert runtime.finishes == 1
+    assert runtime.invoked.count("issue-synthetic") == 1
+
+
+def test_resume_retries_interrupted_rejected_run_drain(
+    tmp_path: Path,
+) -> None:
+    first = _timed_trace_row("lookup", timestamp="2026-08-29T12:00:00Z")
+    duplicate = _timed_trace_row("lookup", timestamp="2026-08-29T12:02:15Z")
+    runtime = TimedTraceRuntime(
+        lambda elapsed: [first] if elapsed < 135 else [first, duplicate],
+        finish_failures=1,
+    )
+    store = VersionCheckpointStore(tmp_path / "stages", "sha256:" + "d" * 64)
+    kwargs = _timed_version_kwargs(tmp_path, runtime, store)
+    checkpoint_args = (
+        "finance-agent",
+        "issue-synthetic",
+        "issue-synthetic",
+        "sha256:" + "a" * 64,
+    )
+
+    result = _execute_version(**kwargs)
+    assert store.insight_drain_pending(*checkpoint_args) is True
+
+    resumed = _execute_version(**kwargs)
+
+    assert resumed == result
+    assert [start[0] for start in runtime.starts] == [0]
+    assert runtime.finishes == 2
+    assert store.insight_drain_pending(*checkpoint_args) is False
+
+
+def test_late_first_pass_is_incomplete_without_recovery_retraffic(
+    tmp_path: Path,
+) -> None:
+    failing = [_timed_trace_row("different_lookup", timestamp="2026-08-29T12:00:00Z")]
+    passing = [_timed_trace_row("lookup", timestamp="2026-08-29T12:14:45Z")]
+    runtime = TimedTraceRuntime(
+        lambda elapsed: failing if elapsed < 885 else passing
+    )
+    store = VersionCheckpointStore(tmp_path / "stages", "sha256:" + "d" * 64)
+    kwargs = _timed_version_kwargs(tmp_path, runtime, store)
+
+    result = _execute_version_with_recovery(
+        **kwargs,
+        clean_window_poll_seconds=15,
+        clean_window_ingestion_margin_seconds=30,
+        clean_window_max_wait_seconds=1200,
+        recovery_budget=_RecoveryBudget(3),
+    )
+
+    assert result.status == "inconclusive"
+    assert result.error_code == "issue_activation_failed"
+    assert [start[0] for start in runtime.starts] == [885]
+    assert runtime.invoked.count("issue-synthetic") == 1
+    assert runtime.clean_agents == []
+    assert runtime.reset_agents == []
+
+
+def test_transient_trace_query_failure_uses_existing_recovery(
+    tmp_path: Path,
+) -> None:
+    passing = [_timed_trace_row("lookup", timestamp="2026-08-29T12:00:00Z")]
+
+    class RecoveringTraceRuntime(TimedTraceRuntime):
+        def __init__(self) -> None:
+            super().__init__(lambda _elapsed: passing)
+            self.assertion_attempts = 0
+
+        def trace_assertion_evidence(self, **kwargs):
+            self.assertion_attempts += 1
+            if self.assertion_attempts == 1:
+                raise ContractError("Remote operation failed with HTTP 503")
+            return super().trace_assertion_evidence(**kwargs)
+
+    runtime = RecoveringTraceRuntime()
+    store = VersionCheckpointStore(tmp_path / "stages", "sha256:" + "d" * 64)
+    kwargs = _timed_version_kwargs(tmp_path, runtime, store)
+
+    result = _execute_version_with_recovery(
+        **kwargs,
+        clean_window_poll_seconds=15,
+        clean_window_ingestion_margin_seconds=30,
+        clean_window_max_wait_seconds=1200,
+        recovery_budget=_RecoveryBudget(3),
+    )
+
+    assert result.status == "observed"
+    assert runtime.assertion_attempts == 2
+    assert len(runtime.starts) == 1
 
 
 def test_runner_executes_25_issues() -> None:
@@ -735,6 +1003,19 @@ def test_failed_hosted_trace_activation_is_incomplete() -> None:
     registry = _registry(agents, hashes)
 
     class FailedTraceActivationRuntime(FakeRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.starts = 0
+            self.finishes = 0
+
+        def start_insights_run(self, **kwargs):
+            self.starts += 1
+            return super().start_insights_run(**kwargs)
+
+        def finish_insights_run(self, **kwargs):
+            self.finishes += 1
+            return super().finish_insights_run(**kwargs)
+
         def trace_assertion_evidence(self, **kwargs):
             evidence = list(super().trace_assertion_evidence(**kwargs))
             if kwargs["traffic_path"].parent.name == "issue-013":
@@ -746,6 +1027,7 @@ def test_failed_hosted_trace_activation_is_incomplete() -> None:
                 evidence[0] = tuple(assertions)
             return tuple(evidence)
 
+    runtime = FailedTraceActivationRuntime()
     result = execute(
         agents=agents,
         issues=issues,
@@ -754,7 +1036,7 @@ def test_failed_hosted_trace_activation_is_incomplete() -> None:
             for agent in agents["agents"]
         },
         registry=registry,
-        runtime=FailedTraceActivationRuntime(),
+        runtime=runtime,
         seed=1,
     )
     issue = next(
@@ -767,6 +1049,10 @@ def test_failed_hosted_trace_activation_is_incomplete() -> None:
     assert issue.endpoint_request_summaries[0].trace_assertion_results[0] == (
         TraceAssertionEvidence("one_balance_call", False)
     )
+    assert issue.insight_references == []
+    assert issue.observed_insights == []
+    assert runtime.starts > 0
+    assert runtime.finishes > 0
 
 
 def test_unhandled_baseline_error_fails_terminal_evidence() -> None:
