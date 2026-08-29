@@ -129,11 +129,12 @@ def build_graph():
         lowered = text.lower()
         if "switch" in lowered and " to " in lowered:
             source_trips = requested_trips(lowered.split(" to ", 1)[0])
-            return {
-                "trip": source_trips[0],
-                "confirmed": "confirm" in text.lower(),
-                "errors": [],
-            }
+            if source_trips:
+                return {
+                    "trip": source_trips[0],
+                    "confirmed": "confirm" in text.lower(),
+                    "errors": [],
+                }
         return {
             "trip": parse_trip(text),
             "confirmed": "confirm" in text.lower(),

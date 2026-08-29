@@ -547,6 +547,7 @@ def test_travel_switch_parses_destination_without_comparison() -> None:
         / "app.py"
     ).read_text(encoding="utf-8")
     assert 'lowered.split(" to ", 1)[0]' in source
+    assert "if source_trips:" in source
     assert 'if state.get("trip")' not in source
 
 
