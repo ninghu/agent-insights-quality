@@ -59,9 +59,33 @@ def _validate_value_schema(
 
 
 def _validate_prompt_definition(value: dict[str, Any], label: str) -> None:
-    definition = value.get("definition")
-    if isinstance(definition, dict) and "tools" in definition:
-        raise ContractError(f"{label} pure Prompt definition cannot contain tools")
+    forbidden_tool_keys = {
+        "function_call",
+        "functions",
+        "parallel_tool_calls",
+        "tool",
+        "tool_choice",
+        "tool_config",
+        "tool_configs",
+        "tool_fixtures",
+        "tool_resources",
+        "tools",
+    }
+
+    def contains_tool_configuration(item: Any) -> bool:
+        if isinstance(item, dict):
+            return bool(forbidden_tool_keys.intersection(item)) or any(
+                contains_tool_configuration(child) for child in item.values()
+            )
+        if isinstance(item, list):
+            return any(contains_tool_configuration(child) for child in item)
+        return False
+
+    if contains_tool_configuration(value):
+        raise ContractError(
+            f"{label} pure Prompt definition cannot contain tool or "
+            "function-calling configuration"
+        )
     _validate_schema(value, PROMPT_DEFINITION_SCHEMA_PATH, label)
 
 

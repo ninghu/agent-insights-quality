@@ -81,21 +81,83 @@ def test_catalog_rejects_reclassified_fixed_agent() -> None:
         validate_semantics(tampered, issues, require_paths=False)
 
 
-def test_prompt_contract_rejects_tools_and_tool_fixtures() -> None:
-    with pytest.raises(ContractError, match="cannot contain tools"):
+def _valid_prompt_definition() -> dict:
+    return {
+        "name": "weather-agent",
+        "description": "Synthetic public-safe quality agent.",
+        "definition": {
+            "kind": "prompt",
+            "model": "gpt-5.4-mini",
+            "instructions": "Synthetic instructions.",
+        },
+        "metadata": {
+            "traffic_class": "synthetic",
+            "data_class": "public-safe",
+            "logical_version": "v0",
+            "conversation_memory": "responses_conversation",
+            "max_output_tokens": "600",
+        },
+    }
+
+
+def test_prompt_contract_accepts_pure_prompt_definition() -> None:
+    _validate_prompt_definition(_valid_prompt_definition(), "synthetic definition")
+
+
+@pytest.mark.parametrize(
+    "forbidden_key",
+    [
+        "tools",
+        "tool",
+        "tool_choice",
+        "tool_config",
+        "tool_configs",
+        "tool_fixtures",
+        "tool_resources",
+        "functions",
+        "function_call",
+        "parallel_tool_calls",
+    ],
+)
+@pytest.mark.parametrize("nested", [False, True], ids=["direct", "nested"])
+def test_prompt_contract_rejects_tool_and_function_configuration(
+    forbidden_key: str,
+    nested: bool,
+) -> None:
+    value = _valid_prompt_definition()
+    if nested:
+        value["metadata"]["unreviewed"] = {"configuration": {forbidden_key: []}}
+    else:
+        value["definition"][forbidden_key] = []
+
+    with pytest.raises(
+        ContractError,
+        match="cannot contain tool or function-calling configuration",
+    ):
         _validate_prompt_definition(
-            {
-                "name": "weather-agent",
-                "definition": {
-                    "kind": "prompt",
-                    "model": "gpt-5.4-mini",
-                    "instructions": "Synthetic instructions.",
-                    "tools": [],
-                },
-                "metadata": {"logical_version": "v0"},
-            },
+            value,
             "synthetic definition",
         )
+
+
+@pytest.mark.parametrize(
+    ("location", "extra"),
+    [
+        ("root", {"unreviewed": "value"}),
+        ("definition", {"unreviewed": "value"}),
+        ("metadata", {"unreviewed": "value"}),
+    ],
+)
+def test_prompt_contract_rejects_unreviewed_properties(
+    location: str,
+    extra: dict,
+) -> None:
+    value = _valid_prompt_definition()
+    target = value if location == "root" else value[location]
+    target.update(extra)
+
+    with pytest.raises(ContractError, match="Additional properties are not allowed"):
+        _validate_prompt_definition(value, "synthetic definition")
 
 
 def test_prompt_source_delta_requires_exact_json_types() -> None:
