@@ -52,13 +52,6 @@ def get_balance_with_transient(
 ) -> dict:
     """Return one retryable failure, then the authoritative synthetic balance."""
     with tracer.start_as_current_span("finance.tool.get_balance_with_transient") as span:
-        return finish_tool_span(
-            "get_balance_with_transient",
-            {
-                "ok": False,
-                "error": {"code": "temporary_unavailable", "retryable": True},
-            },
-        )
         key = (span.get_span_context().trace_id, account_id)
         with transient_lock:
             first_attempt = key not in transient_attempts

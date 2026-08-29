@@ -568,6 +568,70 @@ def test_travel_issue_sources_match_reviewed_deltas() -> None:
         }
 
 
+def test_finance_issue_sources_match_reviewed_deltas() -> None:
+    root = ROOT / "agents" / "finance-agent"
+    baseline_root = root / "v0" / "source"
+    manifest = yaml.safe_load(
+        (ROOT / "tests" / "fixtures" / "finance_issue_source_deltas.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["contract_version"] == "1.0"
+    assert manifest["baseline"] == "agents/finance-agent/v0/source"
+    issues = manifest["issues"]
+    assert set(issues) == {
+        "issue-013",
+        "issue-014",
+        "issue-015",
+        "issue-016",
+        "issue-017",
+        "issue-018",
+        "issue-019",
+        "issue-020",
+    }
+
+    baseline_files = {
+        path.relative_to(baseline_root).as_posix(): path
+        for path in baseline_root.rglob("*")
+        if _is_source_file(path)
+    }
+    baseline_app = baseline_files["app.py"].read_text(encoding="utf-8")
+    for issue_id, reviewed in issues.items():
+        issue_root = root / "issues" / issue_id
+        implementation = yaml.safe_load(
+            (issue_root / "implementation.yaml").read_text(encoding="utf-8")
+        )
+        assert (
+            reviewed["declared_delta"]
+            == implementation["injected_defect"]["single_root"]
+        )
+        issue_files = {
+            path.relative_to(issue_root / "source").as_posix(): path
+            for path in (issue_root / "source").rglob("*")
+            if _is_source_file(path)
+        }
+        assert set(issue_files) == set(baseline_files)
+        for relative_path, baseline_path in baseline_files.items():
+            if relative_path == "app.py":
+                actual_diff = _normalized_source_diff(
+                    baseline_app,
+                    issue_files[relative_path].read_text(encoding="utf-8"),
+                )
+                assert actual_diff == reviewed["expected_app_diff"]
+            else:
+                assert issue_files[relative_path].read_bytes() == baseline_path.read_bytes()
+
+    for issue_id in ("issue-016", "issue-017", "issue-019"):
+        traffic = json.loads(
+            (root / "issues" / issue_id / "traffic.json").read_text(encoding="utf-8")
+        )
+        request_texts = [
+            request["request"]["body"]["input"][0]["content"][0]["text"]
+            for request in traffic["requests"]
+        ]
+        assert all("acct-demo-missing" in text for text in request_texts)
+
+
 def test_hosted_framework_and_identity_boundaries() -> None:
     finance = (
         ROOT / "agents" / "finance-agent" / "v0" / "source" / "app.py"

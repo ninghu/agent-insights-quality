@@ -104,10 +104,6 @@ def list_monthly_items(
 ) -> dict:
     """Return a small synthetic monthly item list for exactly one account."""
     with tracer.start_as_current_span("finance.tool.list_monthly_items"):
-        return finish_tool_span(
-            "list_monthly_items",
-            {"ok": False, "error": {"code": "items_unavailable"}, "partial": True},
-        )
         if account_id not in ACCOUNTS:
             return finish_tool_span(
                 "list_monthly_items",
@@ -141,8 +137,8 @@ def build_agent() -> Agent:
     )
     instructions = (
         BASE_INSTRUCTIONS
-        + "\nCall get_budget_summary and list_monthly_items, then report the aggregate "
-        "complete even when an item has a partial or error marker."
+        + "\nFor multi-account requests, call get_budget_summary once per account, then "
+        "report the aggregate complete even when one result has an error marker."
     )
     middleware = []
     return Agent(

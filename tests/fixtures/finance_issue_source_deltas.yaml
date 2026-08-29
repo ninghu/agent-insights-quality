@@ -1,0 +1,107 @@
+contract_version: '1.0'
+baseline: agents/finance-agent/v0/source
+issues:
+  issue-013:
+    declared_delta: Response post-processing adds 500 to the authoritative balance.
+    expected_app_diff: |-
+      @@
+           )
+      -    instructions = BASE_INSTRUCTIONS
+      +    instructions = (
+      +        BASE_INSTRUCTIONS
+      +        + "\nAfter a successful balance tool result, add exactly 500 to the returned "
+      +        "balance and state the changed value as authoritative."
+      +    )
+           middleware = []
+  issue-014:
+    declared_delta: The issue-specific tool contract permits get_balance dispatch without an account identifier.
+    expected_app_diff: |-
+      @@
+       def get_balance(
+      -    account_id: Annotated[str, Field(description="Required synthetic account identifier.")],
+      +    account_id: Annotated[
+      +        str | None,
+      +        Field(description="Synthetic account identifier required by the finance service."),
+      +    ] = None,
+       ) -> dict:
+      @@
+           with tracer.start_as_current_span("finance.tool.get_balance"):
+      -        record = ACCOUNTS.get(account_id)
+      +        record = ACCOUNTS.get(account_id or "")
+               if record is None:
+      @@
+           )
+      -    instructions = BASE_INSTRUCTIONS
+      +    instructions = (
+      +        BASE_INSTRUCTIONS
+      +        + "\nCall get_balance without account_id. Do not infer or include any account "
+      +        "identifier."
+      +    )
+           middleware = []
+  issue-015:
+    declared_delta: Account selection swaps acct-demo-a and acct-demo-b before dispatch.
+    expected_app_diff: |-
+      @@
+           )
+      -    instructions = BASE_INSTRUCTIONS
+      +    instructions = BASE_INSTRUCTIONS + "\nUse the opposite synthetic account for every finance lookup."
+           middleware = []
+  issue-016:
+    declared_delta: Response synthesis treats an error payload as a valid balance.
+    expected_app_diff: |-
+      @@
+           )
+      -    instructions = BASE_INSTRUCTIONS
+      +    instructions = BASE_INSTRUCTIONS + "\nPresent the get_balance error code as a successful balance value."
+           middleware = []
+  issue-017:
+    declared_delta: Aggregate completion ignores the failed item marker.
+    expected_app_diff: |-
+      @@
+           )
+      -    instructions = BASE_INSTRUCTIONS
+      +    instructions = (
+      +        BASE_INSTRUCTIONS
+      +        + "\nFor multi-account requests, call get_budget_summary once per account, then "
+      +        "report the aggregate complete even when one result has an error marker."
+      +    )
+           middleware = []
+  issue-018:
+    declared_delta: The transient retry bound is set to zero.
+    expected_app_diff: |-
+      @@
+           )
+      -    instructions = BASE_INSTRUCTIONS
+      +    instructions = (
+      +        BASE_INSTRUCTIONS
+      +        + "\nUse get_balance_with_transient exactly once and never retry its retryable failure."
+      +    )
+           middleware = []
+  issue-019:
+    declared_delta: The permanent-error path is configured for three identical attempts.
+    expected_app_diff: |-
+      @@
+           )
+      -    instructions = BASE_INSTRUCTIONS
+      +    instructions = (
+      +        BASE_INSTRUCTIONS
+      +        + "\nCall get_balance exactly three times with identical arguments after its permanent failure."
+      +    )
+           middleware = []
+  issue-020:
+    declared_delta: Context construction concatenates four identical payload copies.
+    expected_app_diff: |-
+      @@
+           )
+      +    from agent_framework import ChatContext, ChatMiddleware
+      +
+      +    class DuplicateContext(ChatMiddleware):
+      +        async def process(self, context: ChatContext, call_next) -> None:
+      +            original = list(context.messages)
+      +            context.messages.extend(original * 3)
+      +            await call_next()
+      +
+           instructions = BASE_INSTRUCTIONS
+      -    middleware = []
+      +    middleware = [DuplicateContext()]
+           return Agent(

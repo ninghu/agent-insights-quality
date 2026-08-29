@@ -18,7 +18,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Give the complete budget and monthly items for acct-demo-a."
+                  "text": "Give the complete budget summary for acct-demo-a and acct-demo-missing."
                 }
               ]
             }
@@ -50,7 +50,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Give the complete budget and monthly items for acct-demo-b."
+                  "text": "Give the complete budget summary for acct-demo-b and acct-demo-missing."
                 }
               ]
             }
@@ -82,7 +82,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Give the complete budget and monthly items for acct-demo-a."
+                  "text": "Give the complete budget summary for acct-demo-a and acct-demo-missing."
                 }
               ]
             }
@@ -114,7 +114,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Give the complete budget and monthly items for acct-demo-b."
+                  "text": "Give the complete budget summary for acct-demo-b and acct-demo-missing."
                 }
               ]
             }
@@ -146,7 +146,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Give the complete budget and monthly items for acct-demo-a."
+                  "text": "Give the complete budget summary for acct-demo-a and acct-demo-missing."
                 }
               ]
             }

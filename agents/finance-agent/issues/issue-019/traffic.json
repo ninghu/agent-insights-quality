@@ -18,7 +18,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Show the balance for acct-demo-a."
+                  "text": "Show the balance for acct-demo-missing."
                 }
               ]
             }
@@ -50,7 +50,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Show the balance for acct-demo-b."
+                  "text": "Show the balance for acct-demo-missing."
                 }
               ]
             }
@@ -82,7 +82,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Show the balance for acct-demo-a."
+                  "text": "Show the balance for acct-demo-missing."
                 }
               ]
             }
@@ -114,7 +114,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Show the balance for acct-demo-b."
+                  "text": "Show the balance for acct-demo-missing."
                 }
               ]
             }
@@ -146,7 +146,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Show the balance for acct-demo-a."
+                  "text": "Show the balance for acct-demo-missing."
                 }
               ]
             }

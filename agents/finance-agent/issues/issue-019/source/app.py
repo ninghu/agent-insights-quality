@@ -34,13 +34,6 @@ def get_balance(
 ) -> dict:
     """Return the authoritative balance for exactly one synthetic account."""
     with tracer.start_as_current_span("finance.tool.get_balance"):
-        return finish_tool_span(
-            "get_balance",
-            {
-                "ok": False,
-                "error": {"code": "account_not_found", "retryable": False},
-            },
-        )
         record = ACCOUNTS.get(account_id)
         if record is None:
             return finish_tool_span(
