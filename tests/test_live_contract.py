@@ -559,7 +559,7 @@ def _tool_trace_row(
     result: dict | None = None,
     ok: bool | None = None,
     timestamp: str = "2026-08-28T10:00:00+00:00",
-    duration: str = "0:00:00.010",
+    duration: str | float = 10.0,
 ) -> dict:
     return {
         "operation_id": "a" * 32,
@@ -872,6 +872,76 @@ def test_trace_assertions_require_exact_response_operation_correlation() -> None
     )
 
 
+def test_negative_argument_assertions_require_parsed_telemetry() -> None:
+    omission_fixture = {
+        "body": {"input": []},
+        "trace_assertions": [
+            {
+                "name": "argument_omitted",
+                "kind": "tool_argument_presence",
+                "tool_name": "get_balance",
+                "argument": "account_id",
+                "present": False,
+            }
+        ],
+    }
+    missing_payload = _tool_trace_row("get_balance", ok=False)
+    explicit_empty = _tool_trace_row(
+        "get_balance",
+        arguments={},
+        ok=False,
+    )
+    assert _trace_assertion_result(
+        [missing_payload],
+        omission_fixture,
+    )[0].passed is False
+    assert _trace_assertion_result(
+        [explicit_empty],
+        omission_fixture,
+    )[0].passed is True
+
+    scope_fixture = {
+        "body": {
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "Switch from trip-alpha to trip-beta.",
+                        }
+                    ],
+                }
+            ]
+        },
+        "trace_assertions": [
+            {
+                "name": "stale_scope",
+                "kind": "scope_relation",
+                "tool_name": "search_flights",
+                "scope_kind": "trip",
+                "request_scope": "last",
+                "argument": "trip",
+                "request_tool_equal": False,
+            }
+        ],
+    }
+    missing_scope = _tool_trace_row("search_flights", ok=True)
+    stale_scope = _tool_trace_row(
+        "search_flights",
+        arguments={"trip": "trip-alpha"},
+        ok=True,
+    )
+    assert _trace_assertion_result(
+        [missing_scope],
+        scope_fixture,
+    )[0].passed is False
+    assert _trace_assertion_result(
+        [stale_scope],
+        scope_fixture,
+    )[0].passed is True
+
+
 def test_trace_row_query_projects_private_values_only_for_in_memory_evaluation(
     monkeypatch,
 ) -> None:
@@ -913,14 +983,14 @@ def test_trace_assertions_cover_payload_cardinality_and_span_order() -> None:
         result={"result_count": 80},
         ok=True,
         timestamp="2026-08-28T10:00:00+00:00",
-        duration="0:00:00.010",
+        duration=10.0,
     )
     second = _tool_trace_row(
         "search_hotels",
         result={"result_count": 80},
         ok=True,
         timestamp="2026-08-28T10:00:00.020+00:00",
-        duration="0:00:00.010",
+        duration=10.0,
     )
     fixture = {
         "body": {"input": []},

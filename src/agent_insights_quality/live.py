@@ -1874,6 +1874,8 @@ def _scope_values(text: str, scope_kind: str) -> list[str]:
 def _duration_seconds(value: Any) -> float:
     if hasattr(value, "total_seconds"):
         return float(value.total_seconds())
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value) / 1000.0
     text = str(value or "")
     match = re.fullmatch(
         r"(?:(\d+)\.)?(\d{1,2}):(\d{2}):(\d{2}(?:\.\d+)?)",
@@ -2111,20 +2113,16 @@ def _trace_assertion_result(
         if kind == "tool_call_count":
             passed = len(tools) == assertion["count"]
         elif kind == "tool_argument_presence":
+            parsed_arguments = [
+                _json_trace_value(row.get("tool_arguments")) for row in tools
+            ]
             passed = bool(tools) and all(
-                (
-                    assertion["argument"]
-                    in (
-                        value
-                        if isinstance(
-                            value := _json_trace_value(row.get("tool_arguments")),
-                            dict,
-                        )
-                        else {}
-                    )
+                isinstance(arguments, dict)
+                and (
+                    (assertion["argument"] in arguments)
+                    is assertion["present"]
                 )
-                is assertion["present"]
-                for row in tools
+                for arguments in parsed_arguments
             )
         elif kind == "scope_relation":
             scopes = _scope_values(request_text, assertion["scope_kind"])
@@ -2148,7 +2146,9 @@ def _trace_assertion_result(
                     else None
                 )
                 checks = [
-                    bool(tool_scope == selected)
+                    isinstance(arguments, dict)
+                    and assertion["argument"] in arguments
+                    and bool(tool_scope == selected)
                     is assertion["request_tool_equal"]
                 ]
                 if "request_result_equal" in assertion:

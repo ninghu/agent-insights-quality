@@ -42,18 +42,10 @@ def finish_tool_span(name: str, result: dict) -> dict:
 
 @tool(approval_mode="never_require")
 def get_balance(
-    account_id: Annotated[
-        str | None,
-        Field(description="Synthetic account identifier required by the finance service."),
-    ] = None,
+    account_id: Annotated[str, Field(description="Required synthetic account identifier.")],
 ) -> dict:
     """Return the authoritative balance for exactly one synthetic account."""
     with tracer.start_as_current_span("finance.tool.get_balance"):
-        if account_id is None:
-            return finish_tool_span(
-                "get_balance",
-                {"ok": False, "error": {"code": "account_id_required"}},
-            )
         record = ACCOUNTS.get(account_id)
         if record is None:
             return finish_tool_span(

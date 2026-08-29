@@ -519,6 +519,7 @@ def test_travel_switch_parses_destination_without_comparison() -> None:
     assert len(conversation_ids) == 5
     for request in requests:
         request_text = request["request"]["body"]["input"][0]["content"][0]["text"]
+        assert "compare" not in request_text.lower()
         source_text = request_text.lower().split(" to ", 1)[0]
         source_trip = options.requested_trips(source_text)[0]
         destination_trip = options.parse_trip(request_text)
@@ -723,11 +724,10 @@ def test_finance_issue_sources_match_reviewed_deltas() -> None:
                     baseline_app,
                     issue_files[relative_path].read_text(encoding="utf-8"),
                 )
-                assert (
-                    "sha256:" + hashlib.sha256(actual_diff.encode()).hexdigest()
-                    == reviewed["expected_app_diff_sha256"]
+                actual_diff = "\n".join(
+                    line for line in actual_diff.splitlines() if line != " "
                 )
-                assert reviewed["required_app_marker"] in actual_diff
+                assert actual_diff == reviewed["expected_app_diff"]
             else:
                 assert issue_files[relative_path].read_bytes() == baseline_path.read_bytes()
 
@@ -850,8 +850,9 @@ def test_hosted_framework_and_identity_boundaries() -> None:
         / "source"
         / "app.py"
     ).read_text(encoding="utf-8")
-    assert "str | None" in issue_014
-    assert "] = None" in issue_014
+    assert "str | None" not in issue_014
+    assert "] = None" not in issue_014
+    assert 'Field(description="Required synthetic account identifier.")' in issue_014
 
 
 def test_support_baseline_asserts_handled_error_responses() -> None:

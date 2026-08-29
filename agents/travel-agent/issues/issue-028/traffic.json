@@ -104,7 +104,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Switch from trip-gamma to trip-alpha and compare flight and hotel."
+                  "text": "Switch from trip-gamma to trip-alpha and find a hotel."
                 }
               ]
             }
@@ -118,19 +118,10 @@
         "behavior": "Uses the source trip after an explicit switch.",
         "defect_observed": true,
         "semantic_assertions": {
-          "required_terms_all": ["trip-gamma", "flight-demo-0", "hotel-demo-0"],
+          "required_terms_all": ["trip-gamma", "hotel-demo-0"],
           "forbidden_terms": ["trip-alpha"]
         },
         "trace_assertions": [
-          {
-            "name": "flight_scope_uses_switch_source",
-            "kind": "scope_relation",
-            "tool_name": "search_flights",
-            "scope_kind": "trip",
-            "request_scope": "last",
-            "argument": "trip",
-            "request_tool_equal": false
-          },
           {
             "name": "hotel_scope_uses_switch_source",
             "kind": "scope_relation",
