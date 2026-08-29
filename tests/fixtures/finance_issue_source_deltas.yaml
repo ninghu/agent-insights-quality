@@ -706,20 +706,11 @@ issues:
     declared_delta: "Context construction concatenates four identical payload copies."
     expected_app_diff: |-
       @@
-      +import json
-       import os
-      @@
       -from agent_framework import Agent, tool
       +from agent_framework import (
       +    Agent,
       +    ChatContext,
       +    ChatMiddleware,
-      +    ChatResponse,
-      +    ChatResponseUpdate,
-      +    Content,
-      +    Message,
-      +    MiddlewareTermination,
-      +    ResponseStream,
       +    tool,
       +)
        from agent_framework.foundry import FoundryChatClient
@@ -744,79 +735,7 @@ issues:
       +            await call_next()
       +            return
       +        context.messages.extend(original * 3)
-      +        account_id = "acct-demo-b" if "acct-demo-b" in folded else "acct-demo-a"
-      +        balance = {"ok": True, "account_id": account_id, **ACCOUNTS[account_id]}
-      +        items = {
-      +            "ok": True,
-      +            "account_id": account_id,
-      +            "items": [
-      +                {"label": "Public transit", "amount": 45.0},
-      +                {"label": "Groceries", "amount": 132.5},
-      +                {"label": "Utilities", "amount": 88.0},
-      +            ],
-      +        }
-      +        for name, result in (
-      +            ("get_balance", balance),
-      +            ("list_monthly_items", items),
-      +        ):
-      +            with tracer.start_as_current_span(f"finance.tool.{name}") as span:
-      +                span.set_attribute("gen_ai.operation.name", "execute_tool")
-      +                span.set_attribute("gen_ai.tool.name", name)
-      +                span.set_attribute(
-      +                    "gen_ai.tool.call.arguments",
-      +                    json.dumps({"account_id": account_id}, sort_keys=True),
-      +                )
-      +                span.set_attribute(
-      +                    "gen_ai.tool.call.result",
-      +                    json.dumps(result, sort_keys=True),
-      +                )
-      +                span.set_attribute("tool.ok", True)
-      +        answer = (
-      +            f"{account_id} has balance USD {balance['balance']:.2f} and "
-      +            f"{len(items['items'])} monthly items."
-      +        )
-      +        input_messages = [
-      +            {
-      +                "role": str(message.role),
-      +                "parts": [{"type": "text", "content": message.text or ""}],
-      +            }
-      +            for message in context.messages
-      +        ]
-      +        with tracer.start_as_current_span("finance.model.respond") as span:
-      +            span.set_attribute("gen_ai.operation.name", "chat")
-      +            span.set_attribute(
-      +                "gen_ai.input.messages",
-      +                json.dumps(input_messages, sort_keys=True),
-      +            )
-      +            span.set_attribute(
-      +                "gen_ai.output.messages",
-      +                json.dumps(
-      +                    [
-      +                        {
-      +                            "role": "assistant",
-      +                            "parts": [{"type": "text", "content": answer}],
-      +                        }
-      +                    ],
-      +                    sort_keys=True,
-      +                ),
-      +            )
-      +        response = ChatResponse(
-      +            messages=[Message(role="assistant", contents=[answer])]
-      +        )
-      +        if context.stream:
-      +            async def updates():
-      +                yield ChatResponseUpdate(
-      +                    role="assistant",
-      +                    contents=[Content.from_text(answer)],
-      +                )
-      +
-      +            context.result = ResponseStream(
-      +                updates(),
-      +                finalizer=ChatResponse.from_updates,
-      +            )
-      +        else:
-      +            context.result = response
-      +        raise MiddlewareTermination
+      +        await call_next()
       +
       +
        def build_agent() -> Agent:

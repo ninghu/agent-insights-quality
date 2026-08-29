@@ -775,8 +775,7 @@ def test_finance_issue_sources_match_reviewed_deltas() -> None:
                 assertion["name"]
                 for assertion in expected["trace_assertions"]
             } == required_names
-            if issue_id != "issue-020":
-                assert expected["semantic_assertions"]
+            assert expected["semantic_assertions"]
 
     deterministic_middleware = {
         "issue-013": "ContradictedBalance",
@@ -811,6 +810,16 @@ def test_finance_issue_sources_match_reviewed_deltas() -> None:
         assert predicate in source
         assert "del call_next" not in source
         assert source.index("await call_next()") < source.index(activation)
+
+    duplicate_context = (
+        root / "issues" / "issue-020" / "source" / "app.py"
+    ).read_text(encoding="utf-8")
+    assert duplicate_context.count("await call_next()") == 2
+    assert "MiddlewareTermination" not in duplicate_context
+    assert "gen_ai.input.messages" not in duplicate_context
+    assert "gen_ai.output.messages" not in duplicate_context
+    assert 'start_as_current_span("finance.model.respond")' not in duplicate_context
+    assert 'start_as_current_span(f"finance.tool.' not in duplicate_context
 
 
 def test_hosted_framework_and_identity_boundaries() -> None:
