@@ -854,7 +854,8 @@ def _validate_issue_cards(
         or not all(assessment["fields"].values())
     ):
         raise ContractError(
-            "MATCHED assessment requires one terminal-proven MATCHED card"
+            "MATCHED assessment requires one terminal-proven card with "
+            "identical all-fields-passing evidence"
         )
     card_types = [item["finding_type"] for item in evaluations]
     top_type = assessment["finding_type"]

@@ -61,8 +61,6 @@ def json_values_equal(actual: Any, expected: Any) -> bool:
 
 def content_hash(value: Any) -> str:
     return "sha256:" + hashlib.sha256(canonical_bytes(value)).hexdigest()
-
-
 def file_hash(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
