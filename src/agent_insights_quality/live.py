@@ -62,7 +62,11 @@ _LOGS_SCOPE = "https://api.loganalytics.io/.default"
 _TRANSIENT_HTTP = {408, 424, 429, 500, 502, 503, 504}
 _DEFAULT_REQUEST_TIMEOUT_SECONDS = 300
 _HOSTED_RESPONSE_TIMEOUT_SECONDS = 600
-_TRACE_ASSERTION_STABLE_SECONDS = 120
+_TRACE_ASSERTION_DEADLINE_SECONDS = 15 * 60
+_TRACE_ASSERTION_POLL_SECONDS = 15
+_TRACE_ASSERTION_PROGRESS_SECONDS = 60
+# Reuse the reviewed clean-window uncertainty horizon for late trace ingestion.
+_TRACE_ASSERTION_STABLE_SECONDS = TRAFFIC_UNCERTAINTY_SECONDS
 _AUTH_PROGRESS = ProgressReporter("aiq-auth")
 
 
@@ -1054,12 +1058,16 @@ union traces, dependencies, requests
         fixtures = tuple(_normalize_fixture(item) for item in requests)
         if not any(fixture["trace_assertions"] for fixture in fixtures):
             return tuple(() for _ in fixtures)
-        deadline = self._monotonic() + 15 * 60
-        next_progress = self._monotonic() + 60
+        deadline = self._monotonic() + _TRACE_ASSERTION_DEADLINE_SECONDS
+        next_progress = self._monotonic() + _TRACE_ASSERTION_PROGRESS_SECONDS
         last_results: tuple[tuple[TraceAssertionEvidence, ...], ...] | None = None
-        stable_signature: tuple[str, ...] | None = None
+        stable_signature: tuple[
+            tuple[tuple[str, str], ...],
+            tuple[tuple[tuple[str, bool], ...], ...],
+            tuple[str, ...],
+        ] | None = None
         stable_since: float | None = None
-        while self._monotonic() < deadline:
+        while True:
             rows = self._trace_rows(operation_ids, response_references)
             correlated = _correlated_request_rows(
                 rows,
@@ -1083,33 +1091,54 @@ union traces, dependencies, requests
                         strict=True,
                     )
                 )
-                if all(
+                passing = all(
                     assertion.passed
                     for request_results in last_results
                     for assertion in request_results
-                ):
-                    return last_results
-                signature = _trace_rows_signature(rows)
-                now = self._monotonic()
-                if signature != stable_signature:
-                    stable_signature = signature
-                    stable_since = now
-                elif (
-                    stable_since is not None
-                    and now - stable_since >= _TRACE_ASSERTION_STABLE_SECONDS
-                ):
-                    return last_results
+                )
+                if passing:
+                    signature = _trace_assertion_stability_signature(
+                        rows,
+                        correlated,
+                        response_references,
+                        last_results,
+                    )
+                    now = self._monotonic()
+                    if signature != stable_signature:
+                        stable_signature = signature
+                        stable_since = now
+                    elif (
+                        stable_since is not None
+                        and now - stable_since >= _TRACE_ASSERTION_STABLE_SECONDS
+                    ):
+                        return last_results
+                else:
+                    stable_signature = None
+                    stable_since = None
             else:
+                passing = False
                 stable_signature = None
                 stable_since = None
-            if self._monotonic() >= next_progress:
-                elapsed = int(15 * 60 - max(deadline - self._monotonic(), 0))
-                self.report_progress(
-                    f"trace activation evidence is stabilizing ({elapsed}s)"
+            now = self._monotonic()
+            if now >= deadline:
+                break
+            if now >= next_progress:
+                elapsed = int(
+                    _TRACE_ASSERTION_DEADLINE_SECONDS - max(deadline - now, 0)
                 )
-                next_progress = self._monotonic() + 60
-            self._sleep(15)
-        if last_results is not None:
+                state = (
+                    "passing"
+                    if passing
+                    else "failing"
+                    if correlated is not None
+                    else "correlation"
+                )
+                self.report_progress(
+                    f"trace activation {state} evidence is stabilizing ({elapsed}s)"
+                )
+                next_progress = now + _TRACE_ASSERTION_PROGRESS_SECONDS
+            self._sleep(min(_TRACE_ASSERTION_POLL_SECONDS, deadline - now))
+        if correlated is not None and last_results is not None:
             return last_results
         raise ContractError(
             "Trace assertions require exact response-to-operation correlation"
@@ -1837,6 +1866,34 @@ def _trace_rows_signature(rows: list[dict[str, Any]]) -> tuple[str, ...]:
             for row in rows
         )
     )
+
+
+def _trace_assertion_stability_signature(
+    rows: list[dict[str, Any]],
+    correlated: tuple[list[dict[str, Any]], ...],
+    response_references: tuple[str, ...],
+    results: tuple[tuple[TraceAssertionEvidence, ...], ...],
+) -> tuple[
+    tuple[tuple[str, str], ...],
+    tuple[tuple[tuple[str, bool], ...], ...],
+    tuple[str, ...],
+]:
+    correlation = tuple(
+        (
+            reference,
+            str(request_rows[0].get("operation_id") or "").lower(),
+        )
+        for reference, request_rows in zip(
+            response_references,
+            correlated,
+            strict=True,
+        )
+    )
+    assertion_results = tuple(
+        tuple((assertion.assertion, assertion.passed) for assertion in request_results)
+        for request_results in results
+    )
+    return correlation, assertion_results, _trace_rows_signature(rows)
 
 
 def _json_trace_value(value: Any) -> Any:

@@ -126,6 +126,12 @@ The runner prints flushed, thread-safe progress lines for each Agent/version and
 telemetry, trace, and Agent Insights stages. Long telemetry waits, Insight runs, and remote retries
 emit periodic heartbeats without exposing URLs, payloads, or private identifiers.
 
+Hosted trace assertions poll every 15 seconds through the existing 15-minute bounded ingestion
+deadline. Missing or failing evidence waits for that deadline; passing evidence returns early only
+after its response-to-operation mapping, assertion outcomes, and correlated trace rows remain
+unchanged for the reviewed 10-minute traffic uncertainty horizon. New evidence resets that interval.
+Monotonic proof that response-to-operation correlation is ambiguous may still fail immediately.
+
 Issue source, traffic, source-delta manifests, and version digests are reviewed contracts. Equal
 nonzero request, response, and usable-response counts plus a verified natural trace contract prove
 endpoint execution. A baseline additionally requires all reviewed deterministic assertions and one

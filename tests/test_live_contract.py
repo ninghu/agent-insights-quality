@@ -1129,10 +1129,12 @@ def test_trace_assertion_correlation_fails_immediately_when_ambiguous(
     assert sleeps == []
 
 
-def test_trace_assertion_returns_stable_failed_evidence_before_deadline(
+def test_trace_assertion_stable_failure_waits_for_deadline(
     tmp_path,
 ) -> None:
     monotonic = [0.0]
+    poll_times = []
+    progress = []
     runtime = LiveRuntime(
         _runtime()._profile,
         token_provider=lambda _: "synthetic-token",
@@ -1149,10 +1151,13 @@ def test_trace_assertion_returns_stable_failed_evidence_before_deadline(
     ]
     traffic_path = tmp_path / "traffic.json"
     _write_trace_assertion_traffic(traffic_path)
-    runtime._trace_rows = lambda *_args: rows  # type: ignore[method-assign]
+    runtime._trace_rows = (  # type: ignore[method-assign]
+        lambda *_args: poll_times.append(monotonic[0]) or rows
+    )
     runtime._sleep = lambda seconds: monotonic.__setitem__(
         0, monotonic[0] + seconds
     )
+    runtime.report_progress = progress.append  # type: ignore[method-assign]
 
     evidence = runtime.trace_assertion_evidence(
         operation_ids=(operation_id,),
@@ -1161,10 +1166,13 @@ def test_trace_assertion_returns_stable_failed_evidence_before_deadline(
     )
 
     assert evidence[0][0].passed is False
-    assert monotonic[0] == 120
+    assert monotonic[0] == 15 * 60
+    assert poll_times[-1] == 15 * 60
+    assert progress
+    assert "failing evidence is stabilizing" in progress[-1]
 
 
-def test_trace_assertion_allows_transient_ingestion_to_complete(
+def test_trace_assertion_observes_span_ingested_after_135_seconds(
     tmp_path,
 ) -> None:
     monotonic = [0.0]
@@ -1192,7 +1200,7 @@ def test_trace_assertion_allows_transient_ingestion_to_complete(
     traffic_path = tmp_path / "traffic.json"
     _write_trace_assertion_traffic(traffic_path)
     runtime._trace_rows = (  # type: ignore[method-assign]
-        lambda *_args: incomplete if monotonic[0] < 90 else complete
+        lambda *_args: incomplete if monotonic[0] < 135 else complete
     )
     runtime._sleep = lambda seconds: monotonic.__setitem__(
         0, monotonic[0] + seconds
@@ -1205,7 +1213,117 @@ def test_trace_assertion_allows_transient_ingestion_to_complete(
     )
 
     assert evidence[0][0].passed is True
-    assert monotonic[0] == 90
+    assert monotonic[0] == 135 + 10 * 60
+
+
+def test_trace_assertion_late_duplicate_invalidates_stabilizing_pass(
+    tmp_path,
+) -> None:
+    monotonic = [0.0]
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+    )
+    operation_id = "a" * 32
+    reference = "resp_A1b2C3d4E5f6"
+    first = {
+        **_tool_trace_row("lookup"),
+        "operation_id": operation_id,
+        "matched_reference": reference,
+    }
+    duplicate = {
+        **first,
+        "timestamp": "2026-08-28T10:00:01+00:00",
+    }
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(traffic_path)
+    runtime._trace_rows = (  # type: ignore[method-assign]
+        lambda *_args: [first] if monotonic[0] < 135 else [first, duplicate]
+    )
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
+    )
+
+    evidence = runtime.trace_assertion_evidence(
+        operation_ids=(operation_id,),
+        response_references=(reference,),
+        traffic_path=traffic_path,
+    )
+
+    assert evidence[0][0].passed is False
+    assert monotonic[0] == 15 * 60
+
+
+def test_trace_assertion_stable_pass_waits_for_uncertainty_horizon(
+    tmp_path,
+) -> None:
+    monotonic = [0.0]
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+    )
+    operation_id = "a" * 32
+    reference = "resp_A1b2C3d4E5f6"
+    rows = [
+        {
+            **_tool_trace_row("lookup"),
+            "operation_id": operation_id,
+            "matched_reference": reference,
+        }
+    ]
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(traffic_path)
+    runtime._trace_rows = lambda *_args: rows  # type: ignore[method-assign]
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
+    )
+
+    evidence = runtime.trace_assertion_evidence(
+        operation_ids=(operation_id,),
+        response_references=(reference,),
+        traffic_path=traffic_path,
+    )
+
+    assert evidence[0][0].passed is True
+    assert monotonic[0] == 10 * 60
+
+
+def test_trace_assertion_requires_correlation_in_final_snapshot(
+    tmp_path,
+) -> None:
+    monotonic = [0.0]
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+    )
+    operation_id = "a" * 32
+    reference = "resp_A1b2C3d4E5f6"
+    rows = [
+        {
+            **_tool_trace_row("different_lookup"),
+            "operation_id": operation_id,
+            "matched_reference": reference,
+        }
+    ]
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(traffic_path)
+    runtime._trace_rows = (  # type: ignore[method-assign]
+        lambda *_args: rows if monotonic[0] < 15 * 60 else []
+    )
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
+    )
+
+    with pytest.raises(ContractError, match="exact response-to-operation correlation"):
+        runtime.trace_assertion_evidence(
+            operation_ids=(operation_id,),
+            response_references=(reference,),
+            traffic_path=traffic_path,
+        )
+    assert monotonic[0] == 15 * 60
 
 
 def test_trace_assertions_cover_payload_cardinality_and_span_order() -> None:
