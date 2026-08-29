@@ -31,7 +31,7 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Loses shared state and produces several downstream symptoms.",
+        "behavior": "One cleared shared-state mapping causes missing-ticket routing and missing-revision update symptoms.",
         "defect_observed": true
       }
     },
@@ -63,7 +63,7 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Loses shared state and produces several downstream symptoms.",
+        "behavior": "One cleared shared-state mapping causes missing-ticket routing and missing-revision update symptoms.",
         "defect_observed": true
       }
     },
@@ -95,7 +95,7 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Loses shared state and produces several downstream symptoms.",
+        "behavior": "One cleared shared-state mapping causes missing-ticket routing and missing-revision update symptoms.",
         "defect_observed": true
       }
     },
@@ -127,7 +127,7 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Loses shared state and produces several downstream symptoms.",
+        "behavior": "One cleared shared-state mapping causes missing-ticket routing and missing-revision update symptoms.",
         "defect_observed": true
       }
     },
@@ -159,7 +159,7 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Loses shared state and produces several downstream symptoms.",
+        "behavior": "One cleared shared-state mapping causes missing-ticket routing and missing-revision update symptoms.",
         "defect_observed": true
       }
     }

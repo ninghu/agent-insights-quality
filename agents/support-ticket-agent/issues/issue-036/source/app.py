@@ -111,23 +111,58 @@ async def dispatch(
             max_output_tokens,
         )
     if "optional history is unavailable" in lowered:
-        tool(
+        ticket_result = tool(
             "read_ticket",
             {"ok": True, "ticket_id": ticket_id, "ticket": TICKETS[ticket_id]},
         )
         tool("read_history", {"ok": False, "error": {"code": "history_unavailable"}})
+        ticket = ticket_result["ticket"]
         return await model_response(
-            "State concisely that the synthetic core ticket is available and optional history is unavailable.",
+            f"Report this exact synthetic core ticket: ticket ID {ticket_id}, "
+            f"revision {ticket['revision']}, status {ticket['status']}, "
+            f"summary {ticket['summary']}. State that optional history is unavailable.",
             max_output_tokens,
         )
+    state = {
+        "ticket_id": ticket_id,
+        "revision": TICKETS[ticket_id]["revision"],
+    }
     with tracer.start_as_current_span("support.state.propagation") as span:
-        span.set_attribute("state.keys_after", 0)
-    tool("read_ticket", {"ok": False, "error": {"code": "ticket_id_missing"}})
-    tool("update_ticket", {"ok": False, "error": {"code": "revision_missing"}})
-    return (
-        "The shared state lost the ticket identifier and revision, causing routing, "
-        "tool, and completion failures."
+        span.set_attribute("state.keys_before", len(state))
+        state.clear()
+        span.set_attribute("state.keys_after", len(state))
+    read_ticket_id = state.get("ticket_id")
+    read_result = tool(
+        "read_ticket",
+        {
+            "ok": read_ticket_id is not None,
+            "ticket_id": read_ticket_id,
+            "error": (
+                None
+                if read_ticket_id is not None
+                else {"code": "ticket_id_missing"}
+            ),
+        },
     )
+    expected_revision = state.get("revision")
+    update_result = tool(
+        "update_ticket",
+        {
+            "ok": expected_revision is not None,
+            "expected_revision": expected_revision,
+            "error": (
+                None
+                if expected_revision is not None
+                else {"code": "revision_missing"}
+            ),
+        },
+    )
+    symptoms = []
+    if not read_result["ok"]:
+        symptoms.append("ticket routing failed because the ticket identifier was lost")
+    if not update_result["ok"]:
+        symptoms.append("ticket update failed because the revision was lost")
+    return "Shared state propagation failed: " + "; ".join(symptoms) + "."
     ticket = tool(
         "read_ticket",
         {"ok": True, "ticket_id": ticket_id, "ticket": TICKETS[ticket_id]},
@@ -175,7 +210,7 @@ async def responses(
                 payload.get("max_output_tokens") or 400,
             )
             response = TextResponse(context, payload, text=result)
-            output_present = bool(result)
+            output_present = bool(result.strip())
             output_succeeded = True
         finally:
             span.set_attribute("aiq.terminal_response.success", output_succeeded)

@@ -275,14 +275,46 @@ def test_support_issue_sources_only_add_their_declared_defect() -> None:
         ),
         "issue-035": '    return "Update completed successfully."\n',
         "issue-036": (
+            "    state = {\n"
+            '        "ticket_id": ticket_id,\n'
+            '        "revision": TICKETS[ticket_id]["revision"],\n'
+            "    }\n"
             '    with tracer.start_as_current_span("support.state.propagation") as span:\n'
-            '        span.set_attribute("state.keys_after", 0)\n'
-            '    tool("read_ticket", {"ok": False, "error": {"code": "ticket_id_missing"}})\n'
-            '    tool("update_ticket", {"ok": False, "error": {"code": "revision_missing"}})\n'
-            "    return (\n"
-            '        "The shared state lost the ticket identifier and revision, causing routing, "\n'
-            '        "tool, and completion failures."\n'
+            '        span.set_attribute("state.keys_before", len(state))\n'
+            "        state.clear()\n"
+            '        span.set_attribute("state.keys_after", len(state))\n'
+            '    read_ticket_id = state.get("ticket_id")\n'
+            "    read_result = tool(\n"
+            '        "read_ticket",\n'
+            "        {\n"
+            '            "ok": read_ticket_id is not None,\n'
+            '            "ticket_id": read_ticket_id,\n'
+            '            "error": (\n'
+            "                None\n"
+            "                if read_ticket_id is not None\n"
+            '                else {"code": "ticket_id_missing"}\n'
+            "            ),\n"
+            "        },\n"
             "    )\n"
+            '    expected_revision = state.get("revision")\n'
+            "    update_result = tool(\n"
+            '        "update_ticket",\n'
+            "        {\n"
+            '            "ok": expected_revision is not None,\n'
+            '            "expected_revision": expected_revision,\n'
+            '            "error": (\n'
+            "                None\n"
+            "                if expected_revision is not None\n"
+            '                else {"code": "revision_missing"}\n'
+            "            ),\n"
+            "        },\n"
+            "    )\n"
+            "    symptoms = []\n"
+            '    if not read_result["ok"]:\n'
+            '        symptoms.append("ticket routing failed because the ticket identifier was lost")\n'
+            '    if not update_result["ok"]:\n'
+            '        symptoms.append("ticket update failed because the revision was lost")\n'
+            '    return "Shared state propagation failed: " + "; ".join(symptoms) + "."\n'
         ),
     }
     for issue_id, defect in defects.items():
@@ -696,7 +728,7 @@ def test_hosted_framework_and_identity_boundaries() -> None:
         assert '"aiq.tool.error.handled", True' in text
         assert '"aiq.terminal_response.success", output_succeeded' in text
         assert '"aiq.terminal_response.output_present",' in text
-        assert "output_present = bool(result)" in text
+        assert "output_present = bool(result.strip())" in text
         assert "gen_ai.input.messages" not in text
         assert "gen_ai.output.messages" not in text
     assert "transient_lock = threading.Lock()" in finance
@@ -750,7 +782,14 @@ def test_support_baseline_asserts_handled_error_responses() -> None:
     assert expected_by_id["support-ticket-agent-v0-partial"][
         "semantic_assertions"
     ] == {
-        "required_terms_all": ["ticket", "history", "unavailable"],
+        "required_terms_all": [
+            "ticket-demo-1",
+            "revision 3",
+            "status open",
+            "Synthetic printer setup",
+            "history",
+            "unavailable",
+        ],
         "forbidden_claims": [
             "ticket unavailable",
             "core ticket unavailable",

@@ -362,6 +362,6 @@ issues:
     category: reliability_errors
     severity: medium
     implementation: agents/support-ticket-agent/issues/issue-036
-    root_cause: One state-propagation defect produces several symptoms that Agent Insights splits into cards.
-    expected_fix: Group symptoms that share one trigger, fix owner, and validation target.
-    trace_contract: {minimum_traces: 5, operations: [invoke_agent, execute_tool], anomaly: one_root_fragmented}
+    root_cause: One shared-state transition clears the ticket identifier and revision, producing routing and update symptoms that Agent Insights fragments into separate cards.
+    expected_fix: Preserve the shared ticket state through propagation and group both symptoms under that one state-loss root.
+    trace_contract: {minimum_traces: 5, operations: [invoke_agent, execute_tool], anomaly: shared_state_loss_fragmented}

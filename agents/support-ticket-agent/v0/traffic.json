@@ -177,7 +177,10 @@
         "behavior": "Returns the core ticket and labels history unavailable.",
         "semantic_assertions": {
           "required_terms_all": [
-            "ticket",
+            "ticket-demo-1",
+            "revision 3",
+            "status open",
+            "Synthetic printer setup",
             "history",
             "unavailable"
           ],
