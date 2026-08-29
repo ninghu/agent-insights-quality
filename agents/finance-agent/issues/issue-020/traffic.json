@@ -6,27 +6,27 @@
     {
       "id": "issue-020-request-1",
       "request": {"method": "POST", "path": "/responses", "headers": {"content-type": "application/json"}, "body": {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Summarize the balance and monthly items for acct-demo-a."}]}], "conversation": {"id": "conv-finance-agent-issue-020-1"}, "max_output_tokens": 400}},
-      "expected": {"http_status": 200, "behavior": "Duplicates the full model context four times.", "defect_observed": true, "trace_assertions": [{"name": "model_context_repeated_four_times", "kind": "payload_multiplicity", "source": "input_messages", "minimum": 4}], "activation_gate": true}
+      "expected": {"http_status": 200, "behavior": "Duplicates the Agent Framework model context four times before the real model call.", "defect_observed": true, "semantic_assertions": {"response_format": "non_json"}, "trace_assertions": [{"name": "model_context_repeated_four_times", "kind": "payload_multiplicity", "source": "input_messages", "minimum": 4}], "activation_gate": true}
     },
     {
       "id": "issue-020-request-2",
       "request": {"method": "POST", "path": "/responses", "headers": {"content-type": "application/json"}, "body": {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Summarize the balance and monthly items for acct-demo-b."}]}], "conversation": {"id": "conv-finance-agent-issue-020-2"}, "max_output_tokens": 400}},
-      "expected": {"http_status": 200, "behavior": "Duplicates the full model context four times.", "defect_observed": true, "trace_assertions": [{"name": "model_context_repeated_four_times", "kind": "payload_multiplicity", "source": "input_messages", "minimum": 4}], "activation_gate": true}
+      "expected": {"http_status": 200, "behavior": "Duplicates the Agent Framework model context four times before the real model call.", "defect_observed": true, "semantic_assertions": {"response_format": "non_json"}, "trace_assertions": [{"name": "model_context_repeated_four_times", "kind": "payload_multiplicity", "source": "input_messages", "minimum": 4}], "activation_gate": true}
     },
     {
       "id": "issue-020-request-3",
       "request": {"method": "POST", "path": "/responses", "headers": {"content-type": "application/json"}, "body": {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Summarize the balance and monthly items for acct-demo-a."}]}], "conversation": {"id": "conv-finance-agent-issue-020-3"}, "max_output_tokens": 400}},
-      "expected": {"http_status": 200, "behavior": "Duplicates the full model context four times.", "defect_observed": true, "trace_assertions": [{"name": "model_context_repeated_four_times", "kind": "payload_multiplicity", "source": "input_messages", "minimum": 4}], "activation_gate": true}
+      "expected": {"http_status": 200, "behavior": "Duplicates the Agent Framework model context four times before the real model call.", "defect_observed": true, "semantic_assertions": {"response_format": "non_json"}, "trace_assertions": [{"name": "model_context_repeated_four_times", "kind": "payload_multiplicity", "source": "input_messages", "minimum": 4}], "activation_gate": true}
     },
     {
       "id": "issue-020-request-4",
       "request": {"method": "POST", "path": "/responses", "headers": {"content-type": "application/json"}, "body": {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Summarize the balance and monthly items for acct-demo-b."}]}], "conversation": {"id": "conv-finance-agent-issue-020-4"}, "max_output_tokens": 400}},
-      "expected": {"http_status": 200, "behavior": "Duplicates the full model context four times.", "defect_observed": true, "trace_assertions": [{"name": "model_context_repeated_four_times", "kind": "payload_multiplicity", "source": "input_messages", "minimum": 4}], "activation_gate": true}
+      "expected": {"http_status": 200, "behavior": "Duplicates the Agent Framework model context four times before the real model call.", "defect_observed": true, "semantic_assertions": {"response_format": "non_json"}, "trace_assertions": [{"name": "model_context_repeated_four_times", "kind": "payload_multiplicity", "source": "input_messages", "minimum": 4}], "activation_gate": true}
     },
     {
       "id": "issue-020-request-5",
       "request": {"method": "POST", "path": "/responses", "headers": {"content-type": "application/json"}, "body": {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Summarize the balance and monthly items for acct-demo-a."}]}], "conversation": {"id": "conv-finance-agent-issue-020-5"}, "max_output_tokens": 400}},
-      "expected": {"http_status": 200, "behavior": "Duplicates the full model context four times.", "defect_observed": true, "trace_assertions": [{"name": "model_context_repeated_four_times", "kind": "payload_multiplicity", "source": "input_messages", "minimum": 4}], "activation_gate": true}
+      "expected": {"http_status": 200, "behavior": "Duplicates the Agent Framework model context four times before the real model call.", "defect_observed": true, "semantic_assertions": {"response_format": "non_json"}, "trace_assertions": [{"name": "model_context_repeated_four_times", "kind": "payload_multiplicity", "source": "input_messages", "minimum": 4}], "activation_gate": true}
     }
   ],
   "data_class": "synthetic_public_safe",

@@ -2216,6 +2216,8 @@ def _trace_assertion_result(
             counts: list[int] = []
             if assertion["source"] == "input_messages":
                 for row in rows:
+                    if row.get("operation_name") != "chat":
+                        continue
                     messages = row.get("messages")
                     if not isinstance(messages, list) or not messages:
                         continue
