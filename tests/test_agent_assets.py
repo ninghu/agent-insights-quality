@@ -782,19 +782,10 @@ def test_support_baseline_asserts_handled_error_responses() -> None:
     assert expected_by_id["support-ticket-agent-v0-partial"][
         "semantic_assertions"
     ] == {
-        "required_terms_all": [
-            "ticket-demo-1",
-            "revision 3",
-            "status open",
-            "Synthetic printer setup",
-            "history",
-            "unavailable",
-        ],
-        "forbidden_claims": [
-            "ticket unavailable",
-            "core ticket unavailable",
-            "history available",
-        ],
+        "exact_text": (
+            "Ticket ID ticket-demo-1; revision 3; status open; "
+            "summary Synthetic printer setup; optional history unavailable."
+        ),
     }
 
 
@@ -825,6 +816,72 @@ def test_prompt_traffic_has_no_fixtures_and_has_reviewed_assertions() -> None:
                 item["expected"].get("semantic_assertions")
                 for item in activation
             )
+
+
+def test_prompt_exact_json_uses_closed_tool_free_structured_output() -> None:
+    paths = sorted(
+        [
+            *ROOT.glob("agents/weather-agent/**/traffic.json"),
+            *ROOT.glob("agents/healthcare-agent/**/traffic.json"),
+        ]
+    )
+    forbidden = {
+        "function_call",
+        "functions",
+        "parallel_tool_calls",
+        "tool",
+        "tool_choice",
+        "tool_config",
+        "tool_configs",
+        "tool_fixtures",
+        "tool_resources",
+        "tools",
+    }
+
+    def keys(value):
+        if isinstance(value, dict):
+            return set(value).union(*(keys(child) for child in value.values()))
+        if isinstance(value, list):
+            return set().union(*(keys(child) for child in value))
+        return set()
+
+    for path in paths:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        for item in value["requests"]:
+            body = item["request"]["body"]
+            assert forbidden.isdisjoint(keys(body))
+            assertions = item["expected"].get("semantic_assertions", {})
+            exact_json = assertions.get("exact_json")
+            if assertions.get("response_format") != "json" or not isinstance(
+                exact_json, dict
+            ):
+                assert "text" not in body
+                continue
+            output_format = body["text"]["format"]
+            assert output_format["type"] == "json_schema"
+            assert output_format["strict"] is True
+            schema = output_format["schema"]
+            assert schema["type"] == "object"
+            assert schema["additionalProperties"] is False
+            assert set(schema["required"]) == set(schema["properties"]) == set(
+                exact_json
+            )
+            assert {
+                key: property_schema["enum"][0]
+                for key, property_schema in schema["properties"].items()
+            } == exact_json
+
+    issue_002 = json.loads(
+        (
+            ROOT
+            / "agents"
+            / "weather-agent"
+            / "issues"
+            / "issue-002"
+            / "traffic.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert all("text" not in item["request"]["body"] for item in issue_002["requests"])
 
 
 def test_prompt_activation_gates_are_request_bound() -> None:

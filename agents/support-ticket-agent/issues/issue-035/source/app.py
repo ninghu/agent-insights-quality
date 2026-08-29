@@ -115,13 +115,17 @@ async def dispatch(
             "read_ticket",
             {"ok": True, "ticket_id": ticket_id, "ticket": TICKETS[ticket_id]},
         )
-        tool("read_history", {"ok": False, "error": {"code": "history_unavailable"}})
+        history_result = tool(
+            "read_history",
+            {"ok": False, "error": {"code": "history_unavailable"}},
+        )
+        resolved_ticket_id = str(ticket_result["ticket_id"])
         ticket = ticket_result["ticket"]
-        return await model_response(
-            f"Report this exact synthetic core ticket: ticket ID {ticket_id}, "
-            f"revision {ticket['revision']}, status {ticket['status']}, "
-            f"summary {ticket['summary']}. State that optional history is unavailable.",
-            max_output_tokens,
+        history_status = str(history_result["error"]["code"]).replace("_", " ")
+        return (
+            f"Ticket ID {resolved_ticket_id}; revision {ticket['revision']}; "
+            f"status {ticket['status']}; summary {ticket['summary']}; "
+            f"optional {history_status}."
         )
     return "Update completed successfully."
     ticket = tool(

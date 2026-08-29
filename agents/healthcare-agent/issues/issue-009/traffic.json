@@ -64,7 +64,50 @@
           "conversation": {
             "id": "conv-issue-009-shared"
           },
-          "max_output_tokens": 400
+          "max_output_tokens": 400,
+          "text": {
+            "format": {
+              "type": "json_schema",
+              "name": "issue-009-request-2_response",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "account_scope",
+                  "provider",
+                  "slot",
+                  "date"
+                ],
+                "properties": {
+                  "account_scope": {
+                    "type": "string",
+                    "enum": [
+                      "demo-account-a"
+                    ]
+                  },
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "Dr. Rivera"
+                    ]
+                  },
+                  "slot": {
+                    "type": "string",
+                    "enum": [
+                      "slot-demo-stale"
+                    ]
+                  },
+                  "date": {
+                    "type": "string",
+                    "enum": [
+                      "2026-09-21"
+                    ]
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "expected": {
@@ -106,7 +149,50 @@
           "conversation": {
             "id": "conv-issue-009-shared"
           },
-          "max_output_tokens": 400
+          "max_output_tokens": 400,
+          "text": {
+            "format": {
+              "type": "json_schema",
+              "name": "issue-009-request-3_response",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "account_scope",
+                  "provider",
+                  "slot",
+                  "date"
+                ],
+                "properties": {
+                  "account_scope": {
+                    "type": "string",
+                    "enum": [
+                      "demo-account-a"
+                    ]
+                  },
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "Dr. Rivera"
+                    ]
+                  },
+                  "slot": {
+                    "type": "string",
+                    "enum": [
+                      "slot-demo-stale"
+                    ]
+                  },
+                  "date": {
+                    "type": "string",
+                    "enum": [
+                      "2026-09-21"
+                    ]
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "expected": {
@@ -148,7 +234,50 @@
           "conversation": {
             "id": "conv-issue-009-shared"
           },
-          "max_output_tokens": 400
+          "max_output_tokens": 400,
+          "text": {
+            "format": {
+              "type": "json_schema",
+              "name": "issue-009-request-4_response",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "account_scope",
+                  "provider",
+                  "slot",
+                  "date"
+                ],
+                "properties": {
+                  "account_scope": {
+                    "type": "string",
+                    "enum": [
+                      "demo-account-a"
+                    ]
+                  },
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "Dr. Rivera"
+                    ]
+                  },
+                  "slot": {
+                    "type": "string",
+                    "enum": [
+                      "slot-demo-stale"
+                    ]
+                  },
+                  "date": {
+                    "type": "string",
+                    "enum": [
+                      "2026-09-21"
+                    ]
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "expected": {
@@ -190,7 +319,50 @@
           "conversation": {
             "id": "conv-issue-009-shared"
           },
-          "max_output_tokens": 400
+          "max_output_tokens": 400,
+          "text": {
+            "format": {
+              "type": "json_schema",
+              "name": "issue-009-request-5_response",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "account_scope",
+                  "provider",
+                  "slot",
+                  "date"
+                ],
+                "properties": {
+                  "account_scope": {
+                    "type": "string",
+                    "enum": [
+                      "demo-account-a"
+                    ]
+                  },
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "Dr. Rivera"
+                    ]
+                  },
+                  "slot": {
+                    "type": "string",
+                    "enum": [
+                      "slot-demo-stale"
+                    ]
+                  },
+                  "date": {
+                    "type": "string",
+                    "enum": [
+                      "2026-09-21"
+                    ]
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "expected": {

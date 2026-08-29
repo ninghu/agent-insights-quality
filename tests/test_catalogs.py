@@ -210,6 +210,78 @@ def test_prompt_source_delta_requires_exact_json_types() -> None:
         )
 
 
+def test_prompt_structured_output_is_exact_and_tool_free() -> None:
+    traffic = json.loads(
+        (
+            ROOT / "agents" / "weather-agent" / "v0" / "traffic.json"
+        ).read_text(encoding="utf-8")
+    )
+    _validate_prompt_traffic(
+        traffic,
+        "weather baseline",
+        require_activation=False,
+        require_all_assertions=True,
+    )
+
+    wrong_value = deepcopy(traffic)
+    schema = wrong_value["requests"][3]["request"]["body"]["text"]["format"]["schema"]
+    schema["properties"]["condition"]["enum"][0] = "rain"
+    with pytest.raises(ContractError, match="values must match exact JSON"):
+        _validate_prompt_traffic(
+            wrong_value,
+            "weather baseline",
+            require_activation=False,
+            require_all_assertions=True,
+        )
+
+    missing_format = deepcopy(traffic)
+    missing_format["requests"][3]["request"]["body"].pop("text")
+    with pytest.raises(ContractError, match="requires a structured-output request"):
+        _validate_prompt_traffic(
+            missing_format,
+            "weather baseline",
+            require_activation=False,
+            require_all_assertions=True,
+        )
+
+    missing_response_format = deepcopy(traffic)
+    assertions = missing_response_format["requests"][3]["expected"][
+        "semantic_assertions"
+    ]
+    assertions.pop("response_format")
+    missing_response_format["requests"][3]["request"]["body"].pop("text")
+    with pytest.raises(ContractError, match="requires a structured-output request"):
+        _validate_prompt_traffic(
+            missing_response_format,
+            "weather baseline",
+            require_activation=False,
+            require_all_assertions=True,
+        )
+
+    non_object_exact_json = deepcopy(traffic)
+    non_object_exact_json["requests"][3]["expected"]["semantic_assertions"][
+        "exact_json"
+    ] = ["clear", 21, "celsius"]
+    non_object_exact_json["requests"][3]["request"]["body"].pop("text")
+    with pytest.raises(ContractError, match="schema error"):
+        _validate_prompt_traffic(
+            non_object_exact_json,
+            "weather baseline",
+            require_activation=False,
+            require_all_assertions=True,
+        )
+
+    tool_configured = deepcopy(traffic)
+    tool_configured["requests"][3]["request"]["body"]["tools"] = []
+    with pytest.raises(ContractError, match="cannot contain tool configuration"):
+        _validate_prompt_traffic(
+            tool_configured,
+            "weather baseline",
+            require_activation=False,
+            require_all_assertions=True,
+        )
+
+
 def _weather_latency_traffic() -> dict:
     return json.loads(
         (

@@ -212,26 +212,19 @@ def test_support_whitespace_output_is_not_terminal_output_evidence(monkeypatch) 
 
 def test_support_partial_history_preserves_request_bound_ticket(monkeypatch) -> None:
     module, tracer = _load_support_module(monkeypatch)
-    prompts: list[str] = []
 
-    async def model_response(prompt: str, _max_output_tokens: int) -> str:
-        prompts.append(prompt)
-        return (
-            "ticket-demo-2, revision 1, status open, summary Synthetic app access; "
-            "optional history is unavailable."
-        )
+    async def model_response(_prompt: str, _max_output_tokens: int) -> str:
+        raise AssertionError("partial history must not depend on model paraphrase")
 
     module.model_response = model_response
     response = _invoke(
         module,
         "Read ticket-demo-2 while its optional history is unavailable.",
     )
-    assert response.text.startswith("ticket-demo-2, revision 1")
-    assert prompts == [
-        "Report this exact synthetic core ticket: ticket ID ticket-demo-2, "
-        "revision 1, status open, summary Synthetic app access. "
-        "State that optional history is unavailable."
-    ]
+    assert response.text == (
+        "Ticket ID ticket-demo-2; revision 1; status open; "
+        "summary Synthetic app access; optional history unavailable."
+    )
     assert [
         span.name
         for span in tracer.spans

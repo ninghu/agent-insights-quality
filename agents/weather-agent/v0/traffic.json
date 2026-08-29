@@ -127,7 +127,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=21, unit=celsius. Return JSON with exactly the keys condition, temperature, and unit."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=21, unit=celsius. Return exactly this bare JSON object with no prose or Markdown fences: {\"condition\":\"clear\",\"temperature\":21,\"unit\":\"celsius\"}"
                 }
               ]
             }
@@ -135,7 +135,43 @@
           "conversation": {
             "id": "conv-weather-v0-c"
           },
-          "max_output_tokens": 400
+          "max_output_tokens": 400,
+          "text": {
+            "format": {
+              "type": "json_schema",
+              "name": "weather-v0-json_response",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "condition",
+                  "temperature",
+                  "unit"
+                ],
+                "properties": {
+                  "condition": {
+                    "type": "string",
+                    "enum": [
+                      "clear"
+                    ]
+                  },
+                  "temperature": {
+                    "type": "integer",
+                    "enum": [
+                      21
+                    ]
+                  },
+                  "unit": {
+                    "type": "string",
+                    "enum": [
+                      "celsius"
+                    ]
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "expected": {

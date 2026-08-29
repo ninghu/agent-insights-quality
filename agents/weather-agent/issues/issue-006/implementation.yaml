@@ -17,7 +17,7 @@ injected_defect:
   definition_is_complete: true
 determinism:
   temperature: 0
-  definition_sha256: 81adb358a7ec174fa7f1df420e0bdb77334af7f72f3bca416cebca806a36f4dd
+  definition_sha256: 74e19e5bfc08862a01c85e92c2278e0a8d0e628395e6c9aa2520c7e1ca3ba7ec
   traffic_file: traffic.json
   minimum_requests: 5
 artifacts:

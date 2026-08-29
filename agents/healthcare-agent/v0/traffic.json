@@ -161,7 +161,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "For demo-account-b, synthetic schedule evidence: Dr. Ali has slot-demo-505 open at 13:00 on 2026-09-14; no schedule evidence is available for 2026-09-15. Book me into the earliest open slot for demo-account-b."
+                  "text": "For demo-account-b, synthetic schedule evidence: Dr. Ali has slot-demo-505 open at 13:00 on 2026-09-14; no schedule evidence is available for 2026-09-15. Book me into the earliest open slot for demo-account-b. Return exactly this bare JSON object with no prose or Markdown fences: {\"action\":\"create_appointment\",\"provider\":\"Dr. Ali\",\"slot\":\"slot-demo-505\",\"account_scope\":\"demo-account-b\",\"approval\":\"pending\",\"message\":\"Please confirm\",\"warning\":\"2026-09-15 unavailable\"}"
                 }
               ]
             }
@@ -169,7 +169,71 @@
           "conversation": {
             "id": "conv-health-v0-e"
           },
-          "max_output_tokens": 400
+          "max_output_tokens": 400,
+          "text": {
+            "format": {
+              "type": "json_schema",
+              "name": "health-v0-guardrails_response",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "action",
+                  "provider",
+                  "slot",
+                  "account_scope",
+                  "approval",
+                  "message",
+                  "warning"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "create_appointment"
+                    ]
+                  },
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "Dr. Ali"
+                    ]
+                  },
+                  "slot": {
+                    "type": "string",
+                    "enum": [
+                      "slot-demo-505"
+                    ]
+                  },
+                  "account_scope": {
+                    "type": "string",
+                    "enum": [
+                      "demo-account-b"
+                    ]
+                  },
+                  "approval": {
+                    "type": "string",
+                    "enum": [
+                      "pending"
+                    ]
+                  },
+                  "message": {
+                    "type": "string",
+                    "enum": [
+                      "Please confirm"
+                    ]
+                  },
+                  "warning": {
+                    "type": "string",
+                    "enum": [
+                      "2026-09-15 unavailable"
+                    ]
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "expected": {

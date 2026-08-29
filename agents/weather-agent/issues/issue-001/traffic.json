@@ -26,7 +26,43 @@
           "conversation": {
             "id": "conv-weather-issue-001-1"
           },
-          "max_output_tokens": 400
+          "max_output_tokens": 400,
+          "text": {
+            "format": {
+              "type": "json_schema",
+              "name": "issue-001-request-1_response",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "condition",
+                  "evidence",
+                  "status"
+                ],
+                "properties": {
+                  "condition": {
+                    "type": "string",
+                    "enum": [
+                      "sunny"
+                    ]
+                  },
+                  "evidence": {
+                    "type": "string",
+                    "enum": [
+                      "missing"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "claimed"
+                    ]
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "expected": {
@@ -67,7 +103,43 @@
           "conversation": {
             "id": "conv-weather-issue-001-2"
           },
-          "max_output_tokens": 400
+          "max_output_tokens": 400,
+          "text": {
+            "format": {
+              "type": "json_schema",
+              "name": "issue-001-request-2_response",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "condition",
+                  "evidence",
+                  "status"
+                ],
+                "properties": {
+                  "condition": {
+                    "type": "string",
+                    "enum": [
+                      "sunny"
+                    ]
+                  },
+                  "evidence": {
+                    "type": "string",
+                    "enum": [
+                      "missing"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "claimed"
+                    ]
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "expected": {
@@ -108,7 +180,43 @@
           "conversation": {
             "id": "conv-weather-issue-001-3"
           },
-          "max_output_tokens": 400
+          "max_output_tokens": 400,
+          "text": {
+            "format": {
+              "type": "json_schema",
+              "name": "issue-001-request-3_response",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "condition",
+                  "evidence",
+                  "status"
+                ],
+                "properties": {
+                  "condition": {
+                    "type": "string",
+                    "enum": [
+                      "sunny"
+                    ]
+                  },
+                  "evidence": {
+                    "type": "string",
+                    "enum": [
+                      "missing"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "claimed"
+                    ]
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "expected": {
@@ -149,7 +257,43 @@
           "conversation": {
             "id": "conv-weather-issue-001-4"
           },
-          "max_output_tokens": 400
+          "max_output_tokens": 400,
+          "text": {
+            "format": {
+              "type": "json_schema",
+              "name": "issue-001-request-4_response",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "condition",
+                  "evidence",
+                  "status"
+                ],
+                "properties": {
+                  "condition": {
+                    "type": "string",
+                    "enum": [
+                      "sunny"
+                    ]
+                  },
+                  "evidence": {
+                    "type": "string",
+                    "enum": [
+                      "missing"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "claimed"
+                    ]
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "expected": {
@@ -190,7 +334,43 @@
           "conversation": {
             "id": "conv-weather-issue-001-5"
           },
-          "max_output_tokens": 400
+          "max_output_tokens": 400,
+          "text": {
+            "format": {
+              "type": "json_schema",
+              "name": "issue-001-request-5_response",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "condition",
+                  "evidence",
+                  "status"
+                ],
+                "properties": {
+                  "condition": {
+                    "type": "string",
+                    "enum": [
+                      "sunny"
+                    ]
+                  },
+                  "evidence": {
+                    "type": "string",
+                    "enum": [
+                      "missing"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "claimed"
+                    ]
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "expected": {

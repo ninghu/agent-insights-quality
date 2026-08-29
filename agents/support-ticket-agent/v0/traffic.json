@@ -176,19 +176,7 @@
         "http_status": 200,
         "behavior": "Returns the core ticket and labels history unavailable.",
         "semantic_assertions": {
-          "required_terms_all": [
-            "ticket-demo-1",
-            "revision 3",
-            "status open",
-            "Synthetic printer setup",
-            "history",
-            "unavailable"
-          ],
-          "forbidden_claims": [
-            "ticket unavailable",
-            "core ticket unavailable",
-            "history available"
-          ]
+          "exact_text": "Ticket ID ticket-demo-1; revision 3; status open; summary Synthetic printer setup; optional history unavailable."
         }
       }
     }

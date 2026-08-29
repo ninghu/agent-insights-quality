@@ -245,6 +245,82 @@ def test_weather_v0_assertions_reject_additional_fabricated_claims() -> None:
         assert passed < count
 
 
+@pytest.mark.parametrize(
+    ("text", "expected_passed"),
+    [
+        ('{"condition":"clear","temperature":21,"unit":"celsius"}', 2),
+        ("Weather summary: clear, 21 celsius.", 0),
+        (
+            '```json\n{"condition":"clear","temperature":21,"unit":"celsius"}\n```',
+            0,
+        ),
+        ('{"condition":"rain","temperature":21,"unit":"celsius"}', 1),
+    ],
+)
+def test_weather_structured_output_assertions_reject_drift(
+    text: str,
+    expected_passed: int,
+) -> None:
+    expected = read_json(
+        ROOT / "agents" / "weather-agent" / "v0" / "traffic.json"
+    )["requests"][3]["expected"]
+    response = {
+        "output": [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": text}],
+            }
+        ]
+    }
+    count, passed, _ = _semantic_assertion_result(response, expected)
+    assert count == 2
+    assert passed == expected_passed
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_passed"),
+    [
+        (
+            '{"action":"create_appointment","provider":"Dr. Ali",'
+            '"slot":"slot-demo-505","account_scope":"demo-account-b",'
+            '"approval":"pending","message":"Please confirm",'
+            '"warning":"2026-09-15 unavailable"}',
+            2,
+        ),
+        ("Please confirm the appointment.", 0),
+        (
+            '```json\n{"action":"create_appointment","provider":"Dr. Ali"}\n```',
+            0,
+        ),
+        (
+            '{"action":"create_appointment","provider":"Dr. Ali",'
+            '"slot":"slot-demo-505","account_scope":"demo-account-b",'
+            '"approval":"confirmed","message":"Please confirm",'
+            '"warning":"2026-09-15 unavailable"}',
+            1,
+        ),
+    ],
+)
+def test_healthcare_structured_output_assertions_reject_drift(
+    text: str,
+    expected_passed: int,
+) -> None:
+    expected = read_json(
+        ROOT / "agents" / "healthcare-agent" / "v0" / "traffic.json"
+    )["requests"][4]["expected"]
+    response = {
+        "output": [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": text}],
+            }
+        ]
+    }
+    count, passed, _ = _semantic_assertion_result(response, expected)
+    assert count == 2
+    assert passed == expected_passed
+
+
 def test_healthcare_v0_exact_text_rejects_contradictory_answers() -> None:
     requests = read_json(
         ROOT / "agents" / "healthcare-agent" / "v0" / "traffic.json"
@@ -381,6 +457,32 @@ def test_exact_weather_gates_reject_wrong_numeric_claims(
     }
     count, passed, _ = _semantic_assertion_result(response, expected)
     assert passed < count
+
+
+def test_support_partial_exact_text_rejects_paraphrase() -> None:
+    expected = read_json(
+        ROOT / "agents" / "support-ticket-agent" / "v0" / "traffic.json"
+    )["requests"][4]["expected"]
+    exact_text = expected["semantic_assertions"]["exact_text"]
+    for text, expected_passed in (
+        (exact_text, 1),
+        (
+            "Ticket ticket-demo-1 is open at revision 3; its optional "
+            "history is unavailable.",
+            0,
+        ),
+    ):
+        response = {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": text}],
+                }
+            ]
+        }
+        count, passed, _ = _semantic_assertion_result(response, expected)
+        assert count == 1
+        assert passed == expected_passed
 
 
 def test_trace_behavior_summary_sanitizes_prompt_tool_sequence() -> None:
@@ -757,6 +859,73 @@ def test_prompt_function_call_fails_closed() -> None:
             1,
             None,
         )
+
+
+def test_prompt_structured_output_is_forwarded_without_tools() -> None:
+    runtime = _runtime()
+    runtime._traffic_ledger = type(
+        "Ledger",
+        (),
+        {"mark_started": staticmethod(lambda *_args, **_kwargs: None)},
+    )()
+    request = read_json(
+        ROOT / "agents" / "weather-agent" / "v0" / "traffic.json"
+    )["requests"][3]
+    fixture = _normalize_fixture(request)
+    captured: dict[str, object] = {}
+
+    def json_request(method, url, body, **kwargs):
+        captured.update(
+            {
+                "method": method,
+                "url": url,
+                "body": body,
+                "kwargs": kwargs,
+            }
+        )
+        return {
+            "id": "synthetic-response",
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(
+                                request["expected"]["semantic_assertions"]["exact_json"],
+                                separators=(",", ":"),
+                            ),
+                        }
+                    ],
+                }
+            ],
+        }
+
+    runtime._json_request = json_request  # type: ignore[method-assign]
+    result = runtime._invoke_prompt(
+        "weather-agent",
+        "1",
+        fixture,
+        7,
+        None,
+    )
+
+    forwarded = captured["body"]
+    assert isinstance(forwarded, dict)
+    assert forwarded["text"] == request["request"]["body"]["text"]
+    assert "conversation" not in forwarded
+    assert forwarded["store"] is True
+    assert not {
+        "function_call",
+        "functions",
+        "parallel_tool_calls",
+        "tool",
+        "tool_choice",
+        "tools",
+    }.intersection(forwarded)
+    assert result[1] is True
+    assert result[2] == result[3] == 2
+    assert result[5] == 0
 
 
 def test_prompt_group_uses_previous_response_only_for_next_memory_turn() -> None:

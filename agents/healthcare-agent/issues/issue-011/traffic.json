@@ -26,7 +26,64 @@
           "conversation": {
             "id": "conv-health-issue-011-1"
           },
-          "max_output_tokens": 400
+          "max_output_tokens": 400,
+          "text": {
+            "format": {
+              "type": "json_schema",
+              "name": "issue-011-request-1_response",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "action",
+                  "provider",
+                  "slot",
+                  "account_scope",
+                  "confirmation",
+                  "state"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "transition_appointment_state"
+                    ]
+                  },
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "Dr. Rivera"
+                    ]
+                  },
+                  "slot": {
+                    "type": "string",
+                    "enum": [
+                      "slot-demo-101"
+                    ]
+                  },
+                  "account_scope": {
+                    "type": "string",
+                    "enum": [
+                      "demo-account-a"
+                    ]
+                  },
+                  "confirmation": {
+                    "type": "boolean",
+                    "enum": [
+                      false
+                    ]
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "confirmed"
+                    ]
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "expected": {
@@ -70,7 +127,64 @@
           "conversation": {
             "id": "conv-health-issue-011-2"
           },
-          "max_output_tokens": 400
+          "max_output_tokens": 400,
+          "text": {
+            "format": {
+              "type": "json_schema",
+              "name": "issue-011-request-2_response",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "action",
+                  "provider",
+                  "slot",
+                  "account_scope",
+                  "confirmation",
+                  "state"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "transition_appointment_state"
+                    ]
+                  },
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "Dr. Rivera"
+                    ]
+                  },
+                  "slot": {
+                    "type": "string",
+                    "enum": [
+                      "slot-demo-202"
+                    ]
+                  },
+                  "account_scope": {
+                    "type": "string",
+                    "enum": [
+                      "demo-account-a"
+                    ]
+                  },
+                  "confirmation": {
+                    "type": "boolean",
+                    "enum": [
+                      false
+                    ]
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "confirmed"
+                    ]
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "expected": {
@@ -114,7 +228,64 @@
           "conversation": {
             "id": "conv-health-issue-011-3"
           },
-          "max_output_tokens": 400
+          "max_output_tokens": 400,
+          "text": {
+            "format": {
+              "type": "json_schema",
+              "name": "issue-011-request-3_response",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "action",
+                  "provider",
+                  "slot",
+                  "account_scope",
+                  "confirmation",
+                  "state"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "transition_appointment_state"
+                    ]
+                  },
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "Dr. Rivera"
+                    ]
+                  },
+                  "slot": {
+                    "type": "string",
+                    "enum": [
+                      "slot-demo-303"
+                    ]
+                  },
+                  "account_scope": {
+                    "type": "string",
+                    "enum": [
+                      "demo-account-a"
+                    ]
+                  },
+                  "confirmation": {
+                    "type": "boolean",
+                    "enum": [
+                      false
+                    ]
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "confirmed"
+                    ]
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "expected": {
@@ -158,7 +329,64 @@
           "conversation": {
             "id": "conv-health-issue-011-4"
           },
-          "max_output_tokens": 400
+          "max_output_tokens": 400,
+          "text": {
+            "format": {
+              "type": "json_schema",
+              "name": "issue-011-request-4_response",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "action",
+                  "provider",
+                  "slot",
+                  "account_scope",
+                  "confirmation",
+                  "state"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "transition_appointment_state"
+                    ]
+                  },
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "Dr. Rivera"
+                    ]
+                  },
+                  "slot": {
+                    "type": "string",
+                    "enum": [
+                      "slot-demo-404"
+                    ]
+                  },
+                  "account_scope": {
+                    "type": "string",
+                    "enum": [
+                      "demo-account-a"
+                    ]
+                  },
+                  "confirmation": {
+                    "type": "boolean",
+                    "enum": [
+                      false
+                    ]
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "confirmed"
+                    ]
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "expected": {
@@ -202,7 +430,64 @@
           "conversation": {
             "id": "conv-health-issue-011-5"
           },
-          "max_output_tokens": 400
+          "max_output_tokens": 400,
+          "text": {
+            "format": {
+              "type": "json_schema",
+              "name": "issue-011-request-5_response",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "action",
+                  "provider",
+                  "slot",
+                  "account_scope",
+                  "confirmation",
+                  "state"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "transition_appointment_state"
+                    ]
+                  },
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "Dr. Rivera"
+                    ]
+                  },
+                  "slot": {
+                    "type": "string",
+                    "enum": [
+                      "slot-demo-505"
+                    ]
+                  },
+                  "account_scope": {
+                    "type": "string",
+                    "enum": [
+                      "demo-account-a"
+                    ]
+                  },
+                  "confirmation": {
+                    "type": "boolean",
+                    "enum": [
+                      false
+                    ]
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "confirmed"
+                    ]
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "expected": {

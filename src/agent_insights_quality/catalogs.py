@@ -97,12 +97,16 @@ def _validate_prompt_traffic(
     require_all_assertions: bool,
 ) -> None:
     forbidden_tool_keys = {
-        "tools",
+        "function_call",
+        "functions",
+        "parallel_tool_calls",
         "tool",
         "tool_choice",
         "tool_config",
+        "tool_configs",
         "tool_fixtures",
-        "functions",
+        "tool_resources",
+        "tools",
     }
 
     def contains_tool_configuration(item: Any) -> bool:
@@ -126,12 +130,56 @@ def _validate_prompt_traffic(
     ):
         raise ContractError(f"{label} requires assertions for every request")
     for item in value["requests"]:
+        body = item["request"]["body"]
         expected = item.get("expected")
         assertions = (
             expected.get("semantic_assertions")
             if isinstance(expected, dict)
             else None
         )
+        assertions = assertions if isinstance(assertions, dict) else {}
+        output_format = body.get("text", {}).get("format")
+        exact_json = assertions.get("exact_json")
+        has_exact_json = "exact_json" in assertions
+        expects_json = assertions.get("response_format") == "json"
+        if output_format is None:
+            if has_exact_json or expects_json:
+                raise ContractError(
+                    f"{label} JSON response contract requires a "
+                    "structured-output request"
+                )
+        else:
+            output_schema = output_format["schema"]
+            try:
+                Draft202012Validator.check_schema(output_schema)
+            except SchemaError as error:
+                raise ContractError(
+                    f"{label} contains an invalid structured-output JSON schema"
+                ) from error
+            properties = output_schema["properties"]
+            required = output_schema["required"]
+            if (
+                not expects_json
+                or not has_exact_json
+                or not isinstance(exact_json, dict)
+                or not exact_json
+                or set(required) != set(properties)
+                or set(properties) != set(exact_json)
+            ):
+                raise ContractError(
+                    f"{label} structured output must bind the exact JSON assertion"
+                )
+            schema_value = {
+                key: property_schema["enum"][0]
+                for key, property_schema in properties.items()
+            }
+            if not all(
+                Draft202012Validator(property_schema).is_valid(schema_value[key])
+                for key, property_schema in properties.items()
+            ) or not json_values_equal(schema_value, exact_json):
+                raise ContractError(
+                    f"{label} structured output values must match exact JSON"
+                )
         schema = assertions.get("json_schema") if isinstance(assertions, dict) else None
         if schema is None:
             continue
