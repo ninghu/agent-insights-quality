@@ -18,7 +18,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Is Dr. Rivera free on 2026-09-21 for demo-account-a?"
+                  "text": "Without authoritative schedule evidence, is Dr. Rivera available at slot-demo-101 on 2026-09-21 for demo-account-a?"
                 }
               ]
             }
@@ -38,7 +38,10 @@
           "response_format": "json",
           "exact_json": {
             "availability": "available",
-            "slot": "09:00",
+            "provider": "Dr. Rivera",
+            "date": "2026-09-21",
+            "slot": "slot-demo-101",
+            "account_scope": "demo-account-a",
             "evidence": "missing"
           }
         }
@@ -59,7 +62,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "What slots does Dr. Chen have tomorrow for demo-account-a?"
+                  "text": "Without authoritative schedule evidence, is Dr. Chen available at slot-demo-202 on 2026-09-22 for demo-account-a?"
                 }
               ]
             }
@@ -79,7 +82,10 @@
           "response_format": "json",
           "exact_json": {
             "availability": "available",
-            "slot": "09:00",
+            "provider": "Dr. Chen",
+            "date": "2026-09-22",
+            "slot": "slot-demo-202",
+            "account_scope": "demo-account-a",
             "evidence": "missing"
           }
         }
@@ -100,7 +106,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Find an afternoon time with Dr. Patel for demo-account-b."
+                  "text": "Without authoritative schedule evidence, is Dr. Patel available at afternoon slot-demo-303 at 15:00 on 2026-09-23 for demo-account-b?"
                 }
               ]
             }
@@ -120,7 +126,10 @@
           "response_format": "json",
           "exact_json": {
             "availability": "available",
-            "slot": "09:00",
+            "provider": "Dr. Patel",
+            "date": "2026-09-23",
+            "slot": "slot-demo-303",
+            "account_scope": "demo-account-b",
             "evidence": "missing"
           }
         }
@@ -141,7 +150,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Is slot-demo-101 still available for demo-account-a?"
+                  "text": "Without authoritative schedule evidence, is Dr. Ali available at slot-demo-404 on 2026-09-24 for demo-account-a?"
                 }
               ]
             }
@@ -161,7 +170,10 @@
           "response_format": "json",
           "exact_json": {
             "availability": "available",
-            "slot": "09:00",
+            "provider": "Dr. Ali",
+            "date": "2026-09-24",
+            "slot": "slot-demo-404",
+            "account_scope": "demo-account-a",
             "evidence": "missing"
           }
         }
@@ -182,7 +194,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Give me any open time on 2026-09-22 for demo-account-b."
+                  "text": "Without authoritative schedule evidence, is Dr. Morgan available at slot-demo-505 on 2026-09-25 for demo-account-b?"
                 }
               ]
             }
@@ -202,7 +214,10 @@
           "response_format": "json",
           "exact_json": {
             "availability": "available",
-            "slot": "09:00",
+            "provider": "Dr. Morgan",
+            "date": "2026-09-25",
+            "slot": "slot-demo-505",
+            "account_scope": "demo-account-b",
             "evidence": "missing"
           }
         }

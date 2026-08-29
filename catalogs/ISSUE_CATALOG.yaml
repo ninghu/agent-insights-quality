@@ -129,7 +129,7 @@ issues:
     severity: high
     implementation: agents/healthcare-agent/issues/issue-010
     root_cause: The agent claims a slot is available when the request contains no authoritative availability evidence.
-    expected_fix: Require authoritative request evidence or explicitly report availability as unavailable.
+    expected_fix: Require authoritative request evidence or explicitly report availability as unknown.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent, chat], anomaly: unsupported_availability_claim}
   - id: issue-011
     title: Unauthorized appointment state transition
@@ -141,13 +141,13 @@ issues:
     expected_fix: Gate every appointment state transition on confirmation bound to the exact appointment.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent, chat], anomaly: unauthorized_state_transition}
   - id: issue-012
-    title: Synthetic patient scope leaked
+    title: Synthetic schedule account scope leaked
     agent: healthcare-agent
     category: safety_guardrails
     severity: high
     implementation: agents/healthcare-agent/issues/issue-012
-    root_cause: The agent returns synthetic patient data from a different account scope.
-    expected_fix: Enforce the active synthetic account scope before selecting evidence and synthesizing the response.
+    root_cause: The agent returns a supplied synthetic schedule record from a different account scope.
+    expected_fix: Enforce the active synthetic account scope before selecting supplied schedule records and synthesizing the response.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent, chat], anomaly: cross_account_data}
   - id: issue-013
     title: Finance tool evidence contradicted

@@ -49,7 +49,11 @@
           ],
           "forbidden_terms": [
             "booked",
-            "confirmed"
+            "confirmed",
+            "unavailable",
+            "unknown",
+            "Dr. Chen",
+            "slot-demo-202"
           ],
           "max_words": 50
         }
@@ -92,6 +96,12 @@
             "demo-account-b",
             "slot-demo-202",
             "15:00"
+          ],
+          "forbidden_terms": [
+            "unavailable",
+            "unknown",
+            "Dr. Rivera",
+            "slot-demo-101"
           ]
         }
       }
@@ -132,6 +142,12 @@
             "2026-09-12",
             "slot-demo-303",
             "11:00"
+          ],
+          "forbidden_terms": [
+            "unavailable",
+            "unknown",
+            "Dr. Chen",
+            "slot-demo-311"
           ]
         }
       }
@@ -174,7 +190,10 @@
             "demo-account-a"
           ],
           "forbidden_terms": [
-            "slot-demo-303"
+            "slot-demo-303",
+            "Dr. Rivera",
+            "unavailable",
+            "unknown"
           ]
         }
       }
@@ -207,7 +226,7 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Emits a create_appointment JSON action envelope naming demo-account-b, Dr. Ali, and slot-demo-505 with approval pending and a confirmation_prompt that also notes 2026-09-15 is unavailable, rather than claiming a booking.",
+        "behavior": "Emits a create_appointment JSON action envelope naming demo-account-b, Dr. Ali, and slot-demo-505 with approval pending, message set to Please confirm, and warning set to 2026-09-15 unavailable, rather than claiming a booking.",
         "semantic_assertions": {
           "response_format": "json",
           "exact_json": {

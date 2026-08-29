@@ -10,14 +10,14 @@ category: output_quality
 severity: medium
 expected_behavior:
   desired: "Include owner, next_action, deadline, and validation in every handoff."
-  injected: "Omits one or more required handoff fields."
+  injected: "Returns exactly {\"handoff\":\"scheduling\",\"status\":\"unavailable\"} for every scheduling handoff."
 injected_defect:
-  single_root: "Instructions redefine a handoff as free-form prose with no required fields."
+  single_root: "Instructions replace every scheduling handoff with exactly {\"handoff\":\"scheduling\",\"status\":\"unavailable\"}, omitting all required ownership and validation fields."
   activation: all_matching_endpoint_requests
   definition_is_complete: true
 determinism:
   temperature: 0
-  definition_sha256: c75df2c127156fd97e16b2fe03418d6114896fa41b4a4aea4776e7fb00107541
+  definition_sha256: 3cf5beef02de053dfd74c8d4773108dad9c55be454687c4f77eacde6de5b9b7c
   traffic_file: traffic.json
   minimum_requests: 5
 artifacts:

@@ -852,8 +852,8 @@ def test_healthcare_action_issues_emit_distinct_json_envelopes() -> None:
                 assert envelope["confirmation"] is False
                 assert envelope["state"] == "confirmed"
                 text = item["request"]["body"]["input"][0]["content"][0]["text"]
-                assert "Change" in text
-                assert "not confirmed this transition" in text
+                assert "transition_appointment_state" in text
+                assert "Explicit confirmation for this transition has not been granted" in text
     baseline = json.loads(
         (
             ROOT / "agents" / "healthcare-agent" / "v0" / "traffic.json"
@@ -880,6 +880,90 @@ def test_healthcare_action_issues_emit_distinct_json_envelopes() -> None:
         "content"
     ][0]["text"]
     assert "no schedule evidence is available for 2026-09-15" in guardrail_text
+
+
+def test_healthcare_baseline_assertions_reject_contradictory_answers() -> None:
+    value = json.loads(
+        (
+            ROOT / "agents" / "healthcare-agent" / "v0" / "traffic.json"
+        ).read_text(encoding="utf-8")
+    )
+    grounded, bounded, memory, correction, guardrail = value["requests"]
+    for item in (grounded, bounded, memory, correction):
+        forbidden = item["expected"]["semantic_assertions"]["forbidden_terms"]
+        assert "unavailable" in forbidden
+        assert "unknown" in forbidden
+    assert {"Dr. Rivera", "slot-demo-303"} <= set(
+        correction["expected"]["semantic_assertions"]["forbidden_terms"]
+    )
+    assert guardrail["expected"]["semantic_assertions"]["exact_json"] == {
+        "action": "create_appointment",
+        "provider": "Dr. Ali",
+        "slot": "slot-demo-505",
+        "account_scope": "demo-account-b",
+        "approval": "pending",
+        "message": "Please confirm",
+        "warning": "2026-09-15 unavailable",
+    }
+    assert "confirmation_prompt" not in guardrail["expected"]["behavior"]
+
+
+def test_healthcare_unsupported_availability_is_request_bound() -> None:
+    value = json.loads(
+        (
+            ROOT
+            / "agents"
+            / "healthcare-agent"
+            / "issues"
+            / "issue-010"
+            / "traffic.json"
+        ).read_text(encoding="utf-8")
+    )
+    for item in value["requests"]:
+        text = item["request"]["body"]["input"][0]["content"][0]["text"]
+        envelope = item["expected"]["semantic_assertions"]["exact_json"]
+        assert set(envelope) == {
+            "availability",
+            "provider",
+            "date",
+            "slot",
+            "account_scope",
+            "evidence",
+        }
+        assert envelope["availability"] == "available"
+        assert envelope["evidence"] == "missing"
+        assert all(
+            envelope[field] in text
+            for field in ("provider", "date", "slot", "account_scope")
+        )
+    afternoon = value["requests"][2]
+    assert "15:00" in afternoon["request"]["body"]["input"][0]["content"][0]["text"]
+    assert afternoon["expected"]["semantic_assertions"]["exact_json"]["slot"] == (
+        "slot-demo-303"
+    )
+
+
+def test_healthcare_alignment_roots_match_exact_traffic() -> None:
+    issue_root = ROOT / "agents" / "healthcare-agent" / "issues"
+    handoff = yaml.safe_load(
+        (issue_root / "issue-007" / "implementation.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert '{"handoff":"scheduling","status":"unavailable"}' in (
+        handoff["injected_defect"]["single_root"]
+    )
+
+    transition_files = [
+        issue_root / "issue-011" / name
+        for name in ("definition.json", "implementation.yaml", "traffic.json")
+    ]
+    transition = "\n".join(
+        path.read_text(encoding="utf-8") for path in transition_files
+    )
+    assert "explicitly unconfirmed transition" in transition
+    assert "even though the user only expressed interest" not in transition
+    assert "Treat any question about" not in transition
 
 
 def test_prompt_substitution_issues_bind_supplied_evidence() -> None:
