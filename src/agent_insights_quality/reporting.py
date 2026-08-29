@@ -7,6 +7,11 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
+from agent_insights_quality.shadow_scoring import (
+    SHADOW_SCORE_REPORT_PROFILES,
+    calculate_shadow_quality_score,
+    select_shadow_primary,
+)
 from agent_insights_quality.util import ROOT, ContractError, atomic_json, read_json
 from agent_insights_quality.util import content_hash
 
@@ -368,6 +373,21 @@ def _summary_metrics(
     }
 
 
+def _apply_staging_shadow_score(report: dict[str, Any]) -> None:
+    if report["profile"] not in SHADOW_SCORE_REPORT_PROFILES:
+        return
+    incomplete = report["summary"]["incomplete"]
+    report["summary"]["shadow_quality_score"] = calculate_shadow_quality_score(
+        report["baseline"],
+        report["issues"],
+        incomplete=incomplete,
+    )
+    for item in report["issues"]:
+        item["shadow_v2_primary"] = (
+            None if incomplete else select_shadow_primary(item)
+        )
+
+
 def build_report(
     manifest: dict[str, Any],
     issues: dict[str, Any],
@@ -510,7 +530,7 @@ def build_report(
         if summary["quality_score"] >= QUALITY_SCORE_THRESHOLD
         else "FAIL"
     )
-    return {
+    report = {
         "schema_version": "2.0.0",
         "report_date": manifest["report_date"],
         "run_id": manifest["run_id"],
@@ -524,6 +544,8 @@ def build_report(
         "summary": summary,
         "delivery": {"content_digest": "sha256:" + "0" * 64},
     }
+    _apply_staging_shadow_score(report)
+    return report
 
 
 def build_operational_failure_report(
@@ -565,7 +587,7 @@ def build_operational_failure_report(
         for agent_name, issue_ids in selected.items()
         for issue_id in issue_ids
     ]
-    return {
+    report = {
         "schema_version": "2.0.0",
         "report_date": report_date.isoformat(),
         "run_id": run_id,
@@ -625,6 +647,8 @@ def build_operational_failure_report(
         },
         "delivery": {"content_digest": "sha256:" + "0" * 64},
     }
+    _apply_staging_shadow_score(report)
+    return report
 
 
 def validate_report(report: dict[str, Any]) -> None:
@@ -651,6 +675,21 @@ def validate_report(report: dict[str, Any]) -> None:
         for item in [*report["baseline"], *report["issues"]]
     ):
         raise ContractError("Report runtime evidence is incomplete")
+    if report["profile"] in SHADOW_SCORE_REPORT_PROFILES:
+        expected_shadow = calculate_shadow_quality_score(
+            report["baseline"],
+            report["issues"],
+            incomplete=report["summary"]["incomplete"],
+        )
+        if report["summary"].get("shadow_quality_score") != expected_shadow:
+            raise ContractError("Staging shadow score is inconsistent")
+        incomplete = report["summary"]["incomplete"]
+        if any(
+            item.get("shadow_v2_primary")
+            != (None if incomplete else select_shadow_primary(item))
+            for item in report["issues"]
+        ):
+            raise ContractError("Staging shadow primary selection is inconsistent")
 
 
 def _validate_complete_summary(
@@ -943,6 +982,51 @@ def validate_staging_report(
     _validate_complete_summary(report, expected_count=36, label="Staging")
 
 
+def _shadow_metric(value: Any) -> str:
+    return "N/A" if value is None else f"{float(value):.1f}/100"
+
+
+def _shadow_markdown(report: dict[str, Any]) -> list[str]:
+    shadow = report["summary"].get("shadow_quality_score")
+    if (
+        report["profile"] not in SHADOW_SCORE_REPORT_PROFILES
+        or report["summary"]["incomplete"]
+        or not isinstance(shadow, dict)
+        or shadow.get("score") is None
+    ):
+        return []
+    components = shadow["components"]
+    counts = shadow["counts"]
+    diagnostics = ", ".join(
+        str(value).replace("_", " ") for value in shadow["gate_failures"]
+    )
+    return [
+        "## Staging shadow calibration",
+        "",
+        f"`{shadow['formula']}` is report-only and has no status, promotion, "
+        "or automation authority.",
+        "",
+        "| Shadow metric | Value |",
+        "| --- | ---: |",
+        f"| Total | {_shadow_metric(shadow['score'])} |",
+        f"| Coverage | {_shadow_metric(components['coverage'])} |",
+        "| Diagnosis recall | "
+        f"{_shadow_metric(components['diagnosis_recall'])} |",
+        "| Selected-card quality | "
+        f"{_shadow_metric(components['selected_card_quality'])} |",
+        "| Useful coverage | "
+        f"{_shadow_metric(components['useful_coverage'])} |",
+        f"| Precision | {_shadow_metric(components['precision'])} |",
+        f"| Expected / detected issues | {counts['expected_issues']} / "
+        f"{counts['detected_issues']} |",
+        f"| Generated issue / baseline noise cards | "
+        f"{counts['generated_issue_cards']} / "
+        f"{counts['baseline_noise_cards']} |",
+        f"| Below-target diagnostics | {diagnostics or 'None'} |",
+        "",
+    ]
+
+
 def render_markdown(report: dict[str, Any]) -> str:
     summary = report["summary"]
     score = (
@@ -985,6 +1069,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"field quality `{field_quality}` at 85%; "
         f"clean-card precision `{clean_precision}` at 15%.",
         "",
+        *_shadow_markdown(report),
         "## What is working",
         "",
         "| Capability | Evidence |",

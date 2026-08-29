@@ -145,6 +145,20 @@ def _assessments(manifest: dict) -> dict[str, dict]:
     }
 
 
+def _with_card_evaluations(
+    assessments: dict[str, dict],
+) -> dict[str, dict]:
+    for index, assessment in enumerate(assessments.values(), start=1):
+        assessment["card_evaluations"] = [
+            {
+                "reference": f"sha256:{index:064x}",
+                "finding_type": assessment["finding_type"],
+                "fields": deepcopy(assessment["fields"]),
+            }
+        ]
+    return assessments
+
+
 def _baseline_assessments(manifest: dict) -> dict[str, dict]:
     return {
         agent["name"]: {
@@ -184,6 +198,92 @@ def test_report_status_uses_ninety_point_threshold() -> None:
     )
     assert failed["summary"]["quality_score"] == 83
     assert failed["status"] == "FAIL"
+
+
+def test_staging_shadow_score_does_not_change_v1_or_daily_reports() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    manifest["profile"] = "staging"
+    assessments = _with_card_evaluations(_assessments(manifest))
+    first = next(iter(assessments.values()))
+    first["verdict"] = "partially_useful"
+    first["finding_type"] = "PARTIAL"
+    first["fields"]["root_cause"] = False
+    first["card_evaluations"][0]["finding_type"] = "PARTIAL"
+    first["card_evaluations"][0]["fields"]["root_cause"] = False
+
+    staging = build_report(
+        manifest,
+        issues,
+        assessments,
+        _baseline_assessments(manifest),
+    )
+
+    assert staging["summary"]["quality_score_formula"] == "field_weighted_v1"
+    assert staging["summary"]["quality_score"] == 99.1
+    assert staging["status"] == "PASS"
+    shadow = staging["summary"]["shadow_quality_score"]
+    assert shadow["formula"] == "coverage_quality_precision_v2"
+    assert shadow["automation_authority"] is False
+    assert shadow["components"] == {
+        "coverage": 100.0,
+        "diagnosis_recall": 96.0,
+        "selected_card_quality": 96.0,
+        "useful_coverage": 96.0,
+        "precision": 100.0,
+    }
+    assert shadow["score"] == 96.8
+    assert shadow["gate_failures"] == []
+    assert staging["issues"][0]["shadow_v2_primary"]["quality"] == 0.0
+    validate_report(staging)
+    markdown = render_markdown(staging)
+    assert "## Staging shadow calibration" in markdown
+    assert "`coverage_quality_precision_v2`" in markdown
+    assert "| Total | 96.8/100 |" in markdown
+
+    manifest["profile"] = "daily"
+    daily = build_report(
+        manifest,
+        issues,
+        assessments,
+        _baseline_assessments(manifest),
+    )
+    assert "shadow_quality_score" not in daily["summary"]
+    assert all("shadow_v2_primary" not in item for item in daily["issues"])
+    assert "coverage_quality_precision_v2" not in render_markdown(daily)
+    validate_report(daily)
+
+
+def test_incomplete_staging_shadow_keeps_counts_but_nulls_metrics() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    manifest["profile"] = "staging"
+    manifest["agents"][0]["issues"][0]["endpoint_usable_response_count"] = 4
+    assessments = _with_card_evaluations(_assessments(manifest))
+
+    report = build_report(
+        manifest,
+        issues,
+        assessments,
+        _baseline_assessments(manifest),
+    )
+
+    assert report["status"] == "INCOMPLETE"
+    assert report["summary"]["quality_score"] is None
+    shadow = report["summary"]["shadow_quality_score"]
+    assert shadow["counts"] == {
+        "expected_issues": 25,
+        "detected_issues": 24,
+        "correct_diagnosis_primaries": 24,
+        "generated_issue_cards": 25,
+        "baseline_noise_cards": 0,
+    }
+    assert all(value is None for value in shadow["components"].values())
+    assert shadow["score"] is None
+    assert shadow["gate_failures"] is None
+    assert all(item["shadow_v2_primary"] is None for item in report["issues"])
+    assert "coverage_quality_precision_v2" not in render_markdown(report)
+    validate_report(report)
 
 
 def test_failed_matched_issue_cannot_score_from_perfect_card_fields() -> None:

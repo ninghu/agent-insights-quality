@@ -19,6 +19,7 @@ from agent_insights_quality.report_summary import (
     improvement_rows,
     working_capabilities,
 )
+from agent_insights_quality.shadow_scoring import SHADOW_SCORE_REPORT_PROFILES
 from agent_insights_quality.util import (
     ROOT,
     ContractError,
@@ -308,6 +309,65 @@ def _score_comparison(report: dict[str, Any]) -> str:
     delta = comparison["delta"]
     sign = "+" if delta > 0 else ""
     return f" ({sign}{delta:g})"
+
+
+def _shadow_metric(value: Any) -> str:
+    return "N/A" if value is None else f"{float(value):.1f}/100"
+
+
+def _shadow_score_details(report: dict[str, Any]) -> str:
+    shadow = report["summary"].get("shadow_quality_score")
+    if (
+        report["profile"] not in SHADOW_SCORE_REPORT_PROFILES
+        or report["summary"]["incomplete"]
+        or not isinstance(shadow, dict)
+        or shadow.get("score") is None
+    ):
+        return ""
+    components = shadow["components"]
+    counts = shadow["counts"]
+    diagnostics = ", ".join(
+        str(value).replace("_", " ") for value in shadow["gate_failures"]
+    )
+    rows = [
+        ("Total", _shadow_metric(shadow["score"])),
+        ("Coverage", _shadow_metric(components["coverage"])),
+        (
+            "Diagnosis recall",
+            _shadow_metric(components["diagnosis_recall"]),
+        ),
+        (
+            "Selected-card quality",
+            _shadow_metric(components["selected_card_quality"]),
+        ),
+        (
+            "Useful coverage",
+            _shadow_metric(components["useful_coverage"]),
+        ),
+        ("Precision", _shadow_metric(components["precision"])),
+        (
+            "Expected / detected issues",
+            f"{counts['expected_issues']} / {counts['detected_issues']}",
+        ),
+        (
+            "Generated issue / baseline noise cards",
+            f"{counts['generated_issue_cards']} / "
+            f"{counts['baseline_noise_cards']}",
+        ),
+        ("Below-target diagnostics", diagnostics or "None"),
+    ]
+    return (
+        f'<h3 style="margin:24px 0 8px 0;color:#12304a;{_OUTLOOK_TEXT_STYLE}'
+        'font-size:16px;">Staging shadow calibration</h3>'
+        f'<p style="margin:0 0 12px 0;color:#64748b;{_OUTLOOK_TEXT_STYLE}">'
+        f"<code>{html.escape(shadow['formula'])}</code> is report-only and has "
+        "no status, promotion, or automation authority.</p>"
+        + _data_table(
+            ("Shadow metric", "Value"),
+            rows,
+            (62, 38),
+        )
+    )
 
 
 def _section_heading(title: str) -> str:
@@ -677,6 +737,7 @@ def _render_html(
         )
         + _dashboard_source_link(dashboard_link, adx_publication)
         + _data_table(("Metric", "Findings"), _grade_rows(report), (38, 62))
+        + _shadow_score_details(report)
         + _insight_results_link()
         + "</td></tr>"
         '<tr><td style="padding:30px 32px 0 32px;">'

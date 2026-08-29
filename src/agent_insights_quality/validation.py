@@ -13,6 +13,17 @@ from agent_insights_quality.reporting import (
     QUALITY_SCORE_FORMULA,
     QUALITY_SCORE_THRESHOLD,
 )
+from agent_insights_quality.shadow_scoring import (
+    SHADOW_CALIBRATION_COMPLETE_RUNS,
+    SHADOW_FIELD_WEIGHTS,
+    SHADOW_GATE_THRESHOLDS,
+    SHADOW_MISMATCHED_QUALITY_CAP,
+    SHADOW_PRECISION_WEIGHT,
+    SHADOW_SCORE_AUTOMATION_AUTHORITY,
+    SHADOW_SCORE_FORMULA,
+    SHADOW_SCORE_REPORT_PROFILES,
+    SHADOW_USEFUL_COVERAGE_WEIGHT,
+)
 from agent_insights_quality.util import ROOT, ContractError, read_yaml
 
 _REMOVED_TERMS = re.compile(
@@ -74,6 +85,20 @@ def _validate_reporting_policy() -> None:
         "pass_threshold": QUALITY_SCORE_THRESHOLD,
     }:
         raise ContractError("Reporting quality-score policy does not match implementation")
+    if policy.get("shadow_quality_score") != {
+        "formula": SHADOW_SCORE_FORMULA,
+        "automation_authority": SHADOW_SCORE_AUTOMATION_AUTHORITY,
+        "report_profiles": list(SHADOW_SCORE_REPORT_PROFILES),
+        "useful_coverage_weight": SHADOW_USEFUL_COVERAGE_WEIGHT,
+        "precision_weight": SHADOW_PRECISION_WEIGHT,
+        "native_field_weights": SHADOW_FIELD_WEIGHTS,
+        "mismatched_quality_cap": SHADOW_MISMATCHED_QUALITY_CAP,
+        "gates": SHADOW_GATE_THRESHOLDS,
+        "calibration_complete_runs": SHADOW_CALIBRATION_COMPLETE_RUNS,
+    }:
+        raise ContractError(
+            "Reporting shadow quality-score policy does not match implementation"
+        )
 
 
 def _validate_removed_terms() -> None:

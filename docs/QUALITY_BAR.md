@@ -34,6 +34,52 @@ reporting evidence must still be complete and trustworthy before a score can be 
 See [Insight Result Labels](INSIGHT_RESULTS.md) for Fully Correct, Partially Correct, Incorrect, and
 Noise definitions and field examples.
 
+## Staging shadow calibration
+
+`coverage_quality_precision_v2` is a report-only policy candidate. It does not change the official
+`field_weighted_v1` score, `90/100` threshold, report status, promotion authority, daily trend,
+or ADX payload. New daily reports omit V2 by explicit profile rule. Complete staging reports show
+V2 details without a shadow `PASS` or `FAIL` label and without a cross-formula score delta.
+
+For each terminal-proven issue card, V2 treats the existing assessment `root_cause` field as
+`diagnosis_correct`. Diagnosis is a gate rather than a weighted field: an incorrect diagnosis gives
+that card zero selected-card quality. The remaining native card fields are weighted as follows:
+title 5%; description 25%; category 5%; severity 15%; proposed fix 25%; and linked traces 25%.
+A `MISMATCHED` card is capped at 40 even when its diagnosis is correct. `NOISE`, `DUPLICATE`, and
+`INCOMPLETE` cards cannot be primaries.
+
+One primary is selected per expected issue by highest gated quality, then by ascending stable card
+reference to break ties. Reports store the existing public-safe `sha256:` card reference, finding
+type, diagnosis result, and selected quality for the chosen primary.
+
+The V2 components are:
+
+```text
+N = expected issues
+T = issues with an attributable MATCHED, PARTIAL, or MISMATCHED primary
+C = 100 * T / N
+R = 100 * correct-diagnosis primaries / T
+Q = average selected-primary quality among detected issues
+U = sum(selected-primary quality) / N = C * Q / 100
+G = all generated issue-version cards
+B = independently proven baseline noise cards
+P = 100 * T / (G + B)
+S = 0.80 * U + 0.20 * P
+```
+
+When `G + B` is zero, precision displays `N/A` and contributes zero to `S`. Valid, independently
+proven baseline Agent findings are score-neutral and excluded from `G`, `B`, and `T`. Comparisons and
+gate checks use unrounded values; reports display one decimal place.
+
+Shadow diagnostics record which candidate gates are below target: `S >= 90`, `C >= 95`, `R >= 95`,
+`P >= 80`, and `B = 0`. These diagnostics have no automation authority. Incomplete staging evidence
+keeps raw V2 counts and the existing incomplete reasons, but V2 total, all V2 components, gate
+diagnostics, and selected-primary details are `null`.
+
+The candidate must run unchanged in shadow for three complete staging qualifications. A policy switch
+requires separate human review of those calibration results and an explicit change to official
+scoring, status, promotion, publication, and historical-comparison contracts.
+
 ## FAIL
 
 A complete, trustworthy run is `FAIL` when its quality score is below `90/100`.

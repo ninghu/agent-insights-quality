@@ -103,6 +103,7 @@ def test_publication_payload_contains_public_safe_explanations() -> None:
     assert len(payload["fields"]) == 175
     assert len(payload["highlights"]) == 8
     assert payload["run"]["quality_score_formula"] == "field_weighted_v1"
+    assert "shadow_quality_score" not in payload["run"]
     assert payload["run"]["report_url"].endswith(
         "/reports/daily/2026/08/26/report.md"
     )
@@ -154,6 +155,7 @@ def test_publication_payload_contains_public_safe_explanations() -> None:
         "title",
     }
     rendered = json.dumps(payload, sort_keys=True)
+    assert "coverage_quality_precision_v2" not in rendered
     for excluded_key in (
         "catalog_hashes",
         "delivery",

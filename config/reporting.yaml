@@ -17,3 +17,25 @@ quality_score:
     proposed_fix: 0.15
     linked_traces: 0.15
   pass_threshold: 90
+shadow_quality_score:
+  formula: coverage_quality_precision_v2
+  automation_authority: false
+  report_profiles:
+    - staging
+  useful_coverage_weight: 0.80
+  precision_weight: 0.20
+  native_field_weights:
+    title: 0.05
+    description: 0.25
+    category: 0.05
+    severity: 0.15
+    proposed_fix: 0.25
+    linked_traces: 0.25
+  mismatched_quality_cap: 40
+  gates:
+    score: 90
+    coverage: 95
+    diagnosis_recall: 95
+    precision: 80
+    baseline_noise_cards: 0
+  calibration_complete_runs: 3

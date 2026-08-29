@@ -417,8 +417,10 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
                     "ownership": "none",
                     "ownership_reason": "The expected Insight is fully correct.",
                     "fields": fields,
+                    "card_evaluations": [],
                 },
                 "evidence_reference": "sha256:" + "c" * 64,
+                "shadow_v2_primary": None,
             }
             for issue in issue_by_id.values()
         ],
@@ -438,6 +440,31 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
             "quality_threshold": 90,
             "quality_score_formula": "field_weighted_v1",
             "incomplete_reasons": [],
+            "shadow_quality_score": {
+                "formula": "coverage_quality_precision_v2",
+                "automation_authority": False,
+                "counts": {
+                    "expected_issues": 36,
+                    "detected_issues": 0,
+                    "correct_diagnosis_primaries": 0,
+                    "generated_issue_cards": 0,
+                    "baseline_noise_cards": 0,
+                },
+                "components": {
+                    "coverage": 0.0,
+                    "diagnosis_recall": 0.0,
+                    "selected_card_quality": 0.0,
+                    "useful_coverage": 0.0,
+                    "precision": None,
+                },
+                "score": 0.0,
+                "gate_failures": [
+                    "score",
+                    "coverage",
+                    "diagnosis_recall",
+                    "precision",
+                ],
+            },
         },
         "delivery": {"content_digest": "sha256:" + "0" * 64},
     }
@@ -454,6 +481,8 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
         receipt["source_integrity_digest"]
         == manifest["source_integrity"]["contract_digest"]
     )
+    assert report["summary"]["shadow_quality_score"]["score"] == 0.0
+    assert receipt["qualification_status"] == "PASS"
     incomplete_manifest = deepcopy(manifest)
     first_issue = incomplete_manifest["agents"][0]["issues"][0]
     for summary in first_issue["endpoint_request_summaries"]:

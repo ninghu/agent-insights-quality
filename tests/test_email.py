@@ -155,6 +155,45 @@ def test_email_requires_reviewed_domain_and_one_success(
         r"\b(?:PASS|FAIL)\b",
         preview.read_text(encoding="utf-8"),
     ) is None
+    assert "coverage_quality_precision_v2" not in request["html"]
+    staging_report = deepcopy(report)
+    staging_report["profile"] = "staging"
+    staging_report["summary"]["shadow_quality_score"] = {
+        "formula": "coverage_quality_precision_v2",
+        "automation_authority": False,
+        "counts": {
+            "expected_issues": 36,
+            "detected_issues": 35,
+            "correct_diagnosis_primaries": 34,
+            "generated_issue_cards": 38,
+            "baseline_noise_cards": 1,
+        },
+        "components": {
+            "coverage": 97.2,
+            "diagnosis_recall": 97.1,
+            "selected_card_quality": 95.0,
+            "useful_coverage": 92.4,
+            "precision": 89.7,
+        },
+        "score": 91.9,
+        "gate_failures": ["baseline_noise"],
+    }
+    staging_request = create_request(
+        staging_report,
+        "synthetic@microsoft.com",
+        dashboard_link=_DASHBOARD_LINK,
+        adx_publication=_ADX_PUBLICATION,
+    )
+    assert "Staging shadow calibration" in staging_request["html"]
+    assert "coverage_quality_precision_v2" in staging_request["html"]
+    assert "91.9/100" in staging_request["html"]
+    assert "Below-target diagnostics" in staging_request["html"]
+    assert "baseline noise" in staging_request["html"]
+    staging_preview = runtime_root / "staging" / "shadow" / "report-preview.html"
+    write_private_report_preview(staging_request, staging_preview)
+    assert "coverage_quality_precision_v2" in staging_preview.read_text(
+        encoding="utf-8"
+    )
     with pytest.raises(ContractError, match="private runtime root"):
         write_private_report_preview(request, tmp_path / "public-preview.html")
     for owner in (

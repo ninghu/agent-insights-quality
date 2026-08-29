@@ -3,6 +3,117 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "report_date", "run_id", "profile", "manifest_reference", "catalog_hashes", "source_integrity", "status", "baseline", "issues", "summary", "delivery"],
+  "allOf": [
+    {
+      "if": {"properties": {"profile": {"const": "staging"}}},
+      "then": {
+        "properties": {
+          "issues": {"items": {"required": ["shadow_v2_primary"]}},
+          "summary": {"required": ["shadow_quality_score"]}
+        }
+      },
+      "else": {
+        "properties": {
+          "issues": {"items": {"not": {"required": ["shadow_v2_primary"]}}},
+          "summary": {"not": {"required": ["shadow_quality_score"]}}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "shadowPrimary": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reference", "finding_type", "diagnosis_correct", "quality"],
+          "properties": {
+            "reference": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "finding_type": {"enum": ["MATCHED", "PARTIAL", "MISMATCHED"]},
+            "diagnosis_correct": {"type": "boolean"},
+            "quality": {"type": "number", "minimum": 0, "maximum": 100}
+          }
+        }
+      ]
+    },
+    "shadowQualityScore": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["formula", "automation_authority", "counts", "components", "score", "gate_failures"],
+      "properties": {
+        "formula": {"const": "coverage_quality_precision_v2"},
+        "automation_authority": {"const": false},
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["expected_issues", "detected_issues", "correct_diagnosis_primaries", "generated_issue_cards", "baseline_noise_cards"],
+          "properties": {
+            "expected_issues": {"type": "integer", "minimum": 0, "maximum": 36},
+            "detected_issues": {"type": "integer", "minimum": 0, "maximum": 36},
+            "correct_diagnosis_primaries": {"type": "integer", "minimum": 0, "maximum": 36},
+            "generated_issue_cards": {"type": "integer", "minimum": 0},
+            "baseline_noise_cards": {"type": "integer", "minimum": 0}
+          }
+        },
+        "components": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["coverage", "diagnosis_recall", "selected_card_quality", "useful_coverage", "precision"],
+          "properties": {
+            "coverage": {
+              "oneOf": [
+                {"type": "number", "minimum": 0, "maximum": 100},
+                {"type": "null"}
+              ]
+            },
+            "diagnosis_recall": {
+              "oneOf": [
+                {"type": "number", "minimum": 0, "maximum": 100},
+                {"type": "null"}
+              ]
+            },
+            "selected_card_quality": {
+              "oneOf": [
+                {"type": "number", "minimum": 0, "maximum": 100},
+                {"type": "null"}
+              ]
+            },
+            "useful_coverage": {
+              "oneOf": [
+                {"type": "number", "minimum": 0, "maximum": 100},
+                {"type": "null"}
+              ]
+            },
+            "precision": {
+              "oneOf": [
+                {"type": "number", "minimum": 0, "maximum": 100},
+                {"type": "null"}
+              ]
+            }
+          }
+        },
+        "score": {
+          "oneOf": [
+            {"type": "number", "minimum": 0, "maximum": 100},
+            {"type": "null"}
+          ]
+        },
+        "gate_failures": {
+          "oneOf": [
+            {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "enum": ["score", "coverage", "diagnosis_recall", "precision", "baseline_noise"]
+              }
+            },
+            {"type": "null"}
+          ]
+        }
+      }
+    }
+  },
   "properties": {
     "schema_version": {"const": "2.0.0"},
     "report_date": {"type": "string", "format": "date"},
@@ -42,7 +153,15 @@
     },
     "status": {"enum": ["PASS", "FAIL", "INCOMPLETE"]},
     "baseline": {"type": "array", "minItems": 5, "maxItems": 5},
-    "issues": {"type": "array"},
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "shadow_v2_primary": {"$ref": "#/$defs/shadowPrimary"}
+        }
+      }
+    },
     "summary": {
       "type": "object",
       "additionalProperties": false,
@@ -97,7 +216,8 @@
           ]
         },
         "quality_threshold": {"const": 90},
-        "quality_score_formula": {"const": "field_weighted_v1"}
+        "quality_score_formula": {"const": "field_weighted_v1"},
+        "shadow_quality_score": {"$ref": "#/$defs/shadowQualityScore"}
       }
     },
     "delivery": {
