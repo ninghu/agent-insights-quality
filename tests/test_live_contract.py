@@ -1069,7 +1069,22 @@ def test_trace_row_query_projects_private_values_with_exact_correlation_scope(
     ]
 
 
-def _write_trace_assertion_traffic(path: Path, request_count: int = 1) -> None:
+def _write_trace_assertion_traffic(
+    path: Path,
+    request_count: int = 1,
+    *,
+    with_trace_assertions: bool = True,
+) -> None:
+    expected = {"http_status": 200}
+    if with_trace_assertions:
+        expected["trace_assertions"] = [
+            {
+                "name": "one_lookup",
+                "kind": "tool_call_count",
+                "tool_name": "lookup",
+                "count": 1,
+            }
+        ]
     path.write_text(
         json.dumps(
             {
@@ -1084,17 +1099,7 @@ def _write_trace_assertion_traffic(path: Path, request_count: int = 1) -> None:
                                 },
                             }
                         },
-                        "expected": {
-                            "http_status": 200,
-                            "trace_assertions": [
-                                {
-                                    "name": "one_lookup",
-                                    "kind": "tool_call_count",
-                                    "tool_name": "lookup",
-                                    "count": 1,
-                                }
-                            ],
-                        },
+                        "expected": expected,
                     }
                     for index in range(request_count)
                 ]
@@ -1205,7 +1210,7 @@ def test_trace_assertion_stable_failure_waits_for_deadline(
     assert poll_times[-1] == 15 * 60
     assert progress
     assert "failing evidence is stabilizing" in progress[-1]
-    assert first_passes == []
+    assert first_passes == [0]
 
 
 def test_trace_assertion_observes_span_ingested_after_135_seconds(
@@ -1257,7 +1262,7 @@ def test_trace_assertion_observes_span_ingested_after_135_seconds(
 
     assert evidence[0][0].passed is True
     assert monotonic[0] == 135 + 180
-    assert first_passes == [135]
+    assert first_passes == [0]
 
 
 def test_trace_assertion_late_duplicate_invalidates_stabilizing_pass(
@@ -1398,6 +1403,52 @@ def test_trace_assertion_stable_pass_waits_for_ingestion_interval(
     assert first_passes == [0]
 
 
+def test_hosted_correlation_without_assertions_waits_for_ingestion_interval(
+    tmp_path,
+) -> None:
+    monotonic = [0.0]
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+    )
+    operation_id = "a" * 32
+    reference = "resp_A1b2C3d4E5f6"
+    rows = [
+        {
+            **_tool_trace_row("lookup"),
+            "operation_id": operation_id,
+            "matched_reference": reference,
+        }
+    ]
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(
+        traffic_path,
+        with_trace_assertions=False,
+    )
+    runtime._trace_rows = lambda *_args: rows  # type: ignore[method-assign]
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
+    )
+    first_mappings = []
+
+    evidence = runtime.trace_assertion_evidence(
+        agent_name="travel-agent",
+        foundry_version="issue-021",
+        operation_ids=(operation_id,),
+        response_references=(reference,),
+        window_start="2026-08-28T10:00:00+00:00",
+        window_end="2026-08-28T10:00:30+00:00",
+        traffic_path=traffic_path,
+        stabilization_seconds=180,
+        on_first_pass=lambda: first_mappings.append(monotonic[0]),
+    )
+
+    assert evidence == ((),)
+    assert monotonic[0] == 180
+    assert first_mappings == [0]
+
+
 def test_trace_assertion_requires_correlation_in_final_snapshot(
     tmp_path,
 ) -> None:
@@ -1425,6 +1476,7 @@ def test_trace_assertion_requires_correlation_in_final_snapshot(
         0, monotonic[0] + seconds
     )
 
+    first_mappings = []
     with pytest.raises(ContractError, match="exact response-to-operation correlation"):
         runtime.trace_assertion_evidence(
             agent_name="finance-agent",
@@ -1435,9 +1487,10 @@ def test_trace_assertion_requires_correlation_in_final_snapshot(
             window_end="2026-08-28T10:00:30+00:00",
             traffic_path=traffic_path,
             stabilization_seconds=180,
-            on_first_pass=lambda: pytest.fail("failure must not start Insights"),
+            on_first_pass=lambda: first_mappings.append(monotonic[0]),
         )
     assert monotonic[0] == 15 * 60
+    assert first_mappings == [0]
 
 
 def test_trace_assertion_rejects_pass_first_seen_near_deadline(
@@ -1484,7 +1537,7 @@ def test_trace_assertion_rejects_pass_first_seen_near_deadline(
             on_first_pass=lambda: first_passes.append(monotonic[0]),
         )
     assert monotonic[0] == 15 * 60
-    assert first_passes == [885]
+    assert first_passes == [0]
 
 
 def test_trace_assertions_cover_payload_cardinality_and_span_order() -> None:

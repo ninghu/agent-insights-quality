@@ -1085,18 +1085,17 @@ union traces, dependencies, requests
         traffic_path: Path,
         stabilization_seconds: int,
         on_first_pass: Callable[[], None],
+        on_stable: Callable[[dict[str, Any]], None] | None = None,
     ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
         if stabilization_seconds <= 0:
-            raise ContractError("Trace assertion stabilization interval must be positive")
+            raise ContractError("Hosted evidence stabilization interval must be positive")
         payload = json.loads(traffic_path.read_text(encoding="utf-8"))
         requests = payload if isinstance(payload, list) else payload.get("requests")
         if not isinstance(requests, list) or len(requests) != len(response_references):
-            raise ContractError("Trace assertion traffic coverage is inconsistent")
+            raise ContractError("Hosted evidence traffic coverage is inconsistent")
         _validate_response_references(response_references, len(requests))
         _validate_operation_references(operation_ids, len(requests))
         fixtures = tuple(_normalize_fixture(item) for item in requests)
-        if not any(fixture["trace_assertions"] for fixture in fixtures):
-            return tuple(() for _ in fixtures)
         deadline = self._monotonic() + TRACE_ASSERTION_DEADLINE_SECONDS
         next_progress = self._monotonic() + _TRACE_ASSERTION_PROGRESS_SECONDS
         last_results: tuple[tuple[TraceAssertionEvidence, ...], ...] | None = None
@@ -1106,7 +1105,7 @@ union traces, dependencies, requests
             tuple[str, ...],
         ] | None = None
         stable_since: float | None = None
-        first_pass_observed = False
+        first_mapping_observed = False
         passing = False
         correlated: tuple[list[dict[str, Any]], ...] | None = None
         while True:
@@ -1128,9 +1127,12 @@ union traces, dependencies, requests
                 response_references,
             ):
                 raise TraceAssertionActivationError(
-                    "Trace assertions found ambiguous response-to-operation correlation"
+                    "Hosted evidence found ambiguous response-to-operation correlation"
                 )
             if correlated is not None:
+                if not first_mapping_observed:
+                    first_mapping_observed = True
+                    on_first_pass()
                 last_results = tuple(
                     _trace_assertion_result(request_rows, fixture)
                     for request_rows, fixture in zip(
@@ -1154,14 +1156,13 @@ union traces, dependencies, requests
                 if signature != stable_signature:
                     stable_signature = signature
                     stable_since = now
-                if passing and not first_pass_observed:
-                    first_pass_observed = True
-                    on_first_pass()
                 if (
                     passing
                     and stable_since is not None
                     and now - stable_since >= stabilization_seconds
                 ):
+                    if on_stable is not None:
+                        on_stable(_trace_behavior_summary(rows))
                     return last_results
             else:
                 passing = False
@@ -1182,7 +1183,7 @@ union traces, dependencies, requests
                     else "correlation"
                 )
                 self.report_progress(
-                    f"trace activation {state} evidence is stabilizing ({elapsed}s)"
+                    f"Hosted {state} evidence is stabilizing ({elapsed}s)"
                 )
                 next_progress = now + _TRACE_ASSERTION_PROGRESS_SECONDS
             self._sleep(min(TRACE_ASSERTION_POLL_SECONDS, deadline - now))
@@ -1193,13 +1194,15 @@ union traces, dependencies, requests
             and stable_since is not None
             and self._monotonic() - stable_since >= stabilization_seconds
         ):
+            if on_stable is not None:
+                on_stable(_trace_behavior_summary(rows))
             return last_results
         if correlated is not None:
             raise TraceAssertionActivationError(
-                "Trace assertion evidence did not stabilize before the bounded deadline"
+                "Hosted evidence did not stabilize before the bounded deadline"
             )
         raise TraceAssertionActivationError(
-            "Trace assertions require exact response-to-operation correlation"
+            "Hosted evidence requires exact response-to-operation correlation"
         )
 
     def _trace_rows(

@@ -167,6 +167,7 @@ class RuntimePort(Protocol):
         traffic_path: Path,
         stabilization_seconds: int,
         on_first_pass: Callable[[], None],
+        on_stable: Callable[[dict[str, Any]], None] | None = None,
     ) -> tuple[tuple[Any, ...], ...]: ...
 
     def start_insights_run(
@@ -837,6 +838,8 @@ def _activation_failure_result(
     operation_ids: tuple[str, ...],
     invocation: InvocationEvidence,
     trace_evidence: dict[str, Any],
+    error_code: str = "issue_activation_failed",
+    trace_contract_verified: bool = True,
 ) -> VersionResult:
     return VersionResult(
         logical_version=logical_version,
@@ -845,7 +848,7 @@ def _activation_failure_result(
         operation_ids=list(operation_ids),
         window_start=invocation.started_at,
         window_end=invocation.completed_at,
-        error_code="issue_activation_failed",
+        error_code=error_code,
         endpoint_request_count=invocation.request_count,
         endpoint_response_count=invocation.response_count,
         endpoint_usable_response_count=invocation.usable_response_count,
@@ -853,7 +856,7 @@ def _activation_failure_result(
         semantic_assertions_passed=invocation.semantic_assertions_passed,
         trace_assertion_count=invocation.trace_assertion_count,
         trace_assertions_passed=invocation.trace_assertions_passed,
-        trace_contract_verified=True,
+        trace_contract_verified=trace_contract_verified,
         trace_behavior_summary=trace_evidence,
         endpoint_request_summaries=list(invocation.request_summaries),
     )
@@ -909,7 +912,7 @@ def _drain_rejected_insight_run(
 ) -> None:
     _progress(
         runtime,
-        f"{agent_name}/{result.logical_version}: activation evidence {reason}; "
+        f"{agent_name}/{result.logical_version}: evidence {reason}; "
         "discarding the persisted Agent Insights run result",
     )
     try:
@@ -925,7 +928,7 @@ def _drain_rejected_insight_run(
         _progress(
             runtime,
             f"{agent_name}/{result.logical_version}: persisted Agent Insights run "
-            "remains quarantined by the saved activation failure",
+            "remains quarantined by the saved incomplete evidence",
         )
         return
     if checkpoint_store is not None:
@@ -1034,43 +1037,6 @@ def _execute_version(
         f"{agent['name']}/{logical_version}: telemetry correlated "
         f"({len(operation_ids)} operations)",
     )
-    required_operations = tuple(
-        expected["trace_contract"]["operations"]
-        if expected is not None
-        else ("invoke_agent", "chat")
-    )
-    trace_verified = (
-        checkpoint_store.trace_verified(*checkpoint_args)
-        if checkpoint_store is not None
-        else False
-    )
-    if not trace_verified:
-        try:
-            runtime.verify_trace_contract(
-                agent_name=agent["name"],
-                foundry_version=foundry_version,
-                operation_ids=operation_ids,
-                required_operations=required_operations,
-                window_start=invocation.started_at,
-                window_end=invocation.completed_at,
-            )
-        except Exception as error:
-            raise _VersionStageError("trace_contract_failed", error) from error
-        if checkpoint_store is not None:
-            checkpoint_store.save_trace_verified(*checkpoint_args)
-    _progress(runtime, f"{agent['name']}/{logical_version}: trace contract verified")
-    try:
-        trace_evidence = runtime.trace_behavior_evidence(operation_ids)
-        if expected is None:
-            _validate_baseline_trace_evidence(
-                agent=agent,
-                invocation=invocation,
-                trace_evidence=trace_evidence,
-            )
-    except Exception as error:
-        if expected is None:
-            raise _VersionStageError("baseline_evidence_failed", error) from error
-        raise _VersionStageError("trace_evidence_failed", error) from error
     insight_checkpoint = (
         checkpoint_store.insight_run(*checkpoint_args)
         if checkpoint_store is not None
@@ -1119,7 +1085,7 @@ def _execute_version(
                 raise _VersionStageError(
                     "issue_activation_failed",
                     ContractError(
-                        "First passing trace snapshot arrived after the guarded "
+                        "First exact Hosted mapping arrived after the guarded "
                         "Agent Insights start window"
                     ),
                 ) from error
@@ -1127,8 +1093,61 @@ def _execute_version(
         except Exception as error:
             raise _VersionStageError("insight_run_start_failed", error) from error
 
-    if expected is not None:
-        activation_error = False
+    if agent["type"] != "prompt":
+        start_insight_run_once()
+
+    required_operations = tuple(
+        expected["trace_contract"]["operations"]
+        if expected is not None
+        else ("invoke_agent", "chat")
+    )
+    trace_verified = (
+        checkpoint_store.trace_verified(*checkpoint_args)
+        if checkpoint_store is not None
+        else False
+    )
+    if not trace_verified:
+        try:
+            runtime.verify_trace_contract(
+                agent_name=agent["name"],
+                foundry_version=foundry_version,
+                operation_ids=operation_ids,
+                required_operations=required_operations,
+                window_start=invocation.started_at,
+                window_end=invocation.completed_at,
+            )
+        except Exception as error:
+            raise _VersionStageError("trace_contract_failed", error) from error
+        if checkpoint_store is not None:
+            checkpoint_store.save_trace_verified(*checkpoint_args)
+    _progress(runtime, f"{agent['name']}/{logical_version}: trace contract verified")
+    trace_evidence: dict[str, Any] = {}
+    if agent["type"] == "prompt":
+        try:
+            trace_evidence = runtime.trace_behavior_evidence(operation_ids)
+            if expected is None:
+                _validate_baseline_trace_evidence(
+                    agent=agent,
+                    invocation=invocation,
+                    trace_evidence=trace_evidence,
+                )
+        except Exception as error:
+            if expected is None:
+                raise _VersionStageError("baseline_evidence_failed", error) from error
+            raise _VersionStageError("trace_evidence_failed", error) from error
+
+    if agent["type"] != "prompt":
+        evidence_error_code = (
+            "issue_activation_failed"
+            if expected is not None
+            else "baseline_evidence_failed"
+        )
+        stabilization_error = False
+
+        def capture_stable_trace_evidence(evidence: dict[str, Any]) -> None:
+            nonlocal trace_evidence
+            trace_evidence = evidence
+
         try:
             invocation = _with_trace_assertions(
                 invocation,
@@ -1142,23 +1161,25 @@ def _execute_version(
                     traffic_path=traffic_path,
                     stabilization_seconds=trace_assertion_stabilization_seconds,
                     on_first_pass=start_insight_run_once,
+                    on_stable=capture_stable_trace_evidence,
                 ),
             )
         except _VersionStageError as error:
             if error.code != "issue_activation_failed":
                 raise
-            activation_error = True
+            stabilization_error = True
         except TraceAssertionActivationError:
-            activation_error = True
+            stabilization_error = True
         except Exception as error:
             raise _VersionStageError("trace_assertion_failed", error) from error
-        if activation_error:
+        if stabilization_error:
             result = _activation_failure_result(
                 logical_version=logical_version,
                 foundry_version=foundry_version,
                 operation_ids=operation_ids,
                 invocation=invocation,
                 trace_evidence=trace_evidence,
+                error_code=evidence_error_code,
             )
             _save_and_drain_rejected_insight_run(
                 runtime=runtime,
@@ -1170,11 +1191,46 @@ def _execute_version(
                 checkpoint_store=checkpoint_store,
                 checkpoint_args=checkpoint_args,
                 result=result,
-                reason="did not stabilize",
+                reason="did not stabilize under exact Hosted correlation",
             )
             return result
         if checkpoint_store is not None:
             checkpoint_store.save_invocation(*checkpoint_args, invocation)
+
+        if expected is None:
+            try:
+                _validate_baseline_trace_evidence(
+                    agent=agent,
+                    invocation=invocation,
+                    trace_evidence=trace_evidence,
+                )
+            except Exception as error:
+                stage_error = _VersionStageError("baseline_evidence_failed", error)
+                if _recoverable(stage_error):
+                    raise stage_error from error
+                result = _activation_failure_result(
+                    logical_version=logical_version,
+                    foundry_version=foundry_version,
+                    operation_ids=operation_ids,
+                    invocation=invocation,
+                    trace_evidence=trace_evidence,
+                    error_code="baseline_evidence_failed",
+                )
+                _save_and_drain_rejected_insight_run(
+                    runtime=runtime,
+                    agent_name=agent["name"],
+                    monitor_id=monitor_id,
+                    foundry_version=foundry_version,
+                    operation_ids=operation_ids,
+                    checkpoint=insight_checkpoint,
+                    checkpoint_store=checkpoint_store,
+                    checkpoint_args=checkpoint_args,
+                    result=result,
+                    reason="failed Hosted baseline terminal or tool validation",
+                )
+                return result
+
+    if expected is not None:
         if not _issue_activation_evidence_complete(agent, invocation):
             result = _activation_failure_result(
                 logical_version=logical_version,
@@ -1306,6 +1362,7 @@ def _quarantine_started_insight(
             operation_ids=operation_ids,
             invocation=invocation,
             trace_evidence={},
+            trace_contract_verified=checkpoint_store.trace_verified(*checkpoint_args),
         )
         result.error_code = "insight_run_start_unresolved"
         checkpoint_store.save_result(*checkpoint_args, result)
@@ -1316,6 +1373,7 @@ def _quarantine_started_insight(
         operation_ids=operation_ids,
         invocation=invocation,
         trace_evidence={},
+        trace_contract_verified=checkpoint_store.trace_verified(*checkpoint_args),
     )
     result.error_code = error.code
     _save_and_drain_rejected_insight_run(

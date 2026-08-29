@@ -77,6 +77,7 @@ class FakeRuntime:
         self.progress: list[str] = []
         self.reset_agents: list[str] = []
         self.clean_agents: list[str] = []
+        self.hosted_stabilizations: list[tuple[str, str, bool]] = []
 
     def report_progress(self, message: str) -> None:
         self.progress.append(message)
@@ -207,6 +208,7 @@ class FakeRuntime:
         traffic_path: Path,
         stabilization_seconds: int,
         on_first_pass,
+        on_stable,
     ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
         payload = json.loads(traffic_path.read_text(encoding="utf-8"))
         assert agent_name.endswith("-agent")
@@ -214,7 +216,18 @@ class FakeRuntime:
         assert len(operation_ids) == len(response_references)
         assert window_start < window_end
         assert stabilization_seconds == 180
+        self.hosted_stabilizations.append(
+            (
+                agent_name,
+                foundry_version,
+                any(
+                    request["expected"].get("trace_assertions")
+                    for request in payload["requests"]
+                ),
+            )
+        )
         on_first_pass()
+        on_stable(self.trace_behavior_evidence(operation_ids))
         return tuple(
             tuple(
                 TraceAssertionEvidence(item["name"], True)
@@ -297,9 +310,15 @@ class FakeRuntime:
         assert window_start < window_end
 
 
-def _timed_trace_row(tool_name: str, *, timestamp: str) -> dict:
+def _timed_trace_row(
+    tool_name: str,
+    *,
+    timestamp: str,
+    operation_id: str | None = None,
+    matched_reference: str = "issue-synthetic-0",
+) -> dict:
     return {
-        "operation_id": f"{1:032x}",
+        "operation_id": operation_id or f"{1:032x}",
         "operation_name": "execute_tool",
         "tool_name": tool_name,
         "tool_call_id": "",
@@ -314,19 +333,31 @@ def _timed_trace_row(tool_name: str, *, timestamp: str) -> dict:
         "terminal_success": "",
         "terminal_output": "",
         "handled_error": "",
-        "matched_reference": "issue-synthetic-0",
+        "matched_reference": matched_reference,
     }
 
 
 class TimedTraceRuntime(FakeRuntime):
-    def __init__(self, rows_at, *, finish_failures: int = 0) -> None:
+    def __init__(
+        self,
+        rows_at,
+        *,
+        agent_name: str = "finance-agent",
+        foundry_version: str = "issue-synthetic",
+        baseline: bool = False,
+        finish_failures: int = 0,
+    ) -> None:
         super().__init__()
         self.monotonic = 0.0
         self.wall = datetime(2026, 8, 29, 12, 0, tzinfo=UTC)
         self.rows_at = rows_at
+        self.agent_name = agent_name
+        self.foundry_version = foundry_version
+        self.baseline = baseline
         self.starts: list[tuple[float, datetime]] = []
         self.finishes = 0
         self.finish_failures = finish_failures
+        self.trace_behavior_times: list[float] = []
         self._monotonic = lambda: self.monotonic
         self._sleep = self._advance
 
@@ -344,14 +375,22 @@ class TimedTraceRuntime(FakeRuntime):
         window_end=None,
     ):
         assert operation_ids == (f"{1:032x}",)
-        assert response_references == ("issue-synthetic-0",)
-        assert foundry_version == "issue-synthetic"
-        assert agent_name == "finance-agent"
+        assert response_references == (f"{self.foundry_version}-0",)
+        assert foundry_version == self.foundry_version
+        assert agent_name == self.agent_name
         assert window_start == "2026-08-24T10:00:00+00:00"
         assert window_end == "2026-08-24T10:01:00+00:00"
         return self.rows_at(self.monotonic)
 
+    def trace_behavior_evidence(self, operation_ids: tuple[str, ...]) -> dict:
+        self.trace_behavior_times.append(self.monotonic)
+        return super().trace_behavior_evidence(operation_ids)
+
     def trace_assertion_evidence(self, **kwargs):
+        on_stable = kwargs["on_stable"]
+        kwargs["on_stable"] = lambda _evidence: on_stable(
+            self.trace_behavior_evidence(kwargs["operation_ids"])
+        )
         return LiveRuntime.trace_assertion_evidence(self, **kwargs)
 
     def start_insights_run(self, **kwargs) -> InsightRunCheckpoint:
@@ -364,10 +403,30 @@ class TimedTraceRuntime(FakeRuntime):
         self.finishes += 1
         if self.finishes <= self.finish_failures:
             raise ContractError("synthetic drain interruption")
-        return super().finish_insights_run(**kwargs)
+        evidence = super().finish_insights_run(**kwargs)
+        return replace(evidence, insights=()) if self.baseline else evidence
 
 
-def _write_timed_trace_traffic(path: Path) -> None:
+def _write_timed_trace_traffic(
+    path: Path,
+    *,
+    with_trace_assertions: bool = True,
+    activation_gate: bool | None = None,
+) -> None:
+    expected = {"http_status": 200}
+    if activation_gate is None:
+        activation_gate = with_trace_assertions
+    if activation_gate:
+        expected["activation_gate"] = True
+    if with_trace_assertions:
+        expected["trace_assertions"] = [
+            {
+                "name": "one_lookup",
+                "kind": "tool_call_count",
+                "tool_name": "lookup",
+                "count": 1,
+            }
+        ]
     path.write_text(
         json.dumps(
             {
@@ -375,18 +434,7 @@ def _write_timed_trace_traffic(path: Path) -> None:
                     {
                         "id": "request_A1b2C3d4",
                         "request": {"body": {"input": "synthetic request"}},
-                        "expected": {
-                            "http_status": 200,
-                            "activation_gate": True,
-                            "trace_assertions": [
-                                {
-                                    "name": "one_lookup",
-                                    "kind": "tool_call_count",
-                                    "tool_name": "lookup",
-                                    "count": 1,
-                                }
-                            ],
-                        },
+                        "expected": expected,
                     }
                 ]
             }
@@ -399,30 +447,53 @@ def _timed_version_kwargs(
     tmp_path: Path,
     runtime: TimedTraceRuntime,
     checkpoint_store: VersionCheckpointStore,
+    *,
+    agent_name: str = "finance-agent",
+    foundry_version: str = "issue-synthetic",
+    baseline: bool = False,
+    with_trace_assertions: bool = True,
+    agent_type: str = "hosted_code",
+    activation_gate: bool | None = None,
 ) -> dict:
-    traffic_path = tmp_path / "traffic.json"
-    _write_timed_trace_traffic(traffic_path)
+    traffic_path = tmp_path / f"{agent_name}-{foundry_version}-traffic.json"
+    _write_timed_trace_traffic(
+        traffic_path,
+        with_trace_assertions=with_trace_assertions,
+        activation_gate=activation_gate,
+    )
     return {
         "runtime": runtime,
         "agent": {
-            "name": "finance-agent",
-            "type": "hosted",
-            "baseline_contract": {"semantic_assertions": "required_per_request"},
+            "name": agent_name,
+            "type": agent_type,
+            "baseline_contract": {
+                "request_count": 1,
+                "terminal_response": (
+                    "direct_prompt"
+                    if agent_type == "prompt"
+                    else "standard_assistant_message"
+                ),
+                "semantic_assertions": "required",
+            },
         },
-        "monitor_id": "monitor-finance-agent",
-        "logical_version": "issue-synthetic",
+        "monitor_id": f"monitor-{agent_name}",
+        "logical_version": "v0" if baseline else foundry_version,
         "registry_entry": {
-            "foundry_version": "issue-synthetic",
+            "foundry_version": foundry_version,
             "content_digest": "sha256:" + "a" * 64,
         },
         "traffic_path": traffic_path,
         "seed": 1,
-        "expected": {
-            "trace_contract": {
-                "operations": ["invoke_agent"],
-                "minimum_traces": 1,
+        "expected": (
+            None
+            if baseline
+            else {
+                "trace_contract": {
+                    "operations": ["invoke_agent"],
+                    "minimum_traces": 1,
+                }
             }
-        },
+        ),
         "lookback_hours": 0.1,
         "trace_assertion_stabilization_seconds": 180,
         "insight_start_margin_seconds": 30,
@@ -431,7 +502,7 @@ def _timed_version_kwargs(
     }
 
 
-def test_first_passing_trace_starts_insights_before_stabilization(
+def test_first_exact_hosted_mapping_starts_insights_before_stabilization(
     tmp_path: Path,
 ) -> None:
     failing = [_timed_trace_row("different_lookup", timestamp="2026-08-29T12:00:00Z")]
@@ -444,9 +515,59 @@ def test_first_passing_trace_starts_insights_before_stabilization(
     result = _execute_version(**_timed_version_kwargs(tmp_path, runtime, store))
 
     assert result.status == "observed"
-    assert [start[0] for start in runtime.starts] == [135]
+    assert [start[0] for start in runtime.starts] == [0]
     assert runtime.starts[0][0] < 360
     assert runtime.monotonic == 315
+    assert runtime.finishes == 1
+
+
+def test_exact_hosted_mapping_starts_before_slow_trace_contract(
+    tmp_path: Path,
+) -> None:
+    first = [_timed_trace_row("lookup", timestamp="2026-08-29T12:00:00Z")]
+
+    class SlowTraceContractRuntime(TimedTraceRuntime):
+        def verify_trace_contract(self, **kwargs) -> None:
+            assert [start[0] for start in self.starts] == [0]
+            self._advance(600)
+            super().verify_trace_contract(**kwargs)
+
+    runtime = SlowTraceContractRuntime(lambda _elapsed: first)
+    store = VersionCheckpointStore(tmp_path / "stages", "sha256:" + "d" * 64)
+
+    result = _execute_version(**_timed_version_kwargs(tmp_path, runtime, store))
+
+    assert result.status == "observed"
+    assert [start[0] for start in runtime.starts] == [0]
+    assert runtime.monotonic == 780
+    assert runtime.trace_behavior_times == [780]
+    assert runtime.finishes == 1
+
+
+def test_preverification_failure_quarantines_without_claiming_trace_proof(
+    tmp_path: Path,
+) -> None:
+    class FailedTraceContractRuntime(TimedTraceRuntime):
+        def verify_trace_contract(self, **kwargs) -> None:
+            del kwargs
+            raise ContractError("synthetic trace contract failure")
+
+    runtime = FailedTraceContractRuntime(lambda _elapsed: [])
+    store = VersionCheckpointStore(tmp_path / "stages", "sha256:" + "d" * 64)
+    kwargs = _timed_version_kwargs(tmp_path, runtime, store)
+
+    result = _execute_version_with_recovery(
+        **kwargs,
+        clean_window_poll_seconds=15,
+        clean_window_ingestion_margin_seconds=30,
+        clean_window_max_wait_seconds=1200,
+        recovery_budget=_RecoveryBudget(0),
+    )
+
+    assert result.status == "inconclusive"
+    assert result.error_code == "trace_contract_failed"
+    assert result.trace_contract_verified is False
+    assert [start[0] for start in runtime.starts] == [0]
     assert runtime.finishes == 1
 
 
@@ -532,7 +653,7 @@ def test_resume_retries_interrupted_rejected_run_drain(
     assert store.insight_drain_pending(*checkpoint_args) is False
 
 
-def test_late_first_pass_is_incomplete_without_recovery_retraffic(
+def test_unstabilized_late_assertion_pass_is_incomplete_without_retraffic(
     tmp_path: Path,
 ) -> None:
     failing = [_timed_trace_row("different_lookup", timestamp="2026-08-29T12:00:00Z")]
@@ -553,10 +674,157 @@ def test_late_first_pass_is_incomplete_without_recovery_retraffic(
 
     assert result.status == "inconclusive"
     assert result.error_code == "issue_activation_failed"
-    assert [start[0] for start in runtime.starts] == [885]
+    assert [start[0] for start in runtime.starts] == [0]
+    assert runtime.monotonic == 15 * 60
+    assert runtime.finishes == 1
     assert runtime.invoked.count("issue-synthetic") == 1
     assert runtime.clean_agents == []
     assert runtime.reset_agents == []
+
+
+_HOSTED_NO_ASSERTION_CASES = (
+    ("finance-agent", "finance-baseline", True),
+    ("travel-agent", "travel-baseline", True),
+    ("support-ticket-agent", "support-baseline", True),
+    ("travel-agent", "issue-021", False),
+    ("support-ticket-agent", "issue-029", False),
+)
+
+
+@pytest.mark.parametrize(
+    ("agent_name", "foundry_version", "baseline"),
+    _HOSTED_NO_ASSERTION_CASES,
+)
+def test_hosted_no_assertion_mapping_stabilizes_before_cards(
+    tmp_path: Path,
+    agent_name: str,
+    foundry_version: str,
+    baseline: bool,
+) -> None:
+    reference = f"{foundry_version}-0"
+    first = _timed_trace_row(
+        "lookup",
+        timestamp="2026-08-29T12:00:00Z",
+        matched_reference=reference,
+    )
+    runtime = TimedTraceRuntime(
+        lambda _elapsed: [first],
+        agent_name=agent_name,
+        foundry_version=foundry_version,
+        baseline=baseline,
+    )
+    store = VersionCheckpointStore(tmp_path / "stages", "sha256:" + "d" * 64)
+    kwargs = _timed_version_kwargs(
+        tmp_path,
+        runtime,
+        store,
+        agent_name=agent_name,
+        foundry_version=foundry_version,
+        baseline=baseline,
+        with_trace_assertions=False,
+    )
+
+    result = _execute_version(**kwargs)
+    resumed = _execute_version(**kwargs)
+
+    assert resumed == result
+    assert result.status == ("passed" if baseline else "observed")
+    assert result.trace_assertion_count == 0
+    assert result.trace_assertions_passed == 0
+    assert all(
+        summary.trace_assertion_results == ()
+        for summary in result.endpoint_request_summaries
+    )
+    assert [start[0] for start in runtime.starts] == [0]
+    assert runtime.monotonic == 180
+    assert runtime.finishes == 1
+    assert runtime.trace_behavior_times == [180]
+
+
+@pytest.mark.parametrize(
+    ("agent_name", "foundry_version", "baseline"),
+    _HOSTED_NO_ASSERTION_CASES,
+)
+def test_hosted_no_assertion_late_operation_is_drained_and_resume_is_idempotent(
+    tmp_path: Path,
+    agent_name: str,
+    foundry_version: str,
+    baseline: bool,
+) -> None:
+    reference = f"{foundry_version}-0"
+    first = _timed_trace_row(
+        "lookup",
+        timestamp="2026-08-29T12:00:00Z",
+        matched_reference=reference,
+    )
+    duplicate = _timed_trace_row(
+        "lookup",
+        timestamp="2026-08-29T12:02:15Z",
+        operation_id=f"{2:032x}",
+        matched_reference=reference,
+    )
+    runtime = TimedTraceRuntime(
+        lambda elapsed: [first] if elapsed < 135 else [first, duplicate],
+        agent_name=agent_name,
+        foundry_version=foundry_version,
+        baseline=baseline,
+    )
+    store = VersionCheckpointStore(tmp_path / "stages", "sha256:" + "d" * 64)
+    kwargs = _timed_version_kwargs(
+        tmp_path,
+        runtime,
+        store,
+        agent_name=agent_name,
+        foundry_version=foundry_version,
+        baseline=baseline,
+        with_trace_assertions=False,
+    )
+
+    result = _execute_version(**kwargs)
+    resumed = _execute_version(**kwargs)
+
+    assert resumed == result
+    assert result.status == "inconclusive"
+    assert result.error_code == (
+        "baseline_evidence_failed" if baseline else "issue_activation_failed"
+    )
+    assert result.insight_references == []
+    assert result.observed_insights == []
+    assert [start[0] for start in runtime.starts] == [0]
+    assert runtime.monotonic == 135
+    assert runtime.finishes == 1
+    assert runtime.invoked.count(foundry_version) == 1
+
+
+def test_prompt_path_does_not_run_hosted_stabilization(tmp_path: Path) -> None:
+    class PromptRuntime(TimedTraceRuntime):
+        def trace_assertion_evidence(self, **kwargs):
+            del kwargs
+            pytest.fail("Prompt traffic must not enter Hosted stabilization")
+
+    runtime = PromptRuntime(
+        lambda _elapsed: [],
+        agent_name="weather-agent",
+        foundry_version="issue-prompt-synthetic",
+    )
+    store = VersionCheckpointStore(tmp_path / "stages", "sha256:" + "d" * 64)
+
+    result = _execute_version(
+        **_timed_version_kwargs(
+            tmp_path,
+            runtime,
+            store,
+            agent_name="weather-agent",
+            foundry_version="issue-prompt-synthetic",
+            with_trace_assertions=False,
+            agent_type="prompt",
+            activation_gate=True,
+        )
+    )
+
+    assert result.status == "observed"
+    assert [start[0] for start in runtime.starts] == [0]
+    assert runtime.monotonic == 0
 
 
 def test_transient_trace_query_failure_uses_existing_recovery(
@@ -615,6 +883,29 @@ def test_runner_executes_20_issues() -> None:
     assert runtime.progress[-1] == "qualification runtime completed"
     assert any("endpoint complete" in message for message in runtime.progress)
     assert any("trace contract verified" in message for message in runtime.progress)
+    expected_hosted_stabilizations = {
+        (agent["name"], logical_version)
+        for agent in agents["agents"]
+        if agent["type"] != "prompt"
+        for logical_version in ("v0", *selected[agent["name"]])
+    }
+    assert {
+        (agent_name, foundry_version)
+        for agent_name, foundry_version, _ in runtime.hosted_stabilizations
+    } == expected_hosted_stabilizations
+    assert len(runtime.hosted_stabilizations) == 15
+    assert all(
+        (agent_name, "v0", False) in runtime.hosted_stabilizations
+        for agent_name in (
+            "finance-agent",
+            "travel-agent",
+            "support-ticket-agent",
+        )
+    )
+    assert all(
+        agent_name not in {"weather-agent", "healthcare-agent"}
+        for agent_name, _, _ in runtime.hosted_stabilizations
+    )
 
 
 def test_runner_parallelizes_agents_but_not_versions_within_an_agent() -> None:

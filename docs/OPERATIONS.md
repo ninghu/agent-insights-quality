@@ -126,18 +126,20 @@ The runner prints flushed, thread-safe progress lines for each Agent/version and
 telemetry, trace, and Agent Insights stages. Long telemetry waits, Insight runs, and remote retries
 emit periodic heartbeats without exposing URLs, payloads, or private identifiers.
 
-Hosted trace assertions poll every 15 seconds through the existing 15-minute bounded ingestion
-deadline. At the first fully passing, exactly response-correlated snapshot, the runner starts and
-persists the one Agent Insights run immediately, while every operation is still inside the guarded
-lookback window. Starting is safe because the required issue-activation evidence is already present;
-cards remain quarantined until the same mapping, assertion outcomes, and correlated rows stay
+Every Hosted baseline and issue polls exact response-to-operation correlation every 15 seconds through
+the existing 15-minute bounded ingestion deadline, whether or not its traffic declares trace
+assertions. At the first complete exact mapping, the runner starts and persists the one Agent Insights
+run immediately while every operation is still inside the guarded `0.1`-hour lookback window. Cards
+remain quarantined until the same mapping, optional assertion outcomes, and correlated rows stay
 unchanged for the reviewed 180-second ingestion interval. This interval exceeds the reproduced
 135-second late-span delay by three poll periods and is intentionally separate from the 10-minute
-traffic uncertainty horizon. New evidence resets stabilization. Missing or failing evidence waits
-for the deadline, and only a stable failure can return there; an unstabilized pass is rejected. Any
-run started before later invalidation is drained but its cards are never scored. Exact Foundry-version
-and operation filtering prevents those late cards or spans from contaminating another version.
-Monotonic proof that response-to-operation correlation is ambiguous may still fail immediately.
+traffic uncertainty horizon. New evidence resets stabilization. Missing or failing assertion evidence
+waits for the deadline, and only a stable failure can return there; an unstabilized pass is rejected.
+A late operation sharing a response identity makes correlation ambiguous, saves the baseline or issue
+as incomplete, and drains the already-started run without persisting or scoring its cards. Exact
+Agent, Foundry-version, invocation-time, operation, and foreign-card subset filtering remain
+mandatory. Hosted baseline terminal and tool behavior is validated only after correlation stabilizes;
+the Prompt path does not enter this Hosted stage.
 Recovery claims are durably capped per Agent across resumes. A quarantined Insight run must drain
 before later versions for that Agent can send traffic; an unresolved start without a run ID requires
 a clean-window reset on resume instead of new target traffic. The immutable run manifest is deferred
@@ -157,7 +159,12 @@ errors always keep the run incomplete.
 
 The measured five-Agent-concurrent daily smoke on 2026-08-25 completed in 37.6 minutes: 32.1 minutes
 for endpoint/telemetry/Agent Insights runtime, 5.3 minutes for parallel Sol assessment, and 13 seconds
-for finalization. Service retries can extend the runtime beyond this baseline.
+for finalization. That measurement predates mandatory stabilization for assertion-free Hosted
+invocations. Five sequential daily versions reserve 15 minutes of correlation guarding per Hosted
+Agent lane, and nine full-catalog versions reserve 27 minutes; the three Hosted lanes remain
+concurrent, and the guard overlaps the Agent Insights run started at the first mapping. Allow a
+60-minute no-retry daily planning budget rather than treating 37.6 minutes as a current upper bound.
+Service retries can extend runtime beyond that budget.
 
 An isolated issue failure does not stop later issues. Ambiguous later evidence remains
 `INCOMPLETE`; it is never converted into a product miss.
