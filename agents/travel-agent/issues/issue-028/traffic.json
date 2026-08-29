@@ -82,7 +82,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Compare flight and hotel for trip-alpha."
+                  "text": "Switch to trip-beta and compare flight and hotel."
                 }
               ]
             }

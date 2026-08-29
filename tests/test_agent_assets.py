@@ -482,6 +482,28 @@ def test_travel_switch_parses_destination_without_comparison() -> None:
             / "traffic.json"
         ).read_text(encoding="utf-8")
     )
+    requests = traffic["requests"]
+    established_trip = options.parse_trip(
+        requests[0]["request"]["body"]["input"][0]["content"][0]["text"]
+    )
+    conversation_ids = {
+        request["request"]["body"]["conversation"]["id"] for request in requests
+    }
+    assert established_trip == "trip-alpha"
+    assert conversation_ids == {"conv-travel-agent-issue-028-shared"}
+    assert requests[0]["expected"]["defect_observed"] is False
+    for request in requests[1:]:
+        request_text = request["request"]["body"]["input"][0]["content"][0]["text"]
+        assert request["expected"]["defect_observed"] is True
+        assert options.parse_trip(request_text) != established_trip
+
+    comparison_switch = requests[2]
+    comparison_text = comparison_switch["request"]["body"]["input"][0]["content"][0][
+        "text"
+    ]
+    assert options.requested_trips(comparison_text) == ["trip-beta"]
+    assert options.parse_trip(comparison_text) == "trip-beta"
+
     switch = traffic["requests"][-1]
     assert switch["expected"]["activation_gate"] is True
     assert switch["expected"]["semantic_assertions"] == {
@@ -544,6 +566,17 @@ def test_travel_issue_sources_match_reviewed_deltas() -> None:
                 assert issue_files[relative_path].read_bytes() == baseline_path.read_bytes()
 
     issue_023_root = root / "issues" / "issue-023"
+    issue_023_implementation = yaml.safe_load(
+        (issue_023_root / "implementation.yaml").read_text(encoding="utf-8")
+    )
+    assert issue_023_implementation["category"] == "tool_call_failures"
+    assert issue_023_implementation["expected_behavior"] == {
+        "desired": "Run authoritative inventory search before answering.",
+        "injected": (
+            "Returns a truthful no-inventory answer without the required inventory "
+            "search."
+        ),
+    }
     issue_023_source = (issue_023_root / "source" / "app.py").read_text(
         encoding="utf-8"
     )
