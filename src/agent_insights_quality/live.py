@@ -56,11 +56,13 @@ except ImportError:
     _TELEMETRY_TRANSIENT_ERRORS = ()
 
 _TRACE_ID = re.compile(r"^[0-9a-f]{32}$")
+_RESPONSE_REFERENCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,255}$", re.ASCII)
 _FOUNDRY_SCOPE = "https://ai.azure.com/.default"
 _LOGS_SCOPE = "https://api.loganalytics.io/.default"
 _TRANSIENT_HTTP = {408, 424, 429, 500, 502, 503, 504}
 _DEFAULT_REQUEST_TIMEOUT_SECONDS = 300
 _HOSTED_RESPONSE_TIMEOUT_SECONDS = 600
+_TRACE_ASSERTION_STABLE_SECONDS = 120
 _AUTH_PROGRESS = ProgressReporter("aiq-auth")
 
 
@@ -359,6 +361,7 @@ union traces, dependencies, requests
                     function_call_count=function_call_count,
                 )
             )
+        _validate_response_references(tuple(response_references), len(requests))
         completed = self._utcnow().astimezone(UTC)
         return InvocationEvidence(
             operation_ids=(),
@@ -366,7 +369,7 @@ union traces, dependencies, requests
             started_at=started.isoformat(),
             completed_at=completed.isoformat(),
             request_count=len(requests),
-            allow_window_correlation=agent_type != "prompt",
+            allow_window_correlation=False,
             response_count=len(ordered),
             usable_response_count=usable_response_count,
             semantic_assertion_count=semantic_assertion_count,
@@ -680,9 +683,12 @@ union traces, dependencies, requests
             correlation_id=correlation_id,
             timeout_seconds=_HOSTED_RESPONSE_TIMEOUT_SECONDS,
         )
-        request_reference = str(response.get("_request_reference") or "")
-        if not request_reference:
-            raise ContractError("Hosted response omitted its request reference")
+        response_reference = response.get("id")
+        if (
+            not isinstance(response_reference, str)
+            or _RESPONSE_REFERENCE.fullmatch(response_reference) is None
+        ):
+            raise ContractError("Hosted response identity is missing or invalid")
         assertion_count, assertions_passed, assertion_results = (
             _semantic_assertion_result(
                 response,
@@ -690,7 +696,7 @@ union traces, dependencies, requests
             )
         )
         return (
-            [request_reference],
+            [response_reference],
             _usable_response(response, fixture["expected_status"]),
             assertion_count,
             assertions_passed,
@@ -717,6 +723,10 @@ union traces, dependencies, requests
         start = datetime.fromisoformat(invocation.started_at)
         traffic_end = datetime.fromisoformat(invocation.completed_at)
         query_end = traffic_end + timedelta(minutes=15)
+        _validate_response_references(
+            invocation.response_references,
+            invocation.request_count,
+        )
         escaped = ", ".join(
             f'"{value.replace(chr(34), chr(92) + chr(34))}"'
             for value in invocation.response_references
@@ -724,31 +734,25 @@ union traces, dependencies, requests
         query = f"""
 union traces, dependencies, requests
 | where timestamp >= datetime({start.astimezone(UTC).isoformat()})
-| extend response_id = tostring(customDimensions["gen_ai.response.id"])
+| extend response_id = coalesce(
+    tostring(customDimensions["gen_ai.response.id"]),
+    tostring(customDimensions["azure.ai.agentserver.response_id"]),
+    tostring(customDimensions["response_id"]))
 | extend request_id = coalesce(
     tostring(customDimensions["x-ms-client-request-id"]),
     tostring(customDimensions["client_request_id"]),
     tostring(customDimensions["request_id"]))
 | extend agent_version = tostring(customDimensions["gen_ai.agent.version"])
-| extend matched_reference = iff(response_id in ({escaped}), response_id, request_id)
+| extend matched_reference = case(
+    response_id in ({escaped}), response_id,
+    request_id in ({escaped}), request_id,
+    "")
 | where matched_reference in ({escaped}) and agent_version == "{foundry_version}"
 | summarize matched_references=make_set(matched_reference) by operation_Id
 """
-        deadline = time.monotonic() + 15 * 60
-        next_progress = time.monotonic() + 60
-        window_query = f"""
-union traces, dependencies, requests
-| where timestamp >= datetime({start.astimezone(UTC).isoformat()})
-  and timestamp <= datetime({traffic_end.astimezone(UTC).isoformat()})
-| extend operation_name = tostring(customDimensions["gen_ai.operation.name"])
-| extend observed_agent = tostring(customDimensions["gen_ai.agent.name"])
-| extend agent_version = tostring(customDimensions["gen_ai.agent.version"])
-| where operation_name == "invoke_agent"
-  and observed_agent == "{agent_name}"
-  and agent_version == "{foundry_version}"
-| summarize by operation_Id
-"""
-        while time.monotonic() < deadline:
+        deadline = self._monotonic() + 15 * 60
+        next_progress = self._monotonic() + 60
+        while self._monotonic() < deadline:
             result = self._query_resource(
                 client,
                 query,
@@ -761,32 +765,20 @@ union traces, dependencies, requests
                 )
                 if complete is not None:
                     return complete
-            if invocation.allow_window_correlation:
-                window_result = self._query_resource(
-                    client,
-                    window_query,
-                    timespan=(start, query_end),
-                )
-                if window_result.status == LogsQueryStatus.SUCCESS:
-                    operations = tuple(
-                        sorted(
-                            {
-                                str(row[0]).lower()
-                                for table in window_result.tables
-                                for row in table.rows
-                                if _TRACE_ID.fullmatch(str(row[0]).lower())
-                            }
-                        )
+                if _operation_correlation_impossible(
+                    result.tables,
+                    invocation.response_references,
+                ):
+                    raise ContractError(
+                        "Natural telemetry response correlation is ambiguous"
                     )
-                    if len(operations) == invocation.request_count:
-                        return operations
-            if time.monotonic() >= next_progress:
-                elapsed = int(15 * 60 - max(deadline - time.monotonic(), 0))
+            if self._monotonic() >= next_progress:
+                elapsed = int(15 * 60 - max(deadline - self._monotonic(), 0))
                 self.report_progress(
                     f"{agent_name}/{foundry_version}: waiting for telemetry "
                     f"({elapsed}s)"
                 )
-                next_progress = time.monotonic() + 60
+                next_progress = self._monotonic() + 60
             self._sleep(15)
         raise ContractError("Natural telemetry did not arrive before the bounded deadline")
 
@@ -1057,19 +1049,31 @@ union traces, dependencies, requests
         requests = payload if isinstance(payload, list) else payload.get("requests")
         if not isinstance(requests, list) or len(requests) != len(response_references):
             raise ContractError("Trace assertion traffic coverage is inconsistent")
+        _validate_response_references(response_references, len(requests))
+        _validate_operation_references(operation_ids, len(requests))
         fixtures = tuple(_normalize_fixture(item) for item in requests)
         if not any(fixture["trace_assertions"] for fixture in fixtures):
             return tuple(() for _ in fixtures)
-        deadline = time.monotonic() + 15 * 60
-        next_progress = time.monotonic() + 60
+        deadline = self._monotonic() + 15 * 60
+        next_progress = self._monotonic() + 60
         last_results: tuple[tuple[TraceAssertionEvidence, ...], ...] | None = None
-        while time.monotonic() < deadline:
+        stable_signature: tuple[str, ...] | None = None
+        stable_since: float | None = None
+        while self._monotonic() < deadline:
             rows = self._trace_rows(operation_ids, response_references)
             correlated = _correlated_request_rows(
                 rows,
                 response_references,
                 operation_ids,
             )
+            if correlated is None and _request_correlation_impossible(
+                rows,
+                response_references,
+                operation_ids,
+            ):
+                raise ContractError(
+                    "Trace assertions found ambiguous response-to-operation correlation"
+                )
             if correlated is not None:
                 last_results = tuple(
                     _trace_assertion_result(request_rows, fixture)
@@ -1085,12 +1089,25 @@ union traces, dependencies, requests
                     for assertion in request_results
                 ):
                     return last_results
-            if time.monotonic() >= next_progress:
-                elapsed = int(15 * 60 - max(deadline - time.monotonic(), 0))
+                signature = _trace_rows_signature(rows)
+                now = self._monotonic()
+                if signature != stable_signature:
+                    stable_signature = signature
+                    stable_since = now
+                elif (
+                    stable_since is not None
+                    and now - stable_since >= _TRACE_ASSERTION_STABLE_SECONDS
+                ):
+                    return last_results
+            else:
+                stable_signature = None
+                stable_since = None
+            if self._monotonic() >= next_progress:
+                elapsed = int(15 * 60 - max(deadline - self._monotonic(), 0))
                 self.report_progress(
                     f"trace activation evidence is stabilizing ({elapsed}s)"
                 )
-                next_progress = time.monotonic() + 60
+                next_progress = self._monotonic() + 60
             self._sleep(15)
         if last_results is not None:
             return last_results
@@ -1137,12 +1154,18 @@ union traces, dependencies, requests
 | extend terminal_success=tostring(customDimensions["aiq.terminal_response.success"])
 | extend terminal_output=tostring(customDimensions["aiq.terminal_response.output_present"])
 | extend handled_error=tostring(customDimensions["aiq.tool.error.handled"])
-| extend response_id=tostring(customDimensions["gen_ai.response.id"])
+| extend response_id=coalesce(
+    tostring(customDimensions["gen_ai.response.id"]),
+    tostring(customDimensions["azure.ai.agentserver.response_id"]),
+    tostring(customDimensions["response_id"]))
 | extend request_id=coalesce(
     tostring(customDimensions["x-ms-client-request-id"]),
     tostring(customDimensions["client_request_id"]),
     tostring(customDimensions["request_id"]))
-| extend matched_reference=iff(response_id in ({references}), response_id, request_id)
+| extend matched_reference=case(
+    response_id in ({references}), response_id,
+    request_id in ({references}), request_id,
+    "")
 | project operation_Id, operation_name, tool_name, tool_call_id, error_type, tool_ok, tool_result,
     tool_arguments, input_messages, output_messages, timestamp, duration, name,
     terminal_success, terminal_output, handled_error, matched_reference
@@ -1755,6 +1778,13 @@ def _correlated_request_rows(
     response_references: tuple[str, ...],
     operation_ids: tuple[str, ...],
 ) -> tuple[list[dict[str, Any]], ...] | None:
+    if (
+        len(response_references) != len(operation_ids)
+        or len(set(response_references)) != len(response_references)
+        or len(set(operation_ids)) != len(operation_ids)
+        or any(not value for value in response_references)
+    ):
+        return None
     allowed_operations = set(operation_ids)
     operations_by_reference: dict[str, set[str]] = defaultdict(set)
     rows_by_operation: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -1774,7 +1804,39 @@ def _correlated_request_rows(
         ordered_operations.append(next(iter(matched)))
     if len(set(ordered_operations)) != len(ordered_operations):
         return None
+    if set(ordered_operations) != allowed_operations:
+        return None
     return tuple(rows_by_operation[operation_id] for operation_id in ordered_operations)
+
+
+def _request_correlation_impossible(
+    rows: list[dict[str, Any]],
+    response_references: tuple[str, ...],
+    operation_ids: tuple[str, ...],
+) -> bool:
+    expected_references = set(response_references)
+    allowed_operations = set(operation_ids)
+    operations_by_reference: dict[str, set[str]] = defaultdict(set)
+    references_by_operation: dict[str, set[str]] = defaultdict(set)
+    for row in rows:
+        operation_id = str(row.get("operation_id") or "").lower()
+        reference = str(row.get("matched_reference") or "")
+        if operation_id not in allowed_operations or reference not in expected_references:
+            continue
+        operations_by_reference[reference].add(operation_id)
+        references_by_operation[operation_id].add(reference)
+    return any(len(values) > 1 for values in operations_by_reference.values()) or any(
+        len(values) > 1 for values in references_by_operation.values()
+    )
+
+
+def _trace_rows_signature(rows: list[dict[str, Any]]) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            json.dumps(row, sort_keys=True, ensure_ascii=True, default=str)
+            for row in rows
+        )
+    )
 
 
 def _json_trace_value(value: Any) -> Any:
@@ -2611,3 +2673,71 @@ def _complete_operation_ids(
     if len(set(ordered)) != len(ordered):
         return None
     return tuple(ordered)
+
+
+def _operation_correlation_impossible(
+    tables: Any,
+    expected_references: tuple[str, ...],
+) -> bool:
+    expected = set(expected_references)
+    operations_by_reference: dict[str, set[str]] = defaultdict(set)
+    references_by_operation: dict[str, set[str]] = defaultdict(set)
+    for table in tables:
+        for row in table.rows:
+            operation_id = str(row[0]).lower()
+            if not _TRACE_ID.fullmatch(operation_id):
+                continue
+            references = row[1] if len(row) > 1 else []
+            if isinstance(references, str):
+                try:
+                    references = json.loads(references)
+                except json.JSONDecodeError:
+                    references = [references]
+            if not isinstance(references, list):
+                continue
+            for value in references:
+                reference = str(value)
+                if reference not in expected:
+                    continue
+                operations_by_reference[reference].add(operation_id)
+                references_by_operation[operation_id].add(reference)
+    return any(len(values) > 1 for values in operations_by_reference.values()) or any(
+        len(values) > 1 for values in references_by_operation.values()
+    )
+
+
+def _validate_response_references(
+    response_references: tuple[str, ...],
+    expected_count: int,
+) -> None:
+    if (
+        expected_count < 1
+        or len(response_references) != expected_count
+        or any(
+            not isinstance(value, str)
+            or _RESPONSE_REFERENCE.fullmatch(value) is None
+            for value in response_references
+        )
+        or len(set(response_references)) != expected_count
+    ):
+        raise ContractError(
+            "Endpoint response references must be nonempty, unique, and well formed"
+        )
+
+
+def _validate_operation_references(
+    operation_ids: tuple[str, ...],
+    expected_count: int,
+) -> None:
+    if (
+        expected_count < 1
+        or len(operation_ids) != expected_count
+        or any(
+            not isinstance(value, str) or _TRACE_ID.fullmatch(value) is None
+            for value in operation_ids
+        )
+        or len(set(operation_ids)) != expected_count
+    ):
+        raise ContractError(
+            "Trace assertion operations must uniquely cover every endpoint request"
+        )

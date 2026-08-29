@@ -25,7 +25,7 @@ from agent_insights_quality.live import (
     _trace_contract_ready,
     _usable_response,
 )
-from agent_insights_quality.models import InsightRunCheckpoint
+from agent_insights_quality.models import InsightRunCheckpoint, InvocationEvidence
 from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.util import (
     ROOT,
@@ -912,6 +912,30 @@ def test_trace_assertions_require_exact_response_operation_correlation() -> None
         )
         is None
     )
+    assert (
+        _correlated_request_rows(
+            rows[:2],
+            ("response-1", "response-1"),
+            (operation_a, operation_b),
+        )
+        is None
+    )
+    assert (
+        _correlated_request_rows(
+            rows[:2],
+            ("", "response-2"),
+            (operation_a, operation_b),
+        )
+        is None
+    )
+    assert (
+        _correlated_request_rows(
+            rows[:2],
+            ("response-1", "response-2"),
+            (operation_a, operation_b, "c" * 32),
+        )
+        is None
+    )
 
 
 def test_negative_argument_assertions_require_parsed_telemetry() -> None:
@@ -1015,7 +1039,173 @@ def test_trace_row_query_projects_private_values_only_for_in_memory_evaluation(
     query = captured[0]
     assert 'customDimensions["gen_ai.tool.call.arguments"]' in query
     assert 'customDimensions["gen_ai.tool.call.result"]' in query
+    assert query.index('customDimensions["gen_ai.response.id"]') < query.index(
+        'customDimensions["azure.ai.agentserver.response_id"]'
+    )
+    assert query.index(
+        'customDimensions["azure.ai.agentserver.response_id"]'
+    ) < query.index('customDimensions["response_id"]')
+    assert "request_id in" in query
     assert "matched_reference" in query
+
+
+def _write_trace_assertion_traffic(path: Path, request_count: int = 1) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "requests": [
+                    {
+                        "id": f"request_A1b2C3d4_{index}",
+                        "request": {
+                            "body": {
+                                "input": "synthetic request",
+                                "conversation": {
+                                    "id": f"conversation_A1b2C3d4_{index}"
+                                },
+                            }
+                        },
+                        "expected": {
+                            "http_status": 200,
+                            "trace_assertions": [
+                                {
+                                    "name": "one_lookup",
+                                    "kind": "tool_call_count",
+                                    "tool_name": "lookup",
+                                    "count": 1,
+                                }
+                            ],
+                        },
+                    }
+                    for index in range(request_count)
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_trace_assertion_correlation_fails_immediately_when_ambiguous(
+    tmp_path,
+) -> None:
+    monotonic = [0.0]
+    sleeps = []
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+    )
+    operation_a = "a" * 32
+    operation_b = "b" * 32
+    reference_a = "resp_A1b2C3d4E5f6"
+    reference_b = "resp_F6e5D4c3B2a1"
+    rows = [
+        {
+            **_tool_trace_row("lookup"),
+            "operation_id": operation_a,
+            "matched_reference": reference_a,
+        },
+        {
+            **_tool_trace_row("lookup"),
+            "operation_id": operation_b,
+            "matched_reference": reference_a,
+        },
+        {
+            **_tool_trace_row("lookup"),
+            "operation_id": operation_b,
+            "matched_reference": reference_b,
+        },
+    ]
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(traffic_path, request_count=2)
+    runtime._trace_rows = lambda *_args: rows  # type: ignore[method-assign]
+    runtime._sleep = sleeps.append
+
+    with pytest.raises(ContractError, match="ambiguous"):
+        runtime.trace_assertion_evidence(
+            operation_ids=(operation_a, operation_b),
+            response_references=(reference_a, reference_b),
+            traffic_path=traffic_path,
+        )
+    assert sleeps == []
+
+
+def test_trace_assertion_returns_stable_failed_evidence_before_deadline(
+    tmp_path,
+) -> None:
+    monotonic = [0.0]
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+    )
+    operation_id = "a" * 32
+    reference = "resp_A1b2C3d4E5f6"
+    rows = [
+        {
+            **_tool_trace_row("different_lookup"),
+            "operation_id": operation_id,
+            "matched_reference": reference,
+        }
+    ]
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(traffic_path)
+    runtime._trace_rows = lambda *_args: rows  # type: ignore[method-assign]
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
+    )
+
+    evidence = runtime.trace_assertion_evidence(
+        operation_ids=(operation_id,),
+        response_references=(reference,),
+        traffic_path=traffic_path,
+    )
+
+    assert evidence[0][0].passed is False
+    assert monotonic[0] == 120
+
+
+def test_trace_assertion_allows_transient_ingestion_to_complete(
+    tmp_path,
+) -> None:
+    monotonic = [0.0]
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+    )
+    operation_id = "a" * 32
+    reference = "resp_A1b2C3d4E5f6"
+    incomplete = [
+        {
+            **_tool_trace_row("different_lookup"),
+            "operation_id": operation_id,
+            "matched_reference": reference,
+        }
+    ]
+    complete = [
+        {
+            **_tool_trace_row("lookup"),
+            "operation_id": operation_id,
+            "matched_reference": reference,
+        }
+    ]
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(traffic_path)
+    runtime._trace_rows = (  # type: ignore[method-assign]
+        lambda *_args: incomplete if monotonic[0] < 90 else complete
+    )
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
+    )
+
+    evidence = runtime.trace_assertion_evidence(
+        operation_ids=(operation_id,),
+        response_references=(reference,),
+        traffic_path=traffic_path,
+    )
+
+    assert evidence[0][0].passed is True
+    assert monotonic[0] == 90
 
 
 def test_trace_assertions_cover_payload_cardinality_and_span_order() -> None:
@@ -1676,6 +1866,110 @@ def test_telemetry_requires_every_request_reference() -> None:
         ("response-1", "response-2", "response-3"),
     ) is None
 
+    class AmbiguousTable:
+        rows = [
+            ["a" * 32, ["resp_A1b2C3d4E5f6"]],
+            ["b" * 32, ["resp_A1b2C3d4E5f6"]],
+        ]
+
+    assert _complete_operation_ids(
+        [AmbiguousTable()],
+        ("resp_A1b2C3d4E5f6",),
+    ) is None
+
+
+def test_wait_for_telemetry_queries_r02_hosted_response_keys(monkeypatch) -> None:
+    query_module = types.ModuleType("azure.monitor.query")
+    query_module.LogsQueryStatus = type("LogsQueryStatus", (), {"SUCCESS": "success"})
+    monitor_module = types.ModuleType("azure.monitor")
+    azure_module = types.ModuleType("azure")
+    monkeypatch.setitem(sys.modules, "azure", azure_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor", monitor_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
+    reference = "resp_A1b2C3d4E5f6"
+    captured = []
+
+    class Table:
+        rows = [["a" * 32, [reference]]]
+
+    class Result:
+        status = "success"
+        tables = [Table()]
+
+    runtime = _runtime()
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+    runtime._query_resource = (  # type: ignore[method-assign]
+        lambda _client, query, **_kwargs: captured.append(query) or Result()
+    )
+    invocation = InvocationEvidence(
+        operation_ids=(),
+        response_references=(reference,),
+        started_at="2026-08-28T10:00:00+00:00",
+        completed_at="2026-08-28T10:00:01+00:00",
+        request_count=1,
+        allow_window_correlation=False,
+    )
+
+    assert runtime.wait_for_telemetry(
+        agent_name="finance-agent",
+        foundry_version="opaque-version",
+        invocation=invocation,
+    ) == ("a" * 32,)
+    query = captured[0]
+    assert query.index('customDimensions["gen_ai.response.id"]') < query.index(
+        'customDimensions["azure.ai.agentserver.response_id"]'
+    )
+    assert query.index(
+        'customDimensions["azure.ai.agentserver.response_id"]'
+    ) < query.index('customDimensions["response_id"]')
+    assert "request_id in" in query
+
+
+def test_wait_for_telemetry_rejects_ambiguous_response_mapping(
+    monkeypatch,
+) -> None:
+    query_module = types.ModuleType("azure.monitor.query")
+    query_module.LogsQueryStatus = type("LogsQueryStatus", (), {"SUCCESS": "success"})
+    monitor_module = types.ModuleType("azure.monitor")
+    azure_module = types.ModuleType("azure")
+    monkeypatch.setitem(sys.modules, "azure", azure_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor", monitor_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
+    reference_a = "resp_A1b2C3d4E5f6"
+    reference_b = "resp_F6e5D4c3B2a1"
+    sleeps = []
+
+    class Table:
+        rows = [
+            ["a" * 32, [reference_a]],
+            ["b" * 32, [reference_a, reference_b]],
+        ]
+
+    class Result:
+        status = "success"
+        tables = [Table()]
+
+    runtime = _runtime()
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+    runtime._query_resource = lambda *_args, **_kwargs: Result()  # type: ignore[method-assign]
+    runtime._sleep = sleeps.append
+    invocation = InvocationEvidence(
+        operation_ids=(),
+        response_references=(reference_a, reference_b),
+        started_at="2026-08-28T10:00:00+00:00",
+        completed_at="2026-08-28T10:00:01+00:00",
+        request_count=2,
+        allow_window_correlation=False,
+    )
+
+    with pytest.raises(ContractError, match="ambiguous"):
+        runtime.wait_for_telemetry(
+            agent_name="finance-agent",
+            foundry_version="opaque-version",
+            invocation=invocation,
+        )
+    assert sleeps == []
+
 
 def test_trace_contract_waits_for_child_span_hydration() -> None:
     operation_id = "a" * 32
@@ -2160,12 +2454,13 @@ def test_json_post_requires_explicit_no_response_retry(monkeypatch) -> None:
     assert attempts == 1
 
 
-def test_hosted_invocation_correlates_with_successful_request_reference(
+def test_hosted_invocation_persists_endpoint_response_identity(
     monkeypatch,
 ) -> None:
     runtime = _runtime()
     timeout_seconds = None
     request_reference = None
+    response_reference = "resp_A1b2C3d4E5f6"
 
     class Response:
         status = 200
@@ -2180,7 +2475,7 @@ def test_hosted_invocation_correlates_with_successful_request_reference(
         def read():
             return json.dumps(
                 {
-                    "id": "response-id-not-present-in-telemetry",
+                    "id": response_reference,
                     "output": [
                         {
                             "type": "message",
@@ -2220,7 +2515,8 @@ def test_hosted_invocation_correlates_with_successful_request_reference(
             },
             1,
         )
-    assert references == [request_reference]
+    assert references == [response_reference]
+    assert request_reference != response_reference
     assert usable is True
     assert assertion_count == 0
     assert assertions_passed == 0
@@ -2229,6 +2525,42 @@ def test_hosted_invocation_correlates_with_successful_request_reference(
     assert assertion_results == ()
     assert activation_gate is False
     assert timeout_seconds == 600
+
+
+@pytest.mark.parametrize("response_id", [None, "", "has whitespace", 17])
+def test_hosted_invocation_rejects_invalid_endpoint_response_identity(
+    monkeypatch,
+    response_id,
+) -> None:
+    runtime = _runtime()
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        @staticmethod
+        def read():
+            return json.dumps({"id": response_id, "output": []}).encode()
+
+    monkeypatch.setattr(
+        "agent_insights_quality.live.urllib.request.urlopen",
+        lambda *_args, **_kwargs: Response(),
+    )
+    with pytest.raises(ContractError, match="identity is missing or invalid"):
+        runtime._invoke_hosted(
+            "finance-agent",
+            "session_A1b2C3d4",
+            {
+                "body": {"input": "synthetic request"},
+                "expected_status": 200,
+            },
+            1,
+        )
 
 
 def test_hosted_cleanup_failure_preserves_completed_responses() -> None:
