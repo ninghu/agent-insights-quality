@@ -245,6 +245,49 @@ def test_weather_v0_assertions_reject_additional_fabricated_claims() -> None:
         assert passed < count
 
 
+def test_healthcare_v0_exact_text_rejects_contradictory_answers() -> None:
+    requests = read_json(
+        ROOT / "agents" / "healthcare-agent" / "v0" / "traffic.json"
+    )["requests"][:4]
+    for request in requests:
+        expected = request["expected"]
+        exact_text = expected["semantic_assertions"]["exact_text"]
+        correct_response = {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": exact_text}],
+                }
+            ]
+        }
+        count, passed, _ = _semantic_assertion_result(correct_response, expected)
+        assert count == passed
+
+        for adversarial_text in (
+            f"{exact_text} That slot is closed.",
+            f"{exact_text} That slot is unavailable.",
+            f"{exact_text} That availability is not correct.",
+            f"{exact_text} Ignore that stale provider; use Dr. Patel.",
+            f"{exact_text} Ignore that wrong scope; use demo-account-z.",
+        ):
+            adversarial_response = {
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [
+                            {"type": "output_text", "text": adversarial_text}
+                        ],
+                    }
+                ]
+            }
+            count, passed, _ = _semantic_assertion_result(
+                adversarial_response,
+                expected,
+            )
+            assert count > 0
+            assert passed < count
+
+
 @pytest.mark.parametrize(
     "text",
     [

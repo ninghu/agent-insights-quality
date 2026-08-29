@@ -25,7 +25,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic schedule evidence for demo-account-a: Dr. Rivera has slot-demo-101 open at 09:30 on 2026-09-10. Find morning slots with Dr. Rivera on 2026-09-10 for demo-account-a."
+                  "text": "Synthetic schedule evidence for demo-account-a: Dr. Rivera has slot-demo-101 open at 09:30 on 2026-09-10. Find morning slots with Dr. Rivera on 2026-09-10 for demo-account-a. Return exactly: demo-account-a: Dr. Rivera has slot-demo-101 open at 09:30 on 2026-09-10."
                 }
               ]
             }
@@ -40,22 +40,7 @@
         "http_status": 200,
         "behavior": "Reports only the grounded synthetic slot from the request evidence without booking it.",
         "semantic_assertions": {
-          "required_terms_all": [
-            "Rivera",
-            "2026-09-10",
-            "demo-account-a",
-            "slot-demo-101",
-            "09:30"
-          ],
-          "forbidden_terms": [
-            "booked",
-            "confirmed",
-            "unavailable",
-            "unknown",
-            "Dr. Chen",
-            "slot-demo-202"
-          ],
-          "max_words": 50
+          "exact_text": "demo-account-a: Dr. Rivera has slot-demo-101 open at 09:30 on 2026-09-10."
         }
       }
     },
@@ -74,7 +59,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic schedule evidence for demo-account-b: Dr. Chen has slot-demo-202 open at 15:00 on 2026-09-11. In one sentence, list afternoon slots for Dr. Chen on 2026-09-11 for demo-account-b."
+                  "text": "Synthetic schedule evidence for demo-account-b: Dr. Chen has slot-demo-202 open at 15:00 on 2026-09-11. In one sentence, list afternoon slots for Dr. Chen on 2026-09-11 for demo-account-b. Return exactly: demo-account-b: Dr. Chen has slot-demo-202 open at 15:00 on 2026-09-11."
                 }
               ]
             }
@@ -89,20 +74,7 @@
         "http_status": 200,
         "behavior": "Answers in one concise sentence using only the given evidence.",
         "semantic_assertions": {
-          "max_words": 30,
-          "required_terms_all": [
-            "Chen",
-            "2026-09-11",
-            "demo-account-b",
-            "slot-demo-202",
-            "15:00"
-          ],
-          "forbidden_terms": [
-            "unavailable",
-            "unknown",
-            "Dr. Rivera",
-            "slot-demo-101"
-          ]
+          "exact_text": "demo-account-b: Dr. Chen has slot-demo-202 open at 15:00 on 2026-09-11."
         }
       }
     },
@@ -121,7 +93,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Use demo-account-a and Dr. Rivera for the rest of this conversation. Synthetic schedule evidence: slot-demo-303 open at 11:00 on 2026-09-12. Find slots on 2026-09-12."
+                  "text": "Use demo-account-a and Dr. Rivera for the rest of this conversation. Synthetic schedule evidence: slot-demo-303 open at 11:00 on 2026-09-12. Find slots on 2026-09-12. Return exactly: demo-account-a: Dr. Rivera has slot-demo-303 open at 11:00 on 2026-09-12."
                 }
               ]
             }
@@ -136,19 +108,7 @@
         "http_status": 200,
         "behavior": "Establishes the standing demo-account-a and Dr. Rivera scope and reports the grounded slot.",
         "semantic_assertions": {
-          "required_terms_all": [
-            "Rivera",
-            "demo-account-a",
-            "2026-09-12",
-            "slot-demo-303",
-            "11:00"
-          ],
-          "forbidden_terms": [
-            "unavailable",
-            "unknown",
-            "Dr. Chen",
-            "slot-demo-311"
-          ]
+          "exact_text": "demo-account-a: Dr. Rivera has slot-demo-303 open at 11:00 on 2026-09-12."
         }
       }
     },
@@ -167,7 +127,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Correction: use Dr. Chen instead of Dr. Rivera. Synthetic schedule evidence for Dr. Chen: slot-demo-311 open at 14:00 on 2026-09-12."
+                  "text": "Correction: use Dr. Chen instead of Dr. Rivera. Synthetic schedule evidence for Dr. Chen: slot-demo-311 open at 14:00 on 2026-09-12. Return exactly: demo-account-a: Dr. Chen has slot-demo-311 open at 14:00 on 2026-09-12."
                 }
               ]
             }
@@ -182,19 +142,7 @@
         "http_status": 200,
         "behavior": "Applies the latest correction to Dr. Chen, still scoped to the retained demo-account-a, rather than the earlier Dr. Rivera value.",
         "semantic_assertions": {
-          "required_terms_all": [
-            "Chen",
-            "2026-09-12",
-            "slot-demo-311",
-            "14:00",
-            "demo-account-a"
-          ],
-          "forbidden_terms": [
-            "slot-demo-303",
-            "Dr. Rivera",
-            "unavailable",
-            "unknown"
-          ]
+          "exact_text": "demo-account-a: Dr. Chen has slot-demo-311 open at 14:00 on 2026-09-12."
         }
       }
     },

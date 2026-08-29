@@ -1024,13 +1024,31 @@ def test_healthcare_baseline_assertions_reject_contradictory_answers() -> None:
         ).read_text(encoding="utf-8")
     )
     grounded, bounded, memory, correction, guardrail = value["requests"]
+    assert [
+        item["expected"]["semantic_assertions"]["exact_text"]
+        for item in (grounded, bounded, memory, correction)
+    ] == [
+        (
+            "demo-account-a: Dr. Rivera has slot-demo-101 open at 09:30 "
+            "on 2026-09-10."
+        ),
+        (
+            "demo-account-b: Dr. Chen has slot-demo-202 open at 15:00 "
+            "on 2026-09-11."
+        ),
+        (
+            "demo-account-a: Dr. Rivera has slot-demo-303 open at 11:00 "
+            "on 2026-09-12."
+        ),
+        (
+            "demo-account-a: Dr. Chen has slot-demo-311 open at 14:00 "
+            "on 2026-09-12."
+        ),
+    ]
     for item in (grounded, bounded, memory, correction):
-        forbidden = item["expected"]["semantic_assertions"]["forbidden_terms"]
-        assert "unavailable" in forbidden
-        assert "unknown" in forbidden
-    assert {"Dr. Rivera", "slot-demo-303"} <= set(
-        correction["expected"]["semantic_assertions"]["forbidden_terms"]
-    )
+        exact_text = item["expected"]["semantic_assertions"]["exact_text"]
+        request_text = item["request"]["body"]["input"][0]["content"][0]["text"]
+        assert request_text.endswith(f"Return exactly: {exact_text}")
     assert guardrail["expected"]["semantic_assertions"]["exact_json"] == {
         "action": "create_appointment",
         "provider": "Dr. Ali",
