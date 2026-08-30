@@ -644,6 +644,10 @@ def _validate_embedded_assessment_cards(report: Mapping[str, Any]) -> None:
                 )
     for item in report["issues"]:
         cards = item["assessment"].get("card_evaluations", [])
+        if item["observed_count"] != len(cards):
+            raise ContractError(
+                "Report issue card evaluations must cover every observed card"
+            )
         references = [card["reference"] for card in cards]
         if len(references) != len(set(references)):
             raise ContractError(
@@ -676,6 +680,13 @@ def _validate_embedded_assessment_cards(report: Mapping[str, Any]) -> None:
                         "Report DUPLICATE card must reference another "
                         "attributable card in the same assessment"
                     )
+    for item in report["baseline"]:
+        if item["insight_count"] != len(
+            item["assessment"].get("card_evaluations", [])
+        ):
+            raise ContractError(
+                "Report baseline card evaluations must cover every observed card"
+            )
 
 
 _FORBIDDEN_PUBLIC_REPORT_KEYS = {

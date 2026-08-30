@@ -1075,8 +1075,14 @@ def test_report_rejects_malformed_or_private_nested_content() -> None:
     unresolved_duplicate["issues"][0]["assessment"][
         "card_evaluations"
     ].append(duplicate)
+    unresolved_duplicate["issues"][0]["observed_count"] += 1
     with pytest.raises(ContractError, match="same assessment"):
         validate_report(unresolved_duplicate)
+
+    missing_card_evaluation = deepcopy(report)
+    missing_card_evaluation["issues"][0]["assessment"]["card_evaluations"] = []
+    with pytest.raises(ContractError, match="cover every observed card"):
+        validate_report(missing_card_evaluation)
 
 
 def test_published_report_rejects_incomplete_assessment_evidence() -> None:

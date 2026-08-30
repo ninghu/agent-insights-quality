@@ -30,6 +30,11 @@ from agent_insights_quality.live import (
     _trace_assertion_names,
 )
 from agent_insights_quality.run_manifest import _result_payload, build_manifest
+from agent_insights_quality.reporting import _summary_metrics
+from agent_insights_quality.shadow_scoring import (
+    calculate_shadow_quality_score,
+    select_shadow_primary,
+)
 from agent_insights_quality.util import ROOT, ContractError, content_hash, read_json
 
 
@@ -427,7 +432,6 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
                 "assessment": {
                     "verdict": "clean",
                     "ownership": "none",
-                    "finding_type": "MATCHED",
                     "ownership_reason": "No baseline Insight was observed.",
                     "confidence": 0.99,
                     "card_evaluations": [],
@@ -455,58 +459,53 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
                     "confidence": 0.99,
                     "ownership": "none",
                     "ownership_reason": "The expected Insight is fully correct.",
+                    "reasoning": "The expected Insight is fully correct.",
                     "fields": fields,
-                    "card_evaluations": [],
+                    "card_evaluations": [
+                        {
+                            "reference": content_hash(
+                                {
+                                    "issue_id": issue["id"],
+                                    "kind": "matched-card",
+                                }
+                            ),
+                            "title": issue["title"],
+                            "category": "synthetic",
+                            "severity": "medium",
+                            "verdict": "correct",
+                            "finding_type": "MATCHED",
+                            "ownership": "none",
+                            "ownership_reason": (
+                                "The expected Insight is fully correct."
+                            ),
+                            "fields": fields,
+                            "confidence": 0.99,
+                            "reasoning": (
+                                "The expected Insight is fully correct."
+                            ),
+                        }
+                    ],
                 },
                 "evidence_reference": "sha256:" + "c" * 64,
                 "shadow_v2_primary": None,
             }
             for issue in issue_by_id.values()
         ],
-        "summary": {
-            "issues_expected": 36,
-            "issues_correct": 36,
-            "issues_partial": 0,
-            "baseline_passed": 5,
-            "quality_failures": 0,
-            "incomplete": False,
-            "noise_cards": 0,
-            "unverified_cards": 0,
-            "observed_cards": 36,
-            "field_quality_score": 100,
-            "clean_card_precision": 100,
-            "quality_score": 100,
-            "quality_threshold": 90,
-            "quality_score_formula": "field_weighted_v1",
-            "incomplete_reasons": [],
-            "shadow_quality_score": {
-                "formula": "coverage_quality_precision_v2",
-                "automation_authority": False,
-                "counts": {
-                    "expected_issues": 36,
-                    "detected_issues": 0,
-                    "correct_diagnosis_primaries": 0,
-                    "generated_issue_cards": 0,
-                    "baseline_noise_cards": 0,
-                },
-                "components": {
-                    "coverage": 0.0,
-                    "diagnosis_recall": 0.0,
-                    "selected_card_quality": 0.0,
-                    "useful_coverage": 0.0,
-                    "precision": None,
-                },
-                "score": 0.0,
-                "gate_failures": [
-                    "score",
-                    "coverage",
-                    "diagnosis_recall",
-                    "precision",
-                ],
-            },
-        },
+        "summary": {},
         "delivery": {"content_digest": "sha256:" + "0" * 64},
     }
+    for item in report["issues"]:
+        item["shadow_v2_primary"] = select_shadow_primary(item)
+    report["summary"] = _summary_metrics(
+        report["baseline"],
+        report["issues"],
+        incomplete=False,
+    )
+    report["summary"]["shadow_quality_score"] = calculate_shadow_quality_score(
+        report["baseline"],
+        report["issues"],
+        incomplete=False,
+    )
     receipt = create_promotion_receipt(
         report=report,
         registry=registry,
@@ -520,7 +519,7 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
         receipt["source_integrity_digest"]
         == manifest["source_integrity"]["contract_digest"]
     )
-    assert report["summary"]["shadow_quality_score"]["score"] == 0.0
+    assert report["summary"]["shadow_quality_score"]["score"] == 100.0
     assert receipt["qualification_status"] == "PASS"
     incomplete_manifest = deepcopy(manifest)
     first_issue = incomplete_manifest["agents"][0]["issues"][0]

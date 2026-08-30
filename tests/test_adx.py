@@ -79,14 +79,6 @@ def _report() -> dict:
             ][:4]
         )
     report["issues"] = selected
-    report["summary"] = _summary_metrics(
-        report["baseline"],
-        report["issues"],
-        incomplete=False,
-    )
-    report["status"] = (
-        "PASS" if report["summary"]["quality_score"] >= 90 else "FAIL"
-    )
     for item in report["issues"]:
         item["title"] = issue_by_id[item["issue_id"]]["title"]
         assessment = item["assessment"]
@@ -101,6 +93,15 @@ def _report() -> dict:
                     for field, passed in card["fields"].items()
                     if passed is False
                 }
+        item["observed_count"] = len(assessment["card_evaluations"])
+    report["summary"] = _summary_metrics(
+        report["baseline"],
+        report["issues"],
+        incomplete=False,
+    )
+    report["status"] = (
+        "PASS" if report["summary"]["quality_score"] >= 90 else "FAIL"
+    )
     return report
 
 
