@@ -36,6 +36,10 @@ def test_infrastructure_grants_automation_data_plane_roles() -> None:
     assert "isVersioningEnabled: true" in lab
     assert "test-agent-validation-approved-records" in lab
     assert lab.count("immutableStorageWithVersioning") == 1
+    assert "immutabilityPeriodSinceCreationInDays: 90" in lab
+    assert "expire-approved-validation-records-after-worm" in lab
+    assert "daysAfterModificationGreaterThan: 91" in lab
+    assert "expire-deployment-registry-versions" in lab
     assert "test-agent-validation-lifecycle" not in lab
     assert "test-agent-validation-snapshots" not in lab
     assert "test-agent-validation-receipts" not in lab

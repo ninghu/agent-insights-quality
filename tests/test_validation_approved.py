@@ -5,13 +5,17 @@ import json
 
 import pytest
 
-from agent_insights_quality.util import ROOT, ContractError
+from agent_insights_quality.util import ROOT, ContractError, canonical_bytes
 from agent_insights_quality.validation_approved import (
+    _assert_identical_approval,
     approved_record_blob_name,
+    fetch_approved_record_for_checkout,
+    load_or_create_approval_intent,
     stamp_approved_record,
     validate_approved_record,
     validate_local_result_binding,
 )
+from agent_insights_quality.validation_blob import BlobRecord
 from agent_insights_quality.validation_lifecycle import stamp_lifecycle_digest
 
 HASH = "sha256:" + ("a" * 64)
@@ -102,3 +106,73 @@ def test_approval_rejects_evidence_from_another_cycle() -> None:
             commit_sha=clean["commit_sha"],
             validation_digest=clean["digests"]["validation_digest"],
         )
+
+
+def test_approval_retry_reuses_original_byte_identical_intent(tmp_path) -> None:
+    path = tmp_path / "approval-intent.json"
+    original = _record()
+    assert load_or_create_approval_intent(path, original) == original
+    retry = deepcopy(original)
+    retry["approved_by"] = "different-user"
+    retry["approved_at"] = "2026-08-30T12:00:00+00:00"
+    retry = stamp_approved_record(retry)
+    assert load_or_create_approval_intent(path, retry) == original
+    _assert_identical_approval(
+        BlobRecord(
+            "container",
+            "record",
+            original,
+            "etag",
+            "version",
+            canonical_bytes(original),
+        ),
+        original,
+    )
+    with pytest.raises(ContractError, match="different canonical bytes"):
+        _assert_identical_approval(
+            BlobRecord(
+                "container",
+                "record",
+                original,
+                "etag",
+                "version",
+                canonical_bytes(retry),
+            ),
+            original,
+        )
+
+
+def test_daily_fetches_exact_head_authoritative_blob(monkeypatch) -> None:
+    value = _record()
+    observed = {}
+
+    class Store:
+        def assert_approved_record_contract(self, container):
+            observed["container"] = container
+
+        def read(self, container, name):
+            observed["read"] = (container, name)
+            return BlobRecord(
+                container,
+                name,
+                value,
+                "etag",
+                "version",
+                canonical_bytes(value),
+            )
+
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_approved.current_clean_commit",
+        lambda: value["commit_sha"],
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_approved.validate_approved_record_for_checkout",
+        lambda record, **_kwargs: dict(record),
+    )
+    assert fetch_approved_record_for_checkout(
+        Store(),
+        expected_repository=value["repository"],
+    ) == value
+    assert observed["read"][1].endswith(
+        f"/{value['commit_sha']}/record.json"
+    )

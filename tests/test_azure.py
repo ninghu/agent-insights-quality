@@ -5,11 +5,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from agent_insights_quality.azure import (
+    _lock_approved_validation_policy,
     deploy_analytics_infrastructure,
     deploy_infrastructure,
     resolve_latest_model_version,
     resolve_latest_terra_version,
 )
+from agent_insights_quality.progress import ProgressReporter
 
 
 def test_latest_terra_version_is_selected(monkeypatch) -> None:
@@ -77,6 +79,19 @@ def test_deployment_reads_fixed_telemetry_resource_set(
         calls.append(arguments)
         if "signed-in-user" in arguments:
             return SimpleNamespace(returncode=0, stdout="synthetic-principal")
+        if arguments[1:4] == ["storage", "account", "list"]:
+            return SimpleNamespace(returncode=0, stdout="syntheticstorage\n")
+        if "immutability-policy" in arguments and "show" in arguments:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "state": "Locked",
+                        "immutabilityPeriodSinceCreationInDays": 90,
+                        "allowProtectedAppendWrites": False,
+                    }
+                ),
+            )
         return SimpleNamespace(returncode=0, stdout="")
 
     monkeypatch.setattr(
@@ -89,7 +104,9 @@ def test_deployment_reads_fixed_telemetry_resource_set(
     )
     monkeypatch.setattr("agent_insights_quality.azure.subprocess.run", run)
     deploy_infrastructure()
-    deployment = calls[-1]
+    deployment = next(
+        item for item in calls if item[1:4] == ["deployment", "sub", "create"]
+    )
     assert any(
         value == "telemetryGeneration=g29"
         for value in deployment
@@ -97,6 +114,40 @@ def test_deployment_reads_fixed_telemetry_resource_set(
     assert "testAgentModelVersion=2026-03-17" in deployment
     assert not any("validationPrincipalId=" in value for value in deployment)
     assert not any("validationReceiptPrincipalId=" in value for value in deployment)
+
+
+def test_infrastructure_locks_unlocked_approved_record_policy(
+    monkeypatch,
+) -> None:
+    calls = []
+    policies = iter(
+        [
+            {
+                "state": "Unlocked",
+                "etag": "synthetic-etag",
+                "immutabilityPeriodSinceCreationInDays": 90,
+                "allowProtectedAppendWrites": False,
+            },
+            {
+                "state": "Locked",
+                "immutabilityPeriodSinceCreationInDays": 90,
+                "allowProtectedAppendWrites": False,
+            },
+        ]
+    )
+
+    def run(arguments, **_kwargs):
+        calls.append(arguments)
+        if arguments[1:4] == ["storage", "account", "list"]:
+            return SimpleNamespace(returncode=0, stdout="syntheticstorage\n")
+        if "immutability-policy" in arguments and "show" in arguments:
+            return SimpleNamespace(returncode=0, stdout=json.dumps(next(policies)))
+        return SimpleNamespace(returncode=0, stdout="{}")
+
+    monkeypatch.setattr("agent_insights_quality.azure.subprocess.run", run)
+    _lock_approved_validation_policy(ProgressReporter("test"))
+    lock = next(item for item in calls if "lock" in item)
+    assert lock[lock.index("--if-match") + 1] == "synthetic-etag"
 
 
 def test_analytics_deployment_does_not_change_foundry_models(monkeypatch) -> None:

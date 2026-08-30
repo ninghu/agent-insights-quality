@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Mapping
+import json
+import subprocess
 from typing import Any
 
+from agent_insights_quality.azure_cli import azure_cli
 from agent_insights_quality.util import ContractError, canonical_bytes
 
 
@@ -14,6 +17,7 @@ class BlobRecord:
     value: dict[str, Any]
     etag: str
     version_id: str
+    content: bytes
 
 
 class AzureValidationBlobStore:
@@ -28,6 +32,7 @@ class AzureValidationBlobStore:
             raise ContractError(
                 "Validation Blob operations require the azure optional dependencies"
             ) from error
+        self._storage_account_name = storage_account_name
         self._service = BlobServiceClient(
             account_url=f"https://{storage_account_name}.blob.core.windows.net",
             credential=credential,
@@ -60,10 +65,31 @@ class AzureValidationBlobStore:
             )
         if container != "test-agent-validation-approved-records":
             raise ContractError("Approved record container is not reviewed")
+        account = subprocess.run(
+            [
+                azure_cli(),
+                "storage",
+                "account",
+                "show",
+                "--name",
+                self._storage_account_name,
+                "--query",
+                "allowBlobPublicAccess",
+                "--output",
+                "tsv",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        if account.returncode != 0 or account.stdout.strip().casefold() != "false":
+            raise ContractError(
+                "Approved record storage account permits anonymous Blob access"
+            )
         try:
-            properties = self._service.get_container_client(
-                container
-            ).get_container_properties()
+            container_client = self._service.get_container_client(container)
+            properties = container_client.get_container_properties()
         except (AzureError, OSError) as error:
             raise ContractError("Approved record container is unavailable") from error
         has_policy = (
@@ -80,8 +106,54 @@ class AzureValidationBlobStore:
                 None,
             )
         )
-        if has_policy is not True or immutable_versioning is not True:
+        public_access = (
+            properties.get("public_access")
+            if isinstance(properties, Mapping)
+            else getattr(properties, "public_access", None)
+        )
+        if (
+            public_access not in {None, "None"}
+            or has_policy is not True
+            or immutable_versioning is not True
+        ):
             raise ContractError("Approved record immutable storage is incomplete")
+        policy = subprocess.run(
+            [
+                azure_cli(),
+                "storage",
+                "container",
+                "immutability-policy",
+                "show",
+                "--account-name",
+                self._storage_account_name,
+                "--container-name",
+                container,
+                "--auth-mode",
+                "login",
+                "--output",
+                "json",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        try:
+            policy_value = json.loads(policy.stdout)
+        except json.JSONDecodeError as error:
+            raise ContractError(
+                "Approved record immutability policy response is invalid"
+            ) from error
+        if (
+            policy.returncode != 0
+            or not isinstance(policy_value, Mapping)
+            or str(policy_value.get("state") or "") != "Locked"
+            or policy_value.get("immutabilityPeriodSinceCreationInDays") != 90
+            or policy_value.get("allowProtectedAppendWrites") is not False
+        ):
+            raise ContractError(
+                "Approved record container lacks the exact locked 90-day WORM policy"
+            )
 
     def read(
         self,
@@ -104,6 +176,7 @@ class AzureValidationBlobStore:
             value=_decode_object(value, f"{container}/{name}"),
             etag=str(properties.etag),
             version_id=str(properties.version_id or ""),
+            content=value,
         )
 
     def read_optional(
@@ -153,12 +226,15 @@ class AzureValidationBlobStore:
             )
         except ResourceExistsError:
             existing = self.read(container, name)
-            if canonical_bytes(existing.value) != rendered:
+            if existing.content != rendered:
                 raise ContractError(
                     f"Immutable Blob {container}/{name} already has different content"
                 ) from None
             return existing
-        return self.read(container, name)
+        created = self.read(container, name)
+        if created.content != rendered:
+            raise ContractError("Approved record Blob bytes changed after upload")
+        return created
 
 def _decode_object(value: bytes, label: str) -> dict[str, Any]:
     import json

@@ -99,8 +99,10 @@ from agent_insights_quality.util import (
 from agent_insights_quality.validation import validate_repository
 from agent_insights_quality.validation_approved import (
     approve_test_agent_validation,
-    validate_approved_record_for_checkout,
+    fetch_approved_record_for_checkout,
 )
+from agent_insights_quality.validation_blob import AzureValidationBlobStore
+from agent_insights_quality.validation_credentials import local_azure_operator
 from agent_insights_quality.validation_local import run_test_agent_validation
 from agent_insights_quality.work_items import (
     fetch_quality_work_items,
@@ -288,15 +290,12 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         profile = RuntimeProfile.from_env(args.profile)
         approved_digests = None
         if args.profile == "daily":
-            approved_record = str(
-                os.environ.get("AIQ_APPROVED_VALIDATION_RECORD") or ""
-            ).strip()
-            if not approved_record:
-                raise ContractError(
-                    "Daily provisioning requires an approved Test Agent Validation record"
-                )
-            validate_approved_record_for_checkout(
-                Path(approved_record),
+            operator = local_azure_operator()
+            fetch_approved_record_for_checkout(
+                AzureValidationBlobStore(
+                    profile.registry_storage_account_name,
+                    credential=operator.credential,
+                ),
                 expected_repository="ninghu/agent-insights-quality",
             )
         provision_profile(

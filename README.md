@@ -115,7 +115,7 @@ python -m agent_insights_quality fetch-quality-work-items `
   --report-date <Pacific YYYY-MM-DD> `
   --output $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
 # python -m agent_insights_quality run-full --report-date <Pacific YYYY-MM-DD>
-$env:AIQ_APPROVED_VALIDATION_RECORD = "<private-approved-record-path>"
+# Daily fetches the current clean commit's immutable approved record from Blob.
 python -m agent_insights_quality provision --profile daily
 python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD> `
   --work-items $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json

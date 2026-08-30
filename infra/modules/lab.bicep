@@ -382,6 +382,54 @@ resource lifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05
                   daysAfterModificationGreaterThan: 90
                 }
               }
+              version: {
+                delete: {
+                  daysAfterCreationGreaterThan: 90
+                }
+              }
+            }
+          }
+        }
+        {
+          name: 'expire-deployment-registry-versions'
+          enabled: true
+          type: 'Lifecycle'
+          definition: {
+            filters: {
+              blobTypes: ['blockBlob']
+              prefixMatch: ['deployment-registries/']
+            }
+            actions: {
+              version: {
+                delete: {
+                  daysAfterCreationGreaterThan: 90
+                }
+              }
+            }
+          }
+        }
+        {
+          name: 'expire-approved-validation-records-after-worm'
+          enabled: true
+          type: 'Lifecycle'
+          definition: {
+            filters: {
+              blobTypes: ['blockBlob']
+              prefixMatch: [
+                'test-agent-validation-approved-records/approved-validation-records/'
+              ]
+            }
+            actions: {
+              baseBlob: {
+                delete: {
+                  daysAfterModificationGreaterThan: 91
+                }
+              }
+              version: {
+                delete: {
+                  daysAfterCreationGreaterThan: 91
+                }
+              }
             }
           }
         }

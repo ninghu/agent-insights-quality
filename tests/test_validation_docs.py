@@ -44,7 +44,7 @@ def test_cutover_docs_are_new_only_fail_forward_and_keep_daily_test_external() -
         "isolated `--test-run --rerun N` email-only Daily Test",
         "external, non-gating",
         "staging is never a fallback",
-        "AIQ_APPROVED_VALIDATION_RECORD",
+        "approved-record Blob path",
     ):
         assert requirement in normalized
 

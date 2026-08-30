@@ -13,11 +13,15 @@ from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.util import (
     ROOT,
     ContractError,
+    canonical_bytes,
     content_hash,
     immutable_json,
     read_json,
 )
-from agent_insights_quality.validation_blob import AzureValidationBlobStore
+from agent_insights_quality.validation_blob import (
+    AzureValidationBlobStore,
+    BlobRecord,
+)
 from agent_insights_quality.validation_credentials import local_azure_operator
 from agent_insights_quality.validation_evidence import validate_evidence
 from agent_insights_quality.validation_lifecycle import (
@@ -86,7 +90,7 @@ def approve_test_agent_validation(
             commit_sha=git.commit_sha,
             validation_digest=validation_digest,
         )
-        record = stamp_approved_record(
+        requested_record = stamp_approved_record(
             {
                 "schema_version": "1.0.0",
                 "kind": "test-agent-validation-approved-record",
@@ -101,7 +105,16 @@ def approve_test_agent_validation(
                 "record_digest": "",
             }
         )
-        validate_approved_record(record)
+        validate_approved_record(requested_record)
+        intent_path = (
+            validation_runtime_root()
+            / "approval-intents"
+            / approved_record_blob_name(git.repository, git.commit_sha)
+        )
+        record = load_or_create_approval_intent(
+            intent_path,
+            requested_record,
+        )
         operator = local_azure_operator()
         storage_account = RuntimeProfile.from_env(
             "staging",
@@ -119,7 +132,7 @@ def approve_test_agent_validation(
         existing = store.read_optional(APPROVED_RECORD_CONTAINER, blob_name)
         if existing is not None:
             validate_approved_record(existing.value)
-            _assert_same_approval_bindings(existing.value, record)
+            _assert_identical_approval(existing, record)
             persisted = existing.value
             status = "already_approved"
         else:
@@ -216,22 +229,47 @@ def validate_approved_record(value: Mapping[str, Any]) -> None:
 
 
 def validate_approved_record_for_checkout(
-    path: Path,
+    value: Mapping[str, Any],
     *,
     expected_repository: str,
+    expected_commit_sha: str | None = None,
 ) -> dict[str, Any]:
-    value = read_json(path)
     validate_approved_record(value)
     agents, issues = load_catalogs()
+    commit_sha = expected_commit_sha or current_clean_commit()
     if (
         value["repository"] != expected_repository
-        or value["commit_sha"] != current_clean_commit()
+        or value["commit_sha"] != commit_sha
         or value["validation_digest"] != current_validation_digest(agents, issues)
     ):
         raise ContractError(
             "Approved validation record does not match the exact clean checkout"
         )
-    return value
+    return dict(value)
+
+
+def fetch_approved_record_for_checkout(
+    store: AzureValidationBlobStore,
+    *,
+    expected_repository: str,
+) -> dict[str, Any]:
+    commit_sha = current_clean_commit()
+    store.assert_approved_record_contract(APPROVED_RECORD_CONTAINER)
+    record = store.read(
+        APPROVED_RECORD_CONTAINER,
+        approved_record_blob_name(expected_repository, commit_sha),
+    )
+    if (
+        not record.etag
+        or not record.version_id
+        or record.content != canonical_bytes(record.value)
+    ):
+        raise ContractError("Authoritative approved record Blob metadata is invalid")
+    return validate_approved_record_for_checkout(
+        record.value,
+        expected_repository=expected_repository,
+        expected_commit_sha=commit_sha,
+    )
 
 
 def approved_record_blob_name(repository: str, commit_sha: str) -> str:
@@ -246,19 +284,35 @@ def approved_record_blob_name(repository: str, commit_sha: str) -> str:
     return f"approved-validation-records/{owner}/{name}/{commit_sha}/record.json"
 
 
-def _assert_same_approval_bindings(
-    existing: Mapping[str, Any],
+def load_or_create_approval_intent(
+    path: Path,
+    requested: Mapping[str, Any],
+) -> dict[str, Any]:
+    if path.exists():
+        existing = read_json(path)
+        validate_approved_record(existing)
+        for field in (
+            "repository",
+            "pr_number",
+            "commit_sha",
+            "validation_digest",
+            "evidence_digest",
+            "clean_digest",
+        ):
+            if existing[field] != requested[field]:
+                raise ContractError(
+                    "Existing approval intent targets different validation proof"
+                )
+        return existing
+    immutable_json(path, requested)
+    return dict(requested)
+
+
+def _assert_identical_approval(
+    existing: BlobRecord,
     requested: Mapping[str, Any],
 ) -> None:
-    for field in (
-        "repository",
-        "pr_number",
-        "commit_sha",
-        "validation_digest",
-        "evidence_digest",
-        "clean_digest",
-    ):
-        if existing[field] != requested[field]:
-            raise ContractError(
-                "Approved validation record path already has different content"
-            )
+    if existing.content != canonical_bytes(requested):
+        raise ContractError(
+            "Approved validation record path already has different canonical bytes"
+        )

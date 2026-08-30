@@ -154,10 +154,11 @@ python -m agent_insights_quality run-full --report-date <Pacific YYYY-MM-DD> `
   --work-items $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
 ```
 
-Test Agent Validation always runs the full 41-authority matrix for one exact commit. Set
-`AIQ_APPROVED_VALIDATION_RECORD` to the private approved-record file before provisioning `daily`.
-Daily rejects a missing record, commit drift, or validation-digest drift. After provisioning, verify
-the registry and endpoints read-only. Do not send smoke traffic that starts a new clean-window wait.
+Test Agent Validation always runs the full 41-authority matrix for one exact commit. Daily derives the
+exact-head approved-record Blob path and reads that immutable authority directly; it never trusts an
+operator-supplied local record file. Daily rejects a missing record, invalid WORM metadata, commit
+drift, or validation-digest drift. After provisioning, verify the registry and endpoints read-only.
+Do not send smoke traffic that starts a new clean-window wait.
 
 Provisioning writes each profile registry locally and uploads `daily.json` or `staging.json` to the
 private Azure `deployment-registries` container using Entra authentication. Every qualification run

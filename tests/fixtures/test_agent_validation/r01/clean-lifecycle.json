@@ -232,20 +232,20 @@
   "cycle_id": "validation-local-r01",
   "digests": {
     "clean_resource_inventory_digest": "sha256:80ec918fbecb394c7a28b899a24762cd9ac28a8833a2cc6f25307730908a554c",
-    "evidence_digest": "sha256:277afee3855172d987e08a21e16d22aeda3c7e767a4332f3f60b0917785a0c8d",
+    "evidence_digest": "sha256:b421040c791354ad19ad4bd6a824d038bfdc5d99cd1dec794feef4a84a0270cf",
     "evidence_resource_inventory_digest": "sha256:839dc65aef04b7f4d02018daa273e8599369ac9957fd3f727e2595e64880e52b",
     "execution_matrix_digest": "sha256:b815023aee152f454383be3ed8bddbecc95293781ad435539f36fe7614b294fe",
     "quota_plan_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "runtime_topology_digest": "sha256:ccfc73e8252f9ca571b00947fac320bd2787850657730f6b969b1c1aa4ac175f",
-    "validation_digest": "sha256:06885f564b761bea8cd83c066bca88a1b317e230b4a90e38464f3c2304e690fb"
+    "validation_digest": "sha256:7f753cf684f6be3f74ab3318c7f79d55a03bd78838494338556c1b5add09cb87"
   },
   "event_reference": null,
   "evidence_reference": {
-    "digest": "sha256:277afee3855172d987e08a21e16d22aeda3c7e767a4332f3f60b0917785a0c8d",
-    "path": "evidence/ninghu/agent-insights-quality/63/validation-local-r01/277afee3855172d987e08a21e16d22aeda3c7e767a4332f3f60b0917785a0c8d.json"
+    "digest": "sha256:b421040c791354ad19ad4bd6a824d038bfdc5d99cd1dec794feef4a84a0270cf",
+    "path": "evidence/ninghu/agent-insights-quality/63/validation-local-r01/b421040c791354ad19ad4bd6a824d038bfdc5d99cd1dec794feef4a84a0270cf.json"
   },
   "failure": null,
-  "journal_digest": "sha256:eba37f40f15d36f41ad895de2fa1d9ca72aa2b356c5616cd361b6a76f9065621",
+  "journal_digest": "sha256:703d0ab5ecca131207f0e9b7794011844f5f493b5c5680b1112b4f60870e7fc1",
   "kind": "test-agent-validation-lifecycle",
   "last_activity_at": "2026-08-29T12:16:50+00:00",
   "operator": {

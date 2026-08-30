@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import json
-
-import pytest
+from types import SimpleNamespace
 
 from agent_insights_quality import cli
-from agent_insights_quality.util import ContractError
 
 
 def test_validation_cli_exposes_only_two_automatic_user_commands() -> None:
@@ -61,19 +59,33 @@ def test_daily_provisioning_is_new_only_for_approved_record(
     monkeypatch.setattr(
         cli.RuntimeProfile,
         "from_env",
-        lambda _profile: object(),
+        lambda _profile: SimpleNamespace(
+            registry_storage_account_name="synthetic-storage"
+        ),
     )
     monkeypatch.setattr(cli, "provision_profile", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        cli,
+        "local_azure_operator",
+        lambda: SimpleNamespace(credential="verified-credential"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "AzureValidationBlobStore",
+        lambda account, *, credential: (account, credential),
+    )
     observed = []
     monkeypatch.setattr(
         cli,
-        "validate_approved_record_for_checkout",
-        lambda path, **kwargs: observed.append((path, kwargs)),
+        "fetch_approved_record_for_checkout",
+        lambda store, **kwargs: observed.append((store, kwargs)),
     )
     args = cli.build_parser().parse_args(["provision", "--profile", "daily"])
     monkeypatch.setenv("AIQ_STAGING_PROMOTION_RECEIPT", "legacy.json")
-    with pytest.raises(ContractError, match="approved Test Agent Validation"):
-        cli._dispatch(args)
-    monkeypatch.setenv("AIQ_APPROVED_VALIDATION_RECORD", "approved.json")
     cli._dispatch(args)
-    assert str(observed[0][0]) == "approved.json"
+    assert observed == [
+        (
+            ("synthetic-storage", "verified-credential"),
+            {"expected_repository": "ninghu/agent-insights-quality"},
+        )
+    ]
