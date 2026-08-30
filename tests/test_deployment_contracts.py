@@ -34,15 +34,14 @@ def test_infrastructure_grants_automation_data_plane_roles() -> None:
     assert "name: 'terra-insight-generation'" in lab
     assert "name: 'terra-test-agents'" not in lab
     assert "isVersioningEnabled: true" in lab
-    assert "test-agent-validation-lifecycle" in lab
-    assert "test-agent-validation-snapshots" in lab
-    assert "test-agent-validation-receipts" in lab
-    assert lab.count("immutableStorageWithVersioning") == 3
-    assert "test-agent-validation-shadow-receipts" in lab
-    assert "validationReceiptPrincipalId" in lab
-    assert "blobReaderRoleId" in lab
-    assert "validationPrincipalId" in lab
-    assert "principalType: 'ServicePrincipal'" in lab
+    assert "test-agent-validation-approved-records" in lab
+    assert lab.count("immutableStorageWithVersioning") == 1
+    assert "test-agent-validation-lifecycle" not in lab
+    assert "test-agent-validation-snapshots" not in lab
+    assert "test-agent-validation-receipts" not in lab
+    assert "validationReceiptPrincipalId" not in lab
+    assert "validationPrincipalId" not in lab
+    assert "principalType: 'ServicePrincipal'" not in lab
 
 
 def test_support_provisioning_publishes_to_acr() -> None:

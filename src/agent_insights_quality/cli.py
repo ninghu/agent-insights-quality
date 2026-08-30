@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 import time
-from datetime import UTC, date, datetime
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -40,7 +40,7 @@ from agent_insights_quality.email import (
     write_private_report_preview,
 )
 from agent_insights_quality.generated_paths import validate_generated_paths
-from agent_insights_quality.live import LiveRuntime, _azure_cli_token
+from agent_insights_quality.live import LiveRuntime
 from agent_insights_quality.improvement_memory import (
     build_normalized_summary,
     validate_analysis_against_summary,
@@ -52,7 +52,6 @@ from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.provisioning import (
     create_promotion_receipt,
     provision_profile,
-    validate_promotion_receipt,
 )
 from agent_insights_quality.registry import load_registry, sync_registry
 from agent_insights_quality.reporting import (
@@ -98,44 +97,11 @@ from agent_insights_quality.util import (
     runtime_root,
 )
 from agent_insights_quality.validation import validate_repository
-from agent_insights_quality.validation_blob import AzureValidationBlobStore
-from agent_insights_quality.validation_evidence import validate_evidence
-from agent_insights_quality.validation_cleanup import CleanupEngine
-from agent_insights_quality.validation_cleanup_azure import (
-    AzureValidationCleanupBackend,
+from agent_insights_quality.validation_approved import (
+    approve_test_agent_validation,
+    validate_approved_record_for_checkout,
 )
-from agent_insights_quality.validation_credentials import (
-    validation_blob_credential,
-    verify_azure_service_principal,
-)
-from agent_insights_quality.validation_cycle import ValidationCycleController
-from agent_insights_quality.validation_issuer import (
-    ReceiptIssuer,
-    validate_receipt as validate_test_agent_receipt,
-)
-from agent_insights_quality.validation_lifecycle import (
-    ACTIVE_BLOB,
-    ACTIVE_CONTAINER,
-    LifecycleJournal,
-    validate_lifecycle,
-)
-from agent_insights_quality.validation_manifest import (
-    prepare_candidate_manifest,
-    stamp_candidate_manifest,
-)
-from agent_insights_quality.validation_policy import load_validation_policy
-from agent_insights_quality.validation_rules import (
-    generate_repository_validation_rules,
-)
-from agent_insights_quality.validation_provisioning import (
-    validation_runtime_profile,
-)
-from agent_insights_quality.validation_reconciler import ValidationReconciler
-from agent_insights_quality.validation_gate import (
-    attest_frozen_review,
-    construct_and_issue_merge_receipt,
-    run_validation_gate,
-)
+from agent_insights_quality.validation_local import run_test_agent_validation
 from agent_insights_quality.work_items import (
     fetch_quality_work_items,
     load_quality_work_items,
@@ -232,95 +198,8 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup.add_argument("--plan", type=Path, required=True)
     cleanup.add_argument("--receipt", type=Path)
     cleanup.add_argument("--human-reviewed", action="store_true")
-    prepare_validation = commands.add_parser("prepare-test-agent-validation")
-    prepare_validation.add_argument(
-        "--repository",
-        default="ninghu/agent-insights-quality",
-    )
-    prepare_validation.add_argument("--pr-number", type=int, required=True)
-    prepare_validation.add_argument("--candidate-head-sha", required=True)
-    prepare_validation.add_argument("--candidate-tree-sha", required=True)
-    prepare_validation.add_argument("--workflow-run-id", required=True)
-    prepare_validation.add_argument("--output", type=Path, required=True)
-    validation_rules = commands.add_parser(
-        "generate-test-agent-validation-rules"
-    )
-    validation_rules.add_argument("--check", action="store_true")
-    evidence = commands.add_parser("validate-test-agent-evidence")
-    evidence.add_argument("--evidence", type=Path, required=True)
-    lifecycle = commands.add_parser("validate-test-agent-lifecycle")
-    lifecycle.add_argument("--lifecycle", type=Path, required=True)
-    validation_receipt = commands.add_parser("validate-test-agent-receipt")
-    validation_receipt.add_argument("--receipt", type=Path, required=True)
-    issue_validation_receipt = commands.add_parser(
-        "issue-test-agent-validation-receipt"
-    )
-    issue_validation_receipt.add_argument("--receipt", type=Path, required=True)
-    issue_validation_receipt.add_argument("--storage-account", required=True)
-    issue_validation_receipt.add_argument(
-        "--expected-azure-client-id",
-        required=True,
-    )
-    issue_validation_receipt.add_argument(
-        "--expected-azure-object-id",
-        required=True,
-    )
-    reconcile_validation = commands.add_parser(
-        "reconcile-test-agent-validation"
-    )
-    reconcile_validation.add_argument("--storage-account", required=True)
-    reconcile_validation.add_argument(
-        "--expected-azure-client-id",
-        required=True,
-    )
-    reconcile_validation.add_argument(
-        "--expected-azure-object-id",
-        required=True,
-    )
-    reconcile_validation.add_argument("--ownership-nonce", required=True)
-    reconcile_validation.add_argument(
-        "--holder-workflow-reference",
-        required=True,
-    )
-    reconcile_validation.add_argument("--holder-app-reference", required=True)
-    reconcile_validation.add_argument("--holder-run-reference", required=True)
-    verify_validation_credential = commands.add_parser(
-        "verify-test-agent-validation-credential"
-    )
-    verify_validation_credential.add_argument(
-        "--expected-client-id",
-        required=True,
-    )
-    execute_validation = commands.add_parser("run-test-agent-validation")
-    execute_validation.add_argument(
-        "--mode",
-        choices=("shadow", "merge"),
-        default="shadow",
-    )
-    execute_validation.add_argument("--candidate", type=Path, required=True)
-    execute_validation.add_argument("--storage-account", required=True)
-    execute_validation.add_argument("--expected-azure-client-id", required=True)
-    execute_validation.add_argument("--automation-principal-id", required=True)
-    execute_validation.add_argument("--receipt-output", type=Path, required=True)
-    merge_receipt = commands.add_parser(
-        "issue-test-agent-validation-merge-receipt"
-    )
-    merge_receipt.add_argument("--storage-account", required=True)
-    merge_receipt.add_argument("--expected-azure-client-id", required=True)
-    merge_receipt.add_argument("--expected-azure-object-id", required=True)
-    merge_receipt.add_argument("--cycle-id", required=True)
-    merge_receipt.add_argument("--final-head-sha", required=True)
-    merge_receipt.add_argument("--candidate-root", type=Path, required=True)
-    merge_receipt.add_argument("--receipt-output", type=Path, required=True)
-    review_attestation = commands.add_parser(
-        "attest-test-agent-validation-review"
-    )
-    review_attestation.add_argument("--storage-account", required=True)
-    review_attestation.add_argument("--expected-azure-client-id", required=True)
-    review_attestation.add_argument("--expected-azure-object-id", required=True)
-    review_attestation.add_argument("--cycle-id", required=True)
-    review_attestation.add_argument("--frozen-head-sha", required=True)
-    review_attestation.add_argument("--findings-digest", required=True)
+    commands.add_parser("run-test-agent-validation")
+    commands.add_parser("approve-test-agent-validation")
     return parser
 
 
@@ -336,174 +215,11 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def _dispatch(args: argparse.Namespace) -> str | None:
-    if args.command == "generate-test-agent-validation-rules":
-        agents, issues = load_catalogs()
-        generate_repository_validation_rules(
-            agents,
-            issues,
-            check=args.check,
-        )
-        return None
-    if args.command == "verify-test-agent-validation-credential":
-        verify_azure_service_principal(args.expected_client_id)
-        return None
     if args.command == "run-test-agent-validation":
-        result = run_validation_gate(
-            candidate_path=args.candidate,
-            storage_account=args.storage_account,
-            expected_azure_client_id=args.expected_azure_client_id,
-            automation_principal_id=args.automation_principal_id,
-            receipt_output=args.receipt_output,
-            github_token=str(os.environ.get("GH_TOKEN") or ""),
-            mode=args.mode,
-        )
+        result = run_test_agent_validation()
         return json.dumps(result, sort_keys=True)
-    if args.command == "issue-test-agent-validation-merge-receipt":
-        result = construct_and_issue_merge_receipt(
-            storage_account=args.storage_account,
-            expected_azure_client_id=args.expected_azure_client_id,
-            expected_azure_object_id=args.expected_azure_object_id,
-            cycle_id=args.cycle_id,
-            final_head_sha=args.final_head_sha,
-            candidate_root=args.candidate_root,
-            receipt_output=args.receipt_output,
-            github_token=str(os.environ.get("GH_TOKEN") or ""),
-        )
-        return json.dumps(result, sort_keys=True)
-    if args.command == "attest-test-agent-validation-review":
-        result = attest_frozen_review(
-            storage_account=args.storage_account,
-            expected_azure_client_id=args.expected_azure_client_id,
-            expected_azure_object_id=args.expected_azure_object_id,
-            cycle_id=args.cycle_id,
-            frozen_head_sha=args.frozen_head_sha,
-            findings_digest=args.findings_digest,
-            github_token=str(os.environ.get("GH_TOKEN") or ""),
-        )
-        return json.dumps(result, sort_keys=True)
-    if args.command == "prepare-test-agent-validation":
-        agents, issues = load_catalogs()
-        output = _private_validation_output(args.output)
-        manifest = stamp_candidate_manifest(
-            prepare_candidate_manifest(
-                agents=agents,
-                issues=issues,
-                policy=load_validation_policy(),
-                repository=args.repository,
-                pr_number=args.pr_number,
-                candidate_head_sha=args.candidate_head_sha,
-                candidate_tree_sha=args.candidate_tree_sha,
-                workflow_run_id=args.workflow_run_id,
-            )
-        )
-        atomic_json(output, manifest)
-        return json.dumps(
-            {
-                "cycle_id": manifest["cycle_id"],
-                "authority_count": len(manifest["authorities"]),
-                "manifest_digest": manifest["manifest_digest"],
-            },
-            sort_keys=True,
-        )
-    if args.command == "validate-test-agent-evidence":
-        validate_evidence(read_json(args.evidence))
-        return None
-    if args.command == "validate-test-agent-lifecycle":
-        validate_lifecycle(read_json(args.lifecycle))
-        return None
-    if args.command == "validate-test-agent-receipt":
-        validate_test_agent_receipt(read_json(args.receipt))
-        return None
-    if args.command == "issue-test-agent-validation-receipt":
-        receipt = read_json(args.receipt)
-        store = AzureValidationBlobStore(
-            args.storage_account,
-            credential=validation_blob_credential(
-                args.expected_azure_client_id,
-                args.expected_azure_object_id,
-            ),
-        )
-        issuer = ReceiptIssuer(store)
-        if receipt.get("mode") == "shadow":
-            record = issuer.issue_shadow(receipt)
-        else:
-            raise ContractError(
-                "Prebuilt receipt issuance accepts shadow receipts only; "
-                "use the protected merge constructor"
-            )
-        active = store.read(ACTIVE_CONTAINER, ACTIVE_BLOB)
-        controller = ValidationCycleController(
-            LifecycleJournal(
-                store,
-                load_validation_policy(),
-                mirror_root=(
-                    runtime_root() / "test-agent-validation" / "lifecycle"
-                ),
-            ),
-            lease_id=active.value["lease"]["lease_id"],
-            active=active,
-        )
-        controller.receipt_issued(record, now=datetime.now(UTC))
-        return json.dumps(
-            {
-                "mode": receipt["mode"],
-                "authorizes_merge": receipt["authorizes_merge"],
-                "receipt_digest": receipt["receipt_digest"],
-                "blob_version_id": record.version_id,
-                "required_check": None,
-            },
-            sort_keys=True,
-        )
-    if args.command == "reconcile-test-agent-validation":
-        store = AzureValidationBlobStore(
-            args.storage_account,
-            credential=validation_blob_credential(
-                args.expected_azure_client_id,
-                args.expected_azure_object_id,
-            ),
-        )
-        active = store.read_optional(ACTIVE_CONTAINER, ACTIVE_BLOB)
-        if active is None:
-            return json.dumps({"state": "NO_ACTIVE_CYCLE"}, sort_keys=True)
-        validate_lifecycle(active.value)
-        project_name = active.value["project"]["name"]
-        if not isinstance(project_name, str) or not project_name:
-            raise ContractError("Validation cleanup Project identity is missing")
-        profile = validation_runtime_profile(
-            project_name,
-            cycle_id=active.value["cycle_id"],
-        )
-        policy = load_validation_policy()
-        journal = LifecycleJournal(
-            store,
-            policy,
-            mirror_root=(
-                runtime_root() / "test-agent-validation" / "lifecycle"
-            ),
-        )
-        backend = AzureValidationCleanupBackend(
-            profile=profile,
-            runtime_topology=active.value["runtime_topology"],
-            resources=active.value["resources"],
-            token_provider=_azure_cli_token,
-        )
-        try:
-            state = ValidationReconciler(
-                journal=journal,
-                cleanup=CleanupEngine(backend),
-                policy=policy,
-            ).reconcile(
-                ownership_nonce=args.ownership_nonce,
-                holder_workflow_reference=args.holder_workflow_reference,
-                holder_app_reference=args.holder_app_reference,
-                holder_run_reference=args.holder_run_reference,
-                alert=lambda message: print(message),
-            )
-        except ContractError as error:
-            if str(error) != "Active validation lease is not stale":
-                raise
-            state = "ACTIVE"
-        return json.dumps({"state": state}, sort_keys=True)
+    if args.command == "approve-test-agent-validation":
+        return json.dumps(approve_test_agent_validation(), sort_keys=True)
     if args.command == "validate":
         validate_repository()
         return catalog_summary()
@@ -572,17 +288,16 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         profile = RuntimeProfile.from_env(args.profile)
         approved_digests = None
         if args.profile == "daily":
-            receipt = str(
-                os.environ.get("AIQ_STAGING_PROMOTION_RECEIPT") or ""
+            approved_record = str(
+                os.environ.get("AIQ_APPROVED_VALIDATION_RECORD") or ""
             ).strip()
-            if not receipt:
+            if not approved_record:
                 raise ContractError(
-                    "Daily provisioning requires a human-reviewed staging promotion receipt"
+                    "Daily provisioning requires an approved Test Agent Validation record"
                 )
-            approved_digests = validate_promotion_receipt(
-                Path(receipt),
-                hashes,
-                agent_model_contract(agents),
+            validate_approved_record_for_checkout(
+                Path(approved_record),
+                expected_repository="ninghu/agent-insights-quality",
             )
         provision_profile(
             profile=profile,
@@ -1117,18 +832,6 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         atomic_json(args.output, receipt)
         return "Staging promotion receipt created."
     raise AssertionError("unreachable")
-
-
-def _private_validation_output(path: Path) -> Path:
-    resolved = path.expanduser().resolve()
-    private = runtime_root()
-    if resolved != private and private not in resolved.parents:
-        raise ContractError(
-            "Validation candidate manifests must stay under the private runtime root"
-        )
-    return resolved
-
-
 def _run_contract_digest(
     *,
     profile_name: str,

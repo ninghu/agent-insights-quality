@@ -34,9 +34,8 @@ Add one independently fixable issue only after human review.
 12. Confirm the Agent has at least one assigned issue and daily selection uses
    `min(4, assigned issues)`.
 13. Run repository validation, Ruff, tests, and Bicep compilation.
-14. Run a fresh Test Agent Validation cycle. A changed authority redeploys and revalidates in-cycle;
-    the first pass still covers all 41, and a shared contract change invalidates all 41.
-15. Require exact issue/v0 discrimination and the protected create-once merge receipt. Never use a
-    shadow receipt or legacy staging fallback to authorize merge.
+14. Run a fresh full Test Agent Validation cycle from one exact clean commit.
+15. Require exact issue/v0 discrimination, exact cleanup, explicit human approval, and the single
+    create-once approved validation record. Never use legacy staging as a fallback.
 
 Never add a multi-root issue, compatibility alias, telemetry injection, or private data.

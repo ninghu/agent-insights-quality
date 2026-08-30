@@ -7,44 +7,20 @@
   "required": [
     "schema_version",
     "kind",
-    "cycle_id",
-    "epoch",
-    "repository",
-    "pr_number",
-    "candidate_head_sha",
-    "candidate_tree_sha",
-    "policy_manifest_digest",
-    "catalog_hashes",
-    "artifact_manifest_hash",
-    "source_tree_digest",
-    "validation_contract_digest",
+    "commit_sha",
+    "validation_digest",
     "execution_matrix_digest",
-    "runtime_topology_digest",
-    "quota_plan_digest",
     "telemetry_resource_set",
-    "test_agent_model",
     "authorities",
     "evidence_digest"
   ],
   "properties": {
     "schema_version": {"const": "1.0.0"},
     "kind": {"const": "test-agent-validation-evidence"},
-    "cycle_id": {"$ref": "#/$defs/cycleId"},
-    "epoch": {"type": "integer", "minimum": 1},
-    "repository": {"$ref": "#/$defs/repository"},
-    "pr_number": {"type": "integer", "minimum": 1},
-    "candidate_head_sha": {"$ref": "#/$defs/gitSha"},
-    "candidate_tree_sha": {"$ref": "#/$defs/gitSha"},
-    "policy_manifest_digest": {"$ref": "#/$defs/hash"},
-    "catalog_hashes": {"$ref": "#/$defs/catalogHashes"},
-    "artifact_manifest_hash": {"$ref": "#/$defs/hash"},
-    "source_tree_digest": {"$ref": "#/$defs/hash"},
-    "validation_contract_digest": {"$ref": "#/$defs/hash"},
+    "commit_sha": {"$ref": "#/$defs/gitSha"},
+    "validation_digest": {"$ref": "#/$defs/hash"},
     "execution_matrix_digest": {"$ref": "#/$defs/hash"},
-    "runtime_topology_digest": {"$ref": "#/$defs/hash"},
-    "quota_plan_digest": {"$ref": "#/$defs/hash"},
     "telemetry_resource_set": {"const": "g29"},
-    "test_agent_model": {"$ref": "#/$defs/testAgentModel"},
     "authorities": {
       "type": "array",
       "minItems": 41,
@@ -63,34 +39,6 @@
       "type": "string",
       "pattern": "^[0-9a-f]{40}$"
     },
-    "cycleId": {
-      "type": "string",
-      "pattern": "^[a-z0-9][a-z0-9-]{7,63}$"
-    },
-    "repository": {
-      "type": "string",
-      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
-    },
-    "catalogHashes": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["agents", "issues", "artifacts"],
-      "properties": {
-        "agents": {"$ref": "#/$defs/hash"},
-        "issues": {"$ref": "#/$defs/hash"},
-        "artifacts": {"$ref": "#/$defs/hash"}
-      }
-    },
-    "testAgentModel": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["deployment_name", "model_id", "model_version"],
-      "properties": {
-        "deployment_name": {"const": "gpt-5.4-mini"},
-        "model_id": {"const": "gpt-5.4-mini"},
-        "model_version": {"const": "2026-03-17"}
-      }
-    },
     "authority": {
       "type": "object",
       "additionalProperties": false,
@@ -105,7 +53,7 @@
         "source_content_digest",
         "execution_digest",
         "predicate_contract_digest",
-        "validated_head_sha",
+        "validated_commit_sha",
         "n",
         "k",
         "complete_count",
@@ -150,7 +98,7 @@
         "source_content_digest": {"$ref": "#/$defs/hash"},
         "execution_digest": {"$ref": "#/$defs/hash"},
         "predicate_contract_digest": {"$ref": "#/$defs/hash"},
-        "validated_head_sha": {"$ref": "#/$defs/gitSha"},
+        "validated_commit_sha": {"$ref": "#/$defs/gitSha"},
         "n": {"enum": [5, 7]},
         "k": {"const": 5},
         "complete_count": {"type": "integer", "minimum": 0},

@@ -9,7 +9,7 @@ license: MIT
 `r03` is the final staging run. Do not execute this workflow, create `r04`, recreate staging
 resources, or use staging as a fallback. Use
 `.github/skills/test-agent-validation/SKILL.md` for every new candidate. The remaining text is retained
-only as migration history until the external new-only Daily receipt cutover permits deletion.
+only as migration history until the external new-only Daily approved-record cutover permits deletion.
 
 1. Sync the latest default branch before changing contracts or infrastructure.
 2. Validate catalogs, generated docs, schemas, tests, Ruff, and Bicep.

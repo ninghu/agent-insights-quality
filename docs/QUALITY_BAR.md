@@ -4,9 +4,10 @@
 
 A complete daily or staging run is `PASS` when its quality score is at least `90/100`.
 
-Test Agent Validation has no quality score or `PASS`/`FAIL` report. Its merge gate requires complete
+Test Agent Validation has no quality score or `PASS`/`FAIL` report. Local validation requires complete
 baseline health, the reviewed issue `k/n` observation matrix, zero paired-v0 observations, exact
-identity and telemetry proof, protected review/check provenance, and immutable exact-clean evidence.
+identity and telemetry proof, and content-hashed exact-clean evidence. A separate explicit human
+approval creates the minimal immutable approved record; GitHub is not a validation gate.
 
 ## Quality score
 

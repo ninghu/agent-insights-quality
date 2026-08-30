@@ -5,15 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from jsonschema import Draft202012Validator
-
-from agent_insights_quality.util import ROOT, ContractError, content_hash, read_json, read_yaml
+from agent_insights_quality.util import ROOT, ContractError, read_yaml
 
 VALIDATION_CONFIG_PATH = ROOT / "config" / "test-agent-validation.yaml"
-TRUSTED_POLICY_PATH = ROOT / "config" / "test-agent-validation-policy.yaml"
-TRUSTED_POLICY_SCHEMA_PATH = (
-    ROOT / "schemas" / "test-agent-validation-policy.schema.json"
-)
 
 
 @dataclass(frozen=True)
@@ -39,14 +33,11 @@ class ValidationLimits:
     minimum_tpm_headroom: int
     active_heartbeat_seconds: int
     absolute_ttl_hours: int
-    reconciler_interval_minutes: int
 
 
 @dataclass(frozen=True)
 class ValidationPolicy:
     repository: str
-    default_branch: str
-    policy_manifest_path: str
     telemetry_resource_set: str
     test_agent_model: dict[str, str]
     authority_count: int
@@ -61,16 +52,22 @@ def load_validation_policy(
     path: Path = VALIDATION_CONFIG_PATH,
 ) -> ValidationPolicy:
     value = read_yaml(path)
+    if set(value) != {
+        "schema_version",
+        "repository",
+        "telemetry_resource_set",
+        "test_agent_model",
+        "inventory",
+        "limits",
+        "name_policy",
+        "resource_kinds",
+        "documented_project_cascade",
+    }:
+        raise ContractError("Test Agent Validation config fields are invalid")
     if value.get("schema_version") != "1.0.0":
         raise ContractError("Test Agent Validation config version is invalid")
     if value.get("repository") != "ninghu/agent-insights-quality":
         raise ContractError("Validation repository is not the reviewed public repository")
-    if value.get("default_branch") != "main":
-        raise ContractError("Validation default branch is not reviewed")
-    if value.get("policy_manifest_path") != (
-        "config/test-agent-validation-policy.yaml"
-    ):
-        raise ContractError("Validation trusted policy path is not reviewed")
     if value.get("telemetry_resource_set") != "g29":
         raise ContractError("Validation must use read-only g29 telemetry")
     if value.get("test_agent_model") != {
@@ -93,7 +90,6 @@ def load_validation_policy(
         "minimum_tpm_headroom": 8192,
         "active_heartbeat_seconds": 60,
         "absolute_ttl_hours": 72,
-        "reconciler_interval_minutes": 15,
     }
     if limits_value != expected_limits:
         raise ContractError("Validation limits differ from the reviewed policy")
@@ -114,8 +110,6 @@ def load_validation_policy(
         raise ContractError("Validation Project cascade policy is invalid")
     return ValidationPolicy(
         repository=value["repository"],
-        default_branch=value["default_branch"],
-        policy_manifest_path=value["policy_manifest_path"],
         telemetry_resource_set=value["telemetry_resource_set"],
         test_agent_model=dict(value["test_agent_model"]),
         authority_count=inventory["authorities"],
@@ -125,26 +119,6 @@ def load_validation_policy(
         resource_kinds=tuple(resource_kinds),
         documented_project_cascade=tuple(cascade),
     )
-
-
-def load_trusted_policy(
-    path: Path = TRUSTED_POLICY_PATH,
-) -> tuple[dict[str, Any], str]:
-    value = read_yaml(path)
-    schema = read_json(TRUSTED_POLICY_SCHEMA_PATH)
-    errors = sorted(
-        Draft202012Validator(schema).iter_errors(value),
-        key=lambda error: list(error.absolute_path),
-    )
-    if errors:
-        error = errors[0]
-        location = ".".join(str(item) for item in error.absolute_path) or "<root>"
-        raise ContractError(
-            f"Trusted validation policy schema error at {location}: {error.message}"
-        )
-    return value, content_hash(value)
-
-
 def _mapping(value: Any, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ContractError(f"Validation {label} must be an object")

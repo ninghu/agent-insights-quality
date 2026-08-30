@@ -9,16 +9,17 @@ private artifact root.
 | Profile | Project | Purpose |
 | --- | --- | --- |
 | `daily` | `agent-insights-quality` | Weekday qualification |
-| `staging` | `agent-insights-quality-staging` | Full qualification before promotion |
+| `staging` | `agent-insights-quality-staging` | Legacy `r03` history; do not run |
 
 `r03` is the final legacy staging run. The persistent staging row remains only while the external
-new-only Daily receipt cutover is pending; do not start another staging run or use it as fallback.
+new-only Daily approved-record cutover is pending; do not start another staging run or use it as
+fallback.
 
 ## Test Agent Validation
 
 Test Agent Validation reuses the staging account, GPT-5.4 mini deployment, ACR, storage, and read-only
 `g29` telemetry, but creates one opaque temporary Project and 41 independent Agent endpoints per
-candidate. It creates no monitor and does not run Agent Insights, Sol assessment, score/report
+clean commit. It creates no monitor and does not run Agent Insights, Sol assessment, score/report
 generation, ADX publication, email, or Daily.
 
 The executable authority is each `traffic.json` `validation_rules` contract. Its automatic digest
@@ -28,7 +29,7 @@ contract. Baseline is `5/5`; deterministic issues are `5/5` with paired-v0 `0/5`
 issues are `5/7` with paired-v0 `0/7`. `minimum_traces` keeps its Daily meaning and is never used as a
 validation attempt threshold.
 
-Before any Project create, acquire the account-wide infinite lease and record measured RPM/TPM,
+Before any Project create, acquire the account-wide OS file lock and record measured RPM/TPM,
 25-percent and absolute headroom, the complete endpoint envelope, inner model fan-out, and bounded
 concurrency. Provision at most eight, query telemetry at most four, and allow one scenario
 attempt per runtime. The shared bucket charges each request's input plus maximum output budget,
@@ -38,19 +39,20 @@ operation identity while receiving the same matrix. Evidence binds the exact dep
 derives identity from correlated telemetry, and recomputes the frozen defect predicate separately
 from completion.
 
-The lifecycle is:
+The local lifecycle is:
 
 ```text
-LEASED -> PREFLIGHT -> CREATING -> VALIDATING -> FROZEN
-  -> (REVIEWED | SHADOW_REVIEW_SKIPPED) -> REVALIDATING
-  -> FINAL_CHECKS -> CLEANING -> CLEAN -> RECEIPT_ISSUED
+LOCKED -> PREFLIGHT -> CREATING -> VALIDATING
+  -> FINAL_CHECKS -> CLEANING -> CLEAN
 ```
 
-Every mutation writes an immutable event snapshot first and then updates the active journal with the
-lease plus current ETag. A stale/expired cycle can be taken over only by the cleanup reconciler using
-a fresh lease ID, nonce, and epoch. The 72-hour expiration never extends. Candidate, receipt, and
-reconciler commands use an explicitly selected Azure CLI credential whose Storage token principal is
-checked against the workflow's attested client ID; ambient credential-chain fallback is forbidden.
+The runner holds
+`~/.aiq-runtime/agent-insights-quality/test-agent-validation/validation.lock` for the whole process.
+Every mutation atomically replaces the local active journal and writes a required content-addressed,
+append-only history snapshot. Process exit releases the lock. The next invocation must recover any
+nonterminal journal through cleanup before starting a new cycle; cleanup remains allowed after the
+fixed 72-hour execution TTL. The authenticated Azure CLI user is resolved explicitly, recorded as a
+private hash, and checked on every SDK token acquisition.
 
 Cleanup records intent first and deletes responses, conversations/sessions, Agent versions and
 Agents, Hosted deployments/identities/blueprints, connections, role assignments, cycle principals,
@@ -58,27 +60,37 @@ ACR tags and unshared manifests, then the Project. Final proof requires Project 
 resources, sessions/responses, cycle tags, or incomplete reviewed cascades. Ambiguity enters
 `CLEANUP_BLOCKED` and keeps the account unavailable.
 
-Shadow receipts bind candidate-head policy and always set `authorizes_merge=false` and
-`default_branch_trust_anchor_present=false`. Only the protected default-branch issuer can create a
-merge receipt, after re-querying the exact final PR head/tree, trusted policy/workflow/App/environment,
-one comprehensive review, targeted verification, CI, 41/41 evidence, and immutable `CLEAN` snapshot.
-Run the candidate workflow in explicit `merge` mode to produce the durable `CLEAN` handoff, then
-dispatch the protected receipt workflow with that cycle ID and exact final head. Receipt creation uses
-`If-None-Match:*`; an existing different digest fails closed.
+Run local validation with no identity, path, or SHA arguments:
 
-### External Daily receipt cutover
+```powershell
+python -m agent_insights_quality run-test-agent-validation
+```
 
-Test Agent Validation does not change Daily ownership. The separate Daily owner must first deploy and
-dry-run a **new-only** validation-receipt consumer; no process may read both legacy promotion receipts
-and validation receipts. Under the Daily quiescence lock, prove no run/provision/publication is active,
-pause the scheduler, switch the active source atomically, and remain new-only on failure.
+The command discovers the repository, open PR, exact clean commit, and runtime paths. Any commit
+change forces cleanup and a fresh full cycle. A successful run writes local evidence and CLEAN only.
+After the user explicitly approves that exact result, run:
 
-After re-verifying default-branch policy/workflow/App/check provenance, 41 current digests, and the
-immutable `CLEAN` snapshot, provision Daily once and perform only read-only readiness and registry
-reconciliation. Do not send smoke traffic. For this migration only, after readiness succeeds, the
-Daily owner may run the explicitly requested isolated `--test-run --rerun N` email-only Daily Test.
-It is external, non-gating, and writes no ADX, official report/trend, or pull request. Only then may
-legacy staging resources and code be removed forward-only; staging is never a fallback.
+```powershell
+python -m agent_insights_quality approve-test-agent-validation
+```
+
+The approval command re-reads the exact PR head and local content hashes, then create-once writes one
+minimal immutable approved record. It has no workflow, App, check, tree, topology, quota, or local-path
+fields. GitHub runs ordinary mechanical CI only and merge remains manual.
+
+### External Daily approved-record cutover
+
+The separate Daily owner must dry-run a **new-only** approved-record consumer; no process may read
+both legacy promotion receipts and approved validation records. Under the Daily quiescence lock,
+prove no run/provision/publication is active, pause the scheduler, switch the active source atomically,
+and remain new-only on failure.
+
+Daily checks out the record's exact commit and recomputes catalogs, Agent source, and the validation
+contract before provisioning. Then perform only read-only readiness and registry reconciliation; do
+not send smoke traffic. For this migration only, after readiness succeeds, the Daily owner may run
+the explicitly requested isolated `--test-run --rerun N` email-only Daily Test. It is external,
+non-gating, and writes no ADX, official report/trend, or pull request. Only then may legacy staging
+resources and code be removed forward-only; staging is never a fallback.
 
 Both use 90-day telemetry and artifact retention. The shared ADX quality-history database retains
 sanitized daily results and explanations for 730 days and keeps 90 days in hot cache.
@@ -98,7 +110,7 @@ Daily execution does not build or push images.
 ```powershell
 python -m agent_insights_quality deploy-infrastructure
 python -m agent_insights_quality deploy-analytics
-python -m agent_insights_quality provision --profile staging
+# Legacy staging provisioning is retained but must not run after r03.
 ```
 
 The full infrastructure command includes a two-node production ADX cluster and the
@@ -142,28 +154,10 @@ python -m agent_insights_quality run-full --report-date <Pacific YYYY-MM-DD> `
   --work-items $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
 ```
 
-For an isolated Agent-only change, qualify only that Agent's `v0` and all assigned issues. Existing
-Agents may reuse their latest reviewed evidence only when their content digests, mappings, and all
-shared contracts are unchanged. Shared runtime, telemetry, assessment, scoring, schema,
-infrastructure, or cross-Agent topology changes require full-catalog qualification or read-only
-re-evaluation of retained evidence when no new traffic is needed.
-
-After a complete staging `PASS` or `FAIL` report is human-reviewed, bind all 41 exact content
-digests. `INCOMPLETE` is never promotable:
-
-```powershell
-python -m agent_insights_quality create-promotion-receipt `
-  --report <private-staging-report> --manifest <private-staging-manifest> `
-  --registry <private-staging-registry> `
-  --output <private-promotion-receipt> --human-reviewed
-```
-
-Set `AIQ_STAGING_PROMOTION_RECEIPT` to that private file before provisioning `daily`.
-
-Promotion may compose newly reviewed affected-Agent evidence with the latest valid receipts for
-unchanged Agents. The composed receipt must bind every current mapping and exact digest; incomplete
-evidence is never reusable. After daily provisioning, verify the registry and endpoints read-only.
-Do not send smoke traffic that starts a new clean-window wait.
+Test Agent Validation always runs the full 41-authority matrix for one exact commit. Set
+`AIQ_APPROVED_VALIDATION_RECORD` to the private approved-record file before provisioning `daily`.
+Daily rejects a missing record, commit drift, or validation-digest drift. After provisioning, verify
+the registry and endpoints read-only. Do not send smoke traffic that starts a new clean-window wait.
 
 Provisioning writes each profile registry locally and uploads `daily.json` or `staging.json` to the
 private Azure `deployment-registries` container using Entra authentication. Every qualification run

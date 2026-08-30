@@ -7,11 +7,11 @@ from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from agent_insights_quality.util import ContractError, content_hash
-from agent_insights_quality.validation_blob import BlobRecord
+from agent_insights_quality.util import ContractError, content_hash, runtime_root
 from agent_insights_quality.validation_evidence import validate_evidence
 from agent_insights_quality.validation_lifecycle import (
     LifecycleJournal,
+    LocalRecord,
     stamp_lifecycle_digest,
     validate_topology_resource_bindings,
 )
@@ -21,80 +21,47 @@ from agent_insights_quality.validation_cleanup import CleanupResult
 
 
 def initial_lifecycle(
-    candidate: Mapping[str, Any],
+    plan: Mapping[str, Any],
     *,
     policy: ValidationPolicy,
-    policy_manifest: Mapping[str, Any],
-    policy_manifest_digest: str,
-    policy_commit_sha: str,
-    policy_ref: str,
-    lease_id: str,
     ownership_nonce: str,
-    holder_workflow_reference: str,
-    holder_app_reference: str,
+    holder_session_reference: str,
+    holder_operator_reference: str,
     holder_run_reference: str,
     account_reference: str,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     moment = (now or datetime.now(UTC)).astimezone(UTC)
-    if candidate.get("kind") != "test-agent-validation-candidate":
-        raise ContractError("Validation candidate manifest kind is invalid")
-    if candidate.get("telemetry_resource_set") != "g29":
-        raise ContractError("Validation candidate must use g29")
-    if policy_manifest.get("repository") != policy.repository:
-        raise ContractError("Validation policy manifest repository is invalid")
+    if plan.get("kind") != "test-agent-validation-plan":
+        raise ContractError("Local validation plan kind is invalid")
+    if plan.get("telemetry_resource_set") != "g29":
+        raise ContractError("Local validation must use g29")
     value = {
         "schema_version": "1.0.0",
         "kind": "test-agent-validation-lifecycle",
         "snapshot_type": "event",
-        "cycle_id": candidate["cycle_id"],
-        "epoch": 1,
+        "cycle_id": plan["cycle_id"],
         "revision": 1,
-        "state": "LEASED",
-        "repository": candidate["repository"],
-        "pr_number": candidate["pr_number"],
-        "git": {
-            "initial_head_sha": candidate["candidate_head_sha"],
-            "initial_tree_sha": candidate["candidate_tree_sha"],
-            "current_head_sha": candidate["candidate_head_sha"],
-            "current_tree_sha": candidate["candidate_tree_sha"],
-            "frozen_head_sha": None,
-            "frozen_tree_sha": None,
-            "final_head_sha": None,
-            "final_tree_sha": None,
-        },
+        "state": "LOCKED",
+        "repository": plan["repository"],
+        "pr_number": plan["pr_number"],
+        "commit_sha": plan["commit_sha"],
         "digests": {
-            "artifact_manifest_hash": candidate["artifact_manifest_hash"],
-            "source_tree_digest": candidate["source_tree_digest"],
-            "validation_contract_digest": candidate[
-                "validation_contract_digest"
-            ],
-            "execution_matrix_digest": candidate["execution_matrix_digest"],
-            "runtime_topology_digest": candidate["runtime_topology_digest"],
+            "validation_digest": plan["validation_digest"],
+            "execution_matrix_digest": plan["execution_matrix_digest"],
+            "runtime_topology_digest": plan["planned_topology_digest"],
             "quota_plan_digest": None,
             "evidence_digest": None,
         },
-        "policy_manifest": {
-            "repository": policy.repository,
-            "path": policy.policy_manifest_path,
-            "ref": policy_ref,
-            "commit_sha": policy_commit_sha,
-            "content_digest": policy_manifest_digest,
+        "operator": {
+            "session_reference": holder_session_reference,
+            "operator_reference": holder_operator_reference,
+            "run_reference": holder_run_reference,
         },
-        "lease": {
-            "epoch": 1,
-            "lease_id": lease_id,
-            "ownership_nonce": ownership_nonce,
-            "holder_workflow_reference": holder_workflow_reference,
-            "holder_app_reference": holder_app_reference,
-            "holder_run_reference": holder_run_reference,
-            "acquired_at": moment.isoformat(),
-            "heartbeat_at": moment.isoformat(),
-            "state": "held",
-        },
+        "ownership_nonce": ownership_nonce,
         "capacity": None,
         "project": {
-            "name": candidate["project_name"],
+            "name": plan["project_name"],
             "provider_id": None,
             "endpoint_reference": None,
             "state": "absent",
@@ -119,8 +86,6 @@ def initial_lifecycle(
             "agents": [],
         },
         "resources": [],
-        "scope_freeze": None,
-        "review": None,
         "cleanup": {
             "status": "not_started",
             "plan_hash": None,
@@ -130,16 +95,16 @@ def initial_lifecycle(
             "residue_ids": [],
             "verification_at": None,
         },
-        "event_snapshot": None,
-        "clean_snapshot": None,
+        "event_reference": None,
+        "clean_reference": None,
         "evidence_reference": None,
-        "receipt_reference": None,
+        "started_at": moment.isoformat(),
         "last_activity_at": moment.isoformat(),
         "absolute_expires_at": (
             moment + timedelta(hours=policy.limits.absolute_ttl_hours)
         ).isoformat(),
         "failure": None,
-        "previous_etag": None,
+        "previous_journal_digest": None,
         "journal_digest": "",
     }
     return stamp_lifecycle_digest(value)
@@ -150,22 +115,20 @@ class ValidationCycleController:
         self,
         journal: LifecycleJournal,
         *,
-        lease_id: str,
-        active: BlobRecord,
+        active: LocalRecord,
     ) -> None:
         self._journal = journal
-        self._lease_id = lease_id
         self._active = active
         self._lock = threading.RLock()
 
     @property
-    def active(self) -> BlobRecord:
+    def active(self) -> LocalRecord:
         return self._active
 
-    def heartbeat(self, *, now: datetime) -> BlobRecord:
+    def heartbeat(self, *, now: datetime) -> LocalRecord:
         return self._commit(self._active.value["state"], {}, now)
 
-    def preflight(self, plan: CapacityPlan, *, now: datetime) -> BlobRecord:
+    def preflight(self, plan: CapacityPlan, *, now: datetime) -> LocalRecord:
         payload = asdict(plan)
         payload["plan_digest"] = plan.plan_digest
         return self._commit(
@@ -183,7 +146,7 @@ class ValidationCycleController:
         name: str,
         provider_id: str,
         now: datetime,
-    ) -> BlobRecord:
+    ) -> LocalRecord:
         project = copy.deepcopy(self._active.value["project"])
         project.update(
             {
@@ -201,7 +164,7 @@ class ValidationCycleController:
                 authority_id=None,
                 deterministic_name=name,
                 provider_id=provider_id,
-                ownership_nonce=self._active.value["lease"]["ownership_nonce"],
+                ownership_nonce=self._active.value["ownership_nonce"],
                 state="create_intent",
                 cleanup_method="explicit",
                 now=now,
@@ -222,7 +185,7 @@ class ValidationCycleController:
         role_assignment_ids: list[str],
         resource_observations: Mapping[str, str],
         now: datetime,
-    ) -> BlobRecord:
+    ) -> LocalRecord:
         project = copy.deepcopy(self._active.value["project"])
         project.update(
             {
@@ -263,7 +226,7 @@ class ValidationCycleController:
         provider_ids: list[str],
         *,
         now: datetime,
-    ) -> BlobRecord:
+    ) -> LocalRecord:
         with self._lock:
             expected = set(provider_ids)
             resources = []
@@ -294,7 +257,7 @@ class ValidationCycleController:
         provider_id: str,
         cleanup_method: str,
         now: datetime,
-    ) -> BlobRecord:
+    ) -> LocalRecord:
         with self._lock:
             if any(
                 item["provider_id"] == provider_id
@@ -309,9 +272,7 @@ class ValidationCycleController:
                     authority_id=authority_id,
                     deterministic_name=deterministic_name,
                     provider_id=provider_id,
-                    ownership_nonce=self._active.value["lease"][
-                        "ownership_nonce"
-                    ],
+                    ownership_nonce=self._active.value["ownership_nonce"],
                     state="create_intent",
                     cleanup_method=cleanup_method,
                     now=now,
@@ -323,7 +284,7 @@ class ValidationCycleController:
                 now,
             )
 
-    def resource_created(self, provider_id: str, *, now: datetime) -> BlobRecord:
+    def resource_created(self, provider_id: str, *, now: datetime) -> LocalRecord:
         with self._lock:
             resources = _mark_created(
                 self._active.value["resources"],
@@ -341,7 +302,7 @@ class ValidationCycleController:
         event: Mapping[str, Any],
         *,
         now: datetime,
-    ) -> BlobRecord:
+    ) -> LocalRecord:
         state = event.get("state")
         intent_reference = str(event.get("intent_reference") or "")
         if not intent_reference:
@@ -422,7 +383,7 @@ class ValidationCycleController:
         runtime_agents: list[dict[str, Any]],
         *,
         now: datetime,
-    ) -> BlobRecord:
+    ) -> LocalRecord:
         if len(runtime_agents) != 41:
             raise ContractError("Validation requires 41 deployed Agent endpoints")
         topology = {
@@ -455,153 +416,13 @@ class ValidationCycleController:
             now,
         )
 
-    def freeze(
-        self,
-        *,
-        evidence: BlobRecord,
-        head_sha: str,
-        tree_sha: str,
-        now: datetime,
-    ) -> BlobRecord:
-        if head_sha != self._active.value["git"]["current_head_sha"]:
-            raise ContractError("Scope freeze head differs from the validated head")
-        validate_evidence(
-            evidence.value,
-            runtime_topology=self._active.value["runtime_topology"],
-        )
-        if evidence.value["candidate_head_sha"] != head_sha:
-            raise ContractError("Scope freeze evidence belongs to another head")
-        evidence_digest = evidence.value.get("evidence_digest")
-        if not isinstance(evidence_digest, str) or not evidence_digest.startswith(
-            "sha256:"
-        ):
-            raise ContractError("Validation evidence Blob digest is invalid")
-        scope = {
-            "head_sha": head_sha,
-            "tree_sha": tree_sha,
-            "frozen_at": now.astimezone(UTC).isoformat(),
-            "source_tree_digest": self._active.value["digests"][
-                "source_tree_digest"
-            ],
-            "validation_contract_digest": self._active.value["digests"][
-                "validation_contract_digest"
-            ],
-            "changed_authority_ids": [],
-            "comprehensive_review_required": True,
-        }
-        return self._commit(
-            "FROZEN",
-            {
-                "git": {
-                    "frozen_head_sha": head_sha,
-                    "frozen_tree_sha": tree_sha,
-                },
-                "digests": {"evidence_digest": evidence_digest},
-                "evidence_reference": {
-                    "path": f"{evidence.container}/{evidence.name}",
-                    "version_id": evidence.version_id,
-                    "etag": evidence.etag,
-                    "digest": evidence_digest,
-                },
-                "scope_freeze": scope,
-            },
-            now,
-        )
-
-    def receipt_issued(
-        self,
-        receipt: BlobRecord,
-        *,
-        now: datetime,
-    ) -> BlobRecord:
-        digest = receipt.value.get("receipt_digest")
-        if not isinstance(digest, str) or not digest.startswith("sha256:"):
-            raise ContractError("Validation receipt Blob digest is invalid")
-        if (
-            receipt.value.get("cycle_id") != self._active.value["cycle_id"]
-            or receipt.value.get("epoch") != self._active.value["epoch"]
-        ):
-            raise ContractError("Validation receipt belongs to another lifecycle")
-        self._active = self._journal.complete_receipt_handoff(
-            self._active,
-            receipt,
-            lease_id=self._lease_id,
-            now=now,
-        )
-        return self._active
-
-    def record_review(
-        self,
-        *,
-        mode: str,
-        check_reference: str | None,
-        findings_digest: str | None,
-        now: datetime,
-    ) -> BlobRecord:
-        if self._active.value["state"] != "FROZEN":
-            raise ContractError("Validation permits exactly one frozen-scope review")
-        if mode not in {"comprehensive", "shadow_skipped"}:
-            raise ContractError("Validation review mode is invalid")
-        if mode == "comprehensive" and (
-            not check_reference or not findings_digest
-        ):
-            raise ContractError("Comprehensive validation review proof is incomplete")
-        if mode == "shadow_skipped" and (
-            check_reference is not None or findings_digest is not None
-        ):
-            raise ContractError("Skipped shadow review cannot claim review proof")
-        state = "REVIEWED" if mode == "comprehensive" else "SHADOW_REVIEW_SKIPPED"
-        return self._commit(
-            state,
-            {
-                "review": {
-                    "mode": mode,
-                    "head_sha": self._active.value["git"]["frozen_head_sha"],
-                    "check_reference": check_reference,
-                    "findings_digest": findings_digest,
-                    "completed_at": now.astimezone(UTC).isoformat(),
-                }
-            },
-            now,
-        )
-
-    def begin_revalidation(
-        self,
-        *,
-        head_sha: str,
-        tree_sha: str,
-        changed_authority_ids: list[str],
-        shared_contract_changed: bool,
-        now: datetime,
-    ) -> BlobRecord:
-        if shared_contract_changed:
-            raise ContractError(
-                "Shared validation contract changed; cleanup and start a new cycle"
-            )
-        if len(changed_authority_ids) != len(set(changed_authority_ids)):
-            raise ContractError("Revalidation authority IDs must be unique")
-        scope = copy.deepcopy(self._active.value["scope_freeze"])
-        scope["changed_authority_ids"] = sorted(changed_authority_ids)
-        return self._commit(
-            "REVALIDATING",
-            {
-                "git": {
-                    "current_head_sha": head_sha,
-                    "current_tree_sha": tree_sha,
-                },
-                "scope_freeze": scope,
-            },
-            now,
-        )
-
     def final_checks(
         self,
         *,
-        final_head_sha: str,
-        final_tree_sha: str,
-        evidence: BlobRecord,
+        commit_sha: str,
+        evidence: LocalRecord,
         now: datetime,
-    ) -> BlobRecord:
+    ) -> LocalRecord:
         evidence_digest = evidence.value.get("evidence_digest")
         validate_evidence(
             evidence.value,
@@ -609,23 +430,18 @@ class ValidationCycleController:
         )
         if (
             not isinstance(evidence_digest, str)
-            or evidence.value["candidate_head_sha"] != final_head_sha
+            or evidence.value["commit_sha"] != commit_sha
+            or commit_sha != self._active.value["commit_sha"]
         ):
             raise ContractError("Final validation evidence is not current")
         return self._commit(
             "FINAL_CHECKS",
             {
-                "git": {
-                    "current_head_sha": final_head_sha,
-                    "current_tree_sha": final_tree_sha,
-                    "final_head_sha": final_head_sha,
-                    "final_tree_sha": final_tree_sha,
-                },
                 "digests": {"evidence_digest": evidence_digest},
                 "evidence_reference": {
-                    "path": f"{evidence.container}/{evidence.name}",
-                    "version_id": evidence.version_id,
-                    "etag": evidence.etag,
+                    "path": evidence.path.relative_to(
+                        runtime_root() / "test-agent-validation"
+                    ).as_posix(),
                     "digest": evidence_digest,
                 },
             },
@@ -637,7 +453,7 @@ class ValidationCycleController:
         *,
         failure: Mapping[str, Any] | None,
         now: datetime,
-    ) -> BlobRecord:
+    ) -> LocalRecord:
         updates: dict[str, Any] = {
             "cleanup": {
                 "status": "in_progress",
@@ -686,7 +502,6 @@ class ValidationCycleController:
         )
         committed = self._journal.commit(
             self._active,
-            lease_id=self._lease_id,
             next_state=state,
             updates={
                 "resources": resources,
@@ -695,29 +510,36 @@ class ValidationCycleController:
             },
             now=now,
         )
-        self._active = committed.active
-        if state == "FAILED_CLEAN":
-            self._active = self._journal.release(
-                self._active,
-                lease_id=self._lease_id,
-                now=now,
-            )
+        self._active = committed
         return committed
+
+    def mark_cleanup_blocked(self, *, now: datetime) -> LocalRecord:
+        return self._commit(
+            "CLEANUP_BLOCKED",
+            {
+                "cleanup": {
+                    "status": "ambiguous",
+                    "exact_clean": False,
+                    "residue_ids": ["cleanup_unverified"],
+                    "verification_at": now.astimezone(UTC).isoformat(),
+                }
+            },
+            now,
+        )
 
     def _commit(
         self,
         state: str,
         updates: Mapping[str, Any],
         now: datetime,
-    ) -> BlobRecord:
+    ) -> LocalRecord:
         with self._lock:
             self._active = self._journal.commit(
                 self._active,
-                lease_id=self._lease_id,
                 next_state=state,
                 updates=updates,
                 now=now,
-            ).active
+            )
             return self._active
 
 

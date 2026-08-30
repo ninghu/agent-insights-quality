@@ -81,7 +81,7 @@ def test_validation_project_bicep_creates_no_monitor_or_insights_run() -> None:
 def test_project_children_have_deterministic_intents_before_bicep() -> None:
     provisioner = ValidationProjectProvisioner(
         _staging_profile(),
-        automation_principal_id="synthetic-automation-principal",
+        local_operator_id="synthetic-local-operator",
         policy=load_validation_policy(),
     )
     intents = provisioner.resource_intents(
@@ -102,7 +102,7 @@ def test_project_children_have_deterministic_intents_before_bicep() -> None:
     bicep = (
         ROOT / "infra" / "modules" / "validation-project.bicep"
     ).read_text(encoding="utf-8")
-    assert "automationProjectManagerName" in bicep
+    assert "validationOperatorProjectManagerName" in bicep
     assert "appInsightsReaderName" in bicep
 
 

@@ -69,8 +69,10 @@ paths, create a pull request, or enable auto-merge. Stop after importing the pro
 private run directory. Scheduled official runs never pass `--test-run`.
 
 The runner executes five Agents concurrently and versions sequentially within each Agent. Complete
-runs use the reviewed score threshold of 90. Full staging remains 36 issues plus five baselines,
-41 packages total.
+runs use the reviewed score threshold of 90. Daily provisioning is new-only: it requires
+`AIQ_APPROVED_VALIDATION_RECORD`, checks out that record's exact commit, and recomputes the validation
+digest. It never falls back to a legacy staging promotion receipt. Local Test Agent Validation covers
+all 36 issues plus five baselines outside this Daily workflow.
 
 Any `inconclusive` baseline assessment or `INCOMPLETE` issue assessment makes the whole run
 `INCOMPLETE` with no numeric quality score.

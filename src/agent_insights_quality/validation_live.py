@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -24,6 +25,7 @@ class FoundryScenarioAttemptRunner:
         endpoint_costs: Mapping[str, EndpointCost],
         stabilization_seconds: int,
         record_resource: Callable[[dict[str, Any]], None],
+        record_duration: Callable[[str, float], None] = lambda _stage, _value: None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         if stabilization_seconds <= 0:
@@ -32,6 +34,7 @@ class FoundryScenarioAttemptRunner:
         self._endpoint_costs = dict(endpoint_costs)
         self._stabilization_seconds = stabilization_seconds
         self._record_resource = record_resource
+        self._record_duration = record_duration
         self._now = now
 
     def run(
@@ -100,6 +103,7 @@ class FoundryScenarioAttemptRunner:
             for _, step in raw_steps
         ]
         started = self._now().astimezone(UTC)
+        endpoint_started = time.monotonic()
         response_references: list[str] = []
         semantic_results: list[tuple[int, int]] = []
         usable_results: list[bool] = []
@@ -313,6 +317,10 @@ class FoundryScenarioAttemptRunner:
         else:
             raise ContractError("Validation target runtime kind is not reviewed")
         completed = self._now().astimezone(UTC)
+        self._record_duration(
+            "endpoint_model_seconds",
+            time.monotonic() - endpoint_started,
+        )
         invocation = InvocationEvidence(
             operation_ids=(),
             response_references=tuple(response_references),
@@ -325,6 +333,7 @@ class FoundryScenarioAttemptRunner:
             semantic_assertion_count=sum(item[0] for item in semantic_results),
             semantic_assertions_passed=sum(item[1] for item in semantic_results),
         )
+        telemetry_started = time.monotonic()
         with scheduler.telemetry_query():
             operation_ids = self._runtime.wait_for_telemetry(
                 agent_name=target.runtime_agent_name,
@@ -357,6 +366,10 @@ class FoundryScenarioAttemptRunner:
                 stabilization_seconds=self._stabilization_seconds,
                 on_first_pass=lambda: None,
             )
+        self._record_duration(
+            "ingestion_kql_seconds",
+            time.monotonic() - telemetry_started,
+        )
         if len(trace_results) != len(raw_steps):
             raise ContractError("Validation trace evidence step count is invalid")
         if len(identity_results) != len(raw_steps):

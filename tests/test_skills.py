@@ -79,9 +79,9 @@ def test_new_issue_skill_covers_complete_reviewed_contract() -> None:
         "deterministic packaging",
         "catalogs/AGENT_CATALOG.yaml",
         "previous Agent count, issue count, version count",
-        "fresh Test Agent Validation cycle",
-        "protected create-once merge receipt",
-        "legacy staging fallback",
+        "fresh full Test Agent Validation cycle",
+        "single create-once approved validation record",
+        "Never use legacy staging as a fallback",
     ):
         assert requirement in normalized
 
@@ -106,8 +106,8 @@ def test_onboard_test_agent_skill_covers_topology_and_baseline_safety() -> None:
         "privacy-safe trace proof",
         "baseline ownership",
         "fixed validation scenarios",
-        "protected create-once merge receipt",
-        "legacy staging fallback",
+        "single approved validation record",
+        "never use legacy staging as a fallback",
     ):
         assert requirement in normalized
 
@@ -135,24 +135,23 @@ def test_onboarding_schema_minimums_match_one_issue_contract() -> None:
     assert versions["minProperties"] == 2
 
 
-def test_validation_skill_enforces_report_free_protected_gate() -> None:
+def test_validation_skill_enforces_local_report_free_approval() -> None:
     skill = _text(".github/skills/test-agent-validation/SKILL.md")
     normalized = " ".join(skill.split())
     for requirement in (
-        "report-free candidate gate",
+        "local, report-free validation",
         "Baselines are `5/5`",
         "deterministic issues are `5/5`",
         "model-mediated issues are `5/7`",
         "Never infer mode",
-        "account-wide infinite Blob lease",
-        "current ETag",
+        "account-wide OS file lock",
         "one opaque temporary Project",
         "41 independently named Agent endpoints",
         "Application Insights",
         "CLEANUP_BLOCKED",
-        "default_branch_trust_anchor_present=false",
-        "authorizes_merge=false",
-        "create-once",
+        "approve-test-agent-validation",
+        "minimal immutable approved record",
+        "Merge remains manual",
     ):
         assert requirement in normalized
     legacy = " ".join(

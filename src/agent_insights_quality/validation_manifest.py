@@ -40,42 +40,36 @@ def authority_specs(
     return values
 
 
-def prepare_candidate_manifest(
+def prepare_validation_plan(
     *,
     agents: Mapping[str, Any],
     issues: Mapping[str, Any],
     policy: ValidationPolicy,
     repository: str,
     pr_number: int,
-    candidate_head_sha: str,
-    candidate_tree_sha: str,
-    workflow_run_id: str,
+    commit_sha: str,
+    local_run_id: str,
 ) -> dict[str, Any]:
     if repository != policy.repository:
-        raise ContractError("Candidate repository does not match validation policy")
+        raise ContractError("Repository does not match validation policy")
     if (
         pr_number < 1
-        or not _git_sha(candidate_head_sha)
-        or not _git_sha(candidate_tree_sha)
-        or not workflow_run_id
+        or not _git_sha(commit_sha)
+        or not local_run_id
     ):
-        raise ContractError("Candidate Git or workflow identity is invalid")
+        raise ContractError("Local validation identity is invalid")
     authorities = authority_specs(agents, issues)
     suffix = opaque_cycle_suffix(
         repository=repository,
         pr_number=pr_number,
-        candidate_head_sha=candidate_head_sha,
-        run_id=workflow_run_id,
+        commit_sha=commit_sha,
+        run_id=local_run_id,
     )
     topology = plan_runtime_topology(
         authorities,
         cycle_suffix=suffix,
         policy=policy,
     )
-    hashes = catalog_hashes(dict(agents), dict(issues))
-    source_digests = {
-        item.authority_id: item.source_content_digest for item in authorities
-    }
     execution_digests = {
         item.authority_id: item.execution_digest for item in authorities
     }
@@ -86,59 +80,20 @@ def prepare_candidate_manifest(
         for authority in authorities
         for scenario in authority.validation_rules["scenarios"]
     )
-    validation_contract_files = [
-        ROOT / "config" / "test-agent-validation.yaml",
-        ROOT / "config" / "test-agent-validation-policy.yaml",
-        *sorted(ROOT.glob("schemas/test-agent-validation-*.schema.json")),
-        ROOT / "schemas" / "agent-catalog.schema.json",
-        ROOT / "schemas" / "issue-catalog.schema.json",
-        ROOT / "schemas" / "prompt-traffic.schema.json",
-        ROOT / "src" / "agent_insights_quality" / "live.py",
-        ROOT / "src" / "agent_insights_quality" / "provisioning.py",
-        ROOT / "src" / "agent_insights_quality" / "profiles.py",
-        ROOT / "src" / "agent_insights_quality" / "util.py",
-        *sorted(
-            (ROOT / "src" / "agent_insights_quality").glob("validation_*.py")
-        ),
-        ROOT / "infra" / "modules" / "validation-project.bicep",
-        ROOT / ".github" / "workflows" / "test-agent-validation.yml",
-        ROOT
-        / ".github"
-        / "workflows"
-        / "test-agent-validation-receipt.yml",
-        ROOT
-        / ".github"
-        / "workflows"
-        / "test-agent-validation-reconciler.yml",
-        ROOT
-        / ".github"
-        / "workflows"
-        / "test-agent-validation-review.yml",
-    ]
+    validation_digest = current_validation_digest(agents, issues)
     return {
         "schema_version": "1.0.0",
-        "kind": "test-agent-validation-candidate",
+        "kind": "test-agent-validation-plan",
         "cycle_id": f"validation-{suffix}",
         "repository": repository,
         "pr_number": pr_number,
-        "candidate_head_sha": candidate_head_sha,
-        "candidate_tree_sha": candidate_tree_sha,
+        "commit_sha": commit_sha,
         "project_name": validation_project_name(suffix, policy=policy),
         "telemetry_resource_set": policy.telemetry_resource_set,
         "test_agent_model": policy.test_agent_model,
-        "catalog_hashes": hashes,
-        "artifact_manifest_hash": hashes["artifacts"],
-        "source_content_digests": source_digests,
-        "source_tree_digest": content_hash(source_digests),
-        "execution_digests": execution_digests,
+        "validation_digest": validation_digest,
         "execution_matrix_digest": content_hash(execution_digests),
-        "validation_contract_digest": content_hash(
-            {
-                path.relative_to(ROOT).as_posix(): file_hash(path)
-                for path in validation_contract_files
-            }
-        ),
-        "runtime_topology_digest": content_hash(
+        "planned_topology_digest": content_hash(
             [
                 {
                     "authority_id": item.authority_id,
@@ -172,41 +127,22 @@ def prepare_candidate_manifest(
             }
             for item, authority in zip(topology, authorities, strict=True)
         ],
-        "manifest_digest": "",
     }
 
 
-def stamp_candidate_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
-    result = dict(value)
-    result["manifest_digest"] = ""
-    result["manifest_digest"] = content_hash(
-        {key: item for key, item in result.items() if key != "manifest_digest"}
-    )
-    return result
-
-
-def validate_candidate_manifest(
+def validate_validation_plan(
     value: Mapping[str, Any],
     *,
     agents: Mapping[str, Any],
     issues: Mapping[str, Any],
     policy: ValidationPolicy,
 ) -> None:
-    digest = value.get("manifest_digest")
-    if digest != content_hash(
-        {
-            key: item
-            for key, item in value.items()
-            if key != "manifest_digest"
-        }
-    ):
-        raise ContractError("Validation candidate manifest digest is stale")
     current = {
         item.authority_id: item for item in authority_specs(agents, issues)
     }
     authorities = value.get("authorities")
     if (
-        value.get("kind") != "test-agent-validation-candidate"
+        value.get("kind") != "test-agent-validation-plan"
         or value.get("repository") != policy.repository
         or value.get("telemetry_resource_set") != "g29"
         or not isinstance(authorities, list)
@@ -218,7 +154,7 @@ def validate_candidate_manifest(
         }
         != set(current)
     ):
-        raise ContractError("Validation candidate manifest inventory is invalid")
+        raise ContractError("Local validation plan inventory is invalid")
     for item in authorities:
         authority_id = item["authority_id"]
         expected = current[authority_id]
@@ -230,10 +166,54 @@ def validate_candidate_manifest(
             or item["framework"] != expected.framework
         ):
             raise ContractError(
-                f"{authority_id} candidate authority no longer matches repository"
+                f"{authority_id} plan no longer matches repository"
             )
-    if value.get("catalog_hashes") != catalog_hashes(dict(agents), dict(issues)):
-        raise ContractError("Validation candidate catalog hashes are stale")
+    execution = {
+        authority_id: item.execution_digest
+        for authority_id, item in current.items()
+    }
+    if value.get("execution_matrix_digest") != content_hash(execution):
+        raise ContractError("Local validation execution matrix is stale")
+    if value.get("validation_digest") != current_validation_digest(agents, issues):
+        raise ContractError("Local validation contract is stale")
+
+
+def current_validation_digest(
+    agents: Mapping[str, Any],
+    issues: Mapping[str, Any],
+) -> str:
+    sources = {
+        item.authority_id: item.source_content_digest
+        for item in authority_specs(agents, issues)
+    }
+    return content_hash(
+        {
+            "contracts": {
+                path.relative_to(ROOT).as_posix(): file_hash(path)
+                for path in _validation_contract_files()
+            },
+            "catalog_hashes": catalog_hashes(dict(agents), dict(issues)),
+            "source_content_digests": sources,
+        }
+    )
+
+
+def _validation_contract_files() -> list[Path]:
+    return [
+        ROOT / "config" / "test-agent-validation.yaml",
+        *sorted(ROOT.glob("schemas/test-agent-validation-*.schema.json")),
+        ROOT / "schemas" / "agent-catalog.schema.json",
+        ROOT / "schemas" / "issue-catalog.schema.json",
+        ROOT / "schemas" / "prompt-traffic.schema.json",
+        ROOT / "src" / "agent_insights_quality" / "live.py",
+        ROOT / "src" / "agent_insights_quality" / "provisioning.py",
+        ROOT / "src" / "agent_insights_quality" / "profiles.py",
+        ROOT / "src" / "agent_insights_quality" / "util.py",
+        *sorted(
+            (ROOT / "src" / "agent_insights_quality").glob("validation_*.py")
+        ),
+        ROOT / "infra" / "modules" / "validation-project.bicep",
+    ]
 
 
 def validation_endpoint_costs(

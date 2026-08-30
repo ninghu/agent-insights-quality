@@ -4,10 +4,10 @@ instructions: |
   complete prompt payloads, private work-item content, or real customer data.
   Test traffic must invoke deployed Agent endpoints.
   Application Insights is read-only and direct trace injection is forbidden.
-  Test Agent Validation is a report-free merge gate. It must use the reviewed
+  Test Agent Validation is a local, report-free process. It must use the reviewed
   validation mode and fixed attempts, create no monitor, run no Agent Insights
-  assessment, and issue no merge authorization without protected default-branch
-  policy, exact final-head checks, 41/41 evidence, and immutable CLEAN proof.
+  assessment, and publish no approved record without exact 41/41 evidence,
+  exact cleanup, and explicit human approval.
   Treat AGENT_CATALOG.yaml and ISSUE_CATALOG.yaml as human-reviewed contracts.
   Follow the repository-wide maintenance and evidence rules in AGENTS.md.
 
@@ -18,8 +18,6 @@ scripts:
     command: python -m pytest
   - name: Run Ruff
     command: python -m ruff check .
-  - name: Validate Test Agent rules
-    command: python -m agent_insights_quality generate-test-agent-validation-rules --check
 
 automation:
   auto_issue_session: true

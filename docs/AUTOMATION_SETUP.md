@@ -9,10 +9,9 @@
 - deployed Foundry Agent endpoint access;
 - read access to one privately configured Azure Boards saved query;
 - Storage Blob Data Reader access to the private `deployment-registries` container;
-- a protected OIDC service principal with Foundry Project Manager on the validation account,
-  Monitoring Reader on staging `g29`, ACR push, and container-scoped Blob contributor access only to
-  `test-agent-validation-lifecycle`, `test-agent-validation-snapshots`, and
-  `test-agent-validation-receipts`;
+- an authenticated local Azure CLI user with Foundry Project Manager on the validation account,
+  Monitoring Reader on staging `g29`, ACR push, and Blob contributor access for the immutable
+  `test-agent-validation-approved-records` container;
 - ADX Database Viewer and Ingestor access to the fixed quality analytics database;
 - one email capability with explicit HTML support.
 
@@ -25,8 +24,8 @@ During a reviewed delivery test, a private
 `~/.aiq-runtime/agent-insights-quality/config/email-recipient.json` override may target one Microsoft
 mailbox. Official runs ignore this override and always use the committed team recipient.
 
-Official Daily does not need work-item mutation, release, deployment, or mailbox search capabilities.
-The separate validation execution identity has only the deployment and cleanup rights listed above.
+Official Daily does not need work-item mutation, release, or mailbox search capabilities. Local Test
+Agent Validation uses the explicitly resolved Azure CLI user for deployment and cleanup.
 Keep the Boards query URL and fetched work-item snapshot private; neither belongs in repository
 configuration or generated reports. Deployment registries and run state live under the durable
 user-level `~/.aiq-runtime/agent-insights-quality/` root so scheduled worktrees share approved state.
@@ -35,20 +34,17 @@ need Storage Blob Data Contributor, while qualification-only operators need Stor
 ADX publication receipts and the rendered dashboard import file also stay under this durable private
 root. Daily email uses the reviewed public `https://aka.ms/agent-insights/quality` short link.
 
-Test Agent Validation uses protected `test-agent-validation-review` and
-`test-agent-validation-receipt` environments for the default-branch review attestation and merge
-issuer. Candidate execution/reconciliation and the protected workflows use different OIDC service
-principals. Supply their private object IDs to one-time infrastructure
-deployment as `AIQ_VALIDATION_PRINCIPAL_ID` and `AIQ_VALIDATION_RECEIPT_PRINCIPAL_ID`; never commit
-those values, and configure the matching client IDs as `AIQ_VALIDATION_CLIENT_ID` and
-`AIQ_VALIDATION_RECEIPT_CLIENT_ID`. Every Blob token is checked against the expected tenant, client,
-and object identity. Candidate/reconciler identity writes lifecycle, snapshots, and shadow receipts
-and can read merge receipts for interrupted handoff recovery. Protected receipt identity writes the
-lifecycle handoff event, immutable snapshots, and the merge-receipt container.
-The active lifecycle Blob is infinitely leased; all writes use the lease plus current ETag. Immutable
-event/CLEAN snapshots and receipts require Blob versioning and immutable storage with versioning.
-The cleanup-only reconciler runs every 15 minutes and may take over only after a stale heartbeat or
-the fixed 72-hour absolute expiration.
+Test Agent Validation has no runner, GitHub environment, OIDC principal, required check, or remote
+reconciler. Every worktree uses the same OS lock and local state under
+`~/.aiq-runtime/agent-insights-quality/test-agent-validation/`. The active journal is replaced
+atomically; required content-addressed history, evidence, and CLEAN files stay local. Process exit
+releases the lock, and the next invocation resumes cleanup before starting a new cycle. The 72-hour
+execution TTL never prevents cleanup.
+
+Only the final approved validation record uses Blob. The storage account must have versioning and the
+`test-agent-validation-approved-records` container must have immutable storage with versioning.
+The local approval command verifies the Azure CLI token remains bound to the resolved user on every
+SDK token acquisition. No client secret, service principal, or ambient credential chain is accepted.
 
 ## Readiness
 

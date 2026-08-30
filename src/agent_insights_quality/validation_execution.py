@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any, Iterator
 
-from agent_insights_quality.util import ContractError, content_hash
+from agent_insights_quality.util import ContractError, content_hash, read_json
 from agent_insights_quality.validation_cycle import ValidationCycleController
-from agent_insights_quality.validation_blob import BlobRecord
 from agent_insights_quality.validation_cleanup import (
     CleanupBackend,
     CleanupEngine,
@@ -16,11 +16,11 @@ from agent_insights_quality.validation_cleanup import (
     build_cleanup_plan,
 )
 from agent_insights_quality.validation_evidence import (
-    EvidenceBlobStore,
     persist_evidence,
     stamp_evidence_digests,
     validate_evidence,
 )
+from agent_insights_quality.validation_lifecycle import LocalRecord
 from agent_insights_quality.validation_provisioning import (
     FoundryAuthorityDeployer,
     ProjectDeployment,
@@ -41,9 +41,9 @@ from agent_insights_quality.validation_runtime import (
 )
 
 
-def execute_initial_candidate_pass(
+def execute_validation_plan(
     *,
-    candidate: Mapping[str, Any],
+    plan: Mapping[str, Any],
     authorities: list[AuthoritySpec],
     capacity_plan: CapacityPlan,
     controller: ValidationCycleController,
@@ -51,15 +51,16 @@ def execute_initial_candidate_pass(
     deployer_factory: Callable[[ProjectDeployment], FoundryAuthorityDeployer],
     runner: ScenarioAttemptRunner,
     scheduler: ValidationScheduler,
-    evidence_store: EvidenceBlobStore,
-    policy_manifest_digest: str,
     policy: ValidationPolicy,
     model_contract: Mapping[str, Any],
+    assert_commit: Callable[[], None],
+    record_duration: Callable[[str, float], None] = lambda _stage, _value: None,
+    monotonic: Callable[[], float] = time.monotonic,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
-) -> tuple[dict[str, Any], BlobRecord]:
+) -> tuple[dict[str, Any], LocalRecord]:
     try:
-        return _execute_initial_candidate_pass(
-            candidate=candidate,
+        return _execute_validation_plan(
+            plan=plan,
             authorities=authorities,
             capacity_plan=capacity_plan,
             controller=controller,
@@ -67,10 +68,11 @@ def execute_initial_candidate_pass(
             deployer_factory=deployer_factory,
             runner=runner,
             scheduler=scheduler,
-            evidence_store=evidence_store,
-            policy_manifest_digest=policy_manifest_digest,
             policy=policy,
             model_contract=model_contract,
+            assert_commit=assert_commit,
+            record_duration=record_duration,
+            monotonic=monotonic,
             now=now,
         )
     except (ContractError, OSError, RuntimeError) as error:
@@ -80,11 +82,10 @@ def execute_initial_candidate_pass(
             "CLEAN",
             "FAILED_CLEAN",
             "CLEANUP_BLOCKED",
-            "RECEIPT_ISSUED",
         }:
             controller.begin_cleanup(
                 failure={
-                    "error_code": "candidate_execution_failed",
+                    "error_code": "validation_execution_failed",
                     "detail_digest": content_hash(
                         {"error_type": type(error).__name__}
                     ),
@@ -95,9 +96,9 @@ def execute_initial_candidate_pass(
         raise
 
 
-def _execute_initial_candidate_pass(
+def _execute_validation_plan(
     *,
-    candidate: Mapping[str, Any],
+    plan: Mapping[str, Any],
     authorities: list[AuthoritySpec],
     capacity_plan: CapacityPlan,
     controller: ValidationCycleController,
@@ -105,33 +106,36 @@ def _execute_initial_candidate_pass(
     deployer_factory: Callable[[ProjectDeployment], FoundryAuthorityDeployer],
     runner: ScenarioAttemptRunner,
     scheduler: ValidationScheduler,
-    evidence_store: EvidenceBlobStore,
-    policy_manifest_digest: str,
     policy: ValidationPolicy,
     model_contract: Mapping[str, Any],
+    assert_commit: Callable[[], None],
+    record_duration: Callable[[str, float], None],
+    monotonic: Callable[[], float],
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
-) -> tuple[dict[str, Any], BlobRecord]:
-    if candidate.get("kind") != "test-agent-validation-candidate":
-        raise ContractError("Validation candidate manifest is invalid")
+) -> tuple[dict[str, Any], LocalRecord]:
+    if plan.get("kind") != "test-agent-validation-plan":
+        raise ContractError("Local validation plan is invalid")
     if len(authorities) != 41:
         raise ContractError("Initial validation pass requires all 41 authorities")
+    assert_commit()
     validate_capacity_plan(capacity_plan, policy=policy)
     project_provisioner.assert_test_agent_model(
-        dict(candidate["test_agent_model"])
+        dict(plan["test_agent_model"])
     )
     controller.preflight(capacity_plan, now=now())
     project_id = project_provisioner.expected_project_id(
-        candidate["project_name"]
+        plan["project_name"]
     )
+    project_started = monotonic()
     controller.project_create_intent(
-        name=candidate["project_name"],
+        name=plan["project_name"],
         provider_id=project_id,
         now=now(),
     )
-    ownership_nonce = controller.active.value["lease"]["ownership_nonce"]
+    ownership_nonce = controller.active.value["ownership_nonce"]
     project_intents = project_provisioner.resource_intents(
-        project_name=candidate["project_name"],
-        cycle_id=candidate["cycle_id"],
+        project_name=plan["project_name"],
+        cycle_id=plan["cycle_id"],
         ownership_nonce=ownership_nonce,
     )
     for intent in project_intents:
@@ -142,8 +146,8 @@ def _execute_initial_candidate_pass(
     try:
         with lifecycle_heartbeat(controller, now=now):
             project = project_provisioner.create(
-                project_name=candidate["project_name"],
-                cycle_id=candidate["cycle_id"],
+                project_name=plan["project_name"],
+                cycle_id=plan["cycle_id"],
                 ownership_nonce=ownership_nonce,
             )
     except (ContractError, OSError, RuntimeError):
@@ -170,9 +174,14 @@ def _execute_initial_candidate_pass(
         resource_observations=dict(project.resource_observations),
         now=now(),
     )
+    record_duration(
+        "project_connections_seconds",
+        monotonic() - project_started,
+    )
+    activation_started = monotonic()
     planned = plan_runtime_topology(
         authorities,
-        cycle_suffix=candidate["cycle_id"].removeprefix("validation-"),
+        cycle_suffix=plan["cycle_id"].removeprefix("validation-"),
         policy=policy,
     )
     deployer = deployer_factory(project)
@@ -220,6 +229,10 @@ def _execute_initial_candidate_pass(
         != actual_topology_digest
     ):
         raise ContractError("Committed validation runtime topology digest changed")
+    record_duration(
+        "agent_activation_seconds",
+        monotonic() - activation_started,
+    )
     with lifecycle_heartbeat(controller, now=now):
         authority_evidence = execute_validation_matrix(
             authorities,
@@ -227,32 +240,17 @@ def _execute_initial_candidate_pass(
             runner=runner,
             scheduler=scheduler,
             model_contract=model_contract,
-            validated_head_sha=candidate["candidate_head_sha"],
+            validated_commit_sha=plan["commit_sha"],
         )
+    assert_commit()
     evidence = stamp_evidence_digests(
         {
             "schema_version": "1.0.0",
             "kind": "test-agent-validation-evidence",
-            "cycle_id": candidate["cycle_id"],
-            "epoch": controller.active.value["epoch"],
-            "repository": candidate["repository"],
-            "pr_number": candidate["pr_number"],
-            "candidate_head_sha": candidate["candidate_head_sha"],
-            "candidate_tree_sha": candidate["candidate_tree_sha"],
-            "policy_manifest_digest": policy_manifest_digest,
-            "catalog_hashes": dict(candidate["catalog_hashes"]),
-            "artifact_manifest_hash": candidate["artifact_manifest_hash"],
-            "source_tree_digest": candidate["source_tree_digest"],
-            "validation_contract_digest": candidate[
-                "validation_contract_digest"
-            ],
-            "execution_matrix_digest": candidate[
-                "execution_matrix_digest"
-            ],
-            "runtime_topology_digest": actual_topology_digest,
-            "quota_plan_digest": capacity_plan.plan_digest,
+            "commit_sha": plan["commit_sha"],
+            "validation_digest": plan["validation_digest"],
+            "execution_matrix_digest": plan["execution_matrix_digest"],
             "telemetry_resource_set": "g29",
-            "test_agent_model": dict(candidate["test_agent_model"]),
             "authorities": authority_evidence,
             "evidence_digest": "",
         }
@@ -261,11 +259,17 @@ def _execute_initial_candidate_pass(
         evidence,
         runtime_topology=controller.active.value["runtime_topology"],
     )
-    evidence_record = persist_evidence(evidence_store, evidence)
-    controller.freeze(
+    if not all(item["pass"] for item in evidence["authorities"]):
+        raise ContractError("Local validation evidence did not pass all 41 authorities")
+    evidence_record = persist_evidence(
+        evidence,
+        repository=plan["repository"],
+        pr_number=plan["pr_number"],
+        cycle_id=plan["cycle_id"],
+    )
+    controller.final_checks(
+        commit_sha=plan["commit_sha"],
         evidence=evidence_record,
-        head_sha=candidate["candidate_head_sha"],
-        tree_sha=candidate["candidate_tree_sha"],
         now=now(),
     )
     return evidence, controller.active
@@ -309,7 +313,7 @@ def cleanup_validation_cycle(
     policy: ValidationPolicy,
     failed_cycle: bool,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
-) -> BlobRecord:
+) -> LocalRecord:
     controller.begin_cleanup(failure=None, now=now())
     lifecycle = controller.active.value
     ownership_nonces = {
@@ -320,7 +324,7 @@ def cleanup_validation_cycle(
     ownership_nonce = (
         next(iter(ownership_nonces))
         if ownership_nonces
-        else lifecycle["lease"]["ownership_nonce"]
+        else lifecycle["ownership_nonce"]
     )
     plan = build_cleanup_plan(
         cycle_id=lifecycle["cycle_id"],
@@ -356,6 +360,17 @@ def cleanup_validation_cycle(
         failed_cycle=failed_cycle,
         now=now(),
     )
-    if committed.clean is None:
+    if committed.value["snapshot_type"] != "active" or (
+        committed.value["clean_reference"] is None
+    ):
         raise ContractError("Validation cleanup did not create immutable CLEAN proof")
-    return committed.clean
+    clean_path = (
+        controller.active.path.parent
+        / str(committed.value["clean_reference"]["path"])
+    )
+    clean_value = read_json(clean_path)
+    return LocalRecord(
+        path=clean_path,
+        value=clean_value,
+        digest=str(committed.value["clean_reference"]["digest"]),
+    )

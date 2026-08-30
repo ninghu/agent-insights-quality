@@ -116,25 +116,19 @@ Compile Bicep only when infrastructure changes:
 az bicep build --file infra\main.bicep --stdout
 ```
 
-## Validate a candidate
+## Validate a clean commit
 
 Follow the [Test Agent Validation skill](.github/skills/test-agent-validation/SKILL.md). A new cycle
-deploys all 41 authorities once; fixes may reuse only unchanged current-digest evidence from that same
-cycle. Shared validation-contract changes invalidate the complete cycle.
-
-The policy is impact-based: Agent source, definition, traffic, or assignment changes qualify each
-affected Agent's `v0` and all assigned issues. Evidence for unchanged Agents is reusable only when
-content digests, mappings, and shared contracts are unchanged. Shared runtime, telemetry, assessment,
-scoring, schema, infrastructure, or cross-Agent topology changes require full-catalog qualification
-or retained-evidence re-evaluation when no new traffic is needed.
+auto-discovers one clean PR-head commit and deploys all 41 authorities. Any commit change requires
+exact cleanup and a fresh full cycle; there is no cross-cycle evidence cache.
 
 The fixed daily contract selects four issues per Agent: 20 issues plus five baselines, for 25
-assessment packages. Test Agent Validation is a separate report-free merge gate and never runs Agent
+assessment packages. Test Agent Validation is a separate local report-free process and never runs Agent
 Insights, assessment, scoring, ADX publication, or email.
 
-Only a create-once protected merge receipt can authorize a later candidate. Shadow receipts are
-non-authorizing. Exact cleanup is required before either receipt. The legacy staging path remains
-unchanged only for migration history and cannot be used for a new run after `r03`.
+After exact 41/41 evidence and cleanup, explicit human approval permits one minimal create-once
+approved validation record. GitHub runs ordinary mechanical CI only and merge remains manual. The
+legacy staging path remains only for migration history and cannot run after `r03`.
 
-Protected runtime prerequisites and operator roles are documented in
+Local runtime prerequisites and operator roles are documented in
 [`docs/AUTOMATION_SETUP.md`](docs/AUTOMATION_SETUP.md).

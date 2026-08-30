@@ -3,8 +3,6 @@ param terraModelVersion string
 param testAgentModelVersion string
 param automationOwner string
 param automationPrincipalId string
-param validationPrincipalId string
-param validationReceiptPrincipalId string
 param telemetryGeneration string
 param testAgentCapacity int
 param insightGenerationCapacity int
@@ -27,7 +25,6 @@ var modelInferenceRoleId = '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'
 var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 var acrPushRoleId = '8311e382-0749-4cb8-b61a-304f252e45ec'
 var blobContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
-var blobReaderRoleId = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
 var foundryProjectManagerRoleId = 'eadc314b-1a2d-4efa-be10-5d325db5065e'
 
 module qualityAnalytics 'quality-analytics.bicep' = {
@@ -247,33 +244,23 @@ resource automationRegistryPush 'Microsoft.Authorization/roleAssignments@2022-04
   }
 }
 
-resource validationProjectManager 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource localValidationProjectManager 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: stagingAccount
-  name: guid(stagingAccount.id, validationPrincipalId, foundryProjectManagerRoleId)
+  name: guid(stagingAccount.id, automationPrincipalId, foundryProjectManagerRoleId)
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', foundryProjectManagerRoleId)
-    principalId: validationPrincipalId
-    principalType: 'ServicePrincipal'
+    principalId: automationPrincipalId
+    principalType: 'User'
   }
 }
 
-resource validationInsightsReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource localValidationInsightsReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: stagingInsights
-  name: guid(stagingInsights.id, validationPrincipalId, monitoringReaderRoleId)
+  name: guid(stagingInsights.id, automationPrincipalId, monitoringReaderRoleId)
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', monitoringReaderRoleId)
-    principalId: validationPrincipalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-resource validationRegistryPush 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: registry
-  name: guid(registry.id, validationPrincipalId, acrPushRoleId)
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPushRoleId)
-    principalId: validationPrincipalId
-    principalType: 'ServicePrincipal'
+    principalId: automationPrincipalId
+    principalType: 'User'
   }
 }
 
@@ -343,17 +330,9 @@ resource deploymentRegistries 'Microsoft.Storage/storageAccounts/blobServices/co
   }
 }
 
-resource validationLifecycle 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+resource approvedValidationRecords 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
   parent: blobService
-  name: 'test-agent-validation-lifecycle'
-  properties: {
-    publicAccess: 'None'
-  }
-}
-
-resource validationSnapshots 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
-  parent: blobService
-  name: 'test-agent-validation-snapshots'
+  name: 'test-agent-validation-approved-records'
   properties: {
     publicAccess: 'None'
     immutableStorageWithVersioning: {
@@ -362,122 +341,12 @@ resource validationSnapshots 'Microsoft.Storage/storageAccounts/blobServices/con
   }
 }
 
-resource validationSnapshotPolicy 'Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies@2023-05-01' = {
-  parent: validationSnapshots
+resource approvedValidationRecordPolicy 'Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies@2023-05-01' = {
+  parent: approvedValidationRecords
   name: 'default'
   properties: {
     immutabilityPeriodSinceCreationInDays: 90
     allowProtectedAppendWrites: false
-  }
-}
-
-resource validationReceipts 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
-  parent: blobService
-  name: 'test-agent-validation-receipts'
-  properties: {
-    publicAccess: 'None'
-    immutableStorageWithVersioning: {
-      enabled: true
-    }
-  }
-}
-
-resource validationReceiptPolicy 'Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies@2023-05-01' = {
-  parent: validationReceipts
-  name: 'default'
-  properties: {
-    immutabilityPeriodSinceCreationInDays: 90
-    allowProtectedAppendWrites: false
-  }
-}
-
-resource validationShadowReceipts 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
-  parent: blobService
-  name: 'test-agent-validation-shadow-receipts'
-  properties: {
-    publicAccess: 'None'
-    immutableStorageWithVersioning: {
-      enabled: true
-    }
-  }
-}
-
-resource validationShadowReceiptPolicy 'Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies@2023-05-01' = {
-  parent: validationShadowReceipts
-  name: 'default'
-  properties: {
-    immutabilityPeriodSinceCreationInDays: 90
-    allowProtectedAppendWrites: false
-  }
-}
-
-resource validationLifecycleContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: validationLifecycle
-  name: guid(validationLifecycle.id, validationPrincipalId, blobContributorRoleId)
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobContributorRoleId)
-    principalId: validationPrincipalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-resource validationSnapshotContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: validationSnapshots
-  name: guid(validationSnapshots.id, validationPrincipalId, blobContributorRoleId)
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobContributorRoleId)
-    principalId: validationPrincipalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-resource validationReceiptContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: validationReceipts
-  name: guid(validationReceipts.id, validationReceiptPrincipalId, blobContributorRoleId)
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobContributorRoleId)
-    principalId: validationReceiptPrincipalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-resource validationShadowReceiptContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: validationShadowReceipts
-  name: guid(validationShadowReceipts.id, validationPrincipalId, blobContributorRoleId)
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobContributorRoleId)
-    principalId: validationPrincipalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-resource validationReceiptLifecycleContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: validationLifecycle
-  name: guid(validationLifecycle.id, validationReceiptPrincipalId, blobContributorRoleId)
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobContributorRoleId)
-    principalId: validationReceiptPrincipalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-resource validationReceiptSnapshotContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: validationSnapshots
-  name: guid(validationSnapshots.id, validationReceiptPrincipalId, blobContributorRoleId)
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobContributorRoleId)
-    principalId: validationReceiptPrincipalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-resource validationMergeReceiptReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: validationReceipts
-  name: guid(validationReceipts.id, validationPrincipalId, blobReaderRoleId)
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobReaderRoleId)
-    principalId: validationPrincipalId
-    principalType: 'ServicePrincipal'
   }
 }
 
@@ -500,29 +369,6 @@ resource lifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05
               baseBlob: {
                 delete: {
                   daysAfterModificationGreaterThan: 90
-                }
-              }
-            }
-          }
-        }
-        {
-          name: 'expire-validation-lifecycle'
-          enabled: true
-          type: 'Lifecycle'
-          definition: {
-            filters: {
-              blobTypes: ['blockBlob']
-              prefixMatch: ['test-agent-validation-lifecycle/']
-            }
-            actions: {
-              baseBlob: {
-                delete: {
-                  daysAfterModificationGreaterThan: 90
-                }
-              }
-              version: {
-                delete: {
-                  daysAfterCreationGreaterThan: 90
                 }
               }
             }

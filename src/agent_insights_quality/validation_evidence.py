@@ -3,10 +3,11 @@ from __future__ import annotations
 import copy
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
+from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.util import (
     ROOT,
     ContractError,
@@ -16,7 +17,7 @@ from agent_insights_quality.util import (
     read_yaml,
     runtime_root,
 )
-from agent_insights_quality.validation_blob import BlobRecord
+from agent_insights_quality.validation_lifecycle import LocalRecord
 from agent_insights_quality.validation_rules import (
     validate_validation_rules,
     validation_matrix,
@@ -33,15 +34,6 @@ EXPECTED_BASELINE_AUTHORITIES = {
 EXPECTED_ISSUE_AUTHORITIES = {
     f"issue-{number:03d}" for number in range(1, 37)
 }
-
-
-class EvidenceBlobStore(Protocol):
-    def create_once(
-        self,
-        container: str,
-        name: str,
-        value: dict[str, Any],
-    ) -> BlobRecord: ...
 
 
 def validate_evidence(
@@ -72,10 +64,17 @@ def validate_evidence(
     if set(authority_ids) != EXPECTED_BASELINE_AUTHORITIES | EXPECTED_ISSUE_AUTHORITIES:
         raise ContractError("Validation evidence must contain the exact 41 authorities")
     reviewed_contracts = _reviewed_execution_contracts(repository_root)
+    if value["execution_matrix_digest"] != content_hash(
+        {
+            authority_id: contract["execution_digest"]
+            for authority_id, contract in reviewed_contracts.items()
+        }
+    ):
+        raise ContractError("Validation evidence execution matrix digest is stale")
     for authority in authorities:
-        if authority["validated_head_sha"] != value["candidate_head_sha"]:
+        if authority["validated_commit_sha"] != value["commit_sha"]:
             raise ContractError(
-                f"{authority['authority_id']} evidence is not bound to candidate head"
+                f"{authority['authority_id']} evidence is not bound to the commit"
             )
         expected_agent, expected_mode = _expected_authority_contract(
             authority["authority_id"]
@@ -95,6 +94,14 @@ def validate_evidence(
     _validate_global_attempt_references(authorities)
     if runtime_topology is not None:
         _validate_runtime_topology_binding(value, runtime_topology)
+    if repository_root.resolve() == ROOT.resolve():
+        agents, issues = load_catalogs()
+        from agent_insights_quality.validation_manifest import (
+            current_validation_digest,
+        )
+
+        if value["validation_digest"] != current_validation_digest(agents, issues):
+            raise ContractError("Validation evidence contract digest is stale")
     expected_digest = digest_without_field(value, "evidence_digest")
     if value["evidence_digest"] != expected_digest:
         raise ContractError("Validation evidence digest is stale")
@@ -117,28 +124,31 @@ def stamp_evidence_digests(value: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def persist_evidence(
-    store: EvidenceBlobStore,
     value: Mapping[str, Any],
-) -> BlobRecord:
+    *,
+    repository: str,
+    pr_number: int,
+    cycle_id: str,
+    root: Path | None = None,
+) -> LocalRecord:
     validate_evidence(value)
-    owner, repository = value["repository"].split("/", 1)
-    name = (
-        f"evidence/{owner}/{repository}/{value['pr_number']}/"
-        f"{value['cycle_id']}/e{value['epoch']}/"
-        "test-agent-validation-evidence.json"
+    owner, repository_name = repository.split("/", 1)
+    path = (
+        root
+        or runtime_root() / "test-agent-validation" / "evidence"
+    ) / (
+        f"{owner}/{repository_name}/{pr_number}/{cycle_id}/"
+        f"{str(value['evidence_digest']).removeprefix('sha256:')}.json"
     )
-    record = store.create_once(
-        "test-agent-validation-snapshots",
-        name,
-        dict(value),
+    immutable_json(path, dict(value))
+    persisted = read_json(path)
+    if persisted.get("evidence_digest") != value["evidence_digest"]:
+        raise ContractError("Immutable local evidence has a different digest")
+    return LocalRecord(
+        path=path,
+        value=persisted,
+        digest=str(persisted["evidence_digest"]),
     )
-    if record.value.get("evidence_digest") != value["evidence_digest"]:
-        raise ContractError("Immutable evidence retry found a different digest")
-    immutable_json(
-        runtime_root() / "test-agent-validation" / name,
-        dict(value),
-    )
-    return record
 
 
 def digest_without_field(value: Mapping[str, Any], field: str) -> str:
@@ -473,8 +483,6 @@ def _validate_runtime_topology_binding(
     agents = topology.get("agents")
     if not isinstance(agents, list) or len(agents) != 41:
         raise ContractError("Validation evidence runtime topology is incomplete")
-    if evidence["runtime_topology_digest"] != content_hash(agents):
-        raise ContractError("Validation evidence runtime topology digest is stale")
     by_authority = {item["authority_id"]: item for item in agents}
     if len(by_authority) != 41:
         raise ContractError("Validation evidence runtime topology collides")

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/ninghu/agent-insights-quality/schemas/test-agent-validation-lifecycle.schema.json",
-  "title": "Test Agent Validation lifecycle",
+  "title": "Test Agent Validation local lifecycle",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -9,30 +9,27 @@
     "kind",
     "snapshot_type",
     "cycle_id",
-    "epoch",
     "revision",
     "state",
     "repository",
     "pr_number",
-    "git",
+    "commit_sha",
     "digests",
-    "policy_manifest",
-    "lease",
+    "operator",
+    "ownership_nonce",
     "capacity",
     "project",
     "runtime_topology",
     "resources",
-    "scope_freeze",
-    "review",
     "cleanup",
-    "event_snapshot",
-    "clean_snapshot",
+    "event_reference",
+    "clean_reference",
     "evidence_reference",
-    "receipt_reference",
+    "started_at",
     "last_activity_at",
     "absolute_expires_at",
     "failure",
-    "previous_etag",
+    "previous_journal_digest",
     "journal_digest"
   ],
   "properties": {
@@ -40,32 +37,29 @@
     "kind": {"const": "test-agent-validation-lifecycle"},
     "snapshot_type": {"enum": ["active", "event", "clean"]},
     "cycle_id": {"$ref": "#/$defs/cycleId"},
-    "epoch": {"type": "integer", "minimum": 1},
     "revision": {"type": "integer", "minimum": 1},
     "state": {
       "enum": [
-        "LEASED",
+        "LOCKED",
         "PREFLIGHT",
         "CREATING",
         "VALIDATING",
-        "FROZEN",
-        "REVIEWED",
-        "SHADOW_REVIEW_SKIPPED",
-        "REVALIDATING",
         "FINAL_CHECKS",
         "CLEANING",
         "CLEAN",
-        "RECEIPT_ISSUED",
         "FAILED_CLEAN",
         "CLEANUP_BLOCKED"
       ]
     },
     "repository": {"$ref": "#/$defs/repository"},
     "pr_number": {"type": "integer", "minimum": 1},
-    "git": {"$ref": "#/$defs/git"},
+    "commit_sha": {"$ref": "#/$defs/gitSha"},
     "digests": {"$ref": "#/$defs/digests"},
-    "policy_manifest": {"$ref": "#/$defs/policyManifest"},
-    "lease": {"$ref": "#/$defs/lease"},
+    "operator": {"$ref": "#/$defs/operator"},
+    "ownership_nonce": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,128}$"
+    },
     "capacity": {
       "oneOf": [
         {"type": "null"},
@@ -79,26 +73,14 @@
       "uniqueItems": true,
       "items": {"$ref": "#/$defs/resource"}
     },
-    "scope_freeze": {
-      "oneOf": [
-        {"type": "null"},
-        {"$ref": "#/$defs/scopeFreeze"}
-      ]
-    },
-    "review": {
-      "oneOf": [
-        {"type": "null"},
-        {"$ref": "#/$defs/review"}
-      ]
-    },
     "cleanup": {"$ref": "#/$defs/cleanup"},
-    "event_snapshot": {
+    "event_reference": {
       "oneOf": [
         {"type": "null"},
         {"$ref": "#/$defs/snapshotReference"}
       ]
     },
-    "clean_snapshot": {
+    "clean_reference": {
       "oneOf": [
         {"type": "null"},
         {"$ref": "#/$defs/snapshotReference"}
@@ -110,12 +92,7 @@
         {"$ref": "#/$defs/snapshotReference"}
       ]
     },
-    "receipt_reference": {
-      "oneOf": [
-        {"type": "null"},
-        {"$ref": "#/$defs/snapshotReference"}
-      ]
-    },
+    "started_at": {"$ref": "#/$defs/timestamp"},
     "last_activity_at": {"$ref": "#/$defs/timestamp"},
     "absolute_expires_at": {"$ref": "#/$defs/timestamp"},
     "failure": {
@@ -124,10 +101,10 @@
         {"$ref": "#/$defs/failure"}
       ]
     },
-    "previous_etag": {
+    "previous_journal_digest": {
       "oneOf": [
         {"type": "null"},
-        {"type": "string", "minLength": 1, "maxLength": 256}
+        {"$ref": "#/$defs/hash"}
       ]
     },
     "journal_digest": {"$ref": "#/$defs/hash"}
@@ -140,11 +117,11 @@
       },
       "then": {
         "properties": {
-          "event_snapshot": {"$ref": "#/$defs/snapshotReference"}
+          "event_reference": {"$ref": "#/$defs/snapshotReference"}
         }
       },
       "else": {
-        "properties": {"event_snapshot": {"type": "null"}}
+        "properties": {"event_reference": {"type": "null"}}
       }
     },
     {
@@ -153,31 +130,20 @@
         "required": ["snapshot_type"]
       },
       "then": {
-        "properties": {"clean_snapshot": {"type": "null"}}
+        "properties": {"clean_reference": {"type": "null"}}
       }
     },
     {
       "if": {
         "properties": {
           "snapshot_type": {"const": "active"},
-          "state": {"enum": ["CLEAN", "FAILED_CLEAN", "RECEIPT_ISSUED"]}
+          "state": {"enum": ["CLEAN", "FAILED_CLEAN"]}
         },
         "required": ["snapshot_type", "state"]
       },
       "then": {
         "properties": {
-          "clean_snapshot": {"$ref": "#/$defs/snapshotReference"}
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {"state": {"const": "RECEIPT_ISSUED"}},
-        "required": ["state"]
-      },
-      "then": {
-        "properties": {
-          "receipt_reference": {"$ref": "#/$defs/snapshotReference"}
+          "clean_reference": {"$ref": "#/$defs/snapshotReference"}
         }
       }
     },
@@ -186,13 +152,8 @@
         "properties": {
           "state": {
             "enum": [
-              "FROZEN",
-              "REVIEWED",
-              "SHADOW_REVIEW_SKIPPED",
-              "REVALIDATING",
               "FINAL_CHECKS",
-              "CLEAN",
-              "RECEIPT_ISSUED"
+              "CLEAN"
             ]
           }
         },
@@ -213,12 +174,6 @@
     "gitSha": {
       "type": "string",
       "pattern": "^[0-9a-f]{40}$"
-    },
-    "nullableGitSha": {
-      "oneOf": [
-        {"type": "null"},
-        {"$ref": "#/$defs/gitSha"}
-      ]
     },
     "timestamp": {
       "type": "string",
@@ -243,46 +198,18 @@
         {"$ref": "#/$defs/reference"}
       ]
     },
-    "git": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "initial_head_sha",
-        "initial_tree_sha",
-        "current_head_sha",
-        "current_tree_sha",
-        "frozen_head_sha",
-        "frozen_tree_sha",
-        "final_head_sha",
-        "final_tree_sha"
-      ],
-      "properties": {
-        "initial_head_sha": {"$ref": "#/$defs/gitSha"},
-        "initial_tree_sha": {"$ref": "#/$defs/gitSha"},
-        "current_head_sha": {"$ref": "#/$defs/gitSha"},
-        "current_tree_sha": {"$ref": "#/$defs/gitSha"},
-        "frozen_head_sha": {"$ref": "#/$defs/nullableGitSha"},
-        "frozen_tree_sha": {"$ref": "#/$defs/nullableGitSha"},
-        "final_head_sha": {"$ref": "#/$defs/nullableGitSha"},
-        "final_tree_sha": {"$ref": "#/$defs/nullableGitSha"}
-      }
-    },
     "digests": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "artifact_manifest_hash",
-        "source_tree_digest",
-        "validation_contract_digest",
+        "validation_digest",
         "execution_matrix_digest",
         "runtime_topology_digest",
         "quota_plan_digest",
         "evidence_digest"
       ],
       "properties": {
-        "artifact_manifest_hash": {"$ref": "#/$defs/hash"},
-        "source_tree_digest": {"$ref": "#/$defs/hash"},
-        "validation_contract_digest": {"$ref": "#/$defs/hash"},
+        "validation_digest": {"$ref": "#/$defs/hash"},
         "execution_matrix_digest": {"$ref": "#/$defs/hash"},
         "runtime_topology_digest": {
           "oneOf": [
@@ -304,51 +231,18 @@
         }
       }
     },
-    "policyManifest": {
+    "operator": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "repository",
-        "path",
-        "ref",
-        "commit_sha",
-        "content_digest"
+        "session_reference",
+        "operator_reference",
+        "run_reference"
       ],
       "properties": {
-        "repository": {"$ref": "#/$defs/repository"},
-        "path": {"const": "config/test-agent-validation-policy.yaml"},
-        "ref": {"type": "string", "minLength": 1, "maxLength": 256},
-        "commit_sha": {"$ref": "#/$defs/gitSha"},
-        "content_digest": {"$ref": "#/$defs/hash"}
-      }
-    },
-    "lease": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "epoch",
-        "lease_id",
-        "ownership_nonce",
-        "holder_workflow_reference",
-        "holder_app_reference",
-        "holder_run_reference",
-        "acquired_at",
-        "heartbeat_at",
-        "state"
-      ],
-      "properties": {
-        "epoch": {"type": "integer", "minimum": 1},
-        "lease_id": {"$ref": "#/$defs/reference"},
-        "ownership_nonce": {
-          "type": "string",
-          "pattern": "^[A-Za-z0-9_-]{8,128}$"
-        },
-        "holder_workflow_reference": {"$ref": "#/$defs/reference"},
-        "holder_app_reference": {"$ref": "#/$defs/reference"},
-        "holder_run_reference": {"$ref": "#/$defs/reference"},
-        "acquired_at": {"$ref": "#/$defs/timestamp"},
-        "heartbeat_at": {"$ref": "#/$defs/timestamp"},
-        "state": {"enum": ["held", "released", "broken"]}
+        "session_reference": {"$ref": "#/$defs/hash"},
+        "operator_reference": {"$ref": "#/$defs/hash"},
+        "run_reference": {"$ref": "#/$defs/hash"}
       }
     },
     "capacity": {
@@ -682,56 +576,6 @@
         }
       }
     },
-    "scopeFreeze": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "head_sha",
-        "tree_sha",
-        "frozen_at",
-        "source_tree_digest",
-        "validation_contract_digest",
-        "changed_authority_ids",
-        "comprehensive_review_required"
-      ],
-      "properties": {
-        "head_sha": {"$ref": "#/$defs/gitSha"},
-        "tree_sha": {"$ref": "#/$defs/gitSha"},
-        "frozen_at": {"$ref": "#/$defs/timestamp"},
-        "source_tree_digest": {"$ref": "#/$defs/hash"},
-        "validation_contract_digest": {"$ref": "#/$defs/hash"},
-        "changed_authority_ids": {
-          "type": "array",
-          "maxItems": 41,
-          "uniqueItems": true,
-          "items": {"type": "string", "minLength": 1}
-        },
-        "comprehensive_review_required": {"type": "boolean"}
-      }
-    },
-    "review": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "mode",
-        "head_sha",
-        "check_reference",
-        "findings_digest",
-        "completed_at"
-      ],
-      "properties": {
-        "mode": {"enum": ["comprehensive", "shadow_skipped"]},
-        "head_sha": {"$ref": "#/$defs/gitSha"},
-        "check_reference": {"$ref": "#/$defs/nullableReference"},
-        "findings_digest": {
-          "oneOf": [
-            {"type": "null"},
-            {"$ref": "#/$defs/hash"}
-          ]
-        },
-        "completed_at": {"$ref": "#/$defs/timestamp"}
-      }
-    },
     "cleanup": {
       "type": "object",
       "additionalProperties": false,
@@ -776,11 +620,9 @@
     "snapshotReference": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "version_id", "etag", "digest"],
+      "required": ["path", "digest"],
       "properties": {
         "path": {"type": "string", "minLength": 1, "maxLength": 1024},
-        "version_id": {"type": "string", "minLength": 1, "maxLength": 256},
-        "etag": {"type": "string", "minLength": 1, "maxLength": 256},
         "digest": {"$ref": "#/$defs/hash"}
       }
     },

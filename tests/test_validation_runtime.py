@@ -335,7 +335,7 @@ def test_names_are_opaque_bounded_deterministic_and_collision_free() -> None:
     suffix = opaque_cycle_suffix(
         repository="ninghu/agent-insights-quality",
         pr_number=999,
-        candidate_head_sha=HEAD,
+        commit_sha=HEAD,
         run_id="run-1",
     )
     assert len(suffix) == 12
@@ -400,7 +400,7 @@ def test_all_issues_run_exact_same_matrix_against_paired_v0_without_resampling()
         runner=runner,
         scheduler=_scheduler(),
         model_contract=MODEL,
-        validated_head_sha=HEAD,
+        validated_commit_sha=HEAD,
     )
     assert len(results) == 41
     assert all(result["pass"] for result in results)

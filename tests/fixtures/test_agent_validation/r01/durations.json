@@ -1,14 +1,14 @@
 {
-  "cycle_id": "validation-shadow-r01",
+  "cycle_id": "validation-local-r01",
   "kind": "test-agent-validation-raw-durations",
   "percentiles_calculated": false,
   "schema_version": "1.0.0",
   "stages": {
     "agent_activation_seconds": 310,
-    "cleanup_receipt_seconds": 95,
+    "cleanup_seconds": 35,
     "endpoint_model_seconds": 420,
     "ingestion_kql_seconds": 185,
-    "lease_preflight_seconds": 12,
+    "lock_preflight_seconds": 12,
     "project_connections_seconds": 48,
     "total_seconds": 1010
   }

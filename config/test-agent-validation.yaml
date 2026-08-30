@@ -1,7 +1,5 @@
 schema_version: "1.0.0"
 repository: ninghu/agent-insights-quality
-default_branch: main
-policy_manifest_path: config/test-agent-validation-policy.yaml
 telemetry_resource_set: g29
 test_agent_model:
   deployment_name: gpt-5.4-mini
@@ -21,7 +19,6 @@ limits:
   minimum_tpm_headroom: 8192
   active_heartbeat_seconds: 60
   absolute_ttl_hours: 72
-  reconciler_interval_minutes: 15
 name_policy:
   project:
     maximum_length: 64

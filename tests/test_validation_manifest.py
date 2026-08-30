@@ -1,42 +1,44 @@
 from __future__ import annotations
 
 from agent_insights_quality.catalogs import load_catalogs
+from agent_insights_quality.util import canonical_bytes
 from agent_insights_quality.validation_manifest import (
     authority_specs,
-    prepare_candidate_manifest,
-    stamp_candidate_manifest,
+    prepare_validation_plan,
+    validate_validation_plan,
     validation_step_cost,
 )
 from agent_insights_quality.validation_policy import load_validation_policy
-from agent_insights_quality.util import canonical_bytes
 
 
-def test_candidate_manifest_binds_all_executable_and_source_inputs() -> None:
+def test_local_plan_binds_one_commit_and_all_executable_inputs() -> None:
     agents, issues = load_catalogs()
-    manifest = stamp_candidate_manifest(
-        prepare_candidate_manifest(
-            agents=agents,
-            issues=issues,
-            policy=load_validation_policy(),
-            repository="ninghu/agent-insights-quality",
-            pr_number=999,
-            candidate_head_sha="a" * 40,
-            candidate_tree_sha="b" * 40,
-            workflow_run_id="synthetic-run-1",
-        )
+    policy = load_validation_policy()
+    plan = prepare_validation_plan(
+        agents=agents,
+        issues=issues,
+        policy=policy,
+        repository=policy.repository,
+        pr_number=999,
+        commit_sha="a" * 40,
+        local_run_id="synthetic-run-1",
     )
-    assert len(manifest["authorities"]) == 41
-    assert len(manifest["source_content_digests"]) == 41
-    assert len(manifest["execution_digests"]) == 41
-    assert manifest["artifact_manifest_hash"] == manifest["catalog_hashes"]["artifacts"]
-    assert manifest["project_name"].startswith("aiq-validation-")
-    assert manifest["telemetry_resource_set"] == "g29"
-    assert manifest["endpoint_envelope"]["attempts"] == 445
-    assert manifest["endpoint_envelope"]["requests"] >= 890
-    assert (
-        manifest["endpoint_envelope"]["worst_case_inner_model_calls"] == 4
+    validate_validation_plan(
+        plan,
+        agents=agents,
+        issues=issues,
+        policy=policy,
     )
-    assert manifest["manifest_digest"].startswith("sha256:")
+    assert len(plan["authorities"]) == 41
+    assert plan["commit_sha"] == "a" * 40
+    assert plan["project_name"].startswith("aiq-validation-")
+    assert plan["telemetry_resource_set"] == "g29"
+    assert plan["endpoint_envelope"]["attempts"] == 445
+    assert plan["endpoint_envelope"]["requests"] >= 890
+    assert plan["endpoint_envelope"]["worst_case_inner_model_calls"] == 4
+    assert plan["validation_digest"].startswith("sha256:")
+    assert "tree_sha" not in plan
+    assert "policy_manifest" not in plan
 
 
 def test_authority_source_digests_include_runtime_identity_sources() -> None:

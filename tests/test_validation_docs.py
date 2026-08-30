@@ -25,7 +25,8 @@ def test_validation_docs_preserve_report_free_boundary_and_fixed_matrix() -> Non
         "paired `v0`",
         "report-free",
         "CLEAN",
-        "default-branch",
+        "OS file lock",
+        "explicit human approval",
     ):
         assert requirement.casefold() in combined.casefold()
     assert "Validation never runs monitors, Agent Insights, assessment" in combined
@@ -33,6 +34,7 @@ def test_validation_docs_preserve_report_free_boundary_and_fixed_matrix() -> Non
 
 def test_cutover_docs_are_new_only_fail_forward_and_keep_daily_test_external() -> None:
     operations = _text("docs/OPERATIONS.md")
+    normalized = " ".join(operations.split())
     for requirement in (
         "new-only",
         "no process may read both",
@@ -42,8 +44,9 @@ def test_cutover_docs_are_new_only_fail_forward_and_keep_daily_test_external() -
         "isolated `--test-run --rerun N` email-only Daily Test",
         "external, non-gating",
         "staging is never a fallback",
+        "AIQ_APPROVED_VALIDATION_RECORD",
     ):
-        assert requirement in operations
+        assert requirement in normalized
 
 
 def test_legacy_staging_skill_cannot_start_r04() -> None:

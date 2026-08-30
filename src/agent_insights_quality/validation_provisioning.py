@@ -83,14 +83,14 @@ class ValidationProjectProvisioner:
         self,
         profile: RuntimeProfile,
         *,
-        automation_principal_id: str,
+        local_operator_id: str,
         policy: ValidationPolicy,
         progress: ProgressReporter | None = None,
     ) -> None:
-        if not automation_principal_id:
-            raise ContractError("Protected validation principal identity is required")
+        if not local_operator_id:
+            raise ContractError("Local validation operator identity is required")
         self._profile = profile
-        self._automation_principal_id = automation_principal_id
+        self._local_operator_id = local_operator_id
         self._policy = policy
         self._progress = progress or ProgressReporter("aiq-validation-project")
 
@@ -109,6 +109,28 @@ class ValidationProjectProvisioner:
         self._profile.assert_insights_connection(
             "application-insights-validation"
         )
+
+    def assert_project_absent(self, project_name: str) -> None:
+        project_id = self.expected_project_id(project_name)
+        process = subprocess.run(
+            [
+                azure_cli(),
+                "resource",
+                "show",
+                "--ids",
+                project_id,
+                "--output",
+                "none",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        if process.returncode == 0:
+            raise ContractError("Target validation Project already exists")
+        if process.returncode != 3:
+            raise ContractError("Target validation Project absence is ambiguous")
 
     def resource_intents(
         self,
@@ -164,10 +186,10 @@ class ValidationProjectProvisioner:
             f"projectName={project_name}",
             f"applicationInsightsName={application_insights_name}",
             f"registryName={self._profile.container_registry_name}",
-            f"automationPrincipalId={self._automation_principal_id}",
+            f"validationOperatorPrincipalId={self._local_operator_id}",
             f"ownershipNonce={ownership_nonce}",
             f"cycleId={cycle_id}",
-            f"automationProjectManagerName={plan.role_assignment_names[0]}",
+            f"validationOperatorProjectManagerName={plan.role_assignment_names[0]}",
             f"appInsightsReaderName={plan.role_assignment_names[1]}",
             f"modelInferenceUserName={plan.role_assignment_names[2]}",
             f"registryPullName={plan.role_assignment_names[3]}",
@@ -257,7 +279,7 @@ class ValidationProjectProvisioner:
             registry_id,
         )
         role_labels = (
-            "automation-project-manager",
+            "validation-operator-project-manager",
             "application-insights-reader",
             "model-inference-user",
             "registry-pull",

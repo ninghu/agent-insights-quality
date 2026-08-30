@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -9,289 +8,72 @@ from agent_insights_quality import cli
 from agent_insights_quality.util import ContractError
 
 
-def test_prepare_validation_cli_writes_only_private_candidate_manifest(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    private = tmp_path / ".aiq-runtime" / "agent-insights-quality"
-    monkeypatch.setenv("AIQ_RUNTIME_ROOT", str(private))
-    output = private / "test-agent-validation" / "candidate.json"
-    args = cli.build_parser().parse_args(
-        [
-            "prepare-test-agent-validation",
-            "--pr-number",
-            "999",
-            "--candidate-head-sha",
-            "a" * 40,
-            "--candidate-tree-sha",
-            "b" * 40,
-            "--workflow-run-id",
-            "synthetic-run",
-            "--output",
-            str(output),
-        ]
-    )
-    result = json.loads(cli._dispatch(args) or "{}")
-    assert result["authority_count"] == 41
-    assert output.is_file()
-    assert json.loads(output.read_text(encoding="utf-8"))["kind"] == (
-        "test-agent-validation-candidate"
-    )
-
-    escaped = cli.build_parser().parse_args(
-        [
-            "prepare-test-agent-validation",
-            "--pr-number",
-            "999",
-            "--candidate-head-sha",
-            "a" * 40,
-            "--candidate-tree-sha",
-            "b" * 40,
-            "--workflow-run-id",
-            "synthetic-run",
-            "--output",
-            str(tmp_path / "public.json"),
-        ]
-    )
-    with pytest.raises(ContractError, match="private runtime root"):
-        cli._dispatch(escaped)
-
-
-def test_validation_cli_exposes_contract_lifecycle_receipt_and_reconciler_commands() -> None:
+def test_validation_cli_exposes_only_two_automatic_user_commands() -> None:
     parser = cli.build_parser()
-    assert parser.parse_args(
-        ["validate-test-agent-evidence", "--evidence", "evidence.json"]
-    ).command == "validate-test-agent-evidence"
-    assert parser.parse_args(
-        ["validate-test-agent-lifecycle", "--lifecycle", "lifecycle.json"]
-    ).command == "validate-test-agent-lifecycle"
-    assert parser.parse_args(
-        ["validate-test-agent-receipt", "--receipt", "receipt.json"]
-    ).command == "validate-test-agent-receipt"
-    assert parser.parse_args(
-        [
-            "issue-test-agent-validation-receipt",
-            "--receipt",
-            "receipt.json",
-            "--storage-account",
-            "syntheticstorage",
-            "--expected-azure-client-id",
-            "client-id",
-            "--expected-azure-object-id",
-            "object-id",
-        ]
-    ).command == "issue-test-agent-validation-receipt"
-    assert parser.parse_args(
-        [
-            "reconcile-test-agent-validation",
-            "--storage-account",
-            "syntheticstorage",
-            "--expected-azure-client-id",
-            "client-id",
-            "--expected-azure-object-id",
-            "object-id",
-            "--ownership-nonce",
-            "nonce-0001",
-            "--holder-workflow-reference",
-            "workflow",
-            "--holder-app-reference",
-            "app",
-            "--holder-run-reference",
-            "run",
-        ]
-    ).command == "reconcile-test-agent-validation"
-    assert parser.parse_args(
-        [
-            "issue-test-agent-validation-merge-receipt",
-            "--storage-account",
-            "syntheticstorage",
-            "--expected-azure-client-id",
-            "client-id",
-            "--expected-azure-object-id",
-            "object-id",
-            "--cycle-id",
-            "validation-cycle-0001",
-            "--final-head-sha",
-            "a" * 40,
-            "--candidate-root",
-            "candidate-source",
-            "--receipt-output",
-            "receipt.json",
-        ]
-    ).command == "issue-test-agent-validation-merge-receipt"
-    assert parser.parse_args(
-        [
-            "attest-test-agent-validation-review",
-            "--storage-account",
-            "syntheticstorage",
-            "--expected-azure-client-id",
-            "client-id",
-            "--expected-azure-object-id",
-            "object-id",
-            "--cycle-id",
-            "validation-cycle-0001",
-            "--frozen-head-sha",
-            "a" * 40,
-            "--findings-digest",
-            "sha256:" + ("b" * 64),
-        ]
-    ).command == "attest-test-agent-validation-review"
-    assert parser.parse_args(
-        [
-            "run-test-agent-validation",
-            "--candidate",
-            "candidate.json",
-            "--storage-account",
-            "syntheticstorage",
-            "--expected-azure-client-id",
-            "client-id",
-            "--automation-principal-id",
-            "principal-id",
-            "--receipt-output",
-            "receipt.json",
-        ]
-    ).command == "run-test-agent-validation"
-    assert parser.parse_args(
-        [
-            "verify-test-agent-validation-credential",
-            "--expected-client-id",
-            "client-id",
-        ]
-    ).command == "verify-test-agent-validation-credential"
+    run = parser.parse_args(["run-test-agent-validation"])
+    approve = parser.parse_args(["approve-test-agent-validation"])
+    assert vars(run) == {"command": "run-test-agent-validation"}
+    assert vars(approve) == {"command": "approve-test-agent-validation"}
 
 
-def test_run_validation_cli_dispatches_complete_shadow_gate(
-    monkeypatch,
-) -> None:
-    observed = {}
-
-    def run_validation_gate(**kwargs):
-        observed.update(kwargs)
-        return {
-            "cycle_id": "validation-cycle-0001",
-            "state": "RECEIPT_ISSUED",
-            "receipt": "private.json",
-            "receipt_digest": "sha256:" + ("a" * 64),
-        }
-
-    monkeypatch.setattr(cli, "run_validation_gate", run_validation_gate)
-    monkeypatch.setenv("GH_TOKEN", "synthetic-scoped-token")
-    args = cli.build_parser().parse_args(
-        [
-            "run-test-agent-validation",
-            "--candidate",
-            "candidate.json",
-            "--storage-account",
-            "syntheticstorage",
-            "--expected-azure-client-id",
-            "client-id",
-            "--automation-principal-id",
-            "principal-id",
-            "--receipt-output",
-            "receipt.json",
-        ]
-    )
-    result = json.loads(cli._dispatch(args) or "{}")
-    assert result["state"] == "RECEIPT_ISSUED"
-    assert observed["github_token"] == "synthetic-scoped-token"
-    assert observed["candidate_path"] == Path("candidate.json")
-    assert observed["mode"] == "shadow"
-
-    merge_args = cli.build_parser().parse_args(
-        [
-            "run-test-agent-validation",
-            "--mode",
-            "merge",
-            "--candidate",
-            "candidate.json",
-            "--storage-account",
-            "syntheticstorage",
-            "--expected-azure-client-id",
-            "client-id",
-            "--automation-principal-id",
-            "principal-id",
-            "--receipt-output",
-            "handoff.json",
-        ]
-    )
-    cli._dispatch(merge_args)
-    assert observed["mode"] == "merge"
-
-
-def test_merge_receipt_cli_constructs_from_lifecycle(
-    monkeypatch,
-) -> None:
-    observed = {}
-    monkeypatch.setenv("GH_TOKEN", "synthetic-scoped-token")
+def test_run_validation_cli_uses_automatic_local_discovery(monkeypatch) -> None:
     monkeypatch.setattr(
         cli,
-        "construct_and_issue_merge_receipt",
-        lambda **kwargs: observed.update(kwargs)
-        or {
-            "cycle_id": kwargs["cycle_id"],
-            "state": "RECEIPT_ISSUED",
-            "receipt_digest": "sha256:" + ("a" * 64),
+        "run_test_agent_validation",
+        lambda: {
+            "status": "clean",
+            "commit_sha": "a" * 40,
+            "authority_count": 41,
         },
     )
-    args = cli.build_parser().parse_args(
-        [
-            "issue-test-agent-validation-merge-receipt",
-            "--storage-account",
-            "syntheticstorage",
-            "--expected-azure-client-id",
-            "client-id",
-            "--expected-azure-object-id",
-            "object-id",
-            "--cycle-id",
-            "validation-cycle-0001",
-            "--final-head-sha",
-            "b" * 40,
-            "--candidate-root",
-            "candidate-source",
-            "--receipt-output",
-            "receipt.json",
-        ]
-    )
+    args = cli.build_parser().parse_args(["run-test-agent-validation"])
     result = json.loads(cli._dispatch(args) or "{}")
-    assert result["state"] == "RECEIPT_ISSUED"
-    assert observed["cycle_id"] == "validation-cycle-0001"
-    assert observed["expected_azure_object_id"] == "object-id"
-    assert observed["candidate_root"] == Path("candidate-source")
-    assert observed["github_token"] == "synthetic-scoped-token"
+    assert result == {
+        "status": "clean",
+        "commit_sha": "a" * 40,
+        "authority_count": 41,
+    }
 
 
-def test_review_attestation_cli_uses_protected_producer(
+def test_approval_cli_uses_latest_clean_result_without_manual_paths(
     monkeypatch,
 ) -> None:
-    observed = {}
-    monkeypatch.setenv("GH_TOKEN", "synthetic-scoped-token")
     monkeypatch.setattr(
         cli,
-        "attest_frozen_review",
-        lambda **kwargs: observed.update(kwargs)
-        or {
-            "check_run_id": 123,
-            "attestation_digest": "sha256:" + ("a" * 64),
+        "approve_test_agent_validation",
+        lambda: {
+            "status": "approved",
+            "repository": "ninghu/agent-insights-quality",
+            "pr_number": 63,
+            "commit_sha": "a" * 40,
+            "record_digest": "sha256:" + ("b" * 64),
         },
     )
-    args = cli.build_parser().parse_args(
-        [
-            "attest-test-agent-validation-review",
-            "--storage-account",
-            "syntheticstorage",
-            "--expected-azure-client-id",
-            "client-id",
-            "--expected-azure-object-id",
-            "object-id",
-            "--cycle-id",
-            "validation-cycle-0001",
-            "--frozen-head-sha",
-            "b" * 40,
-            "--findings-digest",
-            "sha256:" + ("c" * 64),
-        ]
-    )
+    args = cli.build_parser().parse_args(["approve-test-agent-validation"])
     result = json.loads(cli._dispatch(args) or "{}")
-    assert result["check_run_id"] == 123
-    assert observed["cycle_id"] == "validation-cycle-0001"
-    assert observed["github_token"] == "synthetic-scoped-token"
+    assert result["status"] == "approved"
+    assert result["pr_number"] == 63
+
+
+def test_daily_provisioning_is_new_only_for_approved_record(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        cli.RuntimeProfile,
+        "from_env",
+        lambda _profile: object(),
+    )
+    monkeypatch.setattr(cli, "provision_profile", lambda **_kwargs: {})
+    observed = []
+    monkeypatch.setattr(
+        cli,
+        "validate_approved_record_for_checkout",
+        lambda path, **kwargs: observed.append((path, kwargs)),
+    )
+    args = cli.build_parser().parse_args(["provision", "--profile", "daily"])
+    monkeypatch.setenv("AIQ_STAGING_PROMOTION_RECEIPT", "legacy.json")
+    with pytest.raises(ContractError, match="approved Test Agent Validation"):
+        cli._dispatch(args)
+    monkeypatch.setenv("AIQ_APPROVED_VALIDATION_RECORD", "approved.json")
+    cli._dispatch(args)
+    assert str(observed[0][0]) == "approved.json"

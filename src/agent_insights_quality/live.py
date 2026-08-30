@@ -181,6 +181,21 @@ class LiveRuntime:
                 self._sleep(delay)
         raise ContractError("Telemetry query retry loop did not execute")
 
+    def assert_telemetry_read_access(self) -> None:
+        try:
+            from azure.monitor.query import LogsQueryStatus
+        except ImportError as error:
+            raise ContractError(
+                'Telemetry preflight requires installation with ".[azure]"'
+            ) from error
+        result = self._query_resource(
+            self._logs_client(),
+            "print readiness=1",
+            timespan=timedelta(minutes=1),
+        )
+        if result.status != LogsQueryStatus.SUCCESS:
+            raise ContractError("Read-only telemetry preflight failed")
+
     def reset_monitor(self, agent_name: str, monitor_id: str) -> None:
         del agent_name
         self._json_request(

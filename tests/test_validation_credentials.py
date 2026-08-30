@@ -9,76 +9,46 @@ from types import SimpleNamespace
 import pytest
 
 from agent_insights_quality.util import ContractError
-from agent_insights_quality.validation_credentials import (
-    validation_blob_credential,
-    verify_azure_service_principal,
-)
-
-
-def test_azure_federated_identity_must_match_expected_client(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "agent_insights_quality.validation_credentials.subprocess.run",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps(
-                {
-                    "tenantId": "synthetic-tenant-id",
-                    "user": {
-                        "type": "servicePrincipal",
-                        "name": "synthetic-client-id",
-                    }
-                }
-            ),
-        ),
-    )
-    identity = verify_azure_service_principal("synthetic-client-id")
-    assert identity.tenant_id == "synthetic-tenant-id"
-    with pytest.raises(ContractError, match="does not match"):
-        verify_azure_service_principal("different-client-id")
+from agent_insights_quality.validation_credentials import local_azure_operator
 
 
 def _jwt(claims: dict) -> str:
-    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
-    return f"header.{payload}.signature"
+    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode()
+    return f"header.{payload.rstrip('=')}.signature"
 
 
-def test_blob_credential_token_principal_must_match_attested_client(
-    monkeypatch,
-) -> None:
+def test_local_operator_requires_user_and_rechecks_every_token(monkeypatch) -> None:
+    def run(arguments, **_kwargs):
+        value = (
+            {
+                "tenantId": "synthetic-tenant-id",
+                "user": {"type": "user", "name": "synthetic-user"},
+            }
+            if "account" in arguments
+            else {"id": "synthetic-object-id"}
+        )
+        return SimpleNamespace(returncode=0, stdout=json.dumps(value))
+
     monkeypatch.setattr(
         "agent_insights_quality.validation_credentials.subprocess.run",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps(
-                {
-                    "tenantId": "synthetic-tenant-id",
-                    "user": {
-                        "type": "servicePrincipal",
-                        "name": "synthetic-client-id",
-                    }
-                }
-            ),
-        ),
+        run,
     )
     tokens = iter(
         [
             _jwt(
                 {
-                    "appid": "synthetic-client-id",
                     "tid": "synthetic-tenant-id",
                     "oid": "synthetic-object-id",
                 }
             ),
             _jwt(
                 {
-                    "appid": "synthetic-client-id",
                     "tid": "synthetic-tenant-id",
                     "oid": "synthetic-object-id",
                 }
             ),
             _jwt(
                 {
-                    "appid": "synthetic-client-id",
                     "tid": "synthetic-tenant-id",
                     "oid": "rotated-object-id",
                 }
@@ -91,10 +61,29 @@ def test_blob_credential_token_principal_must_match_attested_client(
     identity = types.ModuleType("azure.identity")
     identity.AzureCliCredential = lambda: credential
     monkeypatch.setitem(sys.modules, "azure.identity", identity)
-    wrapped = validation_blob_credential(
-        "synthetic-client-id",
-        "synthetic-object-id",
+
+    operator = local_azure_operator()
+    assert operator.object_id == "synthetic-object-id"
+    assert operator.token_provider("scope")
+    with pytest.raises(ContractError, match="identity changed"):
+        operator.token_provider("scope")
+
+
+def test_local_operator_rejects_service_principal(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_credentials.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "tenantId": "synthetic-tenant-id",
+                    "user": {
+                        "type": "servicePrincipal",
+                        "name": "synthetic-client-id",
+                    },
+                }
+            ),
+        ),
     )
-    assert wrapped.get_token("scope").token
-    with pytest.raises(ContractError, match="identity rotated"):
-        wrapped.get_token("scope")
+    with pytest.raises(ContractError, match="authenticated Azure CLI user"):
+        local_azure_operator()

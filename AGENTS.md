@@ -16,7 +16,8 @@ Agents and 36 reviewed, single-root issues.
   present in committed sanitized daily reports. Never publish private assessment packages or
   work-item context to ADX.
 - Keep email requests, deployment registries, run manifests, assessment packages, assessments,
-  legacy promotion receipts, Test Agent Validation lifecycle/evidence/receipts, provider receipts,
+  legacy promotion receipts, Test Agent Validation lifecycle/history/evidence/CLEAN, approved
+  validation records, provider receipts,
   work-item snapshots, ADX publication receipts, and rendered dashboards under the durable user-level
   `~/.aiq-runtime/agent-insights-quality/` root shared by all worktrees.
 - Canonical daily and staging deployment registries live in the private Azure
@@ -28,7 +29,7 @@ Agents and 36 reviewed, single-root issues.
 - `catalogs/AGENT_CATALOG.yaml` defines the five fixed Agents and profile contract.
 - `catalogs/ISSUE_CATALOG.yaml` defines the 36 fixed issue contracts.
 - Agent and Issue catalogs, Agent implementations, validation modes/rules, schemas, infrastructure,
-  score policy, trusted policy, and receipts require human review.
+  score policy, and approved validation records require human review.
 - Do not add compatibility readers or restore superseded identifiers and formats.
 - Every issue folder is the complete deployable source authority for that version: Prompt issues own a
   full `definition.json`; Hosted issues own a full `source/` tree containing only that defect.
@@ -109,18 +110,17 @@ Agents and 36 reviewed, single-root issues.
 2. Generate readable catalog views when a catalog changes.
 3. Run repository validation, Ruff, and tests.
 4. Compile Bicep when infrastructure changes.
-5. Run one Test Agent Validation cycle. The first pass always covers all 41; fixes may reuse only
-   unchanged current-digest evidence within that cycle. Shared validation-contract changes invalidate
-   all 41 and require a new cycle.
-6. Freeze scope, complete exactly one comprehensive review, run targeted finding verification and CI
-   on the exact final head, then clean every cycle resource exactly.
-7. Require a create-once protected merge receipt. Shadow receipts never authorize merge.
+5. Freeze one clean commit after exactly one comprehensive review and targeted mechanical
+   verification, then run one local full 41-authority Test Agent Validation cycle.
+6. Hold the shared OS lock, keep atomic lifecycle/history/evidence/CLEAN under the durable runtime
+   root, and clean every cycle resource exactly. Any commit change requires a fresh full cycle.
+7. After explicit human approval, create the single minimal create-once approved validation record.
+   GitHub has no validation gate and merge remains manual.
 8. Keep the legacy staging path unchanged only for migration retention; `r03` is final and staging is
    never a fallback.
 
 ```powershell
 python -m agent_insights_quality generate-docs
-python -m agent_insights_quality generate-test-agent-validation-rules --check
 python -m agent_insights_quality validate
 python -m ruff check .
 python -m pytest
@@ -130,7 +130,7 @@ az bicep build --file infra\main.bicep --stdout
 ## Skills
 
 - `.github/skills/agent-insights-quality-daily/SKILL.md`: weekday qualification and publication.
-- `.github/skills/test-agent-validation/SKILL.md`: protected 41-authority candidate gate.
+- `.github/skills/test-agent-validation/SKILL.md`: local 41-authority validation and approval.
 - `.github/skills/staging-qualification/SKILL.md`: retained legacy `r03` history; do not execute.
 - `.github/skills/onboard-test-agent/SKILL.md`: add one reviewed fixed Test Agent.
 - `.github/skills/onboard-new-issue/SKILL.md`: add one reviewed issue.

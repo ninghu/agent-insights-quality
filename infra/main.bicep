@@ -6,8 +6,6 @@ param terraModelVersion string
 param testAgentModelVersion string
 param automationOwner string = 'ninghu'
 param automationPrincipalId string
-param validationPrincipalId string
-param validationReceiptPrincipalId string
 param telemetryGeneration string
 @minValue(1)
 @maxValue(5000)
@@ -38,8 +36,6 @@ module lab 'modules/lab.bicep' = {
     testAgentModelVersion: testAgentModelVersion
     automationOwner: automationOwner
     automationPrincipalId: automationPrincipalId
-    validationPrincipalId: validationPrincipalId
-    validationReceiptPrincipalId: validationReceiptPrincipalId
     telemetryGeneration: telemetryGeneration
     testAgentCapacity: testAgentCapacity
     insightGenerationCapacity: insightGenerationCapacity

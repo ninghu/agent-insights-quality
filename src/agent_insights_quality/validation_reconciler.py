@@ -28,51 +28,23 @@ class ValidationReconciler:
     def reconcile(
         self,
         *,
-        ownership_nonce: str,
-        holder_workflow_reference: str,
-        holder_app_reference: str,
-        holder_run_reference: str,
         alert: Callable[[str], None],
         now: datetime | None = None,
     ) -> str:
         moment = (now or datetime.now(UTC)).astimezone(UTC)
-        before = self._journal.read_active()
-        if before.value["state"] in {"RECEIPT_ISSUED", "FAILED_CLEAN"}:
-            return self._journal.release(
-                before,
-                lease_id=before.value["lease"]["lease_id"],
-                now=moment,
-            ).value["state"]
-        if before.value["state"] == "CLEAN":
-            resumed = self._journal.resume_pending_receipt(now=moment)
-            if resumed is not None:
-                return resumed.value["state"]
-            expires = datetime.fromisoformat(
-                before.value["absolute_expires_at"].replace("Z", "+00:00")
-            ).astimezone(UTC)
-            if moment < expires:
-                return "CLEAN"
-            return self._journal.abandon_expired_clean(
-                ownership_nonce=ownership_nonce,
-                holder_workflow_reference=holder_workflow_reference,
-                holder_app_reference=holder_app_reference,
-                holder_run_reference=holder_run_reference,
-                now=moment,
-            ).value["state"]
+        current = self._journal.read_active()
+        if current.value["state"] in {"CLEAN", "FAILED_CLEAN"}:
+            return str(current.value["state"])
         completed_successfully = bool(
-            before.value["failure"] is None
-            and before.value["evidence_reference"] is not None
-            and before.value["git"]["final_head_sha"] is not None
-            and before.value["git"]["final_tree_sha"] is not None
+            current.value["failure"] is None
+            and current.value["evidence_reference"] is not None
         )
-        lease_id, takeover = self._journal.takeover_for_cleanup(
-            ownership_nonce=ownership_nonce,
-            holder_workflow_reference=holder_workflow_reference,
-            holder_app_reference=holder_app_reference,
-            holder_run_reference=holder_run_reference,
-            now=moment,
-        )
-        current = takeover.active
+        if current.value["state"] != "CLEANING":
+            current = self._journal.commit(
+                current,
+                next_state="CLEANING",
+                now=moment,
+            )
         resource_nonces = {
             item["ownership_nonce"] for item in current.value["resources"]
         }
@@ -81,7 +53,7 @@ class ValidationReconciler:
         resource_nonce = (
             next(iter(resource_nonces))
             if resource_nonces
-            else current.value["lease"]["ownership_nonce"]
+            else current.value["ownership_nonce"]
         )
         plan = build_cleanup_plan(
             cycle_id=current.value["cycle_id"],
@@ -91,7 +63,6 @@ class ValidationReconciler:
         )
         current = self._journal.commit(
             current,
-            lease_id=lease_id,
             next_state="CLEANING",
             updates={
                 "cleanup": {
@@ -100,7 +71,7 @@ class ValidationReconciler:
                 }
             },
             now=moment,
-        ).active
+        )
 
         def record_intent(item: CleanupPlanItem) -> None:
             nonlocal current
@@ -117,11 +88,10 @@ class ValidationReconciler:
                 raise ContractError("Cleanup intent resource disappeared from journal")
             current = self._journal.commit(
                 current,
-                lease_id=lease_id,
                 next_state="CLEANING",
                 updates={"resources": resources},
                 now=moment,
-            ).active
+            )
 
         result = self._cleanup.execute(
             plan,
@@ -157,9 +127,8 @@ class ValidationReconciler:
         if project["provider_id"] in absent:
             project["state"] = "deleted"
             project["delete_observed_at"] = moment.isoformat()
-        committed = self._journal.commit(
+        current = self._journal.commit(
             current,
-            lease_id=lease_id,
             next_state=terminal,
             updates={
                 "cleanup": cleanup,
@@ -168,17 +137,9 @@ class ValidationReconciler:
             },
             now=moment,
         )
-        if not result.exact_clean:
+        if terminal == "CLEANUP_BLOCKED":
             try:
                 alert("test_agent_validation_cleanup_blocked")
             except (OSError, RuntimeError):
-                # Progress and alerting must not replace the durable blocked state.
                 pass
-        active = committed.active
-        if terminal == "FAILED_CLEAN":
-            active = self._journal.release(
-                active,
-                lease_id=lease_id,
-                now=moment,
-            )
-        return active.value["state"]
+        return str(current.value["state"])

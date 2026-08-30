@@ -5,10 +5,10 @@ param accountName string
 param projectName string
 param applicationInsightsName string
 param registryName string
-param automationPrincipalId string
+param validationOperatorPrincipalId string
 param ownershipNonce string
 param cycleId string
-param automationProjectManagerName string
+param validationOperatorProjectManagerName string
 param appInsightsReaderName string
 param modelInferenceUserName string
 param registryPullName string
@@ -45,13 +45,13 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
   properties: {}
 }
 
-resource automationProjectManager 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource validationOperatorProjectManager 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: project
-  name: automationProjectManagerName
+  name: validationOperatorProjectManagerName
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', foundryProjectManagerRoleId)
-    principalId: automationPrincipalId
-    principalType: 'ServicePrincipal'
+    principalId: validationOperatorPrincipalId
+    principalType: 'User'
   }
 }
 
@@ -126,6 +126,6 @@ output connectionIds array = [
   insightsConnection.id
 ]
 output roleAssignmentIds array = [
-  automationProjectManager.id
+  validationOperatorProjectManager.id
   ...projectRbac.outputs.roleAssignmentIds
 ]

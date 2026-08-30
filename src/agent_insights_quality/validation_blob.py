@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import Any
 
 from agent_insights_quality.util import ContractError, canonical_bytes
@@ -32,12 +33,61 @@ class AzureValidationBlobStore:
             credential=credential,
         )
 
+    def assert_approved_record_contract(
+        self,
+        container: str,
+    ) -> None:
+        try:
+            from azure.core.exceptions import AzureError
+        except ImportError as error:
+            raise ContractError(
+                "Approved record upload requires the azure optional dependencies"
+            ) from error
+        try:
+            service = self._service.get_service_properties()
+        except (AzureError, OSError) as error:
+            raise ContractError(
+                "Approved record storage properties cannot be read"
+            ) from error
+        versioning = (
+            service.get("is_versioning_enabled")
+            if isinstance(service, Mapping)
+            else getattr(service, "is_versioning_enabled", None)
+        )
+        if versioning is not True:
+            raise ContractError(
+                "Approved record Blob versioning is not enabled"
+            )
+        if container != "test-agent-validation-approved-records":
+            raise ContractError("Approved record container is not reviewed")
+        try:
+            properties = self._service.get_container_client(
+                container
+            ).get_container_properties()
+        except (AzureError, OSError) as error:
+            raise ContractError("Approved record container is unavailable") from error
+        has_policy = (
+            properties.get("has_immutability_policy")
+            if isinstance(properties, Mapping)
+            else getattr(properties, "has_immutability_policy", None)
+        )
+        immutable_versioning = (
+            properties.get("immutable_storage_with_versioning_enabled")
+            if isinstance(properties, Mapping)
+            else getattr(
+                properties,
+                "immutable_storage_with_versioning_enabled",
+                None,
+            )
+        )
+        if has_policy is not True or immutable_versioning is not True:
+            raise ContractError("Approved record immutable storage is incomplete")
+
     def read(
         self,
         container: str,
         name: str,
         *,
-        lease_id: str | None = None,
         version_id: str | None = None,
     ) -> BlobRecord:
         client = self._service.get_blob_client(
@@ -45,9 +95,9 @@ class AzureValidationBlobStore:
             name,
             version_id=version_id,
         )
-        downloader = client.download_blob(lease=lease_id)
+        downloader = client.download_blob()
         value = downloader.readall()
-        properties = client.get_blob_properties(lease=lease_id)
+        properties = client.get_blob_properties()
         return BlobRecord(
             container=container,
             name=name,
@@ -61,7 +111,6 @@ class AzureValidationBlobStore:
         container: str,
         name: str,
         *,
-        lease_id: str | None = None,
         version_id: str | None = None,
     ) -> BlobRecord | None:
         try:
@@ -74,7 +123,6 @@ class AzureValidationBlobStore:
             return self.read(
                 container,
                 name,
-                lease_id=lease_id,
                 version_id=version_id,
             )
         except ResourceNotFoundError:
@@ -111,130 +159,6 @@ class AzureValidationBlobStore:
                 ) from None
             return existing
         return self.read(container, name)
-
-    def compare_and_swap(
-        self,
-        container: str,
-        name: str,
-        value: dict[str, Any],
-        *,
-        lease_id: str,
-        etag: str,
-    ) -> BlobRecord:
-        try:
-            from azure.core import MatchConditions
-            from azure.core.exceptions import (
-                HttpResponseError,
-                ResourceModifiedError,
-            )
-            from azure.storage.blob import ContentSettings
-        except ImportError as error:
-            raise ContractError(
-                "Validation Blob operations require the azure optional dependencies"
-            ) from error
-        client = self._service.get_blob_client(container, name)
-        try:
-            client.upload_blob(
-                canonical_bytes(value),
-                overwrite=True,
-                content_settings=ContentSettings(
-                    content_type="application/json"
-                ),
-                lease=lease_id,
-                etag=etag,
-                match_condition=MatchConditions.IfNotModified,
-            )
-        except (ResourceModifiedError, HttpResponseError) as error:
-            status_code = getattr(error, "status_code", None)
-            if isinstance(error, ResourceModifiedError) or status_code in {
-                409,
-                412,
-            }:
-                raise ContractError(
-                    "Validation journal lease or ETag ownership was lost"
-                ) from error
-            raise
-        return self.read(container, name, lease_id=lease_id)
-
-    def acquire_infinite_lease(
-        self,
-        container: str,
-        name: str,
-        *,
-        proposed_lease_id: str | None = None,
-    ) -> str:
-        try:
-            from azure.storage.blob import BlobLeaseClient
-        except ImportError as error:
-            raise ContractError(
-                "Validation Blob operations require the azure optional dependencies"
-            ) from error
-        lease = BlobLeaseClient(
-            self._service.get_blob_client(container, name),
-            lease_id=proposed_lease_id,
-        )
-        lease.acquire(lease_duration=-1)
-        if not lease.id:
-            raise ContractError("Validation journal lease acquisition returned no ID")
-        return str(lease.id)
-
-    def break_lease(self, container: str, name: str) -> None:
-        try:
-            from azure.core.exceptions import HttpResponseError
-            from azure.storage.blob import BlobLeaseClient
-        except ImportError as error:
-            raise ContractError(
-                "Validation Blob operations require the azure optional dependencies"
-            ) from error
-        try:
-            BlobLeaseClient(
-                self._service.get_blob_client(container, name)
-            ).break_lease()
-        except HttpResponseError as error:
-            error_code = getattr(error, "error_code", None) or getattr(
-                getattr(error, "error", None),
-                "code",
-                None,
-            )
-            if getattr(error, "status_code", None) == 409 and error_code in {
-                "LeaseNotPresentWithLeaseOperation",
-                "LeaseNotPresent",
-            }:
-                return
-            raise
-
-    def release_lease(
-        self,
-        container: str,
-        name: str,
-        *,
-        lease_id: str,
-    ) -> None:
-        try:
-            from azure.core.exceptions import HttpResponseError
-            from azure.storage.blob import BlobLeaseClient
-        except ImportError as error:
-            raise ContractError(
-                "Validation Blob operations require the azure optional dependencies"
-            ) from error
-        try:
-            BlobLeaseClient(
-                self._service.get_blob_client(container, name),
-                lease_id=lease_id,
-            ).release()
-        except HttpResponseError as error:
-            error_code = getattr(error, "error_code", None) or getattr(
-                getattr(error, "error", None),
-                "code",
-                None,
-            )
-            if getattr(error, "status_code", None) == 409 and error_code in {
-                "LeaseNotPresentWithLeaseOperation",
-                "LeaseNotPresent",
-            }:
-                return
-            raise
-
 
 def _decode_object(value: bytes, label: str) -> dict[str, Any]:
     import json

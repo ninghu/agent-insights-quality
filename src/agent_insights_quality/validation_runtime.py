@@ -82,11 +82,11 @@ def opaque_cycle_suffix(
     *,
     repository: str,
     pr_number: int,
-    candidate_head_sha: str,
+    commit_sha: str,
     run_id: str,
 ) -> str:
     digest = hashlib.sha256(
-        f"{repository}\0{pr_number}\0{candidate_head_sha}\0{run_id}".encode(
+        f"{repository}\0{pr_number}\0{commit_sha}\0{run_id}".encode(
             "ascii"
         )
     ).hexdigest()
@@ -289,7 +289,7 @@ def execute_validation_matrix(
     runner: ScenarioAttemptRunner,
     scheduler: ValidationScheduler,
     model_contract: Mapping[str, Any],
-    validated_head_sha: str,
+    validated_commit_sha: str,
 ) -> list[dict[str, Any]]:
     by_id = {item.authority_id: item for item in authorities}
     baseline_ids = {
@@ -314,7 +314,7 @@ def execute_validation_matrix(
                 runner=runner,
                 scheduler=scheduler,
                 model_contract=model_contract,
-                validated_head_sha=validated_head_sha,
+                validated_commit_sha=validated_commit_sha,
             )
             for authority in lane
         ]
@@ -341,7 +341,7 @@ def _execute_authority(
     runner: ScenarioAttemptRunner,
     scheduler: ValidationScheduler,
     model_contract: Mapping[str, Any],
-    validated_head_sha: str,
+    validated_commit_sha: str,
 ) -> dict[str, Any]:
     validate_validation_rules(
         authority.validation_rules,
@@ -391,7 +391,7 @@ def _execute_authority(
         "source_content_digest": authority.source_content_digest,
         "execution_digest": authority.execution_digest,
         "predicate_contract_digest": "",
-        "validated_head_sha": validated_head_sha,
+        "validated_commit_sha": validated_commit_sha,
         "n": n,
         "k": k,
         "complete_count": sum(item["complete_count"] for item in scenarios),

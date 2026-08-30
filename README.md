@@ -1,17 +1,18 @@
 # Agent Insights Quality
 
 This repository qualifies Microsoft Foundry Agent Insights against five fixed synthetic test Agents.
-Official Daily uses its persistent Project. Test Agent Validation uses the existing isolated validation
-account with one temporary Project per candidate cycle:
+Official Daily uses its persistent Project. Local Test Agent Validation uses the existing isolated
+validation account with one temporary Project per commit:
 
 - `agent-insights-quality` for weekday qualification;
-- one opaque `aiq-validation-*` Project containing 41 independently deployed candidate Agents.
+- one opaque `aiq-validation-*` Project containing 41 independently deployed validation Agents.
 
 Application Insights is read-only. Validation reuses the fixed staging `g29` telemetry pair, creates no
-monitor, runs no Agent Insights assessment or report, and deletes its complete resource inventory
-before issuing a receipt. Test traffic always invokes exact deployed Agent endpoints; direct trace
-injection is forbidden. Private registries, lifecycle journals, evidence, and receipts stay in
-Entra-authenticated Blob storage and the durable user runtime root.
+monitor, runs no Agent Insights assessment or report, and deletes its complete resource inventory.
+Test traffic always invokes exact deployed Agent endpoints; direct trace injection is forbidden.
+Lifecycle, content-addressed history, evidence, and CLEAN proof stay only under the shared
+`~/.aiq-runtime/agent-insights-quality/test-agent-validation/` root. Blob stores only the final
+minimal approved record created after explicit human approval.
 
 Sanitized daily results are published to a shared Azure Data Explorer database in the same
 quality-test resource group. A native ADX dashboard combines run, Agent, issue, card, and field
@@ -59,20 +60,20 @@ Project's ARM `location`, resolves its public display through Azure location met
 the private registry. Reports and email currently show `WestUS2`; missing or mismatched region proof
 fails closed, and the renderer does not supply a fallback.
 
-## Test Agent Validation merge gate
+## Local Test Agent Validation
 
-Every candidate validates five baselines and all 36 issues through 41 independent Agent endpoints.
+Every clean commit validates five baselines and all 36 issues through 41 independent Agent endpoints.
 Each reviewed scenario reruns its setup and probe conversation with a fresh identity. Baselines require
 `5/5` healthy attempts. Deterministic defects require `5/5` observations and paired `v0` at `0/5`;
 model-mediated defects require at least `5/7` and paired `v0` at `0/7`. The reviewed mode is catalog
 data bound into the automatic `execution_digest`; runtime results cannot reclassify, resample, or lower
 the threshold.
 
-The account-wide lifecycle is fenced by an infinite Blob lease plus ETag, immutable event snapshots,
-a 72-hour absolute TTL, and cleanup-only takeover. Merge authorization additionally requires the
-default-branch trusted policy, exact final head, one comprehensive review, targeted verification, CI,
-41/41 current evidence, and immutable `CLEAN` proof. Candidate-head shadow receipts explicitly lack
-that trust anchor and never authorize merge.
+An account-wide OS file lock excludes concurrent worktrees. The local atomic journal, required
+content-addressed history, and 72-hour execution TTL support same-commit cleanup recovery. Any commit
+change cleans the current cycle and requires a fresh full run. After 41/41 evidence and exact CLEAN,
+the user may run a separate approval command that rechecks the current PR head and creates one minimal
+immutable approved Blob record. GitHub provides ordinary mechanical CI only; merge remains manual.
 
 The first run after monitor reset uses the reviewed `0.1`-hour lookback. The runner waits for natural
 telemetry and trace proof before Agent Insights, guards against expired operations, and automatically
@@ -95,20 +96,18 @@ the advisory memory never changes score, ownership, promotion, or Test Agent Val
 python -m pip install -e ".[dev]"
 python -m pip install -e ".[azure]"
 python -m agent_insights_quality generate-docs
-python -m agent_insights_quality generate-test-agent-validation-rules --check
 python -m agent_insights_quality validate
 python -m pytest
 ```
 
-Live commands require protected runtime configuration:
+Live commands use the authenticated local Azure CLI user and private runtime configuration:
 
 ```powershell
 python -m agent_insights_quality deploy-infrastructure
 python -m agent_insights_quality deploy-analytics
-python -m agent_insights_quality prepare-test-agent-validation `
-  --pr-number <number> --candidate-head-sha <sha> --candidate-tree-sha <sha> `
-  --workflow-run-id <run> `
-  --output $HOME\.aiq-runtime\agent-insights-quality\test-agent-validation\candidate.json
+python -m agent_insights_quality run-test-agent-validation
+# Run only after explicit human approval of the exact CLEAN result:
+python -m agent_insights_quality approve-test-agent-validation
 # Legacy migration commands remain implemented but must not be invoked after r03:
 # python -m agent_insights_quality provision --profile staging
 python -m agent_insights_quality fetch-quality-work-items `
@@ -116,6 +115,7 @@ python -m agent_insights_quality fetch-quality-work-items `
   --report-date <Pacific YYYY-MM-DD> `
   --output $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
 # python -m agent_insights_quality run-full --report-date <Pacific YYYY-MM-DD>
+$env:AIQ_APPROVED_VALIDATION_RECORD = "<private-approved-record-path>"
 python -m agent_insights_quality provision --profile daily
 python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD> `
   --work-items $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json

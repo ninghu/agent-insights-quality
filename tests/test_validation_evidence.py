@@ -14,8 +14,10 @@ from agent_insights_quality.validation_evidence import (
     stamp_evidence_digests,
     validate_evidence,
 )
-from agent_insights_quality.validation_blob import BlobRecord
-from agent_insights_quality.validation_manifest import authority_specs
+from agent_insights_quality.validation_manifest import (
+    authority_specs,
+    current_validation_digest,
+)
 
 HASH = "sha256:" + ("a" * 64)
 HEAD = "b" * 40
@@ -172,7 +174,7 @@ def _authority(spec, *, observed: int) -> dict:
         "source_content_digest": spec.source_content_digest,
         "execution_digest": spec.execution_digest,
         "predicate_contract_digest": HASH,
-        "validated_head_sha": HEAD,
+        "validated_commit_sha": HEAD,
         "n": n,
         "k": 5,
         "complete_count": n,
@@ -201,30 +203,15 @@ def _evidence() -> dict:
         {
             "schema_version": "1.0.0",
             "kind": "test-agent-validation-evidence",
-            "cycle_id": "validation-cycle-0001",
-            "epoch": 1,
-            "repository": "ninghu/agent-insights-quality",
-            "pr_number": 999,
-            "candidate_head_sha": HEAD,
-            "candidate_tree_sha": "c" * 40,
-            "policy_manifest_digest": HASH,
-            "catalog_hashes": {
-                "agents": HASH,
-                "issues": HASH,
-                "artifacts": HASH,
-            },
-            "artifact_manifest_hash": HASH,
-            "source_tree_digest": HASH,
-            "validation_contract_digest": HASH,
-            "execution_matrix_digest": HASH,
-            "runtime_topology_digest": HASH,
-            "quota_plan_digest": HASH,
+            "commit_sha": HEAD,
+            "validation_digest": current_validation_digest(agents, issues),
+            "execution_matrix_digest": content_hash(
+                {
+                    item.authority_id: item.execution_digest
+                    for item in specs
+                }
+            ),
             "telemetry_resource_set": "g29",
-            "test_agent_model": {
-                "deployment_name": "gpt-5.4-mini",
-                "model_id": "gpt-5.4-mini",
-                "model_version": "2026-03-17",
-            },
             "authorities": authorities,
             "evidence_digest": HASH,
         }
@@ -350,7 +337,6 @@ def test_evidence_binds_every_authority_to_exact_runtime_topology() -> None:
                 "provider_agent_version_id": provider_version_id,
             }
         )
-    value["runtime_topology_digest"] = content_hash(agents)
     value = stamp_evidence_digests(value)
     validate_evidence(value, runtime_topology={"agents": agents})
 
@@ -361,15 +347,15 @@ def test_evidence_binds_every_authority_to_exact_runtime_topology() -> None:
         validate_evidence(tampered, runtime_topology={"agents": agents})
 
 
-def test_evidence_rejects_cross_cycle_or_wrong_head_authority() -> None:
+def test_evidence_rejects_wrong_commit_authority() -> None:
     value = _evidence()
-    value["authorities"][0]["validated_head_sha"] = "d" * 40
+    value["authorities"][0]["validated_commit_sha"] = "d" * 40
     value = stamp_evidence_digests(value)
-    with pytest.raises(ContractError, match="candidate head"):
+    with pytest.raises(ContractError, match="bound to the commit"):
         validate_evidence(value)
 
 
-def test_evidence_is_create_once_in_private_snapshot_storage(
+def test_evidence_is_content_addressed_in_private_local_storage(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -377,20 +363,12 @@ def test_evidence_is_create_once_in_private_snapshot_storage(
     monkeypatch.setenv("AIQ_RUNTIME_ROOT", str(private))
     value = _evidence()
 
-    class Store:
-        @staticmethod
-        def create_once(container, name, payload):
-            return BlobRecord(
-                container,
-                name,
-                deepcopy(payload),
-                "evidence-etag",
-                "evidence-version",
-            )
-
-    record = persist_evidence(Store(), value)
-    assert record.container == "test-agent-validation-snapshots"
-    assert record.name.endswith("test-agent-validation-evidence.json")
-    assert (
-        private / "test-agent-validation" / record.name
-    ).is_file()
+    record = persist_evidence(
+        value,
+        repository="ninghu/agent-insights-quality",
+        pr_number=999,
+        cycle_id="validation-cycle-0001",
+    )
+    assert record.digest == value["evidence_digest"]
+    assert record.path.is_file()
+    assert private / "test-agent-validation" in record.path.parents
