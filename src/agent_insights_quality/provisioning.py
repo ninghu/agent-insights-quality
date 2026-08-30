@@ -1538,6 +1538,14 @@ class FoundryProvisioner:
             time.sleep(2**attempt)
         if status not in (expected or {200, 201, 202}):
             code, message = _remote_error(payload)
+            safe_code = (
+                code
+                if re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", code)
+                else "unavailable"
+            )
+            self.report_progress(
+                f"Foundry {method} rejected: status={status}; code={safe_code}"
+            )
             raise RemoteHttpError(
                 status,
                 code,

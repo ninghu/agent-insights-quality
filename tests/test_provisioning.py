@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import io
 import urllib.error
 from pathlib import Path
 
+import pytest
+
 from agent_insights_quality.provisioning import (
     FoundryProvisioner,
+    RemoteHttpError,
     _monitor_inventory_matches,
     _version_from_response,
     deterministic_zip,
@@ -101,3 +105,51 @@ def test_monitor_list_get_retries_no_response(monkeypatch) -> None:
     )
     assert client._list_monitors() == []
     assert attempts == 2
+
+
+def test_foundry_error_progress_is_public_safe(monkeypatch) -> None:
+    payload = json.dumps(
+        {
+            "error": {
+                "code": "TooManyRequests",
+                "message": "private request detail",
+            }
+        }
+    ).encode()
+
+    def open_request(request, **_kwargs):
+        raise urllib.error.HTTPError(
+            request.full_url,
+            429,
+            "Too Many Requests",
+            {},
+            io.BytesIO(payload),
+        )
+
+    monkeypatch.setattr(
+        "agent_insights_quality.provisioning.urllib.request.urlopen",
+        open_request,
+    )
+    client = FoundryProvisioner(
+        RuntimeProfile(
+            name="validation",
+            project_name="validation",
+            project_endpoint="https://example.invalid",
+            insights_endpoint="https://example.invalid",
+            application_insights_resource_id="/subscriptions/hidden/insights",
+            registry_path=Path("registry.json"),
+        ),
+        token_provider=lambda _: "synthetic-token",
+    )
+    messages = []
+    client.report_progress = messages.append  # type: ignore[method-assign]
+    with pytest.raises(RemoteHttpError):
+        client._request(
+            "POST",
+            "/agents",
+            body=b"{}",
+            hosted=False,
+        )
+    assert messages == [
+        "Foundry POST rejected: status=429; code=TooManyRequests"
+    ]
