@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import Mapping
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,7 @@ from agent_insights_quality.validation_cleanup_azure import (
     AzureValidationCleanupBackend,
 )
 from agent_insights_quality.validation_credentials import (
-    verify_azure_service_principal,
+    validation_blob_credential,
 )
 from agent_insights_quality.validation_cycle import (
     ValidationCycleController,
@@ -39,8 +40,15 @@ from agent_insights_quality.validation_issuer import (
     current_issuer_code_digest,
     github_actions_oidc_subject,
     oidc_subject_digest,
+    publish_required_check,
+    select_provenance_check,
 )
-from agent_insights_quality.validation_lifecycle import LifecycleJournal
+from agent_insights_quality.validation_lifecycle import (
+    ACTIVE_BLOB,
+    ACTIVE_CONTAINER,
+    LifecycleJournal,
+    validate_lifecycle,
+)
 from agent_insights_quality.validation_live import FoundryScenarioAttemptRunner
 from agent_insights_quality.validation_manifest import (
     authority_specs,
@@ -67,7 +75,7 @@ from agent_insights_quality.validation_quota import (
 )
 
 
-def run_shadow_gate(
+def run_validation_gate(
     *,
     candidate_path: Path,
     storage_account: str,
@@ -75,11 +83,14 @@ def run_shadow_gate(
     automation_principal_id: str,
     receipt_output: Path,
     github_token: str,
+    mode: str = "shadow",
     environment: Mapping[str, str] | None = None,
     now: Any = lambda: datetime.now(UTC),
 ) -> dict[str, Any]:
+    if mode not in {"shadow", "merge"}:
+        raise ContractError("Validation gate mode must be shadow or merge")
     values = environment or os.environ
-    verify_azure_service_principal(expected_azure_client_id)
+    blob_credential = validation_blob_credential(expected_azure_client_id)
     if not github_token:
         raise ContractError("Scoped GitHub token is required")
     candidate = read_json(candidate_path)
@@ -99,7 +110,10 @@ def run_shadow_gate(
         cycle_id=candidate["cycle_id"],
         base=base_profile,
     )
-    store = AzureValidationBlobStore(storage_account)
+    store = AzureValidationBlobStore(
+        storage_account,
+        credential=blob_credential,
+    )
     lease_id = str(uuid.uuid4())
     ownership_nonce = uuid.uuid4().hex
     workflow_reference = str(values.get("GITHUB_WORKFLOW_REF") or "")
@@ -209,12 +223,29 @@ def run_shadow_gate(
             model_contract=agents["models"]["test_agents"],
             now=now,
         )
-        controller.record_review(
-            mode="shadow_skipped",
-            check_reference=None,
-            findings_digest=None,
-            now=now(),
-        )
+        reader = GhGitHubStateReader(github_token)
+        if mode == "merge":
+            review_check = reader.check_record(
+                repository=candidate["repository"],
+                head_sha=candidate["candidate_head_sha"],
+                name=trusted_policy["checks"]["comprehensive_review"],
+                expected_workflow_path=trusted_policy["workflow"]["review_path"],
+                expected_app_id=trusted_policy["issuer"]["app_id"],
+                expected_app_slug=trusted_policy["issuer"]["app_slug"],
+            )
+            controller.record_review(
+                mode="comprehensive",
+                check_reference=str(review_check["check_run_id"]),
+                findings_digest=review_check["result_digest"],
+                now=now(),
+            )
+        else:
+            controller.record_review(
+                mode="shadow_skipped",
+                check_reference=None,
+                findings_digest=None,
+                now=now(),
+            )
         controller.begin_revalidation(
             head_sha=candidate["candidate_head_sha"],
             tree_sha=candidate["candidate_tree_sha"],
@@ -233,6 +264,22 @@ def run_shadow_gate(
             evidence=evidence_record,
             now=now(),
         )
+        targeted = reader.check_record(
+            repository=candidate["repository"],
+            head_sha=candidate["candidate_head_sha"],
+            name=trusted_policy["checks"]["targeted_verification"],
+            expected_workflow_path=trusted_policy["workflow"]["targeted_path"],
+            expected_app_id=trusted_policy["issuer"]["app_id"],
+            expected_app_slug=trusted_policy["issuer"]["app_slug"],
+        )
+        ci = reader.check_record(
+            repository=candidate["repository"],
+            head_sha=candidate["candidate_head_sha"],
+            name=trusted_policy["checks"]["continuous_integration"],
+            expected_workflow_path=trusted_policy["workflow"]["ci_path"],
+            expected_app_id=trusted_policy["issuer"]["app_id"],
+            expected_app_slug=trusted_policy["issuer"]["app_slug"],
+        )
         cleanup_backend = AzureValidationCleanupBackend(
             profile=profile,
             runtime_topology=controller.active.value["runtime_topology"],
@@ -246,17 +293,28 @@ def run_shadow_gate(
             failed_cycle=False,
             now=now,
         )
-        reader = GhGitHubStateReader(github_token)
-        targeted = reader.check_record(
-            repository=candidate["repository"],
-            head_sha=candidate["candidate_head_sha"],
-            name=trusted_policy["checks"]["targeted_verification"],
-        )
-        ci = reader.check_record(
-            repository=candidate["repository"],
-            head_sha=candidate["candidate_head_sha"],
-            name=trusted_policy["checks"]["continuous_integration"],
-        )
+        output = receipt_output.expanduser().resolve()
+        private = runtime_root()
+        if output != private and private not in output.parents:
+            raise ContractError("Validation receipt output must stay private")
+        if mode == "merge":
+            handoff = {
+                "schema_version": "1.0.0",
+                "kind": "test-agent-validation-merge-handoff",
+                "cycle_id": candidate["cycle_id"],
+                "repository": candidate["repository"],
+                "pr_number": candidate["pr_number"],
+                "final_head_sha": candidate["candidate_head_sha"],
+                "final_tree_sha": candidate["candidate_tree_sha"],
+                "clean_snapshot": controller.active.value["clean_snapshot"],
+            }
+            immutable_json(output, handoff)
+            return {
+                "cycle_id": candidate["cycle_id"],
+                "state": "CLEAN",
+                "handoff": str(output),
+                "final_head_sha": candidate["candidate_head_sha"],
+            }
         workflow = reader.workflow_state(
             repository=candidate["repository"],
             run_id=int(values["GITHUB_RUN_ID"]),
@@ -304,10 +362,6 @@ def run_shadow_gate(
             continuous_integration=ci,
             issued_at=now().astimezone(UTC).isoformat(),
         )
-        output = receipt_output.expanduser().resolve()
-        private = runtime_root()
-        if output != private and private not in output.parents:
-            raise ContractError("Validation receipt output must stay private")
         immutable_json(output, receipt)
         receipt_record = ReceiptIssuer(store).issue_shadow(
             receipt,
@@ -336,6 +390,201 @@ def run_shadow_gate(
                 now=now,
             )
         raise
+
+
+def run_shadow_gate(
+    *,
+    candidate_path: Path,
+    storage_account: str,
+    expected_azure_client_id: str,
+    automation_principal_id: str,
+    receipt_output: Path,
+    github_token: str,
+    environment: Mapping[str, str] | None = None,
+    now: Any = lambda: datetime.now(UTC),
+) -> dict[str, Any]:
+    return run_validation_gate(
+        candidate_path=candidate_path,
+        storage_account=storage_account,
+        expected_azure_client_id=expected_azure_client_id,
+        automation_principal_id=automation_principal_id,
+        receipt_output=receipt_output,
+        github_token=github_token,
+        mode="shadow",
+        environment=environment,
+        now=now,
+    )
+
+
+def construct_and_issue_merge_receipt(
+    *,
+    storage_account: str,
+    expected_azure_client_id: str,
+    cycle_id: str,
+    final_head_sha: str,
+    receipt_output: Path,
+    github_token: str,
+    environment: Mapping[str, str] | None = None,
+    now: Any = lambda: datetime.now(UTC),
+) -> dict[str, Any]:
+    values = environment or os.environ
+    blob_credential = validation_blob_credential(expected_azure_client_id)
+    if not github_token:
+        raise ContractError("Scoped GitHub token is required")
+    store = AzureValidationBlobStore(
+        storage_account,
+        credential=blob_credential,
+    )
+    active = store.read(ACTIVE_CONTAINER, ACTIVE_BLOB)
+    validate_lifecycle(active.value)
+    lifecycle = active.value
+    if (
+        lifecycle["state"] != "CLEAN"
+        or lifecycle["cycle_id"] != cycle_id
+        or lifecycle["git"]["final_head_sha"] != final_head_sha
+    ):
+        raise ContractError("Protected receipt lifecycle does not match the request")
+    review_state = lifecycle.get("review")
+    if (
+        not isinstance(review_state, Mapping)
+        or review_state.get("mode") != "comprehensive"
+        or review_state.get("head_sha") != lifecycle["scope_freeze"]["head_sha"]
+    ):
+        raise ContractError("Protected receipt requires lifecycle-bound review proof")
+    clean_reference = lifecycle["clean_snapshot"]
+    evidence_reference = lifecycle["evidence_reference"]
+    clean = store.read(
+        *str(clean_reference["path"]).split("/", 1),
+        version_id=clean_reference["version_id"],
+    )
+    evidence_record = store.read(
+        *str(evidence_reference["path"]).split("/", 1),
+        version_id=evidence_reference["version_id"],
+    )
+    trusted_policy, _ = load_trusted_policy()
+    run_id = int(str(values.get("GITHUB_RUN_ID") or "0"))
+    if run_id < 1:
+        raise ContractError("Protected receipt workflow run identity is missing")
+    reader = GhGitHubStateReader(github_token)
+    queried = reader.read(
+        repository=lifecycle["repository"],
+        pr_number=lifecycle["pr_number"],
+        final_head_sha=final_head_sha,
+        policy_path=trusted_policy["policy_path"],
+        default_branch=trusted_policy["default_branch"],
+        issuer_run_id=run_id,
+        review_head_sha=lifecycle["scope_freeze"]["head_sha"],
+    )
+    def checked(name_key: str, workflow_key: str, head: str):
+        return select_provenance_check(
+            queried.checks,
+            name=trusted_policy["checks"][name_key],
+            workflow_path=trusted_policy["workflow"][workflow_key],
+            head_sha=head,
+            app_id=trusted_policy["issuer"]["app_id"],
+            app_slug=trusted_policy["issuer"]["app_slug"],
+        )
+
+    review_check = checked(
+        "comprehensive_review",
+        "review_path",
+        lifecycle["scope_freeze"]["head_sha"],
+    )
+    targeted_check = checked(
+        "targeted_verification",
+        "targeted_path",
+        final_head_sha,
+    )
+    ci_check = checked(
+        "continuous_integration",
+        "ci_path",
+        final_head_sha,
+    )
+    if (
+        review_state.get("check_reference") != str(review_check.check_run_id)
+        or review_state.get("findings_digest") != review_check.result_digest
+    ):
+        raise ContractError("Lifecycle review proof changed before receipt issuance")
+    workflow = queried.issuer_workflow
+    issuer = {
+        "environment": trusted_policy["protected_environment"],
+        "oidc_subject_digest": oidc_subject_digest(
+            github_actions_oidc_subject(values)
+        ),
+        "app_id": trusted_policy["issuer"]["app_id"],
+        "app_slug": trusted_policy["issuer"]["app_slug"],
+        "workflow_database_id": workflow.workflow_id,
+        "workflow_path": workflow.workflow_path,
+        "workflow_ref": trusted_policy["workflow"]["required_ref"],
+        "workflow_commit_sha": workflow.workflow_sha,
+        "run_id": workflow.run_id,
+        "run_attempt": workflow.run_attempt,
+        "issuer_code_digest": current_issuer_code_digest(),
+    }
+    receipt = build_validation_receipt(
+        mode="merge",
+        evidence=evidence_record.value,
+        clean_snapshot=clean,
+        issuer=issuer,
+        trusted_policy_manifest=trusted_policy,
+        policy_commit_sha=queried.policy_commit_sha,
+        policy_content_digest=queried.policy_content_digest,
+        review={
+            "status": "success",
+            "comprehensive_review_count": 1,
+            "exercised_requirements": [
+                "comprehensive_review",
+                "lifecycle",
+                "targeted_verification",
+                "continuous_integration",
+                "exact_cleanup",
+            ],
+            "missing_requirements": [],
+            "check": asdict(review_check),
+            "findings_digest": review_check.result_digest,
+        },
+        targeted_verification=asdict(
+            targeted_check
+        ),
+        continuous_integration=asdict(
+            ci_check
+        ),
+        issued_at=now().astimezone(UTC).isoformat(),
+    )
+    output = receipt_output.expanduser().resolve()
+    private = runtime_root()
+    if output != private and private not in output.parents:
+        raise ContractError("Validation receipt output must stay private")
+    immutable_json(output, receipt)
+    record = ReceiptIssuer(store).issue_merge(
+        receipt,
+        trusted_policy=trusted_policy,
+        reader=reader,
+        oidc_subject=github_actions_oidc_subject(values),
+        environment=values,
+    )
+    controller = ValidationCycleController(
+        LifecycleJournal(
+            store,
+            load_validation_policy(),
+            mirror_root=private / "test-agent-validation" / "lifecycle",
+        ),
+        lease_id=active.value["lease"]["lease_id"],
+        active=active,
+    )
+    controller.receipt_issued(record, now=now())
+    required_check = publish_required_check(
+        receipt,
+        trusted_policy=trusted_policy,
+        token=github_token,
+    )
+    return {
+        "cycle_id": cycle_id,
+        "state": "RECEIPT_ISSUED",
+        "receipt": str(output),
+        "receipt_digest": receipt["receipt_digest"],
+        "required_check": required_check,
+    }
 
 
 def _authority_costs(

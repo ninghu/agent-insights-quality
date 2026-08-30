@@ -104,6 +104,7 @@
         "provider_agent_version_reference",
         "source_content_digest",
         "execution_digest",
+        "predicate_contract_digest",
         "validated_head_sha",
         "n",
         "k",
@@ -148,6 +149,7 @@
         "provider_agent_version_reference": {"$ref": "#/$defs/hash"},
         "source_content_digest": {"$ref": "#/$defs/hash"},
         "execution_digest": {"$ref": "#/$defs/hash"},
+        "predicate_contract_digest": {"$ref": "#/$defs/hash"},
         "validated_head_sha": {"$ref": "#/$defs/gitSha"},
         "n": {"enum": [5, 7]},
         "k": {"const": 5},
@@ -194,6 +196,7 @@
         "healthy_predicate",
         "defect_predicate",
         "v0_control_predicate",
+        "predicate_contract_digest",
         "n",
         "k",
         "complete_count",
@@ -268,6 +271,7 @@
             }
           ]
         },
+        "predicate_contract_digest": {"$ref": "#/$defs/hash"},
         "n": {"enum": [5, 7]},
         "k": {"const": 5},
         "complete_count": {"type": "integer", "minimum": 0},

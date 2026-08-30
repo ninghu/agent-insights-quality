@@ -75,6 +75,8 @@ def test_validation_cli_exposes_contract_lifecycle_receipt_and_reconciler_comman
             "receipt.json",
             "--storage-account",
             "syntheticstorage",
+            "--expected-azure-client-id",
+            "client-id",
         ]
     ).command == "issue-test-agent-validation-receipt"
     assert parser.parse_args(
@@ -82,6 +84,8 @@ def test_validation_cli_exposes_contract_lifecycle_receipt_and_reconciler_comman
             "reconcile-test-agent-validation",
             "--storage-account",
             "syntheticstorage",
+            "--expected-azure-client-id",
+            "client-id",
             "--ownership-nonce",
             "nonce-0001",
             "--holder-workflow-reference",
@@ -92,6 +96,21 @@ def test_validation_cli_exposes_contract_lifecycle_receipt_and_reconciler_comman
             "run",
         ]
     ).command == "reconcile-test-agent-validation"
+    assert parser.parse_args(
+        [
+            "issue-test-agent-validation-merge-receipt",
+            "--storage-account",
+            "syntheticstorage",
+            "--expected-azure-client-id",
+            "client-id",
+            "--cycle-id",
+            "validation-cycle-0001",
+            "--final-head-sha",
+            "a" * 40,
+            "--receipt-output",
+            "receipt.json",
+        ]
+    ).command == "issue-test-agent-validation-merge-receipt"
     assert parser.parse_args(
         [
             "run-test-agent-validation",
@@ -121,7 +140,7 @@ def test_run_validation_cli_dispatches_complete_shadow_gate(
 ) -> None:
     observed = {}
 
-    def run_shadow_gate(**kwargs):
+    def run_validation_gate(**kwargs):
         observed.update(kwargs)
         return {
             "cycle_id": "validation-cycle-0001",
@@ -130,7 +149,7 @@ def test_run_validation_cli_dispatches_complete_shadow_gate(
             "receipt_digest": "sha256:" + ("a" * 64),
         }
 
-    monkeypatch.setattr(cli, "run_shadow_gate", run_shadow_gate)
+    monkeypatch.setattr(cli, "run_validation_gate", run_validation_gate)
     monkeypatch.setenv("GH_TOKEN", "synthetic-scoped-token")
     args = cli.build_parser().parse_args(
         [
@@ -151,3 +170,60 @@ def test_run_validation_cli_dispatches_complete_shadow_gate(
     assert result["state"] == "RECEIPT_ISSUED"
     assert observed["github_token"] == "synthetic-scoped-token"
     assert observed["candidate_path"] == Path("candidate.json")
+    assert observed["mode"] == "shadow"
+
+    merge_args = cli.build_parser().parse_args(
+        [
+            "run-test-agent-validation",
+            "--mode",
+            "merge",
+            "--candidate",
+            "candidate.json",
+            "--storage-account",
+            "syntheticstorage",
+            "--expected-azure-client-id",
+            "client-id",
+            "--automation-principal-id",
+            "principal-id",
+            "--receipt-output",
+            "handoff.json",
+        ]
+    )
+    cli._dispatch(merge_args)
+    assert observed["mode"] == "merge"
+
+
+def test_merge_receipt_cli_constructs_from_lifecycle(
+    monkeypatch,
+) -> None:
+    observed = {}
+    monkeypatch.setenv("GH_TOKEN", "synthetic-scoped-token")
+    monkeypatch.setattr(
+        cli,
+        "construct_and_issue_merge_receipt",
+        lambda **kwargs: observed.update(kwargs)
+        or {
+            "cycle_id": kwargs["cycle_id"],
+            "state": "RECEIPT_ISSUED",
+            "receipt_digest": "sha256:" + ("a" * 64),
+        },
+    )
+    args = cli.build_parser().parse_args(
+        [
+            "issue-test-agent-validation-merge-receipt",
+            "--storage-account",
+            "syntheticstorage",
+            "--expected-azure-client-id",
+            "client-id",
+            "--cycle-id",
+            "validation-cycle-0001",
+            "--final-head-sha",
+            "b" * 40,
+            "--receipt-output",
+            "receipt.json",
+        ]
+    )
+    result = json.loads(cli._dispatch(args) or "{}")
+    assert result["state"] == "RECEIPT_ISSUED"
+    assert observed["cycle_id"] == "validation-cycle-0001"
+    assert observed["github_token"] == "synthetic-scoped-token"

@@ -16,11 +16,12 @@ class BlobRecord:
 
 
 class AzureValidationBlobStore:
-    def __init__(self, storage_account_name: str) -> None:
+    def __init__(self, storage_account_name: str, *, credential: Any) -> None:
         if not storage_account_name:
             raise ContractError("Validation storage account name is required")
+        if credential is None:
+            raise ContractError("Explicit Validation Blob credential is required")
         try:
-            from azure.identity import DefaultAzureCredential
             from azure.storage.blob import BlobServiceClient
         except ImportError as error:
             raise ContractError(
@@ -28,7 +29,7 @@ class AzureValidationBlobStore:
             ) from error
         self._service = BlobServiceClient(
             account_url=f"https://{storage_account_name}.blob.core.windows.net",
-            credential=DefaultAzureCredential(),
+            credential=credential,
         )
 
     def read(

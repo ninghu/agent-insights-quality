@@ -544,6 +544,7 @@ def _build_support_images(
     agent: dict[str, Any],
     *,
     progress: ProgressReporter | None = None,
+    record_resource: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, str]:
     reporter = progress or ProgressReporter("aiq-provision")
     report = reporter.emit
@@ -635,6 +636,7 @@ def _build_support_images(
                     logical_version=logical,
                     wheelhouse_port=server.server_port,
                     progress=reporter,
+                    record_resource=record_resource,
                 )
                 for logical in versions
             }
@@ -651,6 +653,7 @@ def _build_and_push_support_image(
     logical_version: str,
     wheelhouse_port: int,
     progress: ProgressReporter | None = None,
+    record_resource: Callable[[dict[str, Any]], None] | None = None,
 ) -> str:
     reporter = progress or ProgressReporter("aiq-provision")
     report = reporter.emit
@@ -723,6 +726,34 @@ def _build_and_push_support_image(
     if build.returncode != 0:
         raise ContractError(f"Support image build failed for {logical_version}")
     report(f"support-ticket-agent/{logical_version}: image built; pushing")
+    authority_id = (
+        "support-ticket-agent/v0"
+        if logical_version == "v0"
+        else logical_version
+    )
+    tag_resource = {
+        "kind": "acr_tag",
+        "intent_reference": remote_tag,
+        "deterministic_name": f"agent-insights-quality-support:{tag}",
+        "authority_id": authority_id,
+        "parent_id": None,
+    }
+    manifest_resource = {
+        "kind": "acr_manifest",
+        "intent_reference": content_hash(
+            {
+                "kind": "acr_manifest",
+                "repository": "agent-insights-quality-support",
+                "tag": tag,
+            }
+        ),
+        "deterministic_name": "agent-insights-quality-support",
+        "authority_id": authority_id,
+        "parent_id": None,
+    }
+    if record_resource is not None:
+        record_resource({**tag_resource, "state": "create_intent"})
+        record_resource({**manifest_resource, "state": "create_intent"})
     try:
         subprocess.run(
             ["docker", "tag", local_tag, remote_tag],
@@ -745,6 +776,21 @@ def _build_and_push_support_image(
                     outcome.fail()
             match = re.search(r"digest:\s*(sha256:[0-9a-f]{64})", push.stdout)
             if push.returncode == 0 and match:
+                if record_resource is not None:
+                    record_resource(
+                        {
+                            **tag_resource,
+                            "state": "created",
+                            "provider_id": remote_tag,
+                        }
+                    )
+                    record_resource(
+                        {
+                            **manifest_resource,
+                            "state": "created",
+                            "provider_id": match.group(1),
+                        }
+                    )
                 report(f"support-ticket-agent/{logical_version}: image published")
                 return (
                     f"{registry}.azurecr.io/agent-insights-quality-support@"
@@ -752,6 +798,22 @@ def _build_and_push_support_image(
                 )
             recovered = _existing_acr_image(registry, tag, progress=reporter)
             if recovered:
+                if record_resource is not None:
+                    digest = recovered.rsplit("@", 1)[-1]
+                    record_resource(
+                        {
+                            **tag_resource,
+                            "state": "created",
+                            "provider_id": remote_tag,
+                        }
+                    )
+                    record_resource(
+                        {
+                            **manifest_resource,
+                            "state": "created",
+                            "provider_id": digest,
+                        }
+                    )
                 report(
                     f"support-ticket-agent/{logical_version}: published image recovered"
                 )
@@ -763,6 +825,15 @@ def _build_and_push_support_image(
                 )
                 time.sleep(30 * (attempt + 1))
         raise ContractError(f"Support image push failed for {logical_version}")
+    except (ContractError, OSError, subprocess.SubprocessError) as error:
+        if record_resource is not None:
+            record_resource({**tag_resource, "state": "ambiguous_create"})
+            record_resource({**manifest_resource, "state": "ambiguous_create"})
+        if isinstance(error, ContractError):
+            raise
+        raise ContractError(
+            f"Support image publication failed for {logical_version}"
+        ) from error
     finally:
         try:
             with reporter.heartbeat(

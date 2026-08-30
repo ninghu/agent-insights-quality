@@ -3,15 +3,18 @@ name: Test Agent Validation protected receipt
 on:
   workflow_dispatch:
     inputs:
-      receipt_file:
-        description: Receipt path relative to the durable Test Agent Validation runtime root
+      cycle_id:
+        description: Completed validation cycle ID
+        required: true
+        type: string
+      final_head_sha:
+        description: Exact candidate head authorized by the receipt
         required: true
         type: string
 
 permissions:
   contents: read
   pull-requests: read
-  checks: read
   actions: read
   id-token: write
   checks: write
@@ -29,7 +32,8 @@ jobs:
       AIQ_VALIDATION_STORAGE_ACCOUNT: ${{ vars.AIQ_VALIDATION_STORAGE_ACCOUNT }}
       AIQ_VALIDATION_ENVIRONMENT: test-agent-validation-receipt
       EXPECTED_AZURE_CLIENT_ID: ${{ vars.AIQ_VALIDATION_RECEIPT_CLIENT_ID }}
-      RECEIPT_FILE: ${{ inputs.receipt_file }}
+      CYCLE_ID: ${{ inputs.cycle_id }}
+      FINAL_HEAD_SHA: ${{ inputs.final_head_sha }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
@@ -49,23 +53,18 @@ jobs:
         run: |
           python -m agent_insights_quality verify-test-agent-validation-credential `
             --expected-client-id $env:EXPECTED_AZURE_CLIENT_ID
-      - name: Issue create-once protected receipt
+      - name: Construct and issue create-once protected receipt
         shell: pwsh
         run: |
           $root = Join-Path $env:AIQ_RUNTIME_ROOT "test-agent-validation"
-          if ($env:RECEIPT_FILE -notmatch '^[A-Za-z0-9._/-]+$') {
-            throw "Receipt path contains invalid characters"
+          if ($env:CYCLE_ID -notmatch '^[a-z0-9][a-z0-9-]{7,63}$' -or
+              $env:FINAL_HEAD_SHA -notmatch '^[0-9a-f]{40}$') {
+            throw "Receipt construction input is invalid"
           }
-          $receipt = Join-Path $root $env:RECEIPT_FILE
-          $resolvedRoot = [IO.Path]::GetFullPath($root)
-          $resolvedReceipt = [IO.Path]::GetFullPath($receipt)
-          if (-not $resolvedReceipt.StartsWith($resolvedRoot + [IO.Path]::DirectorySeparatorChar)) {
-            throw "Receipt path escapes the durable validation root"
-          }
-          $document = Get-Content -Raw $resolvedReceipt | ConvertFrom-Json
-          if ($document.mode -ne "merge" -or $document.authorizes_merge -ne $true) {
-            throw "Protected receipt workflow accepts merge receipts only"
-          }
-          python -m agent_insights_quality issue-test-agent-validation-receipt `
-            --receipt $resolvedReceipt `
-            --storage-account $env:AIQ_VALIDATION_STORAGE_ACCOUNT
+          $receipt = Join-Path $root "receipt-requests/$env:FINAL_HEAD_SHA-merge.json"
+          python -m agent_insights_quality issue-test-agent-validation-merge-receipt `
+            --cycle-id $env:CYCLE_ID `
+            --final-head-sha $env:FINAL_HEAD_SHA `
+            --receipt-output $receipt `
+            --storage-account $env:AIQ_VALIDATION_STORAGE_ACCOUNT `
+            --expected-azure-client-id $env:EXPECTED_AZURE_CLIENT_ID

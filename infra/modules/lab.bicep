@@ -451,22 +451,32 @@ resource validationShadowReceiptContributor 'Microsoft.Authorization/roleAssignm
   }
 }
 
-resource validationReceiptLifecycleReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource validationReceiptLifecycleContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: validationLifecycle
-  name: guid(validationLifecycle.id, validationReceiptPrincipalId, blobReaderRoleId)
+  name: guid(validationLifecycle.id, validationReceiptPrincipalId, blobContributorRoleId)
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobReaderRoleId)
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobContributorRoleId)
     principalId: validationReceiptPrincipalId
     principalType: 'ServicePrincipal'
   }
 }
 
-resource validationReceiptSnapshotReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource validationReceiptSnapshotContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: validationSnapshots
-  name: guid(validationSnapshots.id, validationReceiptPrincipalId, blobReaderRoleId)
+  name: guid(validationSnapshots.id, validationReceiptPrincipalId, blobContributorRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobContributorRoleId)
+    principalId: validationReceiptPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource validationMergeReceiptReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: validationReceipts
+  name: guid(validationReceipts.id, validationPrincipalId, blobReaderRoleId)
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobReaderRoleId)
-    principalId: validationReceiptPrincipalId
+    principalId: validationPrincipalId
     principalType: 'ServicePrincipal'
   }
 }

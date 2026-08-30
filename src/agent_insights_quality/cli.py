@@ -105,6 +105,7 @@ from agent_insights_quality.validation_cleanup_azure import (
     AzureValidationCleanupBackend,
 )
 from agent_insights_quality.validation_credentials import (
+    validation_blob_credential,
     verify_azure_service_principal,
 )
 from agent_insights_quality.validation_cycle import ValidationCycleController
@@ -136,7 +137,10 @@ from agent_insights_quality.validation_provisioning import (
     validation_runtime_profile,
 )
 from agent_insights_quality.validation_reconciler import ValidationReconciler
-from agent_insights_quality.validation_gate import run_shadow_gate
+from agent_insights_quality.validation_gate import (
+    construct_and_issue_merge_receipt,
+    run_validation_gate,
+)
 from agent_insights_quality.work_items import (
     fetch_quality_work_items,
     load_quality_work_items,
@@ -258,10 +262,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     issue_validation_receipt.add_argument("--receipt", type=Path, required=True)
     issue_validation_receipt.add_argument("--storage-account", required=True)
+    issue_validation_receipt.add_argument(
+        "--expected-azure-client-id",
+        required=True,
+    )
     reconcile_validation = commands.add_parser(
         "reconcile-test-agent-validation"
     )
     reconcile_validation.add_argument("--storage-account", required=True)
+    reconcile_validation.add_argument(
+        "--expected-azure-client-id",
+        required=True,
+    )
     reconcile_validation.add_argument("--ownership-nonce", required=True)
     reconcile_validation.add_argument(
         "--holder-workflow-reference",
@@ -277,11 +289,24 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     execute_validation = commands.add_parser("run-test-agent-validation")
+    execute_validation.add_argument(
+        "--mode",
+        choices=("shadow", "merge"),
+        default="shadow",
+    )
     execute_validation.add_argument("--candidate", type=Path, required=True)
     execute_validation.add_argument("--storage-account", required=True)
     execute_validation.add_argument("--expected-azure-client-id", required=True)
     execute_validation.add_argument("--automation-principal-id", required=True)
     execute_validation.add_argument("--receipt-output", type=Path, required=True)
+    merge_receipt = commands.add_parser(
+        "issue-test-agent-validation-merge-receipt"
+    )
+    merge_receipt.add_argument("--storage-account", required=True)
+    merge_receipt.add_argument("--expected-azure-client-id", required=True)
+    merge_receipt.add_argument("--cycle-id", required=True)
+    merge_receipt.add_argument("--final-head-sha", required=True)
+    merge_receipt.add_argument("--receipt-output", type=Path, required=True)
     return parser
 
 
@@ -309,11 +334,22 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         verify_azure_service_principal(args.expected_client_id)
         return None
     if args.command == "run-test-agent-validation":
-        result = run_shadow_gate(
+        result = run_validation_gate(
             candidate_path=args.candidate,
             storage_account=args.storage_account,
             expected_azure_client_id=args.expected_azure_client_id,
             automation_principal_id=args.automation_principal_id,
+            receipt_output=args.receipt_output,
+            github_token=str(os.environ.get("GH_TOKEN") or ""),
+            mode=args.mode,
+        )
+        return json.dumps(result, sort_keys=True)
+    if args.command == "issue-test-agent-validation-merge-receipt":
+        result = construct_and_issue_merge_receipt(
+            storage_account=args.storage_account,
+            expected_azure_client_id=args.expected_azure_client_id,
+            cycle_id=args.cycle_id,
+            final_head_sha=args.final_head_sha,
             receipt_output=args.receipt_output,
             github_token=str(os.environ.get("GH_TOKEN") or ""),
         )
@@ -353,7 +389,12 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         return None
     if args.command == "issue-test-agent-validation-receipt":
         receipt = read_json(args.receipt)
-        store = AzureValidationBlobStore(args.storage_account)
+        store = AzureValidationBlobStore(
+            args.storage_account,
+            credential=validation_blob_credential(
+                args.expected_azure_client_id
+            ),
+        )
         issuer = ReceiptIssuer(store)
         if receipt.get("mode") == "shadow":
             record = issuer.issue_shadow(receipt)
@@ -403,7 +444,12 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             sort_keys=True,
         )
     if args.command == "reconcile-test-agent-validation":
-        store = AzureValidationBlobStore(args.storage_account)
+        store = AzureValidationBlobStore(
+            args.storage_account,
+            credential=validation_blob_credential(
+                args.expected_azure_client_id
+            ),
+        )
         active = store.read_optional(ACTIVE_CONTAINER, ACTIVE_BLOB)
         if active is None:
             return json.dumps({"state": "NO_ACTIVE_CYCLE"}, sort_keys=True)

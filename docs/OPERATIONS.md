@@ -48,7 +48,9 @@ LEASED -> PREFLIGHT -> CREATING -> VALIDATING -> FROZEN
 
 Every mutation writes an immutable event snapshot first and then updates the active journal with the
 lease plus current ETag. A stale/expired cycle can be taken over only by the cleanup reconciler using
-a fresh lease ID, nonce, and epoch. The 72-hour expiration never extends.
+a fresh lease ID, nonce, and epoch. The 72-hour expiration never extends. Candidate, receipt, and
+reconciler commands use an explicitly selected Azure CLI credential whose Storage token principal is
+checked against the workflow's attested client ID; ambient credential-chain fallback is forbidden.
 
 Cleanup records intent first and deletes responses, conversations/sessions, Agent versions and
 Agents, Hosted deployments/identities/blueprints, connections, role assignments, cycle principals,
@@ -60,7 +62,9 @@ Shadow receipts bind candidate-head policy and always set `authorizes_merge=fals
 `default_branch_trust_anchor_present=false`. Only the protected default-branch issuer can create a
 merge receipt, after re-querying the exact final PR head/tree, trusted policy/workflow/App/environment,
 one comprehensive review, targeted verification, CI, 41/41 evidence, and immutable `CLEAN` snapshot.
-Receipt creation uses `If-None-Match:*`; an existing different digest fails closed.
+Run the candidate workflow in explicit `merge` mode to produce the durable `CLEAN` handoff, then
+dispatch the protected receipt workflow with that cycle ID and exact final head. Receipt creation uses
+`If-None-Match:*`; an existing different digest fails closed.
 
 ### External Daily receipt cutover
 

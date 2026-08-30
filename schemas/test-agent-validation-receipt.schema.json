@@ -337,6 +337,7 @@
         "authority_id",
         "source_content_digest",
         "execution_digest",
+        "predicate_contract_digest",
         "pass",
         "scenarios",
         "authority_evidence_digest"
@@ -350,6 +351,7 @@
         },
         "source_content_digest": {"$ref": "#/$defs/hash"},
         "execution_digest": {"$ref": "#/$defs/hash"},
+        "predicate_contract_digest": {"$ref": "#/$defs/hash"},
         "pass": {"const": true},
         "scenarios": {
           "type": "array",
@@ -366,6 +368,7 @@
       "required": [
         "scenario_id",
         "validation_mode",
+        "predicate_contract_digest",
         "n",
         "k",
         "complete_count",
@@ -377,6 +380,7 @@
       "properties": {
         "scenario_id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{2,63}$"},
         "validation_mode": {"enum": ["baseline", "deterministic", "model_mediated"]},
+        "predicate_contract_digest": {"$ref": "#/$defs/hash"},
         "n": {"enum": [5, 7]},
         "k": {"const": 5},
         "complete_count": {"type": "integer", "minimum": 5, "maximum": 7},

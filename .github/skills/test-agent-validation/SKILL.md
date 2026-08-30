@@ -38,6 +38,8 @@ report publication, ADX, email, or Official Daily.
     `default_branch_trust_anchor_present=false` and `authorizes_merge=false`. A merge receipt is
     create-once and requires default-branch policy/workflow/App/environment provenance, exact final
     head, one review, targeted verification, CI, 41/41 evidence, and immutable `CLEAN` proof.
+    Run the candidate cycle in explicit `merge` mode, then let only the protected default-branch
+    workflow construct the merge receipt from that durable CLEAN lifecycle.
 
 Keep all lifecycle/evidence/receipt artifacts in private Blob storage and the durable user runtime
 root. Never put raw prompts, responses, traces, provider IDs, Azure IDs, or private context in Git.

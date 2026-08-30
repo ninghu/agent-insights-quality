@@ -382,11 +382,25 @@ def prepare_validation_support_images(
     record_resource: Callable[[dict[str, Any]], None] | None = None,
 ) -> ValidationSupportImages:
     reporter = progress or ProgressReporter("aiq-validation-images")
+    built_manifest_ids: set[str] = set()
+
+    def record_build_resource(event: dict[str, Any]) -> None:
+        if (
+            event.get("kind") == "acr_manifest"
+            and event.get("state") == "created"
+            and event.get("provider_id")
+        ):
+            built_manifest_ids.add(str(event["provider_id"]))
+        if record_resource is not None:
+            record_resource(event)
+
     images = _build_support_images(
         profile,
         dict(support_agent),
         progress=reporter,
+        record_resource=record_build_resource,
     )
+    journaled_manifest_ids = set(built_manifest_ids)
     resources: list[dict[str, str | None]] = []
     repository = "agent-insights-quality-support"
     for logical_version, image in sorted(images.items()):
@@ -449,42 +463,47 @@ def prepare_validation_support_images(
             )
         if record_resource is not None:
             record_resource({**tag_resource, "state": "created"})
-            manifest_intent = content_hash(
-                {
+            new_manifest = digest not in journaled_manifest_ids
+            if new_manifest:
+                manifest_intent = content_hash(
+                    {
+                        "kind": "acr_manifest",
+                        "provider_id": digest,
+                        "authority_id": authority_id,
+                    }
+                )
+                manifest_resource = {
                     "kind": "acr_manifest",
-                    "provider_id": digest,
+                    "deterministic_name": repository,
                     "authority_id": authority_id,
+                    "parent_id": None,
+                    "intent_reference": manifest_intent,
                 }
-            )
-            manifest_resource = {
-                "kind": "acr_manifest",
-                "deterministic_name": repository,
-                "authority_id": authority_id,
-                "parent_id": None,
-                "intent_reference": manifest_intent,
-            }
-            record_resource(
-                {**manifest_resource, "state": "create_intent"}
-            )
-            record_resource(
-                {
-                    **manifest_resource,
-                    "state": "created",
-                    "provider_id": digest,
-                }
-            )
-        resources.extend(
-            [
-                tag_resource,
+                record_resource(
+                    {**manifest_resource, "state": "create_intent"}
+                )
+                record_resource(
+                    {
+                        **manifest_resource,
+                        "state": "created",
+                        "provider_id": digest,
+                    }
+                )
+                journaled_manifest_ids.add(digest)
+        else:
+            new_manifest = digest not in journaled_manifest_ids
+            journaled_manifest_ids.add(digest)
+        resources.append(tag_resource)
+        if new_manifest:
+            resources.append(
                 {
                     "kind": "acr_manifest",
                     "deterministic_name": repository,
                     "provider_id": digest,
                     "authority_id": authority_id,
                     "parent_id": None,
-                },
-            ]
-        )
+                }
+            )
     return ValidationSupportImages(
         images=images,
         resources=tuple(resources),

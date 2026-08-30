@@ -136,6 +136,33 @@ def digest_without_field(value: Mapping[str, Any], field: str) -> str:
     return content_hash(payload)
 
 
+def scenario_predicate_contract_digest(
+    scenario: Mapping[str, Any],
+) -> str:
+    return content_hash(
+        {
+            "scenario_execution_digest": scenario["execution_digest"],
+            "healthy_predicate": scenario["healthy_predicate"],
+            "defect_predicate": scenario["defect_predicate"],
+            "v0_control_predicate": scenario["v0_control_predicate"],
+        }
+    )
+
+
+def authority_predicate_contract_digest(
+    authority: Mapping[str, Any],
+) -> str:
+    return content_hash(
+        {
+            "authority_execution_digest": authority["execution_digest"],
+            "scenario_predicate_contract_digests": [
+                scenario["predicate_contract_digest"]
+                for scenario in authority["scenarios"]
+            ],
+        }
+    )
+
+
 def _validate_authority(authority: Mapping[str, Any]) -> None:
     authority_id = authority["authority_id"]
     expected_digest = digest_without_field(
@@ -144,6 +171,12 @@ def _validate_authority(authority: Mapping[str, Any]) -> None:
     )
     if authority["authority_evidence_digest"] != expected_digest:
         raise ContractError(f"{authority_id} authority evidence digest is stale")
+    if authority["predicate_contract_digest"] != (
+        authority_predicate_contract_digest(authority)
+    ):
+        raise ContractError(
+            f"{authority_id} predicate contract is not bound to execution"
+        )
     scenario_ids: set[str] = set()
     for scenario in authority["scenarios"]:
         scenario_id = scenario["scenario_id"]
@@ -173,6 +206,13 @@ def _validate_scenario(
     authority_id: str,
 ) -> None:
     mode = scenario["validation_mode"]
+    if scenario["predicate_contract_digest"] != (
+        scenario_predicate_contract_digest(scenario)
+    ):
+        raise ContractError(
+            f"{authority_id}/{scenario['scenario_id']} predicate contract "
+            "is not bound to execution"
+        )
     n, k = validation_matrix(mode)
     if scenario["n"] != n or scenario["k"] != k:
         raise ContractError(

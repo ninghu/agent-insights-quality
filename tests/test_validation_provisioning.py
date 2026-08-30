@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,6 +13,7 @@ from agent_insights_quality.validation_provisioning import (
     _rate_limits,
     validation_runtime_profile,
 )
+from agent_insights_quality.provisioning import _build_and_push_support_image
 from agent_insights_quality.validation_policy import load_validation_policy
 
 
@@ -133,3 +135,50 @@ def test_support_cycle_tags_are_deterministic_and_provider_bounded() -> None:
     )
     with pytest.raises(ContractError, match="provider limits"):
         _cycle_image_tag("x" * 129, "issue-036")
+
+
+def test_support_image_records_acr_intents_before_push(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    timeline = []
+    digest = "sha256:" + ("a" * 64)
+    monkeypatch.setattr(
+        "agent_insights_quality.provisioning._existing_acr_image",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.provisioning.runtime_root",
+        lambda: tmp_path,
+    )
+
+    def run(arguments, **_kwargs):
+        timeline.append(("command", tuple(arguments)))
+        return SimpleNamespace(
+            returncode=0,
+            stdout=f"digest: {digest}" if arguments[:2] == ["docker", "push"] else "",
+        )
+
+    monkeypatch.setattr(
+        "agent_insights_quality.provisioning.subprocess.run",
+        run,
+    )
+    result = _build_and_push_support_image(
+        registry="syntheticregistry",
+        root=ROOT / "agents" / "support-ticket-agent",
+        logical_version="v0",
+        wheelhouse_port=12345,
+        record_resource=lambda event: timeline.append(
+            ("event", event["state"], event["kind"])
+        ),
+    )
+    push_index = next(
+        index
+        for index, item in enumerate(timeline)
+        if item[0] == "command" and item[1][:2] == ("docker", "push")
+    )
+    assert ("event", "create_intent", "acr_tag") in timeline[:push_index]
+    assert ("event", "create_intent", "acr_manifest") in timeline[:push_index]
+    assert ("event", "created", "acr_tag") in timeline[push_index + 1 :]
+    assert ("event", "created", "acr_manifest") in timeline[push_index + 1 :]
+    assert result.endswith(f"@{digest}")

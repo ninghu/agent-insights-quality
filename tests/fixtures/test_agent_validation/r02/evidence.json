@@ -2,7 +2,7 @@
   "artifact_manifest_hash": "sha256:c2cb33f6b10d20f5ec8eabac6cb70c0f9a5ee79fd95e31d71edb687bde7a54b7",
   "authorities": [
     {
-      "authority_evidence_digest": "sha256:51ed20d6eeebefd28382dcd78809cda03ce548a7fb0cad1f773f4bdb3e46c32c",
+      "authority_evidence_digest": "sha256:f750e361525a8b3def662fcddc145891647e962d2011932fcc076348a9e6b48d",
       "authority_id": "weather-agent/v0",
       "authority_kind": "baseline",
       "canonical_agent": "weather-agent",
@@ -259,15 +259,17 @@
           "defect_predicate": {
             "kind": "never"
           },
-          "v0_control_predicate": null
+          "v0_control_predicate": null,
+          "predicate_contract_digest": "sha256:8e42586c5f1798a20bef88a9cc8470d07ef62813c546575a368be9962833ef1b"
         }
       ],
       "source_content_digest": "sha256:c86905fa1099c0fc6880ec7a98c8c29fb102b1d2ba96e3640d597b22f250af01",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:319c98bb9ae5d72cfac8f6ba50f18b1e4c4f3d8c7029689d3e5e94742aed8cdb"
     },
     {
-      "authority_evidence_digest": "sha256:c88583c4461583e8a474d38baf56cccbb3a898ec567316e8b6e6e4fe73a9f56e",
+      "authority_evidence_digest": "sha256:83aab5f85c21a7daa987526f313a1050abf0fd32030538b78c4a156cd2a35e70",
       "authority_id": "healthcare-agent/v0",
       "authority_kind": "baseline",
       "canonical_agent": "healthcare-agent",
@@ -524,15 +526,17 @@
           "defect_predicate": {
             "kind": "never"
           },
-          "v0_control_predicate": null
+          "v0_control_predicate": null,
+          "predicate_contract_digest": "sha256:a03bcfdefb57605eed054934a2c8841af181ef284ad00d5626dcd38313b9192c"
         }
       ],
       "source_content_digest": "sha256:21eb0f528f98cc047f8e82c405d5ecfbe9d17168c17292c0a32c94ad9c0833d2",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:d2658384ba91a7862d9188c6f0ce762d5f019d83e0cf502ebbe1126990375143"
     },
     {
-      "authority_evidence_digest": "sha256:67ddc5ac57c4cd14b8736f52c46fc46e7bab307ea6708c588dc634331537289a",
+      "authority_evidence_digest": "sha256:5b2ab3c850ac02383a160fee9565c34b4e3fd800767889d4d48a65651e094f70",
       "authority_id": "finance-agent/v0",
       "authority_kind": "baseline",
       "canonical_agent": "finance-agent",
@@ -789,15 +793,17 @@
           "defect_predicate": {
             "kind": "never"
           },
-          "v0_control_predicate": null
+          "v0_control_predicate": null,
+          "predicate_contract_digest": "sha256:7f8622f27b97c45ee52680a596625ddd011868e4d8e824e6dd7de580948973a8"
         }
       ],
       "source_content_digest": "sha256:84b97e00049ca3dcdc169737914537d232e9788dfd922c843c297166779c32ff",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:2a5d05ad0be09fd16d2b14da3ef3f5a71d13897def414cf16d3e63071a0d65b4"
     },
     {
-      "authority_evidence_digest": "sha256:97d2d91cc76996d430189f757f6fd6ef61df39cfc6078cc6caae9792ef3b1166",
+      "authority_evidence_digest": "sha256:7fdc8fe9acd22809e5d69cf76e80fe70da2163c3be801d72f44d6c6fbca71592",
       "authority_id": "travel-agent/v0",
       "authority_kind": "baseline",
       "canonical_agent": "travel-agent",
@@ -1054,15 +1060,17 @@
           "defect_predicate": {
             "kind": "never"
           },
-          "v0_control_predicate": null
+          "v0_control_predicate": null,
+          "predicate_contract_digest": "sha256:901a4e644863a3dcff0e09b58819a5cfe6434a10c538294f6a19faa0f6054ab1"
         }
       ],
       "source_content_digest": "sha256:5802aee8256a8b52ec91463e5832d5107373cc13f88c7c38ea0c9367e4da18cb",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:6b6fd21e41e36d12668c4af0d2dfa177d36523c824a164f206f5c01494defdf0"
     },
     {
-      "authority_evidence_digest": "sha256:4dc0ad0279d75d29525b7f0440155fd01c3dea89a54dc1825e86fb568030268d",
+      "authority_evidence_digest": "sha256:8d0841efdd0bb7e24c466520243662b5c788fe68d921f33c2dbe653ff9c6be95",
       "authority_id": "support-ticket-agent/v0",
       "authority_kind": "baseline",
       "canonical_agent": "support-ticket-agent",
@@ -1319,15 +1327,17 @@
           "defect_predicate": {
             "kind": "never"
           },
-          "v0_control_predicate": null
+          "v0_control_predicate": null,
+          "predicate_contract_digest": "sha256:13b192943bf81d94243828a4a6d8a4787cfb91218d348e5ea9e4c1a8944dd867"
         }
       ],
       "source_content_digest": "sha256:d29c8664ad8c96e0c8b49d9da98b9d6e2154252b0dbfb9e93c0fc35bfb5d03a0",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:caae7fbf92da506355633654a217be67bf491d4b26c2417ff3d170e47777c62b"
     },
     {
-      "authority_evidence_digest": "sha256:f45ae727899e684ec455edf2ac4e7cdc8c1b24d7ce367c17e0fdb9051355e48b",
+      "authority_evidence_digest": "sha256:3ab2b0c8e084307fe553a0984be316f16bc933bf3fad065ba299fc9c456bd6cb",
       "authority_id": "issue-001",
       "authority_kind": "issue",
       "canonical_agent": "weather-agent",
@@ -2002,15 +2012,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:804391aef2fcd6ddf50c85968fbc6423a62cb36fe77b52ad0c8dd88ab77da39d"
         }
       ],
       "source_content_digest": "sha256:168c26037257a2d8a65338de7708415b9b71e14bd85807a830e18400a4241c4e",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:b4cde0ce6a3058f8bef10c752a9c325dafe895270abc1ea157ee7d4683102aa4"
     },
     {
-      "authority_evidence_digest": "sha256:b6a1f0f2d313e22dc416d6b84500818fe7dfbc3ebdf5089bf609c783fe18bdcc",
+      "authority_evidence_digest": "sha256:7ccba3037f7ed4ceca3acb669981ddd149b9c87a7197f8177c318bb78f10fb14",
       "authority_id": "issue-002",
       "authority_kind": "issue",
       "canonical_agent": "weather-agent",
@@ -2685,15 +2697,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:b03fea6ef00136c64e7b4a222b549a01355c94099bd0837b2f734f2da7f4ad1d"
         }
       ],
       "source_content_digest": "sha256:66b343953677f4a5fb9758493fc77ed97631d6a7d55476c6e5e834360426fe54",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:a0557de6195444fa3787b8563486aa8f080062e3517f334f8b4711ccc3fa7c85"
     },
     {
-      "authority_evidence_digest": "sha256:e93e25036f735f946475c9dc5655c1900ddd213d1a04b145330da3a542c5b49a",
+      "authority_evidence_digest": "sha256:9942a6cd9df4f69ba7f3be4f673f01bf3fa6654dbd83f74826dc81ef6c718af8",
       "authority_id": "issue-003",
       "authority_kind": "issue",
       "canonical_agent": "weather-agent",
@@ -3368,15 +3382,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:7ea67dc6a05ee60789349eb6701418a316e9e7a3948fe121a6d9b17c9a053b2c"
         }
       ],
       "source_content_digest": "sha256:e392d57c30f93afd46d84361f510fc0111e3b07511bfdedcadd27d41a321f586",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:15abc89089afd31dbf677b33bf6ef5ee2685fecbb97a8bcb00de500046c5f90d"
     },
     {
-      "authority_evidence_digest": "sha256:20e9d94c04d623d4b09d2f452c0a74a665f2e900f9ea7393bffc27402a9aba68",
+      "authority_evidence_digest": "sha256:1ce9e9d0a10df4d7f542d210ef6dd4b7948e090e902db7ef19c8de12995504c2",
       "authority_id": "issue-004",
       "authority_kind": "issue",
       "canonical_agent": "weather-agent",
@@ -4051,15 +4067,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:354607d8810045394de458baf81c7ef7890df5e5cad3a8b68a5cd14176d86330"
         }
       ],
       "source_content_digest": "sha256:7235b62cf2ee12147244adfe1b1e35abce22b02049883e79e759fa44729f9fe1",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:2c18651ef77ec2ec0545960047412aec90db6a77540c5451ba80e45ef529f4b8"
     },
     {
-      "authority_evidence_digest": "sha256:5c1f282ca3de98e2c8812c10001f6ede51c52e442435aa744b8e969ad98983c0",
+      "authority_evidence_digest": "sha256:4a23eeb8814166162e867ddb1e73200707eade7e072476085c1163c9506aa6f9",
       "authority_id": "issue-005",
       "authority_kind": "issue",
       "canonical_agent": "weather-agent",
@@ -4930,15 +4948,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:c4b44945594bf0f3fc07758b22674a402743112ddd42ecca69d1bac7bf3c29ba"
         }
       ],
       "source_content_digest": "sha256:c209e50afde5667bc474b57b654415b78c29b7e6e62274a277c06e0938079961",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:b2ec3f0ab14e6ef2124b431c99cdbf3932bee770bf9bfdeef144cabce8f02011"
     },
     {
-      "authority_evidence_digest": "sha256:1eaf46a87a66870fb69e81028a76fd082225ef994595391d393e431fe8ce5eae",
+      "authority_evidence_digest": "sha256:bba608e5fac836b56e6cab8a1a736206aee39f5e22e852cb74dd0812a90ae7c2",
       "authority_id": "issue-006",
       "authority_kind": "issue",
       "canonical_agent": "weather-agent",
@@ -5613,15 +5633,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:5635afba1946accd6da4994b766f9af4ee318e287dd501a1c98dcc2833787373"
         }
       ],
       "source_content_digest": "sha256:c85a0d48f14cd8299e3703cc2785888130708de87bf3379fc27b7d28de8ed949",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:49a0d7f55eed75911d7e708b18194c9093506e8c4e4e0f57f7150f962bea66cb"
     },
     {
-      "authority_evidence_digest": "sha256:c740d33c6be9dfd970790b62a84a39da7bbb2457f2477687d5762ec20376ad83",
+      "authority_evidence_digest": "sha256:23f77ead804be2571959cc2a934c291f9308c2731b65be224dafe8da418be3d6",
       "authority_id": "issue-007",
       "authority_kind": "issue",
       "canonical_agent": "healthcare-agent",
@@ -6296,15 +6318,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:59cd7911569a6952b315686da062cb7e4725bf98b3b38018f72be8f2013ddf13"
         }
       ],
       "source_content_digest": "sha256:33df0184f2efef6104086d8ac676ecd48365477aa127a6144039c75ae84bbe08",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:8176b786da35e56d3b7869b6a7e81766ec3807b78777a2d7503063027dbe56b6"
     },
     {
-      "authority_evidence_digest": "sha256:ad91ee858c0b69df3836e3f92231f818821df8552a3d2f2ba5630515d15e0634",
+      "authority_evidence_digest": "sha256:8eb3f0f3f8563e3bb6a1c3a881b7f6ed59e555b210521e3d4a5a8d0004082c62",
       "authority_id": "issue-008",
       "authority_kind": "issue",
       "canonical_agent": "healthcare-agent",
@@ -6979,15 +7003,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:fc6dc2eaad494741945e644e75382bb87055afe1fc829bba4385af7f3e55a980"
         }
       ],
       "source_content_digest": "sha256:f78d271371675e4e832dc67fd5bf99692a4312dabe634b47925d76d75858eb58",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:28a10905b5f901230352198750dbafaef86468a83a592d37820ad3a3d9e1f829"
     },
     {
-      "authority_evidence_digest": "sha256:fbdfe51689dcc2507a38a868db9d8c18adcec5cde4dfdf7f2a22d4267dff4a52",
+      "authority_evidence_digest": "sha256:406c94e0b602dbbdbee85eaeafda404a85ad353d53ca75505dfb712e5e029511",
       "authority_id": "issue-009",
       "authority_kind": "issue",
       "canonical_agent": "healthcare-agent",
@@ -7662,15 +7688,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:650e204084d6d42d9cc4a6642618af9f7241cec9ed59bc62444c5b1b1bb99a84"
         }
       ],
       "source_content_digest": "sha256:ee07f42263b276ab5fa1ee479fb5fd4eb28d731ab260b76eee000bb678cd52d5",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:cb34cb5d3f2bc1bb1e75beeb837e030b3881268de6de095453e60209f55820be"
     },
     {
-      "authority_evidence_digest": "sha256:9595c4b2748a70a88d000a22e697db43f0bfab4e124d996ef6f25dddd1e65cbc",
+      "authority_evidence_digest": "sha256:4f145ad8c8c68907f6dccf67f6b1751e9a7332a7b1906fe0b9ed74f4c0daed90",
       "authority_id": "issue-010",
       "authority_kind": "issue",
       "canonical_agent": "healthcare-agent",
@@ -8345,15 +8373,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:e89a0dcc6c64f13660f6a10caaa09554d0ca676b9673402a561ddae0252ddb41"
         }
       ],
       "source_content_digest": "sha256:1996e54ddac3c1b2bc33d5adfc9ccf6143f6875b526aaf74b0e8c4a109db4198",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:992db67c7d3cda503f7b79400bcf46123b3a4eba15f673ee4a7f707b05470491"
     },
     {
-      "authority_evidence_digest": "sha256:c96320eec2ebdceabb6b0f3b5fc13dadab2dbd60271270f15b75e77564387f7b",
+      "authority_evidence_digest": "sha256:9d3e86b33f865f499184011929aa2d0b6f6d7b6f1cc933802f9258592f9194a9",
       "authority_id": "issue-011",
       "authority_kind": "issue",
       "canonical_agent": "healthcare-agent",
@@ -9028,15 +9058,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:479ea15ff3632fd25c19dab3e9be43f44fb3e95e6de82bee5f7fdde12a52b09d"
         }
       ],
       "source_content_digest": "sha256:2fb1c7663263c702977ad6136df748f38ff84b665ac1e9bf43bfd5df5f2535d5",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:d688a6b955f8267bf54d6e2f6590ce8516b118f212dbda3b7f20d31a6d5e642f"
     },
     {
-      "authority_evidence_digest": "sha256:c19a9ad965b78915d6393c52c02e33b423c178bb1bbe7eed3c65cd8722fcb446",
+      "authority_evidence_digest": "sha256:9462d77cd2bb3254c99cb1bf0e7dca675e85a004f389b0205cd3f10ced410f30",
       "authority_id": "issue-012",
       "authority_kind": "issue",
       "canonical_agent": "healthcare-agent",
@@ -9711,15 +9743,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:fb6904a7bb7fd969046f1192fa1e6449cddb1d8cfe5d27e001fc7eb13a69feaf"
         }
       ],
       "source_content_digest": "sha256:44afcfa14a02eb5244d5fecba114ccc3f81e5cfbaf6b0139994795053ffb69f1",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:c6abdc603a9538ae99f1087ca62a1d0428baf0da6516f4f09b7b6b2db4676f24"
     },
     {
-      "authority_evidence_digest": "sha256:91657c6401fe86cf2f6599a4112a9d1e9edbfe11fcc4a3224ddc4b7ae007b5ec",
+      "authority_evidence_digest": "sha256:7c291798c11f27a735c3de1a5070027bc731f29aa8317010bdaa4b01c8c1a8e7",
       "authority_id": "issue-013",
       "authority_kind": "issue",
       "canonical_agent": "finance-agent",
@@ -10212,15 +10246,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:f09ed42e62c7627faedefcda2ea8c1c529de03120e85d50039c721ad8eeb1fcf"
         }
       ],
       "source_content_digest": "sha256:4d1d5b0519b3d5bb41e36bdc3f45aa7d9913b6db22515efd93d460d86db1f397",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:4e59e21d86a062a90251822dcc52c4e78547b392f4a1cad9d2d9d15c7b763f73"
     },
     {
-      "authority_evidence_digest": "sha256:55a1751baa959ae2e95e71fae2d360a7f30e7562554dd6ef9ae1b7a7b532fc2f",
+      "authority_evidence_digest": "sha256:80b4661c2ceb432a3f2d679f6105ada3ae574bbd95bc1aea3b45e51705aa2301",
       "authority_id": "issue-014",
       "authority_kind": "issue",
       "canonical_agent": "finance-agent",
@@ -10713,15 +10749,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:b810989fce382e1f50c5c66e7c819cd34610c00f018667977c43b91f8b6bae06"
         }
       ],
       "source_content_digest": "sha256:3276bef9f6edd766a3b8e4a40a7399f397d305c88add975909742b230519fc6d",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:17ec411401e7f3574cac20440446c0b35795a57ebce1f745ac32f7cde258f219"
     },
     {
-      "authority_evidence_digest": "sha256:4a708f830767a0d4516185a4ca60790098541ab7c1671e22aa67b8d367cf6c95",
+      "authority_evidence_digest": "sha256:809ee419aec6935575e102f87734893e3870a4afa6221c4a264503e5fe7443e7",
       "authority_id": "issue-015",
       "authority_kind": "issue",
       "canonical_agent": "finance-agent",
@@ -11214,15 +11252,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:180604d80c34aa5a5df487f35dba40960808b1a40b78d2d1a1fdf11f5e5a09da"
         }
       ],
       "source_content_digest": "sha256:0c650e46d6dd62a54e8823c96ce62a81b40000d702fcfcb52a8043a6985e48c8",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:6fe48b1b81976caf47c6dd685bfbffdde0bd76499733a9fd95dd68237584250e"
     },
     {
-      "authority_evidence_digest": "sha256:025dfdc072a6516950bc753d1b95d5b72babea67edf22c38b219a310c6e2cde9",
+      "authority_evidence_digest": "sha256:f3b2e3bf9910eb44433e3a091736814689c2de5389658af62c92a71f04a8a6e5",
       "authority_id": "issue-016",
       "authority_kind": "issue",
       "canonical_agent": "finance-agent",
@@ -11715,15 +11755,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:fcb1dc6564e65598d228ff5228efa77ee53db0232f90cd09ed99942aacf051e8"
         }
       ],
       "source_content_digest": "sha256:9dae01e3b950ae596d28f012be748997011ad95e6898271ded33c98d07d7f745",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:ac68f44066aef2f97016b546b5014b6272abcbbb6f4128c6abe46c469a98b6f0"
     },
     {
-      "authority_evidence_digest": "sha256:0e90af0171424aef0a12fd7abfd207146bff003e8b43f09749c7708f45b38e13",
+      "authority_evidence_digest": "sha256:5f9179f03aef4bce416bab8165d80dc973682fe428d2e5d081e0f797935048a4",
       "authority_id": "issue-017",
       "authority_kind": "issue",
       "canonical_agent": "finance-agent",
@@ -12216,15 +12258,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:fb4c8e7b0d2e97a4bf67815c20043f60a94778a332d32c7a14137865511d0e67"
         }
       ],
       "source_content_digest": "sha256:a6cac09fe9fce2cef206acb6094d07afb11c673a59af0a7fd2b8e97e41eba988",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:96c8636b5cf1c2ad0793142f69ddca972b1ed2423dc4ba36a252e5d9fce6bd99"
     },
     {
-      "authority_evidence_digest": "sha256:62bce856c33c495dc10d3ee0b4eac5fd011ecff1e536dc1e730121f1757f011c",
+      "authority_evidence_digest": "sha256:1953a0cda50f97578ad7756853e7b1db090ec20c486ed7943f34aa9756c08311",
       "authority_id": "issue-018",
       "authority_kind": "issue",
       "canonical_agent": "finance-agent",
@@ -12717,15 +12761,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:5976244c2bf24212aa7d7de63459eecae94be921cf681cb023e4f608a02436a2"
         }
       ],
       "source_content_digest": "sha256:2472481b70d0c14935932e04156c8a994c7207db84b97447d52681ee059e60fe",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:817575aa5531df3251530c11d6bf27df1874f4a48bda721287b24550b90f8400"
     },
     {
-      "authority_evidence_digest": "sha256:abef914af95500e7a6c3f089992b97e9d15229dac05a04f98f3578d136afe11b",
+      "authority_evidence_digest": "sha256:4bb80b442a625d75b93433f97c47074b746dcc8cb4d489228fe22b54b8cd3599",
       "authority_id": "issue-019",
       "authority_kind": "issue",
       "canonical_agent": "finance-agent",
@@ -13218,15 +13264,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:a2247c9eb8113a7105ba34d15c4a4e7c30bb5dabb084f7a49d70e9e2add19773"
         }
       ],
       "source_content_digest": "sha256:7240b88d199b709393f7572d06dc30182a40c4c0c00cb14c5bebab035f2a1b7b",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:e56645d2022be82b3267979b68028a96190aca4f0d320321f64600e20353fc55"
     },
     {
-      "authority_evidence_digest": "sha256:c9e1291b950dd74ff444d1dfbc347255dac9dbdcc5eca6a029a537da5b66ac9c",
+      "authority_evidence_digest": "sha256:aff3c8a000a179c9faed6c6078149f44fc80e5cdc33626d5352c8b9b2671fe9a",
       "authority_id": "issue-020",
       "authority_kind": "issue",
       "canonical_agent": "finance-agent",
@@ -13719,15 +13767,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:8bdc520b2dea42946c446dc3aeeb25063e42a0c8b5d6643e5fd23eca66cde4c1"
         }
       ],
       "source_content_digest": "sha256:f7fb6bb53db12f68dbefe4c8f29f4e297c5d59421a338c1b270319e7e8a52804",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:99745bfd0296536252e0470ce1abcbe16cedff3c9b995e69c06bb6216a8ceeea"
     },
     {
-      "authority_evidence_digest": "sha256:4594755a99c3b95ed3fbe3d97f2f724e1e0b2554cff898b358cdbe18cc8d47e4",
+      "authority_evidence_digest": "sha256:c2d4a9e8a8d0342a9f47a170f8776e54c5194b8b794ac746751c2fd12ee90014",
       "authority_id": "issue-021",
       "authority_kind": "issue",
       "canonical_agent": "travel-agent",
@@ -14402,15 +14452,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:7a45371cd0bd13fdb795268f0cd3988a1229a5016df234ba2f1c2144f9ab3304"
         }
       ],
       "source_content_digest": "sha256:a7649354ad536cf99964c25cc7b7e477c884e7fe4377496434e38ad8f3dbbe3b",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:9c2c20a55766eaa688a37b05532e10e0571865a1f9dd0baf2bae77eb018cc3e8"
     },
     {
-      "authority_evidence_digest": "sha256:fb9905c91069468a08dcaca39e1cdba312f3f926d6450bf5d85239560df9f8ab",
+      "authority_evidence_digest": "sha256:5fe7dec4bcbbb89985979cc758bb4c5714edba8791862f43b0a34e8ee9374c54",
       "authority_id": "issue-022",
       "authority_kind": "issue",
       "canonical_agent": "travel-agent",
@@ -14903,15 +14955,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:3978e447e9b758dce4fd37d29be39681bc456606eda169ae5e2ee61777c367dd"
         }
       ],
       "source_content_digest": "sha256:6f7f29332034ca868dadb88c9332173eae9ad5ac2c4589cccbd91ef4cda93faa",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:dd54ed5dbc6475cc85f0dde67545d608d06353c7b12905bd530e8a20080f368e"
     },
     {
-      "authority_evidence_digest": "sha256:14e0886b74a0bdf78f8e7252cd2c1329353cd145365d7c8c20c34fc195b24e00",
+      "authority_evidence_digest": "sha256:d1ae9ba39655eaa9271329e0da073795c75494ef3edae40b4c2a99a15b755e8e",
       "authority_id": "issue-023",
       "authority_kind": "issue",
       "canonical_agent": "travel-agent",
@@ -15404,15 +15458,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:db176eb85ca83c2d19fe2c8c17abddc141b5b7546563ab673356b6f5824f8199"
         }
       ],
       "source_content_digest": "sha256:eb958eecf20f6f892e8d15851121462b4049b29fa67b4445b7e45f9775a7ff55",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:d68215c138a667c84634794de431ca44822f23a28caf59c800711602419556e0"
     },
     {
-      "authority_evidence_digest": "sha256:39a7dbfdc2da958824616c5bc88c05629a5382b3ba168798a1c82c2dd39cf08f",
+      "authority_evidence_digest": "sha256:11537009f18b04ff6ec94d33d9f02435ae44e690a4292fd4fc65094f096cc337",
       "authority_id": "issue-024",
       "authority_kind": "issue",
       "canonical_agent": "travel-agent",
@@ -15905,15 +15961,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:56906ee11d98b71898e9b7ea3738d8c12d216d779f28728b997ab72ee7f0cb74"
         }
       ],
       "source_content_digest": "sha256:d4bb585b3e4a2d0e40c4b59d5c8dab3c0191f6a958c05085bf0e1ccc649fb991",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:d27b3847b4f18c5a642a95af22c73a19499e7432bf0ca9532d4a8f92bb103467"
     },
     {
-      "authority_evidence_digest": "sha256:515ad6d9b07278e0e6c1982c77488d3676f18c55306b0fb72a7419df032da6be",
+      "authority_evidence_digest": "sha256:c081d22cea2a83a70badcd12cbf2c9ded0ceb988cb1755871b46a821589e570a",
       "authority_id": "issue-025",
       "authority_kind": "issue",
       "canonical_agent": "travel-agent",
@@ -16588,15 +16646,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:035e12f65964e722b2f23b8ec46e2b2ac12b185d336d42c1ccc2d17654c3d4e0"
         }
       ],
       "source_content_digest": "sha256:5a0005b2fdaf16ae2a6c315985c44308d122b9038eca22a5940826c11658e9d8",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:684243e9c90989da8cd0dab1cfb3475c8a92e3c4f83cff184c56e96b02a84224"
     },
     {
-      "authority_evidence_digest": "sha256:b5031bfb8eb117c8e6ae7b9833afb3c1e913fd6130ef485a839fe19d827fb803",
+      "authority_evidence_digest": "sha256:92f769c490dcb493b97be4e9d57ca5304f3ac56284a6768a7b093c77a18fb0e9",
       "authority_id": "issue-026",
       "authority_kind": "issue",
       "canonical_agent": "travel-agent",
@@ -17271,15 +17331,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:cb217c7e63962691c7ad93e5c55e136adeecf3ffee51c88dbec5aa76911eac9e"
         }
       ],
       "source_content_digest": "sha256:95fafd80c7c8712b16be0068a288ca2dffe5458e74fefb57a8e1607d7c881d36",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:f55f8615f6d8bf568dd342aad9932beaea99ef4ed9c46a034ba65a1574b15a7d"
     },
     {
-      "authority_evidence_digest": "sha256:cbcaff49b81985f8e7997c2d0b794baf587b42c416e9f686a8da531f4354a8dc",
+      "authority_evidence_digest": "sha256:98b0cebd2e915b0a349107f31bc726ba9a22f3fb751dfedc2e08f49305222255",
       "authority_id": "issue-027",
       "authority_kind": "issue",
       "canonical_agent": "travel-agent",
@@ -17772,15 +17834,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:5ad4f7c0bd6984253c7b93da5f1e386be3ea8781ef3e978cc4da12e75cd22631"
         }
       ],
       "source_content_digest": "sha256:9400b6eab5a05fa87ca7a78b3b5c2b2d7c01605b83ecb25bba3fed890402be9d",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:c86f312e7ad4a15de009bc30e43e4d426c5bf9351cccbfe258f895038b74f815"
     },
     {
-      "authority_evidence_digest": "sha256:4d78fdc711d3d4066a62abec948ed355a354590714c5dccd7c1ef50421daf854",
+      "authority_evidence_digest": "sha256:cb640e285ae02459743886d74dd4b977836e15658441852c7f55b2183a7fe222",
       "authority_id": "issue-028",
       "authority_kind": "issue",
       "canonical_agent": "travel-agent",
@@ -18273,15 +18337,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:512b6983ee00a8b26c56998ba806510914cc5662cccd478dc551c4c19f152c64"
         }
       ],
       "source_content_digest": "sha256:44eef2afd678f147d2d71d8e2e91185b62614dc8197871e64ec716f6c258f813",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:3e0043f1ccd41f2447375f146a5cb402b998ad721580f0896b0e2952546389f3"
     },
     {
-      "authority_evidence_digest": "sha256:2da6d98fdcbcbe9782324f50139eaf60a2cf28b90289cd8dcd88228ad7d3d2ca",
+      "authority_evidence_digest": "sha256:1fcf4871956110d83cd4d517e05650ff6e7282f48ef4ed76a3fbc7f56cb3790a",
       "authority_id": "issue-029",
       "authority_kind": "issue",
       "canonical_agent": "support-ticket-agent",
@@ -18774,15 +18840,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:2e5b1852c77db2fb40775c988dabcc8bfd8e56e1bcfcc906b64b462fc987657a"
         }
       ],
       "source_content_digest": "sha256:77131348ac2e19c98f7bd53f094b5ae18197cb211cbd21ef07fd5fbc4f7ba5e9",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:c86df00a3558f95afc160f6b0b049a895ba9e052ddd90c74c358cea1006a98ff"
     },
     {
-      "authority_evidence_digest": "sha256:d19ea6afbc986bcac1a1379c9c3409d41b20e0a937b29078da3b4bdf95c1ff9c",
+      "authority_evidence_digest": "sha256:cac7874bbe3174619cb39ef02a2fe37bc2a6811c76ddba325fbe35f376e042ed",
       "authority_id": "issue-030",
       "authority_kind": "issue",
       "canonical_agent": "support-ticket-agent",
@@ -19275,15 +19343,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:33bec6a7932e0d13db3d7a6db0ac8b37c65922443ee048b70b3dc1de4a283e4f"
         }
       ],
       "source_content_digest": "sha256:5e157affbf049886642096ce71b4c71b443e85a3c39eb9df2309098888529415",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:f8a4a0d30f2cd9ea31aa6dc267894670ec8d33ef658401a426290dd8ee6607ce"
     },
     {
-      "authority_evidence_digest": "sha256:176dbd913a186805773d434e9c9794154b7bfe61c5cd09c8b47f4b50dd9c4cd5",
+      "authority_evidence_digest": "sha256:56eb8cab2a36bfa7e21cda4cdb2eaf7907b73aed66809d2a8a64a8ddb8235cd6",
       "authority_id": "issue-031",
       "authority_kind": "issue",
       "canonical_agent": "support-ticket-agent",
@@ -19776,15 +19846,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:ea9c15646cb4d632483a38e57e363fa81438a77e67d1c0e9cb5e98a4aedbf3db"
         }
       ],
       "source_content_digest": "sha256:ca2a9ff49c1a78e5f05655058d24007b8063fd847b515c6e54824f93af900533",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:fc973c928e5d0cdc844259e7aae7edbc86cf35f523eebbb923703c5771eb4412"
     },
     {
-      "authority_evidence_digest": "sha256:154e5cdc7a70291d38abbb0d0dfb050e6f46f78f000a5e545b9bf3f2ece0da6b",
+      "authority_evidence_digest": "sha256:651ab0625d20c0376911b4ce1f9c56bcfd4c1be1a8c24022abf8232f61ddd0bf",
       "authority_id": "issue-032",
       "authority_kind": "issue",
       "canonical_agent": "support-ticket-agent",
@@ -20277,15 +20349,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:2eb36d776f659ae6596514bf66c5b5351af221786c218569810359e6e3d37894"
         }
       ],
       "source_content_digest": "sha256:dab4dc23125ff1947c9459b0b86d393d7c3e69b00e3497d7eb4a242e7c1e15da",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:3dc5a804f83b5c520c510beddfe349a10bdc779e1ece642f3659ebaec2c0e3bd"
     },
     {
-      "authority_evidence_digest": "sha256:35920ebd25c1a493f81ffe98a0605fc5e7b765fa3e7b8f421bfdb1a9a24316a8",
+      "authority_evidence_digest": "sha256:85b7fa0b1093f49adef49f5fbce054ded520de607cef00ef2a2b0d0f7625b859",
       "authority_id": "issue-033",
       "authority_kind": "issue",
       "canonical_agent": "support-ticket-agent",
@@ -20778,15 +20852,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:704ac4401f5658d29fcb09ed3951618a00e1952c51eda15664f7e1101b9d2746"
         }
       ],
       "source_content_digest": "sha256:8dc5764e55c947455511fc8dbc46f1057661f58caab25e101f763ece28087c1b",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:8617c128159a22f2635e460e5b83dba571c096e13a5c8d7fcba92578163d984f"
     },
     {
-      "authority_evidence_digest": "sha256:2e01d7347701058870dd4c040b336184f0cf5e7eca0c1f3eb83c5bb4b799f2a3",
+      "authority_evidence_digest": "sha256:6bd9a5a8a678b66e5853b971a6542b53f496452903fec60cbd60bbdde816bec9",
       "authority_id": "issue-034",
       "authority_kind": "issue",
       "canonical_agent": "support-ticket-agent",
@@ -21279,15 +21355,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:180db082d3c381bcc305763152409bab25667bed786843e413e7625aef2aa9a7"
         }
       ],
       "source_content_digest": "sha256:e7e9503b1fa57eea14651a062cd67e05138c2855d25eee3185a484a84da3af2b",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:8c477ee23134ed917750f5cf78bed28027e85b2d2da081ca6687b569bc4b68b6"
     },
     {
-      "authority_evidence_digest": "sha256:51b035b0ffda2a0c6e26e8ebced250a243edf2ddd77b0fbc2853b9288eb3b6d3",
+      "authority_evidence_digest": "sha256:0037e43bf5117922045875f1f97016ad9f2ca939eac711951ea15c2aecff662b",
       "authority_id": "issue-035",
       "authority_kind": "issue",
       "canonical_agent": "support-ticket-agent",
@@ -21780,15 +21858,17 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:916e64954ffc75ebab06ee58d18066eb33f9320774ff51bf9ad2e93c34032e94"
         }
       ],
       "source_content_digest": "sha256:144b86f9c95ba734cdb0aa113b8f5ab8ca82279dbcf1260de0e098e1c1d989bd",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:53608afaebf62a03bfaf182b6a638c072026b67f4854bcc34b7be4aa06b28e0a"
     },
     {
-      "authority_evidence_digest": "sha256:a8a7253c95fff792787b93d694822a3bae3fdad111c87ce86bb7db2c90203574",
+      "authority_evidence_digest": "sha256:894c7cff140e0a094f52708c5c1989a7480e2e14b7449495b6bf02dfbeaf3e1f",
       "authority_id": "issue-036",
       "authority_kind": "issue",
       "canonical_agent": "support-ticket-agent",
@@ -22281,12 +22361,14 @@
           },
           "v0_control_predicate": {
             "kind": "zero_defect_observations"
-          }
+          },
+          "predicate_contract_digest": "sha256:810974d36107676278cab5cceca7be234349510bea2ab393eb60b0ec05938d10"
         }
       ],
       "source_content_digest": "sha256:4734dd0720bec424dc20fffe4d640c07564296206e8cb28c0100cdc148a1dab9",
       "validated_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "runtime_agent_version": "1"
+      "runtime_agent_version": "1",
+      "predicate_contract_digest": "sha256:1ac632441d4a3e461add26428942585211880e9e5fb614910d2d68d71f54db67"
     }
   ],
   "candidate_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -22298,7 +22380,7 @@
   },
   "cycle_id": "validation-shadow-r02",
   "epoch": 1,
-  "evidence_digest": "sha256:7706e1fab5f9e94be0d086669cf89a4497f4b14ddb50d8ddf4fef8fae7318b27",
+  "evidence_digest": "sha256:b47961873e49cc14e1f57b57598df933ea8c662d90198cb6cb7d405a41191243",
   "execution_matrix_digest": "sha256:9871973a74edb8afcde6fab1985eea8e3ad43e1e9e83243e8baffe0d8ef86ccb",
   "kind": "test-agent-validation-evidence",
   "policy_manifest_digest": "sha256:df0f32404e9389c585b9507d3dda1b5e1ce7962d83a9a71c419caca1767c1ba8",
@@ -22314,5 +22396,5 @@
     "model_id": "gpt-5.4-mini",
     "model_version": "2026-03-17"
   },
-  "validation_contract_digest": "sha256:08d9c79bc53636a3e4a344766971555567864f2d0de7871392102934997027aa"
+  "validation_contract_digest": "sha256:8627cf327909f9c172c3a94c65c5809360406c6bced6d90d164a7c11a8ebabcd"
 }

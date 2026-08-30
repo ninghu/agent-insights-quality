@@ -129,6 +129,11 @@ def oidc_subject_digest(subject: str) -> str:
 
 def current_issuer_code_digest() -> str:
     paths = (
+        ROOT / "src" / "agent_insights_quality" / "cli.py",
+        ROOT / "src" / "agent_insights_quality" / "validation_gate.py",
+        ROOT / "src" / "agent_insights_quality" / "validation_credentials.py",
+        ROOT / "src" / "agent_insights_quality" / "validation_cycle.py",
+        ROOT / "src" / "agent_insights_quality" / "validation_lifecycle.py",
         ROOT / "src" / "agent_insights_quality" / "validation_issuer.py",
         ROOT / "src" / "agent_insights_quality" / "validation_blob.py",
         ROOT / "src" / "agent_insights_quality" / "validation_evidence.py",
@@ -344,11 +349,17 @@ def build_validation_receipt(
             "authority_id": authority["authority_id"],
             "source_content_digest": authority["source_content_digest"],
             "execution_digest": authority["execution_digest"],
+            "predicate_contract_digest": authority[
+                "predicate_contract_digest"
+            ],
             "pass": authority["pass"],
             "scenarios": [
                 {
                     "scenario_id": scenario["scenario_id"],
                     "validation_mode": scenario["validation_mode"],
+                    "predicate_contract_digest": scenario[
+                        "predicate_contract_digest"
+                    ],
                     "n": scenario["n"],
                     "k": scenario["k"],
                     "complete_count": scenario["complete_count"],
@@ -503,14 +514,21 @@ def verify_merge_provenance(
             final_head,
         ),
     ]
-    checks_by_id = {item.check_run_id: item for item in queried.checks}
     completed: dict[str, datetime] = {}
     for role, record, expected_name, expected_path, expected_head in records:
         if record is None:
             raise ContractError("Protected receipt is missing a required check")
-        live = checks_by_id.get(record["check_run_id"])
-        if live is None or (
-            record["name"] != expected_name
+        live = select_provenance_check(
+            queried.checks,
+            name=expected_name,
+            workflow_path=expected_path,
+            head_sha=expected_head,
+            app_id=trusted_policy["issuer"]["app_id"],
+            app_slug=trusted_policy["issuer"]["app_slug"],
+        )
+        if (
+            live.check_run_id != record["check_run_id"]
+            or record["name"] != expected_name
             or live.name != record["name"]
             or live.check_suite_id != record["check_suite_id"]
             or live.app_id != record["app_id"]
@@ -569,6 +587,33 @@ def _parse_time(value: str, label: str) -> datetime:
     if parsed.tzinfo is None:
         raise ContractError(f"{label} timestamp lacks a timezone")
     return parsed.astimezone(UTC)
+
+
+def select_provenance_check(
+    checks: tuple[CheckState, ...] | list[CheckState],
+    *,
+    name: str,
+    workflow_path: str,
+    head_sha: str,
+    app_id: int,
+    app_slug: str,
+) -> CheckState:
+    matches = [
+        check
+        for check in checks
+        if check.name == name
+        and check.workflow_path == workflow_path
+        and check.workflow_sha == head_sha
+        and check.head_sha == head_sha
+        and check.app_id == app_id
+        and check.app_slug == app_slug
+        and check.conclusion == "success"
+    ]
+    if len(matches) != 1:
+        raise ContractError(
+            f"Expected one successful provenance-matched check named {name}"
+        )
+    return matches[0]
 
 
 class ReceiptIssuer:
@@ -712,11 +757,17 @@ class ReceiptIssuer:
                 "authority_id": authority["authority_id"],
                 "source_content_digest": authority["source_content_digest"],
                 "execution_digest": authority["execution_digest"],
+                "predicate_contract_digest": authority[
+                    "predicate_contract_digest"
+                ],
                 "pass": authority["pass"],
                 "scenarios": [
                     {
                         "scenario_id": scenario["scenario_id"],
                         "validation_mode": scenario["validation_mode"],
+                        "predicate_contract_digest": scenario[
+                            "predicate_contract_digest"
+                        ],
                         "n": scenario["n"],
                         "k": scenario["k"],
                         "complete_count": scenario["complete_count"],
@@ -932,48 +983,60 @@ class GhGitHubStateReader:
         repository: str,
         head_sha: str,
         name: str,
+        expected_workflow_path: str,
+        expected_app_id: int = 15368,
+        expected_app_slug: str = "github-actions",
     ) -> dict[str, Any]:
-        matches = []
+        matches: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
         for attempt in range(60):
             checks_payload = self._api(
                 f"repos/{repository}/commits/{head_sha}/check-runs?per_page=100"
             )
-            matches = [
+            named = [
                 item
                 for item in checks_payload.get("check_runs", [])
                 if isinstance(item, dict)
                 and item.get("name") == name
                 and item.get("head_sha") == head_sha
-                and item.get("conclusion") == "success"
             ]
-            if len(matches) == 1:
+            runs = self._api(
+                f"repos/{repository}/actions/runs?head_sha={head_sha}&per_page=100"
+            )
+            run_by_suite = {
+                int(run["check_suite_id"]): run
+                for run in runs.get("workflow_runs", [])
+                if isinstance(run, dict)
+                and run.get("check_suite_id") is not None
+            }
+            matches = []
+            for item in named:
+                suite_id = int(item["check_suite"]["id"])
+                run = run_by_suite.get(suite_id)
+                if run is None:
+                    continue
+                workflow_id = int(run["workflow_id"])
+                workflow = self._api(
+                    f"repos/{repository}/actions/workflows/{workflow_id}"
+                )
+                if (
+                    int(item["app"]["id"]) == expected_app_id
+                    and str(item["app"]["slug"]) == expected_app_slug
+                    and str(workflow["path"]) == expected_workflow_path
+                    and str(run["head_sha"]) == head_sha
+                    and item.get("conclusion") == "success"
+                ):
+                    matches.append((item, run, workflow))
+            if matches:
                 break
             if attempt < 59:
                 time.sleep(15)
         if len(matches) != 1:
             raise ContractError(
-                f"Expected one successful protected check named {name}"
+                f"Expected one successful provenance-matched check named {name}"
             )
-        item = matches[0]
+        item, run, workflow = matches[0]
         suite_id = int(item["check_suite"]["id"])
-        runs = self._api(
-            f"repos/{repository}/actions/runs?head_sha={head_sha}&per_page=100"
-        )
-        run_matches = [
-            run
-            for run in runs.get("workflow_runs", [])
-            if isinstance(run, dict)
-            and int(run.get("check_suite_id") or 0) == suite_id
-        ]
-        if len(run_matches) != 1:
-            raise ContractError(
-                f"Protected check {name} has no unique workflow run"
-            )
-        run = run_matches[0]
         workflow_id = int(run["workflow_id"])
-        workflow = self._api(
-            f"repos/{repository}/actions/workflows/{workflow_id}"
-        )
         return asdict(
             CheckState(
                 name=name,

@@ -9,7 +9,11 @@ from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
 from agent_insights_quality.util import ContractError, content_hash
-from agent_insights_quality.validation_evidence import digest_without_field
+from agent_insights_quality.validation_evidence import (
+    authority_predicate_contract_digest,
+    digest_without_field,
+    scenario_predicate_contract_digest,
+)
 from agent_insights_quality.validation_policy import ValidationPolicy
 from agent_insights_quality.validation_quota import ValidationScheduler
 from agent_insights_quality.validation_rules import validate_validation_rules
@@ -386,6 +390,7 @@ def _execute_authority(
         ),
         "source_content_digest": authority.source_content_digest,
         "execution_digest": authority.execution_digest,
+        "predicate_contract_digest": "",
         "validated_head_sha": validated_head_sha,
         "n": n,
         "k": k,
@@ -395,6 +400,9 @@ def _execute_authority(
         "scenarios": scenarios,
         "authority_evidence_digest": "",
     }
+    authority_result["predicate_contract_digest"] = (
+        authority_predicate_contract_digest(authority_result)
+    )
     authority_result["authority_evidence_digest"] = digest_without_field(
         authority_result,
         "authority_evidence_digest",
@@ -481,13 +489,14 @@ def _execute_scenario(
             and not any(item["defect_observed"] is True for item in v0_attempts)
             and all(item["expected_observation_pass"] for item in v0_attempts)
         )
-    return {
+    result = {
         "scenario_id": scenario["id"],
         "execution_digest": scenario["execution_digest"],
         "validation_mode": scenario["validation_mode"],
         "healthy_predicate": scenario["healthy_predicate"],
         "defect_predicate": scenario["defect_predicate"],
         "v0_control_predicate": scenario["v0_control_predicate"],
+        "predicate_contract_digest": "",
         "n": n,
         "k": k,
         "complete_count": complete_count,
@@ -496,6 +505,10 @@ def _execute_scenario(
         "issue_attempts": issue_attempts,
         "v0_attempts": v0_attempts,
     }
+    result["predicate_contract_digest"] = scenario_predicate_contract_digest(
+        result
+    )
+    return result
 
 
 def _bounded_name(value: str, *, maximum: int, pattern: str) -> str:

@@ -19,7 +19,6 @@ provider IDs, or private identifiers are introduced.
 from __future__ import annotations
 
 import json
-import re
 import tempfile
 from collections import Counter
 from collections.abc import Mapping, Sequence
@@ -406,22 +405,32 @@ def validate_analysis_against_summary(
 def assign_stable_pattern_ids(
     analysis: Mapping[str, Any],
     previous_patterns: Mapping[str, Mapping[str, Any]],
+    normalized_summary: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Replace model-local keys with deterministic living-memory IDs."""
-    validate_analysis(analysis)
-    prior_by_title: dict[str, str] = {}
+    """Replace model-local keys with cited-evidence-derived stable IDs."""
+    validate_analysis_against_summary(analysis, normalized_summary)
+    identities = _pattern_identities(analysis["patterns"], normalized_summary)
+    prior_by_identity: dict[str, str] = {}
     for key, pattern in previous_patterns.items():
-        normalized = _normalized_title(pattern["title"])
-        if normalized in prior_by_title and prior_by_title[normalized] != key:
-            raise ContractError("Prior improvement patterns have ambiguous titles")
-        prior_by_title[normalized] = key
+        identity = pattern.get("identity_digest")
+        if isinstance(identity, str):
+            if identity in prior_by_identity and prior_by_identity[identity] != key:
+                raise ContractError(
+                    "Prior improvement patterns have ambiguous evidence identities"
+                )
+            prior_by_identity[identity] = key
     result = json.loads(json.dumps(analysis))
     key_map: dict[str, str] = {}
     assigned: set[str] = set()
-    for pattern in result["patterns"]:
+    for pattern, identity in zip(
+        result["patterns"],
+        identities,
+        strict=True,
+    ):
         source_key = pattern["pattern_key"]
-        normalized = _normalized_title(pattern["title"])
-        stable_key = prior_by_title.get(normalized) or _pattern_id(normalized)
+        stable_key = prior_by_identity.get(identity["digest"]) or _pattern_id(
+            identity["digest"]
+        )
         if stable_key in assigned:
             raise ContractError(
                 "Improvement analysis patterns collapse to one deterministic ID"
@@ -435,15 +444,41 @@ def assign_stable_pattern_ids(
     return result
 
 
-def _normalized_title(value: str) -> str:
-    return " ".join(value.casefold().split())
+def _pattern_id(identity_digest: str) -> str:
+    return f"pattern-{identity_digest.removeprefix('sha256:')[:24]}"
 
 
-def _pattern_id(normalized_title: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", normalized_title).strip("-")
-    slug = slug[:36].rstrip("-") or "pattern"
-    digest = content_hash({"title": normalized_title}).removeprefix("sha256:")[:10]
-    return f"{slug}-{digest}"
+def _pattern_identities(
+    patterns: Sequence[Mapping[str, Any]],
+    normalized_summary: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    findings = {
+        item["finding_id"]: item
+        for item in normalized_summary["insight_engine_findings"]
+    }
+    identities = []
+    for pattern in patterns:
+        cited = [findings[item["finding_id"]] for item in pattern["evidence"]]
+        root_evidence = [
+            {
+                "finding_id": item["finding_id"],
+                "agent": item["agent"],
+                "issue_id": item.get("issue_id"),
+                "finding_type": item["finding_type"],
+                "failed_fields": item["failed_fields"],
+                "failed_field_reasons": item["failed_field_reasons"],
+            }
+            for item in sorted(cited, key=lambda value: value["finding_id"])
+        ]
+        identities.append(
+            {
+                "finding_ids": [
+                    item["finding_id"] for item in root_evidence
+                ],
+                "digest": content_hash({"root_evidence": root_evidence}),
+            }
+        )
+    return identities
 
 
 def reconcile_patterns(
@@ -458,6 +493,7 @@ def reconcile_patterns(
     exercised_capability_names: Sequence[str] | None = None,
     pattern_capabilities: Mapping[str, Sequence[str]] | None = None,
     pattern_priorities: Mapping[str, int] | None = None,
+    pattern_identities: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Pure lifecycle reconciliation of the living pattern state.
 
@@ -484,6 +520,7 @@ def reconcile_patterns(
     )
     capability_map = pattern_capabilities or {}
     priority_map = pattern_priorities or {}
+    identity_map = pattern_identities or {}
     seen_keys = {pattern["pattern_key"] for pattern in analysis_patterns}
     reconciled: dict[str, dict[str, Any]] = {}
 
@@ -533,6 +570,24 @@ def reconcile_patterns(
                 int((prior or {}).get("priority", len(priority_map) + 1)),
             ),
             "history": history,
+            "identity_digest": (
+                identity_map.get(key, {}).get("digest")
+                or (prior or {}).get("identity_digest")
+                or content_hash(
+                    {
+                        "finding_ids": sorted(
+                            item["finding_id"]
+                            for item in pattern["evidence"]
+                        )
+                    }
+                )
+            ),
+            "identity_finding_ids": list(
+                identity_map.get(key, {}).get("finding_ids")
+                or sorted(
+                    item["finding_id"] for item in pattern["evidence"]
+                )
+            ),
         }
 
     for key, prior in previous_patterns.items():
@@ -1055,7 +1110,11 @@ def write_improvement_memory(
     previous_patterns = (previous_state or {}).get("patterns", {})
     normalized_summary = build_normalized_summary(report, previous_state)
     validate_analysis_against_summary(analysis, normalized_summary)
-    analysis = assign_stable_pattern_ids(analysis, previous_patterns)
+    analysis = assign_stable_pattern_ids(
+        analysis,
+        previous_patterns,
+        normalized_summary,
+    )
     coverage = report_coverage(report)
     exercised_agents = [item["agent"] for item in report["baseline"]]
     is_comparable = coverage["runtime_evidence_complete"]
@@ -1075,6 +1134,17 @@ def write_improvement_memory(
             }
         )
         for pattern in analysis_patterns
+    }
+    pattern_identities = {
+        pattern["pattern_key"]: identity
+        for pattern, identity in zip(
+            analysis["patterns"],
+            _pattern_identities(
+                analysis["patterns"],
+                normalized_summary,
+            ),
+            strict=True,
+        )
     }
     same_run = (
         previous_state is not None
@@ -1102,6 +1172,7 @@ def write_improvement_memory(
                     start=1,
                 )
             },
+            pattern_identities=pattern_identities,
         )
     )
     snapshot = build_run_snapshot(
@@ -1198,7 +1269,11 @@ def write_improvement_preview(
         )
     normalized_summary = build_normalized_summary(report)
     validate_analysis_against_summary(analysis, normalized_summary)
-    analysis = assign_stable_pattern_ids(analysis, {})
+    analysis = assign_stable_pattern_ids(
+        analysis,
+        {},
+        normalized_summary,
+    )
     coverage = report_coverage(report)
     patterns = list(analysis["patterns"]) if coverage["runtime_evidence_complete"] else []
     reconciled = reconcile_patterns(
@@ -1229,6 +1304,17 @@ def write_improvement_preview(
             for index, priority in enumerate(
                 analysis["improvement_priorities"],
                 start=1,
+            )
+        },
+        pattern_identities={
+            pattern["pattern_key"]: identity
+            for pattern, identity in zip(
+                analysis["patterns"],
+                _pattern_identities(
+                    analysis["patterns"],
+                    normalized_summary,
+                ),
+                strict=True,
             )
         },
     )

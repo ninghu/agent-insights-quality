@@ -6,7 +6,9 @@ import pytest
 
 from agent_insights_quality.util import ContractError, content_hash
 from agent_insights_quality.validation_evidence import (
+    authority_predicate_contract_digest,
     persist_evidence,
+    scenario_predicate_contract_digest,
     stamp_evidence_digests,
     validate_evidence,
 )
@@ -136,6 +138,7 @@ def _authority(
         "v0_control_predicate": (
             None if baseline else {"kind": "zero_defect_observations"}
         ),
+        "predicate_contract_digest": HASH,
         "n": n,
         "k": 5,
         "complete_count": n,
@@ -144,7 +147,10 @@ def _authority(
         "issue_attempts": issue_attempts,
         "v0_attempts": v0_attempts,
     }
-    return {
+    scenario["predicate_contract_digest"] = scenario_predicate_contract_digest(
+        scenario
+    )
+    authority = {
         "authority_id": authority_id,
         "authority_kind": "baseline" if baseline else "issue",
         "canonical_agent": agent,
@@ -156,6 +162,7 @@ def _authority(
         "provider_agent_version_reference": HASH,
         "source_content_digest": HASH,
         "execution_digest": HASH,
+        "predicate_contract_digest": HASH,
         "validated_head_sha": HEAD,
         "n": n,
         "k": 5,
@@ -165,6 +172,10 @@ def _authority(
         "scenarios": [scenario],
         "authority_evidence_digest": HASH,
     }
+    authority["predicate_contract_digest"] = (
+        authority_predicate_contract_digest(authority)
+    )
+    return authority
 
 
 def _evidence() -> dict:
@@ -306,6 +317,15 @@ def test_evidence_recomputes_predicates_and_rejects_global_reference_reuse() -> 
     attempt["defect_observed"] = False
     value = stamp_evidence_digests(value)
     with pytest.raises(ContractError, match="does not match its predicate"):
+        validate_evidence(value)
+
+
+def test_predicate_mutation_rejects_original_execution_binding() -> None:
+    value = _evidence()
+    scenario = value["authorities"][5]["scenarios"][0]
+    scenario["defect_predicate"]["required_surfaces"] = ["trace"]
+    value = stamp_evidence_digests(value)
+    with pytest.raises(ContractError, match="predicate contract"):
         validate_evidence(value)
 
     value = _evidence()

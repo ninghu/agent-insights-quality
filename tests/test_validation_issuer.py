@@ -11,12 +11,14 @@ from agent_insights_quality.util import ROOT, ContractError, content_hash
 from agent_insights_quality.validation_blob import BlobRecord
 from agent_insights_quality.validation_issuer import (
     CheckState,
+    GhGitHubStateReader,
     current_issuer_code_digest,
     QueriedGitHubState,
     ReceiptIssuer,
     WorkflowState,
     oidc_subject_digest,
     publish_required_check,
+    select_provenance_check,
     verify_runtime_issuer,
     stamp_receipt_digest,
     validate_receipt,
@@ -130,11 +132,17 @@ def _receipt(mode: str) -> dict:
             "authority_id": authority["authority_id"],
             "source_content_digest": authority["source_content_digest"],
             "execution_digest": authority["execution_digest"],
+            "predicate_contract_digest": authority[
+                "predicate_contract_digest"
+            ],
             "pass": authority["pass"],
             "scenarios": [
                 {
                     "scenario_id": scenario["scenario_id"],
                     "validation_mode": scenario["validation_mode"],
+                    "predicate_contract_digest": scenario[
+                        "predicate_contract_digest"
+                    ],
                     "n": scenario["n"],
                     "k": scenario["k"],
                     "complete_count": scenario["complete_count"],
@@ -583,6 +591,121 @@ def test_required_check_is_published_on_exact_candidate_head(
     assert result["check_run_id"] == 999
 
 
+def test_check_record_filters_exact_provenance_before_uniqueness(
+    monkeypatch,
+) -> None:
+    reader = GhGitHubStateReader("synthetic-token")
+    checks = {
+        "check_runs": [
+            {
+                "id": 1,
+                "name": "validate",
+                "head_sha": HEAD,
+                "conclusion": "success",
+                "completed_at": NOW,
+                "output": {},
+                "app": {"id": 999, "slug": "other-app"},
+                "check_suite": {"id": 101},
+            },
+            {
+                "id": 2,
+                "name": "validate",
+                "head_sha": HEAD,
+                "conclusion": "success",
+                "completed_at": NOW,
+                "output": {},
+                "app": {"id": 15368, "slug": "github-actions"},
+                "check_suite": {"id": 102},
+            },
+        ]
+    }
+    runs = {
+        "workflow_runs": [
+            {"check_suite_id": 101, "workflow_id": 201, "head_sha": HEAD},
+            {"check_suite_id": 102, "workflow_id": 202, "head_sha": HEAD},
+        ]
+    }
+
+    def api(path):
+        if "/check-runs" in path:
+            return checks
+        if "/actions/runs?" in path:
+            return runs
+        workflow_id = int(path.rsplit("/", 1)[-1])
+        return {
+            "id": workflow_id,
+            "path": (
+                ".github/workflows/validate.yml"
+                if workflow_id == 202
+                else ".github/workflows/other.yml"
+            ),
+        }
+
+    monkeypatch.setattr(reader, "_api", api)
+    record = reader.check_record(
+        repository="ninghu/agent-insights-quality",
+        head_sha=HEAD,
+        name="validate",
+        expected_workflow_path=".github/workflows/validate.yml",
+        expected_app_id=15368,
+        expected_app_slug="github-actions",
+    )
+    assert record["check_run_id"] == 2
+    assert record["workflow_id"] == 202
+
+
+def test_provenance_selection_rejects_only_duplicate_exact_matches() -> None:
+    exact = CheckState(
+        name="validate",
+        check_run_id=1,
+        check_suite_id=101,
+        app_id=15368,
+        app_slug="github-actions",
+        head_sha=HEAD,
+        conclusion="success",
+        result_digest=HASH,
+        workflow_id=201,
+        workflow_path=".github/workflows/validate.yml",
+        workflow_sha=HEAD,
+        completed_at=NOW,
+    )
+    wrong_path = CheckState(
+        **{
+            **exact.__dict__,
+            "check_run_id": 2,
+            "check_suite_id": 102,
+            "workflow_path": ".github/workflows/test-agent-validation.yml",
+        }
+    )
+    assert (
+        select_provenance_check(
+            (wrong_path, exact),
+            name="validate",
+            workflow_path=".github/workflows/validate.yml",
+            head_sha=HEAD,
+            app_id=15368,
+            app_slug="github-actions",
+        ).check_run_id
+        == 1
+    )
+    duplicate = CheckState(
+        **{
+            **exact.__dict__,
+            "check_run_id": 3,
+            "check_suite_id": 103,
+        }
+    )
+    with pytest.raises(ContractError, match="one successful provenance-matched"):
+        select_provenance_check(
+            (exact, duplicate),
+            name="validate",
+            workflow_path=".github/workflows/validate.yml",
+            head_sha=HEAD,
+            app_id=15368,
+            app_slug="github-actions",
+        )
+
+
 def test_merge_receipt_fails_when_head_or_check_provenance_changes(tmp_path) -> None:
     receipt = _receipt("merge")
     policy, _ = load_trusted_policy()
@@ -624,7 +747,7 @@ def test_merge_receipt_rejects_wrong_workflow_and_completion_order(
         ".github/workflows/validate.yml"
     )
     wrong_workflow = stamp_receipt_digest(wrong_workflow)
-    with pytest.raises(ContractError, match="check proof is stale"):
+    with pytest.raises(ContractError, match="provenance-matched"):
         ReceiptIssuer(
             MemoryReceiptStore(wrong_workflow),
             mirror_root=tmp_path,

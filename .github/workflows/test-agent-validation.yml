@@ -1,4 +1,4 @@
-name: Test Agent Validation shadow preparation
+name: Test Agent Validation candidate cycle
 
 on:
   pull_request:
@@ -16,6 +16,14 @@ on:
         description: Exact candidate tree SHA
         required: true
         type: string
+      mode:
+        description: Candidate cycle mode
+        required: true
+        default: shadow
+        type: choice
+        options:
+          - shadow
+          - merge
 
 permissions:
   contents: read
@@ -23,7 +31,6 @@ permissions:
   checks: read
   actions: read
   id-token: write
-  checks: read
 
 concurrency:
   group: test-agent-validation-account
@@ -83,6 +90,7 @@ jobs:
       CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate_head_sha }}
       CANDIDATE_TREE_SHA: ${{ inputs.candidate_tree_sha }}
       WORKFLOW_RUN_ID: ${{ github.run_id }}
+      VALIDATION_MODE: ${{ inputs.mode || 'shadow' }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
@@ -120,13 +128,15 @@ jobs:
             --candidate-tree-sha $env:CANDIDATE_TREE_SHA `
             --workflow-run-id $env:WORKFLOW_RUN_ID `
             --output $output
-          $receipt = Join-Path $env:AIQ_RUNTIME_ROOT "test-agent-validation/receipt-requests/$env:CANDIDATE_HEAD_SHA-shadow.json"
+          $receipt = Join-Path $env:AIQ_RUNTIME_ROOT "test-agent-validation/receipt-requests/$env:CANDIDATE_HEAD_SHA-$env:VALIDATION_MODE.json"
           python -m agent_insights_quality run-test-agent-validation `
+            --mode $env:VALIDATION_MODE `
             --candidate $output `
             --storage-account $env:AIQ_VALIDATION_STORAGE_ACCOUNT `
             --expected-azure-client-id $env:EXPECTED_AZURE_CLIENT_ID `
             --automation-principal-id $env:AUTOMATION_PRINCIPAL_ID `
             --receipt-output $receipt
 
-# This workflow remains a non-authorizing shadow-preparation path until the reviewed r01/r02
-# lifecycle exercises are complete. It deliberately does not publish the protected required check.
+# Shadow mode creates only a non-authorizing receipt. Merge mode stops at the
+# immutable CLEAN handoff; only the default-branch protected receipt workflow
+# can construct the merge receipt and publish the required check.

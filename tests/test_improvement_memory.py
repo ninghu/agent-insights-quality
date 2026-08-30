@@ -351,12 +351,30 @@ def test_analysis_citations_must_resolve_to_insight_engine_findings() -> None:
         )
 
 
-def test_pattern_ids_are_assigned_deterministically_and_reuse_prior_title() -> None:
+def test_pattern_ids_use_root_evidence_not_generated_title() -> None:
     analysis = _analysis(pattern_key="model-local-key")
-    first = assign_stable_pattern_ids(analysis, {})
+    summary = build_normalized_summary(_report())
+    first = assign_stable_pattern_ids(analysis, {}, summary)
     stable_id = first["patterns"][0]["pattern_key"]
     assert stable_id != "model-local-key"
     assert first["improvement_priorities"][0]["pattern_key"] == stable_id
+
+    reworded = _analysis(pattern_key="another-model-local-key")
+    reworded["patterns"][0]["title"] = "A harmlessly reworded pattern title"
+    second = assign_stable_pattern_ids(reworded, {}, summary)
+    assert second["patterns"][0]["pattern_key"] == stable_id
+
+    changed_summary = deepcopy(summary)
+    changed_summary["insight_engine_findings"][0][
+        "failed_field_reasons"
+    ]["root_cause"] = "Different root evidence."
+    changed_local_key = _analysis(pattern_key="another-model-local-key")
+    changed = assign_stable_pattern_ids(
+        changed_local_key,
+        {},
+        changed_summary,
+    )
+    assert changed["patterns"][0]["pattern_key"] != stable_id
 
     prior = {
         stable_id: {
@@ -364,9 +382,6 @@ def test_pattern_ids_are_assigned_deterministically_and_reuse_prior_title() -> N
             "status": "active",
         }
     }
-    changed_local_key = _analysis(pattern_key="another-model-local-key")
-    second = assign_stable_pattern_ids(changed_local_key, prior)
-    assert second["patterns"][0]["pattern_key"] == stable_id
     normalized = build_normalized_summary(
         _report(),
         {"patterns": prior},
@@ -380,6 +395,36 @@ def test_pattern_ids_are_assigned_deterministically_and_reuse_prior_title() -> N
             "supporting_capabilities": [],
         }
     ]
+
+
+def test_living_memory_reuses_evidence_identity_after_title_rewording(
+    tmp_path: Path,
+) -> None:
+    reports_root = tmp_path / "reports"
+    living = reports_root / "insight-engine-improvement.json"
+    first = write_improvement_memory(
+        report=_report(),
+        analysis=_analysis(pattern_key="first-model-key"),
+        reports_root=reports_root,
+        living_state_path=living,
+    )
+    first_id = next(iter(first["patterns"]))
+    next_report = _report(
+        run_id="aiq-20260825",
+        report_date="2026-08-25",
+    )
+    reworded = _analysis(pattern_key="second-model-key")
+    reworded["patterns"][0]["title"] = "Reworded without changing evidence"
+    second = write_improvement_memory(
+        report=next_report,
+        analysis=reworded,
+        reports_root=reports_root,
+        living_state_path=living,
+    )
+    assert list(second["patterns"]) == [first_id]
+    assert second["patterns"][first_id]["title"] == (
+        "Reworded without changing evidence"
+    )
 
 
 def test_reconcile_patterns_lifecycle_transitions() -> None:
