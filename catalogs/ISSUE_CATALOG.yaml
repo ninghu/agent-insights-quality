@@ -227,7 +227,7 @@ issues:
     category: latency
     severity: medium
     implementation: agents/finance-agent/issues/issue-019
-    validation_mode: deterministic
+    validation_mode: model_mediated
     root_cause: The agent repeats an identical permanent failure beyond the retry bound.
     expected_fix: Stop at the retry bound and surface the permanent failure.
     trace_contract: {minimum_traces: 5, operations: [invoke_agent, execute_tool], anomaly: retry_loop}

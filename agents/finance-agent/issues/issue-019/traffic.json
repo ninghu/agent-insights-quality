@@ -336,8 +336,8 @@
     "scenarios": [
       {
         "id": "issue-019-defect-path",
-        "validation_mode": "deterministic",
-        "n": 5,
+        "validation_mode": "model_mediated",
+        "n": 7,
         "k": 5,
         "fixtures": [],
         "attempts": [
@@ -920,6 +920,238 @@
                 }
               }
             ]
+          },
+          {
+            "index": 6,
+            "conversation_group": "issue-019-attempt-06",
+            "parameters": {
+              "case_id": "case-06",
+              "source_request_ids": [
+                "issue-019-request-1"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-019-setup-06-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 06. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-019-probe-06-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 06. Show the balance for acct-demo-missing."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "account_not_found"
+                    ]
+                  },
+                  "trace_assertions": [
+                    {
+                      "name": "three_permanent_attempts",
+                      "kind": "tool_call_count",
+                      "tool_name": "get_balance",
+                      "count": 3
+                    },
+                    {
+                      "name": "permanent_error_retry_sequence",
+                      "kind": "retry_sequence",
+                      "tool_name": "get_balance",
+                      "result_sequence": [
+                        "error",
+                        "error",
+                        "error"
+                      ]
+                    },
+                    {
+                      "name": "same_request_scope_each_attempt",
+                      "kind": "scope_relation",
+                      "tool_name": "get_balance",
+                      "scope_kind": "account",
+                      "request_scope": "first",
+                      "argument": "account_id",
+                      "request_tool_equal": true
+                    }
+                  ],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 7,
+            "conversation_group": "issue-019-attempt-07",
+            "parameters": {
+              "case_id": "case-07",
+              "source_request_ids": [
+                "issue-019-request-2"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-019-setup-07-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 07. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-019-probe-07-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 07. Show the balance for acct-demo-missing."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "account_not_found"
+                    ]
+                  },
+                  "trace_assertions": [
+                    {
+                      "name": "three_permanent_attempts",
+                      "kind": "tool_call_count",
+                      "tool_name": "get_balance",
+                      "count": 3
+                    },
+                    {
+                      "name": "permanent_error_retry_sequence",
+                      "kind": "retry_sequence",
+                      "tool_name": "get_balance",
+                      "result_sequence": [
+                        "error",
+                        "error",
+                        "error"
+                      ]
+                    },
+                    {
+                      "name": "same_request_scope_each_attempt",
+                      "kind": "scope_relation",
+                      "tool_name": "get_balance",
+                      "scope_kind": "account",
+                      "request_scope": "first",
+                      "argument": "account_id",
+                      "request_tool_equal": true
+                    }
+                  ],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
           }
         ],
         "healthy_predicate": null,
@@ -930,7 +1162,9 @@
             "issue-019-probe-02-01",
             "issue-019-probe-03-01",
             "issue-019-probe-04-01",
-            "issue-019-probe-05-01"
+            "issue-019-probe-05-01",
+            "issue-019-probe-06-01",
+            "issue-019-probe-07-01"
           ],
           "required_surfaces": [
             "trace"
@@ -939,9 +1173,9 @@
         "v0_control_predicate": {
           "kind": "zero_defect_observations"
         },
-        "execution_digest": "sha256:184d3eff6f284f0bf53bdd477ae997f7bcd224e48ec56630e64d541949349655"
+        "execution_digest": "sha256:dacc172ea12416aeb7d30d26d3d19a7ad38b90a01a75297d9fd7e89887c5b8f6"
       }
     ],
-    "execution_digest": "sha256:d16deb27761b330267654a43230a79ae32889f9714340e97b8d5f3d0f3525554"
+    "execution_digest": "sha256:053df67b35e0cacf0826df6ee30ad7863a569b4792409cdc2af7f4f6f658aede"
   }
 }

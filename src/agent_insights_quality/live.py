@@ -1435,10 +1435,15 @@ union traces, dependencies, requests
 | extend tool_call_id=coalesce(
     tostring(customDimensions["gen_ai.tool.call.id"]),
     tostring(customDimensions["tool.call.id"]))
-| extend tool_arguments=tostring(customDimensions["gen_ai.tool.call.arguments"])
+| extend tool_arguments=coalesce(
+    tostring(customDimensions["aiq.tool.call.arguments"]),
+    tostring(customDimensions["gen_ai.tool.call.arguments"]))
 | extend error_type=tostring(customDimensions["error.type"])
 | extend tool_ok=tostring(customDimensions["tool.ok"])
-| extend tool_result=tostring(customDimensions["gen_ai.tool.call.result"])
+| extend tool_result=coalesce(
+    tostring(customDimensions["aiq.tool.call.result"]),
+    tostring(customDimensions["gen_ai.tool.call.result"]))
+| extend structural_tool=tostring(customDimensions["aiq.tool.call.result"])
 | extend input_messages=tostring(customDimensions["gen_ai.input.messages"])
 | extend output_messages=tostring(customDimensions["gen_ai.output.messages"])
 | extend terminal_success=tostring(customDimensions["aiq.terminal_response.success"])
@@ -1457,7 +1462,7 @@ union traces, dependencies, requests
     request_id in ({references}), request_id,
     "")
 | project operation_Id, operation_name, tool_name, tool_call_id, error_type, tool_ok, tool_result,
-    tool_arguments, input_messages, output_messages, timestamp, duration, name,
+    tool_arguments, structural_tool, input_messages, output_messages, timestamp, duration, name,
     terminal_success, terminal_output, handled_error, matched_reference
 """
         result = self._query_resource(
@@ -1477,14 +1482,15 @@ union traces, dependencies, requests
                 "tool_ok": str(row[5] or ""),
                 "tool_result": str(row[6] or ""),
                 "tool_arguments": str(row[7] or ""),
-                "messages": [str(row[8] or ""), str(row[9] or "")],
-                "timestamp": str(row[10] or ""),
-                "duration": row[11],
-                "span_name": str(row[12] or ""),
-                "terminal_success": str(row[13] or ""),
-                "terminal_output": str(row[14] or ""),
-                "handled_error": str(row[15] or ""),
-                "matched_reference": str(row[16] or ""),
+                "structural_tool": str(row[8] or ""),
+                "messages": [str(row[9] or ""), str(row[10] or "")],
+                "timestamp": str(row[11] or ""),
+                "duration": row[12],
+                "span_name": str(row[13] or ""),
+                "terminal_success": str(row[14] or ""),
+                "terminal_output": str(row[15] or ""),
+                "handled_error": str(row[16] or ""),
+                "matched_reference": str(row[17] or ""),
             }
             for table in result.tables
             for row in table.rows
@@ -2244,13 +2250,15 @@ def _tool_rows(
     rows: list[dict[str, Any]],
     tool_name: str,
 ) -> list[dict[str, Any]]:
-    return sorted(
-        [
+    matching = [
             row
             for row in rows
             if row.get("operation_name") == "execute_tool"
             and row.get("tool_name") == tool_name
-        ],
+        ]
+    structural = [row for row in matching if row.get("structural_tool")]
+    return sorted(
+        structural or matching,
         key=lambda row: (str(row.get("timestamp") or ""), str(row.get("span_name") or "")),
     )
 

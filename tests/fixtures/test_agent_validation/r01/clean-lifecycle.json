@@ -232,20 +232,20 @@
   "cycle_id": "validation-local-r01",
   "digests": {
     "clean_resource_inventory_digest": "sha256:80ec918fbecb394c7a28b899a24762cd9ac28a8833a2cc6f25307730908a554c",
-    "evidence_digest": "sha256:8cad88ac8c1fbdff9885e4227f4051b85feb35ddf201269449f607c5f9357e09",
+    "evidence_digest": "sha256:277afee3855172d987e08a21e16d22aeda3c7e767a4332f3f60b0917785a0c8d",
     "evidence_resource_inventory_digest": "sha256:839dc65aef04b7f4d02018daa273e8599369ac9957fd3f727e2595e64880e52b",
-    "execution_matrix_digest": "sha256:9871973a74edb8afcde6fab1985eea8e3ad43e1e9e83243e8baffe0d8ef86ccb",
+    "execution_matrix_digest": "sha256:b815023aee152f454383be3ed8bddbecc95293781ad435539f36fe7614b294fe",
     "quota_plan_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "runtime_topology_digest": "sha256:ccfc73e8252f9ca571b00947fac320bd2787850657730f6b969b1c1aa4ac175f",
-    "validation_digest": "sha256:fbfeb0acdb4ee8423ae6842e4687f0cafd280d78d115a0e76b707016b5bfbd26"
+    "validation_digest": "sha256:06885f564b761bea8cd83c066bca88a1b317e230b4a90e38464f3c2304e690fb"
   },
   "event_reference": null,
   "evidence_reference": {
-    "digest": "sha256:8cad88ac8c1fbdff9885e4227f4051b85feb35ddf201269449f607c5f9357e09",
-    "path": "evidence/ninghu/agent-insights-quality/63/validation-local-r01/8cad88ac8c1fbdff9885e4227f4051b85feb35ddf201269449f607c5f9357e09.json"
+    "digest": "sha256:277afee3855172d987e08a21e16d22aeda3c7e767a4332f3f60b0917785a0c8d",
+    "path": "evidence/ninghu/agent-insights-quality/63/validation-local-r01/277afee3855172d987e08a21e16d22aeda3c7e767a4332f3f60b0917785a0c8d.json"
   },
   "failure": null,
-  "journal_digest": "sha256:b577bd888405f1c53fe8fb6f8b3778bba3234646359f3316a7a12ccf648417a8",
+  "journal_digest": "sha256:eba37f40f15d36f41ad895de2fa1d9ca72aa2b356c5616cd361b6a76f9065621",
   "kind": "test-agent-validation-lifecycle",
   "last_activity_at": "2026-08-29T12:16:50+00:00",
   "operator": {

@@ -7,14 +7,8 @@ from typing import Annotated
 
 from agent_framework import (
     Agent,
-    ChatContext,
-    ChatMiddleware,
-    ChatResponse,
-    ChatResponseUpdate,
-    Content,
-    Message,
-    MiddlewareTermination,
-    ResponseStream,
+    FunctionInvocationContext,
+    FunctionMiddleware,
     tool,
 )
 from agent_framework.foundry import FoundryChatClient
@@ -36,8 +30,23 @@ transient_attempts: set[tuple[int, str]] = set()
 transient_lock = threading.Lock()
 
 
-def finish_tool_span(name: str, result: dict) -> dict:
+def finish_tool_span(name: str, result: dict, account_id: str | None = None) -> dict:
     span = trace.get_current_span()
+    account_id = account_id or result.get("account_id")
+    arguments = {"account_id": account_id} if account_id else {}
+    safe_result = {"ok": bool(result.get("ok"))}
+    if account_id:
+        safe_result["account_id"] = account_id
+    for field in ("balance", "currency"):
+        if field in result:
+            safe_result[field] = result[field]
+    error = result.get("error")
+    if isinstance(error, dict) and error.get("code"):
+        safe_result["error"] = {"code": str(error["code"])}
+    span.set_attribute("gen_ai.operation.name", "execute_tool")
+    span.set_attribute("gen_ai.tool.name", name)
+    span.set_attribute("aiq.tool.call.arguments", json.dumps(arguments, sort_keys=True))
+    span.set_attribute("aiq.tool.call.result", json.dumps(safe_result, sort_keys=True))
     span.set_attribute("tool.name", name)
     span.set_attribute("tool.ok", bool(result.get("ok")))
     return result
@@ -45,15 +54,23 @@ def finish_tool_span(name: str, result: dict) -> dict:
 
 @tool(approval_mode="never_require")
 def get_balance(
-    account_id: Annotated[str, Field(description="Required synthetic account identifier.")],
+    account_id: Annotated[
+        str | None,
+        Field(description="Optional synthetic account identifier."),
+    ] = None,
 ) -> dict:
-    """Return the authoritative balance for exactly one synthetic account."""
+    """Return a balance or a structured missing-identifier error."""
     with RUNTIME_IDENTITY.start_span(tracer, "finance.tool.get_balance"):
+        if account_id is None:
+            return finish_tool_span(
+                "get_balance",
+                {"ok": False, "error": {"code": "account_id_required"}},
+            )
         record = ACCOUNTS.get(account_id)
         if record is None:
             return finish_tool_span(
                 "get_balance",
-                {"ok": False, "error": {"code": "account_not_found"}},
+                {"ok": False, "account_id": account_id, "error": {"code": "account_not_found"}},
             )
         return finish_tool_span(
             "get_balance",
@@ -79,6 +96,7 @@ def get_balance_with_transient(
                 "get_balance_with_transient",
                 {
                     "ok": False,
+                    "account_id": account_id,
                     "error": {"code": "temporary_unavailable", "retryable": True},
                 },
             )
@@ -99,7 +117,7 @@ def get_budget_summary(
         if record is None:
             return finish_tool_span(
                 "get_budget_summary",
-                {"ok": False, "error": {"code": "account_not_found"}},
+                {"ok": False, "account_id": account_id, "error": {"code": "account_not_found"}},
             )
         return finish_tool_span(
             "get_budget_summary",
@@ -122,7 +140,7 @@ def list_monthly_items(
         if account_id not in ACCOUNTS:
             return finish_tool_span(
                 "list_monthly_items",
-                {"ok": False, "error": {"code": "account_not_found"}},
+                {"ok": False, "account_id": account_id, "error": {"code": "account_not_found"}},
             )
         return finish_tool_span(
             "list_monthly_items",
@@ -148,66 +166,30 @@ for a transient test, use get_balance_with_transient. Keep answers concise and d
 financial recommendations."""
 
 
-class MissingAccountIdentifier(ChatMiddleware):
-    async def process(self, context: ChatContext, call_next) -> None:
-        text = next(
-            (
-                message.text
-                for message in reversed(context.messages)
-                if message.role == "user" and message.text
-            ),
-            "",
+class MissingAccountIdentifier(FunctionMiddleware):
+    async def process(
+        self,
+        context: FunctionInvocationContext,
+        call_next,
+    ) -> None:
+        arguments = context.arguments
+        account_id = (
+            arguments.get("account_id")
+            if isinstance(arguments, dict)
+            else getattr(arguments, "account_id", None)
         )
-        folded = text.casefold()
-        if not (
-            "show the balance" in folded
-            and any(account_id in folded for account_id in ACCOUNTS)
-            and "transient" not in folded
-        ):
+        if context.function.name != "get_balance" or account_id not in ACCOUNTS:
             await call_next()
             return
-        result = {"ok": False, "error": {"code": "account_id_required"}}
-        with RUNTIME_IDENTITY.start_span(tracer, "finance.tool.get_balance") as span:
-            span.set_attribute("gen_ai.operation.name", "execute_tool")
-            span.set_attribute("gen_ai.tool.name", "get_balance")
-            span.set_attribute("gen_ai.tool.call.arguments", "{}")
-            span.set_attribute(
-                "gen_ai.tool.call.result",
-                json.dumps(result, sort_keys=True),
-            )
-            span.set_attribute("tool.ok", False)
-        answer = "The balance lookup failed because account_id was omitted."
-        with RUNTIME_IDENTITY.start_span(tracer, "finance.model.respond") as span:
-            span.set_attribute("gen_ai.operation.name", "chat")
-            span.set_attribute(
-                "gen_ai.output.messages",
-                json.dumps(
-                    [
-                        {
-                            "role": "assistant",
-                            "parts": [{"type": "text", "content": answer}],
-                        }
-                    ],
-                    sort_keys=True,
-                ),
-            )
-        response = ChatResponse(
-            messages=[Message(role="assistant", contents=[answer])]
-        )
-        if context.stream:
-            async def updates():
-                yield ChatResponseUpdate(
-                    role="assistant",
-                    contents=[Content.from_text(answer)],
-                )
-
-            context.result = ResponseStream(
-                updates(),
-                finalizer=ChatResponse.from_updates,
-            )
+        if isinstance(arguments, dict):
+            context.arguments = {
+                key: value
+                for key, value in arguments.items()
+                if key != "account_id"
+            }
         else:
-            context.result = response
-        raise MiddlewareTermination
+            setattr(arguments, "account_id", None)
+        await call_next()
 
 
 def build_agent() -> Agent:

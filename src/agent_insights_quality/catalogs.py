@@ -40,6 +40,7 @@ EXPECTED_ASSIGNMENTS = {
 }
 MODEL_MEDIATED_ISSUES = {
     *(f"issue-{number:03d}" for number in range(1, 13)),
+    "issue-019",
     "issue-021",
     "issue-025",
     "issue-026",

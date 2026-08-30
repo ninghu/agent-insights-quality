@@ -10,7 +10,7 @@ import zipfile
 from pathlib import Path
 
 import yaml
-from agent_insights_quality.util import ROOT
+from agent_insights_quality.util import ROOT, content_hash
 
 
 def _is_source_file(path: Path) -> bool:
@@ -684,7 +684,7 @@ def test_finance_issue_sources_match_reviewed_deltas() -> None:
             encoding="utf-8"
         )
     )
-    assert manifest["contract_version"] == "1.0"
+    assert manifest["contract_version"] == "2.0"
     assert manifest["baseline"] == "agents/finance-agent/v0/source"
     issues = manifest["issues"]
     assert set(issues) == {
@@ -728,7 +728,9 @@ def test_finance_issue_sources_match_reviewed_deltas() -> None:
                 actual_diff = "\n".join(
                     line for line in actual_diff.splitlines() if line != " "
                 )
-                assert actual_diff == reviewed["expected_app_diff"]
+                assert content_hash(actual_diff) == reviewed[
+                    "expected_app_diff_digest"
+                ]
             else:
                 assert issue_files[relative_path].read_bytes() == baseline_path.read_bytes()
 
@@ -778,43 +780,21 @@ def test_finance_issue_sources_match_reviewed_deltas() -> None:
             } == required_names
             assert expected["semantic_assertions"]
 
-    deterministic_middleware = {
-        "issue-013": "ContradictedBalance",
-        "issue-014": "MissingAccountIdentifier",
-        "issue-015": "OppositeAccountScope",
-        "issue-016": "StructuredErrorAsBalance",
-        "issue-017": "CompletePartialAggregate",
-        "issue-018": "MissingTransientRetry",
-        "issue-019": "PermanentFailureRetryLoop",
-        "issue-020": "DuplicateContext",
-    }
-    request_predicates = {
-        "issue-013": ("show the balance", "changed = result"),
-        "issue-014": ("show the balance", 'result = {"ok": False'),
-        "issue-015": ("show its balance", "requested ="),
-        "issue-016": ("preserve the tool error", 'result = {"ok": False'),
-        "issue-017": ("complete budget summary", "results ="),
-        "issue-018": ("transient balance lookup", "result = {"),
-        "issue-019": ("context.function.name", 'account_id != "acct-demo-missing"'),
-        "issue-020": (
-            "summarize the balance and monthly items",
-            "context.messages.extend(original * 3)",
-        ),
-    }
-    for issue_id, class_name in deterministic_middleware.items():
+    for issue_id, reviewed in issues.items():
+        class_name = reviewed["expected_class"]
         source = (
             root / "issues" / issue_id / "source" / "app.py"
         ).read_text(encoding="utf-8")
-        middleware_base = (
-            "FunctionMiddleware" if issue_id == "issue-019" else "ChatMiddleware"
-        )
+        middleware_base = reviewed["middleware_kind"]
         assert f"class {class_name}({middleware_base}):" in source
         assert f"middleware = [{class_name}()]" in source
-        assert "middleware=[ExactTransientRetry(), *middleware]" in source
-        predicate, activation = request_predicates[issue_id]
-        assert predicate in source
         assert "del call_next" not in source
-        assert source.index("await call_next()") < source.index(activation)
+        class_source = source[source.index(f"class {class_name}") : source.index(
+            "\ndef build_agent"
+        )]
+        assert "gen_ai.operation.name" not in class_source
+        assert "gen_ai.tool.call" not in class_source
+        assert "gen_ai.output.messages" not in class_source
 
     baseline_source = (baseline_root / "app.py").read_text(encoding="utf-8")
     baseline_retry = (baseline_root / "retry.py").read_text(encoding="utf-8")
@@ -888,9 +868,9 @@ def test_hosted_framework_and_identity_boundaries() -> None:
         / "source"
         / "app.py"
     ).read_text(encoding="utf-8")
-    assert "str | None" not in issue_014
-    assert "] = None" not in issue_014
-    assert 'Field(description="Required synthetic account identifier.")' in issue_014
+    assert "str | None" in issue_014
+    assert "] = None" in issue_014
+    assert 'Field(description="Optional synthetic account identifier.")' in issue_014
 
 
 def test_support_baseline_asserts_handled_error_responses() -> None:

@@ -4,7 +4,7 @@ from copy import deepcopy
 
 import pytest
 
-from agent_insights_quality.util import ContractError
+from agent_insights_quality.util import ROOT, ContractError, read_json
 from agent_insights_quality.validation_rules import (
     CONVERSATION_PLACEHOLDER,
     RUNTIME_AGENT_NAME_PLACEHOLDER,
@@ -216,3 +216,44 @@ def test_prompt_rules_reject_fixtures_and_runtime_selectors() -> None:
 def test_baseline_has_health_predicate_without_v0_control() -> None:
     rules = _rules("baseline")
     _validate(rules, "baseline")
+
+
+def test_issue_019_is_model_mediated_five_of_seven() -> None:
+    rules = read_json(
+        ROOT
+        / "agents"
+        / "finance-agent"
+        / "issues"
+        / "issue-019"
+        / "traffic.json"
+    )["validation_rules"]
+    scenario = rules["scenarios"][0]
+    assert scenario["validation_mode"] == "model_mediated"
+    assert (scenario["k"], scenario["n"]) == (5, 7)
+    assert len(scenario["attempts"]) == 7
+
+
+def test_issue_021_requires_failed_search_and_ordered_fabrication_proof() -> None:
+    rules = read_json(
+        ROOT
+        / "agents"
+        / "travel-agent"
+        / "issues"
+        / "issue-021"
+        / "traffic.json"
+    )["validation_rules"]
+    scenario = rules["scenarios"][0]
+    assert scenario["defect_predicate"]["required_surfaces"] == [
+        "semantic",
+        "trace",
+    ]
+    for attempt in scenario["attempts"]:
+        assertions = attempt["probe_steps"][0]["expected"]["trace_assertions"]
+        assert any(
+            item == {
+                "name": "failed_search_before_fabricated_answer",
+                "kind": "operation_sequence",
+                "operations": ["execute_tool", "chat"],
+            }
+            for item in assertions
+        )

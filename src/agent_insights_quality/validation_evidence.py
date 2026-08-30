@@ -734,7 +734,7 @@ def _expected_authority_contract(authority_id: str) -> tuple[str, str]:
     )
     mode = (
         "model_mediated"
-        if number <= 12 or number in {21, 25, 26}
+        if number <= 12 or number in {19, 21, 25, 26}
         else "deterministic"
     )
     return agent, mode

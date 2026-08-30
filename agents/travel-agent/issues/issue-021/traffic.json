@@ -263,6 +263,14 @@
                       "kind": "tool_result_class",
                       "tool_name": "search_flights",
                       "result_class": "error"
+                    },
+                    {
+                      "name": "failed_search_before_fabricated_answer",
+                      "kind": "operation_sequence",
+                      "operations": [
+                        "execute_tool",
+                        "chat"
+                      ]
                     }
                   ],
                   "identity_assertions": {
@@ -360,6 +368,14 @@
                       "kind": "tool_result_class",
                       "tool_name": "search_flights",
                       "result_class": "error"
+                    },
+                    {
+                      "name": "failed_search_before_fabricated_answer",
+                      "kind": "operation_sequence",
+                      "operations": [
+                        "execute_tool",
+                        "chat"
+                      ]
                     }
                   ],
                   "identity_assertions": {
@@ -457,6 +473,14 @@
                       "kind": "tool_result_class",
                       "tool_name": "search_flights",
                       "result_class": "error"
+                    },
+                    {
+                      "name": "failed_search_before_fabricated_answer",
+                      "kind": "operation_sequence",
+                      "operations": [
+                        "execute_tool",
+                        "chat"
+                      ]
                     }
                   ],
                   "identity_assertions": {
@@ -554,6 +578,14 @@
                       "kind": "tool_result_class",
                       "tool_name": "search_flights",
                       "result_class": "error"
+                    },
+                    {
+                      "name": "failed_search_before_fabricated_answer",
+                      "kind": "operation_sequence",
+                      "operations": [
+                        "execute_tool",
+                        "chat"
+                      ]
                     }
                   ],
                   "identity_assertions": {
@@ -651,6 +683,14 @@
                       "kind": "tool_result_class",
                       "tool_name": "search_flights",
                       "result_class": "error"
+                    },
+                    {
+                      "name": "failed_search_before_fabricated_answer",
+                      "kind": "operation_sequence",
+                      "operations": [
+                        "execute_tool",
+                        "chat"
+                      ]
                     }
                   ],
                   "identity_assertions": {
@@ -748,6 +788,14 @@
                       "kind": "tool_result_class",
                       "tool_name": "search_flights",
                       "result_class": "error"
+                    },
+                    {
+                      "name": "failed_search_before_fabricated_answer",
+                      "kind": "operation_sequence",
+                      "operations": [
+                        "execute_tool",
+                        "chat"
+                      ]
                     }
                   ],
                   "identity_assertions": {
@@ -845,6 +893,14 @@
                       "kind": "tool_result_class",
                       "tool_name": "search_flights",
                       "result_class": "error"
+                    },
+                    {
+                      "name": "failed_search_before_fabricated_answer",
+                      "kind": "operation_sequence",
+                      "operations": [
+                        "execute_tool",
+                        "chat"
+                      ]
                     }
                   ],
                   "identity_assertions": {
@@ -869,15 +925,16 @@
             "issue-021-probe-07-01"
           ],
           "required_surfaces": [
-            "semantic"
+            "semantic",
+            "trace"
           ]
         },
         "v0_control_predicate": {
           "kind": "zero_defect_observations"
         },
-        "execution_digest": "sha256:981904cf2065dcd2528aef11f75ae3df519c93ae6962564a856cf7613d26315c"
+        "execution_digest": "sha256:4f8197c9325382f3273756643433134ab4d92d8e02493cae64512cca0237528c"
       }
     ],
-    "execution_digest": "sha256:4cd6e1c8447f49be4fd03653aed9a86e33d76c4778a0be359b7b092b2cddd090"
+    "execution_digest": "sha256:c936de127bfe62ba84309bc9145298d1749737a4756bd2b00cf0cf20ab6e7448"
   }
 }

@@ -48,6 +48,7 @@ _TRACE_OBSERVED_ISSUES = {
     "issue-027",
     "issue-028",
 }
+_SEMANTIC_AND_TRACE_OBSERVED_ISSUES = {"issue-021"}
 
 
 def validation_matrix(mode: str) -> tuple[int, int]:
@@ -327,7 +328,9 @@ def build_validation_rules(
                 "kind": "all_observation_steps_pass",
                 "step_ids": observation_step_ids,
                 "required_surfaces": (
-                    ["trace"]
+                    ["semantic", "trace"]
+                    if issue["id"] in _SEMANTIC_AND_TRACE_OBSERVED_ISSUES
+                    else ["trace"]
                     if issue["id"] in _TRACE_OBSERVED_ISSUES
                     else ["semantic"]
                 ),
@@ -454,6 +457,14 @@ def _validation_step(
             semantic = generated_semantic
         if not trace:
             trace = generated_trace
+        if issue_id == "issue-021":
+            trace.append(
+                {
+                    "name": "failed_search_before_fabricated_answer",
+                    "kind": "operation_sequence",
+                    "operations": ["execute_tool", "chat"],
+                }
+            )
     elif probe and issue_id is None and not semantic:
         semantic = _baseline_assertions(agent_name, str(raw.get("id") or ""))
     return {

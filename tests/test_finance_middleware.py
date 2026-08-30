@@ -8,7 +8,13 @@ import sys
 import types
 from types import SimpleNamespace
 
-from agent_insights_quality.live import _normalize_fixture, _trace_assertion_result
+import pytest
+
+from agent_insights_quality.live import (
+    _normalize_fixture,
+    _tool_rows,
+    _trace_assertion_result,
+)
 from agent_insights_quality.util import ROOT, read_json
 
 
@@ -30,6 +36,37 @@ def _load_finance_app(monkeypatch, logical_version: str):
     class FunctionMiddleware:
         pass
 
+    class Content:
+        @staticmethod
+        def from_text(text):
+            return text
+
+    class Message:
+        def __init__(self, *, role, contents):
+            self.role = role
+            self.contents = contents
+
+    class ChatResponse:
+        def __init__(self, *, messages):
+            self.messages = messages
+
+        @staticmethod
+        def from_updates(_updates):
+            return None
+
+    class ChatResponseUpdate:
+        def __init__(self, *, role, contents):
+            self.role = role
+            self.contents = contents
+
+    class ResponseStream:
+        def __init__(self, updates, *, finalizer):
+            self.updates = updates
+            self.finalizer = finalizer
+
+    class MiddlewareTermination(Exception):
+        pass
+
     def tool(**_kwargs):
         return lambda function: function
 
@@ -38,6 +75,12 @@ def _load_finance_app(monkeypatch, logical_version: str):
     agent_framework.ChatMiddleware = ChatMiddleware
     agent_framework.FunctionInvocationContext = FunctionInvocationContext
     agent_framework.FunctionMiddleware = FunctionMiddleware
+    agent_framework.Content = Content
+    agent_framework.Message = Message
+    agent_framework.ChatResponse = ChatResponse
+    agent_framework.ChatResponseUpdate = ChatResponseUpdate
+    agent_framework.ResponseStream = ResponseStream
+    agent_framework.MiddlewareTermination = MiddlewareTermination
     agent_framework.tool = tool
 
     foundry = types.ModuleType("agent_framework.foundry")
@@ -293,3 +336,159 @@ def test_issue_019_leaves_nonmatching_invocations_single_attempt(monkeypatch) ->
     asyncio.run(module.PermanentFailureRetryLoop().process(context, call_next))
 
     assert attempts == 1
+
+
+def test_finance_tools_emit_privacy_safe_structural_telemetry(monkeypatch) -> None:
+    module = _load_finance_app(monkeypatch, "v0")
+    attributes = {}
+    module.trace.get_current_span = lambda: SimpleNamespace(
+        set_attribute=lambda key, value: attributes.__setitem__(key, value)
+    )
+    module.finish_tool_span(
+        "get_balance",
+        {
+            "ok": True,
+            "account_id": "acct-demo-a",
+            "balance": 1250.5,
+            "currency": "USD",
+            "private_detail": "excluded",
+        },
+    )
+    assert json.loads(attributes["aiq.tool.call.arguments"]) == {
+        "account_id": "acct-demo-a"
+    }
+    assert json.loads(attributes["aiq.tool.call.result"]) == {
+        "ok": True,
+        "account_id": "acct-demo-a",
+        "balance": 1250.5,
+        "currency": "USD",
+    }
+    assert "private_detail" not in attributes["aiq.tool.call.result"]
+    assert _tool_rows(
+        [
+            {
+                "operation_name": "execute_tool",
+                "tool_name": "get_balance",
+                "structural_tool": "",
+            },
+            {
+                "operation_name": "execute_tool",
+                "tool_name": "get_balance",
+                "structural_tool": attributes["aiq.tool.call.result"],
+            },
+        ],
+        "get_balance",
+    ) == [
+        {
+            "operation_name": "execute_tool",
+            "tool_name": "get_balance",
+            "structural_tool": attributes["aiq.tool.call.result"],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("issue_id", "class_name", "request_text"),
+    [
+        ("issue-013", "ContradictedBalance", "Show the balance for acct-demo-a."),
+        (
+            "issue-016",
+            "StructuredErrorAsBalance",
+            "For acct-demo-missing, preserve the tool error.",
+        ),
+        (
+            "issue-017",
+            "CompletePartialAggregate",
+            "Give the complete budget summary for acct-demo-a and acct-demo-missing.",
+        ),
+    ],
+)
+def test_finance_output_defects_run_real_pipeline_before_postprocessing(
+    monkeypatch,
+    issue_id,
+    class_name,
+    request_text,
+) -> None:
+    module = _load_finance_app(monkeypatch, issue_id)
+    context = SimpleNamespace(
+        messages=[_message(request_text)],
+        result=None,
+        stream=False,
+    )
+    calls = []
+
+    async def call_next() -> None:
+        calls.append("real-model-tool-pipeline")
+        context.result = "real-response"
+
+    with pytest.raises(module.MiddlewareTermination):
+        asyncio.run(getattr(module, class_name)().process(context, call_next))
+    assert calls == ["real-model-tool-pipeline"]
+    source = inspect.getsource(getattr(module, class_name))
+    assert "start_span" not in source
+    assert "gen_ai." not in source
+
+
+def test_issue_014_removes_argument_from_real_function_invocation(
+    monkeypatch,
+) -> None:
+    module = _load_finance_app(monkeypatch, "issue-014")
+    context = SimpleNamespace(
+        function=SimpleNamespace(name="get_balance"),
+        arguments={"account_id": "acct-demo-a"},
+        result=None,
+    )
+    observed = []
+
+    async def call_next() -> None:
+        observed.append(dict(context.arguments))
+
+    asyncio.run(module.MissingAccountIdentifier().process(context, call_next))
+    assert observed == [{}]
+    assert "start_span" not in inspect.getsource(module.MissingAccountIdentifier)
+
+
+def test_issue_015_swaps_scope_on_real_function_invocation(monkeypatch) -> None:
+    module = _load_finance_app(monkeypatch, "issue-015")
+    context = SimpleNamespace(
+        function=SimpleNamespace(name="get_balance"),
+        arguments={"account_id": "acct-demo-a"},
+        result=None,
+    )
+    observed = []
+
+    async def call_next() -> None:
+        observed.append(dict(context.arguments))
+
+    asyncio.run(module.OppositeAccountScope().process(context, call_next))
+    assert observed == [{"account_id": "acct-demo-b"}]
+    assert "start_span" not in inspect.getsource(module.OppositeAccountScope)
+
+
+def test_issue_018_executes_real_tool_once_without_retry_wrapper(
+    monkeypatch,
+) -> None:
+    module = _load_finance_app(monkeypatch, "issue-018")
+    context = SimpleNamespace(
+        function=SimpleNamespace(name="get_balance_with_transient"),
+        arguments={"account_id": "acct-demo-a"},
+        result=None,
+    )
+    calls = []
+
+    async def call_next() -> None:
+        calls.append(dict(context.arguments))
+
+    asyncio.run(module.MissingTransientRetry().process(context, call_next))
+    assert calls == [{"account_id": "acct-demo-a"}]
+    source = (
+        ROOT
+        / "agents"
+        / "finance-agent"
+        / "issues"
+        / "issue-018"
+        / "source"
+        / "app.py"
+    ).read_text(encoding="utf-8")
+    build = source[source.index("def build_agent") :]
+    assert "ExactTransientRetry()" not in build

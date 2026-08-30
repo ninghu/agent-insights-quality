@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import threading
 from typing import Annotated
@@ -24,8 +25,23 @@ transient_attempts: set[tuple[int, str]] = set()
 transient_lock = threading.Lock()
 
 
-def finish_tool_span(name: str, result: dict) -> dict:
+def finish_tool_span(name: str, result: dict, account_id: str | None = None) -> dict:
     span = trace.get_current_span()
+    account_id = account_id or result.get("account_id")
+    arguments = {"account_id": account_id} if account_id else {}
+    safe_result = {"ok": bool(result.get("ok"))}
+    if account_id:
+        safe_result["account_id"] = account_id
+    for field in ("balance", "currency"):
+        if field in result:
+            safe_result[field] = result[field]
+    error = result.get("error")
+    if isinstance(error, dict) and error.get("code"):
+        safe_result["error"] = {"code": str(error["code"])}
+    span.set_attribute("gen_ai.operation.name", "execute_tool")
+    span.set_attribute("gen_ai.tool.name", name)
+    span.set_attribute("aiq.tool.call.arguments", json.dumps(arguments, sort_keys=True))
+    span.set_attribute("aiq.tool.call.result", json.dumps(safe_result, sort_keys=True))
     span.set_attribute("tool.name", name)
     span.set_attribute("tool.ok", bool(result.get("ok")))
     return result
@@ -41,7 +57,7 @@ def get_balance(
         if record is None:
             return finish_tool_span(
                 "get_balance",
-                {"ok": False, "error": {"code": "account_not_found"}},
+                {"ok": False, "account_id": account_id, "error": {"code": "account_not_found"}},
             )
         return finish_tool_span(
             "get_balance",
@@ -67,6 +83,7 @@ def get_balance_with_transient(
                 "get_balance_with_transient",
                 {
                     "ok": False,
+                    "account_id": account_id,
                     "error": {"code": "temporary_unavailable", "retryable": True},
                 },
             )
@@ -87,7 +104,7 @@ def get_budget_summary(
         if record is None:
             return finish_tool_span(
                 "get_budget_summary",
-                {"ok": False, "error": {"code": "account_not_found"}},
+                {"ok": False, "account_id": account_id, "error": {"code": "account_not_found"}},
             )
         return finish_tool_span(
             "get_budget_summary",
@@ -110,7 +127,7 @@ def list_monthly_items(
         if account_id not in ACCOUNTS:
             return finish_tool_span(
                 "list_monthly_items",
-                {"ok": False, "error": {"code": "account_not_found"}},
+                {"ok": False, "account_id": account_id, "error": {"code": "account_not_found"}},
             )
         return finish_tool_span(
             "list_monthly_items",
