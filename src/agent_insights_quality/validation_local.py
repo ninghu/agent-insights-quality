@@ -8,16 +8,17 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.live import LiveRuntime
 from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.util import (
+    ROOT,
     ContractError,
     content_hash,
     immutable_json,
-    runtime_root,
 )
 from agent_insights_quality.validation_cleanup import CleanupEngine
 from agent_insights_quality.validation_cleanup_azure import (
@@ -40,6 +41,7 @@ from agent_insights_quality.validation_lifecycle import (
     LifecycleJournal,
     LocalValidationLock,
     read_bound_local_record,
+    validation_runtime_root,
     validate_lifecycle,
 )
 from agent_insights_quality.validation_live import FoundryScenarioAttemptRunner
@@ -53,6 +55,9 @@ from agent_insights_quality.validation_manifest import (
 from agent_insights_quality.validation_policy import (
     ValidationPolicy,
     load_validation_policy,
+)
+from agent_insights_quality.validation_permissions import (
+    assert_validation_permissions,
 )
 from agent_insights_quality.validation_provisioning import (
     FoundryAuthorityDeployer,
@@ -122,6 +127,7 @@ def discover_local_git_context() -> LocalGitContext:
 
 
 def current_clean_commit() -> str:
+    _assert_repository_root()
     status = _run_text(
         ["git", "status", "--porcelain=v1", "--untracked-files=all"],
         "Git worktree status",
@@ -220,6 +226,7 @@ def run_test_agent_validation(
             cycle_id=plan["cycle_id"],
             base=base_profile,
         )
+        assert_validation_permissions(base_profile, operator)
         authorities = authority_specs(agents, issues)
         measurement = measure_test_agent_capacity(profile, now=now)
         costs = validation_endpoint_costs(authorities)
@@ -249,9 +256,7 @@ def run_test_agent_validation(
             holder_session_reference=content_hash({"session_id": session_id}),
             holder_operator_reference=operator.operator_reference,
             holder_run_reference=content_hash({"run_id": local_run_id}),
-            account_reference=content_hash(
-                {"account_resource_id": profile.account_resource_id}
-            ),
+            substrate=_substrate(operator, base_profile),
             now=now(),
         )
         active = journal.begin_cycle(initial)
@@ -345,8 +350,7 @@ def run_test_agent_validation(
         durations["cleanup_seconds"] = monotonic() - cleanup_started
         durations["total_seconds"] = monotonic() - total_started
         immutable_json(
-            runtime_root()
-            / "test-agent-validation"
+            validation_runtime_root()
             / "durations"
             / git.repository.replace("/", "--")
             / str(git.pr_number)
@@ -380,6 +384,11 @@ def _recover_incomplete(
     now: Callable[[], datetime],
 ) -> None:
     current = journal.read_active()
+    _assert_recovery_substrate(
+        current.value["substrate"],
+        operator,
+        base_profile,
+    )
     profile = validation_runtime_profile(
         str(current.value["project"]["name"]),
         cycle_id=str(current.value["cycle_id"]),
@@ -421,7 +430,7 @@ def _verify_existing_clean_result(
         label="CLEAN",
     ).value
     evidence = read_bound_local_record(
-        runtime_root() / "test-agent-validation",
+        validation_runtime_root(),
         active["evidence_reference"],
         digest_field="evidence_digest",
         label="evidence",
@@ -430,13 +439,62 @@ def _verify_existing_clean_result(
     validate_evidence(evidence)
     if (
         clean["state"] != "CLEAN"
+        or clean["repository"] != active["repository"]
+        or clean["pr_number"] != active["pr_number"]
+        or clean["cycle_id"] != active["cycle_id"]
         or clean["commit_sha"] != commit_sha
         or clean["cleanup"]["exact_clean"] is not True
+        or evidence["repository"] != active["repository"]
+        or evidence["pr_number"] != active["pr_number"]
+        or evidence["cycle_id"] != active["cycle_id"]
         or evidence["commit_sha"] != commit_sha
         or evidence["validation_digest"] != validation_digest
+        or evidence["runtime_topology_digest"]
+        != clean["digests"]["runtime_topology_digest"]
+        or evidence["resource_inventory_digest"]
+        != clean["digests"]["evidence_resource_inventory_digest"]
+        or clean["digests"]["clean_resource_inventory_digest"]
+        != content_hash(clean["resources"])
         or active["digests"]["evidence_digest"] != evidence["evidence_digest"]
     ):
         raise ContractError("Existing local CLEAN result is not current")
+
+
+def _substrate(
+    operator: LocalAzureOperator,
+    profile: RuntimeProfile,
+) -> dict[str, str]:
+    values = {
+        "tenant_id": operator.tenant_id,
+        "subscription_id": operator.subscription_id,
+        "account_name": profile.account_name,
+        "account_resource_id": profile.account_resource_id,
+        "registry_name": profile.container_registry_name,
+        "storage_account_name": profile.registry_storage_account_name,
+        "telemetry_resource_id": profile.application_insights_resource_id,
+    }
+    if not all(values.values()):
+        raise ContractError("Validation Azure substrate identity is incomplete")
+    subscription_prefix = f"/subscriptions/{operator.subscription_id}/".casefold()
+    if not all(
+        str(values[field]).casefold().startswith(subscription_prefix)
+        for field in ("account_resource_id", "telemetry_resource_id")
+    ):
+        raise ContractError(
+            "Validation resources do not belong to the active Azure subscription"
+        )
+    return values
+
+
+def _assert_recovery_substrate(
+    expected: dict[str, str],
+    operator: LocalAzureOperator,
+    profile: RuntimeProfile,
+) -> None:
+    if expected != _substrate(operator, profile):
+        raise ContractError(
+            "Current Azure context does not match the interrupted validation substrate"
+        )
 
 
 def _run_text(arguments: list[str], label: str) -> str:
@@ -446,6 +504,7 @@ def _run_text(arguments: list[str], label: str) -> str:
         text=True,
         timeout=120,
         check=False,
+        cwd=ROOT,
     )
     if process.returncode != 0:
         raise ContractError(f"{label} could not be queried")
@@ -468,3 +527,28 @@ def _git_sha(value: str) -> bool:
         len(value) == 40
         and all(character in "0123456789abcdef" for character in value)
     )
+
+
+def _assert_repository_root() -> None:
+    expected = ROOT.resolve()
+    root = _run_text(
+        ["git", "rev-parse", "--show-toplevel"],
+        "Git repository root",
+    )
+    if Path(root).resolve() != expected:
+        raise ContractError("Imported repository root does not match Git")
+    ambient = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=Path.cwd(),
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    if (
+        ambient.returncode != 0
+        or Path(ambient.stdout.strip()).resolve() != expected
+    ):
+        raise ContractError(
+            "Current worktree does not match the imported repository root"
+        )

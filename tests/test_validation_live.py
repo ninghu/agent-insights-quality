@@ -106,9 +106,11 @@ class Runtime:
         previous_response_id,
         *,
         include_seed_metadata,
+        validation_intent_reference,
     ):
         del agent_name, foundry_version, seed, previous_response_id
         assert include_seed_metadata is False
+        assert validation_intent_reference.startswith("sha256:")
         self.counter += 1
         count = len(fixture["semantic_assertions"])
         passed = count if self.assertion_pass or not count else 0
@@ -164,12 +166,27 @@ class HostedRuntime(Runtime):
         del agent_name, foundry_version
 
     @staticmethod
-    def _create_hosted_session(agent_name, foundry_version):
+    def _create_hosted_session(
+        agent_name,
+        foundry_version,
+        *,
+        validation_intent_reference,
+    ):
         del agent_name, foundry_version
+        assert validation_intent_reference.startswith("sha256:")
         return "session-synthetic"
 
-    def _invoke_hosted(self, agent_name, session_id, fixture, seed):
+    def _invoke_hosted(
+        self,
+        agent_name,
+        session_id,
+        fixture,
+        seed,
+        *,
+        validation_intent_reference,
+    ):
         del agent_name, session_id, seed
+        assert validation_intent_reference.startswith("sha256:")
         self.counter += 1
         count = len(fixture["semantic_assertions"])
         return (
@@ -263,6 +280,12 @@ def test_attempt_keeps_completion_independent_from_defect_observation() -> None:
     assert result["expected_observation_pass"] is False
     assert len(resources) == 4
     assert all(resource["kind"] == "stored_response" for resource in resources)
+    assert all(
+        resource["runtime_kind"] == "prompt"
+        and resource["discovery_key"]
+        for resource in resources
+        if resource["state"] == "create_intent"
+    )
     assert [resource["state"] for resource in resources] == [
         "create_intent",
         "created",

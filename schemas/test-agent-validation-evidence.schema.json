@@ -7,9 +7,14 @@
   "required": [
     "schema_version",
     "kind",
+    "repository",
+    "pr_number",
+    "cycle_id",
     "commit_sha",
     "validation_digest",
     "execution_matrix_digest",
+    "runtime_topology_digest",
+    "resource_inventory_digest",
     "telemetry_resource_set",
     "authorities",
     "evidence_digest"
@@ -17,9 +22,14 @@
   "properties": {
     "schema_version": {"const": "1.0.0"},
     "kind": {"const": "test-agent-validation-evidence"},
+    "repository": {"$ref": "#/$defs/repository"},
+    "pr_number": {"type": "integer", "minimum": 1},
+    "cycle_id": {"$ref": "#/$defs/cycleId"},
     "commit_sha": {"$ref": "#/$defs/gitSha"},
     "validation_digest": {"$ref": "#/$defs/hash"},
     "execution_matrix_digest": {"$ref": "#/$defs/hash"},
+    "runtime_topology_digest": {"$ref": "#/$defs/hash"},
+    "resource_inventory_digest": {"$ref": "#/$defs/hash"},
     "telemetry_resource_set": {"const": "g29"},
     "authorities": {
       "type": "array",
@@ -38,6 +48,14 @@
     "gitSha": {
       "type": "string",
       "pattern": "^[0-9a-f]{40}$"
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "cycleId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{7,63}$"
     },
     "authority": {
       "type": "object",

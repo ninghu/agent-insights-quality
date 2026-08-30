@@ -242,7 +242,7 @@ def validation_authority_cost(authority: AuthoritySpec) -> EndpointCost:
     if not costs:
         raise ContractError("Validation authority has no endpoint request costs")
     return EndpointCost(
-        requests=1,
+        requests=max(item.requests for item in costs),
         tokens=max(item.tokens for item in costs),
         inner_model_calls=max(item.inner_model_calls for item in costs),
     )
@@ -266,7 +266,7 @@ def validation_step_cost(
         raise ContractError("Validation output token budget must be positive")
     input_budget = len(canonical_bytes(body))
     return EndpointCost(
-        requests=1,
+        requests=fanout,
         tokens=(input_budget + maximum_output) * fanout,
         inner_model_calls=fanout,
     )

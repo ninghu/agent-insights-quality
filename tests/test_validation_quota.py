@@ -55,6 +55,23 @@ def test_capacity_preflight_fails_closed_when_headroom_disappears() -> None:
             policy=policy,
             costs=[EndpointCost(requests=1, tokens=1, inner_model_calls=1)],
         )
+
+
+def test_inner_model_fanout_consumes_rpm_units() -> None:
+    policy = load_validation_policy()
+    plan = build_capacity_plan(
+        CapacityMeasurement(
+            rpm=12,
+            tpm=100_000,
+            measured_at="2026-08-29T00:00:00Z",
+        ),
+        policy=policy,
+        costs=[EndpointCost(requests=4, tokens=100, inner_model_calls=4)],
+    )
+    assert plan.reserved_rpm == 8
+    assert plan.available_rpm == 4
+    assert plan.endpoint_concurrency == 1
+    assert plan.outer_request_envelope == 4
     with pytest.raises(ContractError, match="reviewed envelope"):
         build_capacity_plan(
             CapacityMeasurement(

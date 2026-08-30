@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -90,6 +91,7 @@ def test_project_children_have_deterministic_intents_before_bicep() -> None:
         ownership_nonce="nonce-0001",
     )
     assert [item["kind"] for item in intents] == [
+        "arm_deployment",
         "runtime_principal",
         "connection",
         "connection",
@@ -99,11 +101,42 @@ def test_project_children_have_deterministic_intents_before_bicep() -> None:
         "role_assignment",
     ]
     assert len({item["intent_reference"] for item in intents}) == len(intents)
+    assert all(item["runtime_kind"] == "control" for item in intents)
+    assert all(item["discovery_key"] for item in intents)
     bicep = (
         ROOT / "infra" / "modules" / "validation-project.bicep"
     ).read_text(encoding="utf-8")
     assert "validationOperatorProjectManagerName" in bicep
     assert "appInsightsReaderName" in bicep
+
+
+def test_project_timeout_cancels_and_waits_for_terminal_deployment(
+    monkeypatch,
+) -> None:
+    provisioner = ValidationProjectProvisioner(
+        _staging_profile(),
+        local_operator_id="synthetic-local-operator",
+        policy=load_validation_policy(),
+    )
+    observed = []
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_provisioning.subprocess.run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            subprocess.TimeoutExpired("az", 1)
+        ),
+    )
+    monkeypatch.setattr(
+        provisioner,
+        "_cancel_and_wait_deployment",
+        observed.append,
+    )
+    with pytest.raises(ContractError, match="did not complete locally"):
+        provisioner.create(
+            project_name="aiq-validation-0123456789ab",
+            cycle_id="validation-cycle-0001",
+            ownership_nonce="nonce-0001",
+        )
+    assert observed == ["test-agent-validation-validation-cycle-0001"]
 
 
 def test_capacity_measurement_normalizes_provider_rate_windows() -> None:

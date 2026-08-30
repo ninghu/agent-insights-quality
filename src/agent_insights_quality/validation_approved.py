@@ -16,7 +16,6 @@ from agent_insights_quality.util import (
     content_hash,
     immutable_json,
     read_json,
-    runtime_root,
 )
 from agent_insights_quality.validation_blob import AzureValidationBlobStore
 from agent_insights_quality.validation_credentials import local_azure_operator
@@ -25,6 +24,7 @@ from agent_insights_quality.validation_lifecycle import (
     LifecycleJournal,
     LocalValidationLock,
     read_bound_local_record,
+    validation_runtime_root,
     validate_lifecycle,
 )
 from agent_insights_quality.validation_local import (
@@ -68,7 +68,7 @@ def approve_test_agent_validation(
         clean = clean_record.value
         validate_lifecycle(clean)
         evidence_record = read_bound_local_record(
-            runtime_root() / "test-agent-validation",
+            validation_runtime_root(),
             active.value["evidence_reference"],
             digest_field="evidence_digest",
             label="evidence",
@@ -77,21 +77,15 @@ def approve_test_agent_validation(
         validate_evidence(evidence)
         agents, issues = load_catalogs()
         validation_digest = current_validation_digest(agents, issues)
-        if (
-            clean["snapshot_type"] != "clean"
-            or clean["state"] != "CLEAN"
-            or clean["commit_sha"] != git.commit_sha
-            or clean["cleanup"]["exact_clean"] is not True
-            or clean["cleanup"]["residue_ids"]
-            or evidence["commit_sha"] != git.commit_sha
-            or evidence["validation_digest"] != validation_digest
-            or active.value["digests"]["validation_digest"] != validation_digest
-            or active.value["digests"]["evidence_digest"]
-            != evidence["evidence_digest"]
-        ):
-            raise ContractError(
-                "Local evidence or CLEAN proof does not match the current commit"
-            )
+        validate_local_result_binding(
+            active.value,
+            clean,
+            evidence,
+            repository=git.repository,
+            pr_number=git.pr_number,
+            commit_sha=git.commit_sha,
+            validation_digest=validation_digest,
+        )
         record = stamp_approved_record(
             {
                 "schema_version": "1.0.0",
@@ -136,8 +130,7 @@ def approve_test_agent_validation(
             ).value
             status = "approved"
         immutable_json(
-            runtime_root()
-            / "test-agent-validation"
+            validation_runtime_root()
             / "approved-records"
             / blob_name,
             persisted,
@@ -158,6 +151,46 @@ def stamp_approved_record(value: Mapping[str, Any]) -> dict[str, Any]:
         {key: item for key, item in result.items() if key != "record_digest"}
     )
     return result
+
+
+def validate_local_result_binding(
+    active: Mapping[str, Any],
+    clean: Mapping[str, Any],
+    evidence: Mapping[str, Any],
+    *,
+    repository: str,
+    pr_number: int,
+    commit_sha: str,
+    validation_digest: str,
+) -> None:
+    if (
+        clean["snapshot_type"] != "clean"
+        or clean["state"] != "CLEAN"
+        or clean["repository"] != repository
+        or clean["pr_number"] != pr_number
+        or clean["commit_sha"] != commit_sha
+        or clean["cleanup"]["exact_clean"] is not True
+        or clean["cleanup"]["residue_ids"]
+        or evidence["repository"] != repository
+        or evidence["pr_number"] != pr_number
+        or evidence["cycle_id"] != clean["cycle_id"]
+        or evidence["commit_sha"] != commit_sha
+        or evidence["validation_digest"] != validation_digest
+        or evidence["runtime_topology_digest"]
+        != clean["digests"]["runtime_topology_digest"]
+        or evidence["resource_inventory_digest"]
+        != clean["digests"]["evidence_resource_inventory_digest"]
+        or clean["digests"]["clean_resource_inventory_digest"]
+        != content_hash(clean["resources"])
+        or active["cycle_id"] != clean["cycle_id"]
+        or active["clean_reference"]["digest"] != clean["journal_digest"]
+        or active["evidence_reference"]["digest"] != evidence["evidence_digest"]
+        or active["digests"]["validation_digest"] != validation_digest
+        or active["digests"]["evidence_digest"] != evidence["evidence_digest"]
+    ):
+        raise ContractError(
+            "Local evidence or CLEAN proof does not match one validation cycle"
+        )
 
 
 def validate_approved_record(value: Mapping[str, Any]) -> None:

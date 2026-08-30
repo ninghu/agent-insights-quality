@@ -22371,10 +22371,15 @@
     }
   ],
   "commit_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-  "evidence_digest": "sha256:fe6763b1282550f8216aa7c7c79ad14b8e0403ba4158bb02430d42394c847138",
+  "cycle_id": "validation-local-r01",
+  "evidence_digest": "sha256:8cad88ac8c1fbdff9885e4227f4051b85feb35ddf201269449f607c5f9357e09",
   "execution_matrix_digest": "sha256:9871973a74edb8afcde6fab1985eea8e3ad43e1e9e83243e8baffe0d8ef86ccb",
   "kind": "test-agent-validation-evidence",
+  "pr_number": 63,
+  "repository": "ninghu/agent-insights-quality",
+  "resource_inventory_digest": "sha256:839dc65aef04b7f4d02018daa273e8599369ac9957fd3f727e2595e64880e52b",
+  "runtime_topology_digest": "sha256:ccfc73e8252f9ca571b00947fac320bd2787850657730f6b969b1c1aa4ac175f",
   "schema_version": "1.0.0",
   "telemetry_resource_set": "g29",
-  "validation_digest": "sha256:bb5c6542a74f37ca11945e0466bcdabf745e05761366a743ac8dbdfe501d7470"
+  "validation_digest": "sha256:fbfeb0acdb4ee8423ae6842e4687f0cafd280d78d115a0e76b707016b5bfbd26"
 }

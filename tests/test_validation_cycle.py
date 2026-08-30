@@ -29,7 +29,15 @@ def test_initial_cycle_binds_one_commit_operator_and_immutable_ttl() -> None:
         holder_session_reference=content_hash("session"),
         holder_operator_reference=content_hash("operator"),
         holder_run_reference=content_hash("run"),
-        account_reference=content_hash("account"),
+        substrate={
+            "tenant_id": "synthetic-tenant",
+            "subscription_id": "synthetic-subscription",
+            "account_name": "synthetic-account",
+            "account_resource_id": "/subscriptions/synthetic/account",
+            "registry_name": "synthetic-registry",
+            "storage_account_name": "synthetic-storage",
+            "telemetry_resource_id": "/subscriptions/synthetic/telemetry",
+        },
         now=datetime(2026, 8, 29, 12, 0, tzinfo=UTC),
     )
     validate_lifecycle(value)
@@ -40,3 +48,4 @@ def test_initial_cycle_binds_one_commit_operator_and_immutable_ttl() -> None:
     assert "git" not in value
     assert "policy_manifest" not in value
     assert "lease" not in value
+    assert value["substrate"]["subscription_id"] == "synthetic-subscription"

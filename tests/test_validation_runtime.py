@@ -374,6 +374,12 @@ def test_deployment_is_bounded_to_eight_and_each_authority_is_independent() -> N
     for index, event in enumerate(events):
         key = event["intent_reference"]
         if event["state"] == "create_intent":
+            assert event["runtime_kind"] in {
+                "prompt",
+                "hosted_code",
+                "hosted_custom_container",
+            }
+            assert event["discovery_key"]
             by_intent[key] = index
         elif event["state"] == "created":
             assert by_intent[key] < index

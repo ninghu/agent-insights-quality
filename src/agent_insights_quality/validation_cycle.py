@@ -7,12 +7,13 @@ from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from agent_insights_quality.util import ContractError, content_hash, runtime_root
+from agent_insights_quality.util import ContractError, content_hash
 from agent_insights_quality.validation_evidence import validate_evidence
 from agent_insights_quality.validation_lifecycle import (
     LifecycleJournal,
     LocalRecord,
     stamp_lifecycle_digest,
+    validation_runtime_root,
     validate_topology_resource_bindings,
 )
 from agent_insights_quality.validation_policy import ValidationPolicy
@@ -28,7 +29,7 @@ def initial_lifecycle(
     holder_session_reference: str,
     holder_operator_reference: str,
     holder_run_reference: str,
-    account_reference: str,
+    substrate: Mapping[str, str],
     now: datetime | None = None,
 ) -> dict[str, Any]:
     moment = (now or datetime.now(UTC)).astimezone(UTC)
@@ -52,12 +53,15 @@ def initial_lifecycle(
             "runtime_topology_digest": plan["planned_topology_digest"],
             "quota_plan_digest": None,
             "evidence_digest": None,
+            "evidence_resource_inventory_digest": None,
+            "clean_resource_inventory_digest": None,
         },
         "operator": {
             "session_reference": holder_session_reference,
             "operator_reference": holder_operator_reference,
             "run_reference": holder_run_reference,
         },
+        "substrate": dict(substrate),
         "ownership_nonce": ownership_nonce,
         "capacity": None,
         "project": {
@@ -71,7 +75,9 @@ def initial_lifecycle(
             "delete_observed_at": None,
         },
         "runtime_topology": {
-            "account_reference": account_reference,
+            "account_reference": content_hash(
+                {"account_resource_id": substrate["account_resource_id"]}
+            ),
             "project_reference": None,
             "telemetry_resource_set": "g29",
             "test_agent_model": policy.test_agent_model,
@@ -163,7 +169,12 @@ class ValidationCycleController:
                 parent_id=None,
                 authority_id=None,
                 deterministic_name=name,
+                intent_reference=content_hash(
+                    {"kind": "project", "provider_id": provider_id}
+                ),
                 provider_id=provider_id,
+                runtime_kind="control",
+                discovery_key=provider_id,
                 ownership_nonce=self._active.value["ownership_nonce"],
                 state="create_intent",
                 cleanup_method="explicit",
@@ -255,6 +266,8 @@ class ValidationCycleController:
         authority_id: str | None,
         deterministic_name: str,
         provider_id: str,
+        runtime_kind: str,
+        discovery_key: str,
         cleanup_method: str,
         now: datetime,
     ) -> LocalRecord:
@@ -271,7 +284,10 @@ class ValidationCycleController:
                     parent_id=parent_id,
                     authority_id=authority_id,
                     deterministic_name=deterministic_name,
+                    intent_reference=provider_id,
                     provider_id=provider_id,
+                    runtime_kind=runtime_kind,
+                    discovery_key=discovery_key,
                     ownership_nonce=self._active.value["ownership_nonce"],
                     state="create_intent",
                     cleanup_method=cleanup_method,
@@ -314,6 +330,8 @@ class ValidationCycleController:
                 authority_id=event.get("authority_id"),
                 deterministic_name=str(event["deterministic_name"]),
                 provider_id=intent_reference,
+                runtime_kind=str(event["runtime_kind"]),
+                discovery_key=str(event["discovery_key"]),
                 cleanup_method=str(event.get("cleanup_method") or "explicit"),
                 now=now,
             )
@@ -323,7 +341,7 @@ class ValidationCycleController:
                 found = False
                 for resource in self._active.value["resources"]:
                     item = copy.deepcopy(resource)
-                    if item["provider_id"] == intent_reference:
+                    if item["intent_reference"] == intent_reference:
                         item["state"] = "ambiguous_create"
                         found = True
                     resources.append(item)
@@ -351,7 +369,7 @@ class ValidationCycleController:
             }
             for resource in self._active.value["resources"]:
                 item = copy.deepcopy(resource)
-                if item["provider_id"] == intent_reference:
+                if item["intent_reference"] == intent_reference:
                     if (
                         provider_id in existing_ids
                         and item["kind"] != "runtime_principal"
@@ -371,6 +389,32 @@ class ValidationCycleController:
             if not found:
                 raise ContractError(
                     "Dynamic validation resource observation has no intent"
+                )
+            return self._commit(
+                self._active.value["state"],
+                {"resources": resources},
+                now,
+            )
+
+    def resource_discovered(
+        self,
+        *,
+        intent_reference: str,
+        provider_id: str,
+        now: datetime,
+    ) -> LocalRecord:
+        with self._lock:
+            resources = []
+            found = False
+            for resource in self._active.value["resources"]:
+                item = copy.deepcopy(resource)
+                if item["intent_reference"] == intent_reference:
+                    item["resolved_provider_id"] = provider_id
+                    found = True
+                resources.append(item)
+            if not found:
+                raise ContractError(
+                    "Discovered validation resource has no recorded intent"
                 )
             return self._commit(
                 self._active.value["state"],
@@ -427,6 +471,7 @@ class ValidationCycleController:
         validate_evidence(
             evidence.value,
             runtime_topology=self._active.value["runtime_topology"],
+            resources=self._active.value["resources"],
         )
         if (
             not isinstance(evidence_digest, str)
@@ -437,10 +482,15 @@ class ValidationCycleController:
         return self._commit(
             "FINAL_CHECKS",
             {
-                "digests": {"evidence_digest": evidence_digest},
+                "digests": {
+                    "evidence_digest": evidence_digest,
+                    "evidence_resource_inventory_digest": evidence.value[
+                        "resource_inventory_digest"
+                    ],
+                },
                 "evidence_reference": {
                     "path": evidence.path.relative_to(
-                        runtime_root() / "test-agent-validation"
+                        validation_runtime_root()
                     ).as_posix(),
                     "digest": evidence_digest,
                 },
@@ -507,6 +557,9 @@ class ValidationCycleController:
                 "resources": resources,
                 "project": project,
                 "cleanup": cleanup,
+                "digests": {
+                    "clean_resource_inventory_digest": content_hash(resources),
+                },
             },
             now=now,
         )
@@ -549,7 +602,10 @@ def _resource(
     parent_id: str | None,
     authority_id: str | None,
     deterministic_name: str,
+    intent_reference: str,
     provider_id: str,
+    runtime_kind: str,
+    discovery_key: str,
     ownership_nonce: str,
     state: str,
     cleanup_method: str,
@@ -561,7 +617,11 @@ def _resource(
         "parent_id": parent_id,
         "authority_id": authority_id,
         "deterministic_name": deterministic_name,
+        "intent_reference": intent_reference,
         "provider_id": provider_id,
+        "resolved_provider_id": None,
+        "runtime_kind": runtime_kind,
+        "discovery_key": discovery_key,
         "ownership_nonce": ownership_nonce,
         "create_intent_at": now.astimezone(UTC).isoformat(),
         "create_observed_at": now.astimezone(UTC).isoformat() if created else None,
@@ -606,7 +666,7 @@ def _observe_resources(
     result = []
     for resource in resources:
         item = copy.deepcopy(resource)
-        provider_id = pending.pop(item["provider_id"], None)
+        provider_id = pending.pop(item["intent_reference"], None)
         if provider_id is not None:
             item["provider_id"] = provider_id
             item["state"] = "created"

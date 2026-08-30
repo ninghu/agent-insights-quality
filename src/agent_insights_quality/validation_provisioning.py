@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import subprocess
+import time
 import urllib.parse
 import uuid
 from dataclasses import dataclass
@@ -18,8 +19,8 @@ from agent_insights_quality.util import (
     ROOT,
     ContractError,
     content_hash,
-    runtime_root,
 )
+from agent_insights_quality.validation_lifecycle import validation_runtime_root
 from agent_insights_quality.validation_policy import ValidationPolicy
 from agent_insights_quality.validation_manifest import source_content_digest
 from agent_insights_quality.validation_runtime import (
@@ -71,8 +72,7 @@ def validation_runtime_profile(
     return source.with_project(
         name=f"validation-{cycle_id}",
         project_name=project_name,
-        registry_path=runtime_root()
-        / "test-agent-validation"
+        registry_path=validation_runtime_root()
         / cycle_id
         / "deployment-registry.json",
     )
@@ -168,7 +168,7 @@ class ValidationProjectProvisioner:
             cycle_id=cycle_id,
             ownership_nonce=ownership_nonce,
         )
-        deployment_name = f"test-agent-validation-{cycle_id}"[:64].rstrip("-")
+        deployment_name = _deployment_name(cycle_id)
         command = [
             azure_cli(),
             "deployment",
@@ -197,20 +197,31 @@ class ValidationProjectProvisioner:
             "--output",
             "json",
         ]
-        with self._progress.heartbeat("ephemeral validation Project create") as outcome:
-            process = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=30 * 60,
-                check=False,
-            )
-            if process.returncode != 0:
-                outcome.fail()
+        try:
+            with self._progress.heartbeat(
+                "ephemeral validation Project create"
+            ) as outcome:
+                process = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=30 * 60,
+                    check=False,
+                )
+                if process.returncode != 0:
+                    outcome.fail()
+        except (subprocess.TimeoutExpired, OSError) as error:
+            self._cancel_and_wait_deployment(deployment_name)
+            raise ContractError(
+                "Ephemeral validation Project deployment did not complete locally"
+            ) from error
         if process.returncode != 0:
+            self._cancel_and_wait_deployment(deployment_name)
             raise ContractError("Ephemeral validation Project creation failed")
         try:
-            outputs = json.loads(process.stdout)["properties"]["outputs"]
+            deployment = json.loads(process.stdout)
+            deployment_state = deployment["properties"]["provisioningState"]
+            outputs = deployment["properties"]["outputs"]
             project = ProjectDeployment(
                 project_name=project_name,
                 project_id=str(outputs["projectId"]["value"]),
@@ -224,6 +235,11 @@ class ValidationProjectProvisioner:
             raise ContractError(
                 "Ephemeral validation Project deployment outputs are invalid"
             ) from error
+        if deployment_state != "Succeeded":
+            self._cancel_and_wait_deployment(deployment_name)
+            raise ContractError(
+                "Ephemeral validation Project deployment is not terminal-success"
+            )
         if (
             project.project_endpoint != self._profile.project_endpoint
             or len(project.connection_ids) != 2
@@ -234,11 +250,39 @@ class ValidationProjectProvisioner:
             raise ContractError("Ephemeral validation Project topology is incomplete")
         observations = [
             (
-                str(plan.intents[0]["intent_reference"]),
+                str(
+                    next(
+                        item["intent_reference"]
+                        for item in plan.intents
+                        if item["kind"] == "arm_deployment"
+                    )
+                ),
+                str(
+                    next(
+                        item["discovery_key"]
+                        for item in plan.intents
+                        if item["kind"] == "arm_deployment"
+                    )
+                ),
+            ),
+            (
+                str(
+                    next(
+                        item["intent_reference"]
+                        for item in plan.intents
+                        if item["kind"] == "runtime_principal"
+                    )
+                ),
                 project.project_principal_id,
             ),
-            *((provider_id, provider_id) for provider_id in plan.connection_ids),
-            *((provider_id, provider_id) for provider_id in plan.role_assignment_ids),
+            *(
+                (
+                    str(item["intent_reference"]),
+                    str(item["discovery_key"]),
+                )
+                for item in plan.intents
+                if item["kind"] in {"connection", "role_assignment"}
+            ),
         ]
         return ProjectDeployment(
             **{
@@ -246,6 +290,65 @@ class ValidationProjectProvisioner:
                 "resource_observations": tuple(observations),
             }
         )
+
+    def _cancel_and_wait_deployment(self, deployment_name: str) -> None:
+        terminal = {"Succeeded", "Failed", "Canceled"}
+        for attempt in range(31):
+            state = subprocess.run(
+                [
+                    azure_cli(),
+                    "deployment",
+                    "group",
+                    "show",
+                    "--resource-group",
+                    RESOURCE_GROUP,
+                    "--name",
+                    deployment_name,
+                    "--query",
+                    "properties.provisioningState",
+                    "--output",
+                    "tsv",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+            if state.returncode == 3:
+                return
+            if state.returncode != 0:
+                raise ContractError(
+                    "Validation deployment terminal state is ambiguous"
+                )
+            status = state.stdout.strip()
+            if status in terminal:
+                return
+            if attempt == 0:
+                cancel = subprocess.run(
+                    [
+                        azure_cli(),
+                        "deployment",
+                        "group",
+                        "cancel",
+                        "--resource-group",
+                        RESOURCE_GROUP,
+                        "--name",
+                        deployment_name,
+                        "--output",
+                        "none",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    check=False,
+                )
+                if cancel.returncode not in {0, 3}:
+                    raise ContractError(
+                        "Validation deployment cancellation failed"
+                    )
+            if attempt < 30:
+                time.sleep(5)
+        raise ContractError("Validation deployment did not reach a terminal state")
 
     def _resource_plan(
         self,
@@ -308,7 +411,28 @@ class ValidationProjectProvisioner:
                 "ownership_nonce": ownership_nonce,
             }
         )
+        deployment_name = _deployment_name(cycle_id)
+        deployment_id = (
+            f"{self._profile.account_resource_id.split('/providers/', 1)[0]}"
+            "/providers/Microsoft.Resources/deployments/"
+            f"{deployment_name}"
+        )
         intents: list[dict[str, str | None]] = [
+            {
+                "kind": "arm_deployment",
+                "intent_reference": content_hash(
+                    {"kind": "arm_deployment", "provider_id": deployment_id}
+                ),
+                "deterministic_name": deployment_name,
+                "parent_id": self._profile.account_resource_id.split(
+                    "/providers/",
+                    1,
+                )[0],
+                "authority_id": None,
+                "cleanup_method": "explicit",
+                "runtime_kind": "control",
+                "discovery_key": deployment_id,
+            },
             {
                 "kind": "runtime_principal",
                 "intent_reference": identity_intent,
@@ -316,27 +440,37 @@ class ValidationProjectProvisioner:
                 "parent_id": project_id,
                 "authority_id": None,
                 "cleanup_method": "documented_project_cascade",
+                "runtime_kind": "control",
+                "discovery_key": project_id,
             }
         ]
         intents.extend(
             {
                 "kind": "connection",
-                "intent_reference": provider_id,
+                "intent_reference": content_hash(
+                    {"kind": "connection", "provider_id": provider_id}
+                ),
                 "deterministic_name": provider_id.rsplit("/", 1)[-1],
                 "parent_id": project_id,
                 "authority_id": None,
                 "cleanup_method": "explicit",
+                "runtime_kind": "control",
+                "discovery_key": provider_id,
             }
             for provider_id in connection_ids
         )
         intents.extend(
             {
                 "kind": "role_assignment",
-                "intent_reference": provider_id,
+                "intent_reference": content_hash(
+                    {"kind": "role_assignment", "provider_id": provider_id}
+                ),
                 "deterministic_name": label,
                 "parent_id": scope,
                 "authority_id": None,
                 "cleanup_method": "explicit",
+                "runtime_kind": "control",
+                "discovery_key": provider_id,
             }
             for provider_id, label, scope in zip(
                 role_ids,
@@ -405,8 +539,34 @@ def prepare_validation_support_images(
 ) -> ValidationSupportImages:
     reporter = progress or ProgressReporter("aiq-validation-images")
     built_manifest_ids: set[str] = set()
+    build_tag_by_authority: dict[str, str] = {}
 
     def record_build_resource(event: dict[str, Any]) -> None:
+        authority_id = str(event.get("authority_id") or "")
+        deterministic_name = str(event.get("deterministic_name") or "")
+        if event.get("kind") == "acr_tag" and authority_id:
+            build_tag_by_authority[authority_id] = deterministic_name
+        discovery_key = (
+            build_tag_by_authority.get(authority_id, deterministic_name)
+            if event.get("kind") == "acr_manifest"
+            else deterministic_name
+        )
+        event = {
+            **event,
+            "intent_reference": (
+                str(event.get("intent_reference"))
+                if str(event.get("intent_reference") or "").startswith("sha256:")
+                else content_hash(
+                    {
+                        "kind": event.get("kind"),
+                        "authority_id": authority_id,
+                        "deterministic_name": deterministic_name,
+                    }
+                )
+            ),
+            "runtime_kind": "hosted_custom_container",
+            "discovery_key": discovery_key,
+        }
         if (
             event.get("kind") == "acr_manifest"
             and event.get("state") == "created"
@@ -454,6 +614,8 @@ def prepare_validation_support_images(
             "provider_id": f"{repository}:{tag}",
             "authority_id": authority_id,
             "parent_id": digest,
+            "runtime_kind": "hosted_custom_container",
+            "discovery_key": f"{repository}:{tag}",
         }
         if record_resource is not None:
             record_resource({**tag_resource, "state": "create_intent"})
@@ -507,6 +669,8 @@ def prepare_validation_support_images(
                     "authority_id": authority_id,
                     "parent_id": None,
                     "intent_reference": manifest_intent,
+                    "runtime_kind": "hosted_custom_container",
+                    "discovery_key": f"{repository}@{digest}",
                 }
                 record_resource(
                     {**manifest_resource, "state": "create_intent"}
@@ -677,6 +841,10 @@ def _resource_name(resource_id: str) -> str:
     parsed = urllib.parse.urlparse(resource_id)
     value = parsed.path if parsed.scheme else resource_id
     return value.rstrip("/").rsplit("/", 1)[-1]
+
+
+def _deployment_name(cycle_id: str) -> str:
+    return f"test-agent-validation-{cycle_id}"[:64].rstrip("-")
 
 
 def _nested_reference(

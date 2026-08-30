@@ -59,7 +59,7 @@ def test_endpoint_cost_accounts_for_input_and_output_tokens() -> None:
         }
     }
     cost = validation_step_cost("microsoft_agent_framework", step)
-    assert cost.requests == 1
+    assert cost.requests == 4
     assert cost.inner_model_calls == 4
     assert cost.tokens == (
         len(canonical_bytes(step["request"]["body"])) + 200

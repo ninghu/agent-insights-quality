@@ -575,6 +575,7 @@ union traces, dependencies, requests
         previous_response_id: str | None,
         *,
         include_seed_metadata: bool = True,
+        validation_intent_reference: str | None = None,
     ) -> tuple[
         list[str],
         bool,
@@ -604,6 +605,11 @@ union traces, dependencies, requests
             body["metadata"] = {
                 **body.get("metadata", {}),
                 "traffic_seed": str(seed),
+            }
+        if validation_intent_reference is not None:
+            body["metadata"] = {
+                **body.get("metadata", {}),
+                "validation_intent_reference": validation_intent_reference,
             }
         self._traffic_ledger.mark_started(
             agent_name,
@@ -652,6 +658,8 @@ union traces, dependencies, requests
         self,
         agent_name: str,
         foundry_version: str,
+        *,
+        validation_intent_reference: str | None = None,
     ) -> str:
         session = self._json_request(
             "POST",
@@ -661,7 +669,18 @@ union traces, dependencies, requests
                 "version_indicator": {
                     "type": "version_ref",
                     "agent_version": foundry_version,
-                }
+                },
+                **(
+                    {
+                        "metadata": {
+                            "validation_intent_reference": (
+                                validation_intent_reference
+                            )
+                        }
+                    }
+                    if validation_intent_reference is not None
+                    else {}
+                ),
             },
             hosted=True,
         )
@@ -687,6 +706,8 @@ union traces, dependencies, requests
         session_id: str,
         fixture: dict[str, Any],
         seed: int,
+        *,
+        validation_intent_reference: str | None = None,
     ) -> tuple[
         list[str],
         bool,
@@ -702,6 +723,15 @@ union traces, dependencies, requests
             "input": fixture["body"]["input"],
             "agent_session_id": session_id,
             "store": False,
+            **(
+                {
+                    "metadata": {
+                        "validation_intent_reference": validation_intent_reference
+                    }
+                }
+                if validation_intent_reference is not None
+                else {}
+            ),
         }
         correlation_id = str(uuid.uuid4())
         self._traffic_ledger.mark_started(

@@ -15,6 +15,8 @@ from agent_insights_quality.util import ContractError, content_hash
 class LocalAzureOperator:
     credential: Any
     object_id: str
+    tenant_id: str
+    subscription_id: str
     operator_reference: str
 
     def token_provider(self, scope: str) -> str:
@@ -53,10 +55,12 @@ def local_azure_operator() -> LocalAzureOperator:
     )
     user = account.get("user")
     tenant_id = str(account.get("tenantId") or "").strip()
+    subscription_id = str(account.get("id") or "").strip()
     if (
         not isinstance(user, dict)
         or str(user.get("type") or "").casefold() != "user"
         or not tenant_id
+        or not subscription_id
     ):
         raise ContractError(
             "Local validation requires an authenticated Azure CLI user"
@@ -91,9 +95,12 @@ def local_azure_operator() -> LocalAzureOperator:
     return LocalAzureOperator(
         credential=credential,
         object_id=object_id,
+        tenant_id=tenant_id,
+        subscription_id=subscription_id,
         operator_reference=content_hash(
             {
                 "tenant_id": tenant_id.casefold(),
+                "subscription_id": subscription_id.casefold(),
                 "object_id": object_id.casefold(),
             }
         ),
@@ -120,6 +127,19 @@ def _azure_json(arguments: list[str], label: str) -> dict[str, Any]:
 
 
 def _token_identity(token: str) -> dict[str, str]:
+    claims = token_claims(token)
+    identity = {
+        "tenant_id": str(claims.get("tid") or "").strip().casefold(),
+        "object_id": str(claims.get("oid") or "").strip().casefold(),
+    }
+    if not all(identity.values()):
+        raise ContractError(
+            "Azure CLI access token lacks complete operator claims"
+        )
+    return identity
+
+
+def token_claims(token: str) -> dict[str, Any]:
     parts = token.split(".")
     if len(parts) != 3:
         raise ContractError("Azure CLI access token is malformed")
@@ -130,12 +150,4 @@ def _token_identity(token: str) -> dict[str, str]:
         raise ContractError("Azure CLI access token claims are invalid") from error
     if not isinstance(claims, dict):
         raise ContractError("Azure CLI access token claims are invalid")
-    identity = {
-        "tenant_id": str(claims.get("tid") or "").strip().casefold(),
-        "object_id": str(claims.get("oid") or "").strip().casefold(),
-    }
-    if not all(identity.values()):
-        raise ContractError(
-            "Azure CLI access token lacks complete operator claims"
-        )
-    return identity
+    return claims

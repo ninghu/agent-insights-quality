@@ -7,21 +7,22 @@ from typing import Any, Protocol
 from agent_insights_quality.util import ContractError, content_hash
 
 _DELETE_ORDER = {
-    "stored_response": 0,
-    "conversation": 1,
-    "session": 2,
-    "provider_agent_version": 3,
-    "provider_agent": 4,
-    "hosted_deployment": 5,
-    "hosted_blueprint": 6,
-    "hosted_identity": 7,
-    "connection": 8,
-    "role_assignment": 9,
-    "runtime_principal": 10,
-    "entra_service_principal": 11,
-    "acr_tag": 12,
-    "acr_manifest": 13,
-    "project": 14,
+    "arm_deployment": 0,
+    "stored_response": 1,
+    "conversation": 2,
+    "session": 3,
+    "provider_agent_version": 4,
+    "provider_agent": 5,
+    "hosted_deployment": 6,
+    "hosted_blueprint": 7,
+    "hosted_identity": 8,
+    "connection": 9,
+    "role_assignment": 10,
+    "runtime_principal": 11,
+    "entra_service_principal": 12,
+    "acr_tag": 13,
+    "acr_manifest": 14,
+    "project": 15,
 }
 _DISCOVERABLE_AMBIGUOUS_KINDS = {
     "acr_tag",
@@ -38,6 +39,10 @@ class CleanupPlanItem:
     kind: str
     deterministic_name: str
     provider_id: str
+    resolved_provider_id: str | None
+    intent_reference: str
+    runtime_kind: str
+    discovery_key: str
     parent_id: str | None
     authority_id: str | None
     state: str
@@ -85,6 +90,8 @@ class CleanupResult:
 
 
 class CleanupBackend(Protocol):
+    def resolve_intent(self, item: CleanupPlanItem) -> CleanupPlanItem | None: ...
+
     def delete(self, item: CleanupPlanItem) -> None: ...
 
     def absent(self, item: CleanupPlanItem) -> bool: ...
@@ -111,17 +118,31 @@ def build_cleanup_plan(
     cascade_kinds = set(documented_project_cascade)
     items: list[CleanupPlanItem] = []
     provider_ids: set[str] = set()
+    intent_references: set[str] = set()
     for resource in resources:
         kind = str(resource.get("kind") or "")
         provider_id = str(resource.get("provider_id") or "")
+        intent_reference = str(resource.get("intent_reference") or "")
+        runtime_kind = str(resource.get("runtime_kind") or "")
+        discovery_key = str(resource.get("discovery_key") or "")
         cleanup_method = str(resource.get("cleanup_method") or "")
         state = str(resource.get("state") or "")
         deterministic_name = str(resource.get("deterministic_name") or "")
-        if kind not in _DELETE_ORDER or not provider_id or not deterministic_name:
+        if (
+            kind not in _DELETE_ORDER
+            or not provider_id
+            or not deterministic_name
+            or not intent_reference
+            or not runtime_kind
+            or not discovery_key
+        ):
             raise ContractError("Cleanup resource kind or provider ID is invalid")
         if provider_id in provider_ids:
             raise ContractError("Cleanup resource provider IDs must be unique")
+        if intent_reference in intent_references:
+            raise ContractError("Cleanup resource intent references must be unique")
         provider_ids.add(provider_id)
+        intent_references.add(intent_reference)
         if cleanup_method == "documented_project_cascade":
             if kind not in cascade_kinds:
                 raise ContractError(
@@ -144,6 +165,10 @@ def build_cleanup_plan(
                 kind=kind,
                 deterministic_name=deterministic_name,
                 provider_id=provider_id,
+                resolved_provider_id=resource.get("resolved_provider_id"),
+                intent_reference=intent_reference,
+                runtime_kind=runtime_kind,
+                discovery_key=discovery_key,
                 parent_id=resource.get("parent_id"),
                 authority_id=resource.get("authority_id"),
                 state=state,
@@ -165,6 +190,10 @@ def build_cleanup_plan(
             {
                 "kind": item.kind,
                 "provider_id": item.provider_id,
+                "resolved_provider_id": item.resolved_provider_id,
+                "intent_reference": item.intent_reference,
+                "runtime_kind": item.runtime_kind,
+                "discovery_key": item.discovery_key,
                 "deterministic_name": item.deterministic_name,
                 "parent_id": item.parent_id,
                 "authority_id": item.authority_id,
@@ -192,6 +221,7 @@ class CleanupEngine:
         plan: CleanupPlan,
         *,
         record_delete_intent: Callable[[CleanupPlanItem], None],
+        record_discovery: Callable[[CleanupPlanItem], None] = lambda _item: None,
     ) -> CleanupResult:
         if not plan.items:
             inventory = self._backend.inventory(
@@ -199,13 +229,29 @@ class CleanupEngine:
                 ownership_nonce=plan.ownership_nonce,
             )
             return _result(plan, (), inventory)
+        resolved_items: list[CleanupPlanItem] = []
+        unresolved: list[CleanupPlanItem] = []
         for item in plan.items:
+            if item.state not in {"create_intent", "ambiguous_create"}:
+                resolved_items.append(item)
+                continue
+            resolved = self._backend.resolve_intent(item)
+            if resolved is None:
+                unresolved.append(item)
+                continue
+            record_discovery(resolved)
+            resolved_items.append(resolved)
+        for item in resolved_items:
             if item.cleanup_method == "documented_project_cascade":
+                continue
+            if self._backend.absent(item):
                 continue
             record_delete_intent(item)
             if (
                 item.kind == "acr_manifest"
-                and self._backend.manifest_is_shared(item.provider_id)
+                and self._backend.manifest_is_shared(
+                    item.resolved_provider_id or item.provider_id
+                )
             ):
                 continue
             self._backend.delete(item)
@@ -213,13 +259,16 @@ class CleanupEngine:
         verified_absent = tuple(
             sorted(
                 item.provider_id
-                for item in plan.items
+                for item in resolved_items
                 if (
                     item.kind != "acr_manifest"
-                    or not self._backend.manifest_is_shared(item.provider_id)
+                    or not self._backend.manifest_is_shared(
+                        item.resolved_provider_id or item.provider_id
+                    )
                 )
                 and (
-                    item.state != "ambiguous_create"
+                    item.state not in {"create_intent", "ambiguous_create"}
+                    or item.resolved_provider_id is not None
                     or item.kind in _DISCOVERABLE_AMBIGUOUS_KINDS
                 )
                 and self._backend.absent(item)
@@ -229,19 +278,22 @@ class CleanupEngine:
             cycle_id=plan.cycle_id,
             ownership_nonce=plan.ownership_nonce,
         )
-        return _result(plan, verified_absent, inventory)
+        return _result(plan, verified_absent, inventory, unresolved=unresolved)
 
 
 def _result(
     plan: CleanupPlan,
     verified_absent: tuple[str, ...],
     inventory: CleanupInventory,
+    *,
+    unresolved: Sequence[CleanupPlanItem] = (),
 ) -> CleanupResult:
     retained = set(inventory.retained_shared_manifest_ids)
     residue = tuple(
         sorted(
             {
                 *inventory.residue_ids,
+                *(item.provider_id for item in unresolved),
                 *(
                     item.provider_id
                     for item in plan.items

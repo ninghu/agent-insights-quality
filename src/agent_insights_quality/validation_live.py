@@ -130,6 +130,10 @@ class FoundryScenarioAttemptRunner:
                         ),
                         "authority_id": target.authority_id,
                         "parent_id": target.provider_agent_id,
+                        "runtime_kind": target.runtime_kind,
+                        "discovery_key": (
+                            f"{target.runtime_agent_name}|{intent_reference}"
+                        ),
                     }
                 )
                 scheduler.acquire_request(cost)
@@ -142,6 +146,7 @@ class FoundryScenarioAttemptRunner:
                             0,
                             previous_response_id,
                             include_seed_metadata=False,
+                            validation_intent_reference=intent_reference,
                         )
                     except ContractError:
                         self._record_resource(
@@ -156,6 +161,10 @@ class FoundryScenarioAttemptRunner:
                                 ),
                                 "authority_id": target.authority_id,
                                 "parent_id": target.provider_agent_id,
+                                "runtime_kind": target.runtime_kind,
+                                "discovery_key": (
+                                    f"{target.runtime_agent_name}|{intent_reference}"
+                                ),
                             }
                         )
                         raise
@@ -212,12 +221,17 @@ class FoundryScenarioAttemptRunner:
                     ),
                     "authority_id": target.authority_id,
                     "parent_id": target.provider_agent_id,
+                    "runtime_kind": target.runtime_kind,
+                    "discovery_key": (
+                        f"{target.runtime_agent_name}|{session_intent}"
+                    ),
                 }
             )
             try:
                 session_id = self._runtime._create_hosted_session(
                     target.runtime_agent_name,
                     target.runtime_agent_version,
+                    validation_intent_reference=session_intent,
                 )
             except ContractError:
                 self._record_resource(
@@ -266,6 +280,10 @@ class FoundryScenarioAttemptRunner:
                         "deterministic_name": response_name,
                         "authority_id": target.authority_id,
                         "parent_id": session_id,
+                        "runtime_kind": target.runtime_kind,
+                        "discovery_key": (
+                            f"{target.runtime_agent_name}|{response_intent}"
+                        ),
                     }
                 )
                 scheduler.acquire_request(cost)
@@ -276,6 +294,7 @@ class FoundryScenarioAttemptRunner:
                             session_id,
                             fixture,
                             0,
+                            validation_intent_reference=response_intent,
                         )
                     except ContractError:
                         self._record_resource(

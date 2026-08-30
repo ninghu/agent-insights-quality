@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_insights_quality.util import ContractError
+from agent_insights_quality.util import ContractError, content_hash
 from agent_insights_quality.validation_cleanup import (
     CleanupEngine,
     CleanupInventory,
@@ -19,7 +19,11 @@ def _resource(
 ) -> dict:
     return {
         "kind": kind,
+        "intent_reference": content_hash({"kind": kind, "id": provider_id}),
         "provider_id": provider_id,
+        "resolved_provider_id": None,
+        "runtime_kind": "control",
+        "discovery_key": provider_id,
         "deterministic_name": provider_id,
         "parent_id": "project-id" if kind != "project" else None,
         "authority_id": None,
@@ -33,12 +37,19 @@ class Backend:
         self.deleted: list[str] = []
         self.shared: set[str] = set()
         self.residue: tuple[str, ...] = ()
+        self.already_absent: set[str] = set()
+
+    def resolve_intent(self, item: CleanupPlanItem):
+        return None
 
     def delete(self, item: CleanupPlanItem) -> None:
         self.deleted.append(item.provider_id)
 
     def absent(self, item: CleanupPlanItem) -> bool:
-        return item.provider_id in self.deleted
+        return (
+            item.provider_id in self.deleted
+            or item.provider_id in self.already_absent
+        )
 
     def manifest_is_shared(self, provider_id: str) -> bool:
         return provider_id in self.shared
@@ -135,6 +146,25 @@ def test_cleanup_residue_fails_closed() -> None:
     )
     assert result.exact_clean is False
     assert result.residue_ids == ("nonce-owned-resource",)
+
+
+def test_cleanup_retry_skips_resources_already_absent() -> None:
+    plan = build_cleanup_plan(
+        cycle_id="validation-cycle-0001",
+        ownership_nonce="nonce-0001",
+        resources=[_resource("provider_agent", "agent-id")],
+        documented_project_cascade=(),
+    )
+    backend = Backend()
+    backend.already_absent.add("agent-id")
+    result = CleanupEngine(backend).execute(
+        plan,
+        record_delete_intent=lambda _item: pytest.fail(
+            "already-absent resource must not be deleted again"
+        ),
+    )
+    assert result.exact_clean is True
+    assert backend.deleted == []
 
 
 def test_ambiguous_create_cannot_be_proven_clean_from_placeholder_absence() -> None:

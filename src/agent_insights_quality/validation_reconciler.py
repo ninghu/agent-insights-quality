@@ -93,9 +93,31 @@ class ValidationReconciler:
                 now=moment,
             )
 
+        def record_discovery(item: CleanupPlanItem) -> None:
+            nonlocal current
+            if item.resolved_provider_id is None:
+                raise ContractError("Resolved cleanup intent has no provider identity")
+            resources = []
+            found = False
+            for resource in current.value["resources"]:
+                updated = dict(resource)
+                if resource["intent_reference"] == item.intent_reference:
+                    updated["resolved_provider_id"] = item.resolved_provider_id
+                    found = True
+                resources.append(updated)
+            if not found:
+                raise ContractError("Resolved cleanup intent disappeared from journal")
+            current = self._journal.commit(
+                current,
+                next_state="CLEANING",
+                updates={"resources": resources},
+                now=moment,
+            )
+
         result = self._cleanup.execute(
             plan,
             record_delete_intent=record_intent,
+            record_discovery=record_discovery,
         )
         cleanup = {
             "status": "exact_clean" if result.exact_clean else "ambiguous",

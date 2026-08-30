@@ -15,9 +15,11 @@ from agent_insights_quality.util import (
     immutable_json,
     read_json,
     read_yaml,
-    runtime_root,
 )
-from agent_insights_quality.validation_lifecycle import LocalRecord
+from agent_insights_quality.validation_lifecycle import (
+    LocalRecord,
+    validation_runtime_root,
+)
 from agent_insights_quality.validation_rules import (
     validate_validation_rules,
     validation_matrix,
@@ -40,6 +42,7 @@ def validate_evidence(
     value: Mapping[str, Any],
     *,
     runtime_topology: Mapping[str, Any] | None = None,
+    resources: list[Mapping[str, Any]] | None = None,
     repository_root: Path = ROOT,
 ) -> None:
     schema = read_json(EVIDENCE_SCHEMA)
@@ -94,6 +97,14 @@ def validate_evidence(
     _validate_global_attempt_references(authorities)
     if runtime_topology is not None:
         _validate_runtime_topology_binding(value, runtime_topology)
+        if value["runtime_topology_digest"] != content_hash(
+            runtime_topology["agents"]
+        ):
+            raise ContractError("Validation evidence runtime topology digest is stale")
+    if resources is not None and value["resource_inventory_digest"] != content_hash(
+        resources
+    ):
+        raise ContractError("Validation evidence resource inventory digest is stale")
     if repository_root.resolve() == ROOT.resolve():
         agents, issues = load_catalogs()
         from agent_insights_quality.validation_manifest import (
@@ -132,10 +143,16 @@ def persist_evidence(
     root: Path | None = None,
 ) -> LocalRecord:
     validate_evidence(value)
+    if (
+        value["repository"] != repository
+        or value["pr_number"] != pr_number
+        or value["cycle_id"] != cycle_id
+    ):
+        raise ContractError("Local evidence path context does not match its content")
     owner, repository_name = repository.split("/", 1)
     path = (
         root
-        or runtime_root() / "test-agent-validation" / "evidence"
+        or validation_runtime_root() / "evidence"
     ) / (
         f"{owner}/{repository_name}/{pr_number}/{cycle_id}/"
         f"{str(value['evidence_digest']).removeprefix('sha256:')}.json"
@@ -564,6 +581,26 @@ def _reviewed_execution_contracts(
                     "v0_control_predicate": scenario[
                         "v0_control_predicate"
                     ],
+                    "attempts": [
+                        {
+                            "index": attempt["index"],
+                            "setup_steps": [
+                                {
+                                    "step_id": step["id"],
+                                    "request_digest": content_hash(step["request"]),
+                                }
+                                for step in attempt["setup_steps"]
+                            ],
+                            "probe_steps": [
+                                {
+                                    "step_id": step["id"],
+                                    "request_digest": content_hash(step["request"]),
+                                }
+                                for step in attempt["probe_steps"]
+                            ],
+                        }
+                        for attempt in scenario["attempts"]
+                    ],
                 }
                 for scenario in rules["scenarios"]
             },
@@ -624,6 +661,60 @@ def _validate_reviewed_execution_contract(
                 f"{authority_id}/{scenario['scenario_id']} canonical execution "
                 "contract is stale"
             )
+        _validate_attempt_request_contract(
+            authority_id,
+            scenario["issue_attempts"],
+            expected["attempts"],
+        )
+        if scenario["v0_attempts"]:
+            _validate_attempt_request_contract(
+                authority_id,
+                scenario["v0_attempts"],
+                expected["attempts"],
+            )
+            for issue_attempt, v0_attempt in zip(
+                scenario["issue_attempts"],
+                scenario["v0_attempts"],
+                strict=True,
+            ):
+                if _attempt_request_shape(issue_attempt) != _attempt_request_shape(
+                    v0_attempt
+                ):
+                    raise ContractError(
+                        f"{authority_id} issue/v0 request parity is stale"
+                    )
+
+
+def _validate_attempt_request_contract(
+    authority_id: str,
+    observed: list[Mapping[str, Any]],
+    expected: list[Mapping[str, Any]],
+) -> None:
+    if len(observed) != len(expected):
+        raise ContractError(f"{authority_id} canonical attempt inventory is stale")
+    for attempt, contract in zip(observed, expected, strict=True):
+        if (
+            attempt["index"] != contract["index"]
+            or _attempt_request_shape(attempt)
+            != {
+                "setup_steps": contract["setup_steps"],
+                "probe_steps": contract["probe_steps"],
+            }
+        ):
+            raise ContractError(f"{authority_id} canonical request contract is stale")
+
+
+def _attempt_request_shape(attempt: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        role: [
+            {
+                "step_id": step["step_id"],
+                "request_digest": step["request_digest"],
+            }
+            for step in attempt[role]
+        ]
+        for role in ("setup_steps", "probe_steps")
+    }
 
 
 def _expected_authority_contract(authority_id: str) -> tuple[str, str]:

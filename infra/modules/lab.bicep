@@ -24,6 +24,7 @@ var monitoringReaderRoleId = '43d0d8ad-25c7-4714-9337-8ba259a9fe05'
 var modelInferenceRoleId = '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'
 var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 var acrPushRoleId = '8311e382-0749-4cb8-b61a-304f252e45ec'
+var acrDeleteRoleId = 'c2f4ef07-c644-48eb-af81-4b1b4947fb11'
 var blobContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 var foundryProjectManagerRoleId = 'eadc314b-1a2d-4efa-be10-5d325db5065e'
 
@@ -239,6 +240,16 @@ resource automationRegistryPush 'Microsoft.Authorization/roleAssignments@2022-04
   name: guid(registry.id, automationPrincipalId, acrPushRoleId)
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPushRoleId)
+    principalId: automationPrincipalId
+    principalType: 'User'
+  }
+}
+
+resource automationRegistryDelete 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: registry
+  name: guid(registry.id, automationPrincipalId, acrDeleteRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrDeleteRoleId)
     principalId: automationPrincipalId
     principalType: 'User'
   }

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from dataclasses import replace
 
 import pytest
 
 from agent_insights_quality.catalogs import load_catalogs
-from agent_insights_quality.util import ContractError, content_hash
+from agent_insights_quality.util import ROOT, ContractError, content_hash
 from agent_insights_quality.validation_cleanup import (
     CleanupEngine,
     CleanupInventory,
@@ -17,6 +18,7 @@ from agent_insights_quality.validation_cycle import (
 from agent_insights_quality.validation_lifecycle import (
     LifecycleJournal,
     LocalValidationLock,
+    validation_runtime_root,
 )
 from agent_insights_quality.validation_manifest import prepare_validation_plan
 from agent_insights_quality.validation_policy import load_validation_policy
@@ -44,7 +46,15 @@ def _initial() -> dict:
         holder_session_reference=content_hash("session"),
         holder_operator_reference=content_hash("operator"),
         holder_run_reference=content_hash("run"),
-        account_reference=content_hash("account"),
+        substrate={
+            "tenant_id": "synthetic-tenant",
+            "subscription_id": "synthetic-subscription",
+            "account_name": "synthetic-account",
+            "account_resource_id": "/subscriptions/synthetic/account",
+            "registry_name": "synthetic-registry",
+            "storage_account_name": "synthetic-storage",
+            "telemetry_resource_id": "/subscriptions/synthetic/telemetry",
+        },
         now=START,
     )
 
@@ -61,6 +71,17 @@ def test_shared_process_lock_excludes_a_second_worktree(tmp_path) -> None:
         first.release()
     second.acquire()
     second.release()
+
+
+def test_validation_runtime_root_rejects_every_override(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(
+        "AIQ_RUNTIME_ROOT",
+        str(ROOT / ".aiq-runtime" / "agent-insights-quality"),
+    )
+    with pytest.raises(ContractError, match="does not permit"):
+        validation_runtime_root()
 
 
 def test_atomic_journal_requires_lock_and_writes_content_addressed_history(
@@ -108,6 +129,9 @@ def test_next_invocation_recovers_incomplete_journal_before_new_cycle(
     tmp_path,
 ) -> None:
     class Backend:
+        def resolve_intent(self, item):
+            return replace(item, resolved_provider_id=item.provider_id)
+
         def delete(self, _item) -> None:
             return None
 

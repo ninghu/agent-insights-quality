@@ -203,6 +203,9 @@ def _evidence() -> dict:
         {
             "schema_version": "1.0.0",
             "kind": "test-agent-validation-evidence",
+            "repository": "ninghu/agent-insights-quality",
+            "pr_number": 999,
+            "cycle_id": "validation-cycle-0001",
             "commit_sha": HEAD,
             "validation_digest": current_validation_digest(agents, issues),
             "execution_matrix_digest": content_hash(
@@ -211,6 +214,8 @@ def _evidence() -> dict:
                     for item in specs
                 }
             ),
+            "runtime_topology_digest": HASH,
+            "resource_inventory_digest": HASH,
             "telemetry_resource_set": "g29",
             "authorities": authorities,
             "evidence_digest": HASH,
@@ -338,6 +343,8 @@ def test_evidence_binds_every_authority_to_exact_runtime_topology() -> None:
             }
         )
     value = stamp_evidence_digests(value)
+    value["runtime_topology_digest"] = content_hash(agents)
+    value = stamp_evidence_digests(value)
     validate_evidence(value, runtime_topology={"agents": agents})
 
     tampered = deepcopy(value)
@@ -356,11 +363,9 @@ def test_evidence_rejects_wrong_commit_authority() -> None:
 
 
 def test_evidence_is_content_addressed_in_private_local_storage(
-    monkeypatch,
     tmp_path,
 ) -> None:
-    private = tmp_path / ".aiq-runtime" / "agent-insights-quality"
-    monkeypatch.setenv("AIQ_RUNTIME_ROOT", str(private))
+    private = tmp_path / "test-agent-validation"
     value = _evidence()
 
     record = persist_evidence(
@@ -368,7 +373,33 @@ def test_evidence_is_content_addressed_in_private_local_storage(
         repository="ninghu/agent-insights-quality",
         pr_number=999,
         cycle_id="validation-cycle-0001",
+        root=private / "evidence",
     )
     assert record.digest == value["evidence_digest"]
     assert record.path.is_file()
-    assert private / "test-agent-validation" in record.path.parents
+    assert private in record.path.parents
+
+
+def test_v0_request_digest_cannot_be_changed_and_restamped() -> None:
+    value = _evidence()
+    step = value["authorities"][5]["scenarios"][0]["v0_attempts"][0][
+        "probe_steps"
+    ][0]
+    step["request_digest"] = content_hash({"changed": True})
+    value = stamp_evidence_digests(value)
+    with pytest.raises(ContractError, match="canonical request contract"):
+        validate_evidence(value)
+
+
+def test_evidence_rejects_cross_cycle_path_or_resource_binding(tmp_path) -> None:
+    value = _evidence()
+    with pytest.raises(ContractError, match="path context"):
+        persist_evidence(
+            value,
+            repository=value["repository"],
+            pr_number=value["pr_number"],
+            cycle_id="validation-other-cycle",
+            root=tmp_path,
+        )
+    with pytest.raises(ContractError, match="resource inventory"):
+        validate_evidence(value, resources=[{"different": True}])

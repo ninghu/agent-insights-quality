@@ -247,9 +247,16 @@ def _execute_validation_plan(
         {
             "schema_version": "1.0.0",
             "kind": "test-agent-validation-evidence",
+            "repository": plan["repository"],
+            "pr_number": plan["pr_number"],
+            "cycle_id": plan["cycle_id"],
             "commit_sha": plan["commit_sha"],
             "validation_digest": plan["validation_digest"],
             "execution_matrix_digest": plan["execution_matrix_digest"],
+            "runtime_topology_digest": actual_topology_digest,
+            "resource_inventory_digest": content_hash(
+                controller.active.value["resources"]
+            ),
             "telemetry_resource_set": "g29",
             "authorities": authority_evidence,
             "evidence_digest": "",
@@ -258,6 +265,7 @@ def _execute_validation_plan(
     validate_evidence(
         evidence,
         runtime_topology=controller.active.value["runtime_topology"],
+        resources=controller.active.value["resources"],
     )
     if not all(item["pass"] for item in evidence["authorities"]):
         raise ContractError("Local validation evidence did not pass all 41 authorities")
@@ -351,9 +359,19 @@ def cleanup_validation_cycle(
             now(),
         )
 
+    def record_discovery(item: CleanupPlanItem) -> None:
+        if item.resolved_provider_id is None:
+            raise ContractError("Resolved cleanup intent has no provider identity")
+        controller.resource_discovered(
+            intent_reference=item.intent_reference,
+            provider_id=item.resolved_provider_id,
+            now=now(),
+        )
+
     result = CleanupEngine(backend).execute(
         plan,
         record_delete_intent=record_delete_intent,
+        record_discovery=record_discovery,
     )
     committed = controller.complete_cleanup(
         result,

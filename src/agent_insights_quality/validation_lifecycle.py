@@ -17,7 +17,6 @@ from agent_insights_quality.util import (
     content_hash,
     immutable_json,
     read_json,
-    runtime_root,
 )
 
 LIFECYCLE_SCHEMA = (
@@ -58,6 +57,7 @@ _REQUIRED_FIELDS = {
     "commit_sha",
     "digests",
     "operator",
+    "substrate",
     "ownership_nonce",
     "capacity",
     "project",
@@ -83,11 +83,22 @@ class LocalRecord:
     digest: str
 
 
+def validation_runtime_root() -> Path:
+    if "AIQ_RUNTIME_ROOT" in os.environ:
+        raise ContractError(
+            "Test Agent Validation does not permit a runtime-root override"
+        )
+    return (
+        Path.home()
+        / ".aiq-runtime"
+        / "agent-insights-quality"
+        / "test-agent-validation"
+    ).resolve()
+
+
 class LocalValidationLock:
     def __init__(self, path: Path | None = None) -> None:
-        self.path = path or (
-            runtime_root() / "test-agent-validation" / "validation.lock"
-        )
+        self.path = path or (validation_runtime_root() / "validation.lock")
         self._stream: BinaryIO | None = None
 
     @property
@@ -157,9 +168,7 @@ class LifecycleJournal:
         root: Path | None = None,
     ) -> None:
         self._lock = lock
-        self.root = root or (
-            runtime_root() / "test-agent-validation" / "lifecycle"
-        )
+        self.root = root or (validation_runtime_root() / "lifecycle")
         self.active_path = self.root / "active.json"
 
     def read_optional(self) -> LocalRecord | None:

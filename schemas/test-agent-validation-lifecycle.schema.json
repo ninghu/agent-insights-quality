@@ -16,6 +16,7 @@
     "commit_sha",
     "digests",
     "operator",
+    "substrate",
     "ownership_nonce",
     "capacity",
     "project",
@@ -56,6 +57,7 @@
     "commit_sha": {"$ref": "#/$defs/gitSha"},
     "digests": {"$ref": "#/$defs/digests"},
     "operator": {"$ref": "#/$defs/operator"},
+    "substrate": {"$ref": "#/$defs/substrate"},
     "ownership_nonce": {
       "type": "string",
       "pattern": "^[A-Za-z0-9_-]{8,128}$"
@@ -206,7 +208,9 @@
         "execution_matrix_digest",
         "runtime_topology_digest",
         "quota_plan_digest",
-        "evidence_digest"
+        "evidence_digest",
+        "evidence_resource_inventory_digest",
+        "clean_resource_inventory_digest"
       ],
       "properties": {
         "validation_digest": {"$ref": "#/$defs/hash"},
@@ -228,6 +232,18 @@
             {"type": "null"},
             {"$ref": "#/$defs/hash"}
           ]
+        },
+        "evidence_resource_inventory_digest": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/hash"}
+          ]
+        },
+        "clean_resource_inventory_digest": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/hash"}
+          ]
         }
       }
     },
@@ -243,6 +259,28 @@
         "session_reference": {"$ref": "#/$defs/hash"},
         "operator_reference": {"$ref": "#/$defs/hash"},
         "run_reference": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "substrate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tenant_id",
+        "subscription_id",
+        "account_name",
+        "account_resource_id",
+        "registry_name",
+        "storage_account_name",
+        "telemetry_resource_id"
+      ],
+      "properties": {
+        "tenant_id": {"$ref": "#/$defs/reference"},
+        "subscription_id": {"$ref": "#/$defs/reference"},
+        "account_name": {"$ref": "#/$defs/reference"},
+        "account_resource_id": {"$ref": "#/$defs/reference"},
+        "registry_name": {"$ref": "#/$defs/reference"},
+        "storage_account_name": {"$ref": "#/$defs/reference"},
+        "telemetry_resource_id": {"$ref": "#/$defs/reference"}
       }
     },
     "capacity": {
@@ -505,7 +543,11 @@
         "parent_id",
         "authority_id",
         "deterministic_name",
+        "intent_reference",
         "provider_id",
+        "resolved_provider_id",
+        "runtime_kind",
+        "discovery_key",
         "ownership_nonce",
         "create_intent_at",
         "create_observed_at",
@@ -517,6 +559,7 @@
       "properties": {
         "kind": {
           "enum": [
+            "arm_deployment",
             "project",
             "connection",
             "role_assignment",
@@ -543,7 +586,13 @@
           ]
         },
         "deterministic_name": {"type": "string", "minLength": 1, "maxLength": 256},
+        "intent_reference": {"$ref": "#/$defs/hash"},
         "provider_id": {"$ref": "#/$defs/reference"},
+        "resolved_provider_id": {"$ref": "#/$defs/nullableReference"},
+        "runtime_kind": {
+          "enum": ["control", "prompt", "hosted_code", "hosted_custom_container"]
+        },
+        "discovery_key": {"$ref": "#/$defs/reference"},
         "ownership_nonce": {
           "type": "string",
           "pattern": "^[A-Za-z0-9_-]{8,128}$"

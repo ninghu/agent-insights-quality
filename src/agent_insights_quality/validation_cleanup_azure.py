@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
+import urllib.parse
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from typing import Any, Callable
 
 from agent_insights_quality.azure_cli import azure_cli
@@ -39,34 +42,110 @@ class AzureValidationCleanupBackend:
             progress=progress or ProgressReporter("aiq-validation-cleanup"),
         )
 
+    def resolve_intent(self, item: CleanupPlanItem) -> CleanupPlanItem | None:
+        parts = item.discovery_key.split("|")
+        actual = ""
+        deterministic_name = item.deterministic_name
+        if item.kind in {
+            "arm_deployment",
+            "connection",
+            "project",
+            "role_assignment",
+        }:
+            actual = item.discovery_key
+        elif item.kind == "provider_agent":
+            actual = parts[0]
+            deterministic_name = parts[0]
+        elif item.kind == "provider_agent_version":
+            version = self._find_version_by_logical(
+                parts[0],
+                parts[1],
+                hosted=item.runtime_kind != "prompt",
+            )
+            if version:
+                actual = f"{parts[0]}/versions/{version}"
+                deterministic_name = f"{parts[0]}/{version}"
+        elif item.kind in {
+            "hosted_identity",
+            "hosted_blueprint",
+            "hosted_deployment",
+        }:
+            version = self._find_version_by_logical(parts[0], parts[1], hosted=True)
+            if version:
+                details = self._client.version_details(
+                    parts[0],
+                    version,
+                    hosted=True,
+                )
+                field = {
+                    "hosted_identity": "identity",
+                    "hosted_blueprint": "blueprint",
+                    "hosted_deployment": "deployment",
+                }[item.kind]
+                nested = details.get(field)
+                if isinstance(nested, Mapping):
+                    actual = str(
+                        nested.get("id")
+                        or nested.get("resource_id")
+                        or nested.get("resourceId")
+                        or ""
+                    )
+        elif item.kind == "session":
+            actual = self._find_metadata_resource(
+                f"/agents/{parts[0]}/endpoint/sessions?limit=100",
+                item.intent_reference,
+                hosted=True,
+            )
+        elif item.kind == "stored_response":
+            actual = self._find_metadata_resource(
+                "/openai/v1/responses?limit=100",
+                item.intent_reference,
+                hosted=False,
+            )
+        elif item.kind == "acr_tag":
+            actual = item.discovery_key
+        elif item.kind == "acr_manifest":
+            actual = self._resolve_manifest_digest(item.discovery_key)
+        elif item.kind == "runtime_principal":
+            actual = item.intent_reference
+        elif item.kind == "entra_service_principal":
+            actual = self._find_service_principal(item.discovery_key)
+        else:
+            return None
+        return replace(
+            item,
+            deterministic_name=deterministic_name,
+            resolved_provider_id=actual or "discovery-absent",
+        )
+
     def delete(self, item: CleanupPlanItem) -> None:
         if item.kind == "provider_agent_version":
             agent_name, version = _agent_version(item.deterministic_name)
             self._client._delete_owned_version(
                 agent_name,
                 version,
-                hosted=self._hosted(item.authority_id),
+                hosted=item.runtime_kind != "prompt",
             )
             return
         if item.kind == "provider_agent":
             self._client.delete_agent(
                 item.deterministic_name,
-                hosted=self._hosted(item.authority_id),
+                hosted=item.runtime_kind != "prompt",
             )
             return
         if item.kind == "session":
             self._client.delete_session(
-                self._agent_name(item.authority_id),
-                item.provider_id,
+                self._agent_name(item),
+                self._actual_id(item),
             )
             return
         if item.kind == "stored_response":
-            self._client.delete_response(item.provider_id)
+            self._client.delete_response(self._actual_id(item))
             return
         if item.kind == "entra_service_principal":
             self._run(
-                [azure_cli(), "ad", "sp", "delete", "--id", item.provider_id],
-                expected=(0,),
+                [azure_cli(), "ad", "sp", "delete", "--id", self._actual_id(item)],
+                expected=(0, 3),
             )
             return
         if item.kind == "acr_tag":
@@ -82,7 +161,7 @@ class AzureValidationCleanupBackend:
                     "--image",
                     f"{repository}:{tag}",
                 ],
-                expected=(0,),
+                expected=(0, 3),
             )
             return
         if item.kind == "acr_manifest":
@@ -98,20 +177,24 @@ class AzureValidationCleanupBackend:
                     "--name",
                     self._profile.container_registry_name,
                     "--image",
-                    f"{repository}@{item.provider_id}",
+                    f"{repository}@{self._actual_id(item)}",
                     "--yes",
                 ],
-                expected=(0,),
+                expected=(0, 3),
             )
             return
-        if item.provider_id.startswith("/subscriptions/"):
+        if item.kind == "arm_deployment":
+            self._cancel_wait_delete_deployment(item.deterministic_name)
+            return
+        actual_id = self._actual_id(item)
+        if actual_id.startswith("/subscriptions/"):
             self._run(
                 [
                     azure_cli(),
                     "resource",
                     "delete",
                     "--ids",
-                    item.provider_id,
+                    actual_id,
                 ],
                 expected=(0, 3),
             )
@@ -121,36 +204,39 @@ class AzureValidationCleanupBackend:
         )
 
     def absent(self, item: CleanupPlanItem) -> bool:
+        if item.resolved_provider_id == "discovery-absent":
+            return True
         if item.kind == "provider_agent_version":
             agent_name, version = _agent_version(item.deterministic_name)
             return not self._client.version_exists(
                 agent_name,
                 version,
-                hosted=self._hosted(item.authority_id),
+                hosted=item.runtime_kind != "prompt",
             )
         if item.kind == "provider_agent":
             return not self._client.agent_exists(
                 item.deterministic_name,
-                hosted=self._hosted(item.authority_id),
+                hosted=item.runtime_kind != "prompt",
             )
         if item.kind == "session":
             return not self._client.session_exists(
-                self._agent_name(item.authority_id),
-                item.provider_id,
+                self._agent_name(item),
+                self._actual_id(item),
             )
         if item.kind == "stored_response":
-            return not self._client.response_exists(item.provider_id)
+            return not self._client.response_exists(self._actual_id(item))
         if item.kind == "runtime_principal":
-            if item.provider_id.startswith("sha256:"):
+            actual_id = self._actual_id(item)
+            if actual_id == item.intent_reference:
                 if item.parent_id and item.parent_id.startswith("/subscriptions/"):
                     return self._arm_resource_absent(item.parent_id)
                 return not self._client.agent_exists(
                     item.deterministic_name,
                     hosted=True,
                 )
-            return self._service_principal_absent(item.provider_id)
+            return self._service_principal_absent(actual_id)
         if item.kind == "entra_service_principal":
-            return self._service_principal_absent(item.provider_id)
+            return self._service_principal_absent(self._actual_id(item))
         if item.kind == "acr_tag":
             repository, tag = _acr_tag(item.deterministic_name)
             process = self._run(
@@ -173,12 +259,14 @@ class AzureValidationCleanupBackend:
             values = json.loads(process.stdout)
             return isinstance(values, list) and tag not in values
         if item.kind == "acr_manifest":
-            return self.manifest_is_shared(item.provider_id) or self._manifest_absent(
+            actual_id = self._actual_id(item)
+            return self.manifest_is_shared(actual_id) or self._manifest_absent(
                 item.deterministic_name,
-                item.provider_id,
+                actual_id,
             )
-        if item.provider_id.startswith("/subscriptions/"):
-            return self._arm_resource_absent(item.provider_id)
+        actual_id = self._actual_id(item)
+        if actual_id.startswith("/subscriptions/"):
+            return self._arm_resource_absent(actual_id)
         return False
 
     def manifest_is_shared(self, provider_id: str) -> bool:
@@ -186,10 +274,16 @@ class AzureValidationCleanupBackend:
             item
             for item in self._resources
             if item.get("kind") == "acr_manifest"
-            and item.get("provider_id") == provider_id
+            and (
+                item.get("resolved_provider_id") == provider_id
+                or item.get("provider_id") == provider_id
+                or str(item.get("discovery_key") or "").endswith(
+                    f"@{provider_id}"
+                )
+            )
         ]
         if len(matches) != 1:
-            return False
+            return True
         repository = str(matches[0].get("deterministic_name") or "")
         process = self._run(
             [
@@ -210,9 +304,16 @@ class AzureValidationCleanupBackend:
             return False
         value = json.loads(process.stdout)
         tags = value.get("tags") if isinstance(value, dict) else None
-        return isinstance(tags, list) and any(
-            isinstance(tag, str) and not tag.startswith("validation-")
-            for tag in tags
+        current_tags = {
+            str(item["deterministic_name"]).rsplit(":", 1)[-1]
+            for item in self._resources
+            if item.get("kind") == "acr_tag"
+            and item.get("parent_id") == provider_id
+        }
+        return (
+            not isinstance(tags, list)
+            or not current_tags
+            or any(not isinstance(tag, str) or tag not in current_tags for tag in tags)
         )
 
     def inventory(
@@ -254,6 +355,10 @@ class AzureValidationCleanupBackend:
                     kind="project",
                     deterministic_name=str(project["deterministic_name"]),
                     provider_id=str(project["provider_id"]),
+                    resolved_provider_id=project.get("resolved_provider_id"),
+                    intent_reference=str(project["intent_reference"]),
+                    runtime_kind=str(project["runtime_kind"]),
+                    discovery_key=str(project["discovery_key"]),
                     parent_id=None,
                     authority_id=None,
                     state=str(project["state"]),
@@ -300,15 +405,185 @@ class AzureValidationCleanupBackend:
             retained_shared_manifest_ids=retained,
         )
 
-    def _hosted(self, authority_id: str | None) -> bool:
-        if authority_id is None or authority_id not in self._topology:
-            raise ContractError("Cleanup authority topology is missing")
-        return self._topology[authority_id]["runtime_kind"] != "prompt"
+    @staticmethod
+    def _actual_id(item: CleanupPlanItem) -> str:
+        return item.resolved_provider_id or item.provider_id
 
-    def _agent_name(self, authority_id: str | None) -> str:
-        if authority_id is None or authority_id not in self._topology:
-            raise ContractError("Cleanup authority topology is missing")
-        return str(self._topology[authority_id]["runtime_agent_name"])
+    @staticmethod
+    def _agent_name(item: CleanupPlanItem) -> str:
+        name = item.discovery_key.split("|", 1)[0]
+        if not name:
+            raise ContractError("Cleanup Agent discovery key is missing")
+        return name
+
+    def _find_version_by_logical(
+        self,
+        agent_name: str,
+        logical_version: str,
+        *,
+        hosted: bool,
+    ) -> str:
+        response = self._client._request(
+            "GET",
+            f"/agents/{urllib.parse.quote(agent_name, safe='')}/versions?limit=100",
+            hosted=hosted,
+            expected={200, 404},
+        )
+        if response["_status"] == 404:
+            return ""
+        matches = [
+            item
+            for item in (response.get("data") or response.get("value") or [])
+            if isinstance(item, Mapping)
+            and isinstance(item.get("metadata"), Mapping)
+            and item["metadata"].get("aiq_profile") == self._profile.name
+            and item["metadata"].get("aiq_logical_version") == logical_version
+        ]
+        if len(matches) > 1:
+            raise ContractError("Validation version discovery is ambiguous")
+        return str(matches[0].get("version") or "") if matches else ""
+
+    def _find_metadata_resource(
+        self,
+        route: str,
+        intent_reference: str,
+        *,
+        hosted: bool,
+    ) -> str:
+        response = self._client._request(
+            "GET",
+            route,
+            hosted=hosted,
+            expected={200, 404},
+        )
+        if response["_status"] == 404:
+            if not hosted:
+                raise ContractError(
+                    "Stored-response intent discovery is unavailable"
+                )
+            return ""
+        matches = [
+            item
+            for item in (response.get("data") or response.get("value") or [])
+            if isinstance(item, Mapping)
+            and isinstance(item.get("metadata"), Mapping)
+            and item["metadata"].get("validation_intent_reference")
+            == intent_reference
+        ]
+        if len(matches) > 1:
+            raise ContractError("Validation runtime resource discovery is ambiguous")
+        if not matches:
+            return ""
+        return str(
+            matches[0].get("agent_session_id")
+            or matches[0].get("session_id")
+            or matches[0].get("id")
+            or ""
+        )
+
+    def _find_service_principal(self, discovery_key: str) -> str:
+        process = self._run(
+            [
+                azure_cli(),
+                "ad",
+                "sp",
+                "list",
+                "--display-name",
+                discovery_key,
+                "--output",
+                "json",
+            ],
+            expected=(0,),
+        )
+        values = json.loads(process.stdout)
+        if not isinstance(values, list) or len(values) > 1:
+            raise ContractError("Validation service-principal discovery is ambiguous")
+        return str(values[0].get("id") or "") if values else ""
+
+    def _resolve_manifest_digest(self, discovery_key: str) -> str:
+        if "@" in discovery_key:
+            return discovery_key.rsplit("@", 1)[-1]
+        process = self._run(
+            [
+                azure_cli(),
+                "acr",
+                "manifest",
+                "show-metadata",
+                "--registry",
+                self._profile.container_registry_name,
+                "--name",
+                discovery_key,
+                "--output",
+                "json",
+            ],
+            expected=(0, 3),
+        )
+        if process.returncode == 3:
+            return ""
+        value = json.loads(process.stdout)
+        if not isinstance(value, Mapping):
+            raise ContractError("Validation ACR manifest discovery is invalid")
+        return str(value.get("digest") or value.get("changeableAttributes", {}).get("digest") or "")
+
+    def _cancel_wait_delete_deployment(self, name: str) -> None:
+        terminal = {"Succeeded", "Failed", "Canceled"}
+        for attempt in range(31):
+            state = self._run(
+                [
+                    azure_cli(),
+                    "deployment",
+                    "group",
+                    "show",
+                    "--resource-group",
+                    "agent-insights-quality-rg",
+                    "--name",
+                    name,
+                    "--query",
+                    "properties.provisioningState",
+                    "--output",
+                    "tsv",
+                ],
+                expected=(0, 3),
+            )
+            if state.returncode == 3:
+                return
+            if state.stdout.strip() in terminal:
+                break
+            if attempt == 0:
+                self._run(
+                    [
+                        azure_cli(),
+                        "deployment",
+                        "group",
+                        "cancel",
+                        "--resource-group",
+                        "agent-insights-quality-rg",
+                        "--name",
+                        name,
+                        "--output",
+                        "none",
+                    ],
+                    expected=(0, 3),
+                )
+            if attempt < 30:
+                time.sleep(5)
+        else:
+            raise ContractError("Validation deployment cleanup did not become terminal")
+        self._run(
+            [
+                azure_cli(),
+                "deployment",
+                "group",
+                "delete",
+                "--resource-group",
+                "agent-insights-quality-rg",
+                "--name",
+                name,
+                "--output",
+                "none",
+            ],
+            expected=(0, 3),
+        )
 
     def _service_principal_absent(self, principal_id: str) -> bool:
         process = self._run(
@@ -396,6 +671,10 @@ def _plan_item(resource: Mapping[str, Any]) -> CleanupPlanItem:
         kind=str(resource["kind"]),
         deterministic_name=str(resource["deterministic_name"]),
         provider_id=str(resource["provider_id"]),
+        resolved_provider_id=resource.get("resolved_provider_id"),
+        intent_reference=str(resource["intent_reference"]),
+        runtime_kind=str(resource["runtime_kind"]),
+        discovery_key=str(resource["discovery_key"]),
         parent_id=resource.get("parent_id"),
         authority_id=resource.get("authority_id"),
         state=str(resource["state"]),

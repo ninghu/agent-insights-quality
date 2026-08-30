@@ -266,9 +266,13 @@ def _deployment_intents(
                 }
             ),
             "deterministic_name": (
-                planned.runtime_agent_name
-                if kind == "runtime_principal"
-                else f"{planned.runtime_agent_name}-{kind}"
+                f"{planned.runtime_agent_name}/{authority.logical_version}"
+                if kind == "provider_agent_version"
+                else planned.runtime_agent_name
+            ),
+            "runtime_kind": authority.runtime_kind,
+            "discovery_key": (
+                f"{planned.runtime_agent_name}|{authority.logical_version}|{kind}"
             ),
             "authority_id": authority.authority_id,
             "parent_id": None,
