@@ -3,16 +3,19 @@ from __future__ import annotations
 from copy import deepcopy
 
 import pytest
+from agent_insights_quality.catalogs import load_catalogs
 
 from agent_insights_quality.util import ContractError, content_hash
 from agent_insights_quality.validation_evidence import (
     authority_predicate_contract_digest,
+    evaluate_defect_predicate,
     persist_evidence,
     scenario_predicate_contract_digest,
     stamp_evidence_digests,
     validate_evidence,
 )
 from agent_insights_quality.validation_blob import BlobRecord
+from agent_insights_quality.validation_manifest import authority_specs
 
 HASH = "sha256:" + ("a" * 64)
 HEAD = "b" * 40
@@ -22,19 +25,20 @@ def _step(
     index: int,
     *,
     namespace: str,
-    step_id: str,
-    assertion_pass: bool = True,
+    rule_step: dict,
+    semantic_pass: bool = True,
+    trace_pass: bool = True,
 ) -> dict:
     return {
         "index": index,
-        "step_id": step_id,
-        "request_digest": content_hash({"request": namespace, "index": index}),
+        "step_id": rule_step["id"],
+        "request_digest": content_hash(rule_step["request"]),
         "response_reference": content_hash({"response": namespace, "index": index}),
         "operation_reference": content_hash({"operation": namespace, "index": index}),
         "complete": True,
         "endpoint_pass": True,
-        "semantic_pass": assertion_pass,
-        "trace_pass": True,
+        "semantic_pass": semantic_pass,
+        "trace_pass": trace_pass,
         "identity_pass": True,
     }
 
@@ -43,36 +47,60 @@ def _attempt(
     index: int,
     *,
     namespace: str,
-    step_prefix: str,
-    probe_pass: bool,
-    observed: bool,
+    rule_attempt: dict,
+    defect_predicate: dict,
+    should_observe: bool,
     expected: bool,
 ) -> dict:
-    setup = _step(
-        index * 10,
-        namespace=namespace,
-        step_id=f"{step_prefix}-setup-{index}",
-    )
-    probe = _step(
-        index * 10 + 1,
-        namespace=namespace,
-        step_id=f"{step_prefix}-probe-{index}",
-        assertion_pass=probe_pass,
-    )
+    setup = [
+        _step(
+            position,
+            namespace=f"{namespace}:attempt:{index}:setup:{position}",
+            rule_step=rule_step,
+        )
+        for position, rule_step in enumerate(
+            rule_attempt["setup_steps"],
+            start=1,
+        )
+    ]
+    selected_ids = set(defect_predicate.get("step_ids", []))
+    required_surfaces = set(defect_predicate.get("required_surfaces", []))
+    probe = []
+    failed_selected = False
+    for position, rule_step in enumerate(
+        rule_attempt["probe_steps"],
+        start=len(setup) + 1,
+    ):
+        semantic_pass = True
+        trace_pass = True
+        if (
+            defect_predicate["kind"] != "never"
+            and rule_step["id"] in selected_ids
+            and not should_observe
+            and not failed_selected
+        ):
+            semantic_pass = "semantic" not in required_surfaces
+            trace_pass = "trace" not in required_surfaces
+            failed_selected = True
+        probe.append(
+            _step(
+                position,
+                namespace=f"{namespace}:attempt:{index}:probe:{position}",
+                rule_step=rule_step,
+                semantic_pass=semantic_pass,
+                trace_pass=trace_pass,
+            )
+        )
+    observed = evaluate_defect_predicate(defect_predicate, probe)
+    steps = [*setup, *probe]
     return {
         "index": index,
         "conversation_reference": content_hash({"conversation": namespace, "index": index}),
         "session_reference": content_hash({"session": namespace, "index": index}),
-        "response_references": [
-            setup["response_reference"],
-            probe["response_reference"],
-        ],
-        "operation_references": [
-            setup["operation_reference"],
-            probe["operation_reference"],
-        ],
-        "setup_steps": [setup],
-        "probe_steps": [probe],
+        "response_references": [step["response_reference"] for step in steps],
+        "operation_references": [step["operation_reference"] for step in steps],
+        "setup_steps": setup,
+        "probe_steps": probe,
         "complete": True,
         "defect_observed": observed,
         "expected_observation_pass": expected,
@@ -80,26 +108,22 @@ def _attempt(
     }
 
 
-def _authority(
-    authority_id: str,
-    agent: str,
-    *,
-    mode: str,
-    observed: int,
-) -> dict:
-    baseline = authority_id.endswith("/v0")
-    n = 7 if mode == "model_mediated" else 5
-    step_prefix = authority_id.replace("/", "-")
+def _authority(spec, *, observed: int) -> dict:
+    authority_id = spec.authority_id
+    baseline = spec.authority_kind == "baseline"
+    rule = spec.validation_rules["scenarios"][0]
+    mode = rule["validation_mode"]
+    n = rule["n"]
     issue_attempts = [
         _attempt(
             index,
             namespace=f"{authority_id}:authority",
-            step_prefix=step_prefix,
-            probe_pass=baseline or index <= observed,
-            observed=(not baseline and index <= observed),
+            rule_attempt=rule_attempt,
+            defect_predicate=rule["defect_predicate"],
+            should_observe=not baseline and index <= observed,
             expected=(baseline or index <= observed),
         )
-        for index in range(1, n + 1)
+        for index, rule_attempt in enumerate(rule["attempts"], start=1)
     ]
     v0_attempts = (
         []
@@ -108,36 +132,21 @@ def _authority(
             _attempt(
                 index,
                 namespace=f"{authority_id}:paired-v0",
-                step_prefix=step_prefix,
-                probe_pass=False,
-                observed=False,
+                rule_attempt=rule_attempt,
+                defect_predicate=rule["defect_predicate"],
+                should_observe=False,
                 expected=True,
             )
-            for index in range(1, n + 1)
+            for index, rule_attempt in enumerate(rule["attempts"], start=1)
         ]
     )
     scenario = {
-        "scenario_id": "reviewed-path",
-        "execution_digest": HASH,
+        "scenario_id": rule["id"],
+        "execution_digest": rule["execution_digest"],
         "validation_mode": mode,
-        "healthy_predicate": (
-            {"kind": "all_probe_assertions_pass"} if baseline else None
-        ),
-        "defect_predicate": (
-            {"kind": "never"}
-            if baseline
-            else {
-                "kind": "all_observation_steps_pass",
-                "step_ids": [
-                    f"{step_prefix}-probe-{index}"
-                    for index in range(1, n + 1)
-                ],
-                "required_surfaces": ["semantic"],
-            }
-        ),
-        "v0_control_predicate": (
-            None if baseline else {"kind": "zero_defect_observations"}
-        ),
+        "healthy_predicate": rule["healthy_predicate"],
+        "defect_predicate": rule["defect_predicate"],
+        "v0_control_predicate": rule["v0_control_predicate"],
         "predicate_contract_digest": HASH,
         "n": n,
         "k": 5,
@@ -153,15 +162,15 @@ def _authority(
     authority = {
         "authority_id": authority_id,
         "authority_kind": "baseline" if baseline else "issue",
-        "canonical_agent": agent,
+        "canonical_agent": spec.canonical_agent,
         "logical_version": "v0" if baseline else authority_id,
         "runtime_agent_name": (
-            f"{agent}-{authority_id.replace('/', '-')}-candidate"
+            f"{spec.canonical_agent}-{authority_id.replace('/', '-')}-candidate"
         ),
         "runtime_agent_version": "1",
         "provider_agent_version_reference": HASH,
-        "source_content_digest": HASH,
-        "execution_digest": HASH,
+        "source_content_digest": spec.source_content_digest,
+        "execution_digest": spec.execution_digest,
         "predicate_contract_digest": HASH,
         "validated_head_sha": HEAD,
         "n": n,
@@ -179,42 +188,15 @@ def _authority(
 
 
 def _evidence() -> dict:
-    agents = [
-        "weather-agent",
-        "healthcare-agent",
-        "finance-agent",
-        "travel-agent",
-        "support-ticket-agent",
-    ]
+    agents, issues = load_catalogs()
+    specs = authority_specs(agents, issues)
     authorities = [
-        _authority(f"{agent}/v0", agent, mode="baseline", observed=0)
-        for agent in agents
+        _authority(
+            spec,
+            observed=0 if spec.authority_kind == "baseline" else 5,
+        )
+        for spec in specs
     ]
-    for number in range(1, 37):
-        agent = (
-            "weather-agent"
-            if number <= 6
-            else "healthcare-agent"
-            if number <= 12
-            else "finance-agent"
-            if number <= 20
-            else "travel-agent"
-            if number <= 28
-            else "support-ticket-agent"
-        )
-        mode = (
-            "model_mediated"
-            if number <= 12 or number in {21, 25, 26}
-            else "deterministic"
-        )
-        authorities.append(
-            _authority(
-                f"issue-{number:03d}",
-                agent,
-                mode=mode,
-                observed=5 if mode == "model_mediated" else 5,
-            )
-        )
     return stamp_evidence_digests(
         {
             "schema_version": "1.0.0",
@@ -322,10 +304,17 @@ def test_evidence_recomputes_predicates_and_rejects_global_reference_reuse() -> 
 
 def test_predicate_mutation_rejects_original_execution_binding() -> None:
     value = _evidence()
-    scenario = value["authorities"][5]["scenarios"][0]
+    authority = value["authorities"][5]
+    scenario = authority["scenarios"][0]
     scenario["defect_predicate"]["required_surfaces"] = ["trace"]
+    scenario["predicate_contract_digest"] = (
+        scenario_predicate_contract_digest(scenario)
+    )
+    authority["predicate_contract_digest"] = (
+        authority_predicate_contract_digest(authority)
+    )
     value = stamp_evidence_digests(value)
-    with pytest.raises(ContractError, match="predicate contract"):
+    with pytest.raises(ContractError, match="canonical execution contract"):
         validate_evidence(value)
 
     value = _evidence()

@@ -77,6 +77,8 @@ def test_validation_cli_exposes_contract_lifecycle_receipt_and_reconciler_comman
             "syntheticstorage",
             "--expected-azure-client-id",
             "client-id",
+            "--expected-azure-object-id",
+            "object-id",
         ]
     ).command == "issue-test-agent-validation-receipt"
     assert parser.parse_args(
@@ -86,6 +88,8 @@ def test_validation_cli_exposes_contract_lifecycle_receipt_and_reconciler_comman
             "syntheticstorage",
             "--expected-azure-client-id",
             "client-id",
+            "--expected-azure-object-id",
+            "object-id",
             "--ownership-nonce",
             "nonce-0001",
             "--holder-workflow-reference",
@@ -103,14 +107,35 @@ def test_validation_cli_exposes_contract_lifecycle_receipt_and_reconciler_comman
             "syntheticstorage",
             "--expected-azure-client-id",
             "client-id",
+            "--expected-azure-object-id",
+            "object-id",
             "--cycle-id",
             "validation-cycle-0001",
             "--final-head-sha",
             "a" * 40,
+            "--candidate-root",
+            "candidate-source",
             "--receipt-output",
             "receipt.json",
         ]
     ).command == "issue-test-agent-validation-merge-receipt"
+    assert parser.parse_args(
+        [
+            "attest-test-agent-validation-review",
+            "--storage-account",
+            "syntheticstorage",
+            "--expected-azure-client-id",
+            "client-id",
+            "--expected-azure-object-id",
+            "object-id",
+            "--cycle-id",
+            "validation-cycle-0001",
+            "--frozen-head-sha",
+            "a" * 40,
+            "--findings-digest",
+            "sha256:" + ("b" * 64),
+        ]
+    ).command == "attest-test-agent-validation-review"
     assert parser.parse_args(
         [
             "run-test-agent-validation",
@@ -215,15 +240,58 @@ def test_merge_receipt_cli_constructs_from_lifecycle(
             "syntheticstorage",
             "--expected-azure-client-id",
             "client-id",
+            "--expected-azure-object-id",
+            "object-id",
             "--cycle-id",
             "validation-cycle-0001",
             "--final-head-sha",
             "b" * 40,
+            "--candidate-root",
+            "candidate-source",
             "--receipt-output",
             "receipt.json",
         ]
     )
     result = json.loads(cli._dispatch(args) or "{}")
     assert result["state"] == "RECEIPT_ISSUED"
+    assert observed["cycle_id"] == "validation-cycle-0001"
+    assert observed["expected_azure_object_id"] == "object-id"
+    assert observed["candidate_root"] == Path("candidate-source")
+    assert observed["github_token"] == "synthetic-scoped-token"
+
+
+def test_review_attestation_cli_uses_protected_producer(
+    monkeypatch,
+) -> None:
+    observed = {}
+    monkeypatch.setenv("GH_TOKEN", "synthetic-scoped-token")
+    monkeypatch.setattr(
+        cli,
+        "attest_frozen_review",
+        lambda **kwargs: observed.update(kwargs)
+        or {
+            "check_run_id": 123,
+            "attestation_digest": "sha256:" + ("a" * 64),
+        },
+    )
+    args = cli.build_parser().parse_args(
+        [
+            "attest-test-agent-validation-review",
+            "--storage-account",
+            "syntheticstorage",
+            "--expected-azure-client-id",
+            "client-id",
+            "--expected-azure-object-id",
+            "object-id",
+            "--cycle-id",
+            "validation-cycle-0001",
+            "--frozen-head-sha",
+            "b" * 40,
+            "--findings-digest",
+            "sha256:" + ("c" * 64),
+        ]
+    )
+    result = json.loads(cli._dispatch(args) or "{}")
+    assert result["check_run_id"] == 123
     assert observed["cycle_id"] == "validation-cycle-0001"
     assert observed["github_token"] == "synthetic-scoped-token"

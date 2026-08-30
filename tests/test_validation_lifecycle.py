@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -14,6 +15,7 @@ from agent_insights_quality.validation_cleanup import (
     CleanupResult,
 )
 from agent_insights_quality.validation_cycle import ValidationCycleController
+from agent_insights_quality.validation_execution import cleanup_validation_cycle
 from agent_insights_quality.validation_lifecycle import (
     ACTIVE_BLOB,
     ACTIVE_CONTAINER,
@@ -22,6 +24,9 @@ from agent_insights_quality.validation_lifecycle import (
     validate_lifecycle,
 )
 from agent_insights_quality.validation_policy import load_validation_policy
+from agent_insights_quality.validation_provisioning import (
+    prepare_validation_support_images,
+)
 from agent_insights_quality.validation_reconciler import ValidationReconciler
 
 HASH = "sha256:" + ("a" * 64)
@@ -938,3 +943,88 @@ def test_expired_unreceipted_clean_is_failed_clean_and_released() -> None:
     )
     assert state == "FAILED_CLEAN"
     assert store.released is True
+
+
+def test_cycle_tag_intent_reaches_real_journal_before_import_and_cleans(
+    monkeypatch,
+) -> None:
+    value = _lifecycle()
+    value["state"] = "CREATING"
+    value["project"].update(
+        {
+            "name": "synthetic-project",
+            "provider_id": "project-id",
+            "state": "created",
+            "create_intent_at": START.isoformat(),
+            "create_observed_at": START.isoformat(),
+        }
+    )
+    value["resources"] = [
+        {
+            "kind": "project",
+            "parent_id": None,
+            "authority_id": None,
+            "deterministic_name": "synthetic-project",
+            "provider_id": "project-id",
+            "ownership_nonce": "nonce-0001",
+            "create_intent_at": START.isoformat(),
+            "create_observed_at": START.isoformat(),
+            "delete_intent_at": None,
+            "delete_observed_at": None,
+            "state": "created",
+            "cleanup_method": "explicit",
+        }
+    ]
+    value = stamp_lifecycle_digest(value)
+    store = MemoryStore(value)
+    controller = ValidationCycleController(
+        LifecycleJournal(store, load_validation_policy()),
+        lease_id="synthetic-lease-1",
+        active=store.read(ACTIVE_CONTAINER, ACTIVE_BLOB),
+    )
+    digest = "sha256:" + ("d" * 64)
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_provisioning._build_support_images",
+        lambda *_args, **_kwargs: {
+            "v0": f"registry.invalid/agent-insights-quality-support@{digest}"
+        },
+    )
+
+    def import_tag(_arguments, **_kwargs):
+        intent = next(
+            item
+            for item in controller.active.value["resources"]
+            if item["kind"] == "acr_tag"
+        )
+        assert intent["state"] == "create_intent"
+        assert intent["provider_id"].startswith("sha256:")
+        assert intent["deterministic_name"].startswith(
+            "agent-insights-quality-support:validation-"
+        )
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_provisioning.subprocess.run",
+        import_tag,
+    )
+    prepare_validation_support_images(
+        SimpleNamespace(container_registry_name="syntheticregistry"),
+        {"name": "support-ticket-agent"},
+        cycle_id="validation-cycle-0001",
+        record_resource=lambda event: controller.dynamic_resource_event(
+            event,
+            now=START + timedelta(seconds=1),
+        ),
+    )
+    clean = cleanup_validation_cycle(
+        controller=controller,
+        backend=CleanupBackend(),
+        policy=load_validation_policy(),
+        failed_cycle=True,
+        now=lambda: START + timedelta(seconds=2),
+    )
+    assert clean.value["state"] == "FAILED_CLEAN"
+    assert clean.value["cleanup"]["exact_clean"] is True
+    assert {
+        item["provider_id"] for item in clean.value["resources"]
+    } == set(clean.value["cleanup"]["verified_absent_ids"])

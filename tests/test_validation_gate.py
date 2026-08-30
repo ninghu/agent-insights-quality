@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from agent_insights_quality.util import ContractError
 from agent_insights_quality.validation_blob import BlobRecord
 from agent_insights_quality.validation_gate import (
+    attest_frozen_review,
     construct_and_issue_merge_receipt,
 )
 from agent_insights_quality.validation_issuer import (
@@ -96,7 +100,11 @@ def test_protected_merge_path_constructs_receipt_from_clean_lifecycle(
     observed = {}
     monkeypatch.setattr(
         "agent_insights_quality.validation_gate.validation_blob_credential",
-        lambda expected: observed.setdefault("credential", expected) or object(),
+        lambda client, object_id: observed.setdefault(
+            "credential",
+            (client, object_id),
+        )
+        or object(),
     )
     def store_factory(_account, *, credential):
         observed["store_credential"] = credential
@@ -109,6 +117,13 @@ def test_protected_merge_path_constructs_receipt_from_clean_lifecycle(
     monkeypatch.setattr(
         "agent_insights_quality.validation_gate.validate_lifecycle",
         lambda _value: None,
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_gate._verify_candidate_checkout",
+        lambda root, head: observed.setdefault(
+            "candidate_checkout",
+            (root, head),
+        ),
     )
 
     queried = QueriedGitHubState(
@@ -207,14 +222,88 @@ def test_protected_merge_path_constructs_receipt_from_clean_lifecycle(
     result = construct_and_issue_merge_receipt(
         storage_account="syntheticstorage",
         expected_azure_client_id="client-id",
+        expected_azure_object_id="object-id",
         cycle_id=active["cycle_id"],
         final_head_sha=HEAD,
+        candidate_root=tmp_path / "candidate-source",
         receipt_output=output,
         github_token="token",
         environment={"GITHUB_RUN_ID": "500"},
     )
     assert result["state"] == "RECEIPT_ISSUED"
     assert output.is_file()
+    assert observed["credential"] == ("client-id", "object-id")
+    assert observed["candidate_checkout"][1] == HEAD
     assert observed["build"]["mode"] == "merge"
     assert observed["build"]["review"]["check"]["check_run_id"] == 1
     assert observed["handoff"][0].value["receipt_digest"] == HASH
+
+
+def test_review_attestation_requires_exact_frozen_lifecycle(
+    monkeypatch,
+) -> None:
+    active = {
+        "state": "FROZEN",
+        "cycle_id": "validation-cycle-0001",
+        "repository": "ninghu/agent-insights-quality",
+        "scope_freeze": {"head_sha": HEAD, "tree_sha": TREE},
+    }
+
+    class Store:
+        @staticmethod
+        def read(_container, _name):
+            return BlobRecord(
+                "test-agent-validation-lifecycle",
+                "active.json",
+                active,
+                "etag",
+                "version",
+            )
+
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_gate.validation_blob_credential",
+        lambda *_args: object(),
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_gate.AzureValidationBlobStore",
+        lambda *_args, **_kwargs: Store(),
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_gate.validate_lifecycle",
+        lambda _value: None,
+    )
+    observed = {}
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_gate.publish_review_attestation",
+        lambda **kwargs: observed.update(kwargs)
+        or {
+            "check_run_id": 1,
+            "attestation_digest": HASH,
+            "frozen_head_sha": HEAD,
+        },
+    )
+    result = attest_frozen_review(
+        storage_account="syntheticstorage",
+        expected_azure_client_id="client-id",
+        expected_azure_object_id="object-id",
+        cycle_id=active["cycle_id"],
+        frozen_head_sha=HEAD,
+        findings_digest=HASH,
+        github_token="token",
+        environment={},
+    )
+    assert result["check_run_id"] == 1
+    assert observed["frozen_head_sha"] == HEAD
+
+    active["state"] = "VALIDATING"
+    with pytest.raises(ContractError, match="frozen validation lifecycle"):
+        attest_frozen_review(
+            storage_account="syntheticstorage",
+            expected_azure_client_id="client-id",
+            expected_azure_object_id="object-id",
+            cycle_id="validation-cycle-0001",
+            frozen_head_sha=HEAD,
+            findings_digest=HASH,
+            github_token="token",
+            environment={},
+        )

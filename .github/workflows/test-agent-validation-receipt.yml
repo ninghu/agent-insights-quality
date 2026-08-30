@@ -32,6 +32,7 @@ jobs:
       AIQ_VALIDATION_STORAGE_ACCOUNT: ${{ vars.AIQ_VALIDATION_STORAGE_ACCOUNT }}
       AIQ_VALIDATION_ENVIRONMENT: test-agent-validation-receipt
       EXPECTED_AZURE_CLIENT_ID: ${{ vars.AIQ_VALIDATION_RECEIPT_CLIENT_ID }}
+      EXPECTED_AZURE_OBJECT_ID: ${{ vars.AIQ_VALIDATION_RECEIPT_PRINCIPAL_ID }}
       CYCLE_ID: ${{ inputs.cycle_id }}
       FINAL_HEAD_SHA: ${{ inputs.final_head_sha }}
       GH_TOKEN: ${{ github.token }}
@@ -39,6 +40,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: main
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.final_head_sha }}
+          path: candidate-source
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -65,6 +71,8 @@ jobs:
           python -m agent_insights_quality issue-test-agent-validation-merge-receipt `
             --cycle-id $env:CYCLE_ID `
             --final-head-sha $env:FINAL_HEAD_SHA `
+            --candidate-root (Join-Path $env:GITHUB_WORKSPACE "candidate-source") `
             --receipt-output $receipt `
             --storage-account $env:AIQ_VALIDATION_STORAGE_ACCOUNT `
-            --expected-azure-client-id $env:EXPECTED_AZURE_CLIENT_ID
+            --expected-azure-client-id $env:EXPECTED_AZURE_CLIENT_ID `
+            --expected-azure-object-id $env:EXPECTED_AZURE_OBJECT_ID

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import uuid
 from collections.abc import Mapping
 from dataclasses import asdict
@@ -40,6 +41,7 @@ from agent_insights_quality.validation_issuer import (
     current_issuer_code_digest,
     github_actions_oidc_subject,
     oidc_subject_digest,
+    publish_review_attestation,
     publish_required_check,
     select_provenance_check,
 )
@@ -90,7 +92,10 @@ def run_validation_gate(
     if mode not in {"shadow", "merge"}:
         raise ContractError("Validation gate mode must be shadow or merge")
     values = environment or os.environ
-    blob_credential = validation_blob_credential(expected_azure_client_id)
+    blob_credential = validation_blob_credential(
+        expected_azure_client_id,
+        automation_principal_id,
+    )
     if not github_token:
         raise ContractError("Scoped GitHub token is required")
     candidate = read_json(candidate_path)
@@ -232,6 +237,7 @@ def run_validation_gate(
                 expected_workflow_path=trusted_policy["workflow"]["review_path"],
                 expected_app_id=trusted_policy["issuer"]["app_id"],
                 expected_app_slug=trusted_policy["issuer"]["app_slug"],
+                expected_cycle_id=candidate["cycle_id"],
             )
             controller.record_review(
                 mode="comprehensive",
@@ -416,21 +422,77 @@ def run_shadow_gate(
     )
 
 
+def attest_frozen_review(
+    *,
+    storage_account: str,
+    expected_azure_client_id: str,
+    expected_azure_object_id: str,
+    cycle_id: str,
+    frozen_head_sha: str,
+    findings_digest: str,
+    github_token: str,
+    environment: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    values = environment or os.environ
+    credential = validation_blob_credential(
+        expected_azure_client_id,
+        expected_azure_object_id,
+    )
+    store = AzureValidationBlobStore(
+        storage_account,
+        credential=credential,
+    )
+    active = store.read(ACTIVE_CONTAINER, ACTIVE_BLOB)
+    validate_lifecycle(active.value)
+    if (
+        active.value["state"] != "FROZEN"
+        or active.value["cycle_id"] != cycle_id
+        or active.value["scope_freeze"]["head_sha"] != frozen_head_sha
+        or len(findings_digest) != 71
+        or not findings_digest.startswith("sha256:")
+        or any(character not in "0123456789abcdef" for character in findings_digest[7:])
+    ):
+        raise ContractError(
+            "Review attestation does not match the frozen validation lifecycle"
+        )
+    trusted_policy, _ = load_trusted_policy()
+    result = publish_review_attestation(
+        repository=active.value["repository"],
+        frozen_head_sha=frozen_head_sha,
+        cycle_id=cycle_id,
+        findings_digest=findings_digest,
+        trusted_policy=trusted_policy,
+        token=github_token,
+        environment=values,
+    )
+    return {
+        **result,
+        "scope_digest": content_hash(active.value["scope_freeze"]),
+    }
+
+
 def construct_and_issue_merge_receipt(
     *,
     storage_account: str,
     expected_azure_client_id: str,
+    expected_azure_object_id: str,
     cycle_id: str,
     final_head_sha: str,
+    candidate_root: Path,
     receipt_output: Path,
     github_token: str,
     environment: Mapping[str, str] | None = None,
     now: Any = lambda: datetime.now(UTC),
 ) -> dict[str, Any]:
     values = environment or os.environ
-    blob_credential = validation_blob_credential(expected_azure_client_id)
+    blob_credential = validation_blob_credential(
+        expected_azure_client_id,
+        expected_azure_object_id,
+    )
     if not github_token:
         raise ContractError("Scoped GitHub token is required")
+    candidate_root = candidate_root.resolve()
+    _verify_candidate_checkout(candidate_root, final_head_sha)
     store = AzureValidationBlobStore(
         storage_account,
         credential=blob_credential,
@@ -462,7 +524,12 @@ def construct_and_issue_merge_receipt(
         version_id=evidence_reference["version_id"],
     )
     trusted_policy, _ = load_trusted_policy()
-    run_id = int(str(values.get("GITHUB_RUN_ID") or "0"))
+    try:
+        run_id = int(str(values.get("GITHUB_RUN_ID") or "0"))
+    except ValueError as error:
+        raise ContractError(
+            "Protected receipt workflow run identity is invalid"
+        ) from error
     if run_id < 1:
         raise ContractError("Protected receipt workflow run identity is missing")
     reader = GhGitHubStateReader(github_token)
@@ -550,6 +617,7 @@ def construct_and_issue_merge_receipt(
             ci_check
         ),
         issued_at=now().astimezone(UTC).isoformat(),
+        repository_root=candidate_root,
     )
     output = receipt_output.expanduser().resolve()
     private = runtime_root()
@@ -562,6 +630,7 @@ def construct_and_issue_merge_receipt(
         reader=reader,
         oidc_subject=github_actions_oidc_subject(values),
         environment=values,
+        repository_root=candidate_root,
     )
     controller = ValidationCycleController(
         LifecycleJournal(
@@ -585,6 +654,25 @@ def construct_and_issue_merge_receipt(
         "receipt_digest": receipt["receipt_digest"],
         "required_check": required_check,
     }
+
+
+def _verify_candidate_checkout(
+    candidate_root: Path,
+    final_head_sha: str,
+) -> None:
+    if not candidate_root.is_dir():
+        raise ContractError("Exact candidate source checkout is missing")
+    process = subprocess.run(
+        ["git", "-C", str(candidate_root), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if process.returncode != 0 or process.stdout.strip() != final_head_sha:
+        raise ContractError(
+            "Candidate source checkout does not match the final head"
+        )
 
 
 def _authority_costs(

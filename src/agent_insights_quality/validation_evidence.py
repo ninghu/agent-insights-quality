@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, Protocol
 
 from jsonschema import Draft202012Validator, FormatChecker
@@ -12,10 +13,14 @@ from agent_insights_quality.util import (
     content_hash,
     immutable_json,
     read_json,
+    read_yaml,
     runtime_root,
 )
 from agent_insights_quality.validation_blob import BlobRecord
-from agent_insights_quality.validation_rules import validation_matrix
+from agent_insights_quality.validation_rules import (
+    validate_validation_rules,
+    validation_matrix,
+)
 
 EVIDENCE_SCHEMA = ROOT / "schemas" / "test-agent-validation-evidence.schema.json"
 EXPECTED_BASELINE_AUTHORITIES = {
@@ -43,6 +48,7 @@ def validate_evidence(
     value: Mapping[str, Any],
     *,
     runtime_topology: Mapping[str, Any] | None = None,
+    repository_root: Path = ROOT,
 ) -> None:
     schema = read_json(EVIDENCE_SCHEMA)
     errors = sorted(
@@ -65,6 +71,7 @@ def validate_evidence(
         raise ContractError("Validation evidence authority IDs must be unique")
     if set(authority_ids) != EXPECTED_BASELINE_AUTHORITIES | EXPECTED_ISSUE_AUTHORITIES:
         raise ContractError("Validation evidence must contain the exact 41 authorities")
+    reviewed_contracts = _reviewed_execution_contracts(repository_root)
     for authority in authorities:
         if authority["validated_head_sha"] != value["candidate_head_sha"]:
             raise ContractError(
@@ -80,6 +87,10 @@ def validate_evidence(
             raise ContractError(
                 f"{authority['authority_id']} evidence changed its reviewed contract"
             )
+        _validate_reviewed_execution_contract(
+            authority,
+            reviewed_contracts[authority["authority_id"]],
+        )
         _validate_authority(authority)
     _validate_global_attempt_references(authorities)
     if runtime_topology is not None:
@@ -488,6 +499,122 @@ def _validate_runtime_topology_binding(
         ):
             raise ContractError(
                 f"{authority['authority_id']} evidence runtime identity is stale"
+            )
+
+
+def _reviewed_execution_contracts(
+    repository_root: Path,
+) -> dict[str, dict[str, Any]]:
+    root = repository_root.resolve()
+    agents = read_yaml(root / "catalogs" / "AGENT_CATALOG.yaml")
+    issues = read_yaml(root / "catalogs" / "ISSUE_CATALOG.yaml")
+    agent_by_name = {
+        str(agent["name"]): agent for agent in agents.get("agents", [])
+    }
+    issue_items = issues.get("issues")
+    if len(agent_by_name) != 5 or not isinstance(issue_items, list) or len(
+        issue_items
+    ) != 36:
+        raise ContractError("Reviewed execution catalog inventory is invalid")
+    contracts: dict[str, dict[str, Any]] = {}
+
+    def add(
+        *,
+        authority_id: str,
+        authority_kind: str,
+        agent: Mapping[str, Any],
+        logical_version: str,
+        reviewed_mode: str,
+        relative_path: str,
+    ) -> None:
+        path = (root / relative_path / "traffic.json").resolve()
+        if root not in path.parents:
+            raise ContractError(
+                "Reviewed execution contract path escapes repository"
+            )
+        rules = read_json(path)["validation_rules"]
+        validate_validation_rules(
+            rules,
+            authority_id=authority_id,
+            authority_kind=authority_kind,
+            canonical_agent=str(agent["name"]),
+            logical_version=logical_version,
+            runtime_kind=str(agent["type"]),
+            framework=str(agent["framework"]),
+            model_contract=agents["models"]["test_agents"],
+            reviewed_mode=reviewed_mode,
+        )
+        contracts[authority_id] = {
+            "canonical_agent": str(agent["name"]),
+            "logical_version": logical_version,
+            "execution_digest": rules["execution_digest"],
+            "scenarios": {
+                scenario["id"]: {
+                    "execution_digest": scenario["execution_digest"],
+                    "healthy_predicate": scenario["healthy_predicate"],
+                    "defect_predicate": scenario["defect_predicate"],
+                    "v0_control_predicate": scenario[
+                        "v0_control_predicate"
+                    ],
+                }
+                for scenario in rules["scenarios"]
+            },
+        }
+
+    for agent in agent_by_name.values():
+        add(
+            authority_id=f"{agent['name']}/v0",
+            authority_kind="baseline",
+            agent=agent,
+            logical_version="v0",
+            reviewed_mode="baseline",
+            relative_path=str(agent["baseline_path"]),
+        )
+    for issue in issue_items:
+        agent = agent_by_name[str(issue["agent"])]
+        add(
+            authority_id=str(issue["id"]),
+            authority_kind="issue",
+            agent=agent,
+            logical_version=str(issue["id"]),
+            reviewed_mode=str(issue["validation_mode"]),
+            relative_path=str(issue["implementation"]),
+        )
+    if set(contracts) != EXPECTED_BASELINE_AUTHORITIES | EXPECTED_ISSUE_AUTHORITIES:
+        raise ContractError("Reviewed execution contracts are incomplete")
+    return contracts
+
+
+def _validate_reviewed_execution_contract(
+    authority: Mapping[str, Any],
+    reviewed: Mapping[str, Any],
+) -> None:
+    authority_id = authority["authority_id"]
+    if (
+        authority["canonical_agent"] != reviewed["canonical_agent"]
+        or authority["logical_version"] != reviewed["logical_version"]
+        or authority["execution_digest"] != reviewed["execution_digest"]
+    ):
+        raise ContractError(
+            f"{authority_id} canonical authority execution digest is stale"
+        )
+    scenarios = reviewed["scenarios"]
+    if {item["scenario_id"] for item in authority["scenarios"]} != set(scenarios):
+        raise ContractError(
+            f"{authority_id} canonical scenario inventory is stale"
+        )
+    for scenario in authority["scenarios"]:
+        expected = scenarios[scenario["scenario_id"]]
+        if (
+            scenario["execution_digest"] != expected["execution_digest"]
+            or scenario["healthy_predicate"] != expected["healthy_predicate"]
+            or scenario["defect_predicate"] != expected["defect_predicate"]
+            or scenario["v0_control_predicate"]
+            != expected["v0_control_predicate"]
+        ):
+            raise ContractError(
+                f"{authority_id}/{scenario['scenario_id']} canonical execution "
+                "contract is stale"
             )
 
 

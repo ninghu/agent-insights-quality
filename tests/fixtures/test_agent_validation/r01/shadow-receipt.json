@@ -14,7 +14,7 @@
     "app_id": 15368,
     "app_slug": "github-actions",
     "environment": "test-agent-validation-shadow",
-    "issuer_code_digest": "sha256:42ccebbe9c9db506d2f4d2d527215c4ddda2ae69d3d09272c39a1ecdddb91ddf",
+    "issuer_code_digest": "sha256:24f143f8965965aa0d751cd94c6a7188eebddfa6a5a680deec1b0cfe2845c734",
     "oidc_subject_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "run_attempt": 1,
     "run_id": 400,
@@ -29,7 +29,7 @@
     "path": "config/test-agent-validation-policy.yaml",
     "ref": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "commit_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    "content_digest": "sha256:df0f32404e9389c585b9507d3dda1b5e1ce7962d83a9a71c419caca1767c1ba8",
+    "content_digest": "sha256:c67b9ed125126409617c11d0c960d237c9476a22a61dbcfff2acf9ffddbddd38",
     "allowed_workflow_path": ".github/workflows/test-agent-validation.yml",
     "allowed_app_id": 15368,
     "allowed_app_slug": "github-actions",
@@ -93,11 +93,11 @@
   },
   "artifact_manifest_hash": "sha256:c2cb33f6b10d20f5ec8eabac6cb70c0f9a5ee79fd95e31d71edb687bde7a54b7",
   "source_tree_digest": "sha256:7346c449276af446d346989f316aacb7d6bf67e4a1958b0564d2ef1a87144fad",
-  "validation_contract_digest": "sha256:8627cf327909f9c172c3a94c65c5809360406c6bced6d90d164a7c11a8ebabcd",
+  "validation_contract_digest": "sha256:db9734a0a356f9c2c16934439fb9b003bbeaeb6a03db3f7adbd27e69a29b69d0",
   "execution_matrix_digest": "sha256:9871973a74edb8afcde6fab1985eea8e3ad43e1e9e83243e8baffe0d8ef86ccb",
   "runtime_topology_digest": "sha256:ccfc73e8252f9ca571b00947fac320bd2787850657730f6b969b1c1aa4ac175f",
   "quota_plan_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "evidence_digest": "sha256:8ad5522c9a91e048bdf2ab8126d2b4ba43139ab41929a3863b0687a046ddce1e",
+  "evidence_digest": "sha256:7e08a2f315b057647b4e404ae925ca21e99b0f515826a13d1ffa7f3812066827",
   "telemetry_resource_set": "g29",
   "test_agent_model": {
     "deployment_name": "gpt-5.4-mini",
@@ -1012,10 +1012,10 @@
     "path": "test-agent-validation-snapshots/clean/validation-shadow-r01.json",
     "version_id": "synthetic-version-r01",
     "etag": "synthetic-etag-r01",
-    "digest": "sha256:5a376995c73bc97f43623cbff34b183f62969b0479e7cd13e66563afdb82d9c5",
+    "digest": "sha256:446688ef2325b4de1905de693a868173845ae1ab835c8962c009239e72ae7daa",
     "cleanup_plan_hash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
     "exact_clean": true,
     "verified_at": "2026-08-29T12:30:00+00:00"
   },
-  "receipt_digest": "sha256:d316ade5e5d43fb3399a80690061ecbc93eaa96a35bc9ad37fa0fbf2e918e426"
+  "receipt_digest": "sha256:7cff1ee88ee8dc567f5c37c3ef8f4fd2d599000f160587604092db8175c6ca0b"
 }

@@ -230,17 +230,17 @@
   "cycle_id": "validation-shadow-r02",
   "digests": {
     "artifact_manifest_hash": "sha256:c2cb33f6b10d20f5ec8eabac6cb70c0f9a5ee79fd95e31d71edb687bde7a54b7",
-    "evidence_digest": "sha256:b47961873e49cc14e1f57b57598df933ea8c662d90198cb6cb7d405a41191243",
+    "evidence_digest": "sha256:24d166f316ab77591b1d851b6ad6da59954dd00273f7c44ec9b4118300d05654",
     "execution_matrix_digest": "sha256:9871973a74edb8afcde6fab1985eea8e3ad43e1e9e83243e8baffe0d8ef86ccb",
     "quota_plan_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "runtime_topology_digest": "sha256:3671f9fb26b05807e8d36e0f25725b2f739c223d57fa9d4d08d987d3f8e49c4e",
     "source_tree_digest": "sha256:7346c449276af446d346989f316aacb7d6bf67e4a1958b0564d2ef1a87144fad",
-    "validation_contract_digest": "sha256:8627cf327909f9c172c3a94c65c5809360406c6bced6d90d164a7c11a8ebabcd"
+    "validation_contract_digest": "sha256:db9734a0a356f9c2c16934439fb9b003bbeaeb6a03db3f7adbd27e69a29b69d0"
   },
   "epoch": 1,
   "event_snapshot": null,
   "evidence_reference": {
-    "digest": "sha256:b47961873e49cc14e1f57b57598df933ea8c662d90198cb6cb7d405a41191243",
+    "digest": "sha256:24d166f316ab77591b1d851b6ad6da59954dd00273f7c44ec9b4118300d05654",
     "etag": "evidence-etag-r02",
     "path": "test-agent-validation-snapshots/evidence/validation-shadow-r02.json",
     "version_id": "evidence-version-r02"
@@ -256,7 +256,7 @@
     "initial_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "initial_tree_sha": "cccccccccccccccccccccccccccccccccccccccc"
   },
-  "journal_digest": "sha256:50bda6c73016f14689b6800090ed920ace8faff16ea55540fc606d8b41fe3f2c",
+  "journal_digest": "sha256:b88185af9d4e026f94e287eb07a9922905c7452b916ed09eaa3fb981d5cc131c",
   "kind": "test-agent-validation-lifecycle",
   "last_activity_at": "2026-08-29T12:00:00+00:00",
   "lease": {
@@ -272,7 +272,7 @@
   },
   "policy_manifest": {
     "commit_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    "content_digest": "sha256:df0f32404e9389c585b9507d3dda1b5e1ce7962d83a9a71c419caca1767c1ba8",
+    "content_digest": "sha256:c67b9ed125126409617c11d0c960d237c9476a22a61dbcfff2acf9ffddbddd38",
     "path": "config/test-agent-validation-policy.yaml",
     "ref": "refs/heads/main",
     "repository": "ninghu/agent-insights-quality"

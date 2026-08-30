@@ -110,6 +110,10 @@ def prepare_candidate_manifest(
         / ".github"
         / "workflows"
         / "test-agent-validation-reconciler.yml",
+        ROOT
+        / ".github"
+        / "workflows"
+        / "test-agent-validation-review.yml",
     ]
     return {
         "schema_version": "1.0.0",

@@ -421,6 +421,13 @@ def prepare_validation_support_images(
         )
         tag_resource = {
             "kind": "acr_tag",
+            "intent_reference": content_hash(
+                {
+                    "kind": "acr_tag",
+                    "provider_id": f"{repository}:{tag}",
+                    "authority_id": authority_id,
+                }
+            ),
             "deterministic_name": f"{repository}:{tag}",
             "provider_id": f"{repository}:{tag}",
             "authority_id": authority_id,

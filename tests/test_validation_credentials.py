@@ -22,6 +22,7 @@ def test_azure_federated_identity_must_match_expected_client(monkeypatch) -> Non
             returncode=0,
             stdout=json.dumps(
                 {
+                    "tenantId": "synthetic-tenant-id",
                     "user": {
                         "type": "servicePrincipal",
                         "name": "synthetic-client-id",
@@ -30,7 +31,8 @@ def test_azure_federated_identity_must_match_expected_client(monkeypatch) -> Non
             ),
         ),
     )
-    verify_azure_service_principal("synthetic-client-id")
+    identity = verify_azure_service_principal("synthetic-client-id")
+    assert identity.tenant_id == "synthetic-tenant-id"
     with pytest.raises(ContractError, match="does not match"):
         verify_azure_service_principal("different-client-id")
 
@@ -49,6 +51,7 @@ def test_blob_credential_token_principal_must_match_attested_client(
             returncode=0,
             stdout=json.dumps(
                 {
+                    "tenantId": "synthetic-tenant-id",
                     "user": {
                         "type": "servicePrincipal",
                         "name": "synthetic-client-id",
@@ -57,18 +60,41 @@ def test_blob_credential_token_principal_must_match_attested_client(
             ),
         ),
     )
+    tokens = iter(
+        [
+            _jwt(
+                {
+                    "appid": "synthetic-client-id",
+                    "tid": "synthetic-tenant-id",
+                    "oid": "synthetic-object-id",
+                }
+            ),
+            _jwt(
+                {
+                    "appid": "synthetic-client-id",
+                    "tid": "synthetic-tenant-id",
+                    "oid": "synthetic-object-id",
+                }
+            ),
+            _jwt(
+                {
+                    "appid": "synthetic-client-id",
+                    "tid": "synthetic-tenant-id",
+                    "oid": "rotated-object-id",
+                }
+            ),
+        ]
+    )
     credential = SimpleNamespace(
-        get_token=lambda _scope: SimpleNamespace(
-            token=_jwt({"appid": "synthetic-client-id"})
-        )
+        get_token=lambda _scope: SimpleNamespace(token=next(tokens))
     )
     identity = types.ModuleType("azure.identity")
     identity.AzureCliCredential = lambda: credential
     monkeypatch.setitem(sys.modules, "azure.identity", identity)
-    assert validation_blob_credential("synthetic-client-id") is credential
-
-    credential.get_token = lambda _scope: SimpleNamespace(
-        token=_jwt({"azp": "different-client-id"})
+    wrapped = validation_blob_credential(
+        "synthetic-client-id",
+        "synthetic-object-id",
     )
-    with pytest.raises(ContractError, match="Blob token principal"):
-        validation_blob_credential("synthetic-client-id")
+    assert wrapped.get_token("scope").token
+    with pytest.raises(ContractError, match="identity rotated"):
+        wrapped.get_token("scope")

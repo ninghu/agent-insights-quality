@@ -110,10 +110,7 @@ from agent_insights_quality.validation_credentials import (
 )
 from agent_insights_quality.validation_cycle import ValidationCycleController
 from agent_insights_quality.validation_issuer import (
-    GhGitHubStateReader,
     ReceiptIssuer,
-    github_actions_oidc_subject,
-    publish_required_check,
     validate_receipt as validate_test_agent_receipt,
 )
 from agent_insights_quality.validation_lifecycle import (
@@ -126,10 +123,7 @@ from agent_insights_quality.validation_manifest import (
     prepare_candidate_manifest,
     stamp_candidate_manifest,
 )
-from agent_insights_quality.validation_policy import (
-    load_trusted_policy,
-    load_validation_policy,
-)
+from agent_insights_quality.validation_policy import load_validation_policy
 from agent_insights_quality.validation_rules import (
     generate_repository_validation_rules,
 )
@@ -138,6 +132,7 @@ from agent_insights_quality.validation_provisioning import (
 )
 from agent_insights_quality.validation_reconciler import ValidationReconciler
 from agent_insights_quality.validation_gate import (
+    attest_frozen_review,
     construct_and_issue_merge_receipt,
     run_validation_gate,
 )
@@ -266,12 +261,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--expected-azure-client-id",
         required=True,
     )
+    issue_validation_receipt.add_argument(
+        "--expected-azure-object-id",
+        required=True,
+    )
     reconcile_validation = commands.add_parser(
         "reconcile-test-agent-validation"
     )
     reconcile_validation.add_argument("--storage-account", required=True)
     reconcile_validation.add_argument(
         "--expected-azure-client-id",
+        required=True,
+    )
+    reconcile_validation.add_argument(
+        "--expected-azure-object-id",
         required=True,
     )
     reconcile_validation.add_argument("--ownership-nonce", required=True)
@@ -304,9 +307,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     merge_receipt.add_argument("--storage-account", required=True)
     merge_receipt.add_argument("--expected-azure-client-id", required=True)
+    merge_receipt.add_argument("--expected-azure-object-id", required=True)
     merge_receipt.add_argument("--cycle-id", required=True)
     merge_receipt.add_argument("--final-head-sha", required=True)
+    merge_receipt.add_argument("--candidate-root", type=Path, required=True)
     merge_receipt.add_argument("--receipt-output", type=Path, required=True)
+    review_attestation = commands.add_parser(
+        "attest-test-agent-validation-review"
+    )
+    review_attestation.add_argument("--storage-account", required=True)
+    review_attestation.add_argument("--expected-azure-client-id", required=True)
+    review_attestation.add_argument("--expected-azure-object-id", required=True)
+    review_attestation.add_argument("--cycle-id", required=True)
+    review_attestation.add_argument("--frozen-head-sha", required=True)
+    review_attestation.add_argument("--findings-digest", required=True)
     return parser
 
 
@@ -348,9 +362,22 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         result = construct_and_issue_merge_receipt(
             storage_account=args.storage_account,
             expected_azure_client_id=args.expected_azure_client_id,
+            expected_azure_object_id=args.expected_azure_object_id,
             cycle_id=args.cycle_id,
             final_head_sha=args.final_head_sha,
+            candidate_root=args.candidate_root,
             receipt_output=args.receipt_output,
+            github_token=str(os.environ.get("GH_TOKEN") or ""),
+        )
+        return json.dumps(result, sort_keys=True)
+    if args.command == "attest-test-agent-validation-review":
+        result = attest_frozen_review(
+            storage_account=args.storage_account,
+            expected_azure_client_id=args.expected_azure_client_id,
+            expected_azure_object_id=args.expected_azure_object_id,
+            cycle_id=args.cycle_id,
+            frozen_head_sha=args.frozen_head_sha,
+            findings_digest=args.findings_digest,
             github_token=str(os.environ.get("GH_TOKEN") or ""),
         )
         return json.dumps(result, sort_keys=True)
@@ -392,24 +419,18 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         store = AzureValidationBlobStore(
             args.storage_account,
             credential=validation_blob_credential(
-                args.expected_azure_client_id
+                args.expected_azure_client_id,
+                args.expected_azure_object_id,
             ),
         )
         issuer = ReceiptIssuer(store)
         if receipt.get("mode") == "shadow":
             record = issuer.issue_shadow(receipt)
-        elif receipt.get("mode") == "merge":
-            trusted_policy, _ = load_trusted_policy()
-            github_token = str(os.environ.get("GH_TOKEN") or "").strip()
-            record = issuer.issue_merge(
-                receipt,
-                trusted_policy=trusted_policy,
-                reader=GhGitHubStateReader(github_token),
-                oidc_subject=github_actions_oidc_subject(),
-                environment=os.environ,
-            )
         else:
-            raise ContractError("Validation receipt mode is invalid")
+            raise ContractError(
+                "Prebuilt receipt issuance accepts shadow receipts only; "
+                "use the protected merge constructor"
+            )
         active = store.read(ACTIVE_CONTAINER, ACTIVE_BLOB)
         controller = ValidationCycleController(
             LifecycleJournal(
@@ -423,23 +444,13 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             active=active,
         )
         controller.receipt_issued(record, now=datetime.now(UTC))
-        if receipt.get("mode") == "merge":
-            required_check = publish_required_check(
-                receipt,
-                trusted_policy=trusted_policy,
-                token=github_token,
-            )
         return json.dumps(
             {
                 "mode": receipt["mode"],
                 "authorizes_merge": receipt["authorizes_merge"],
                 "receipt_digest": receipt["receipt_digest"],
                 "blob_version_id": record.version_id,
-                "required_check": (
-                    required_check
-                    if receipt["mode"] == "merge"
-                    else None
-                ),
+                "required_check": None,
             },
             sort_keys=True,
         )
@@ -447,7 +458,8 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         store = AzureValidationBlobStore(
             args.storage_account,
             credential=validation_blob_credential(
-                args.expected_azure_client_id
+                args.expected_azure_client_id,
+                args.expected_azure_object_id,
             ),
         )
         active = store.read_optional(ACTIVE_CONTAINER, ACTIVE_BLOB)

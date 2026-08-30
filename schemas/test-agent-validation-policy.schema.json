@@ -11,6 +11,7 @@
     "default_branch",
     "policy_path",
     "protected_environment",
+    "review_environment",
     "workflow",
     "issuer",
     "checks",
@@ -24,6 +25,7 @@
     "default_branch": {"const": "main"},
     "policy_path": {"const": "config/test-agent-validation-policy.yaml"},
     "protected_environment": {"const": "test-agent-validation-receipt"},
+    "review_environment": {"const": "test-agent-validation-review"},
     "workflow": {
       "type": "object",
       "additionalProperties": false,
@@ -38,7 +40,7 @@
       ],
       "properties": {
         "candidate_path": {"const": ".github/workflows/test-agent-validation.yml"},
-        "review_path": {"const": ".github/workflows/test-agent-validation.yml"},
+        "review_path": {"const": ".github/workflows/test-agent-validation-review.yml"},
         "targeted_path": {"const": ".github/workflows/test-agent-validation.yml"},
         "ci_path": {"const": ".github/workflows/validate.yml"},
         "receipt_path": {"const": ".github/workflows/test-agent-validation-receipt.yml"},

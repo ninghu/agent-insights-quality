@@ -35,12 +35,16 @@ need Storage Blob Data Contributor, while qualification-only operators need Stor
 ADX publication receipts and the rendered dashboard import file also stay under this durable private
 root. Daily email uses the reviewed public `https://aka.ms/agent-insights/quality` short link.
 
-Test Agent Validation uses the protected `test-agent-validation-receipt` environment only for the
-default-branch merge issuer. Candidate execution/reconciliation and protected receipt issuance use
-different OIDC service principals. Supply their private object IDs to one-time infrastructure
+Test Agent Validation uses protected `test-agent-validation-review` and
+`test-agent-validation-receipt` environments for the default-branch review attestation and merge
+issuer. Candidate execution/reconciliation and the protected workflows use different OIDC service
+principals. Supply their private object IDs to one-time infrastructure
 deployment as `AIQ_VALIDATION_PRINCIPAL_ID` and `AIQ_VALIDATION_RECEIPT_PRINCIPAL_ID`; never commit
-those values. Candidate identity can write only the separate immutable shadow-receipt container.
-Protected receipt identity can read lifecycle/CLEAN proof and write only the merge-receipt container.
+those values, and configure the matching client IDs as `AIQ_VALIDATION_CLIENT_ID` and
+`AIQ_VALIDATION_RECEIPT_CLIENT_ID`. Every Blob token is checked against the expected tenant, client,
+and object identity. Candidate/reconciler identity writes lifecycle, snapshots, and shadow receipts
+and can read merge receipts for interrupted handoff recovery. Protected receipt identity writes the
+lifecycle handoff event, immutable snapshots, and the merge-receipt container.
 The active lifecycle Blob is infinitely leased; all writes use the lease plus current ETag. Immutable
 event/CLEAN snapshots and receipts require Blob versioning and immutable storage with versioning.
 The cleanup-only reconciler runs every 15 minutes and may take over only after a stale heartbeat or

@@ -9,15 +9,22 @@ import pytest
 
 from agent_insights_quality.util import ROOT, ContractError, content_hash
 from agent_insights_quality.validation_blob import BlobRecord
+from agent_insights_quality.validation_evidence import (
+    authority_predicate_contract_digest,
+    scenario_predicate_contract_digest,
+    stamp_evidence_digests,
+)
 from agent_insights_quality.validation_issuer import (
     CheckState,
     GhGitHubStateReader,
+    build_validation_receipt,
     current_issuer_code_digest,
     QueriedGitHubState,
     ReceiptIssuer,
     WorkflowState,
     oidc_subject_digest,
     publish_required_check,
+    publish_review_attestation,
     select_provenance_check,
     verify_runtime_issuer,
     stamp_receipt_digest,
@@ -279,7 +286,7 @@ def _receipt(mode: str) -> dict:
 def _with_expected_check_paths(receipt: dict) -> dict:
     if receipt["review"]["check"] is not None:
         receipt["review"]["check"]["workflow_path"] = (
-            ".github/workflows/test-agent-validation.yml"
+            ".github/workflows/test-agent-validation-review.yml"
         )
     receipt["required_ci"]["targeted_verification"]["workflow_path"] = (
         ".github/workflows/test-agent-validation.yml"
@@ -555,6 +562,12 @@ def test_required_check_is_published_on_exact_candidate_head(
     observed = {}
 
     def run(arguments, **kwargs):
+        if "--method" not in arguments:
+            return type(
+                "Result",
+                (),
+                {"returncode": 0, "stdout": json.dumps({"check_runs": []})},
+            )()
         observed["arguments"] = arguments
         observed["payload"] = json.loads(kwargs["input"])
         observed["token"] = kwargs["env"]["GH_TOKEN"]
@@ -589,6 +602,92 @@ def test_required_check_is_published_on_exact_candidate_head(
     assert observed["token"] == "synthetic-scoped-token"
     assert "main" not in observed["payload"]["head_sha"]
     assert result["check_run_id"] == 999
+
+
+def test_review_attestation_check_binds_frozen_head_and_trusted_workflow(
+    monkeypatch,
+) -> None:
+    policy, _ = load_trusted_policy()
+    observed = {}
+
+    def run(arguments, **kwargs):
+        if "--method" not in arguments:
+            return type(
+                "Result",
+                (),
+                {"returncode": 0, "stdout": json.dumps({"check_runs": []})},
+            )()
+        observed["arguments"] = arguments
+        observed["payload"] = json.loads(kwargs["input"])
+        return type(
+            "Result",
+            (),
+            {
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "id": 777,
+                        "name": "test-agent-validation-review",
+                        "head_sha": HEAD,
+                        "external_id": observed["payload"]["external_id"],
+                        "conclusion": "success",
+                        "app": {"id": 15368, "slug": "github-actions"},
+                    }
+                ),
+            },
+        )()
+
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_issuer.subprocess.run",
+        run,
+    )
+    result = publish_review_attestation(
+        repository="ninghu/agent-insights-quality",
+        frozen_head_sha=HEAD,
+        cycle_id="validation-cycle-0001",
+        findings_digest=HASH,
+        trusted_policy=policy,
+        token="synthetic-token",
+        environment={
+            "GITHUB_ACTIONS": "true",
+            "AIQ_VALIDATION_ENVIRONMENT": "test-agent-validation-review",
+            "GITHUB_WORKFLOW_REF": (
+                "ninghu/agent-insights-quality/"
+                ".github/workflows/test-agent-validation-review.yml@"
+                "refs/heads/main"
+            ),
+            "GITHUB_SHA": "d" * 40,
+            "GITHUB_RUN_ID": "500",
+            "GITHUB_RUN_ATTEMPT": "2",
+        },
+    )
+    summary = json.loads(observed["payload"]["output"]["summary"])
+    assert observed["payload"]["head_sha"] == HEAD
+    assert summary["cycle_id"] == "validation-cycle-0001"
+    assert summary["findings_digest"] == HASH
+    assert summary["workflow_sha"] == "d" * 40
+    assert result["check_run_id"] == 777
+    with pytest.raises(ContractError, match="workflow provenance"):
+        publish_review_attestation(
+            repository="ninghu/agent-insights-quality",
+            frozen_head_sha=HEAD,
+            cycle_id="validation-cycle-0001",
+            findings_digest=HASH,
+            trusted_policy=policy,
+            token="synthetic-token",
+            environment={
+                "GITHUB_ACTIONS": "true",
+                "AIQ_VALIDATION_ENVIRONMENT": "test-agent-validation-shadow",
+                "GITHUB_WORKFLOW_REF": (
+                    "ninghu/agent-insights-quality/"
+                    ".github/workflows/test-agent-validation.yml@"
+                    "refs/heads/main"
+                ),
+                "GITHUB_SHA": "d" * 40,
+                "GITHUB_RUN_ID": "500",
+                "GITHUB_RUN_ATTEMPT": "2",
+            },
+        )
 
 
 def test_check_record_filters_exact_provenance_before_uniqueness(
@@ -652,6 +751,68 @@ def test_check_record_filters_exact_provenance_before_uniqueness(
     )
     assert record["check_run_id"] == 2
     assert record["workflow_id"] == 202
+
+
+def test_check_record_resolves_review_attestation_to_producer_workflow(
+    monkeypatch,
+) -> None:
+    policy, _ = load_trusted_policy()
+    attestation = {
+        "schema_version": "1.0.0",
+        "kind": "test-agent-validation-review-attestation",
+        "cycle_id": "validation-cycle-0001",
+        "frozen_head_sha": HEAD,
+        "findings_digest": HASH,
+        "workflow_path": policy["workflow"]["review_path"],
+        "workflow_ref": "refs/heads/main",
+        "workflow_sha": "d" * 40,
+        "workflow_run_id": 500,
+        "workflow_run_attempt": 1,
+    }
+    check = {
+        "id": 1,
+        "name": policy["checks"]["comprehensive_review"],
+        "head_sha": HEAD,
+        "conclusion": "success",
+        "completed_at": NOW,
+        "external_id": content_hash(attestation),
+        "output": {"summary": json.dumps(attestation, sort_keys=True)},
+        "app": {"id": 15368, "slug": "github-actions"},
+        "check_suite": {"id": 101},
+    }
+    reader = GhGitHubStateReader("synthetic-token")
+
+    def api(path):
+        if "/check-runs" in path:
+            return {"check_runs": [check]}
+        if "/actions/runs?" in path:
+            return {"workflow_runs": []}
+        if path.endswith("/actions/runs/500"):
+            return {
+                "id": 500,
+                "run_attempt": 1,
+                "head_sha": "d" * 40,
+                "workflow_id": 600,
+            }
+        if path.endswith("/actions/workflows/600"):
+            return {
+                "id": 600,
+                "path": policy["workflow"]["review_path"],
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(reader, "_api", api)
+    record = reader.check_record(
+        repository=policy["repository"],
+        head_sha=HEAD,
+        name=policy["checks"]["comprehensive_review"],
+        expected_workflow_path=policy["workflow"]["review_path"],
+        expected_app_id=15368,
+        expected_app_slug="github-actions",
+        expected_cycle_id="validation-cycle-0001",
+    )
+    assert record["check_run_id"] == 1
+    assert record["workflow_sha"] == "d" * 40
 
 
 def test_provenance_selection_rejects_only_duplicate_exact_matches() -> None:
@@ -806,6 +967,42 @@ def test_receipt_summaries_must_match_immutable_evidence(tmp_path) -> None:
             MemoryReceiptStore(receipt),
             mirror_root=tmp_path,
         ).issue_shadow(receipt)
+
+
+def test_receipt_construction_recomputes_reviewed_execution_contract() -> None:
+    evidence = runpy.run_path(
+        str(ROOT / "tests" / "test_validation_evidence.py")
+    )["_evidence"]()
+    authority = evidence["authorities"][5]
+    scenario = authority["scenarios"][0]
+    scenario["defect_predicate"]["required_surfaces"] = ["trace"]
+    scenario["predicate_contract_digest"] = (
+        scenario_predicate_contract_digest(scenario)
+    )
+    authority["predicate_contract_digest"] = (
+        authority_predicate_contract_digest(authority)
+    )
+    evidence = stamp_evidence_digests(evidence)
+    with pytest.raises(ContractError, match="canonical execution contract"):
+        build_validation_receipt(
+            mode="shadow",
+            evidence=evidence,
+            clean_snapshot=BlobRecord(
+                "test-agent-validation-snapshots",
+                "clean.json",
+                {},
+                "etag",
+                "version",
+            ),
+            issuer={},
+            trusted_policy_manifest={},
+            policy_commit_sha=HEAD,
+            policy_content_digest=HASH,
+            review={},
+            targeted_verification={},
+            continuous_integration={},
+            issued_at=NOW,
+        )
 
 
 def test_create_once_receipt_retry_rejects_different_digest(tmp_path) -> None:

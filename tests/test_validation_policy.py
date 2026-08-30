@@ -25,6 +25,10 @@ def test_validation_policy_freezes_inventory_identity_and_lifecycle_limits() -> 
     assert policy.limits.active_heartbeat_seconds == 60
     assert policy.limits.reconciler_interval_minutes == 15
     assert trusted["receipt"]["create_once"] is True
+    assert trusted["review_environment"] == "test-agent-validation-review"
+    assert trusted["workflow"]["review_path"] == (
+        ".github/workflows/test-agent-validation-review.yml"
+    )
     assert digest.startswith("sha256:")
 
 

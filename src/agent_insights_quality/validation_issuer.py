@@ -145,6 +145,7 @@ def current_issuer_code_digest() -> str:
         ROOT / "schemas" / "test-agent-validation-policy.schema.json",
         ROOT / "config" / "test-agent-validation-policy.yaml",
         ROOT / ".github" / "workflows" / "test-agent-validation-receipt.yml",
+        ROOT / ".github" / "workflows" / "test-agent-validation-review.yml",
     )
     return content_hash(
         {
@@ -306,6 +307,7 @@ def build_validation_receipt(
     targeted_verification: Mapping[str, Any],
     continuous_integration: Mapping[str, Any],
     issued_at: str,
+    repository_root: Path = ROOT,
 ) -> dict[str, Any]:
     if mode not in {"shadow", "merge"}:
         raise ContractError("Validation receipt mode is invalid")
@@ -313,6 +315,7 @@ def build_validation_receipt(
     validate_evidence(
         evidence,
         runtime_topology=lifecycle.get("runtime_topology"),
+        repository_root=repository_root,
     )
     if (
         lifecycle.get("snapshot_type") != "clean"
@@ -498,12 +501,14 @@ def verify_merge_provenance(
             trusted_policy["checks"]["comprehensive_review"],
             trusted_policy["workflow"]["review_path"],
             receipt["scope_freeze"]["head_sha"],
+            queried.policy_commit_sha,
         ),
         (
             "targeted_verification",
             receipt["required_ci"]["targeted_verification"],
             trusted_policy["checks"]["targeted_verification"],
             trusted_policy["workflow"]["targeted_path"],
+            final_head,
             final_head,
         ),
         (
@@ -512,10 +517,18 @@ def verify_merge_provenance(
             trusted_policy["checks"]["continuous_integration"],
             trusted_policy["workflow"]["ci_path"],
             final_head,
+            final_head,
         ),
     ]
     completed: dict[str, datetime] = {}
-    for role, record, expected_name, expected_path, expected_head in records:
+    for (
+        role,
+        record,
+        expected_name,
+        expected_path,
+        expected_head,
+        expected_workflow_sha,
+    ) in records:
         if record is None:
             raise ContractError("Protected receipt is missing a required check")
         live = select_provenance_check(
@@ -525,6 +538,7 @@ def verify_merge_provenance(
             head_sha=expected_head,
             app_id=trusted_policy["issuer"]["app_id"],
             app_slug=trusted_policy["issuer"]["app_slug"],
+            workflow_sha=expected_workflow_sha,
         )
         if (
             live.check_run_id != record["check_run_id"]
@@ -538,7 +552,7 @@ def verify_merge_provenance(
             or live.workflow_sha != record["workflow_sha"]
             or live.completed_at != record["completed_at"]
             or record["workflow_path"] != expected_path
-            or record["workflow_sha"] != expected_head
+            or record["workflow_sha"] != expected_workflow_sha
             or live.head_sha != expected_head
             or live.conclusion != "success"
             or live.result_digest != record["result_digest"]
@@ -597,23 +611,59 @@ def select_provenance_check(
     head_sha: str,
     app_id: int,
     app_slug: str,
+    workflow_sha: str | None = None,
 ) -> CheckState:
-    matches = [
-        check
-        for check in checks
-        if check.name == name
-        and check.workflow_path == workflow_path
-        and check.workflow_sha == head_sha
-        and check.head_sha == head_sha
-        and check.app_id == app_id
-        and check.app_slug == app_slug
-        and check.conclusion == "success"
-    ]
+    matches = _provenance_check_matches(
+        checks,
+        name=name,
+        workflow_path=workflow_path,
+        head_sha=head_sha,
+        app_id=app_id,
+        app_slug=app_slug,
+        workflow_sha=workflow_sha,
+    )
     if len(matches) != 1:
         raise ContractError(
             f"Expected one successful provenance-matched check named {name}"
         )
     return matches[0]
+
+
+def _provenance_check_matches(
+    checks: tuple[CheckState, ...] | list[CheckState],
+    *,
+    name: str,
+    workflow_path: str,
+    head_sha: str,
+    app_id: int,
+    app_slug: str,
+    workflow_sha: str | None,
+) -> list[CheckState]:
+    return [
+        check
+        for check in checks
+        if check.name == name
+        and check.workflow_path == workflow_path
+        and (workflow_sha is None or check.workflow_sha == workflow_sha)
+        and check.head_sha == head_sha
+        and check.app_id == app_id
+        and check.app_slug == app_slug
+        and check.conclusion == "success"
+    ]
+
+
+def _review_attestation(
+    item: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    output = item.get("output")
+    summary = output.get("summary") if isinstance(output, Mapping) else None
+    if not isinstance(summary, str):
+        return None
+    try:
+        value = json.loads(summary)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
 
 
 class ReceiptIssuer:
@@ -670,6 +720,7 @@ class ReceiptIssuer:
         reader: GitHubStateReader,
         oidc_subject: str,
         environment: Mapping[str, str],
+        repository_root: Path = ROOT,
     ) -> BlobRecord:
         verify_runtime_issuer(
             receipt,
@@ -690,10 +741,18 @@ class ReceiptIssuer:
             trusted_policy=trusted_policy,
             queried=queried,
         )
-        self._verify_clean_proof(receipt)
+        self._verify_clean_proof(
+            receipt,
+            repository_root=repository_root,
+        )
         return self._write(receipt)
 
-    def _verify_clean_proof(self, receipt: Mapping[str, Any]) -> None:
+    def _verify_clean_proof(
+        self,
+        receipt: Mapping[str, Any],
+        *,
+        repository_root: Path = ROOT,
+    ) -> None:
         reference = receipt["clean_snapshot"]
         path = str(reference["path"])
         if "/" not in path:
@@ -751,6 +810,7 @@ class ReceiptIssuer:
         validate_evidence(
             evidence.value,
             runtime_topology=clean.value.get("runtime_topology"),
+            repository_root=repository_root,
         )
         expected_summaries = [
             {
@@ -920,34 +980,13 @@ class GhGitHubStateReader:
         checks = []
         for item in checks_by_id.values():
             suite_id = int(item["check_suite"]["id"])
-            run = run_by_suite.get(suite_id)
-            if run is None:
-                continue
-            workflow_id = int(run["workflow_id"])
-            workflow_value = self._api(
-                f"repos/{repository}/actions/workflows/{workflow_id}"
+            state = self._check_state(
+                repository=repository,
+                item=item,
+                run=run_by_suite.get(suite_id),
             )
-            checks.append(
-                CheckState(
-                    name=str(item["name"]),
-                    check_run_id=int(item["id"]),
-                    check_suite_id=suite_id,
-                    app_id=int(item["app"]["id"]),
-                    app_slug=str(item["app"]["slug"]),
-                    head_sha=str(item["head_sha"]),
-                    conclusion=str(item["conclusion"]),
-                    result_digest=content_hash(
-                        {
-                            "conclusion": item.get("conclusion"),
-                            "output": item.get("output"),
-                        }
-                    ),
-                    workflow_id=workflow_id,
-                    workflow_path=str(workflow_value["path"]),
-                    workflow_sha=str(run["head_sha"]),
-                    completed_at=str(item["completed_at"]),
-                )
-            )
+            if state is not None:
+                checks.append(state)
         required = {
             str(item)
             for item in protection.get("contexts", [])
@@ -986,8 +1025,9 @@ class GhGitHubStateReader:
         expected_workflow_path: str,
         expected_app_id: int = 15368,
         expected_app_slug: str = "github-actions",
+        expected_cycle_id: str | None = None,
     ) -> dict[str, Any]:
-        matches: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+        matches: list[CheckState] = []
         for attempt in range(60):
             checks_payload = self._api(
                 f"repos/{repository}/commits/{head_sha}/check-runs?per_page=100"
@@ -998,6 +1038,14 @@ class GhGitHubStateReader:
                 if isinstance(item, dict)
                 and item.get("name") == name
                 and item.get("head_sha") == head_sha
+                and (
+                    expected_cycle_id is None
+                    or (
+                        (attestation := _review_attestation(item)) is not None
+                        and attestation.get("cycle_id") == expected_cycle_id
+                        and attestation.get("frozen_head_sha") == head_sha
+                    )
+                )
             ]
             runs = self._api(
                 f"repos/{repository}/actions/runs?head_sha={head_sha}&per_page=100"
@@ -1008,25 +1056,26 @@ class GhGitHubStateReader:
                 if isinstance(run, dict)
                 and run.get("check_suite_id") is not None
             }
-            matches = []
+            candidates = []
             for item in named:
                 suite_id = int(item["check_suite"]["id"])
-                run = run_by_suite.get(suite_id)
-                if run is None:
-                    continue
-                workflow_id = int(run["workflow_id"])
-                workflow = self._api(
-                    f"repos/{repository}/actions/workflows/{workflow_id}"
+                state = self._check_state(
+                    repository=repository,
+                    item=item,
+                    run=run_by_suite.get(suite_id),
                 )
-                if (
-                    int(item["app"]["id"]) == expected_app_id
-                    and str(item["app"]["slug"]) == expected_app_slug
-                    and str(workflow["path"]) == expected_workflow_path
-                    and str(run["head_sha"]) == head_sha
-                    and item.get("conclusion") == "success"
-                ):
-                    matches.append((item, run, workflow))
-            if matches:
+                if state is not None:
+                    candidates.append(state)
+            matches = _provenance_check_matches(
+                candidates,
+                name=name,
+                workflow_path=expected_workflow_path,
+                head_sha=head_sha,
+                app_id=expected_app_id,
+                app_slug=expected_app_slug,
+                workflow_sha=None,
+            )
+            if len(matches) != 0:
                 break
             if attempt < 59:
                 time.sleep(15)
@@ -1034,29 +1083,74 @@ class GhGitHubStateReader:
             raise ContractError(
                 f"Expected one successful provenance-matched check named {name}"
             )
-        item, run, workflow = matches[0]
-        suite_id = int(item["check_suite"]["id"])
-        workflow_id = int(run["workflow_id"])
-        return asdict(
-            CheckState(
-                name=name,
-                check_run_id=int(item["id"]),
-                check_suite_id=suite_id,
-                app_id=int(item["app"]["id"]),
-                app_slug=str(item["app"]["slug"]),
-                head_sha=head_sha,
-                conclusion="success",
-                result_digest=content_hash(
-                    {
-                        "conclusion": item.get("conclusion"),
-                        "output": item.get("output"),
-                    }
-                ),
-                workflow_id=workflow_id,
-                workflow_path=str(workflow["path"]),
-                workflow_sha=str(run["head_sha"]),
-                completed_at=str(item["completed_at"]),
+        return asdict(matches[0])
+
+    def _check_state(
+        self,
+        *,
+        repository: str,
+        item: Mapping[str, Any],
+        run: Mapping[str, Any] | None,
+    ) -> CheckState | None:
+        attestation = _review_attestation(item)
+        if isinstance(attestation, dict) and attestation.get("kind") == (
+            "test-agent-validation-review-attestation"
+        ):
+            if (
+                attestation.get("frozen_head_sha") != item.get("head_sha")
+                or item.get("external_id") != content_hash(attestation)
+                or not isinstance(attestation.get("workflow_run_id"), int)
+                or not isinstance(
+                    attestation.get("workflow_run_attempt"),
+                    int,
+                )
+                or not isinstance(attestation.get("workflow_sha"), str)
+                or not str(attestation.get("findings_digest") or "").startswith(
+                    "sha256:"
+                )
+            ):
+                return None
+            attested_run = self._api(
+                f"repos/{repository}/actions/runs/"
+                f"{attestation['workflow_run_id']}"
             )
+            if (
+                int(attested_run.get("run_attempt") or 1)
+                != int(attestation["workflow_run_attempt"])
+                or str(attested_run.get("head_sha") or "")
+                != str(attestation["workflow_sha"])
+            ):
+                return None
+            run = attested_run
+        elif run is None:
+            return None
+        workflow_id = int(run["workflow_id"])
+        workflow = self._api(
+            f"repos/{repository}/actions/workflows/{workflow_id}"
+        )
+        if isinstance(attestation, dict) and (
+            attestation.get("workflow_path") != workflow.get("path")
+            or attestation.get("workflow_ref") != "refs/heads/main"
+        ):
+            return None
+        return CheckState(
+            name=str(item["name"]),
+            check_run_id=int(item["id"]),
+            check_suite_id=int(item["check_suite"]["id"]),
+            app_id=int(item["app"]["id"]),
+            app_slug=str(item["app"]["slug"]),
+            head_sha=str(item["head_sha"]),
+            conclusion=str(item["conclusion"]),
+            result_digest=content_hash(
+                {
+                    "conclusion": item.get("conclusion"),
+                    "output": item.get("output"),
+                }
+            ),
+            workflow_id=workflow_id,
+            workflow_path=str(workflow["path"]),
+            workflow_sha=str(run["head_sha"]),
+            completed_at=str(item["completed_at"]),
         )
 
     def workflow_state(
@@ -1161,4 +1255,160 @@ def publish_required_check(
         "head_sha": str(result["head_sha"]),
         "app_id": int(app["id"]),
         "app_slug": str(app["slug"]),
+    }
+
+
+def publish_review_attestation(
+    *,
+    repository: str,
+    frozen_head_sha: str,
+    cycle_id: str,
+    findings_digest: str,
+    trusted_policy: Mapping[str, Any],
+    token: str,
+    environment: Mapping[str, str],
+) -> dict[str, Any]:
+    if not token:
+        raise ContractError("Scoped GitHub token is required for review attestation")
+    workflow_ref = str(environment.get("GITHUB_WORKFLOW_REF") or "")
+    workflow_sha = str(environment.get("GITHUB_SHA") or "")
+    try:
+        run_id = int(str(environment.get("GITHUB_RUN_ID") or "0"))
+        run_attempt = int(str(environment.get("GITHUB_RUN_ATTEMPT") or "0"))
+    except ValueError as error:
+        raise ContractError(
+            "Review attestation workflow run identity is invalid"
+        ) from error
+    expected_workflow_ref = (
+        f"{repository}/{trusted_policy['workflow']['review_path']}@"
+        f"{trusted_policy['workflow']['required_ref']}"
+    )
+    if (
+        environment.get("GITHUB_ACTIONS") != "true"
+        or environment.get("AIQ_VALIDATION_ENVIRONMENT")
+        != trusted_policy["review_environment"]
+        or workflow_ref != expected_workflow_ref
+        or len(workflow_sha) != 40
+        or run_id < 1
+        or run_attempt < 1
+    ):
+        raise ContractError("Review attestation workflow provenance is invalid")
+    attestation = {
+        "schema_version": "1.0.0",
+        "kind": "test-agent-validation-review-attestation",
+        "cycle_id": cycle_id,
+        "frozen_head_sha": frozen_head_sha,
+        "findings_digest": findings_digest,
+        "workflow_path": trusted_policy["workflow"]["review_path"],
+        "workflow_ref": trusted_policy["workflow"]["required_ref"],
+        "workflow_sha": workflow_sha,
+        "workflow_run_id": run_id,
+        "workflow_run_attempt": run_attempt,
+    }
+    payload = {
+        "name": trusted_policy["checks"]["comprehensive_review"],
+        "head_sha": frozen_head_sha,
+        "status": "completed",
+        "conclusion": "success",
+        "external_id": content_hash(attestation),
+        "output": {
+            "title": "Frozen-scope comprehensive review attested",
+            "summary": json.dumps(attestation, sort_keys=True),
+        },
+    }
+    lookup = subprocess.run(
+        [
+            "gh",
+            "api",
+            f"repos/{repository}/commits/{frozen_head_sha}/check-runs?per_page=100",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        env={**os.environ, "GH_TOKEN": token},
+    )
+    if lookup.returncode != 0:
+        raise ContractError("Protected review attestation lookup failed")
+    try:
+        lookup_value = json.loads(lookup.stdout)
+    except json.JSONDecodeError as error:
+        raise ContractError(
+            "Protected review attestation lookup response is invalid"
+        ) from error
+    if not isinstance(lookup_value, dict):
+        raise ContractError(
+            "Protected review attestation lookup returned no object"
+        )
+    existing = [
+        item
+        for item in lookup_value.get("check_runs", [])
+        if isinstance(item, dict)
+        and item.get("name") == payload["name"]
+        and item.get("head_sha") == frozen_head_sha
+        and int(item.get("app", {}).get("id") or 0)
+        == trusted_policy["issuer"]["app_id"]
+        and str(item.get("app", {}).get("slug") or "")
+        == trusted_policy["issuer"]["app_slug"]
+    ]
+    matching = [
+        item
+        for item in existing
+        if item.get("external_id") == payload["external_id"]
+    ]
+    if len(matching) > 1 or (existing and not matching):
+        raise ContractError(
+            "Frozen scope already has a different review attestation"
+        )
+    method = "PATCH" if matching else "POST"
+    endpoint = (
+        f"repos/{repository}/check-runs/{int(matching[0]['id'])}"
+        if matching
+        else f"repos/{repository}/check-runs"
+    )
+    request_payload = (
+        {key: value for key, value in payload.items() if key != "head_sha"}
+        if matching
+        else payload
+    )
+    process = subprocess.run(
+        [
+            "gh",
+            "api",
+            "--method",
+            method,
+            endpoint,
+            "--input",
+            "-",
+        ],
+        input=json.dumps(request_payload),
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        env={**os.environ, "GH_TOKEN": token},
+    )
+    if process.returncode != 0:
+        raise ContractError("Protected review attestation check publication failed")
+    try:
+        result = json.loads(process.stdout)
+    except json.JSONDecodeError as error:
+        raise ContractError(
+            "Protected review attestation response is invalid"
+        ) from error
+    app = result.get("app") if isinstance(result, dict) else None
+    if (
+        not isinstance(app, dict)
+        or result.get("name") != payload["name"]
+        or result.get("head_sha") != frozen_head_sha
+        or result.get("external_id") != payload["external_id"]
+        or result.get("conclusion") != "success"
+        or int(app.get("id") or 0) != trusted_policy["issuer"]["app_id"]
+        or str(app.get("slug") or "") != trusted_policy["issuer"]["app_slug"]
+    ):
+        raise ContractError("Protected review attestation identity is invalid")
+    return {
+        "check_run_id": int(result["id"]),
+        "attestation_digest": payload["external_id"],
+        "frozen_head_sha": frozen_head_sha,
     }
