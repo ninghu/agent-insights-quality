@@ -96,29 +96,60 @@ def discover_local_git_context() -> LocalGitContext:
         "GitHub repository",
     )
     repository = str(repository_value.get("nameWithOwner") or "")
-    pull = _run_json(
-        [
-            "gh",
-            "pr",
-            "view",
-            "--repo",
-            repository,
-            "--json",
-            "number,headRefOid,state",
-        ],
-        "GitHub pull request",
-    )
-    pr_number = pull.get("number")
     if (
-        not repository
-        or not isinstance(pr_number, int)
-        or pr_number < 1
-        or pull.get("state") != "OPEN"
-        or pull.get("headRefOid") != commit_sha
+        len(repository.split("/")) != 2
+        or any(not part or part.strip() != part for part in repository.split("/"))
     ):
-        raise ContractError(
-            "Current clean commit must be the exact head of one open pull request"
+        raise ContractError("GitHub repository identity is invalid")
+    matching_pulls: list[dict[str, Any]] = []
+    seen_numbers: set[int] = set()
+    page = 1
+    while True:
+        pulls = _run_json_array(
+            [
+                "gh",
+                "api",
+                "--method",
+                "GET",
+                (
+                    f"repos/{repository}/commits/{commit_sha}/pulls"
+                    f"?per_page=100&page={page}"
+                ),
+                "--header",
+                "Accept: application/vnd.github+json",
+                "--header",
+                "X-GitHub-Api-Version: 2022-11-28",
+            ],
+            "GitHub pull requests",
         )
+        for pull in pulls:
+            number = pull.get("number")
+            state = pull.get("state")
+            head = pull.get("head")
+            head_sha = head.get("sha") if isinstance(head, dict) else None
+            if (
+                not isinstance(number, int)
+                or isinstance(number, bool)
+                or number < 1
+                or state not in {"open", "closed"}
+                or not isinstance(head, dict)
+                or not isinstance(head_sha, str)
+                or not _git_sha(head_sha)
+                or number in seen_numbers
+            ):
+                raise ContractError("GitHub pull request response is invalid")
+            seen_numbers.add(number)
+            if state == "open" and head_sha == commit_sha:
+                matching_pulls.append(pull)
+        if len(pulls) < 100:
+            break
+        page += 1
+    if len(matching_pulls) != 1:
+        raise ContractError(
+            "Current clean commit must be the exact head of exactly one open "
+            "pull request"
+        )
+    pr_number = matching_pulls[0]["number"]
     return LocalGitContext(
         repository=repository,
         pr_number=pr_number,
@@ -519,6 +550,19 @@ def _run_json(arguments: list[str], label: str) -> dict[str, Any]:
         raise ContractError(f"{label} response is invalid") from error
     if not isinstance(value, dict):
         raise ContractError(f"{label} response is not an object")
+    return value
+
+
+def _run_json_array(arguments: list[str], label: str) -> list[dict[str, Any]]:
+    raw = _run_text(arguments, label)
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise ContractError(f"{label} response is invalid") from error
+    if not isinstance(value, list) or any(
+        not isinstance(item, dict) for item in value
+    ):
+        raise ContractError(f"{label} response is not an object array")
     return value
 
 

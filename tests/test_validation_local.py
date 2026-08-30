@@ -31,16 +31,47 @@ def test_local_git_context_is_automatic_and_exact(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "agent_insights_quality.validation_local._run_json",
-        lambda arguments, _label: (
-            {"nameWithOwner": "ninghu/agent-insights-quality"}
-            if arguments[1:3] == ["repo", "view"]
-            else {"number": 63, "headRefOid": "a" * 40, "state": "OPEN"}
-        ),
+        lambda _arguments, _label: {
+            "nameWithOwner": "ninghu/agent-insights-quality"
+        },
+    )
+    observed = []
+
+    def pulls(arguments, _label):
+        observed.append(arguments)
+        return [
+            {
+                "number": 63,
+                "state": "open",
+                "head": {"sha": "a" * 40},
+            }
+        ]
+
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_local._run_json_array",
+        pulls,
     )
     context = discover_local_git_context()
     assert context.repository == "ninghu/agent-insights-quality"
     assert context.pr_number == 63
     assert context.commit_sha == "a" * 40
+    assert observed == [
+        [
+            "gh",
+            "api",
+            "--method",
+            "GET",
+            (
+                "repos/ninghu/agent-insights-quality/commits/"
+                + "a" * 40
+                + "/pulls?per_page=100&page=1"
+            ),
+            "--header",
+            "Accept: application/vnd.github+json",
+            "--header",
+            "X-GitHub-Api-Version: 2022-11-28",
+        ]
+    ]
 
 
 def test_local_git_context_rejects_dirty_or_drifted_head(monkeypatch) -> None:
@@ -63,13 +94,104 @@ def test_local_git_context_rejects_dirty_or_drifted_head(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "agent_insights_quality.validation_local._run_json",
-        lambda arguments, _label: (
-            {"nameWithOwner": "ninghu/agent-insights-quality"}
-            if arguments[1:3] == ["repo", "view"]
-            else {"number": 63, "headRefOid": "b" * 40, "state": "OPEN"}
-        ),
+        lambda _arguments, _label: {
+            "nameWithOwner": "ninghu/agent-insights-quality"
+        },
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_local._run_json_array",
+        lambda _arguments, _label: [
+            {
+                "number": 63,
+                "state": "open",
+                "head": {"sha": "b" * 40},
+            }
+        ],
     )
     with pytest.raises(ContractError, match="exact head"):
+        discover_local_git_context()
+
+
+@pytest.mark.parametrize(
+    ("pulls", "message"),
+    [
+        ([], "exact head"),
+        (
+            [
+                {
+                    "number": 63,
+                    "state": "closed",
+                    "head": {"sha": "a" * 40},
+                }
+            ],
+            "exact head",
+        ),
+        (
+            [
+                {
+                    "number": 63,
+                    "state": "open",
+                    "head": {"sha": "a" * 40},
+                },
+                {
+                    "number": 64,
+                    "state": "open",
+                    "head": {"sha": "a" * 40},
+                },
+            ],
+            "exactly one",
+        ),
+    ],
+)
+def test_local_git_context_rejects_zero_or_multiple_exact_open_pulls(
+    monkeypatch,
+    pulls,
+    message,
+) -> None:
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_local._assert_repository_root",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_local._run_text",
+        lambda arguments, _label: "" if "status" in arguments else "a" * 40,
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_local._run_json",
+        lambda _arguments, _label: {
+            "nameWithOwner": "ninghu/agent-insights-quality"
+        },
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_local._run_json_array",
+        lambda _arguments, _label: pulls,
+    )
+    with pytest.raises(ContractError, match=message):
+        discover_local_git_context()
+
+
+def test_local_git_context_rejects_malformed_pull_response(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_local._assert_repository_root",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_local._run_text",
+        lambda arguments, _label: "" if "status" in arguments else "a" * 40,
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_local._run_json",
+        lambda _arguments, _label: {
+            "nameWithOwner": "ninghu/agent-insights-quality"
+        },
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_local._run_json_array",
+        lambda _arguments, _label: [
+            {"number": "63", "state": "open", "head": {"sha": "a" * 40}}
+        ],
+    )
+    with pytest.raises(ContractError, match="response is invalid"):
         discover_local_git_context()
 
 
