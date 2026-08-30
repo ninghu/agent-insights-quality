@@ -1,0 +1,173 @@
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from jsonschema import Draft202012Validator
+
+from agent_insights_quality.util import ROOT, ContractError, content_hash, read_json, read_yaml
+
+VALIDATION_CONFIG_PATH = ROOT / "config" / "test-agent-validation.yaml"
+TRUSTED_POLICY_PATH = ROOT / "config" / "test-agent-validation-policy.yaml"
+TRUSTED_POLICY_SCHEMA_PATH = (
+    ROOT / "schemas" / "test-agent-validation-policy.schema.json"
+)
+
+
+@dataclass(frozen=True)
+class NamePolicy:
+    maximum_length: int
+    pattern: str
+
+    def accepts(self, value: str) -> bool:
+        return len(value) <= self.maximum_length and re.fullmatch(
+            self.pattern,
+            value,
+        ) is not None
+
+
+@dataclass(frozen=True)
+class ValidationLimits:
+    provisioning_concurrency: int
+    telemetry_query_concurrency: int
+    runtime_attempt_concurrency: int
+    inner_model_call_limit: int
+    reserved_capacity_percent: int
+    minimum_rpm_headroom: int
+    minimum_tpm_headroom: int
+    active_heartbeat_seconds: int
+    absolute_ttl_hours: int
+    reconciler_interval_minutes: int
+
+
+@dataclass(frozen=True)
+class ValidationPolicy:
+    repository: str
+    default_branch: str
+    policy_manifest_path: str
+    telemetry_resource_set: str
+    test_agent_model: dict[str, str]
+    authority_count: int
+    limits: ValidationLimits
+    project_name_policy: NamePolicy
+    agent_name_policy: NamePolicy
+    resource_kinds: tuple[str, ...]
+    documented_project_cascade: tuple[str, ...]
+
+
+def load_validation_policy(
+    path: Path = VALIDATION_CONFIG_PATH,
+) -> ValidationPolicy:
+    value = read_yaml(path)
+    if value.get("schema_version") != "1.0.0":
+        raise ContractError("Test Agent Validation config version is invalid")
+    if value.get("repository") != "ninghu/agent-insights-quality":
+        raise ContractError("Validation repository is not the reviewed public repository")
+    if value.get("default_branch") != "main":
+        raise ContractError("Validation default branch is not reviewed")
+    if value.get("policy_manifest_path") != (
+        "config/test-agent-validation-policy.yaml"
+    ):
+        raise ContractError("Validation trusted policy path is not reviewed")
+    if value.get("telemetry_resource_set") != "g29":
+        raise ContractError("Validation must use read-only g29 telemetry")
+    if value.get("test_agent_model") != {
+        "deployment_name": "gpt-5.4-mini",
+        "model_id": "gpt-5.4-mini",
+        "model_version": "2026-03-17",
+    }:
+        raise ContractError("Validation Test Agent model is not reviewed")
+    inventory = _mapping(value.get("inventory"), "inventory")
+    if inventory != {"agents": 5, "issues": 36, "authorities": 41}:
+        raise ContractError("Validation authority inventory is not exact")
+    limits_value = _mapping(value.get("limits"), "limits")
+    expected_limits = {
+        "provisioning_concurrency": 8,
+        "telemetry_query_concurrency": 4,
+        "runtime_attempt_concurrency": 1,
+        "inner_model_call_limit": 4,
+        "reserved_capacity_percent": 25,
+        "minimum_rpm_headroom": 8,
+        "minimum_tpm_headroom": 8192,
+        "active_heartbeat_seconds": 60,
+        "absolute_ttl_hours": 72,
+        "reconciler_interval_minutes": 15,
+    }
+    if limits_value != expected_limits:
+        raise ContractError("Validation limits differ from the reviewed policy")
+    names = _mapping(value.get("name_policy"), "name policy")
+    project_names = _name_policy(names.get("project"), "Project")
+    agent_names = _name_policy(names.get("agent"), "Agent")
+    resource_kinds = value.get("resource_kinds")
+    if (
+        not isinstance(resource_kinds, list)
+        or len(resource_kinds) != len(set(resource_kinds))
+        or not all(isinstance(item, str) and item for item in resource_kinds)
+    ):
+        raise ContractError("Validation resource kinds are invalid")
+    cascade = value.get("documented_project_cascade")
+    if not isinstance(cascade, list) or any(
+        item not in resource_kinds for item in cascade
+    ):
+        raise ContractError("Validation Project cascade policy is invalid")
+    return ValidationPolicy(
+        repository=value["repository"],
+        default_branch=value["default_branch"],
+        policy_manifest_path=value["policy_manifest_path"],
+        telemetry_resource_set=value["telemetry_resource_set"],
+        test_agent_model=dict(value["test_agent_model"]),
+        authority_count=inventory["authorities"],
+        limits=ValidationLimits(**limits_value),
+        project_name_policy=project_names,
+        agent_name_policy=agent_names,
+        resource_kinds=tuple(resource_kinds),
+        documented_project_cascade=tuple(cascade),
+    )
+
+
+def load_trusted_policy(
+    path: Path = TRUSTED_POLICY_PATH,
+) -> tuple[dict[str, Any], str]:
+    value = read_yaml(path)
+    schema = read_json(TRUSTED_POLICY_SCHEMA_PATH)
+    errors = sorted(
+        Draft202012Validator(schema).iter_errors(value),
+        key=lambda error: list(error.absolute_path),
+    )
+    if errors:
+        error = errors[0]
+        location = ".".join(str(item) for item in error.absolute_path) or "<root>"
+        raise ContractError(
+            f"Trusted validation policy schema error at {location}: {error.message}"
+        )
+    return value, content_hash(value)
+
+
+def _mapping(value: Any, label: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ContractError(f"Validation {label} must be an object")
+    return value
+
+
+def _name_policy(value: Any, label: str) -> NamePolicy:
+    item = _mapping(value, f"{label} name policy")
+    if set(item) != {"maximum_length", "pattern"}:
+        raise ContractError(f"Validation {label} name policy is invalid")
+    maximum = item["maximum_length"]
+    pattern = item["pattern"]
+    if (
+        isinstance(maximum, bool)
+        or not isinstance(maximum, int)
+        or maximum < 8
+        or not isinstance(pattern, str)
+    ):
+        raise ContractError(f"Validation {label} name policy is invalid")
+    try:
+        re.compile(pattern)
+    except re.error as error:
+        raise ContractError(
+            f"Validation {label} name pattern is invalid"
+        ) from error
+    return NamePolicy(maximum_length=maximum, pattern=pattern)

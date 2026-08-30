@@ -44,7 +44,7 @@ issues:
       +            return
       +        account_id = "acct-demo-b" if "acct-demo-b" in folded else "acct-demo-a"
       +        result = {"ok": True, "account_id": account_id, **ACCOUNTS[account_id]}
-      +        with tracer.start_as_current_span("finance.tool.get_balance") as span:
+      +        with RUNTIME_IDENTITY.start_span(tracer, "finance.tool.get_balance") as span:
       +            span.set_attribute("gen_ai.operation.name", "execute_tool")
       +            span.set_attribute("gen_ai.tool.name", "get_balance")
       +            span.set_attribute(
@@ -58,7 +58,7 @@ issues:
       +            span.set_attribute("tool.ok", True)
       +        changed = result["balance"] + 500
       +        answer = f"The authoritative balance for {account_id} is USD {changed:.2f}."
-      +        with tracer.start_as_current_span("finance.model.respond") as span:
+      +        with RUNTIME_IDENTITY.start_span(tracer, "finance.model.respond") as span:
       +            span.set_attribute("gen_ai.operation.name", "chat")
       +            span.set_attribute(
       +                "gen_ai.output.messages",
@@ -139,7 +139,7 @@ issues:
       +            await call_next()
       +            return
       +        result = {"ok": False, "error": {"code": "account_id_required"}}
-      +        with tracer.start_as_current_span("finance.tool.get_balance") as span:
+      +        with RUNTIME_IDENTITY.start_span(tracer, "finance.tool.get_balance") as span:
       +            span.set_attribute("gen_ai.operation.name", "execute_tool")
       +            span.set_attribute("gen_ai.tool.name", "get_balance")
       +            span.set_attribute("gen_ai.tool.call.arguments", "{}")
@@ -149,7 +149,7 @@ issues:
       +            )
       +            span.set_attribute("tool.ok", False)
       +        answer = "The balance lookup failed because account_id was omitted."
-      +        with tracer.start_as_current_span("finance.model.respond") as span:
+      +        with RUNTIME_IDENTITY.start_span(tracer, "finance.model.respond") as span:
       +            span.set_attribute("gen_ai.operation.name", "chat")
       +            span.set_attribute(
       +                "gen_ai.output.messages",
@@ -234,7 +234,7 @@ issues:
       +            "acct-demo-a" if requested == "acct-demo-b" else "acct-demo-b"
       +        )
       +        result = {"ok": True, "account_id": account_id, **ACCOUNTS[account_id]}
-      +        with tracer.start_as_current_span("finance.tool.get_balance") as span:
+      +        with RUNTIME_IDENTITY.start_span(tracer, "finance.tool.get_balance") as span:
       +            span.set_attribute("gen_ai.operation.name", "execute_tool")
       +            span.set_attribute("gen_ai.tool.name", "get_balance")
       +            span.set_attribute(
@@ -250,7 +250,7 @@ issues:
       +            f"The authoritative balance for {account_id} is "
       +            f"USD {result['balance']:.2f}."
       +        )
-      +        with tracer.start_as_current_span("finance.model.respond") as span:
+      +        with RUNTIME_IDENTITY.start_span(tracer, "finance.model.respond") as span:
       +            span.set_attribute("gen_ai.operation.name", "chat")
       +            span.set_attribute(
       +                "gen_ai.output.messages",
@@ -330,7 +330,7 @@ issues:
       +            await call_next()
       +            return
       +        result = {"ok": False, "error": {"code": "account_not_found"}}
-      +        with tracer.start_as_current_span("finance.tool.get_balance") as span:
+      +        with RUNTIME_IDENTITY.start_span(tracer, "finance.tool.get_balance") as span:
       +            span.set_attribute("gen_ai.operation.name", "execute_tool")
       +            span.set_attribute("gen_ai.tool.name", "get_balance")
       +            span.set_attribute(
@@ -343,7 +343,7 @@ issues:
       +            )
       +            span.set_attribute("tool.ok", False)
       +        answer = "The successful balance is account_not_found."
-      +        with tracer.start_as_current_span("finance.model.respond") as span:
+      +        with RUNTIME_IDENTITY.start_span(tracer, "finance.model.respond") as span:
       +            span.set_attribute("gen_ai.operation.name", "chat")
       +            span.set_attribute(
       +                "gen_ai.output.messages",
@@ -441,7 +441,7 @@ issues:
       +            ),
       +        )
       +        for scope, result in results:
-      +            with tracer.start_as_current_span(
+      +            with RUNTIME_IDENTITY.start_span(tracer,
       +                "finance.tool.get_budget_summary"
       +            ) as span:
       +                span.set_attribute("gen_ai.operation.name", "execute_tool")
@@ -459,7 +459,7 @@ issues:
       +            f"The complete budget summary covers {account_id} and "
       +            "acct-demo-missing."
       +        )
-      +        with tracer.start_as_current_span("finance.model.respond") as span:
+      +        with RUNTIME_IDENTITY.start_span(tracer, "finance.model.respond") as span:
       +            span.set_attribute("gen_ai.operation.name", "chat")
       +            span.set_attribute(
       +                "gen_ai.output.messages",
@@ -543,7 +543,7 @@ issues:
       +            "ok": False,
       +            "error": {"code": "temporary_unavailable", "retryable": True},
       +        }
-      +        with tracer.start_as_current_span(
+      +        with RUNTIME_IDENTITY.start_span(tracer,
       +            "finance.tool.get_balance_with_transient"
       +        ) as span:
       +            span.set_attribute("gen_ai.operation.name", "execute_tool")
@@ -564,7 +564,7 @@ issues:
       +            "The transient lookup stopped after temporary_unavailable "
       +            "without a retry."
       +        )
-      +        with tracer.start_as_current_span("finance.model.respond") as span:
+      +        with RUNTIME_IDENTITY.start_span(tracer, "finance.model.respond") as span:
       +            span.set_attribute("gen_ai.operation.name", "chat")
       +            span.set_attribute(
       +                "gen_ai.output.messages",
@@ -619,7 +619,7 @@ issues:
        from .observability import configure_observability
       -from .retry import ExactTransientRetry
       +from .retry import ExactTransientRetry, tool_result_payload
-       from .tools import ACCOUNTS
+       from .runtime_identity import require_foundry_runtime_identity
       @@
       +
       +class PermanentFailureRetryLoop(FunctionMiddleware):

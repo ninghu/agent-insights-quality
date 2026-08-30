@@ -18,6 +18,11 @@ from agent_insights_quality.util import (
     read_json,
     read_yaml,
 )
+from agent_insights_quality.validation_rules import (
+    generate_repository_validation_rules,
+    validate_rules_schema,
+    validate_validation_rules,
+)
 
 AGENT_CATALOG_PATH = ROOT / "catalogs" / "AGENT_CATALOG.yaml"
 ISSUE_CATALOG_PATH = ROOT / "catalogs" / "ISSUE_CATALOG.yaml"
@@ -32,6 +37,12 @@ EXPECTED_ASSIGNMENTS = {
     "finance-agent": 8,
     "travel-agent": 8,
     "support-ticket-agent": 8,
+}
+MODEL_MEDIATED_ISSUES = {
+    *(f"issue-{number:03d}" for number in range(1, 13)),
+    "issue-021",
+    "issue-025",
+    "issue-026",
 }
 
 
@@ -335,6 +346,11 @@ def validate_semantics(
     ):
         raise ContractError("Agent baseline terminal-evidence modes are not reviewed")
     if any(
+        agent["baseline_contract"]["validation_mode"] != "baseline"
+        for agent in by_agent.values()
+    ):
+        raise ContractError("Agent baseline validation modes are not reviewed")
+    if any(
         agent["baseline_contract"]["trace_operations"]
         != trace_operation_modes[agent_name]
         for agent_name, agent in by_agent.items()
@@ -347,6 +363,16 @@ def validate_semantics(
         raise ContractError("Issue IDs must be ordered and continuous from issue-001 to issue-036")
     if len(ids) != len(set(ids)):
         raise ContractError("Issue IDs must be unique")
+    for issue in issue_items:
+        expected_mode = (
+            "model_mediated"
+            if issue["id"] in MODEL_MEDIATED_ISSUES
+            else "deterministic"
+        )
+        if issue["validation_mode"] != expected_mode:
+            raise ContractError(
+                f"{issue['id']} validation mode is not the reviewed defect mechanism"
+            )
 
     counts = Counter(item["agent"] for item in issue_items)
     if dict(counts) != EXPECTED_ASSIGNMENTS:
@@ -368,7 +394,10 @@ def validate_semantics(
         if require_paths and not (ROOT / agent["baseline_path"]).is_dir():
             raise ContractError(f"{agent_name} baseline path is missing")
         if require_paths:
-            _validate_baseline(agent)
+            _validate_baseline(
+                agent,
+                model_contract=agents["models"]["test_agents"],
+            )
     if assigned_ids != set(ids):
         raise ContractError("Every issue must be assigned exactly once")
 
@@ -384,6 +413,15 @@ def validate_semantics(
                 if not (path / required).is_file():
                     raise ContractError(f"{issue['id']} is missing {required}")
             _validate_implementation(issue, path, by_agent[issue["agent"]])
+            _validate_authority_rules(
+                read_json(path / "traffic.json"),
+                agent=by_agent[issue["agent"]],
+                logical_version=issue["id"],
+                authority_id=issue["id"],
+                authority_kind="issue",
+                reviewed_mode=issue["validation_mode"],
+                model_contract=agents["models"]["test_agents"],
+            )
             _validate_source_delta(
                 issue,
                 path,
@@ -419,12 +457,25 @@ def agent_model_contract(agents: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def _validate_baseline(agent: dict[str, Any]) -> None:
+def _validate_baseline(
+    agent: dict[str, Any],
+    *,
+    model_contract: dict[str, Any],
+) -> None:
     root = ROOT / agent["baseline_path"]
     metadata = read_yaml(root / "implementation.yaml")
     if metadata.get("issue_id") != "v0" or metadata.get("agent_name") != agent["name"]:
         raise ContractError(f"{agent['name']} baseline metadata is invalid")
     traffic = json.loads((root / "traffic.json").read_text(encoding="utf-8"))
+    _validate_authority_rules(
+        traffic,
+        agent=agent,
+        logical_version="v0",
+        authority_id=f"{agent['name']}/v0",
+        authority_kind="baseline",
+        reviewed_mode=agent["baseline_contract"]["validation_mode"],
+        model_contract=model_contract,
+    )
     requests = traffic.get("requests") if isinstance(traffic, dict) else None
     if not isinstance(requests, list) or len(requests) < 5:
         raise ContractError(f"{agent['name']} baseline requires at least five requests")
@@ -575,6 +626,33 @@ def _validate_implementation(
         _validate_weather_latency_traffic(requests)
 
 
+def _validate_authority_rules(
+    traffic: dict[str, Any],
+    *,
+    agent: dict[str, Any],
+    logical_version: str,
+    authority_id: str,
+    authority_kind: str,
+    reviewed_mode: str,
+    model_contract: dict[str, Any],
+) -> None:
+    validation_rules = traffic.get("validation_rules")
+    if not isinstance(validation_rules, dict):
+        raise ContractError(f"{authority_id} validation rules are missing")
+    validate_rules_schema(validation_rules, authority_id)
+    validate_validation_rules(
+        validation_rules,
+        authority_id=authority_id,
+        authority_kind=authority_kind,
+        canonical_agent=agent["name"],
+        logical_version=logical_version,
+        runtime_kind=agent["type"],
+        framework=agent["framework"],
+        model_contract=model_contract,
+        reviewed_mode=reviewed_mode,
+    )
+
+
 def _validate_source_delta(
     issue: dict[str, Any],
     root: Path,
@@ -703,10 +781,14 @@ def render_agent_catalog(agents: dict[str, Any]) -> str:
         "",
         "<!-- Generated from catalogs/AGENT_CATALOG.yaml; do not edit. -->",
         "",
-        "| Agent | Owner | Type | Framework | Model | Terminal evidence | Semantic assertions | Trace operations | Issue count |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | ---: |",
+        "| Agent | Owner | Type | Framework | Model | Terminal evidence | Semantic assertions | Trace operations | Validation | Execution digest | Issue count |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---: |",
     ]
     for agent in agents["agents"]:
+        rules = read_json(ROOT / agent["baseline_path"] / "traffic.json")[
+            "validation_rules"
+        ]
+        scenario = rules["scenarios"][0]
         lines.append(
             f"| `{agent['name']}` | {agent['owner']} | `{agent['type']}` | "
             f"`{agent['framework']}` | "
@@ -714,6 +796,8 @@ def render_agent_catalog(agents: dict[str, Any]) -> str:
             f"`{agent['baseline_contract']['terminal_response']}` | "
             f"`{agent['baseline_contract']['semantic_assertions']}` | "
             f"`{agent['baseline_contract']['trace_operations']}` | "
+            f"`{scenario['validation_mode']} {scenario['k']}/{scenario['n']}` | "
+            f"`{rules['execution_digest']}` | "
             f"{len(agent['issue_ids'])} |"
         )
     lines.append("")
@@ -728,23 +812,36 @@ def render_issue_catalog(issues: dict[str, Any]) -> str:
         "<!-- Generated from catalogs/ISSUE_CATALOG.yaml; do not edit. -->",
         "",
         "Every issue represents one independently fixable defect and expects exactly one Insight.",
-        f"Daily qualification rotates {daily_count} issues per Agent; full staging "
-        f"qualifies all {len(issues['issues'])} issues.",
+        f"Daily qualification rotates {daily_count} issues per Agent; Test Agent "
+        f"Validation covers all {len(issues['issues'])} issues with paired v0 controls.",
         "",
-        "| Issue | Agent | Category | Severity | Expected defect |",
-        "| --- | --- | --- | --- | --- |",
+        "| Issue | Agent | Category | Severity | Validation | Execution digest | Expected defect |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for issue in issues["issues"]:
+        rules = read_json(ROOT / issue["implementation"] / "traffic.json")[
+            "validation_rules"
+        ]
+        scenario = rules["scenarios"][0]
         lines.append(
             f"| <a id=\"{issue['id']}\"></a>`{issue['id']}` - {issue['title']} | "
             f"`{issue['agent']}` | "
-            f"`{issue['category']}` | `{issue['severity']}` | {issue['root_cause']} |"
+            f"`{issue['category']}` | `{issue['severity']}` | "
+            f"`{scenario['validation_mode']} {scenario['k']}/{scenario['n']}` | "
+            f"`{rules['execution_digest']}` | {issue['root_cause']} |"
         )
     lines.append("")
     return "\n".join(lines)
 
 
 def generate_docs(*, check: bool = False) -> None:
+    raw_agents = read_yaml(AGENT_CATALOG_PATH)
+    raw_issues = read_yaml(ISSUE_CATALOG_PATH)
+    generate_repository_validation_rules(
+        raw_agents,
+        raw_issues,
+        check=check,
+    )
     agents, issues = load_catalogs()
     outputs = {
         ROOT / "AGENT_CATALOG.md": render_agent_catalog(agents),

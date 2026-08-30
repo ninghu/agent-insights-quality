@@ -927,6 +927,34 @@ def _validate_issue_cards(
             raise ContractError(
                 "Non-correct card evaluations require at least one failed field"
             )
+        if evaluation["finding_type"] in {"PARTIAL", "MISMATCHED"}:
+            failed_fields = {
+                field
+                for field, passed in evaluation["fields"].items()
+                if not passed
+            }
+            field_reasons = evaluation.get("field_reasons")
+            if not isinstance(field_reasons, dict) or set(field_reasons) != failed_fields:
+                raise ContractError(
+                    "PARTIAL/MISMATCHED card evaluations require a field_reasons "
+                    "entry for exactly each failed field"
+                )
+    reference_types = {item["reference"]: item["finding_type"] for item in evaluations}
+    for evaluation in evaluations:
+        if evaluation["finding_type"] != "DUPLICATE":
+            continue
+        duplicate_of = evaluation.get("duplicate_of")
+        if (
+            not isinstance(duplicate_of, str)
+            or duplicate_of == evaluation["reference"]
+            or duplicate_of not in reference_types
+            or reference_types[duplicate_of]
+            not in {"MATCHED", "PARTIAL", "MISMATCHED"}
+        ):
+            raise ContractError(
+                "DUPLICATE card evaluations require duplicate_of to resolve to "
+                "another attributable card in the same issue's card evaluations"
+            )
     incomplete_cards = [
         item for item in evaluations if item["finding_type"] == "INCOMPLETE"
     ]

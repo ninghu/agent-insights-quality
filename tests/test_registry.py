@@ -24,13 +24,14 @@ from agent_insights_quality.util import ContractError
 def _registry(profile: str) -> dict:
     agents, issues = load_catalogs()
     return {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "profile": profile,
         "project_name": (
             "agent-insights-quality"
             if profile == "daily"
             else "agent-insights-quality-staging"
         ),
+        "test_region": "WestUS2",
         "test_agent_model": agent_model_contract(agents),
         "catalog_hashes": catalog_hashes(agents, issues),
         "agents": {

@@ -16,6 +16,7 @@ from openai import AsyncOpenAI
 from typing_extensions import Annotated
 
 from .observability import configure_observability
+from .runtime_identity import require_foundry_runtime_identity
 from .options import (
     MAX_RESPONSE_OPTIONS,
     bounded_inventory_options,
@@ -28,8 +29,9 @@ from .options import (
 )
 
 
-configure_observability("travel-agent")
-tracer = trace.get_tracer("travel-agent")
+RUNTIME_IDENTITY = require_foundry_runtime_identity()
+configure_observability(RUNTIME_IDENTITY.name, RUNTIME_IDENTITY.version)
+tracer = trace.get_tracer(RUNTIME_IDENTITY.name, RUNTIME_IDENTITY.version)
 credential = DefaultAzureCredential()
 
 
@@ -53,14 +55,14 @@ def latest_text(state: TravelState) -> str:
 
 
 async def failed_search(name: str) -> None:
-    with tracer.start_as_current_span(f"travel.tool.{name}") as span:
+    with RUNTIME_IDENTITY.start_span(tracer, f"travel.tool.{name}") as span:
         span.set_attribute("gen_ai.operation.name", "execute_tool")
         span.set_attribute("gen_ai.tool.name", name)
         span.set_attribute("tool.ok", False)
 
 
 async def search_flights(trip: str, include_details: bool = False) -> list[dict]:
-    with tracer.start_as_current_span("travel.tool.search_flights") as span:
+    with RUNTIME_IDENTITY.start_span(tracer, "travel.tool.search_flights") as span:
         span.set_attribute("gen_ai.operation.name", "execute_tool")
         span.set_attribute("gen_ai.tool.name", "search_flights")
         span.set_attribute("tool.ok", True)
@@ -92,7 +94,7 @@ async def search_flights(trip: str, include_details: bool = False) -> list[dict]
 
 
 async def search_hotels(trip: str, include_details: bool = False) -> list[dict]:
-    with tracer.start_as_current_span("travel.tool.search_hotels") as span:
+    with RUNTIME_IDENTITY.start_span(tracer, "travel.tool.search_hotels") as span:
         span.set_attribute("gen_ai.operation.name", "execute_tool")
         span.set_attribute("gen_ai.tool.name", "search_hotels")
         span.set_attribute("tool.ok", True)
@@ -236,7 +238,7 @@ async def model_answer(prompt: str) -> str:
         base_url=os.environ["FOUNDRY_PROJECT_ENDPOINT"].rstrip("/") + "/openai/v1",
         api_key=token_provider,
     )
-    with tracer.start_as_current_span("travel.model.respond") as span:
+    with RUNTIME_IDENTITY.start_span(tracer, "travel.model.respond") as span:
         span.set_attribute("gen_ai.operation.name", "chat")
         span.set_attribute("gen_ai.request.model", model)
         result = await client.responses.create(

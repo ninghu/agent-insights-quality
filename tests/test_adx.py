@@ -60,6 +60,7 @@ class _FakeAdxClient:
 def _report() -> dict:
     report = deepcopy(read_json(_report_path()))
     report["schema_version"] = "2.0.0"
+    report["test_region"] = "WestUS2"
     agents, issues = load_catalogs(require_paths=False)
     report["catalog_hashes"]["agents"] = content_hash(agents)
     report["catalog_hashes"]["issues"] = content_hash(issues)

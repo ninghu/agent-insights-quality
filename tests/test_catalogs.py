@@ -7,6 +7,7 @@ import json
 import pytest
 
 from agent_insights_quality.catalogs import (
+    MODEL_MEDIATED_ISSUES,
     _activation_contract_digest,
     _validate_prompt_definition,
     _validate_prompt_issue_delta,
@@ -19,6 +20,7 @@ from agent_insights_quality.catalogs import (
     validate_semantics,
 )
 from agent_insights_quality.util import ROOT, ContractError
+from agent_insights_quality.validation_rules import validation_matrix
 
 
 def test_source_integrity_binds_activation_assertion_definitions(tmp_path) -> None:
@@ -124,9 +126,75 @@ def test_catalogs_define_fixed_inventory() -> None:
         ["invoke_agent", "execute_tool"],
     ]
     assert len(issues["source_delta_contracts"]) == 36
+    assert {
+        item["id"]
+        for item in issues["issues"]
+        if item["validation_mode"] == "model_mediated"
+    } == MODEL_MEDIATED_ISSUES
+    assert all(
+        item["baseline_contract"]["validation_mode"] == "baseline"
+        for item in agents["agents"]
+    )
     assert "Daily qualification rotates 4 issues per Agent" in render_issue_catalog(
         issues
     )
+
+
+def test_all_authorities_have_fixed_versioned_validation_rules() -> None:
+    agents, issues = load_catalogs()
+    issue_by_id = {item["id"]: item for item in issues["issues"]}
+    seen = set()
+    for agent in agents["agents"]:
+        authorities = [
+            (
+                f"{agent['name']}/v0",
+                agent["baseline_path"],
+                "baseline",
+            ),
+            *[
+                (
+                    issue_id,
+                    issue_by_id[issue_id]["implementation"],
+                    issue_by_id[issue_id]["validation_mode"],
+                )
+                for issue_id in agent["issue_ids"]
+            ],
+        ]
+        for authority_id, root, mode in authorities:
+            traffic = json.loads(
+                (ROOT / root / "traffic.json").read_text(encoding="utf-8")
+            )
+            rules = traffic["validation_rules"]
+            scenario = rules["scenarios"][0]
+            n, k = validation_matrix(mode)
+            assert rules["schema_version"] == "1.0.0"
+            assert rules["execution_digest"].startswith("sha256:")
+            assert scenario["execution_digest"].startswith("sha256:")
+            assert (scenario["n"], scenario["k"]) == (n, k)
+            assert len(scenario["attempts"]) == n
+            assert all(
+                attempt["setup_steps"] and attempt["probe_steps"]
+                for attempt in scenario["attempts"]
+            )
+            if mode == "baseline":
+                assert scenario["v0_control_predicate"] is None
+            else:
+                assert scenario["v0_control_predicate"] == {
+                    "kind": "zero_defect_observations"
+                }
+            seen.add(authority_id)
+    assert seen == {
+        *(f"{agent['name']}/v0" for agent in agents["agents"]),
+        *(f"issue-{number:03d}" for number in range(1, 37)),
+    }
+
+
+def test_validation_mode_reclassification_is_rejected() -> None:
+    agents, issues = load_catalogs(require_paths=False)
+    tampered = deepcopy(issues)
+    tampered["issues"][0]["validation_mode"] = "deterministic"
+    with pytest.raises(ContractError, match="reviewed defect mechanism"):
+        validate_semantics(agents, tampered, require_paths=False)
 
 
 def test_catalog_semantics_reject_old_source_delta_shape_cleanly() -> None:

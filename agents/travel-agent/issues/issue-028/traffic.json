@@ -8,7 +8,9 @@
       "request": {
         "method": "POST",
         "path": "/responses",
-        "headers": {"content-type": "application/json"},
+        "headers": {
+          "content-type": "application/json"
+        },
         "body": {
           "input": [
             {
@@ -21,7 +23,9 @@
               ]
             }
           ],
-          "conversation": {"id": "conv-travel-agent-issue-028-1"},
+          "conversation": {
+            "id": "conv-travel-agent-issue-028-1"
+          },
           "max_output_tokens": 400
         }
       },
@@ -30,8 +34,13 @@
         "behavior": "Uses the source trip after an explicit switch.",
         "defect_observed": true,
         "semantic_assertions": {
-          "required_terms_all": ["trip-alpha", "flight-demo-0"],
-          "forbidden_terms": ["trip-beta"]
+          "required_terms_all": [
+            "trip-alpha",
+            "flight-demo-0"
+          ],
+          "forbidden_terms": [
+            "trip-beta"
+          ]
         },
         "trace_assertions": [
           {
@@ -52,7 +61,9 @@
       "request": {
         "method": "POST",
         "path": "/responses",
-        "headers": {"content-type": "application/json"},
+        "headers": {
+          "content-type": "application/json"
+        },
         "body": {
           "input": [
             {
@@ -65,7 +76,9 @@
               ]
             }
           ],
-          "conversation": {"id": "conv-travel-agent-issue-028-2"},
+          "conversation": {
+            "id": "conv-travel-agent-issue-028-2"
+          },
           "max_output_tokens": 400
         }
       },
@@ -74,8 +87,13 @@
         "behavior": "Uses the source trip after an explicit switch.",
         "defect_observed": true,
         "semantic_assertions": {
-          "required_terms_all": ["trip-beta", "hotel-demo-0"],
-          "forbidden_terms": ["trip-gamma"]
+          "required_terms_all": [
+            "trip-beta",
+            "hotel-demo-0"
+          ],
+          "forbidden_terms": [
+            "trip-gamma"
+          ]
         },
         "trace_assertions": [
           {
@@ -96,7 +114,9 @@
       "request": {
         "method": "POST",
         "path": "/responses",
-        "headers": {"content-type": "application/json"},
+        "headers": {
+          "content-type": "application/json"
+        },
         "body": {
           "input": [
             {
@@ -109,7 +129,9 @@
               ]
             }
           ],
-          "conversation": {"id": "conv-travel-agent-issue-028-3"},
+          "conversation": {
+            "id": "conv-travel-agent-issue-028-3"
+          },
           "max_output_tokens": 400
         }
       },
@@ -118,8 +140,13 @@
         "behavior": "Uses the source trip after an explicit switch.",
         "defect_observed": true,
         "semantic_assertions": {
-          "required_terms_all": ["trip-gamma", "hotel-demo-0"],
-          "forbidden_terms": ["trip-alpha"]
+          "required_terms_all": [
+            "trip-gamma",
+            "hotel-demo-0"
+          ],
+          "forbidden_terms": [
+            "trip-alpha"
+          ]
         },
         "trace_assertions": [
           {
@@ -140,7 +167,9 @@
       "request": {
         "method": "POST",
         "path": "/responses",
-        "headers": {"content-type": "application/json"},
+        "headers": {
+          "content-type": "application/json"
+        },
         "body": {
           "input": [
             {
@@ -153,7 +182,9 @@
               ]
             }
           ],
-          "conversation": {"id": "conv-travel-agent-issue-028-4"},
+          "conversation": {
+            "id": "conv-travel-agent-issue-028-4"
+          },
           "max_output_tokens": 400
         }
       },
@@ -162,8 +193,15 @@
         "behavior": "Uses the source trip after an explicit switch.",
         "defect_observed": true,
         "semantic_assertions": {
-          "required_terms_all": ["trip-alpha", "flight-demo-0", "Booking completed"],
-          "forbidden_terms": ["trip-gamma", "Booking not completed"]
+          "required_terms_all": [
+            "trip-alpha",
+            "flight-demo-0",
+            "Booking completed"
+          ],
+          "forbidden_terms": [
+            "trip-gamma",
+            "Booking not completed"
+          ]
         },
         "trace_assertions": [
           {
@@ -184,7 +222,9 @@
       "request": {
         "method": "POST",
         "path": "/responses",
-        "headers": {"content-type": "application/json"},
+        "headers": {
+          "content-type": "application/json"
+        },
         "body": {
           "input": [
             {
@@ -197,7 +237,9 @@
               ]
             }
           ],
-          "conversation": {"id": "conv-travel-agent-issue-028-5"},
+          "conversation": {
+            "id": "conv-travel-agent-issue-028-5"
+          },
           "max_output_tokens": 400
         }
       },
@@ -206,8 +248,13 @@
         "behavior": "Uses the source trip after an explicit switch.",
         "defect_observed": true,
         "semantic_assertions": {
-          "required_terms_all": ["trip-beta", "flight-demo-0"],
-          "forbidden_terms": ["trip-alpha"]
+          "required_terms_all": [
+            "trip-beta",
+            "flight-demo-0"
+          ],
+          "forbidden_terms": [
+            "trip-alpha"
+          ]
         },
         "trace_assertions": [
           {
@@ -225,5 +272,560 @@
     }
   ],
   "data_class": "synthetic_public_safe",
-  "traffic_source": "endpoint_requests"
+  "traffic_source": "endpoint_requests",
+  "validation_rules": {
+    "schema_version": "1.0.0",
+    "scenarios": [
+      {
+        "id": "issue-028-defect-path",
+        "validation_mode": "deterministic",
+        "n": 5,
+        "k": 5,
+        "fixtures": [],
+        "attempts": [
+          {
+            "index": 1,
+            "conversation_group": "issue-028-attempt-01",
+            "parameters": {
+              "case_id": "case-01",
+              "source_request_ids": [
+                "issue-028-request-1"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-028-setup-01-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 01. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-028-probe-01-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 01. Switch from trip-alpha to trip-beta and find a flight."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "trip-alpha",
+                      "flight-demo-0"
+                    ],
+                    "forbidden_terms": [
+                      "trip-beta"
+                    ]
+                  },
+                  "trace_assertions": [
+                    {
+                      "name": "flight_scope_uses_switch_source",
+                      "kind": "scope_relation",
+                      "tool_name": "search_flights",
+                      "scope_kind": "trip",
+                      "request_scope": "last",
+                      "argument": "trip",
+                      "request_tool_equal": false
+                    }
+                  ],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 2,
+            "conversation_group": "issue-028-attempt-02",
+            "parameters": {
+              "case_id": "case-02",
+              "source_request_ids": [
+                "issue-028-request-2"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-028-setup-02-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 02. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-028-probe-02-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 02. Switch from trip-beta to trip-gamma and find a hotel."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "trip-beta",
+                      "hotel-demo-0"
+                    ],
+                    "forbidden_terms": [
+                      "trip-gamma"
+                    ]
+                  },
+                  "trace_assertions": [
+                    {
+                      "name": "hotel_scope_uses_switch_source",
+                      "kind": "scope_relation",
+                      "tool_name": "search_hotels",
+                      "scope_kind": "trip",
+                      "request_scope": "last",
+                      "argument": "trip",
+                      "request_tool_equal": false
+                    }
+                  ],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 3,
+            "conversation_group": "issue-028-attempt-03",
+            "parameters": {
+              "case_id": "case-03",
+              "source_request_ids": [
+                "issue-028-request-3"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-028-setup-03-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 03. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-028-probe-03-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 03. Switch from trip-gamma to trip-alpha and find a hotel."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "trip-gamma",
+                      "hotel-demo-0"
+                    ],
+                    "forbidden_terms": [
+                      "trip-alpha"
+                    ]
+                  },
+                  "trace_assertions": [
+                    {
+                      "name": "hotel_scope_uses_switch_source",
+                      "kind": "scope_relation",
+                      "tool_name": "search_hotels",
+                      "scope_kind": "trip",
+                      "request_scope": "last",
+                      "argument": "trip",
+                      "request_tool_equal": false
+                    }
+                  ],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 4,
+            "conversation_group": "issue-028-attempt-04",
+            "parameters": {
+              "case_id": "case-04",
+              "source_request_ids": [
+                "issue-028-request-4"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-028-setup-04-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 04. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-028-probe-04-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 04. Switch from trip-alpha to trip-gamma and confirm a flight."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "trip-alpha",
+                      "flight-demo-0",
+                      "Booking completed"
+                    ],
+                    "forbidden_terms": [
+                      "trip-gamma",
+                      "Booking not completed"
+                    ]
+                  },
+                  "trace_assertions": [
+                    {
+                      "name": "flight_scope_uses_switch_source",
+                      "kind": "scope_relation",
+                      "tool_name": "search_flights",
+                      "scope_kind": "trip",
+                      "request_scope": "last",
+                      "argument": "trip",
+                      "request_tool_equal": false
+                    }
+                  ],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 5,
+            "conversation_group": "issue-028-attempt-05",
+            "parameters": {
+              "case_id": "case-05",
+              "source_request_ids": [
+                "issue-028-request-5"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-028-setup-05-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 05. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-028-probe-05-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 05. Switch from trip-beta to trip-alpha and search again."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "trip-beta",
+                      "flight-demo-0"
+                    ],
+                    "forbidden_terms": [
+                      "trip-alpha"
+                    ]
+                  },
+                  "trace_assertions": [
+                    {
+                      "name": "flight_scope_uses_switch_source",
+                      "kind": "scope_relation",
+                      "tool_name": "search_flights",
+                      "scope_kind": "trip",
+                      "request_scope": "last",
+                      "argument": "trip",
+                      "request_tool_equal": false
+                    }
+                  ],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "healthy_predicate": null,
+        "defect_predicate": {
+          "kind": "all_observation_steps_pass",
+          "step_ids": [
+            "issue-028-probe-01-01",
+            "issue-028-probe-02-01",
+            "issue-028-probe-03-01",
+            "issue-028-probe-04-01",
+            "issue-028-probe-05-01"
+          ],
+          "required_surfaces": [
+            "trace"
+          ]
+        },
+        "v0_control_predicate": {
+          "kind": "zero_defect_observations"
+        },
+        "execution_digest": "sha256:7a7bb9f7b24e457733dcd5b6c4a6c25a7b4db50a7272ecde765fef6b69238307"
+      }
+    ],
+    "execution_digest": "sha256:928ae42a2cba0fed3a107e1f406c24b77bd3e98fe184ffec65dedd6280920b60"
+  }
 }

@@ -40,7 +40,14 @@ from agent_insights_quality.email import (
     write_private_report_preview,
 )
 from agent_insights_quality.generated_paths import validate_generated_paths
-from agent_insights_quality.live import LiveRuntime
+from agent_insights_quality.live import LiveRuntime, _azure_cli_token
+from agent_insights_quality.improvement_memory import (
+    build_normalized_summary,
+    validate_analysis_against_summary,
+    validate_published_improvement,
+    write_improvement_memory,
+    write_improvement_preview,
+)
 from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.provisioning import (
     create_promotion_receipt,
@@ -83,6 +90,7 @@ from agent_insights_quality.util import (
     ROOT,
     ContractError,
     atomic_json,
+    atomic_text,
     content_hash,
     file_hash,
     immutable_json,
@@ -90,6 +98,39 @@ from agent_insights_quality.util import (
     runtime_root,
 )
 from agent_insights_quality.validation import validate_repository
+from agent_insights_quality.validation_blob import AzureValidationBlobStore
+from agent_insights_quality.validation_evidence import validate_evidence
+from agent_insights_quality.validation_cleanup import CleanupEngine
+from agent_insights_quality.validation_cleanup_azure import (
+    AzureValidationCleanupBackend,
+)
+from agent_insights_quality.validation_issuer import (
+    GhGitHubStateReader,
+    ReceiptIssuer,
+    github_actions_oidc_subject,
+    validate_receipt as validate_test_agent_receipt,
+)
+from agent_insights_quality.validation_lifecycle import (
+    ACTIVE_BLOB,
+    ACTIVE_CONTAINER,
+    LifecycleJournal,
+    validate_lifecycle,
+)
+from agent_insights_quality.validation_manifest import (
+    prepare_candidate_manifest,
+    stamp_candidate_manifest,
+)
+from agent_insights_quality.validation_policy import (
+    load_trusted_policy,
+    load_validation_policy,
+)
+from agent_insights_quality.validation_rules import (
+    generate_repository_validation_rules,
+)
+from agent_insights_quality.validation_provisioning import (
+    validation_runtime_profile,
+)
+from agent_insights_quality.validation_reconciler import ValidationReconciler
 from agent_insights_quality.work_items import (
     fetch_quality_work_items,
     load_quality_work_items,
@@ -132,6 +173,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     finalize.add_argument("--output-root", type=Path, default=ROOT / "reports")
     finalize.add_argument("--work-items", type=Path, required=True)
+    finalize.add_argument("--improvement-analysis", type=Path)
+    finalize.add_argument(
+        "--prepare-improvement-input",
+        action="store_true",
+    )
     work_items = commands.add_parser("fetch-quality-work-items")
     work_items.add_argument("--query-url", required=True)
     work_items.add_argument("--report-date", required=True, type=date.fromisoformat)
@@ -153,6 +199,18 @@ def build_parser() -> argparse.ArgumentParser:
     published.add_argument("--latest-markdown", type=Path, required=True)
     published.add_argument("--trend", type=Path, required=True)
     published.add_argument("--base-trend", type=Path, required=True)
+    published.add_argument("--improvement-json", type=Path, required=True)
+    published.add_argument("--improvement-markdown", type=Path, required=True)
+    published.add_argument(
+        "--improvement-snapshot-json",
+        type=Path,
+        required=True,
+    )
+    published.add_argument(
+        "--improvement-snapshot-markdown",
+        type=Path,
+        required=True,
+    )
     published.add_argument(
         "--agent-report",
         type=Path,
@@ -169,6 +227,42 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup.add_argument("--plan", type=Path, required=True)
     cleanup.add_argument("--receipt", type=Path)
     cleanup.add_argument("--human-reviewed", action="store_true")
+    prepare_validation = commands.add_parser("prepare-test-agent-validation")
+    prepare_validation.add_argument(
+        "--repository",
+        default="ninghu/agent-insights-quality",
+    )
+    prepare_validation.add_argument("--pr-number", type=int, required=True)
+    prepare_validation.add_argument("--candidate-head-sha", required=True)
+    prepare_validation.add_argument("--candidate-tree-sha", required=True)
+    prepare_validation.add_argument("--workflow-run-id", required=True)
+    prepare_validation.add_argument("--output", type=Path, required=True)
+    validation_rules = commands.add_parser(
+        "generate-test-agent-validation-rules"
+    )
+    validation_rules.add_argument("--check", action="store_true")
+    evidence = commands.add_parser("validate-test-agent-evidence")
+    evidence.add_argument("--evidence", type=Path, required=True)
+    lifecycle = commands.add_parser("validate-test-agent-lifecycle")
+    lifecycle.add_argument("--lifecycle", type=Path, required=True)
+    validation_receipt = commands.add_parser("validate-test-agent-receipt")
+    validation_receipt.add_argument("--receipt", type=Path, required=True)
+    issue_validation_receipt = commands.add_parser(
+        "issue-test-agent-validation-receipt"
+    )
+    issue_validation_receipt.add_argument("--receipt", type=Path, required=True)
+    issue_validation_receipt.add_argument("--storage-account", required=True)
+    reconcile_validation = commands.add_parser(
+        "reconcile-test-agent-validation"
+    )
+    reconcile_validation.add_argument("--storage-account", required=True)
+    reconcile_validation.add_argument("--ownership-nonce", required=True)
+    reconcile_validation.add_argument(
+        "--holder-workflow-reference",
+        required=True,
+    )
+    reconcile_validation.add_argument("--holder-app-reference", required=True)
+    reconcile_validation.add_argument("--holder-run-reference", required=True)
     return parser
 
 
@@ -184,6 +278,124 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def _dispatch(args: argparse.Namespace) -> str | None:
+    if args.command == "generate-test-agent-validation-rules":
+        agents, issues = load_catalogs()
+        generate_repository_validation_rules(
+            agents,
+            issues,
+            check=args.check,
+        )
+        return None
+    if args.command == "prepare-test-agent-validation":
+        agents, issues = load_catalogs()
+        output = _private_validation_output(args.output)
+        manifest = stamp_candidate_manifest(
+            prepare_candidate_manifest(
+                agents=agents,
+                issues=issues,
+                policy=load_validation_policy(),
+                repository=args.repository,
+                pr_number=args.pr_number,
+                candidate_head_sha=args.candidate_head_sha,
+                candidate_tree_sha=args.candidate_tree_sha,
+                workflow_run_id=args.workflow_run_id,
+            )
+        )
+        atomic_json(output, manifest)
+        return json.dumps(
+            {
+                "cycle_id": manifest["cycle_id"],
+                "authority_count": len(manifest["authorities"]),
+                "manifest_digest": manifest["manifest_digest"],
+            },
+            sort_keys=True,
+        )
+    if args.command == "validate-test-agent-evidence":
+        validate_evidence(read_json(args.evidence))
+        return None
+    if args.command == "validate-test-agent-lifecycle":
+        validate_lifecycle(read_json(args.lifecycle))
+        return None
+    if args.command == "validate-test-agent-receipt":
+        validate_test_agent_receipt(read_json(args.receipt))
+        return None
+    if args.command == "issue-test-agent-validation-receipt":
+        receipt = read_json(args.receipt)
+        issuer = ReceiptIssuer(
+            AzureValidationBlobStore(args.storage_account)
+        )
+        if receipt.get("mode") == "shadow":
+            record = issuer.issue_shadow(receipt)
+        elif receipt.get("mode") == "merge":
+            trusted_policy, _ = load_trusted_policy()
+            record = issuer.issue_merge(
+                receipt,
+                trusted_policy=trusted_policy,
+                reader=GhGitHubStateReader(),
+                oidc_subject=github_actions_oidc_subject(),
+                environment=os.environ,
+            )
+        else:
+            raise ContractError("Validation receipt mode is invalid")
+        return json.dumps(
+            {
+                "mode": receipt["mode"],
+                "authorizes_merge": receipt["authorizes_merge"],
+                "receipt_digest": receipt["receipt_digest"],
+                "blob_version_id": record.version_id,
+            },
+            sort_keys=True,
+        )
+    if args.command == "reconcile-test-agent-validation":
+        store = AzureValidationBlobStore(args.storage_account)
+        active = store.read_optional(ACTIVE_CONTAINER, ACTIVE_BLOB)
+        if active is None:
+            return json.dumps({"state": "NO_ACTIVE_CYCLE"}, sort_keys=True)
+        validate_lifecycle(active.value)
+        if active.value["state"] in {
+            "CLEAN",
+            "FAILED_CLEAN",
+            "RECEIPT_ISSUED",
+        }:
+            return json.dumps({"state": active.value["state"]}, sort_keys=True)
+        project_name = active.value["project"]["name"]
+        if not isinstance(project_name, str) or not project_name:
+            raise ContractError("Validation cleanup Project identity is missing")
+        profile = validation_runtime_profile(
+            project_name,
+            cycle_id=active.value["cycle_id"],
+        )
+        policy = load_validation_policy()
+        journal = LifecycleJournal(
+            store,
+            policy,
+            mirror_root=(
+                runtime_root() / "test-agent-validation" / "lifecycle"
+            ),
+        )
+        backend = AzureValidationCleanupBackend(
+            profile=profile,
+            runtime_topology=active.value["runtime_topology"],
+            resources=active.value["resources"],
+            token_provider=_azure_cli_token,
+        )
+        try:
+            state = ValidationReconciler(
+                journal=journal,
+                cleanup=CleanupEngine(backend),
+                policy=policy,
+            ).reconcile(
+                ownership_nonce=args.ownership_nonce,
+                holder_workflow_reference=args.holder_workflow_reference,
+                holder_app_reference=args.holder_app_reference,
+                holder_run_reference=args.holder_run_reference,
+                alert=lambda message: print(message),
+            )
+        except ContractError as error:
+            if str(error) != "Active validation lease is not stale":
+                raise
+            state = "ACTIVE"
+        return json.dumps({"state": state}, sort_keys=True)
     if args.command == "validate":
         validate_repository()
         return catalog_summary()
@@ -302,12 +514,17 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         profile = RuntimeProfile.from_env(profile_name)
         profile.assert_insights_connection()
         profile.assert_test_agent_model(agent_model_contract(agents))
+        test_region = profile.resolve_test_region()
         sync_registry(profile)
         registry = load_registry(
             profile.registry_path,
             profile=profile_name,
             catalog_hashes=hashes,
         )
+        if registry["test_region"] != test_region:
+            raise ContractError(
+                "Live Foundry Project region does not match the deployment registry"
+            )
         runtime = LiveRuntime(profile)
         seed = int(hashes["issues"].split(":")[1][:16], 16)
         run_contract_digest = _run_contract_digest(
@@ -321,6 +538,8 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             work_items=work_items,
             policy=policy,
             seed=seed,
+            test_region=test_region,
+            test_region_registry=registry["test_region"],
         )
         checkpoint_store = VersionCheckpointStore(
             state / "stage-checkpoints",
@@ -364,6 +583,8 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                     delivery_mode=delivery_mode,
                     insight_lookback_hours=policy.insight_lookback_hours,
                     telemetry_resource_set=policy.telemetry_resource_set,
+                    test_region=test_region,
+                    test_region_registry=registry["test_region"],
                     catalog_hashes=hashes,
                     agent_catalog=agents,
                     issue_catalog=issues,
@@ -507,6 +728,40 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             assessments,
             baseline_assessments,
         )
+        improvement_analysis = None
+        if manifest["profile"] == "daily":
+            normalized_summary = build_normalized_summary(report)
+            analysis_input = (
+                args.manifest.parent / "insight-engine-improvement-input.json"
+            )
+            atomic_json(analysis_input, normalized_summary)
+            if args.prepare_improvement_input:
+                if args.improvement_analysis is not None:
+                    raise ContractError(
+                        "Improvement input preparation does not accept analysis output"
+                    )
+                return json.dumps(
+                    {"improvement_analysis_input": str(analysis_input)},
+                    sort_keys=True,
+                )
+            if args.improvement_analysis is None:
+                raise ContractError(
+                    "Daily finalization requires a schema-valid GPT-5.6 Sol "
+                    "Insight Engine improvement analysis; normalized input was "
+                    f"written to {analysis_input}"
+                )
+            improvement_analysis = read_json(args.improvement_analysis)
+            validate_analysis_against_summary(
+                improvement_analysis,
+                normalized_summary,
+            )
+        elif (
+            args.improvement_analysis is not None
+            or args.prepare_improvement_input
+        ):
+            raise ContractError(
+                "Insight Engine improvement analysis applies only to Daily"
+            )
         if manifest["profile"] == "daily":
             apply_score_comparison(report, args.output_root / "trend.json")
         else:
@@ -526,7 +781,31 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             / manifest["report_date"].replace("-", os.sep)
             / manifest["run_id"]
         )
-        write_report(report, output)
+        write_report(
+            report,
+            output,
+            include_improvement_link=not test_run,
+        )
+        if improvement_analysis is not None:
+            if test_run:
+                write_improvement_preview(
+                    report=report,
+                    analysis=improvement_analysis,
+                    output=(
+                        args.manifest.parent
+                        / "insight-engine-improvement-preview"
+                    ),
+                )
+            else:
+                write_improvement_memory(
+                    report=report,
+                    analysis=improvement_analysis,
+                    reports_root=args.output_root,
+                    living_state_path=(
+                        args.output_root
+                        / "insight-engine-improvement.json"
+                    ),
+                )
         recipient = resolve_recipient(test_run=test_run)
         runtime_profile = RuntimeProfile.from_env(manifest["profile"])
         adx_publication = (
@@ -561,17 +840,20 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             test_run=test_run,
         )
         report["delivery"]["content_digest"] = request["content_digest"]
-        write_report(report, output)
+        write_report(
+            report,
+            output,
+            include_improvement_link=not test_run,
+        )
         private_request = args.manifest.parent / "email-send-request.json"
         atomic_json(private_request, request)
         private_preview = args.manifest.parent / "report-preview.html"
         write_private_report_preview(request, private_preview)
         if manifest["profile"] == "daily" and not test_run:
             atomic_json(args.output_root / "latest.json", report)
-            (args.output_root / "latest.md").write_text(
+            atomic_text(
+                args.output_root / "latest.md",
                 (output / "report.md").read_text(encoding="utf-8"),
-                encoding="utf-8",
-                newline="\n",
             )
             update_trend(report, args.output_root / "trend.json")
         return json.dumps(
@@ -657,6 +939,17 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         }
         if actual_agent_reports != expected_agent_reports:
             raise ContractError("Published per-Agent reports are inconsistent")
+        validate_published_improvement(
+            report=report,
+            living_state=read_json(args.improvement_json),
+            living_markdown=args.improvement_markdown.read_text(
+                encoding="utf-8"
+            ),
+            snapshot=read_json(args.improvement_snapshot_json),
+            snapshot_markdown=args.improvement_snapshot_markdown.read_text(
+                encoding="utf-8"
+            ),
+        )
         trend = read_json(args.trend)
         base_trend = read_json(args.base_trend)
         matching_days = [
@@ -696,6 +989,16 @@ def _dispatch(args: argparse.Namespace) -> str | None:
     raise AssertionError("unreachable")
 
 
+def _private_validation_output(path: Path) -> Path:
+    resolved = path.expanduser().resolve()
+    private = runtime_root()
+    if resolved != private and private not in resolved.parents:
+        raise ContractError(
+            "Validation candidate manifests must stay under the private runtime root"
+        )
+    return resolved
+
+
 def _run_contract_digest(
     *,
     profile_name: str,
@@ -708,6 +1011,8 @@ def _run_contract_digest(
     work_items: dict[str, Any],
     policy: Any,
     seed: int,
+    test_region: str,
+    test_region_registry: str,
 ) -> str:
     runtime_files = {
         path.relative_to(ROOT).as_posix(): file_hash(path)
@@ -738,6 +1043,8 @@ def _run_contract_digest(
             "agent_start_stagger_seconds": policy.agent_start_stagger_seconds,
             "telemetry_resource_set": policy.telemetry_resource_set,
             "seed": seed,
+            "test_region": test_region,
+            "test_region_registry": test_region_registry,
             "runtime_files": runtime_files,
         }
     )

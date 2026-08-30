@@ -51,7 +51,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "title", "agent", "category", "severity", "implementation", "root_cause", "expected_fix", "trace_contract"],
+        "required": ["id", "title", "agent", "category", "severity", "implementation", "validation_mode", "root_cause", "expected_fix", "trace_contract"],
         "properties": {
           "id": {"type": "string", "pattern": "^issue-[0-9]{3}$"},
           "title": {"type": "string", "minLength": 5, "maxLength": 120},
@@ -59,6 +59,7 @@
           "category": {"enum": ["tool_call_failures", "latency", "cost_tokens", "reliability_errors", "hallucinations", "output_quality", "context_memory", "safety_guardrails"]},
           "severity": {"enum": ["high", "medium", "low"]},
           "implementation": {"type": "string", "pattern": "^agents/[a-z-]+/issues/issue-[0-9]{3}$"},
+          "validation_mode": {"enum": ["deterministic", "model_mediated"]},
           "root_cause": {"type": "string", "minLength": 20},
           "expected_fix": {"type": "string", "minLength": 20},
           "trace_contract": {

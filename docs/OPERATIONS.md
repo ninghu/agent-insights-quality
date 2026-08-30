@@ -11,6 +11,67 @@ private artifact root.
 | `daily` | `agent-insights-quality` | Weekday qualification |
 | `staging` | `agent-insights-quality-staging` | Full qualification before promotion |
 
+`r03` is the final legacy staging run. The persistent staging row remains only while the external
+new-only Daily receipt cutover is pending; do not start another staging run or use it as fallback.
+
+## Test Agent Validation
+
+Test Agent Validation reuses the staging account, GPT-5.4 mini deployment, ACR, storage, and read-only
+`g29` telemetry, but creates one opaque temporary Project and 41 independent Agent endpoints per
+candidate. It creates no monitor and does not run Agent Insights, Sol assessment, score/report
+generation, ADX publication, email, or Daily.
+
+The executable authority is each `traffic.json` `validation_rules` contract. Its automatic digest
+includes complete setup/probe request bodies, ordered conversation grouping, parameters, fixtures,
+semantic/trace/identity assertions, reviewed mode, `n`, `k`, runtime kind, framework, and model
+contract. Baseline is `5/5`; deterministic issues are `5/5` with paired-v0 `0/5`; model-mediated
+issues are `5/7` with paired-v0 `0/7`. `minimum_traces` keeps its Daily meaning and is never used as a
+validation attempt threshold.
+
+Before any Project create, acquire the account-wide infinite lease and record measured RPM/TPM,
+25-percent and absolute headroom, the complete endpoint envelope, inner model fan-out, and bounded
+concurrency. Provision at most eight, query telemetry at most four, and allow one scenario
+attempt per runtime. Every attempt gets a fresh conversation identity; issue and v0 receive the same
+matrix. Evidence stores completion separately from a nullable defect observation.
+
+The lifecycle is:
+
+```text
+LEASED -> PREFLIGHT -> CREATING -> VALIDATING -> FROZEN
+  -> (REVIEWED | SHADOW_REVIEW_SKIPPED) -> REVALIDATING
+  -> FINAL_CHECKS -> CLEANING -> CLEAN -> RECEIPT_ISSUED
+```
+
+Every mutation writes an immutable event snapshot first and then updates the active journal with the
+lease plus current ETag. A stale/expired cycle can be taken over only by the cleanup reconciler using
+a fresh lease ID, nonce, and epoch. The 72-hour expiration never extends.
+
+Cleanup records intent first and deletes responses, conversations/sessions, Agent versions and
+Agents, Hosted deployments/identities/blueprints, connections, role assignments, cycle principals,
+ACR tags and unshared manifests, then the Project. Final proof requires Project `404`, no nonce-owned
+resources, sessions/responses, cycle tags, or incomplete reviewed cascades. Ambiguity enters
+`CLEANUP_BLOCKED` and keeps the account unavailable.
+
+Shadow receipts bind candidate-head policy and always set `authorizes_merge=false` and
+`default_branch_trust_anchor_present=false`. Only the protected default-branch issuer can create a
+merge receipt, after re-querying the exact final PR head/tree, trusted policy/workflow/App/environment,
+one comprehensive review, targeted verification, CI, 41/41 evidence, and immutable `CLEAN` snapshot.
+Receipt creation uses `If-None-Match:*`; an existing different digest fails closed.
+
+### External Daily receipt cutover
+
+Test Agent Validation does not change Daily ownership. The separate Daily owner must first deploy and
+dry-run a **new-only** validation-receipt consumer; no process may read both legacy promotion receipts
+and validation receipts. Under the Daily quiescence lock, prove no run/provision/publication is active,
+pause the scheduler, switch the active source atomically, and remain new-only on failure.
+
+After re-verifying default-branch policy/workflow/App/check provenance, 41 current digests, and the
+immutable `CLEAN` snapshot, provision Daily once and perform only read-only readiness and registry
+reconciliation. Do not send smoke traffic. For this migration only, after readiness succeeds, the
+Daily owner may run the explicitly requested isolated `--test-run --rerun N` email-only Daily Test.
+It is external, non-gating, and writes no ADX, official report/trend, or pull request. Only then may
+legacy staging resources and code be removed forward-only; staging is never a fallback.
+
 Both use 90-day telemetry and artifact retention. The shared ADX quality-history database retains
 sanitized daily results and explanations for 730 days and keeps 90 days in hot cache.
 
@@ -66,7 +127,7 @@ issues package their complete `source/` tree together with the shared requiremen
 contract. A deployed issue version contains only its reviewed defect and no dormant branches for
 other issues, so source-aware proposed fixes see the exact defective implementation.
 
-Run all 36 staging issues and complete human review before provisioning or changing daily mappings:
+The following command is retained for legacy migration history only and must not be run after `r03`:
 
 ```powershell
 python -m agent_insights_quality run-full --report-date <Pacific YYYY-MM-DD> `
@@ -108,6 +169,13 @@ Azure deployment identifiers to Git.
 python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD> `
   --work-items $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
 ```
+
+Before traffic, Daily performs a read-only ARM GET of its concrete Foundry Project and resolves the
+returned `location` through Azure location metadata. That live Project is the sole region source; the
+deployment registry is only a required normalized cross-check and is never a fallback. The current
+canonical display is `WestUS2`. Report/email generation fails if the live location, metadata display,
+or registry match is missing. This contract is intentionally one scalar region: no experiments,
+region arrays, comparison runs, or region-scoped report directories.
 
 The runner validates catalog hashes against the protected daily registry, resets each monitor once,
 waits for the reviewed `0.1`-hour clean interval, runs `v0`, then runs four deterministic issues per
@@ -180,7 +248,8 @@ privacy-safe per-request assertion outcomes, full-request trace proof, and separ
 proof. Use GPT-5.6 Sol with
 `src/agent_insights_quality/prompts/assessment.md`, then finalize:
 
-Run manifest schema `4.0.0` binds both the official/test-email delivery mode and verified source,
+Run manifest schema `5.0.0` binds the live Project region, registry cross-check, both the
+official/test-email delivery mode, and verified source,
 activation, endpoint, semantic, and trace evidence. Superseded manifest shapes are rejected.
 Newly finalized reports use schema `2.0.0` and require verified source integrity for every complete
 `PASS` or `FAIL`; immutable historical reports are not rewritten or accepted as current output.
@@ -203,6 +272,15 @@ comparison, and finding details without displaying the internal `PASS` or `FAIL`
 Finalization also writes private `report-preview.html` beside the run manifest. Staging human review
 uses this preview because it is rendered by the exact same Outlook-safe HTML path as the daily email.
 It may contain private work-item context and runtime links, so it must never be committed.
+
+For Daily, first run `finalize --prepare-improvement-input` after assessments. Give only that
+public-safe normalized file to GPT-5.6 Sol with
+`src/agent_insights_quality/prompts/improvement.md`, then rerun finalization with
+`--improvement-analysis <private-json>`. Schema and citation validation reject any pattern not backed
+by at least two distinct Agents with `insight_engine` ownership. Deterministic code owns new/active/
+watching/resolved/reopened/not-evaluated transitions. The stable JSON/Markdown, immutable dated
+snapshot, Daily report, latest views, and trend are submitted in one generated-only pull request.
+Optional email-only tests write only a private improvement preview.
 
 For `daily`, finalization also derives one public-safe payload and publishes it atomically to ADX.
 The v2 payload exposes logical `AIQDailyRuns`, `AIQDailyAgents`, `AIQDailyBaselines`,

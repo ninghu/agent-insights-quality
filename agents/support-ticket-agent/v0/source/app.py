@@ -15,10 +15,12 @@ from opentelemetry.trace import Status, StatusCode
 from openai import AsyncOpenAI
 
 from .observability import configure_observability
+from .runtime_identity import require_foundry_runtime_identity
 
 
-configure_observability("support-ticket-agent")
-tracer = trace.get_tracer("support-ticket-agent")
+RUNTIME_IDENTITY = require_foundry_runtime_identity()
+configure_observability(RUNTIME_IDENTITY.name, RUNTIME_IDENTITY.version)
+tracer = trace.get_tracer(RUNTIME_IDENTITY.name, RUNTIME_IDENTITY.version)
 app = ResponsesAgentServerHost()
 credential = DefaultAzureCredential()
 ISSUE_ID = "v0"
@@ -55,7 +57,7 @@ def input_text(value: Any) -> str:
 
 
 def tool(name: str, result: dict) -> dict:
-    with tracer.start_as_current_span(f"support.tool.{name}") as span:
+    with RUNTIME_IDENTITY.start_span(tracer, f"support.tool.{name}") as span:
         span.set_attribute("gen_ai.operation.name", "execute_tool")
         span.set_attribute("gen_ai.tool.name", name)
         span.set_attribute("tool.ok", bool(result.get("ok", True)))
@@ -71,7 +73,7 @@ def tool(name: str, result: dict) -> dict:
 
 
 async def model_response(prompt: str, max_output_tokens: int) -> str:
-    with tracer.start_as_current_span("support.model.dispatch") as span:
+    with RUNTIME_IDENTITY.start_span(tracer, "support.model.dispatch") as span:
         model = os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-5.4-mini")
         span.set_attribute("gen_ai.operation.name", "chat")
         span.set_attribute("gen_ai.request.model", model)
@@ -161,9 +163,10 @@ async def responses(
 ):
     del cancellation_signal
     text = input_text(payload.get("input"))
-    with tracer.start_as_current_span("support.dispatch") as span:
+    with RUNTIME_IDENTITY.start_span(tracer, "support.dispatch") as span:
         span.set_attribute("gen_ai.operation.name", "invoke_agent")
-        span.set_attribute("gen_ai.agent.name", "support-ticket-agent")
+        span.set_attribute("gen_ai.agent.name", RUNTIME_IDENTITY.name)
+        span.set_attribute("gen_ai.agent.version", RUNTIME_IDENTITY.version)
         span.set_attribute("gen_ai.response.id", context.response_id)
         span.set_attribute("issue.id", ISSUE_ID)
         output_succeeded = False

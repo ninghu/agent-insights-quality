@@ -26,9 +26,13 @@ from agent_insights_quality.shadow_scoring import (
 )
 from agent_insights_quality.selection import DAILY_ISSUES_PER_AGENT
 from agent_insights_quality.util import ROOT, ContractError, read_yaml
+from agent_insights_quality.validation_policy import (
+    load_trusted_policy,
+    load_validation_policy,
+)
 
 _REMOVED_TERMS = re.compile(
-    r"(?i)\b(?:" + "s" + r"cenario|" + "s" + r"cn)\b|aiq-" + "s" + "cn"
+    r"(?i)\b" + "s" + r"cn\b|aiq-" + "s" + "cn"
 )
 def validate_repository() -> None:
     _, issues = load_catalogs()
@@ -43,6 +47,7 @@ def validate_repository() -> None:
     _validate_reporting_policy()
     _validate_removed_terms()
     _validate_sensitive_content()
+    _validate_test_agent_validation_boundary()
 
 
 def _tracked_text_files() -> list[Path]:
@@ -138,4 +143,53 @@ def _validate_sensitive_content() -> None:
     if violations:
         raise ContractError(
             "Potential private or sensitive values found in: " + ", ".join(violations)
+        )
+
+
+def _validate_test_agent_validation_boundary() -> None:
+    policy = load_validation_policy()
+    trusted, _ = load_trusted_policy()
+    if (
+        policy.authority_count != 41
+        or policy.telemetry_resource_set != "g29"
+        or trusted["receipt"]["create_once"] is not True
+    ):
+        raise ContractError("Test Agent Validation policy is not the reviewed gate")
+    forbidden = (
+        "agent_insights_quality.adx",
+        "agent_insights_quality.assessment",
+        "agent_insights_quality.email",
+        "agent_insights_quality.reporting",
+        "ensure_monitor(",
+        "start_insights_run(",
+        "publish_daily_report",
+    )
+    violations = []
+    for path in sorted(
+        (ROOT / "src" / "agent_insights_quality").glob("validation_*.py")
+    ):
+        content = path.read_text(encoding="utf-8")
+        if any(value in content for value in forbidden):
+            violations.append(path.relative_to(ROOT).as_posix())
+    for path in (
+        ROOT / ".github" / "workflows" / "test-agent-validation.yml",
+        ROOT / ".github" / "workflows" / "test-agent-validation-receipt.yml",
+        ROOT / ".github" / "workflows" / "test-agent-validation-reconciler.yml",
+    ):
+        content = path.read_text(encoding="utf-8")
+        if any(
+            value in content.casefold()
+            for value in (
+                "run-daily",
+                "run-full",
+                "publish-adx",
+                "create-promotion-receipt",
+                "agent_insight_monitor",
+            )
+        ):
+            violations.append(path.relative_to(ROOT).as_posix())
+    if violations:
+        raise ContractError(
+            "Test Agent Validation crosses its report-free boundary: "
+            + ", ".join(violations)
         )

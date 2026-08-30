@@ -65,10 +65,32 @@ diagnostic label, or claim as activation proof.
 Evaluate every object in `observed_insights` independently in `card_evaluations`. Echo each card's
 reference, title, category, and severity exactly. Use one card-level verdict, finding type, ownership,
 field map, confidence, and reasoning per generated card. The set of card references must exactly match
-the package. Keep the top-level assessment as the expected-issue result.
+the package. Keep the top-level assessment as the expected-issue result. Write the top-level
+`reasoning` as one public-safe sentence stating why the expected issue is Correct, Partially Correct,
+Incorrect, Noise, Duplicate, Missing, or Incomplete; downstream reporting renders it verbatim as the
+"Why" explanation for that expected issue and it must never contain raw prompts, responses, traces,
+provider IDs, or private resource identifiers.
 If a card's linked proof has no terminal response and output, use card-level `incomplete` /
 `INCOMPLETE`; the top level must also remain `INCOMPLETE`. A top-level `MATCHED` result requires one
 terminal-proven card whose card-level result is also `MATCHED`; NOISE-only cards cannot prove a match.
+
+For every `PARTIAL` or `MISMATCHED` card, set `field_reasons` to an object whose keys are exactly the
+fields that failed in that card's `fields` map (no more, no fewer) and whose values are one specific,
+public-safe sentence explaining why that individual field failed. Do not add a reason for a passing
+field, and do not omit a reason for any failed field.
+For every `DUPLICATE` card, set `duplicate_of` to the `reference` of the other card in the same
+issue's `card_evaluations` that is the primary attributable card for the shared root (its own
+finding_type must be `MATCHED`, `PARTIAL`, or `MISMATCHED`). A `DUPLICATE` card can never name itself
+or another `DUPLICATE`/`NOISE`/`INCOMPLETE` card as its primary; if no such primary card exists in this
+issue's evidence, use `NOISE` instead of `DUPLICATE`.
+
+An expected issue whose only cards are `NOISE` and/or `DUPLICATE` is still `MISSING` at the top level:
+Noise and Duplicate never satisfy expected issue coverage on their own. Only an attributable
+`MATCHED`, `PARTIAL`, or `MISMATCHED` card covers the expected issue. Compute Noise, Duplicate, and
+Missing independently of one another; do not let one classification suppress or imply another. A
+`NOISE` card generated while exercising one issue's version is never that issue's match merely because
+of where it was observed; it still requires its own `finding_type`/`ownership` explanation of why it
+does not correspond to any reviewed issue.
 
 Set one customer-facing `finding_type`:
 

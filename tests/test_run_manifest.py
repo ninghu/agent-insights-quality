@@ -71,13 +71,15 @@ def _manifest(
         )
         return value
     value = {
-        "schema_version": "4.0.0",
+        "schema_version": "5.0.0",
         "run_id": run_id,
         "profile": profile,
         "delivery_mode": delivery_mode,
         "report_date": "2026-08-28",
         "insight_lookback_hours": 0.1,
         "telemetry_resource_set": "g29",
+        "test_region": "WestUS2",
+        "test_region_registry": "WestUS2",
         "catalog_hashes": hashes,
         "source_integrity": {
             "verified": True,
@@ -143,6 +145,16 @@ def test_manifest_rejects_superseded_schema() -> None:
         {key: item for key, item in manifest.items() if key != "manifest_hash"}
     )
     with pytest.raises(ContractError, match="Run manifest is invalid"):
+        validate_manifest(manifest)
+
+
+def test_manifest_rejects_live_project_registry_region_mismatch() -> None:
+    manifest = _manifest()
+    manifest["test_region_registry"] = "EastUS"
+    manifest["manifest_hash"] = content_hash(
+        {key: item for key, item in manifest.items() if key != "manifest_hash"}
+    )
+    with pytest.raises(ContractError, match="registry cross-check"):
         validate_manifest(manifest)
 
 

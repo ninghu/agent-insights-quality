@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -16,7 +17,7 @@ from agent_insights_quality.azure_cli import azure_cli
 def deploy_infrastructure(
     environment: Mapping[str, str] | None = None,
 ) -> None:
-    del environment
+    values = environment or os.environ
     progress = ProgressReporter("aiq-infra")
     progress.emit("full infrastructure reconciliation started")
     terra_model_version = resolve_latest_terra_version()
@@ -25,6 +26,21 @@ def deploy_infrastructure(
     ]
     telemetry_resource_set = load_automation_policy().telemetry_resource_set
     principal_id = _current_principal_id(progress)
+    validation_principal_id = str(
+        values.get("AIQ_VALIDATION_PRINCIPAL_ID") or ""
+    ).strip()
+    if not validation_principal_id:
+        raise ContractError(
+            "Protected validation principal identity is required for infrastructure"
+        )
+    validation_receipt_principal_id = str(
+        values.get("AIQ_VALIDATION_RECEIPT_PRINCIPAL_ID") or ""
+    ).strip()
+    if not validation_receipt_principal_id:
+        raise ContractError(
+            "Protected validation receipt principal identity is required for "
+            "infrastructure"
+        )
     _deploy_template(
         ROOT / "infra" / "main.bicep",
         [
@@ -35,6 +51,8 @@ def deploy_infrastructure(
             f"telemetryGeneration={telemetry_resource_set}",
             "automationOwner=ninghu",
             f"automationPrincipalId={principal_id}",
+            f"validationPrincipalId={validation_principal_id}",
+            f"validationReceiptPrincipalId={validation_receipt_principal_id}",
         ],
         progress=progress,
     )

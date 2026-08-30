@@ -57,9 +57,42 @@
               "linked_traces": {"type": "boolean"}
             }
           },
+          "field_reasons": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "root_cause": {"type": "string", "minLength": 1, "maxLength": 300},
+              "title": {"type": "string", "minLength": 1, "maxLength": 300},
+              "description": {"type": "string", "minLength": 1, "maxLength": 300},
+              "category": {"type": "string", "minLength": 1, "maxLength": 300},
+              "severity": {"type": "string", "minLength": 1, "maxLength": 300},
+              "proposed_fix": {"type": "string", "minLength": 1, "maxLength": 300},
+              "linked_traces": {"type": "string", "minLength": 1, "maxLength": 300}
+            }
+          },
+          "duplicate_of": {
+            "type": ["string", "null"],
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
           "confidence": {"type": "number", "minimum": 0, "maximum": 1},
           "reasoning": {"type": "string", "minLength": 1, "maxLength": 1000}
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {"finding_type": {"enum": ["PARTIAL", "MISMATCHED"]}},
+              "required": ["finding_type"]
+            },
+            "then": {"required": ["field_reasons"]}
+          },
+          {
+            "if": {
+              "properties": {"finding_type": {"const": "DUPLICATE"}},
+              "required": ["finding_type"]
+            },
+            "then": {"required": ["duplicate_of"]}
+          }
+        ]
       }
     },
     "confidence": {"type": "number", "minimum": 0, "maximum": 1},

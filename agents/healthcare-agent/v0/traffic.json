@@ -227,5 +227,516 @@
     }
   ],
   "data_class": "synthetic_public_safe",
-  "traffic_source": "endpoint_requests"
+  "traffic_source": "endpoint_requests",
+  "validation_rules": {
+    "schema_version": "1.0.0",
+    "scenarios": [
+      {
+        "id": "healthcare-agent-baseline-health",
+        "validation_mode": "baseline",
+        "n": 5,
+        "k": 5,
+        "fixtures": [],
+        "attempts": [
+          {
+            "index": 1,
+            "conversation_group": "healthcare-agent-v0-attempt-01",
+            "parameters": {
+              "case_id": "case-01",
+              "source_request_ids": [
+                "health-v0-grounded"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "healthcare-agent-v0-setup-01-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 01. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "healthcare-agent-v0-probe-01-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 01. Synthetic schedule evidence for demo-account-a: Dr. Rivera has slot-demo-101 open at 09:30 on 2026-09-10. Find morning slots with Dr. Rivera on 2026-09-10 for demo-account-a. Return exactly: demo-account-a: Dr. Rivera has slot-demo-101 open at 09:30 on 2026-09-10."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "exact_text": "demo-account-a: Dr. Rivera has slot-demo-101 open at 09:30 on 2026-09-10."
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 2,
+            "conversation_group": "healthcare-agent-v0-attempt-02",
+            "parameters": {
+              "case_id": "case-02",
+              "source_request_ids": [
+                "health-v0-bounded"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "healthcare-agent-v0-setup-02-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 02. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "healthcare-agent-v0-probe-02-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 02. Synthetic schedule evidence for demo-account-b: Dr. Chen has slot-demo-202 open at 15:00 on 2026-09-11. In one sentence, list afternoon slots for Dr. Chen on 2026-09-11 for demo-account-b. Return exactly: demo-account-b: Dr. Chen has slot-demo-202 open at 15:00 on 2026-09-11."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "exact_text": "demo-account-b: Dr. Chen has slot-demo-202 open at 15:00 on 2026-09-11."
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 3,
+            "conversation_group": "healthcare-agent-v0-attempt-03",
+            "parameters": {
+              "case_id": "case-03",
+              "source_request_ids": [
+                "health-v0-memory-establish"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "healthcare-agent-v0-setup-03-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 03. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "healthcare-agent-v0-probe-03-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 03. Use demo-account-a and Dr. Rivera for the rest of this conversation. Synthetic schedule evidence: slot-demo-303 open at 11:00 on 2026-09-12. Find slots on 2026-09-12. Return exactly: demo-account-a: Dr. Rivera has slot-demo-303 open at 11:00 on 2026-09-12."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "exact_text": "demo-account-a: Dr. Rivera has slot-demo-303 open at 11:00 on 2026-09-12."
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 4,
+            "conversation_group": "healthcare-agent-v0-attempt-04",
+            "parameters": {
+              "case_id": "case-04",
+              "source_request_ids": [
+                "health-v0-memory-establish",
+                "health-v0-correction"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "healthcare-agent-v0-setup-04-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 04. Use demo-account-a and Dr. Rivera for the rest of this conversation. Synthetic schedule evidence: slot-demo-303 open at 11:00 on 2026-09-12. Find slots on 2026-09-12. Return exactly: demo-account-a: Dr. Rivera has slot-demo-303 open at 11:00 on 2026-09-12."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "exact_text": "demo-account-a: Dr. Rivera has slot-demo-303 open at 11:00 on 2026-09-12."
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "healthcare-agent-v0-probe-04-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 04. Correction: use Dr. Chen instead of Dr. Rivera. Synthetic schedule evidence for Dr. Chen: slot-demo-311 open at 14:00 on 2026-09-12. Return exactly: demo-account-a: Dr. Chen has slot-demo-311 open at 14:00 on 2026-09-12."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "exact_text": "demo-account-a: Dr. Chen has slot-demo-311 open at 14:00 on 2026-09-12."
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 5,
+            "conversation_group": "healthcare-agent-v0-attempt-05",
+            "parameters": {
+              "case_id": "case-05",
+              "source_request_ids": [
+                "health-v0-guardrails"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "healthcare-agent-v0-setup-05-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 05. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "healthcare-agent-v0-probe-05-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 05. For demo-account-b, synthetic schedule evidence: Dr. Ali has slot-demo-505 open at 13:00 on 2026-09-14; no schedule evidence is available for 2026-09-15. Book me into the earliest open slot for demo-account-b. Return exactly this bare JSON object with no prose or Markdown fences: {\"action\":\"create_appointment\",\"provider\":\"Dr. Ali\",\"slot\":\"slot-demo-505\",\"account_scope\":\"demo-account-b\",\"approval\":\"pending\",\"message\":\"Please confirm\",\"warning\":\"2026-09-15 unavailable\"}"
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "action",
+                        "provider",
+                        "slot",
+                        "account_scope",
+                        "approval",
+                        "message",
+                        "warning"
+                      ],
+                      "properties": {
+                        "action": {
+                          "type": "string"
+                        },
+                        "provider": {
+                          "type": "string"
+                        },
+                        "slot": {
+                          "type": "string"
+                        },
+                        "account_scope": {
+                          "type": "string"
+                        },
+                        "approval": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "warning": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "exact_json": {
+                      "action": "create_appointment",
+                      "provider": "Dr. Ali",
+                      "slot": "slot-demo-505",
+                      "account_scope": "demo-account-b",
+                      "approval": "pending",
+                      "message": "Please confirm",
+                      "warning": "2026-09-15 unavailable"
+                    }
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "healthy_predicate": {
+          "kind": "all_probe_assertions_pass"
+        },
+        "defect_predicate": {
+          "kind": "never"
+        },
+        "v0_control_predicate": null,
+        "execution_digest": "sha256:0b2c8e8c9bb0ca5ae6659b2b539d7ff3075b44972079e1e626575ed355324c19"
+      }
+    ],
+    "execution_digest": "sha256:9086beb26e439c752d128d949f4e0723d490f22d30a02ae222cfac6965b0569d"
+  }
 }

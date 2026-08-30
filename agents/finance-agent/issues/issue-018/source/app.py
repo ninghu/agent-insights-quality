@@ -25,11 +25,13 @@ from pydantic import Field
 
 from .observability import configure_observability
 from .retry import ExactTransientRetry
+from .runtime_identity import require_foundry_runtime_identity
 from .tools import ACCOUNTS
 
 
-configure_observability("finance-agent")
-tracer = trace.get_tracer("finance-agent")
+RUNTIME_IDENTITY = require_foundry_runtime_identity()
+configure_observability(RUNTIME_IDENTITY.name, RUNTIME_IDENTITY.version)
+tracer = trace.get_tracer(RUNTIME_IDENTITY.name, RUNTIME_IDENTITY.version)
 transient_attempts: set[tuple[int, str]] = set()
 transient_lock = threading.Lock()
 
@@ -46,7 +48,7 @@ def get_balance(
     account_id: Annotated[str, Field(description="Required synthetic account identifier.")],
 ) -> dict:
     """Return the authoritative balance for exactly one synthetic account."""
-    with tracer.start_as_current_span("finance.tool.get_balance"):
+    with RUNTIME_IDENTITY.start_span(tracer, "finance.tool.get_balance"):
         record = ACCOUNTS.get(account_id)
         if record is None:
             return finish_tool_span(
@@ -64,7 +66,7 @@ def get_balance_with_transient(
     account_id: Annotated[str, Field(description="Required synthetic account identifier.")],
 ) -> dict:
     """Return one retryable failure, then the authoritative synthetic balance."""
-    with tracer.start_as_current_span("finance.tool.get_balance_with_transient") as span:
+    with RUNTIME_IDENTITY.start_span(tracer, "finance.tool.get_balance_with_transient") as span:
         key = (span.get_span_context().trace_id, account_id)
         with transient_lock:
             first_attempt = key not in transient_attempts
@@ -92,7 +94,7 @@ def get_budget_summary(
     account_id: Annotated[str, Field(description="Required synthetic account identifier.")],
 ) -> dict:
     """Return bounded synthetic budget data for exactly one account."""
-    with tracer.start_as_current_span("finance.tool.get_budget_summary"):
+    with RUNTIME_IDENTITY.start_span(tracer, "finance.tool.get_budget_summary"):
         record = ACCOUNTS.get(account_id)
         if record is None:
             return finish_tool_span(
@@ -116,7 +118,7 @@ def list_monthly_items(
     account_id: Annotated[str, Field(description="Required synthetic account identifier.")],
 ) -> dict:
     """Return a small synthetic monthly item list for exactly one account."""
-    with tracer.start_as_current_span("finance.tool.list_monthly_items"):
+    with RUNTIME_IDENTITY.start_span(tracer, "finance.tool.list_monthly_items"):
         if account_id not in ACCOUNTS:
             return finish_tool_span(
                 "list_monthly_items",
@@ -168,7 +170,7 @@ class MissingTransientRetry(ChatMiddleware):
             "ok": False,
             "error": {"code": "temporary_unavailable", "retryable": True},
         }
-        with tracer.start_as_current_span(
+        with RUNTIME_IDENTITY.start_span(tracer,
             "finance.tool.get_balance_with_transient"
         ) as span:
             span.set_attribute("gen_ai.operation.name", "execute_tool")
@@ -189,7 +191,7 @@ class MissingTransientRetry(ChatMiddleware):
             "The transient lookup stopped after temporary_unavailable "
             "without a retry."
         )
-        with tracer.start_as_current_span("finance.model.respond") as span:
+        with RUNTIME_IDENTITY.start_span(tracer, "finance.model.respond") as span:
             span.set_attribute("gen_ai.operation.name", "chat")
             span.set_attribute(
                 "gen_ai.output.messages",
@@ -232,7 +234,7 @@ def build_agent() -> Agent:
     middleware = [MissingTransientRetry()]
     return Agent(
         client=client,
-        name="finance-agent",
+        name=RUNTIME_IDENTITY.name,
         instructions=instructions,
         tools=[
             get_balance,

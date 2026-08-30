@@ -251,7 +251,7 @@ def test_support_issue_sources_only_add_their_declared_defect() -> None:
         ),
         "issue-031": (
             "    for _ in range(4):\n"
-            '        with tracer.start_as_current_span("support.state.waiting"):\n'
+            '        with RUNTIME_IDENTITY.start_span(tracer, "support.state.waiting"):\n'
             "            pass\n"
             '    return "The request stopped after repeated no-progress states."\n'
         ),
@@ -266,7 +266,7 @@ def test_support_issue_sources_only_add_their_declared_defect() -> None:
             '    return "Ticket data was read, but orchestration stopped before a useful answer."\n'
         ),
         "issue-034": (
-            '    with tracer.start_as_current_span("support.model.dispatch") as span:\n'
+            '    with RUNTIME_IDENTITY.start_span(tracer, "support.model.dispatch") as span:\n'
             '        span.set_attribute("gen_ai.operation.name", "chat")\n'
             '        span.set_attribute("model.ok", False)\n'
             '        span.set_attribute("error.type", "synthetic_model_failure")\n'
@@ -279,7 +279,7 @@ def test_support_issue_sources_only_add_their_declared_defect() -> None:
             '        "ticket_id": ticket_id,\n'
             '        "revision": TICKETS[ticket_id]["revision"],\n'
             "    }\n"
-            '    with tracer.start_as_current_span("support.state.propagation") as span:\n'
+            '    with RUNTIME_IDENTITY.start_span(tracer, "support.state.propagation") as span:\n'
             '        span.set_attribute("state.keys_before", len(state))\n'
             "        state.clear()\n"
             '        span.set_attribute("state.keys_after", len(state))\n'
@@ -857,7 +857,8 @@ def test_hosted_framework_and_identity_boundaries() -> None:
     for source in support_sources:
         text = source.read_text(encoding="utf-8")
         assert '"gen_ai.operation.name", "invoke_agent"' in text
-        assert '"gen_ai.agent.name", "support-ticket-agent"' in text
+        assert '"gen_ai.agent.name", RUNTIME_IDENTITY.name' in text
+        assert '"gen_ai.agent.version", RUNTIME_IDENTITY.version' in text
         assert '"gen_ai.output.type", "text"' in text
         assert '"gen_ai.response.finish_reasons", ("stop",)' in text
         assert '"aiq.tool.error.handled", True' in text

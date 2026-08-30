@@ -1,0 +1,49 @@
+schema_version: "1.0.0"
+repository: ninghu/agent-insights-quality
+default_branch: main
+policy_manifest_path: config/test-agent-validation-policy.yaml
+telemetry_resource_set: g29
+test_agent_model:
+  deployment_name: gpt-5.4-mini
+  model_id: gpt-5.4-mini
+  model_version: "2026-03-17"
+inventory:
+  agents: 5
+  issues: 36
+  authorities: 41
+limits:
+  provisioning_concurrency: 8
+  telemetry_query_concurrency: 4
+  runtime_attempt_concurrency: 1
+  inner_model_call_limit: 4
+  reserved_capacity_percent: 25
+  minimum_rpm_headroom: 8
+  minimum_tpm_headroom: 8192
+  active_heartbeat_seconds: 60
+  absolute_ttl_hours: 72
+  reconciler_interval_minutes: 15
+name_policy:
+  project:
+    maximum_length: 64
+    pattern: "^[a-z][a-z0-9-]*[a-z0-9]$"
+  agent:
+    maximum_length: 63
+    pattern: "^[a-z][a-z0-9-]*[a-z0-9]$"
+resource_kinds:
+  - project
+  - connection
+  - role_assignment
+  - provider_agent
+  - provider_agent_version
+  - hosted_identity
+  - hosted_blueprint
+  - runtime_principal
+  - entra_service_principal
+  - hosted_deployment
+  - session
+  - conversation
+  - stored_response
+  - acr_tag
+  - acr_manifest
+documented_project_cascade:
+  - runtime_principal

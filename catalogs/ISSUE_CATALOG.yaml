@@ -47,6 +47,7 @@ issues:
     category: hallucinations
     severity: high
     implementation: agents/weather-agent/issues/issue-001
+    validation_mode: model_mediated
     root_cause: The agent gives a factual weather answer when the request-provided evidence has no supporting value.
     expected_fix: Require grounded evidence or explicitly report that the value is unavailable.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent, chat], anomaly: unsupported_final_answer}
@@ -56,6 +57,7 @@ issues:
     category: output_quality
     severity: medium
     implementation: agents/weather-agent/issues/issue-002
+    validation_mode: model_mediated
     root_cause: The response violates the explicit machine-readable schema requested by the user.
     expected_fix: Enforce the required keys and prohibit unrequested prose.
     trace_contract: {minimum_traces: 5, operations: [invoke_agent, chat], anomaly: invalid_response_schema}
@@ -65,6 +67,7 @@ issues:
     category: output_quality
     severity: high
     implementation: agents/weather-agent/issues/issue-003
+    validation_mode: model_mediated
     root_cause: The final answer substitutes forecast high and low values for the requested current condition and temperature.
     expected_fix: Return the current condition, temperature, and unit for a current-conditions request.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent, chat], anomaly: wrong_weather_result_shape}
@@ -74,6 +77,7 @@ issues:
     category: context_memory
     severity: medium
     implementation: agents/weather-agent/issues/issue-004
+    validation_mode: model_mediated
     root_cause: The agent drops the user's standing temperature-unit preference on a follow-up turn.
     expected_fix: Preserve the active units preference for the bounded conversation.
     trace_contract: {minimum_traces: 5, operations: [invoke_agent, chat], anomaly: standing_constraint_lost}
@@ -83,6 +87,7 @@ issues:
     category: latency
     severity: low
     implementation: agents/weather-agent/issues/issue-005
+    validation_mode: model_mediated
     root_cause: The agent requests unnecessary clarification even though the request already contains complete weather evidence.
     expected_fix: Complete the request directly when location, units, and current-condition evidence are present.
     trace_contract: {minimum_traces: 5, operations: [invoke_agent, chat], anomaly: unnecessary_clarification}
@@ -92,6 +97,7 @@ issues:
     category: cost_tokens
     severity: low
     implementation: agents/weather-agent/issues/issue-006
+    validation_mode: model_mediated
     root_cause: The agent repeatedly produces verbose filler despite an explicit concise response bound.
     expected_fix: Honor the concise response contract without dropping required weather facts.
     trace_contract: {minimum_traces: 5, operations: [invoke_agent, chat], anomaly: excessive_output_tokens}
@@ -101,6 +107,7 @@ issues:
     category: output_quality
     severity: medium
     implementation: agents/healthcare-agent/issues/issue-007
+    validation_mode: model_mediated
     root_cause: The scheduling handoff omits a required owner, next action, deadline, or validation field.
     expected_fix: Require every named handoff field in the response contract.
     trace_contract: {minimum_traces: 5, operations: [invoke_agent, chat], anomaly: required_fields_missing}
@@ -110,6 +117,7 @@ issues:
     category: safety_guardrails
     severity: high
     implementation: agents/healthcare-agent/issues/issue-008
+    validation_mode: model_mediated
     root_cause: The otherwise-valid appointment action envelope omits explicit approval and active account scope controls.
     expected_fix: Require and validate approval, account scope, provider, and slot in every appointment action envelope.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent, chat], anomaly: unsafe_action_envelope}
@@ -119,6 +127,7 @@ issues:
     category: context_memory
     severity: medium
     implementation: agents/healthcare-agent/issues/issue-009
+    validation_mode: model_mediated
     root_cause: The agent ignores the latest provider or slot correction and uses stale conversation state.
     expected_fix: Make the latest explicit correction authoritative for the current task.
     trace_contract: {minimum_traces: 5, operations: [invoke_agent, chat], anomaly: stale_corrected_value}
@@ -128,6 +137,7 @@ issues:
     category: hallucinations
     severity: high
     implementation: agents/healthcare-agent/issues/issue-010
+    validation_mode: model_mediated
     root_cause: The agent claims a slot is available when the request contains no authoritative availability evidence.
     expected_fix: Require authoritative request evidence or explicitly report availability as unknown.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent, chat], anomaly: unsupported_availability_claim}
@@ -137,6 +147,7 @@ issues:
     category: safety_guardrails
     severity: high
     implementation: agents/healthcare-agent/issues/issue-011
+    validation_mode: model_mediated
     root_cause: The agent emits an appointment state-transition action envelope without explicit confirmation.
     expected_fix: Gate every appointment state transition on confirmation bound to the exact appointment.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent, chat], anomaly: unauthorized_state_transition}
@@ -146,6 +157,7 @@ issues:
     category: safety_guardrails
     severity: high
     implementation: agents/healthcare-agent/issues/issue-012
+    validation_mode: model_mediated
     root_cause: The agent returns a supplied synthetic schedule record from a different account scope.
     expected_fix: Enforce the active synthetic account scope before selecting supplied schedule records and synthesizing the response.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent, chat], anomaly: cross_account_data}
@@ -155,6 +167,7 @@ issues:
     category: hallucinations
     severity: high
     implementation: agents/finance-agent/issues/issue-013
+    validation_mode: deterministic
     root_cause: The final answer contradicts a successful authoritative finance tool result.
     expected_fix: Preserve authoritative finance values through response synthesis.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent, execute_tool, chat], anomaly: tool_result_contradicted}
@@ -164,6 +177,7 @@ issues:
     category: tool_call_failures
     severity: high
     implementation: agents/finance-agent/issues/issue-014
+    validation_mode: deterministic
     root_cause: The agent calls a finance tool without its required account identifier.
     expected_fix: Validate required tool arguments before dispatch.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent, execute_tool], anomaly: required_argument_missing}
@@ -173,6 +187,7 @@ issues:
     category: tool_call_failures
     severity: high
     implementation: agents/finance-agent/issues/issue-015
+    validation_mode: deterministic
     root_cause: The agent invokes a finance tool for a different synthetic account than the request.
     expected_fix: Bind finance tool arguments to the active requested account.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent, execute_tool], anomaly: wrong_entity_scope}
@@ -182,6 +197,7 @@ issues:
     category: hallucinations
     severity: medium
     implementation: agents/finance-agent/issues/issue-016
+    validation_mode: deterministic
     root_cause: The agent treats a structured finance error returned over successful transport as usable data.
     expected_fix: Inspect the structured result status before synthesis.
     trace_contract: {minimum_traces: 5, operations: [invoke_agent, execute_tool, chat], anomaly: structured_error_ignored}
@@ -191,6 +207,7 @@ issues:
     category: output_quality
     severity: medium
     implementation: agents/finance-agent/issues/issue-017
+    validation_mode: deterministic
     root_cause: The agent reports an aggregate finance result as complete despite an explicit failed item.
     expected_fix: Surface partial failure and recover only the failed bounded item.
     trace_contract: {minimum_traces: 5, operations: [invoke_agent, execute_tool, chat], anomaly: partial_failure_hidden}
@@ -200,6 +217,7 @@ issues:
     category: tool_call_failures
     severity: medium
     implementation: agents/finance-agent/issues/issue-018
+    validation_mode: deterministic
     root_cause: The agent omits the required bounded retry after one transient lookup failure.
     expected_fix: Retry the reviewed transient condition once with the same bounded request.
     trace_contract: {minimum_traces: 5, operations: [invoke_agent, execute_tool], anomaly: required_retry_missing}
@@ -209,6 +227,7 @@ issues:
     category: latency
     severity: medium
     implementation: agents/finance-agent/issues/issue-019
+    validation_mode: deterministic
     root_cause: The agent repeats an identical permanent failure beyond the retry bound.
     expected_fix: Stop at the retry bound and surface the permanent failure.
     trace_contract: {minimum_traces: 5, operations: [invoke_agent, execute_tool], anomaly: retry_loop}
@@ -218,6 +237,7 @@ issues:
     category: cost_tokens
     severity: medium
     implementation: agents/finance-agent/issues/issue-020
+    validation_mode: deterministic
     root_cause: The agent duplicates conversation history and finance tool payloads in model context.
     expected_fix: Include each required history item and tool payload once.
     trace_contract: {minimum_traces: 5, operations: [invoke_agent, chat], anomaly: duplicated_model_context}
@@ -227,6 +247,7 @@ issues:
     category: hallucinations
     severity: high
     implementation: agents/travel-agent/issues/issue-021
+    validation_mode: model_mediated
     root_cause: The agent fabricates travel inventory after the required search fails.
     expected_fix: Propagate the failed search and avoid unsupported inventory synthesis.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent, execute_tool, chat], anomaly: fabricated_after_failure}
@@ -236,6 +257,7 @@ issues:
     category: tool_call_failures
     severity: high
     implementation: agents/travel-agent/issues/issue-022
+    validation_mode: deterministic
     root_cause: The graph routes a travel request to an incompatible tool.
     expected_fix: Correct the LangGraph routing node for the requested travel intent.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent, execute_tool], anomaly: wrong_tool}
@@ -245,6 +267,7 @@ issues:
     category: tool_call_failures
     severity: high
     implementation: agents/travel-agent/issues/issue-023
+    validation_mode: deterministic
     root_cause: The graph omits the authoritative inventory search before answering.
     expected_fix: Require the search node before inventory synthesis.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent, chat], anomaly: required_tool_missing}
@@ -254,6 +277,7 @@ issues:
     category: cost_tokens
     severity: low
     implementation: agents/travel-agent/issues/issue-024
+    validation_mode: deterministic
     root_cause: The agent requests and forwards a large optional inventory payload not needed by the answer.
     expected_fix: Disable optional overfetch and project only required inventory fields.
     trace_contract: {minimum_traces: 5, operations: [invoke_agent, execute_tool, chat], anomaly: unused_optional_payload}
@@ -263,6 +287,7 @@ issues:
     category: safety_guardrails
     severity: high
     implementation: agents/travel-agent/issues/issue-025
+    validation_mode: model_mediated
     root_cause: The graph executes booking before availability validation and explicit confirmation.
     expected_fix: Order validation and confirmation nodes before booking.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent, execute_tool], anomaly: unsafe_node_order}
@@ -272,6 +297,7 @@ issues:
     category: output_quality
     severity: high
     implementation: agents/travel-agent/issues/issue-026
+    validation_mode: model_mediated
     root_cause: The graph silently drops one requested itinerary despite having both inputs.
     expected_fix: Complete both comparison branches before prioritizing an itinerary.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent, execute_tool, chat], anomaly: incomplete_comparison}
@@ -281,6 +307,7 @@ issues:
     category: latency
     severity: medium
     implementation: agents/travel-agent/issues/issue-027
+    validation_mode: deterministic
     root_cause: The graph executes independent flight and hotel searches sequentially.
     expected_fix: Run independent search nodes concurrently while preserving response order.
     trace_contract: {minimum_traces: 5, operations: [invoke_agent, execute_tool, chat], anomaly: sequential_independent_calls}
@@ -290,6 +317,7 @@ issues:
     category: context_memory
     severity: high
     implementation: agents/travel-agent/issues/issue-028
+    validation_mode: deterministic
     root_cause: The graph uses stale itinerary state after the user switches trips.
     expected_fix: Bind state and tool arguments to the latest explicit itinerary.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent, execute_tool, chat], anomaly: stale_entity_state}
@@ -299,6 +327,7 @@ issues:
     category: reliability_errors
     severity: medium
     implementation: agents/support-ticket-agent/issues/issue-029
+    validation_mode: deterministic
     root_cause: The agent omits the required escalation after bounded recovery is exhausted.
     expected_fix: Dispatch the reviewed escalation with bounded synthetic context.
     trace_contract: {minimum_traces: 5, operations: [invoke_agent, execute_tool], anomaly: escalation_missing}
@@ -308,6 +337,7 @@ issues:
     category: safety_guardrails
     severity: high
     implementation: agents/support-ticket-agent/issues/issue-030
+    validation_mode: deterministic
     root_cause: The ticket update accepts a stale expected revision.
     expected_fix: Reject updates unless the expected revision equals the current revision.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent, execute_tool], anomaly: stale_revision_accepted}
@@ -317,6 +347,7 @@ issues:
     category: latency
     severity: medium
     implementation: agents/support-ticket-agent/issues/issue-031
+    validation_mode: deterministic
     root_cause: The orchestration repeats the same state without progress until the loop bound.
     expected_fix: Detect no-progress states and terminate with a bounded explicit failure.
     trace_contract: {minimum_traces: 5, operations: [invoke_agent], anomaly: no_progress_loop}
@@ -326,6 +357,7 @@ issues:
     category: reliability_errors
     severity: high
     implementation: agents/support-ticket-agent/issues/issue-032
+    validation_mode: deterministic
     root_cause: The runtime rejects a valid ticket request before model or tool work.
     expected_fix: Dispatch valid ticket input to the required model or tool path.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent], anomaly: valid_request_rejected}
@@ -335,6 +367,7 @@ issues:
     category: output_quality
     severity: high
     implementation: agents/support-ticket-agent/issues/issue-033
+    validation_mode: deterministic
     root_cause: The runtime omits a useful ticket answer after the required tool succeeds.
     expected_fix: Preserve successful tool state through response synthesis.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent, execute_tool], anomaly: post_tool_abort}
@@ -344,6 +377,7 @@ issues:
     category: reliability_errors
     severity: high
     implementation: agents/support-ticket-agent/issues/issue-034
+    validation_mode: deterministic
     root_cause: The runtime exposes a deterministic model failure without bounded recovery.
     expected_fix: Apply the reviewed bounded model failure handling policy before responding.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent, chat], anomaly: raw_model_failure_exposed}
@@ -353,6 +387,7 @@ issues:
     category: hallucinations
     severity: high
     implementation: agents/support-ticket-agent/issues/issue-035
+    validation_mode: deterministic
     root_cause: The agent reports success although the requested operation was never dispatched.
     expected_fix: Report success only after verified operation completion.
     trace_contract: {minimum_traces: 1, operations: [invoke_agent], anomaly: success_without_operation}
@@ -362,6 +397,7 @@ issues:
     category: reliability_errors
     severity: medium
     implementation: agents/support-ticket-agent/issues/issue-036
+    validation_mode: deterministic
     root_cause: One shared-state transition clears the ticket identifier and revision, producing routing and update symptoms that Agent Insights fragments into separate cards.
     expected_fix: Preserve the shared ticket state through propagation and group both symptoms under that one state-loss root.
     trace_contract: {minimum_traces: 5, operations: [invoke_agent, execute_tool], anomaly: shared_state_loss_fragmented}

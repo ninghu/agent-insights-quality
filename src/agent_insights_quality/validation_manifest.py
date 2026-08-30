@@ -1,0 +1,258 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
+
+from agent_insights_quality.catalogs import catalog_hashes
+from agent_insights_quality.util import ROOT, ContractError, content_hash, file_hash, read_json
+from agent_insights_quality.validation_policy import ValidationPolicy
+from agent_insights_quality.validation_quota import EndpointCost
+from agent_insights_quality.validation_runtime import (
+    AuthoritySpec,
+    opaque_cycle_suffix,
+    plan_runtime_topology,
+    validation_project_name,
+)
+
+
+def authority_specs(
+    agents: Mapping[str, Any],
+    issues: Mapping[str, Any],
+) -> list[AuthoritySpec]:
+    issue_by_id = {item["id"]: item for item in issues["issues"]}
+    values: list[AuthoritySpec] = []
+    for agent in agents["agents"]:
+        values.append(_authority(agent, None))
+        values.extend(
+            _authority(agent, issue_by_id[issue_id])
+            for issue_id in agent["issue_ids"]
+        )
+    if len(values) != 41:
+        raise ContractError("Validation authority manifest must contain exactly 41 items")
+    return values
+
+
+def prepare_candidate_manifest(
+    *,
+    agents: Mapping[str, Any],
+    issues: Mapping[str, Any],
+    policy: ValidationPolicy,
+    repository: str,
+    pr_number: int,
+    candidate_head_sha: str,
+    candidate_tree_sha: str,
+    workflow_run_id: str,
+) -> dict[str, Any]:
+    if repository != policy.repository:
+        raise ContractError("Candidate repository does not match validation policy")
+    if (
+        pr_number < 1
+        or not _git_sha(candidate_head_sha)
+        or not _git_sha(candidate_tree_sha)
+        or not workflow_run_id
+    ):
+        raise ContractError("Candidate Git or workflow identity is invalid")
+    authorities = authority_specs(agents, issues)
+    suffix = opaque_cycle_suffix(
+        repository=repository,
+        pr_number=pr_number,
+        candidate_head_sha=candidate_head_sha,
+        run_id=workflow_run_id,
+    )
+    topology = plan_runtime_topology(
+        authorities,
+        cycle_suffix=suffix,
+        policy=policy,
+    )
+    hashes = catalog_hashes(dict(agents), dict(issues))
+    source_digests = {
+        item.authority_id: item.source_content_digest for item in authorities
+    }
+    execution_digests = {
+        item.authority_id: item.execution_digest for item in authorities
+    }
+    costs = validation_endpoint_costs(authorities)
+    validation_contract_files = [
+        ROOT / "config" / "test-agent-validation.yaml",
+        ROOT / "config" / "test-agent-validation-policy.yaml",
+        *sorted(ROOT.glob("schemas/test-agent-validation-*.schema.json")),
+        ROOT / "schemas" / "agent-catalog.schema.json",
+        ROOT / "schemas" / "issue-catalog.schema.json",
+        ROOT / "schemas" / "prompt-traffic.schema.json",
+        ROOT / "src" / "agent_insights_quality" / "live.py",
+        ROOT / "src" / "agent_insights_quality" / "provisioning.py",
+        ROOT / "src" / "agent_insights_quality" / "profiles.py",
+        ROOT / "src" / "agent_insights_quality" / "util.py",
+        *sorted(
+            (ROOT / "src" / "agent_insights_quality").glob("validation_*.py")
+        ),
+        ROOT / "infra" / "modules" / "validation-project.bicep",
+        ROOT / ".github" / "workflows" / "test-agent-validation.yml",
+        ROOT
+        / ".github"
+        / "workflows"
+        / "test-agent-validation-receipt.yml",
+        ROOT
+        / ".github"
+        / "workflows"
+        / "test-agent-validation-reconciler.yml",
+    ]
+    return {
+        "schema_version": "1.0.0",
+        "kind": "test-agent-validation-candidate",
+        "cycle_id": f"validation-{suffix}",
+        "repository": repository,
+        "pr_number": pr_number,
+        "candidate_head_sha": candidate_head_sha,
+        "candidate_tree_sha": candidate_tree_sha,
+        "project_name": validation_project_name(suffix, policy=policy),
+        "telemetry_resource_set": policy.telemetry_resource_set,
+        "test_agent_model": policy.test_agent_model,
+        "catalog_hashes": hashes,
+        "artifact_manifest_hash": hashes["artifacts"],
+        "source_content_digests": source_digests,
+        "source_tree_digest": content_hash(source_digests),
+        "execution_digests": execution_digests,
+        "execution_matrix_digest": content_hash(execution_digests),
+        "validation_contract_digest": content_hash(
+            {
+                path.relative_to(ROOT).as_posix(): file_hash(path)
+                for path in validation_contract_files
+            }
+        ),
+        "runtime_topology_digest": content_hash(
+            [
+                {
+                    "authority_id": item.authority_id,
+                    "runtime_agent_name": item.runtime_agent_name,
+                    "runtime_kind": item.runtime_kind,
+                    "framework": item.framework,
+                }
+                for item in topology
+            ]
+        ),
+        "endpoint_envelope": {
+            "attempts": len(costs),
+            "requests": sum(item.requests for item in costs),
+            "worst_case_tokens": max(item.tokens for item in costs),
+            "worst_case_inner_model_calls": max(
+                item.inner_model_calls for item in costs
+            ),
+        },
+        "authorities": [
+            {
+                "authority_id": item.authority_id,
+                "authority_kind": authority.authority_kind,
+                "canonical_agent": item.canonical_agent,
+                "logical_version": item.logical_version,
+                "runtime_kind": item.runtime_kind,
+                "framework": item.framework,
+                "runtime_agent_name": item.runtime_agent_name,
+                "source_content_digest": authority.source_content_digest,
+                "execution_digest": authority.execution_digest,
+                "validation_mode": authority.validation_mode,
+            }
+            for item, authority in zip(topology, authorities, strict=True)
+        ],
+        "manifest_digest": "",
+    }
+
+
+def stamp_candidate_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
+    result = dict(value)
+    result["manifest_digest"] = ""
+    result["manifest_digest"] = content_hash(
+        {key: item for key, item in result.items() if key != "manifest_digest"}
+    )
+    return result
+
+
+def validation_endpoint_costs(
+    authorities: list[AuthoritySpec],
+) -> list[EndpointCost]:
+    inner_calls = {
+        "foundry_prompt": 1,
+        "microsoft_agent_framework": 4,
+        "langgraph": 1,
+        "custom_responses": 1,
+    }
+    costs: list[EndpointCost] = []
+    for authority in authorities:
+        fanout = inner_calls[authority.framework]
+        for scenario in authority.validation_rules["scenarios"]:
+            for attempt in scenario["attempts"]:
+                steps = [*attempt["setup_steps"], *attempt["probe_steps"]]
+                request_count = len(steps)
+                tokens = sum(
+                    int(step["request"]["body"].get("max_output_tokens", 400))
+                    for step in steps
+                ) * fanout
+                cost = EndpointCost(
+                    requests=request_count,
+                    tokens=tokens,
+                    inner_model_calls=fanout,
+                )
+                costs.append(cost)
+                if authority.authority_kind == "issue":
+                    costs.append(cost)
+    return costs
+
+
+def _authority(
+    agent: Mapping[str, Any],
+    issue: Mapping[str, Any] | None,
+) -> AuthoritySpec:
+    root = ROOT / (
+        agent["baseline_path"] if issue is None else issue["implementation"]
+    )
+    traffic = read_json(root / "traffic.json")
+    rules = traffic["validation_rules"]
+    logical_version = "v0" if issue is None else issue["id"]
+    authority_id = (
+        f"{agent['name']}/v0" if issue is None else issue["id"]
+    )
+    return AuthoritySpec(
+        authority_id=authority_id,
+        authority_kind="baseline" if issue is None else "issue",
+        canonical_agent=agent["name"],
+        logical_version=logical_version,
+        runtime_kind=agent["type"],
+        framework=agent["framework"],
+        source_content_digest=source_content_digest(root, agent["type"]),
+        execution_digest=rules["execution_digest"],
+        validation_mode=(
+            agent["baseline_contract"]["validation_mode"]
+            if issue is None
+            else issue["validation_mode"]
+        ),
+        validation_rules=rules,
+    )
+
+
+def source_content_digest(root: Path, runtime_kind: str) -> str:
+    if runtime_kind == "prompt":
+        return content_hash(read_json(root / "definition.json"))
+    source = root / "source"
+    files = {
+        path.relative_to(root).as_posix(): file_hash(path)
+        for path in sorted(source.rglob("*"))
+        if path.is_file()
+        and "__pycache__" not in path.parts
+        and path.suffix.casefold() not in {".pyc", ".pyo"}
+    }
+    baseline = root if root.name == "v0" else root.parents[1] / "v0"
+    for name in (
+        "requirements.txt",
+        "host.yaml",
+        "container.yaml",
+        "Dockerfile",
+    ):
+        path = baseline / name
+        if path.is_file():
+            files[f"deployment/{name}"] = file_hash(path)
+    return content_hash(files)
+
+
+def _git_sha(value: str) -> bool:
+    return len(value) == 40 and all(character in "0123456789abcdef" for character in value)

@@ -4,6 +4,10 @@
 
 A complete daily or staging run is `PASS` when its quality score is at least `90/100`.
 
+Test Agent Validation has no quality score or `PASS`/`FAIL` report. Its merge gate requires complete
+baseline health, the reviewed issue `k/n` observation matrix, zero paired-v0 observations, exact
+identity and telemetry proof, protected review/check provenance, and immutable exact-clean evidence.
+
 ## Quality score
 
 The reviewed `field_weighted_v1` formula is:
@@ -31,6 +35,9 @@ score. Incomplete reports are skipped as comparison baselines, and an incomplete
 the score change as `N/A`.
 Structural, privacy, provenance, and
 reporting evidence must still be complete and trustworthy before a score can be used.
+The living Insight Engine improvement memory is advisory and score-neutral. It can synthesize only
+`insight_engine`-owned findings and never changes per-card assessment, ownership, run status, or
+promotion.
 See [Insight Result Labels](INSIGHT_RESULTS.md) for Fully Correct, Partially Correct, Incorrect, and
 Noise definitions and field examples.
 

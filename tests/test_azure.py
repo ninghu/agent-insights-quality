@@ -88,13 +88,27 @@ def test_deployment_reads_fixed_telemetry_resource_set(
         lambda model: "2026-03-17" if model == "gpt-5.4-mini" else "unexpected",
     )
     monkeypatch.setattr("agent_insights_quality.azure.subprocess.run", run)
-    deploy_infrastructure()
+    deploy_infrastructure(
+        {
+            "AIQ_VALIDATION_PRINCIPAL_ID": "synthetic-validation-principal",
+            "AIQ_VALIDATION_RECEIPT_PRINCIPAL_ID": (
+                "synthetic-receipt-principal"
+            ),
+        }
+    )
     deployment = calls[-1]
     assert any(
         value == "telemetryGeneration=g29"
         for value in deployment
     )
     assert "testAgentModelVersion=2026-03-17" in deployment
+    assert (
+        "validationPrincipalId=synthetic-validation-principal" in deployment
+    )
+    assert (
+        "validationReceiptPrincipalId=synthetic-receipt-principal"
+        in deployment
+    )
 
 
 def test_analytics_deployment_does_not_change_foundry_models(monkeypatch) -> None:

@@ -1,0 +1,37 @@
+schema_version: "1.0.0"
+kind: test-agent-validation-trusted-policy
+repository: ninghu/agent-insights-quality
+default_branch: main
+policy_path: config/test-agent-validation-policy.yaml
+protected_environment: test-agent-validation-receipt
+workflow:
+  candidate_path: .github/workflows/test-agent-validation.yml
+  receipt_path: .github/workflows/test-agent-validation-receipt.yml
+  reconciler_path: .github/workflows/test-agent-validation-reconciler.yml
+  required_ref: refs/heads/main
+issuer:
+  app_id: 15368
+  app_slug: github-actions
+checks:
+  comprehensive_review: test-agent-validation-review
+  targeted_verification: test-agent-validation-targeted
+  continuous_integration: validate
+  required_check: test-agent-validation
+receipt:
+  merge_container: test-agent-validation-receipts
+  shadow_container: test-agent-validation-shadow-receipts
+  merge_prefix: receipts
+  shadow_prefix: shadow-receipts
+  create_once: true
+  blob_versioning_required: true
+  immutability_required: true
+lifecycle:
+  active_container: test-agent-validation-lifecycle
+  snapshot_container: test-agent-validation-snapshots
+  receipt_container: test-agent-validation-receipts
+  shadow_receipt_container: test-agent-validation-shadow-receipts
+  active_blob: active.json
+  absolute_ttl_hours: 72
+  maximum_heartbeat_seconds: 60
+  reconciler_interval_minutes: 15
+  alert_route: github-actions-summary

@@ -50,6 +50,7 @@ def test_email_requires_reviewed_domain_and_one_success(
         "profile": "daily",
         "run_id": "aiq-20260824",
         "report_date": "2026-08-24",
+        "test_region": "WestUS2",
         "score_comparison": {
             "report_date": "2026-08-23",
             "quality_score": 94.1,
@@ -122,7 +123,7 @@ def test_email_requires_reviewed_domain_and_one_success(
         "How Scoring Works"
     )
     assert request["subject"] == (
-        "[Agent Insights Quality] 100/100 - 2026-08-24 - 20/20 issues"
+        "[Agent Insights Quality] 100/100 - 2026-08-24 - 20/20 issues - WestUS2"
     )
     assert re.search(r"\b(?:PASS|FAIL)\b", request["subject"]) is None
     assert re.search(r"\b(?:PASS|FAIL)\b", request["html"]) is None
@@ -135,10 +136,20 @@ def test_email_requires_reviewed_domain_and_one_success(
     assert "docs/INSIGHT_RESULTS.md" in request["html"]
     assert "Open quality trend dashboard" in request["html"]
     assert _DASHBOARD_LINK in request["html"]
+    assert "Agent Insights Quality</h1>" in request["html"]
+    assert "View Insight Engine Improvement Report" in request["html"]
+    assert 'href="https://github.com/ninghu/agent-insights-quality/blob/main/reports/insight-engine-improvement.md"' in request["html"]
+    assert request["html"].index(">Report</th>") < request["html"].index(
+        "View Insight Engine Improvement Report"
+    )
+    assert "Test Region: WestUS2" in request["html"]
     assert request["html"].index("Test Agents</h2>") < request["html"].index(
         "Foundry Project:"
     )
     assert request["html"].index("Foundry Project:") < request["html"].index(
+        "Test Region:"
+    )
+    assert request["html"].index("Test Region:") < request["html"].index(
         ">Test agent</th>"
     )
     assert _PROJECT_LINK in request["html"]
@@ -189,6 +200,9 @@ def test_email_requires_reviewed_domain_and_one_success(
     assert "91.9/100" in staging_request["html"]
     assert "Below-target diagnostics" in staging_request["html"]
     assert "baseline noise" in staging_request["html"]
+    assert "View Insight Engine Improvement Report" not in staging_request["html"]
+    assert "Test Region: WestUS2" in staging_request["html"]
+    assert "WestUS2" not in staging_request["subject"]
     staging_preview = runtime_root / "staging" / "shadow" / "report-preview.html"
     write_private_report_preview(staging_request, staging_preview)
     assert "coverage_quality_precision_v2" in staging_preview.read_text(
@@ -251,11 +265,13 @@ def test_email_requires_reviewed_domain_and_one_success(
         test_run=True,
     )
     assert test_request["subject"].startswith("[TEST] [Agent Insights Quality]")
+    assert test_request["subject"].endswith(" - WestUS2")
     assert test_request["delivery_mode"] == "test_email_only"
     assert "TEST RUN" in test_request["html"]
     assert "intentionally not published to ADX" in test_request["html"]
     assert "Open quality trend dashboard" not in test_request["html"]
     assert "Not published" in test_request["html"]
+    assert "View Insight Engine Improvement Report" not in test_request["html"]
     with pytest.raises(ContractError, match="dashboard publication to be skipped"):
         create_request(
             report,
@@ -278,6 +294,7 @@ def test_email_requires_reviewed_domain_and_one_success(
     )
     assert "Quality Score: N/A (change N/A)" in incomplete_request["html"]
     assert "INCOMPLETE" in incomplete_request["subject"]
+    assert incomplete_request["subject"].endswith(" - WestUS2")
     assert "INCOMPLETE" in incomplete_request["html"]
     assert "Run status</td>" in incomplete_request["html"]
     assert "Overall judgment" not in incomplete_request["html"]

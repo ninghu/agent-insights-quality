@@ -1,0 +1,39 @@
+name: Test Agent Validation cleanup reconciler
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: test-agent-validation-account
+  cancel-in-progress: false
+
+jobs:
+  cleanup-only:
+    runs-on: [self-hosted, agent-insights-quality]
+    environment: test-agent-validation-shadow
+    env:
+      AIQ_VALIDATION_STORAGE_ACCOUNT: ${{ vars.AIQ_VALIDATION_STORAGE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[azure]"
+      - name: Reconcile stale lifecycle
+        shell: pwsh
+        run: |
+          $nonce = [guid]::NewGuid().ToString("N")
+          python -m agent_insights_quality reconcile-test-agent-validation `
+            --storage-account $env:AIQ_VALIDATION_STORAGE_ACCOUNT `
+            --ownership-nonce $nonce `
+            --holder-workflow-reference "${{ github.workflow_ref }}" `
+            --holder-app-reference "github-actions" `
+            --holder-run-reference "${{ github.run_id }}.${{ github.run_attempt }}"

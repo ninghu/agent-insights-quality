@@ -81,7 +81,11 @@ jobs:
             "${report_md_path}" \
             "reports/latest.json" \
             "reports/latest.md" \
-            "reports/trend.json"; do
+            "reports/trend.json" \
+            "reports/insight-engine-improvement.json" \
+            "reports/insight-engine-improvement.md" \
+            "${report_path%report.json}insight-engine-improvement.json" \
+            "${report_path%report.json}insight-engine-improvement.md"; do
             git diff --name-only "${BASE_SHA}...${HEAD_SHA}" | grep -Fx "${required_path}"
           done
           agent_args=()
@@ -102,6 +106,14 @@ jobs:
           git show "${HEAD_SHA}:reports/latest.json" > "${RUNNER_TEMP}/latest.json"
           git show "${HEAD_SHA}:reports/latest.md" > "${RUNNER_TEMP}/latest.md"
           git show "${HEAD_SHA}:reports/trend.json" > "${RUNNER_TEMP}/trend.json"
+          git show "${HEAD_SHA}:reports/insight-engine-improvement.json" \
+            > "${RUNNER_TEMP}/insight-engine-improvement.json"
+          git show "${HEAD_SHA}:reports/insight-engine-improvement.md" \
+            > "${RUNNER_TEMP}/insight-engine-improvement.md"
+          git show "${HEAD_SHA}:${report_path%report.json}insight-engine-improvement.json" \
+            > "${RUNNER_TEMP}/insight-engine-improvement-snapshot.json"
+          git show "${HEAD_SHA}:${report_path%report.json}insight-engine-improvement.md" \
+            > "${RUNNER_TEMP}/insight-engine-improvement-snapshot.md"
           git show "${BASE_SHA}:reports/trend.json" > "${RUNNER_TEMP}/base-trend.json"
           python -m agent_insights_quality validate-published-report \
             --report "${RUNNER_TEMP}/report.json" \
@@ -112,6 +124,10 @@ jobs:
             --latest-markdown "${RUNNER_TEMP}/latest.md" \
             --trend "${RUNNER_TEMP}/trend.json" \
             --base-trend "${RUNNER_TEMP}/base-trend.json" \
+            --improvement-json "${RUNNER_TEMP}/insight-engine-improvement.json" \
+            --improvement-markdown "${RUNNER_TEMP}/insight-engine-improvement.md" \
+            --improvement-snapshot-json "${RUNNER_TEMP}/insight-engine-improvement-snapshot.json" \
+            --improvement-snapshot-markdown "${RUNNER_TEMP}/insight-engine-improvement-snapshot.md" \
             "${agent_args[@]}"
       - name: Enable auto-merge
         env:

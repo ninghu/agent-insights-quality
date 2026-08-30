@@ -67,6 +67,7 @@ def test_post_manifest_failure_does_not_publish_operational_result(
         registry_path=private_root / "registry.json",
         assert_insights_connection=lambda: None,
         assert_test_agent_model=lambda _model: None,
+        resolve_test_region=lambda: "WestUS2",
     )
     monkeypatch.setattr(
         cli.RuntimeProfile,
@@ -75,7 +76,11 @@ def test_post_manifest_failure_does_not_publish_operational_result(
     )
     monkeypatch.setattr(cli, "agent_model_contract", lambda _agents: {})
     monkeypatch.setattr(cli, "sync_registry", lambda _profile: None)
-    monkeypatch.setattr(cli, "load_registry", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        cli,
+        "load_registry",
+        lambda *_args, **_kwargs: {"test_region": "WestUS2"},
+    )
     monkeypatch.setattr(cli, "LiveRuntime", lambda _profile: SimpleNamespace())
     monkeypatch.setattr(cli, "_run_contract_digest", lambda **_kwargs: "digest")
     monkeypatch.setattr(cli, "execute", lambda **_kwargs: [])
@@ -127,11 +132,13 @@ def test_test_finalization_stays_private_and_skips_adx(
     state.mkdir(parents=True)
     monkeypatch.setenv("AIQ_RUNTIME_ROOT", str(private_root))
     manifest = {
-        "schema_version": "4.0.0",
+        "schema_version": "5.0.0",
         "run_id": "aiq-20260828-r01",
         "profile": "daily",
         "delivery_mode": "test_email_only",
         "report_date": "2026-08-28",
+        "test_region": "WestUS2",
+        "test_region_registry": "WestUS2",
         "agents": [{"name": "weather-agent", "issues": [{"issue_id": "issue-001"}]}],
     }
     work_items = {"schema_version": "synthetic"}
@@ -156,6 +163,17 @@ def test_test_finalization_stays_private_and_skips_adx(
         "summary": {},
         "delivery": {"content_digest": "sha256:" + "0" * 64},
     }
+    improvement_analysis = {
+        "schema_version": "1.0.0",
+        "model": "gpt-5.6-sol",
+        "executive_summary": "No cross-Agent pattern was identified.",
+        "patterns": [],
+        "isolated_observations": [],
+        "improvement_priorities": [],
+        "exclusions": [],
+    }
+    improvement_path = state / "improvement-analysis.json"
+    atomic_json(improvement_path, improvement_analysis)
 
     monkeypatch.setattr(cli, "load_catalogs", lambda: ({"agents": []}, {"issues": []}))
     monkeypatch.setattr(cli, "catalog_hashes", lambda *_args: {})
@@ -164,6 +182,15 @@ def test_test_finalization_stays_private_and_skips_adx(
     monkeypatch.setattr(cli, "load_assessments", lambda *_args: {})
     monkeypatch.setattr(cli, "load_baseline_assessments", lambda *_args: {})
     monkeypatch.setattr(cli, "build_report", lambda *_args: report)
+    monkeypatch.setattr(
+        cli,
+        "build_normalized_summary",
+        lambda _report: {
+            "coverage": {},
+            "insight_engine_findings": [],
+            "exclusions": [],
+        },
+    )
     monkeypatch.setattr(cli, "apply_score_comparison", lambda *_args: None)
     monkeypatch.setattr(
         cli,
@@ -189,7 +216,14 @@ def test_test_finalization_stays_private_and_skips_adx(
         lambda: pytest.fail("dashboard resolution attempted"),
     )
 
-    def write_report(value: dict, output: Path) -> None:
+    report_link_flags = []
+
+    def write_report(
+        value: dict,
+        output: Path,
+        **kwargs,
+    ) -> None:
+        report_link_flags.append(kwargs["include_improvement_link"])
         output.mkdir(parents=True, exist_ok=True)
         atomic_json(output / "report.json", value)
 
@@ -206,6 +240,12 @@ def test_test_finalization_stays_private_and_skips_adx(
         }
 
     monkeypatch.setattr(cli, "write_report", write_report)
+    previews = []
+    monkeypatch.setattr(
+        cli,
+        "write_improvement_preview",
+        lambda **kwargs: previews.append(kwargs),
+    )
     monkeypatch.setattr(cli, "create_request", create_request)
 
     args = cli.build_parser().parse_args(
@@ -221,6 +261,8 @@ def test_test_finalization_stays_private_and_skips_adx(
             str(state / "baseline-assessment.json"),
             "--output-root",
             str(output_root),
+            "--improvement-analysis",
+            str(improvement_path),
         ]
     )
     result = json.loads(cli._dispatch(args) or "{}")
@@ -230,4 +272,6 @@ def test_test_finalization_stays_private_and_skips_adx(
     assert result["generated_report"] is False
     assert result["pull_request"] == "skipped_test"
     assert (state / "final-report" / "report.json").is_file()
+    assert len(previews) == 1
+    assert report_link_flags == [False, False]
     assert not output_root.exists()

@@ -39,6 +39,7 @@ def _registry(agents: dict, hashes: dict[str, str]) -> dict:
     return {
         "profile": "daily",
         "project_name": "agent-insights-quality",
+        "test_region": "WestUS2",
         "catalog_hashes": hashes,
         "agents": {
             agent["name"]: {

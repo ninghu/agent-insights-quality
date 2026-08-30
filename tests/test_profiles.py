@@ -172,3 +172,95 @@ def test_azure_resource_reads_retry_transient_failures(monkeypatch) -> None:
     monkeypatch.setattr("agent_insights_quality.profiles.time.sleep", lambda _: None)
     assert _run_azure_read(["az"]).returncode == 0
     assert attempts == 2
+
+
+def test_profile_region_comes_from_live_project_and_azure_metadata(
+    monkeypatch,
+) -> None:
+    profile = RuntimeProfile(
+        name="daily",
+        project_name="agent-insights-quality",
+        project_endpoint="https://example.invalid",
+        insights_endpoint="https://example.invalid",
+        application_insights_resource_id="/subscriptions/hidden/active",
+        registry_path=SimpleNamespace(),
+        account_resource_id="/subscriptions/hidden/account",
+    )
+    responses = iter(
+        [
+            SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"location": "westus2"}),
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    [
+                        {"name": "eastus", "displayName": "East US"},
+                        {"name": "westus2", "displayName": "West US 2"},
+                    ]
+                ),
+            ),
+        ]
+    )
+    calls = []
+
+    def run(arguments, **_kwargs):
+        calls.append(arguments)
+        return next(responses)
+
+    monkeypatch.setattr("agent_insights_quality.profiles.subprocess.run", run)
+    assert profile.resolve_test_region() == "WestUS2"
+    assert calls[0][1:4] == ["rest", "--method", "get"]
+    assert "/projects/agent-insights-quality?" in calls[0][
+        calls[0].index("--url") + 1
+    ]
+    assert calls[1][1:3] == ["account", "list-locations"]
+
+
+def test_profile_region_has_no_registry_or_config_fallback(monkeypatch) -> None:
+    profile = RuntimeProfile(
+        name="daily",
+        project_name="agent-insights-quality",
+        project_endpoint="https://example.invalid",
+        insights_endpoint="https://example.invalid",
+        application_insights_resource_id="/subscriptions/hidden/active",
+        registry_path=SimpleNamespace(),
+        account_resource_id="/subscriptions/hidden/account",
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.profiles.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({}),
+        ),
+    )
+    with pytest.raises(ContractError, match="location is missing"):
+        profile.resolve_test_region()
+
+
+def test_profile_region_fails_when_metadata_cannot_resolve(monkeypatch) -> None:
+    profile = RuntimeProfile(
+        name="daily",
+        project_name="agent-insights-quality",
+        project_endpoint="https://example.invalid",
+        insights_endpoint="https://example.invalid",
+        application_insights_resource_id="/subscriptions/hidden/active",
+        registry_path=SimpleNamespace(),
+        account_resource_id="/subscriptions/hidden/account",
+    )
+    responses = iter(
+        [
+            SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"location": "westus2"}),
+            ),
+            SimpleNamespace(returncode=0, stdout="[]"),
+        ]
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.profiles.subprocess.run",
+        lambda *_args, **_kwargs: next(responses),
+    )
+    with pytest.raises(ContractError, match="did not resolve uniquely"):
+        profile.resolve_test_region()

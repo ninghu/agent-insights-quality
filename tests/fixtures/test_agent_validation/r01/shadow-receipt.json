@@ -1,0 +1,939 @@
+{
+  "artifact_manifest_hash": "sha256:c2cb33f6b10d20f5ec8eabac6cb70c0f9a5ee79fd95e31d71edb687bde7a54b7",
+  "authorities": [
+    {
+      "authority_evidence_digest": "sha256:1d5fdeb8524525e330145e68301be39055e5eb49267be1a904d6e4b68ddfdd86",
+      "authority_id": "weather-agent/v0",
+      "execution_digest": "sha256:e3e48daada11192baa28764ce1e8741222afa17d04c6225f832c8f96a180bd19",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 0,
+          "pass": true,
+          "scenario_id": "weather-agent-baseline-health",
+          "v0_complete_count": 0,
+          "v0_observed": 0,
+          "validation_mode": "baseline"
+        }
+      ],
+      "source_content_digest": "sha256:c86905fa1099c0fc6880ec7a98c8c29fb102b1d2ba96e3640d597b22f250af01"
+    },
+    {
+      "authority_evidence_digest": "sha256:d0129a8929285c624a95863485d23ba0d2dbb623d2f2e2706e5a0bb120042ac1",
+      "authority_id": "healthcare-agent/v0",
+      "execution_digest": "sha256:9086beb26e439c752d128d949f4e0723d490f22d30a02ae222cfac6965b0569d",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 0,
+          "pass": true,
+          "scenario_id": "healthcare-agent-baseline-health",
+          "v0_complete_count": 0,
+          "v0_observed": 0,
+          "validation_mode": "baseline"
+        }
+      ],
+      "source_content_digest": "sha256:21eb0f528f98cc047f8e82c405d5ecfbe9d17168c17292c0a32c94ad9c0833d2"
+    },
+    {
+      "authority_evidence_digest": "sha256:9afd3791f7f5eac6c0d3109cb56d8c777a43e45511b0b5a99148d88a0bba8ac0",
+      "authority_id": "finance-agent/v0",
+      "execution_digest": "sha256:e9112f17a7d23ade48743d836a1b4a68dc9b5ad65947fa43d611ffebcae6abf0",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 0,
+          "pass": true,
+          "scenario_id": "finance-agent-baseline-health",
+          "v0_complete_count": 0,
+          "v0_observed": 0,
+          "validation_mode": "baseline"
+        }
+      ],
+      "source_content_digest": "sha256:84b97e00049ca3dcdc169737914537d232e9788dfd922c843c297166779c32ff"
+    },
+    {
+      "authority_evidence_digest": "sha256:046daf56497963dff9293581ebcbdd5f631a11e2eeb60851b028d5b6d185016d",
+      "authority_id": "travel-agent/v0",
+      "execution_digest": "sha256:3fa72749e748b778e6023cdd3c34a34f414fce8a05e5954c92688afa750e3d02",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 0,
+          "pass": true,
+          "scenario_id": "travel-agent-baseline-health",
+          "v0_complete_count": 0,
+          "v0_observed": 0,
+          "validation_mode": "baseline"
+        }
+      ],
+      "source_content_digest": "sha256:5802aee8256a8b52ec91463e5832d5107373cc13f88c7c38ea0c9367e4da18cb"
+    },
+    {
+      "authority_evidence_digest": "sha256:74a44fc0ab9dc5ee2a6b1c84833de1ad0e3654378abfc21d96b19885ec161d76",
+      "authority_id": "support-ticket-agent/v0",
+      "execution_digest": "sha256:58c53a8ab9e66497fa704cb946e91e20fc9e37bb30bd3d200fd3a332e3049329",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 0,
+          "pass": true,
+          "scenario_id": "support-ticket-agent-baseline-health",
+          "v0_complete_count": 0,
+          "v0_observed": 0,
+          "validation_mode": "baseline"
+        }
+      ],
+      "source_content_digest": "sha256:d29c8664ad8c96e0c8b49d9da98b9d6e2154252b0dbfb9e93c0fc35bfb5d03a0"
+    },
+    {
+      "authority_evidence_digest": "sha256:1f28d6da3d6670679e7418d77113067f421d8df1371ea19731a9fb1d719d8c92",
+      "authority_id": "issue-001",
+      "execution_digest": "sha256:68e45c555b819e3e0fc3802da650110c4648beb947df2ce08ef26428062d50f0",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 7,
+          "k": 5,
+          "n": 7,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-001-defect-path",
+          "v0_complete_count": 7,
+          "v0_observed": 0,
+          "validation_mode": "model_mediated"
+        }
+      ],
+      "source_content_digest": "sha256:168c26037257a2d8a65338de7708415b9b71e14bd85807a830e18400a4241c4e"
+    },
+    {
+      "authority_evidence_digest": "sha256:b70af06222c3c5740233887012eb9c7700d85730f90418656f05e4b527c4c881",
+      "authority_id": "issue-002",
+      "execution_digest": "sha256:e656f7f88736a9c2e4f1252fef2c4da6bc3e566525a8f70db37e359d64187740",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 7,
+          "k": 5,
+          "n": 7,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-002-defect-path",
+          "v0_complete_count": 7,
+          "v0_observed": 0,
+          "validation_mode": "model_mediated"
+        }
+      ],
+      "source_content_digest": "sha256:66b343953677f4a5fb9758493fc77ed97631d6a7d55476c6e5e834360426fe54"
+    },
+    {
+      "authority_evidence_digest": "sha256:1425af01458b577d7f5d2f5b6c5de146da5db08f964adf53d42c8385ef5538f0",
+      "authority_id": "issue-003",
+      "execution_digest": "sha256:ba230ea308527b1ae1595b9d5569174597732aaa8eac7a0ef5fd1c80f80433b1",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 7,
+          "k": 5,
+          "n": 7,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-003-defect-path",
+          "v0_complete_count": 7,
+          "v0_observed": 0,
+          "validation_mode": "model_mediated"
+        }
+      ],
+      "source_content_digest": "sha256:e392d57c30f93afd46d84361f510fc0111e3b07511bfdedcadd27d41a321f586"
+    },
+    {
+      "authority_evidence_digest": "sha256:0e4259aafc2f1d1c1ebb638e275f5fe047a0fa27fb6689b1f2696a1d18d10ce8",
+      "authority_id": "issue-004",
+      "execution_digest": "sha256:162cf5219bc13c64b8f8a4ebc64e49f09f6aee1cd29acfc3892c6b5532ecb552",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 7,
+          "k": 5,
+          "n": 7,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-004-defect-path",
+          "v0_complete_count": 7,
+          "v0_observed": 0,
+          "validation_mode": "model_mediated"
+        }
+      ],
+      "source_content_digest": "sha256:7235b62cf2ee12147244adfe1b1e35abce22b02049883e79e759fa44729f9fe1"
+    },
+    {
+      "authority_evidence_digest": "sha256:1c5f978535254a5c26502b361a3e5c3c4339f25832d1f54a7db7016e7fbb9992",
+      "authority_id": "issue-005",
+      "execution_digest": "sha256:84044d7c404b6545de3ec0c5d60f1066c94a87d47e934d9b04376c0f522c4cf3",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 7,
+          "k": 5,
+          "n": 7,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-005-defect-path",
+          "v0_complete_count": 7,
+          "v0_observed": 0,
+          "validation_mode": "model_mediated"
+        }
+      ],
+      "source_content_digest": "sha256:c209e50afde5667bc474b57b654415b78c29b7e6e62274a277c06e0938079961"
+    },
+    {
+      "authority_evidence_digest": "sha256:49e2beedb8e5e47f8ccf8b828d2fe679cd9de2ae180079af9e3d2e23d59dd6bd",
+      "authority_id": "issue-006",
+      "execution_digest": "sha256:a08c191d4a115844f7efbd8154d4e778bd6b2a861d37c02958334c91e791a5ee",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 7,
+          "k": 5,
+          "n": 7,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-006-defect-path",
+          "v0_complete_count": 7,
+          "v0_observed": 0,
+          "validation_mode": "model_mediated"
+        }
+      ],
+      "source_content_digest": "sha256:c85a0d48f14cd8299e3703cc2785888130708de87bf3379fc27b7d28de8ed949"
+    },
+    {
+      "authority_evidence_digest": "sha256:65717b104233237df210c096b69d4ab24ab3f60ca34e83e0543398840b0b8751",
+      "authority_id": "issue-007",
+      "execution_digest": "sha256:e5b1f90d4a290de6da7d717c8b2e219fc1f126338d86b2abcea3d9ed7175d80b",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 7,
+          "k": 5,
+          "n": 7,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-007-defect-path",
+          "v0_complete_count": 7,
+          "v0_observed": 0,
+          "validation_mode": "model_mediated"
+        }
+      ],
+      "source_content_digest": "sha256:33df0184f2efef6104086d8ac676ecd48365477aa127a6144039c75ae84bbe08"
+    },
+    {
+      "authority_evidence_digest": "sha256:cf75c3cb87710046f077c3ab25bb861a7e29bf8f097df2afbc087a57eab8131f",
+      "authority_id": "issue-008",
+      "execution_digest": "sha256:17c19e399a3391d9ead1f8c2d24514b642d462e9bd0397ce30897a883d7cb1cf",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 7,
+          "k": 5,
+          "n": 7,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-008-defect-path",
+          "v0_complete_count": 7,
+          "v0_observed": 0,
+          "validation_mode": "model_mediated"
+        }
+      ],
+      "source_content_digest": "sha256:f78d271371675e4e832dc67fd5bf99692a4312dabe634b47925d76d75858eb58"
+    },
+    {
+      "authority_evidence_digest": "sha256:e068c26bc998b68adc465ea8d4bb29eb1506d52daa6d66d41cdd12b06179dee9",
+      "authority_id": "issue-009",
+      "execution_digest": "sha256:78f418c844d1dddefba351a2513fbf735ad27bcc75f5a7a720e733a0178de5d3",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 7,
+          "k": 5,
+          "n": 7,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-009-defect-path",
+          "v0_complete_count": 7,
+          "v0_observed": 0,
+          "validation_mode": "model_mediated"
+        }
+      ],
+      "source_content_digest": "sha256:ee07f42263b276ab5fa1ee479fb5fd4eb28d731ab260b76eee000bb678cd52d5"
+    },
+    {
+      "authority_evidence_digest": "sha256:88f7d5388cf9e7558ebc768c675c149cf56329478709a3bc53eccb995a4b6638",
+      "authority_id": "issue-010",
+      "execution_digest": "sha256:db718054b3eb266006761648b62a16890ae6afcfb8534e2d596ac556f6d33c1a",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 7,
+          "k": 5,
+          "n": 7,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-010-defect-path",
+          "v0_complete_count": 7,
+          "v0_observed": 0,
+          "validation_mode": "model_mediated"
+        }
+      ],
+      "source_content_digest": "sha256:1996e54ddac3c1b2bc33d5adfc9ccf6143f6875b526aaf74b0e8c4a109db4198"
+    },
+    {
+      "authority_evidence_digest": "sha256:4c2c7e62d93d2edcae08a4a1a22b09c37aef4d6bf0c3a34e80bbf8712a2f59ee",
+      "authority_id": "issue-011",
+      "execution_digest": "sha256:c21282b99cff25d0166b3d023a26a74780d96007cf068710c3681f671cb9b8ed",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 7,
+          "k": 5,
+          "n": 7,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-011-defect-path",
+          "v0_complete_count": 7,
+          "v0_observed": 0,
+          "validation_mode": "model_mediated"
+        }
+      ],
+      "source_content_digest": "sha256:2fb1c7663263c702977ad6136df748f38ff84b665ac1e9bf43bfd5df5f2535d5"
+    },
+    {
+      "authority_evidence_digest": "sha256:549abf455c83cae67b7062a10e8bb47ac81dbdc39f755b17b76c7f5c10e0d5ad",
+      "authority_id": "issue-012",
+      "execution_digest": "sha256:d9deb1d12d8de9f92616870da8b66778c0aba5f42b99c63481aa9e697492f0f7",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 7,
+          "k": 5,
+          "n": 7,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-012-defect-path",
+          "v0_complete_count": 7,
+          "v0_observed": 0,
+          "validation_mode": "model_mediated"
+        }
+      ],
+      "source_content_digest": "sha256:44afcfa14a02eb5244d5fecba114ccc3f81e5cfbaf6b0139994795053ffb69f1"
+    },
+    {
+      "authority_evidence_digest": "sha256:3e3a8ffd7a6368534528fe300c5138e5dc56f71bd8f4b0cfc28d6e3dbb62b7a7",
+      "authority_id": "issue-013",
+      "execution_digest": "sha256:523b64b0b109115794ae806d62ca97562a1d82860687f307082a7e809cc28356",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-013-defect-path",
+          "v0_complete_count": 5,
+          "v0_observed": 0,
+          "validation_mode": "deterministic"
+        }
+      ],
+      "source_content_digest": "sha256:4d1d5b0519b3d5bb41e36bdc3f45aa7d9913b6db22515efd93d460d86db1f397"
+    },
+    {
+      "authority_evidence_digest": "sha256:98c4be1f3d687ce7981933e8b0000e2a390779cb3a997582cd5a8a79188b8e22",
+      "authority_id": "issue-014",
+      "execution_digest": "sha256:75bd644e5254a33784ca2c4d5d237fc5020d1e3f8c020a97db8e9de24653f65b",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-014-defect-path",
+          "v0_complete_count": 5,
+          "v0_observed": 0,
+          "validation_mode": "deterministic"
+        }
+      ],
+      "source_content_digest": "sha256:3276bef9f6edd766a3b8e4a40a7399f397d305c88add975909742b230519fc6d"
+    },
+    {
+      "authority_evidence_digest": "sha256:77f980b6a2cfd7247968fef63e91bfe998e7a788b1451fe4f1b0f30a48cd601f",
+      "authority_id": "issue-015",
+      "execution_digest": "sha256:f076e57ddd2b8dc6744317a826371b2150ac0c316f37de920ef8eb6923d972bd",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-015-defect-path",
+          "v0_complete_count": 5,
+          "v0_observed": 0,
+          "validation_mode": "deterministic"
+        }
+      ],
+      "source_content_digest": "sha256:0c650e46d6dd62a54e8823c96ce62a81b40000d702fcfcb52a8043a6985e48c8"
+    },
+    {
+      "authority_evidence_digest": "sha256:a63b4f4a54b11042cf2b0b6148dac380afa00ec4c019add6b9873a86121cfd6a",
+      "authority_id": "issue-016",
+      "execution_digest": "sha256:15d831be51623e292402251508b4daa5f2d08980d23d3ac6f77ba9ffec4a2d73",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-016-defect-path",
+          "v0_complete_count": 5,
+          "v0_observed": 0,
+          "validation_mode": "deterministic"
+        }
+      ],
+      "source_content_digest": "sha256:9dae01e3b950ae596d28f012be748997011ad95e6898271ded33c98d07d7f745"
+    },
+    {
+      "authority_evidence_digest": "sha256:4d0f7084aea6c2586df24acc22f88bd911c23b533f19785c5e76b47249aa203f",
+      "authority_id": "issue-017",
+      "execution_digest": "sha256:910d2b5283641d7ce5156fd73c6a426f2cc08ba65ae39e406315742ee5d41467",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-017-defect-path",
+          "v0_complete_count": 5,
+          "v0_observed": 0,
+          "validation_mode": "deterministic"
+        }
+      ],
+      "source_content_digest": "sha256:a6cac09fe9fce2cef206acb6094d07afb11c673a59af0a7fd2b8e97e41eba988"
+    },
+    {
+      "authority_evidence_digest": "sha256:da52db7766d462f259c0bab6c39c5be106db661e824e6861b1789e8ae74f1e67",
+      "authority_id": "issue-018",
+      "execution_digest": "sha256:8358a7e7c00cafd6db1d104b58aea8977d719cbeccb418b4f990baa692fc1eb0",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-018-defect-path",
+          "v0_complete_count": 5,
+          "v0_observed": 0,
+          "validation_mode": "deterministic"
+        }
+      ],
+      "source_content_digest": "sha256:2472481b70d0c14935932e04156c8a994c7207db84b97447d52681ee059e60fe"
+    },
+    {
+      "authority_evidence_digest": "sha256:0babfab25c362c7bb6e0cf82bd734fbf1ebd4d491d5c1af61763865f3fe152d3",
+      "authority_id": "issue-019",
+      "execution_digest": "sha256:d16deb27761b330267654a43230a79ae32889f9714340e97b8d5f3d0f3525554",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-019-defect-path",
+          "v0_complete_count": 5,
+          "v0_observed": 0,
+          "validation_mode": "deterministic"
+        }
+      ],
+      "source_content_digest": "sha256:7240b88d199b709393f7572d06dc30182a40c4c0c00cb14c5bebab035f2a1b7b"
+    },
+    {
+      "authority_evidence_digest": "sha256:1dc92074f9d9e0a98506279f50cbdf7cb7032568bca1b7b6a81997e1323c44db",
+      "authority_id": "issue-020",
+      "execution_digest": "sha256:4d7b749aeb380991af910950589a5497039d796eb931ecdce4c76360399d5d42",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-020-defect-path",
+          "v0_complete_count": 5,
+          "v0_observed": 0,
+          "validation_mode": "deterministic"
+        }
+      ],
+      "source_content_digest": "sha256:f7fb6bb53db12f68dbefe4c8f29f4e297c5d59421a338c1b270319e7e8a52804"
+    },
+    {
+      "authority_evidence_digest": "sha256:f0b8a9a47f6d98e37a0bf7ea9679f5c8dd37969ab08120ff41e4550c6019dff2",
+      "authority_id": "issue-021",
+      "execution_digest": "sha256:4cd6e1c8447f49be4fd03653aed9a86e33d76c4778a0be359b7b092b2cddd090",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 7,
+          "k": 5,
+          "n": 7,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-021-defect-path",
+          "v0_complete_count": 7,
+          "v0_observed": 0,
+          "validation_mode": "model_mediated"
+        }
+      ],
+      "source_content_digest": "sha256:a7649354ad536cf99964c25cc7b7e477c884e7fe4377496434e38ad8f3dbbe3b"
+    },
+    {
+      "authority_evidence_digest": "sha256:8c14e33ec840ae76011660c96d60193bab29a6550c655d1a63d04eed03084b4e",
+      "authority_id": "issue-022",
+      "execution_digest": "sha256:9ef407a015255ffc9d119faec7ad7337ec6ad39d6ebd16d08aa0d14ca26d0fe3",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-022-defect-path",
+          "v0_complete_count": 5,
+          "v0_observed": 0,
+          "validation_mode": "deterministic"
+        }
+      ],
+      "source_content_digest": "sha256:6f7f29332034ca868dadb88c9332173eae9ad5ac2c4589cccbd91ef4cda93faa"
+    },
+    {
+      "authority_evidence_digest": "sha256:e56d2f5db645d3673fab02c7c24b725d8d4aa8f20f62c32eb6c2b605b095a337",
+      "authority_id": "issue-023",
+      "execution_digest": "sha256:34dbd50dcdf81b1a85a18e04ab8c4583289158d0004fa08a6d0c1a521a43cf28",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-023-defect-path",
+          "v0_complete_count": 5,
+          "v0_observed": 0,
+          "validation_mode": "deterministic"
+        }
+      ],
+      "source_content_digest": "sha256:eb958eecf20f6f892e8d15851121462b4049b29fa67b4445b7e45f9775a7ff55"
+    },
+    {
+      "authority_evidence_digest": "sha256:2ff0dd5431e3b1c2f640f7ad17e5cbd79c59b632dc9442bf50498bbb125b2298",
+      "authority_id": "issue-024",
+      "execution_digest": "sha256:ef72f821d69a86a30d15f9944ade45a0961734582f6d23d03dbfde67999bc497",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-024-defect-path",
+          "v0_complete_count": 5,
+          "v0_observed": 0,
+          "validation_mode": "deterministic"
+        }
+      ],
+      "source_content_digest": "sha256:d4bb585b3e4a2d0e40c4b59d5c8dab3c0191f6a958c05085bf0e1ccc649fb991"
+    },
+    {
+      "authority_evidence_digest": "sha256:9c16f2fdf6dc846d16295f84e69bce8c46fa43acfadbd6a46b5b3b082893f071",
+      "authority_id": "issue-025",
+      "execution_digest": "sha256:bec310cf48c787a85759bbfadec5b10b9192b41a2864207ebfcdafe2fd7ad712",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 7,
+          "k": 5,
+          "n": 7,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-025-defect-path",
+          "v0_complete_count": 7,
+          "v0_observed": 0,
+          "validation_mode": "model_mediated"
+        }
+      ],
+      "source_content_digest": "sha256:5a0005b2fdaf16ae2a6c315985c44308d122b9038eca22a5940826c11658e9d8"
+    },
+    {
+      "authority_evidence_digest": "sha256:c36356caa84ae5bfbd5839a11ccca4084b04a01eb76c8d5ceea6c2545e06c265",
+      "authority_id": "issue-026",
+      "execution_digest": "sha256:f139337371419d9d9c6cbeab4c6268c9399eab3a80d162a2e7312101d82a1bb1",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 7,
+          "k": 5,
+          "n": 7,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-026-defect-path",
+          "v0_complete_count": 7,
+          "v0_observed": 0,
+          "validation_mode": "model_mediated"
+        }
+      ],
+      "source_content_digest": "sha256:95fafd80c7c8712b16be0068a288ca2dffe5458e74fefb57a8e1607d7c881d36"
+    },
+    {
+      "authority_evidence_digest": "sha256:398ce562f51467aec7778ce73de1a73bc85082be475a38271cac1e23bab8fea0",
+      "authority_id": "issue-027",
+      "execution_digest": "sha256:fe1543e16163969322aeadf1d7719c43fccbde2e0a66c3701472c73e025579d2",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-027-defect-path",
+          "v0_complete_count": 5,
+          "v0_observed": 0,
+          "validation_mode": "deterministic"
+        }
+      ],
+      "source_content_digest": "sha256:9400b6eab5a05fa87ca7a78b3b5c2b2d7c01605b83ecb25bba3fed890402be9d"
+    },
+    {
+      "authority_evidence_digest": "sha256:a91c6f9f05a4b4ccf23d4770052642530822782361d8f21fbe2b271320a20e4b",
+      "authority_id": "issue-028",
+      "execution_digest": "sha256:928ae42a2cba0fed3a107e1f406c24b77bd3e98fe184ffec65dedd6280920b60",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-028-defect-path",
+          "v0_complete_count": 5,
+          "v0_observed": 0,
+          "validation_mode": "deterministic"
+        }
+      ],
+      "source_content_digest": "sha256:44eef2afd678f147d2d71d8e2e91185b62614dc8197871e64ec716f6c258f813"
+    },
+    {
+      "authority_evidence_digest": "sha256:081b29f69693ac50b9b62e727adee9ae951b4e5e3fcfa7ae437b0f98dbdfb80a",
+      "authority_id": "issue-029",
+      "execution_digest": "sha256:933b0d0db3eb739c2c2c42aaaaaff557661a3b9757783240f438461c20b8ec4c",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-029-defect-path",
+          "v0_complete_count": 5,
+          "v0_observed": 0,
+          "validation_mode": "deterministic"
+        }
+      ],
+      "source_content_digest": "sha256:77131348ac2e19c98f7bd53f094b5ae18197cb211cbd21ef07fd5fbc4f7ba5e9"
+    },
+    {
+      "authority_evidence_digest": "sha256:969a01088c5afddb9bc8d173a7b224b4e22a61bf80dac08b7aa97ad29433b6eb",
+      "authority_id": "issue-030",
+      "execution_digest": "sha256:1cb3af89677a46cd775dec16653bdafc992c60a7abfb610444d32f341269ee04",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-030-defect-path",
+          "v0_complete_count": 5,
+          "v0_observed": 0,
+          "validation_mode": "deterministic"
+        }
+      ],
+      "source_content_digest": "sha256:5e157affbf049886642096ce71b4c71b443e85a3c39eb9df2309098888529415"
+    },
+    {
+      "authority_evidence_digest": "sha256:c34d321049b1e08b780f62f19a2315e966959f37e6c34ab9dd1bf251dfe3ab06",
+      "authority_id": "issue-031",
+      "execution_digest": "sha256:17e1a4e0cf3f971a000526d8d4be02f136e2bbcaa5bb3a10dead72624f2d85a9",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-031-defect-path",
+          "v0_complete_count": 5,
+          "v0_observed": 0,
+          "validation_mode": "deterministic"
+        }
+      ],
+      "source_content_digest": "sha256:ca2a9ff49c1a78e5f05655058d24007b8063fd847b515c6e54824f93af900533"
+    },
+    {
+      "authority_evidence_digest": "sha256:3b5cc2a3026c97c18663bafeebf57d8cac5bc27f73fb20eee5be2a36d3990b58",
+      "authority_id": "issue-032",
+      "execution_digest": "sha256:19b0b653fcf61a96225cbc7f68b2d16da46ca8bb553eb01a48a9681aa1b7d751",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-032-defect-path",
+          "v0_complete_count": 5,
+          "v0_observed": 0,
+          "validation_mode": "deterministic"
+        }
+      ],
+      "source_content_digest": "sha256:dab4dc23125ff1947c9459b0b86d393d7c3e69b00e3497d7eb4a242e7c1e15da"
+    },
+    {
+      "authority_evidence_digest": "sha256:7e6a45501ffd8ff80068a24ab426e9265c2370b633ac1ce4e1c42aa9b8299972",
+      "authority_id": "issue-033",
+      "execution_digest": "sha256:ce6f37b32e47ec898f4ec1081eeb2483dd181885be95ed81a9fc71f2c09459ba",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-033-defect-path",
+          "v0_complete_count": 5,
+          "v0_observed": 0,
+          "validation_mode": "deterministic"
+        }
+      ],
+      "source_content_digest": "sha256:8dc5764e55c947455511fc8dbc46f1057661f58caab25e101f763ece28087c1b"
+    },
+    {
+      "authority_evidence_digest": "sha256:05c576fe62fc8ed5da8ed56b33bafe1288b70b87a96fa1555295718dca45cfd5",
+      "authority_id": "issue-034",
+      "execution_digest": "sha256:88e6134992c006879d822a32b0e82eeb3120e135110dc49caa25b9cc3d9131c6",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-034-defect-path",
+          "v0_complete_count": 5,
+          "v0_observed": 0,
+          "validation_mode": "deterministic"
+        }
+      ],
+      "source_content_digest": "sha256:e7e9503b1fa57eea14651a062cd67e05138c2855d25eee3185a484a84da3af2b"
+    },
+    {
+      "authority_evidence_digest": "sha256:58c7f70d35bdd243f249d88b1dde2050079de03d1b5395e10b32032551fcb4f8",
+      "authority_id": "issue-035",
+      "execution_digest": "sha256:9a6ad4e9ceb4d4faeeb4e7c3d28d44624305c36a143ee42125151e62442d632b",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-035-defect-path",
+          "v0_complete_count": 5,
+          "v0_observed": 0,
+          "validation_mode": "deterministic"
+        }
+      ],
+      "source_content_digest": "sha256:144b86f9c95ba734cdb0aa113b8f5ab8ca82279dbcf1260de0e098e1c1d989bd"
+    },
+    {
+      "authority_evidence_digest": "sha256:2e32c4f6891e82d28ad6841cc28595f73be8354e51835d5169607fa5e3be00d0",
+      "authority_id": "issue-036",
+      "execution_digest": "sha256:ea6cc245e87fe3331804fd26c022c6280e5d0f23aa7f5522c85815a8a416f6cc",
+      "pass": true,
+      "scenarios": [
+        {
+          "complete_count": 5,
+          "k": 5,
+          "n": 5,
+          "observed": 5,
+          "pass": true,
+          "scenario_id": "issue-036-defect-path",
+          "v0_complete_count": 5,
+          "v0_observed": 0,
+          "validation_mode": "deterministic"
+        }
+      ],
+      "source_content_digest": "sha256:4734dd0720bec424dc20fffe4d640c07564296206e8cb28c0100cdc148a1dab9"
+    }
+  ],
+  "authorizes_merge": false,
+  "catalog_hashes": {
+    "agents": "sha256:bae4540225ce90f2bee4e69d7ad459f7fb2f5196809c222b9d6fd37ea829c008",
+    "artifacts": "sha256:c2cb33f6b10d20f5ec8eabac6cb70c0f9a5ee79fd95e31d71edb687bde7a54b7",
+    "issues": "sha256:69a79eef2a741ebe07ff44a0ca571f0672bcdfc5dc629933cf55b429596509e5"
+  },
+  "clean_snapshot": {
+    "cleanup_plan_hash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "digest": "sha256:9ae4bb6bb8f866348e474e24f2cb55a3fa3421f15a29903ed83401612d404302",
+    "etag": "synthetic-etag-r01",
+    "exact_clean": true,
+    "path": "test-agent-validation-snapshots/clean/validation-shadow-r01.json",
+    "verified_at": "2026-08-29T12:30:00+00:00",
+    "version_id": "synthetic-version-r01"
+  },
+  "cycle_id": "validation-shadow-r01",
+  "epoch": 1,
+  "evidence_digest": "sha256:9c206467b663bd57b6d9934b43ac86dac0d1a7ceab81a9dd0402863ed4066e59",
+  "execution_matrix_digest": "sha256:9871973a74edb8afcde6fab1985eea8e3ad43e1e9e83243e8baffe0d8ef86ccb",
+  "final_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "final_tree_sha": "cccccccccccccccccccccccccccccccccccccccc",
+  "issued_at": "2026-08-29T12:00:00Z",
+  "issuer": {
+    "app_id": 15368,
+    "app_slug": "github-actions",
+    "environment": "test-agent-validation-shadow",
+    "issuer_code_digest": "sha256:5974479cbb6d569c926c4b5b308969bb656b9b008976dd256c8c2d5f275e28df",
+    "oidc_subject_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "run_attempt": 1,
+    "run_id": 400,
+    "workflow_commit_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "workflow_database_id": 300,
+    "workflow_path": ".github/workflows/test-agent-validation.yml",
+    "workflow_ref": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "kind": "test-agent-validation-receipt",
+  "mode": "shadow",
+  "pr_number": 999,
+  "quota_plan_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "receipt_digest": "sha256:fe72aa84cb21c3465a1e7c69808138b503cce83f95382fb13431d859afe828a8",
+  "repository": "ninghu/agent-insights-quality",
+  "required_ci": {
+    "continuous_integration": {
+      "app_id": 15368,
+      "app_slug": "github-actions",
+      "check_run_id": 3,
+      "check_suite_id": 103,
+      "completed_at": "2026-08-29T12:00:00Z",
+      "conclusion": "success",
+      "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "name": "validate",
+      "result_digest": "sha256:620521438c1aa27d20340d5596f8bb3708478794c9a46c081e0f1788be4ca991",
+      "workflow_id": 203,
+      "workflow_path": ".github/workflows/test-agent-validation-receipt.yml",
+      "workflow_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "targeted_verification": {
+      "app_id": 15368,
+      "app_slug": "github-actions",
+      "check_run_id": 2,
+      "check_suite_id": 102,
+      "completed_at": "2026-08-29T12:00:00Z",
+      "conclusion": "success",
+      "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "name": "test-agent-validation-targeted",
+      "result_digest": "sha256:a13b81afdfde16e6c83f30f159d2a29855900559cbe253a4857cedcb5d525d55",
+      "workflow_id": 202,
+      "workflow_path": ".github/workflows/test-agent-validation-receipt.yml",
+      "workflow_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  "review": {
+    "check": null,
+    "comprehensive_review_count": 0,
+    "exercised_requirements": [
+      "lifecycle"
+    ],
+    "findings_digest": null,
+    "missing_requirements": [
+      "comprehensive_review"
+    ],
+    "status": "skipped"
+  },
+  "runtime_topology_digest": "sha256:89001cfa44eeda48ebc7425dce40bc49bfb799533299a1aeb2b6e9260760d8a0",
+  "schema_version": "1.0.0",
+  "scope_freeze": {
+    "frozen_at": "2026-08-29T12:00:00Z",
+    "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "scope_digest": "sha256:2123c2a593636778cbb3deff4cc0b0c0ee3ca082428407641a75a0c3908f3739",
+    "source_tree_digest": "sha256:7346c449276af446d346989f316aacb7d6bf67e4a1958b0564d2ef1a87144fad",
+    "tree_sha": "cccccccccccccccccccccccccccccccccccccccc",
+    "validation_contract_digest": "sha256:e15961ef05ac2ba6b7a4423dd7e01f6eee6c3c21c7b4c5bd9567cfe3a5cd72b8"
+  },
+  "source_tree_digest": "sha256:7346c449276af446d346989f316aacb7d6bf67e4a1958b0564d2ef1a87144fad",
+  "telemetry_resource_set": "g29",
+  "test_agent_model": {
+    "deployment_name": "gpt-5.4-mini",
+    "model_id": "gpt-5.4-mini",
+    "model_version": "2026-03-17"
+  },
+  "trusted_policy": {
+    "allowed_app_id": 15368,
+    "allowed_app_slug": "github-actions",
+    "allowed_workflow_path": ".github/workflows/test-agent-validation.yml",
+    "commit_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "content_digest": "sha256:df0f32404e9389c585b9507d3dda1b5e1ce7962d83a9a71c419caca1767c1ba8",
+    "default_branch_trust_anchor_present": false,
+    "path": "config/test-agent-validation-policy.yaml",
+    "ref": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "repository": "ninghu/agent-insights-quality",
+    "required_check": "test-agent-validation",
+    "required_environment": "test-agent-validation-receipt"
+  },
+  "validation_contract_digest": "sha256:e15961ef05ac2ba6b7a4423dd7e01f6eee6c3c21c7b4c5bd9567cfe3a5cd72b8"
+}

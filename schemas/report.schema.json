@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "report_date", "run_id", "profile", "manifest_reference", "catalog_hashes", "source_integrity", "status", "baseline", "issues", "summary", "delivery"],
+  "required": ["schema_version", "report_date", "run_id", "profile", "manifest_reference", "catalog_hashes", "source_integrity", "test_region", "status", "baseline", "issues", "summary", "delivery"],
   "allOf": [
     {
       "if": {"properties": {"profile": {"const": "staging"}}},
@@ -158,6 +158,12 @@
           ]
         }
       }
+    },
+    "test_region": {
+      "oneOf": [
+        {"type": "string", "pattern": "^[A-Z][a-zA-Z]*[0-9]*$"},
+        {"const": "unavailable"}
+      ]
     },
     "status": {"enum": ["PASS", "FAIL", "INCOMPLETE"]},
     "baseline": {"type": "array", "minItems": 5, "maxItems": 5},

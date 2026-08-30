@@ -234,6 +234,7 @@ def test_build_manifest_validates_real_nested_evidence() -> None:
         for agent in agents["agents"]
     ]
     registry = {
+        "test_region": "WestUS2",
         "agents": {
             agent["name"]: {
                 "monitor_id": f"monitor-{agent['name']}",
@@ -255,6 +256,8 @@ def test_build_manifest_validates_real_nested_evidence() -> None:
         delivery_mode="official",
         insight_lookback_hours=0.1,
         telemetry_resource_set="g29",
+        test_region="WestUS2",
+        test_region_registry="WestUS2",
         catalog_hashes=hashes,
         agent_catalog=agents,
         issue_catalog=issues,
@@ -314,9 +317,10 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
     hashes = catalog_hashes(agents, issues)
     model = agent_model_contract(agents)
     registry = {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "profile": "staging",
         "project_name": "agent-insights-quality-staging",
+        "test_region": "WestUS2",
         "test_agent_model": model,
         "catalog_hashes": hashes,
         "agents": {
@@ -335,13 +339,15 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
     }
     issue_by_id = {item["id"]: item for item in issues["issues"]}
     manifest = {
-        "schema_version": "4.0.0",
+        "schema_version": "5.0.0",
         "run_id": "aiq-20260824",
         "profile": "staging",
         "delivery_mode": "official",
         "report_date": "2026-08-24",
         "insight_lookback_hours": 0.1,
         "telemetry_resource_set": "g29",
+        "test_region": "WestUS2",
+        "test_region_registry": "WestUS2",
         "catalog_hashes": hashes,
         "source_integrity": {
             "verified": True,
@@ -407,6 +413,7 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
         "status": "PASS",
         "catalog_hashes": hashes,
         "source_integrity": manifest["source_integrity"],
+        "test_region": "WestUS2",
         "baseline": [
             {
                 "agent": agent["name"],

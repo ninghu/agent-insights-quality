@@ -1,0 +1,54 @@
+name: Test Agent Validation protected receipt
+
+on:
+  workflow_dispatch:
+    inputs:
+      receipt_file:
+        description: Receipt path relative to the durable Test Agent Validation runtime root
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+  actions: read
+  id-token: write
+
+concurrency:
+  group: test-agent-validation-account
+  cancel-in-progress: false
+
+jobs:
+  test-agent-validation:
+    runs-on: [self-hosted, agent-insights-quality]
+    environment: test-agent-validation-receipt
+    env:
+      AIQ_RUNTIME_ROOT: ${{ vars.AIQ_RUNTIME_ROOT }}
+      AIQ_VALIDATION_STORAGE_ACCOUNT: ${{ vars.AIQ_VALIDATION_STORAGE_ACCOUNT }}
+      AIQ_VALIDATION_ENVIRONMENT: test-agent-validation-receipt
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[azure]"
+      - name: Issue create-once protected receipt
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:AIQ_RUNTIME_ROOT "test-agent-validation"
+          $receipt = Join-Path $root "${{ inputs.receipt_file }}"
+          $resolvedRoot = [IO.Path]::GetFullPath($root)
+          $resolvedReceipt = [IO.Path]::GetFullPath($receipt)
+          if (-not $resolvedReceipt.StartsWith($resolvedRoot + [IO.Path]::DirectorySeparatorChar)) {
+            throw "Receipt path escapes the durable validation root"
+          }
+          $document = Get-Content -Raw $resolvedReceipt | ConvertFrom-Json
+          if ($document.mode -ne "merge" -or $document.authorizes_merge -ne $true) {
+            throw "Protected receipt workflow accepts merge receipts only"
+          }
+          python -m agent_insights_quality issue-test-agent-validation-receipt `
+            --receipt $resolvedReceipt `
+            --storage-account $env:AIQ_VALIDATION_STORAGE_ACCOUNT

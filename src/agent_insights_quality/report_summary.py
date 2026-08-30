@@ -72,7 +72,11 @@ def improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str]]:
                 "Healthy Agent versions should produce zero findings.",
             )
         )
-    missing = [item for item in issues if item.get("detail") == "MISSING"]
+    missing = [
+        item
+        for item in issues
+        if item.get("detail") in {"MISSING", "NOISE", "DUPLICATE"}
+    ]
     if missing:
         rows.append(
             (

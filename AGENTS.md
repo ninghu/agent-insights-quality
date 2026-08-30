@@ -16,8 +16,8 @@ Agents and 36 reviewed, single-root issues.
   present in committed sanitized daily reports. Never publish private assessment packages or
   work-item context to ADX.
 - Keep email requests, deployment registries, run manifests, assessment packages, assessments,
-  promotion receipts, provider receipts, work-item snapshots, ADX publication receipts, rendered
-  dashboards under the durable user-level
+  legacy promotion receipts, Test Agent Validation lifecycle/evidence/receipts, provider receipts,
+  work-item snapshots, ADX publication receipts, and rendered dashboards under the durable user-level
   `~/.aiq-runtime/agent-insights-quality/` root shared by all worktrees.
 - Canonical daily and staging deployment registries live in the private Azure
   `deployment-registries` blob container and synchronize into the local runtime root. Never commit
@@ -27,8 +27,8 @@ Agents and 36 reviewed, single-root issues.
 
 - `catalogs/AGENT_CATALOG.yaml` defines the five fixed Agents and profile contract.
 - `catalogs/ISSUE_CATALOG.yaml` defines the 36 fixed issue contracts.
-- Agent and Issue catalogs, Agent implementations, schemas, infrastructure, score policy, and
-  promotion receipts require human review.
+- Agent and Issue catalogs, Agent implementations, validation modes/rules, schemas, infrastructure,
+  score policy, trusted policy, and receipts require human review.
 - Do not add compatibility readers or restore superseded identifiers and formats.
 - Every issue folder is the complete deployable source authority for that version: Prompt issues own a
   full `definition.json`; Hosted issues own a full `source/` tree containing only that defect.
@@ -39,13 +39,22 @@ Agents and 36 reviewed, single-root issues.
 
 ## Execution model
 
-- `daily` and `staging` use separate Foundry accounts, Projects, telemetry, monitors, and private
-  registries.
+- Official Daily and Test Agent Validation use separate Foundry accounts and telemetry. Daily keeps
+  its Project and monitors; validation creates one temporary Project and no monitor.
 - Run the five test Agents concurrently.
 - Stagger Agent starts by the reviewed short delay to avoid a simultaneous endpoint burst.
 - Within one Agent, run `v0` and issue versions sequentially.
 - Daily rotates exactly four issues per Agent: 20 issues plus five baselines, for 25 packages.
-- Full staging remains all 36 issues plus five baselines, for 41 packages.
+- Daily is single-region. Read `location` from the concrete Daily Foundry Project with ARM, resolve
+  its display through Azure location metadata, and use registry/config values only as cross-checks.
+  Never hardcode a renderer fallback or add multi-region behavior.
+- Validation deploys 41 independent endpoints: five baselines plus all 36 issues.
+- Baselines require `5/5` healthy attempts. Deterministic issues require `5/5` with paired `v0`
+  `0/5`; model-mediated issues require `5/7` with paired `v0` `0/7`.
+- Validation mode is reviewed catalog data bound into `execution_digest`; never infer or reclassify
+  it from runtime results, resample a miss, or lower `n`/`k`.
+- Validation is report-free: never create monitors, run Agent Insights, assess/score cards, publish
+  ADX, send email, or run Daily from a validation cycle.
 - Every potentially long-running operation emits public-safe start, elapsed heartbeat, and
   completion/failure progress. Progress-output failures must never abort the operation.
 - `g29` is the fixed telemetry resource set: one App Insights and Log Analytics pair per profile.
@@ -56,7 +65,7 @@ Agents and 36 reviewed, single-root issues.
 - Monitor reset does not delete telemetry. Wait for the reviewed `0.1`-hour clean interval before a
   new traffic attempt.
 - Recover at most three transiently incomplete versions per Agent before declaring the run incomplete.
-- Never send ad-hoc debug traffic to daily or staging before a qualification.
+- Never send ad-hoc debug traffic to Daily or the validation account.
 - Quality-tagged Azure Boards work items are private email context only. Never write their query URL,
   titles, assignees, or links into committed reports.
 - Bind each private work-item snapshot digest and closed-business date to its qualification run before
@@ -86,6 +95,11 @@ Agents and 36 reviewed, single-root issues.
 - Use `none`, `agent`, `insight_engine`, `test_framework`, `infrastructure`, or `unresolved`
   ownership.
 - `field_weighted_v1` score is 85% expected-issue field quality and 15% clean-card precision.
+- Official Daily builds a public-safe normalized improvement input after assessments. GPT-5.6 Sol
+  returns only the strict improvement-analysis schema; deterministic code reconciles living pattern
+  state. Only `insight_engine` ownership is eligible, and the result is advisory and score-neutral.
+- Publish `reports/insight-engine-improvement.{json,md}` and the immutable dated snapshot with the
+  Daily report. Email-only tests write a private preview only and never link or mutate living memory.
 - Complete runs pass at 90 or above and fail below 90. Incomplete evidence is `INCOMPLETE` with no
   numeric score.
 
@@ -95,22 +109,18 @@ Agents and 36 reviewed, single-root issues.
 2. Generate readable catalog views when a catalog changes.
 3. Run repository validation, Ruff, and tests.
 4. Compile Bicep when infrastructure changes.
-5. Use impact-based staging:
-   - Agent source, definition, traffic, or assigned-issue changes qualify only each affected Agent's
-     `v0` and all assigned issues.
-   - Unchanged Agents reuse their latest reviewed evidence only when their content digests, mappings,
-     and every shared runtime contract are unchanged.
-   - Shared runtime, telemetry, assessment, scoring, schema, infrastructure, or cross-Agent topology
-     changes require full-catalog qualification, or retained evidence re-evaluation when no new Agent
-     traffic is needed.
-6. Compose promotion from new affected-Agent evidence plus the latest valid receipts for unchanged
-   Agents. Every exact digest and mapping must match; `INCOMPLETE` evidence is never reusable.
-7. Require human review before promotion to daily.
-8. After exact-digest daily provisioning, use read-only readiness and registry reconciliation. Do not
-   send daily smoke traffic that dirties the clean window.
+5. Run one Test Agent Validation cycle. The first pass always covers all 41; fixes may reuse only
+   unchanged current-digest evidence within that cycle. Shared validation-contract changes invalidate
+   all 41 and require a new cycle.
+6. Freeze scope, complete exactly one comprehensive review, run targeted finding verification and CI
+   on the exact final head, then clean every cycle resource exactly.
+7. Require a create-once protected merge receipt. Shadow receipts never authorize merge.
+8. Keep the legacy staging path unchanged only for migration retention; `r03` is final and staging is
+   never a fallback.
 
 ```powershell
 python -m agent_insights_quality generate-docs
+python -m agent_insights_quality generate-test-agent-validation-rules --check
 python -m agent_insights_quality validate
 python -m ruff check .
 python -m pytest
@@ -120,6 +130,7 @@ az bicep build --file infra\main.bicep --stdout
 ## Skills
 
 - `.github/skills/agent-insights-quality-daily/SKILL.md`: weekday qualification and publication.
-- `.github/skills/staging-qualification/SKILL.md`: full 36-issue qualification and promotion.
+- `.github/skills/test-agent-validation/SKILL.md`: protected 41-authority candidate gate.
+- `.github/skills/staging-qualification/SKILL.md`: retained legacy `r03` history; do not execute.
 - `.github/skills/onboard-test-agent/SKILL.md`: add one reviewed fixed Test Agent.
 - `.github/skills/onboard-new-issue/SKILL.md`: add one reviewed issue.

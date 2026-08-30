@@ -6,7 +6,7 @@ license: MIT
 
 # Daily Agent Insights Quality
 
-<!-- prompt-version: 2.4.1 -->
+<!-- prompt-version: 2.5.0 -->
 
 1. Set `PYTHONPATH` to the current worktree's `src` directory in the same shell as every repository
    Python command. Verify `agent_insights_quality.__file__` resolves inside the current worktree.
@@ -37,6 +37,13 @@ license: MIT
    Never send new traffic for this recheck, never force a conclusive verdict, and retain `INCOMPLETE`
    when independent evidence remains insufficient.
 7. Run `finalize` with all assessments and the same private work-item snapshot. Finalization must
+   first use `--prepare-improvement-input` to write the normalized public-safe improvement input.
+   Assess that input with GPT-5.6 Sol using
+   `src/agent_insights_quality/prompts/improvement.md`, save the strict schema-bound JSON privately,
+   then run `finalize` with `--improvement-analysis <path>`. Official Daily atomically publishes the
+   living and immutable-snapshot improvement files with the report. An email-only test writes only a
+   private improvement preview and never mutates or links the living document.
+   Finalization must
    attempt the public-safe daily ADX publication and create the immutable email request with the
    privately configured quality-trend dashboard link. ADX may receive public catalog expectations
    and full reasoning already present in the committed sanitized report, but never private assessment

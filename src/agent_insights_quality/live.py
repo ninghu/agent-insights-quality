@@ -13,7 +13,7 @@ from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
@@ -105,6 +105,7 @@ class LiveRuntime:
         self._monotonic = monotonic
         self._token_lock = threading.Lock()
         self._token_cache: dict[str, tuple[float, str]] = {}
+        self._rate_limit_feedback = threading.local()
         self._telemetry_query_lock = threading.Lock()
         self._logs_client_instance: Any | None = None
         self._progress = ProgressReporter("aiq", monotonic=monotonic)
@@ -112,6 +113,18 @@ class LiveRuntime:
 
     def report_progress(self, message: str) -> None:
         self._progress.emit(message)
+
+    def rate_limit_feedback(self) -> dict[str, int | float | None]:
+        value = getattr(self._rate_limit_feedback, "value", None)
+        return (
+            dict(value)
+            if isinstance(value, dict)
+            else {
+                "remaining_requests": None,
+                "remaining_tokens": None,
+                "retry_after_seconds": None,
+            }
+        )
 
     def _token_provider(self, scope: str) -> str:
         with self._token_lock:
@@ -545,6 +558,8 @@ union traces, dependencies, requests
         fixture: dict[str, Any],
         seed: int,
         previous_response_id: str | None,
+        *,
+        include_seed_metadata: bool = True,
     ) -> tuple[
         list[str],
         bool,
@@ -570,10 +585,11 @@ union traces, dependencies, requests
             body["previous_response_id"] = previous_response_id
         body["store"] = True
         body["agent_reference"] = reference
-        body["metadata"] = {
-            **body.get("metadata", {}),
-            "traffic_seed": str(seed),
-        }
+        if include_seed_metadata:
+            body["metadata"] = {
+                **body.get("metadata", {}),
+                "traffic_seed": str(seed),
+            }
         self._traffic_ledger.mark_started(
             agent_name,
             now=self._utcnow().astimezone(UTC),
@@ -1087,11 +1103,41 @@ union traces, dependencies, requests
         on_first_pass: Callable[[], None],
         on_stable: Callable[[dict[str, Any]], None] | None = None,
     ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
-        if stabilization_seconds <= 0:
-            raise ContractError("Hosted evidence stabilization interval must be positive")
         payload = json.loads(traffic_path.read_text(encoding="utf-8"))
         requests = payload if isinstance(payload, list) else payload.get("requests")
-        if not isinstance(requests, list) or len(requests) != len(response_references):
+        if not isinstance(requests, list):
+            raise ContractError("Hosted evidence traffic coverage is inconsistent")
+        return LiveRuntime.trace_assertion_evidence_for_requests(
+            self,
+            agent_name=agent_name,
+            foundry_version=foundry_version,
+            operation_ids=operation_ids,
+            response_references=response_references,
+            window_start=window_start,
+            window_end=window_end,
+            requests=requests,
+            stabilization_seconds=stabilization_seconds,
+            on_first_pass=on_first_pass,
+            on_stable=on_stable,
+        )
+
+    def trace_assertion_evidence_for_requests(
+        self,
+        *,
+        agent_name: str,
+        foundry_version: str,
+        operation_ids: tuple[str, ...],
+        response_references: tuple[str, ...],
+        window_start: str,
+        window_end: str,
+        requests: list[dict[str, Any]],
+        stabilization_seconds: int,
+        on_first_pass: Callable[[], None],
+        on_stable: Callable[[dict[str, Any]], None] | None = None,
+    ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
+        if stabilization_seconds <= 0:
+            raise ContractError("Hosted evidence stabilization interval must be positive")
+        if len(requests) != len(response_references):
             raise ContractError("Hosted evidence traffic coverage is inconsistent")
         _validate_response_references(response_references, len(requests))
         _validate_operation_references(operation_ids, len(requests))
@@ -1544,6 +1590,7 @@ union traces, dependencies, requests
         credential_refreshed = False
         status = 0
         payload = b""
+        response_headers: Mapping[str, str] = {}
         while attempt < max_attempts:
             request = urllib.request.Request(
                 url,
@@ -1565,9 +1612,11 @@ union traces, dependencies, requests
                     ) as response:
                         status = response.status
                         payload = response.read()
+                        response_headers = getattr(response, "headers", {})
             except urllib.error.HTTPError as error:
                 status = error.code
                 payload = error.read()
+                response_headers = getattr(error, "headers", {}) or {}
             except (TimeoutError, urllib.error.URLError) as error:
                 attempt += 1
                 no_response_failures += 1
@@ -1609,6 +1658,8 @@ union traces, dependencies, requests
                 f"({attempt + 1}/{max_attempts})"
             )
             self._sleep(delay)
+        feedback = _rate_limit_values(response_headers)
+        self._rate_limit_feedback.value = feedback
         allowed = expected or {200, 201, 202}
         if status not in allowed:
             code, message = _remote_error(payload)
@@ -1631,7 +1682,33 @@ union traces, dependencies, requests
             raise ContractError("Remote operation returned an invalid JSON shape")
         value["_http_status"] = status
         value["_request_reference"] = request_reference
+        value["_rate_limit"] = feedback
         return value
+
+
+def _rate_limit_values(
+    headers: Mapping[str, str],
+) -> dict[str, int | float | None]:
+    def integer(name: str) -> int | None:
+        raw = headers.get(name)
+        try:
+            value = int(raw) if raw is not None else None
+        except ValueError:
+            return None
+        return max(0, value) if value is not None else None
+
+    raw_retry = headers.get("Retry-After")
+    try:
+        retry_after = float(raw_retry) if raw_retry is not None else None
+    except ValueError:
+        retry_after = None
+    if retry_after is not None and retry_after < 0:
+        retry_after = None
+    return {
+        "remaining_requests": integer("x-ratelimit-remaining-requests"),
+        "remaining_tokens": integer("x-ratelimit-remaining-tokens"),
+        "retry_after_seconds": retry_after,
+    }
 
 
 def _azure_cli_token(scope: str) -> str:
@@ -2206,6 +2283,11 @@ _TRACE_ASSERTION_FIELDS = {
         "second_tool",
         "relation",
     },
+    "operation_sequence": {
+        "name",
+        "kind",
+        "operations",
+    },
 }
 
 
@@ -2286,6 +2368,17 @@ def _normalize_trace_assertions(value: Any) -> list[dict[str, Any]]:
                 or any(item not in {"success", "error"} for item in sequence)
             ):
                 raise ContractError("Traffic trace retry sequence is invalid")
+        if kind == "operation_sequence":
+            operations = assertion.get("operations")
+            if (
+                not isinstance(operations, list)
+                or not operations
+                or any(
+                    item not in {"invoke_agent", "execute_tool", "chat"}
+                    for item in operations
+                )
+            ):
+                raise ContractError("Traffic operation sequence is invalid")
         if kind == "terminal_claim_relation":
             if assertion.get("result_class") not in {
                 None,
@@ -2526,6 +2619,23 @@ def _trace_assertion_result(
                 passed = bool(pairs) and all(
                     left[1] <= right[0] for left, right in pairs
                 )
+        elif kind == "operation_sequence":
+            observed = [
+                str(row.get("operation_name") or "")
+                for row in sorted(
+                    rows,
+                    key=lambda item: str(item.get("timestamp") or ""),
+                )
+                if row.get("operation_name")
+            ]
+            position = 0
+            for operation in observed:
+                if (
+                    position < len(assertion["operations"])
+                    and operation == assertion["operations"][position]
+                ):
+                    position += 1
+            passed = position == len(assertion["operations"])
         results.append(
             TraceAssertionEvidence(
                 assertion=str(assertion["name"]),

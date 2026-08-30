@@ -770,6 +770,10 @@ def test_related_noncorrect_card_requires_a_failed_field(
         _validate_issue_cards(assessment, {"observed_insights": [card]})
 
     evaluation["fields"] = {**fields, "severity": False}
+    with pytest.raises(ContractError, match="field_reasons"):
+        _validate_issue_cards(assessment, {"observed_insights": [card]})
+
+    evaluation["field_reasons"] = {"severity": "Expected high; the card reports medium."}
     with pytest.raises(ContractError, match="assessments require"):
         _validate_issue_cards(assessment, {"observed_insights": [card]})
 
@@ -824,6 +828,154 @@ def test_all_other_noncorrect_cards_require_a_failed_field(
     }
     with pytest.raises(ContractError, match="at least one failed field"):
         _validate_issue_cards(assessment, {"observed_insights": [card]})
+
+
+@pytest.mark.parametrize("finding_type", ["PARTIAL", "MISMATCHED"])
+def test_partial_and_mismatched_cards_require_exact_field_reasons(
+    finding_type: str,
+) -> None:
+    fields = {
+        "root_cause": True,
+        "title": False,
+        "description": False,
+        "category": True,
+        "severity": True,
+        "proposed_fix": True,
+        "linked_traces": True,
+    }
+    card = {
+        "reference": "sha256:" + "a" * 64,
+        "title": "Synthetic card",
+        "category": "output_quality",
+        "severity": "medium",
+        "card_linked_trace_proof": _trace_proof(),
+    }
+    verdict = "partially_useful" if finding_type == "PARTIAL" else "incorrect"
+    evaluation = {
+        "reference": card["reference"],
+        "title": card["title"],
+        "category": card["category"],
+        "severity": card["severity"],
+        "verdict": verdict,
+        "finding_type": finding_type,
+        "ownership": "insight_engine",
+        "fields": fields,
+    }
+    assessment = {
+        "issue_id": "issue-001",
+        "verdict": verdict,
+        "finding_type": finding_type,
+        "fields": fields,
+        "card_evaluations": [evaluation],
+    }
+    with pytest.raises(ContractError, match="field_reasons"):
+        _validate_issue_cards(assessment, {"observed_insights": [card]})
+
+    evaluation["field_reasons"] = {"title": "Reason for title."}
+    with pytest.raises(ContractError, match="field_reasons"):
+        _validate_issue_cards(assessment, {"observed_insights": [card]})
+
+    evaluation["field_reasons"] = {
+        "title": "Reason for title.",
+        "description": "Reason for description.",
+        "severity": "Extra reason not tied to a failed field.",
+    }
+    with pytest.raises(ContractError, match="field_reasons"):
+        _validate_issue_cards(assessment, {"observed_insights": [card]})
+
+    evaluation["field_reasons"] = {
+        "title": "Reason for title.",
+        "description": "Reason for description.",
+    }
+    _validate_issue_cards(assessment, {"observed_insights": [card]})
+
+
+def test_duplicate_card_requires_a_resolvable_primary_reference() -> None:
+    fields_all_true = {
+        "root_cause": True,
+        "title": True,
+        "description": True,
+        "category": True,
+        "severity": True,
+        "proposed_fix": True,
+        "linked_traces": True,
+    }
+    fields_failed = {**fields_all_true, "title": False}
+    primary_reference = "sha256:" + "a" * 64
+    duplicate_reference = "sha256:" + "b" * 64
+    primary_card = {
+        "reference": primary_reference,
+        "title": "Primary card",
+        "category": "output_quality",
+        "severity": "medium",
+        "card_linked_trace_proof": _trace_proof(),
+    }
+    duplicate_card = {
+        "reference": duplicate_reference,
+        "title": "Duplicate card",
+        "category": "output_quality",
+        "severity": "medium",
+        "card_linked_trace_proof": _trace_proof(),
+    }
+    primary_evaluation = {
+        "reference": primary_reference,
+        "title": primary_card["title"],
+        "category": primary_card["category"],
+        "severity": primary_card["severity"],
+        "verdict": "partially_useful",
+        "finding_type": "PARTIAL",
+        "ownership": "insight_engine",
+        "fields": fields_failed,
+        "field_reasons": {"title": "The title misrepresents the routing failure."},
+    }
+    duplicate_evaluation = {
+        "reference": duplicate_reference,
+        "title": duplicate_card["title"],
+        "category": duplicate_card["category"],
+        "severity": duplicate_card["severity"],
+        "verdict": "incorrect",
+        "finding_type": "DUPLICATE",
+        "ownership": "insight_engine",
+        "fields": {field: False for field in fields_all_true},
+    }
+    assessment = {
+        "issue_id": "issue-001",
+        "verdict": "partially_useful",
+        "finding_type": "PARTIAL",
+        "fields": fields_failed,
+        "card_evaluations": [primary_evaluation, duplicate_evaluation],
+    }
+    package = {"observed_insights": [primary_card, duplicate_card]}
+
+    with pytest.raises(ContractError, match="duplicate_of"):
+        _validate_issue_cards(assessment, package)
+
+    duplicate_evaluation["duplicate_of"] = duplicate_reference
+    with pytest.raises(ContractError, match="duplicate_of"):
+        _validate_issue_cards(assessment, package)
+
+    duplicate_evaluation["duplicate_of"] = "sha256:" + "9" * 64
+    with pytest.raises(ContractError, match="duplicate_of"):
+        _validate_issue_cards(assessment, package)
+
+    primary_evaluation["finding_type"] = "NOISE"
+    primary_evaluation["verdict"] = "incorrect"
+    primary_evaluation["fields"] = {field: False for field in fields_all_true}
+    duplicate_evaluation["duplicate_of"] = primary_reference
+    assessment["finding_type"] = "DUPLICATE"
+    assessment["verdict"] = "incorrect"
+    with pytest.raises(ContractError, match="duplicate_of"):
+        _validate_issue_cards(assessment, package)
+
+    primary_evaluation["finding_type"] = "PARTIAL"
+    primary_evaluation["verdict"] = "partially_useful"
+    primary_evaluation["fields"] = fields_failed
+    primary_evaluation["field_reasons"] = {
+        "title": "The title misrepresents the routing failure."
+    }
+    assessment["finding_type"] = "PARTIAL"
+    assessment["verdict"] = "partially_useful"
+    _validate_issue_cards(assessment, package)
 
 
 @pytest.mark.parametrize(

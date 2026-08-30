@@ -163,6 +163,8 @@ def create_request(
         f"{report['report_date']} - {report['summary']['issues_correct']}/"
         f"{report['summary']['issues_expected']} issues"
     )
+    if report.get("profile") == "daily":
+        subject = f"{subject} - {report['test_region']}"
     body = _render_html(
         report,
         project_link=project_link,
@@ -522,6 +524,14 @@ def _private_project_source_link(
     )
 
 
+def _test_region_line(report: dict[str, Any]) -> str:
+    region = report["test_region"]
+    return (
+        f'<p style="margin:0 0 18px 0;color:#334155;{_OUTLOOK_TEXT_STYLE}">'
+        f"Test Region: {html.escape(region)}</p>"
+    )
+
+
 def _dashboard_source_link(
     dashboard_link: str | None,
     adx_publication: Mapping[str, Any] | None,
@@ -551,6 +561,25 @@ def _dashboard_source_link(
     return (
         f'<p style="margin:0 0 18px 0;color:#334155;{_OUTLOOK_TEXT_STYLE}">'
         f"Quality trend dashboard: {value}</p>{warning}"
+    )
+
+
+def _insight_engine_improvement_link(
+    report: dict[str, Any], *, test_run: bool = False
+) -> str:
+    """Stable public link to the living Insight Engine improvement memory.
+
+    Only an Official Daily run may reference the stable public document; the
+    isolated Optional Daily Test never mutates or links a public URL.
+    """
+    if report.get("profile") != "daily" or test_run:
+        return ""
+    url = f"{_PUBLIC_REPORT_BASE_URL}reports/insight-engine-improvement.md"
+    return (
+        f'<p style="margin:16px 0 0 0;color:#334155;{_OUTLOOK_TEXT_STYLE}">'
+        f'<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
+        f'href="{html.escape(url, quote=True)}">'
+        "View Insight Engine Improvement Report</a></p>"
     )
 
 
@@ -714,7 +743,7 @@ def _render_html(
         'background-color:#12304a;">'
         '<h1 style="margin:0 0 8px 0;color:#ffffff;font-family:Segoe UI,Arial,'
         'sans-serif;font-size:32px;line-height:39px;font-weight:700;">'
-        "Agent Insights quality</h1>"
+        "Agent Insights Quality</h1>"
         '<p style="margin:0 0 14px 0;color:#dbeafe;font-size:17px;line-height:24px;">'
         f"{html.escape(report.get('profile', 'daily').title())} qualification report "
         f"&middot; {html.escape(report['report_date'])}</p>"
@@ -759,6 +788,7 @@ def _render_html(
         '<tr><td style="padding:24px 32px 38px 32px;">'
         + _section_heading("Test Agents")
         + _private_project_source_link(report, project_link)
+        + _test_region_line(report)
         + '<table cellpadding="0" cellspacing="0" border="0" width="100%" '
         'style="width:100%;border-collapse:collapse;font-size:13px;">'
         '<tr bgcolor="#e8eef7">'
@@ -775,7 +805,9 @@ def _render_html(
         '<th align="left" width="14%" style="padding:10px 12px;'
         'border:1px solid #d6deea;color:#12304a;">Report</th></tr>'
         + rows
-        + "</table></td></tr>"
+        + "</table>"
+        + _insight_engine_improvement_link(report, test_run=test_run)
+        + "</td></tr>"
         + _work_items_section(work_items)
         + "</table>"
         "<!--[if mso]></td></tr></table><![endif]-->"

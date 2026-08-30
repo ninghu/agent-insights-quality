@@ -1,0 +1,412 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ninghu/agent-insights-quality/schemas/test-agent-validation-receipt.schema.json",
+  "title": "Test Agent Validation receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "mode",
+    "authorizes_merge",
+    "repository",
+    "pr_number",
+    "cycle_id",
+    "epoch",
+    "final_head_sha",
+    "final_tree_sha",
+    "issued_at",
+    "issuer",
+    "trusted_policy",
+    "scope_freeze",
+    "review",
+    "required_ci",
+    "catalog_hashes",
+    "artifact_manifest_hash",
+    "source_tree_digest",
+    "validation_contract_digest",
+    "execution_matrix_digest",
+    "runtime_topology_digest",
+    "quota_plan_digest",
+    "evidence_digest",
+    "telemetry_resource_set",
+    "test_agent_model",
+    "authorities",
+    "clean_snapshot",
+    "receipt_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "kind": {"const": "test-agent-validation-receipt"},
+    "mode": {"enum": ["shadow", "merge"]},
+    "authorizes_merge": {"type": "boolean"},
+    "repository": {"$ref": "#/$defs/repository"},
+    "pr_number": {"type": "integer", "minimum": 1},
+    "cycle_id": {"$ref": "#/$defs/cycleId"},
+    "epoch": {"type": "integer", "minimum": 1},
+    "final_head_sha": {"$ref": "#/$defs/gitSha"},
+    "final_tree_sha": {"$ref": "#/$defs/gitSha"},
+    "issued_at": {"$ref": "#/$defs/timestamp"},
+    "issuer": {"$ref": "#/$defs/issuer"},
+    "trusted_policy": {"$ref": "#/$defs/trustedPolicy"},
+    "scope_freeze": {"$ref": "#/$defs/scopeFreeze"},
+    "review": {"$ref": "#/$defs/review"},
+    "required_ci": {"$ref": "#/$defs/requiredCi"},
+    "catalog_hashes": {"$ref": "#/$defs/catalogHashes"},
+    "artifact_manifest_hash": {"$ref": "#/$defs/hash"},
+    "source_tree_digest": {"$ref": "#/$defs/hash"},
+    "validation_contract_digest": {"$ref": "#/$defs/hash"},
+    "execution_matrix_digest": {"$ref": "#/$defs/hash"},
+    "runtime_topology_digest": {"$ref": "#/$defs/hash"},
+    "quota_plan_digest": {"$ref": "#/$defs/hash"},
+    "evidence_digest": {"$ref": "#/$defs/hash"},
+    "telemetry_resource_set": {"const": "g29"},
+    "test_agent_model": {"$ref": "#/$defs/testAgentModel"},
+    "authorities": {
+      "type": "array",
+      "minItems": 41,
+      "maxItems": 41,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/authoritySummary"}
+    },
+    "clean_snapshot": {"$ref": "#/$defs/cleanSnapshot"},
+    "receipt_digest": {"$ref": "#/$defs/hash"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"mode": {"const": "merge"}},
+        "required": ["mode"]
+      },
+      "then": {
+        "properties": {
+          "authorizes_merge": {"const": true},
+          "issuer": {
+            "properties": {
+              "environment": {"const": "test-agent-validation-receipt"},
+              "workflow_ref": {"const": "refs/heads/main"}
+            }
+          },
+          "trusted_policy": {
+            "properties": {
+              "default_branch_trust_anchor_present": {"const": true},
+              "ref": {"const": "refs/heads/main"}
+            }
+          },
+          "review": {
+            "properties": {
+              "status": {"const": "success"},
+              "comprehensive_review_count": {"const": 1},
+              "missing_requirements": {"maxItems": 0},
+              "check": {"$ref": "#/$defs/check"}
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "authorizes_merge": {"const": false},
+          "issuer": {
+            "properties": {
+              "environment": {"const": "test-agent-validation-shadow"}
+            }
+          },
+          "trusted_policy": {
+            "properties": {
+              "default_branch_trust_anchor_present": {"const": false}
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "gitSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "reference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "cycleId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{7,63}$"
+    },
+    "catalogHashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agents", "issues", "artifacts"],
+      "properties": {
+        "agents": {"$ref": "#/$defs/hash"},
+        "issues": {"$ref": "#/$defs/hash"},
+        "artifacts": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "testAgentModel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deployment_name", "model_id", "model_version"],
+      "properties": {
+        "deployment_name": {"const": "gpt-5.4-mini"},
+        "model_id": {"const": "gpt-5.4-mini"},
+        "model_version": {"const": "2026-03-17"}
+      }
+    },
+    "issuer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "environment",
+        "oidc_subject_digest",
+        "app_id",
+        "app_slug",
+        "workflow_database_id",
+        "workflow_path",
+        "workflow_ref",
+        "workflow_commit_sha",
+        "run_id",
+        "run_attempt",
+        "issuer_code_digest"
+      ],
+      "properties": {
+        "environment": {
+          "enum": [
+            "test-agent-validation-shadow",
+            "test-agent-validation-receipt"
+          ]
+        },
+        "oidc_subject_digest": {"$ref": "#/$defs/hash"},
+        "app_id": {"type": "integer", "minimum": 1},
+        "app_slug": {"type": "string", "minLength": 1, "maxLength": 128},
+        "workflow_database_id": {"type": "integer", "minimum": 1},
+        "workflow_path": {"type": "string", "pattern": "^\\.github/workflows/.+\\.ya?ml$"},
+        "workflow_ref": {"type": "string", "minLength": 1, "maxLength": 256},
+        "workflow_commit_sha": {"$ref": "#/$defs/gitSha"},
+        "run_id": {"type": "integer", "minimum": 1},
+        "run_attempt": {"type": "integer", "minimum": 1},
+        "issuer_code_digest": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "trustedPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "default_branch_trust_anchor_present",
+        "repository",
+        "path",
+        "ref",
+        "commit_sha",
+        "content_digest",
+        "allowed_workflow_path",
+        "allowed_app_id",
+        "allowed_app_slug",
+        "required_environment",
+        "required_check"
+      ],
+      "properties": {
+        "default_branch_trust_anchor_present": {"type": "boolean"},
+        "repository": {"$ref": "#/$defs/repository"},
+        "path": {"const": "config/test-agent-validation-policy.yaml"},
+        "ref": {"type": "string", "minLength": 1, "maxLength": 256},
+        "commit_sha": {"$ref": "#/$defs/gitSha"},
+        "content_digest": {"$ref": "#/$defs/hash"},
+        "allowed_workflow_path": {"type": "string", "pattern": "^\\.github/workflows/.+\\.ya?ml$"},
+        "allowed_app_id": {"type": "integer", "minimum": 1},
+        "allowed_app_slug": {"type": "string", "minLength": 1, "maxLength": 128},
+        "required_environment": {"const": "test-agent-validation-receipt"},
+        "required_check": {"const": "test-agent-validation"}
+      }
+    },
+    "scopeFreeze": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "head_sha",
+        "tree_sha",
+        "frozen_at",
+        "source_tree_digest",
+        "validation_contract_digest",
+        "scope_digest"
+      ],
+      "properties": {
+        "head_sha": {"$ref": "#/$defs/gitSha"},
+        "tree_sha": {"$ref": "#/$defs/gitSha"},
+        "frozen_at": {"$ref": "#/$defs/timestamp"},
+        "source_tree_digest": {"$ref": "#/$defs/hash"},
+        "validation_contract_digest": {"$ref": "#/$defs/hash"},
+        "scope_digest": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "comprehensive_review_count",
+        "exercised_requirements",
+        "missing_requirements",
+        "check",
+        "findings_digest"
+      ],
+      "properties": {
+        "status": {"enum": ["success", "skipped"]},
+        "comprehensive_review_count": {"type": "integer", "minimum": 0, "maximum": 1},
+        "exercised_requirements": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "missing_requirements": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "check": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/check"}
+          ]
+        },
+        "findings_digest": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/hash"}
+          ]
+        }
+      }
+    },
+    "requiredCi": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["targeted_verification", "continuous_integration"],
+      "properties": {
+        "targeted_verification": {"$ref": "#/$defs/check"},
+        "continuous_integration": {"$ref": "#/$defs/check"}
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "check_run_id",
+        "check_suite_id",
+        "app_id",
+        "app_slug",
+        "workflow_id",
+        "workflow_path",
+        "workflow_sha",
+        "head_sha",
+        "conclusion",
+        "completed_at",
+        "result_digest"
+      ],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 256},
+        "check_run_id": {"type": "integer", "minimum": 1},
+        "check_suite_id": {"type": "integer", "minimum": 1},
+        "app_id": {"type": "integer", "minimum": 1},
+        "app_slug": {"type": "string", "minLength": 1, "maxLength": 128},
+        "workflow_id": {"type": "integer", "minimum": 1},
+        "workflow_path": {"type": "string", "pattern": "^\\.github/workflows/.+\\.ya?ml$"},
+        "workflow_sha": {"$ref": "#/$defs/gitSha"},
+        "head_sha": {"$ref": "#/$defs/gitSha"},
+        "conclusion": {"const": "success"},
+        "completed_at": {"$ref": "#/$defs/timestamp"},
+        "result_digest": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "authoritySummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority_id",
+        "source_content_digest",
+        "execution_digest",
+        "pass",
+        "scenarios",
+        "authority_evidence_digest"
+      ],
+      "properties": {
+        "authority_id": {
+          "oneOf": [
+            {"type": "string", "pattern": "^[a-z][a-z0-9-]+-agent/v0$"},
+            {"type": "string", "pattern": "^issue-[0-9]{3}$"}
+          ]
+        },
+        "source_content_digest": {"$ref": "#/$defs/hash"},
+        "execution_digest": {"$ref": "#/$defs/hash"},
+        "pass": {"const": true},
+        "scenarios": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {"$ref": "#/$defs/scenarioSummary"}
+        },
+        "authority_evidence_digest": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "scenarioSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario_id",
+        "validation_mode",
+        "n",
+        "k",
+        "complete_count",
+        "observed",
+        "v0_complete_count",
+        "v0_observed",
+        "pass"
+      ],
+      "properties": {
+        "scenario_id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{2,63}$"},
+        "validation_mode": {"enum": ["baseline", "deterministic", "model_mediated"]},
+        "n": {"enum": [5, 7]},
+        "k": {"const": 5},
+        "complete_count": {"type": "integer", "minimum": 5, "maximum": 7},
+        "observed": {"type": "integer", "minimum": 0, "maximum": 7},
+        "v0_complete_count": {"type": "integer", "minimum": 0, "maximum": 7},
+        "v0_observed": {"const": 0},
+        "pass": {"const": true}
+      }
+    },
+    "cleanSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "version_id",
+        "etag",
+        "digest",
+        "cleanup_plan_hash",
+        "exact_clean",
+        "verified_at"
+      ],
+      "properties": {
+        "path": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "version_id": {"type": "string", "minLength": 1, "maxLength": 256},
+        "etag": {"type": "string", "minLength": 1, "maxLength": 256},
+        "digest": {"$ref": "#/$defs/hash"},
+        "cleanup_plan_hash": {"$ref": "#/$defs/hash"},
+        "exact_clean": {"const": true},
+        "verified_at": {"$ref": "#/$defs/timestamp"}
+      }
+    }
+  }
+}

@@ -133,3 +133,11 @@ def immutable_json(path: Path, value: Mapping[str, Any]) -> None:
             raise ContractError(f"{path} is immutable and already has different content")
         return
     atomic_json(path, value)
+
+
+def immutable_text(path: Path, value: str) -> None:
+    if path.exists():
+        if path.read_text(encoding="utf-8") != value:
+            raise ContractError(f"{path} is immutable and already has different content")
+        return
+    atomic_text(path, value)

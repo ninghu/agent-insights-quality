@@ -33,6 +33,16 @@ def test_infrastructure_grants_automation_data_plane_roles() -> None:
     assert "name: 'gpt-5.4-mini'" in lab
     assert "name: 'terra-insight-generation'" in lab
     assert "name: 'terra-test-agents'" not in lab
+    assert "isVersioningEnabled: true" in lab
+    assert "test-agent-validation-lifecycle" in lab
+    assert "test-agent-validation-snapshots" in lab
+    assert "test-agent-validation-receipts" in lab
+    assert lab.count("immutableStorageWithVersioning") == 3
+    assert "test-agent-validation-shadow-receipts" in lab
+    assert "validationReceiptPrincipalId" in lab
+    assert "blobReaderRoleId" in lab
+    assert "validationPrincipalId" in lab
+    assert "principalType: 'ServicePrincipal'" in lab
 
 
 def test_support_provisioning_publishes_to_acr() -> None:

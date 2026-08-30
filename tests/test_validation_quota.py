@@ -1,0 +1,160 @@
+from __future__ import annotations
+
+from dataclasses import replace
+
+import pytest
+
+from agent_insights_quality.util import ContractError
+from agent_insights_quality.live import _rate_limit_values
+from agent_insights_quality.validation_policy import load_validation_policy
+from agent_insights_quality.validation_quota import (
+    CapacityMeasurement,
+    EndpointCost,
+    WeightedTokenBucket,
+    build_capacity_plan,
+    validate_capacity_plan,
+)
+
+
+def test_capacity_plan_preserves_percent_and_absolute_headroom() -> None:
+    policy = load_validation_policy()
+    plan = build_capacity_plan(
+        CapacityMeasurement(
+            rpm=100,
+            tpm=100_000,
+            measured_at="2026-08-29T00:00:00Z",
+        ),
+        policy=policy,
+        costs=[
+            EndpointCost(requests=2, tokens=4096, inner_model_calls=2),
+            EndpointCost(requests=1, tokens=2048, inner_model_calls=1),
+        ],
+    )
+    assert plan.reserved_rpm == 25
+    assert plan.reserved_tpm == 25_000
+    assert plan.endpoint_concurrency <= 8
+    assert plan.provisioning_concurrency == 8
+    assert plan.telemetry_query_concurrency == 4
+    assert plan.outer_request_envelope == 3
+    assert plan.plan_digest.startswith("sha256:")
+    validate_capacity_plan(plan, policy=policy)
+
+
+def test_capacity_preflight_fails_closed_when_headroom_disappears() -> None:
+    policy = load_validation_policy()
+    with pytest.raises(ContractError, match="preserve reviewed account headroom"):
+        build_capacity_plan(
+            CapacityMeasurement(
+                rpm=8,
+                tpm=8192,
+                measured_at="2026-08-29T00:00:00Z",
+            ),
+            policy=policy,
+            costs=[EndpointCost(requests=1, tokens=1, inner_model_calls=1)],
+        )
+    with pytest.raises(ContractError, match="reviewed envelope"):
+        build_capacity_plan(
+            CapacityMeasurement(
+                rpm=100,
+                tpm=100_000,
+                measured_at="2026-08-29T00:00:00Z",
+            ),
+            policy=policy,
+            costs=[
+                EndpointCost(
+                    requests=1,
+                    tokens=100,
+                    inner_model_calls=policy.limits.inner_model_call_limit + 1,
+                )
+            ],
+        )
+
+
+def test_weighted_bucket_waits_and_honors_rate_limit_reduction() -> None:
+    now = [0.0]
+    sleeps: list[float] = []
+
+    def clock() -> float:
+        return now[0]
+
+    def sleeper(value: float) -> None:
+        sleeps.append(value)
+        now[0] += value
+
+    bucket = WeightedTokenBucket(
+        request_capacity=2,
+        token_capacity=200,
+        clock=clock,
+        sleeper=sleeper,
+    )
+    cost = EndpointCost(requests=2, tokens=200, inner_model_calls=1)
+    bucket.acquire(cost)
+    bucket.acquire(cost)
+    assert sleeps == [pytest.approx(60.0)]
+
+    bucket.reduce_from_rate_limit(
+        remaining_requests=0,
+        remaining_tokens=0,
+        retry_after_seconds=3,
+    )
+    assert sleeps[-1] == 3
+
+
+def test_policy_does_not_raise_concurrency_from_runtime_headers() -> None:
+    policy = load_validation_policy()
+    smaller = replace(
+        policy,
+        limits=replace(policy.limits, provisioning_concurrency=2),
+    )
+    plan = build_capacity_plan(
+        CapacityMeasurement(
+            rpm=1000,
+            tpm=1_000_000,
+            measured_at="2026-08-29T00:00:00Z",
+        ),
+        policy=smaller,
+        costs=[EndpointCost(requests=1, tokens=100, inner_model_calls=1)],
+    )
+    assert plan.endpoint_concurrency == 2
+
+
+def test_capacity_plan_digest_prevents_runtime_concurrency_tampering() -> None:
+    policy = load_validation_policy()
+    plan = build_capacity_plan(
+        CapacityMeasurement(
+            rpm=100,
+            tpm=100_000,
+            measured_at="2026-08-29T00:00:00Z",
+        ),
+        policy=policy,
+        costs=[EndpointCost(requests=1, tokens=100, inner_model_calls=1)],
+    )
+    with pytest.raises(ContractError, match="digest is stale"):
+        validate_capacity_plan(
+            replace(plan, endpoint_concurrency=plan.endpoint_concurrency - 1),
+            policy=policy,
+        )
+
+
+def test_runtime_rate_limit_headers_are_reduced_to_public_numeric_feedback() -> None:
+    assert _rate_limit_values(
+        {
+            "x-ratelimit-remaining-requests": "17",
+            "x-ratelimit-remaining-tokens": "4096",
+            "Retry-After": "2.5",
+        }
+    ) == {
+        "remaining_requests": 17,
+        "remaining_tokens": 4096,
+        "retry_after_seconds": 2.5,
+    }
+    assert _rate_limit_values(
+        {
+            "x-ratelimit-remaining-requests": "private-invalid",
+            "Retry-After": "-1",
+        }
+    ) == {
+        "remaining_requests": None,
+        "remaining_tokens": None,
+        "retry_after_seconds": None,
+    }

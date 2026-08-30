@@ -95,6 +95,7 @@ def provision_profile(
     )
     progress(f"{profile.name}: waiting for Foundry Project data plane")
     client.wait_project()
+    test_region = profile.resolve_test_region()
     progress(f"{profile.name}: checking reusable registry")
     reusable = _reusable_registry(
         client,
@@ -102,6 +103,7 @@ def provision_profile(
         agents,
         issues,
         approved_digests,
+        test_region,
     )
     if reusable is not None:
         progress(f"{profile.name}: existing 41-version registry is reusable")
@@ -164,9 +166,10 @@ def provision_profile(
     ):
         raise ContractError("Profile monitor inventory is not exact")
     registry = {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "profile": profile.name,
         "project_name": profile.project_name,
+        "test_region": test_region,
         "test_agent_model": model_contract,
         "catalog_hashes": catalog_hashes(agents, issues),
         "agents": registry_agents,
@@ -184,6 +187,7 @@ def _reusable_registry(
     agents: dict[str, Any],
     issues: dict[str, Any],
     approved_digests: dict[str, str] | None,
+    test_region: str,
 ) -> dict[str, Any] | None:
     if not profile.registry_path.exists():
         return None
@@ -194,6 +198,8 @@ def _reusable_registry(
             catalog_hashes=catalog_hashes(agents, issues),
         )
     except ContractError:
+        return None
+    if registry["test_region"] != test_region:
         return None
     expected_monitors = {
         name: value["monitor_id"]
@@ -964,6 +970,82 @@ class FoundryProvisioner:
                 next_progress = time.monotonic() + 60
             time.sleep(10)
         raise ContractError("Foundry Project data plane was not ready within 15 minutes")
+
+    def version_details(
+        self,
+        name: str,
+        version: str,
+        *,
+        hosted: bool,
+    ) -> dict[str, Any]:
+        if not name or not version:
+            raise ContractError("Foundry Agent version identity is required")
+        return self._request(
+            "GET",
+            f"/agents/{urllib.parse.quote(name, safe='')}/versions/"
+            f"{urllib.parse.quote(version, safe='')}",
+            hosted=hosted,
+        )
+
+    def delete_agent(self, name: str, *, hosted: bool) -> None:
+        self._request(
+            "DELETE",
+            f"/agents/{urllib.parse.quote(name, safe='')}",
+            hosted=hosted,
+            expected={200, 202, 204, 404},
+        )
+
+    def version_exists(self, name: str, version: str, *, hosted: bool) -> bool:
+        response = self._request(
+            "GET",
+            f"/agents/{urllib.parse.quote(name, safe='')}/versions/"
+            f"{urllib.parse.quote(version, safe='')}",
+            hosted=hosted,
+            expected={200, 404},
+            include_payload=False,
+        )
+        return response["_status"] == 200
+
+    def agent_exists(self, name: str, *, hosted: bool) -> bool:
+        return self._agent_exists(name, hosted=hosted)
+
+    def delete_session(self, agent_name: str, session_id: str) -> None:
+        self._request(
+            "DELETE",
+            f"/agents/{urllib.parse.quote(agent_name, safe='')}/endpoint/"
+            f"sessions/{urllib.parse.quote(session_id, safe='')}",
+            hosted=True,
+            expected={200, 202, 204, 404},
+        )
+
+    def session_exists(self, agent_name: str, session_id: str) -> bool:
+        response = self._request(
+            "GET",
+            f"/agents/{urllib.parse.quote(agent_name, safe='')}/endpoint/"
+            f"sessions/{urllib.parse.quote(session_id, safe='')}",
+            hosted=True,
+            expected={200, 404},
+            include_payload=False,
+        )
+        return response["_status"] == 200
+
+    def delete_response(self, response_id: str) -> None:
+        self._request(
+            "DELETE",
+            f"/openai/v1/responses/{urllib.parse.quote(response_id, safe='')}",
+            hosted=False,
+            expected={200, 202, 204, 404},
+        )
+
+    def response_exists(self, response_id: str) -> bool:
+        response = self._request(
+            "GET",
+            f"/openai/v1/responses/{urllib.parse.quote(response_id, safe='')}",
+            hosted=False,
+            expected={200, 404},
+            include_payload=False,
+        )
+        return response["_status"] == 200
 
     def ensure_version(
         self,

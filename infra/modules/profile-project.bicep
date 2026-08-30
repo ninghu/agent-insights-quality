@@ -114,3 +114,15 @@ resource insightsConnection 'Microsoft.CognitiveServices/accounts/projects/conne
     registryConnection
   ]
 }
+
+output projectId string = project.id
+output projectPrincipalId string = project.identity.principalId
+output connectionIds array = [
+  registryConnection.id
+  insightsConnection.id
+]
+output roleAssignmentIds array = [
+  automationInsightsReader.id
+  automationProjectManager.id
+  ...projectRbac.outputs.roleAssignmentIds
+]

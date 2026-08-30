@@ -48,7 +48,7 @@ def _load_finance_app(monkeypatch, logical_version: str):
     identity.DefaultAzureCredential = object
 
     trace_module = types.ModuleType("opentelemetry.trace")
-    trace_module.get_tracer = lambda _name: object()
+    trace_module.get_tracer = lambda *_args: object()
     opentelemetry = types.ModuleType("opentelemetry")
     opentelemetry.trace = trace_module
 
@@ -59,7 +59,18 @@ def _load_finance_app(monkeypatch, logical_version: str):
     package = types.ModuleType(package_name)
     package.__path__ = []
     observability = types.ModuleType(f"{package_name}.observability")
-    observability.configure_observability = lambda _name: None
+    observability.configure_observability = lambda *_args: None
+    runtime_identity = types.ModuleType(f"{package_name}.runtime_identity")
+
+    class RuntimeIdentity:
+        name = "synthetic-finance-agent"
+        version = "1"
+
+        @staticmethod
+        def start_span(tracer, name):
+            return tracer.start_as_current_span(name)
+
+    runtime_identity.require_foundry_runtime_identity = RuntimeIdentity
     tools = types.ModuleType(f"{package_name}.tools")
     tools.ACCOUNTS = {
         "acct-demo-a": {"balance": 1250.5, "spend": 265.5, "currency": "USD"},
@@ -76,6 +87,7 @@ def _load_finance_app(monkeypatch, logical_version: str):
         "pydantic": pydantic,
         package_name: package,
         f"{package_name}.observability": observability,
+        f"{package_name}.runtime_identity": runtime_identity,
         f"{package_name}.tools": tools,
     }
     for name, value in modules.items():

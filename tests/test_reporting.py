@@ -12,6 +12,7 @@ from agent_insights_quality.reporting import (
     calculate_quality_score,
     render_agent_markdown,
     render_markdown,
+    resolve_test_region,
     score_comparison,
     updated_trend,
     validate_report,
@@ -114,6 +115,7 @@ def _manifest(*, full: bool = False) -> dict:
         "run_id": "aiq-20260824",
         "profile": "staging" if full else "daily",
         "manifest_hash": "sha256:" + "c" * 64,
+        "test_region": "WestUS2",
         "catalog_hashes": {
             "agents": "sha256:" + "d" * 64,
             "issues": "sha256:" + "e" * 64,
@@ -136,6 +138,7 @@ def _assessments(manifest: dict) -> dict[str, dict]:
             "ownership": "none",
             "finding_type": "MATCHED",
             "ownership_reason": "The expected Insight is fully correct.",
+            "reasoning": "The expected Insight is fully correct.",
             "fields": {
                 "root_cause": True,
                 "title": True,
@@ -205,6 +208,151 @@ def test_report_status_uses_ninety_point_threshold() -> None:
     )
     assert failed["summary"]["quality_score"] == 83
     assert failed["status"] == "FAIL"
+
+
+def test_render_markdown_uses_exact_agent_insights_quality_title() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    report = build_report(
+        manifest,
+        issues,
+        _assessments(manifest),
+        _baseline_assessments(manifest),
+    )
+    markdown = render_markdown(report)
+    assert markdown.startswith("# Agent Insights Quality - 2026-08-24")
+
+
+def test_build_report_uses_arm_resolved_canonical_test_region() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    report = build_report(
+        manifest,
+        issues,
+        _assessments(manifest),
+        _baseline_assessments(manifest),
+    )
+    assert report["test_region"] == "WestUS2"
+
+
+def test_build_report_fails_closed_on_missing_test_region() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    del manifest["test_region"]
+    with pytest.raises(ContractError, match="test_region"):
+        build_report(
+            manifest,
+            issues,
+            _assessments(manifest),
+            _baseline_assessments(manifest),
+        )
+
+
+def test_build_report_fails_closed_on_unresolved_test_region_metadata() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    manifest["test_region"] = "notarealazureregion"
+    with pytest.raises(ContractError, match="test_region"):
+        build_report(
+            manifest,
+            issues,
+            _assessments(manifest),
+            _baseline_assessments(manifest),
+        )
+
+
+def test_build_report_accepts_other_arm_resolved_canonical_regions() -> None:
+    _, issues = load_catalogs()
+    for canonical in ("EastUS", "UKSouth", "CentralIndia", "SoutheastAsia"):
+        manifest = _manifest()
+        manifest["test_region"] = canonical
+        report = build_report(
+            manifest,
+            issues,
+            _assessments(manifest),
+            _baseline_assessments(manifest),
+        )
+        assert report["test_region"] == canonical
+
+
+def test_build_report_registry_test_region_cannot_supply_or_fall_back() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    del manifest["test_region"]
+    manifest["test_region_registry"] = "westus2"
+    with pytest.raises(ContractError, match="test_region"):
+        build_report(
+            manifest,
+            issues,
+            _assessments(manifest),
+            _baseline_assessments(manifest),
+        )
+
+
+def test_build_report_fails_closed_on_registry_test_region_mismatch() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    manifest["test_region"] = "WestUS2"
+    manifest["test_region_registry"] = "EastUS"
+    with pytest.raises(ContractError, match="cross-check"):
+        build_report(
+            manifest,
+            issues,
+            _assessments(manifest),
+            _baseline_assessments(manifest),
+        )
+
+
+def test_build_report_registry_test_region_cross_check_matches() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    manifest["test_region"] = "WestUS2"
+    manifest["test_region_registry"] = "west-us-2"
+    report = build_report(
+        manifest,
+        issues,
+        _assessments(manifest),
+        _baseline_assessments(manifest),
+    )
+    assert report["test_region"] == "WestUS2"
+
+
+def test_resolve_test_region_uses_only_live_location_as_source() -> None:
+    assert resolve_test_region("WestUS2") == "WestUS2"
+    with pytest.raises(ContractError, match="live"):
+        resolve_test_region(None, "westus2")
+    with pytest.raises(ContractError, match="live"):
+        resolve_test_region("", "westus2")
+
+
+def test_resolve_test_region_generic_with_injected_metadata() -> None:
+    metadata = {"contosonorth": "Contoso North"}
+    assert (
+        resolve_test_region("contosonorth", location_metadata=metadata)
+        == "ContosoNorth"
+    )
+    with pytest.raises(ContractError, match="Azure location metadata"):
+        resolve_test_region("westus2", location_metadata=metadata)
+
+
+def test_report_schema_requires_test_region() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    report = build_report(
+        manifest,
+        issues,
+        _assessments(manifest),
+        _baseline_assessments(manifest),
+    )
+    validate_report(report)
+    missing = deepcopy(report)
+    del missing["test_region"]
+    with pytest.raises(Exception):
+        validate_report(missing)
+    invalid = deepcopy(report)
+    invalid["test_region"] = "eastus2"
+    with pytest.raises(Exception):
+        validate_report(invalid)
 
 
 def test_rejected_foreign_operation_card_does_not_enter_report_scoring() -> None:
@@ -869,39 +1017,215 @@ def test_published_report_rejects_incomplete_assessment_evidence() -> None:
 def test_agent_report_is_a_human_validation_handoff() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
+    assessments = _assessments(manifest)
+    first_issue_id = manifest["agents"][0]["issues"][0]["issue_id"]
+    assessments[first_issue_id]["verdict"] = "partially_useful"
+    assessments[first_issue_id]["finding_type"] = "PARTIAL"
+    assessments[first_issue_id]["ownership"] = "insight_engine"
+    assessments[first_issue_id]["reasoning"] = (
+        "The card names the correct root but severity and fix are wrong."
+    )
+    assessments[first_issue_id]["fields"] = {
+        "root_cause": True,
+        "title": True,
+        "description": True,
+        "category": True,
+        "severity": False,
+        "proposed_fix": False,
+        "linked_traces": True,
+    }
+    assessments[first_issue_id]["card_evaluations"] = [
+        {
+            "reference": "sha256:" + "9" * 64,
+            "title": "Synthetic partial finding",
+            "finding_type": "PARTIAL",
+            "fields": assessments[first_issue_id]["fields"],
+            "field_reasons": {
+                "severity": "The card understates impact though traces show a full outage.",
+                "proposed_fix": "The proposed fix does not address the identified root cause.",
+            },
+            "ownership": "insight_engine",
+            "confidence": 0.8,
+            "reasoning": "The card names the correct root but severity and fix are wrong.",
+        }
+    ]
     report = build_report(
         manifest,
         issues,
-        _assessments(manifest),
+        assessments,
         _baseline_assessments(manifest),
     )
-    report["issues"][0]["assessment"]["card_evaluations"] = [
+    markdown = render_agent_markdown(report, "weather-agent")
+    assert "## Expected issue coverage" in markdown
+    assert "## Extra generated Insights" in markdown
+    assert "## Decision details" in markdown
+    assert "## Evaluation guide" in markdown
+    assert "## Human validation checklist" in markdown
+    assert "## Coding-agent context" in markdown
+    assert (
+        "| Expected issue | Version | Primary Insight | Evaluation | Why |"
+    ) in markdown
+    assert "Partially Correct" in markdown
+    assert "Synthetic partial finding" in markdown
+    assert "understates impact" in markdown
+    assert "does not address the identified root cause" in markdown
+    assert "Quality score:" not in markdown
+    assert "Runtime evidence: `Complete`" in markdown
+
+
+def test_extra_insights_missing_coverage_duplicates_and_coding_agent_context() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    assessments = _assessments(manifest)
+    agent_name = manifest["agents"][0]["name"]
+    agent_issue_ids = [item["issue_id"] for item in manifest["agents"][0]["issues"]]
+    noise_issue_id, duplicate_issue_id = agent_issue_ids[0], agent_issue_ids[1]
+
+    # An expected issue with only a Noise card is still Missing, and the Noise
+    # card is recorded as an Extra generated Insight with no issue assignment.
+    assessments[noise_issue_id]["verdict"] = "missing"
+    assessments[noise_issue_id]["finding_type"] = "NOISE"
+    assessments[noise_issue_id]["ownership"] = "insight_engine"
+    assessments[noise_issue_id]["reasoning"] = (
+        "No card represents this issue's root cause."
+    )
+    assessments[noise_issue_id]["card_evaluations"] = [
         {
-            "title": "Synthetic partial finding",
-            "finding_type": "PARTIAL",
+            "reference": "sha256:" + "a1" * 32,
+            "title": "Unrelated noise finding",
+            "finding_type": "NOISE",
             "fields": {
-                "root_cause": True,
-                "title": True,
-                "description": True,
-                "category": True,
-                "severity": False,
-                "proposed_fix": False,
-                "linked_traces": True,
+                field: False for field in assessments[noise_issue_id]["fields"]
             },
+            "ownership": "insight_engine",
+            "ownership_reason": (
+                "The card describes a condition never present in this trace."
+            ),
+            "confidence": 0.7,
+            "reasoning": "Independent trace review shows no such condition occurred.",
         }
     ]
-    markdown = render_agent_markdown(report, "weather-agent")
-    assert "## Review summary" in markdown
-    assert "## Evaluation guide" in markdown
-    assert "## Insight-level evaluation" in markdown
-    assert "## Human validation checklist" in markdown
+
+    # An issue with a primary MATCHED card plus a Duplicate of that same card
+    # stays Correct, and the Duplicate renders as an explicit group.
+    assessments[duplicate_issue_id]["verdict"] = "correct"
+    assessments[duplicate_issue_id]["finding_type"] = "MATCHED"
+    primary_reference = "sha256:" + "b2" * 32
+    assessments[duplicate_issue_id]["card_evaluations"] = [
+        {
+            "reference": primary_reference,
+            "title": "Primary root cause finding",
+            "finding_type": "MATCHED",
+            "fields": deepcopy(assessments[duplicate_issue_id]["fields"]),
+            "ownership": "none",
+            "confidence": 0.95,
+            "reasoning": "The card fully matches the expected issue.",
+        },
+        {
+            "reference": "sha256:" + "c3" * 32,
+            "title": "Repeated finding",
+            "finding_type": "DUPLICATE",
+            "duplicate_of": primary_reference,
+            "fields": deepcopy(assessments[duplicate_issue_id]["fields"]),
+            "ownership": "insight_engine",
+            "confidence": 0.9,
+            "reasoning": "This card repeats the same root as the primary card.",
+        },
+    ]
+
+    report = build_report(
+        manifest,
+        issues,
+        assessments,
+        _baseline_assessments(manifest),
+    )
+    markdown = render_agent_markdown(report, agent_name)
+
+    coverage_section = markdown.split("## Expected issue coverage", 1)[1].split(
+        "## Extra generated Insights", 1
+    )[0]
+    noise_row = next(
+        line for line in coverage_section.splitlines() if noise_issue_id in line
+    )
+    assert "Missing" in noise_row
+    assert "No card represents this issue's root cause." in noise_row
+
+    assert "Unrelated noise finding" in markdown
+    assert "Duplicate of **Primary root cause finding**." in markdown
+
+    review_summary = markdown.split("## Review summary", 1)[1].split(
+        "## Expected issue coverage", 1
+    )[0]
+    assert "| Missing expected issues | 1 |" in review_summary
+    assert "| Noise | 1 |" in review_summary
+    assert "| Duplicate | 1 |" in review_summary
+
+    assert "### Noise card - observed in" in markdown
+    assert "**Corresponding issue:** None" in markdown
+    assert f"### [{noise_issue_id}]" in markdown
+    assert "### Duplicate group" in markdown
+    assert "**Primary card:** Primary root cause finding" in markdown
+    assert "1. Repeated finding" in markdown
+
+    context_section = markdown.split("## Coding-agent context", 1)[1]
+    # The Missing issue's row merges its own coverage label with the
+    # unmatched Noise card generated in the same version - one row, no
+    # separate row for the extra card.
+    assert f"`{noise_issue_id}` Missing + unmatched Noise" in context_section
+    assert f"`{noise_issue_id}` Missing |" not in context_section
+    # The otherwise-Correct issue still gets a row because of its Duplicate
+    # group, and its ownership is the Duplicate card's own ownership, not
+    # the primary's "no problem" ownership.
+    assert f"`{duplicate_issue_id}` Correct + Duplicate group" in context_section
+    assert f"`{duplicate_issue_id}` Missing" not in context_section
+    noise_row = next(
+        line for line in context_section.splitlines() if noise_issue_id in line
+    )
+    duplicate_row = next(
+        line for line in context_section.splitlines() if duplicate_issue_id in line
+    )
+    assert "`insight_engine`" in noise_row
+    assert "Noise detail above" in noise_row
+    assert f"agents/{agent_name}/issues/{noise_issue_id}/source/" in noise_row
+    assert f"agents/{agent_name}/issues/{noise_issue_id}/traffic.json" in noise_row
+    assert "`insight_engine`" in duplicate_row
+    assert "Duplicate detail above" in duplicate_row
+    assert f"agents/{agent_name}/issues/{duplicate_issue_id}/source/" in duplicate_row
+    # No hyperlink is used for the issue-catalog reference in this table -
+    # it is a deterministic repo-relative path a coding agent can open.
+    assert f"`ISSUE_CATALOG.md#{noise_issue_id}`" in noise_row
+    assert f"[ISSUE_CATALOG.md#{noise_issue_id}]" not in noise_row
+
+
+def test_daily_top_level_report_links_insight_engine_improvement() -> None:
+    _, issues = load_catalogs()
+    daily_manifest = _manifest()
+    daily_report = build_report(
+        daily_manifest,
+        issues,
+        _assessments(daily_manifest),
+        _baseline_assessments(daily_manifest),
+    )
+    daily_markdown = render_markdown(daily_report)
+    assert "## Per-Agent reports" in daily_markdown
     assert (
-        "| Issue | Foundry version | Generated Insight | Evaluation | "
-        "Passing fields | Failing fields |"
-    ) in markdown
-    assert "root cause, title, description, category, linked traces" in markdown
-    assert "severity, proposed fix" in markdown
-    assert "| Ownership |" not in markdown
+        "[View Insight Engine Improvement Report]"
+        "(../../../../insight-engine-improvement.md)"
+        in daily_markdown
+    )
+    assert daily_markdown.index("## Per-Agent reports") < daily_markdown.index(
+        "View Insight Engine Improvement Report"
+    )
+
+    staging_manifest = _manifest(full=True)
+    staging_report = build_report(
+        staging_manifest,
+        issues,
+        _assessments(staging_manifest),
+        _baseline_assessments(staging_manifest),
+    )
+    staging_markdown = render_markdown(staging_report)
+    assert "View Insight Engine Improvement Report" not in staging_markdown
 
 
 def test_complete_rendered_reports_hide_internal_verdict_labels() -> None:
@@ -936,7 +1260,8 @@ def test_complete_rendered_reports_hide_internal_verdict_labels() -> None:
         for baseline in report["baseline"]:
             agent = render_agent_markdown(report, baseline["agent"])
             assert re.search(r"\b(?:PASS|FAIL)\b", agent) is None
-            assert "Quality score:" in agent
+            assert "Runtime evidence:" in agent
+            assert "Quality score:" not in agent
 
 
 def test_incomplete_rendered_reports_keep_safety_state_visible() -> None:

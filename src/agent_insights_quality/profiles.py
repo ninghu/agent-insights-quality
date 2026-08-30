@@ -11,6 +11,7 @@ from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.registry import PROFILE_PROJECTS
 from agent_insights_quality.util import ContractError, runtime_root
 from agent_insights_quality.azure_cli import azure_cli
+from agent_insights_quality.azure_regions import location_display_name
 
 RESOURCE_GROUP = "agent-insights-quality-rg"
 _PROGRESS = ProgressReporter("aiq-profile")
@@ -108,12 +109,15 @@ class RuntimeProfile:
             telemetry_resource_set=resource_set,
         )
 
-    def assert_insights_connection(self) -> None:
+    def assert_insights_connection(
+        self,
+        connection_name: str | None = None,
+    ) -> None:
         if not self.account_resource_id:
             raise ContractError("Profile account resource identity is unavailable")
         connection_id = (
             f"{self.account_resource_id}/projects/{self.project_name}/connections/"
-            f"application-insights-{self.name}"
+            f"{connection_name or f'application-insights-{self.name}'}"
         )
         process = _run_azure_read(
             [
@@ -137,6 +141,89 @@ class RuntimeProfile:
             raise ContractError(
                 "Project telemetry connection does not match the active resource set"
             )
+
+    def with_project(
+        self,
+        *,
+        name: str,
+        project_name: str,
+        registry_path: Path,
+    ) -> "RuntimeProfile":
+        if not name or not project_name:
+            raise ContractError("Derived runtime profile identity is required")
+        if not self.account_name or not self.account_resource_id:
+            raise ContractError("Derived runtime profile requires a Foundry account")
+        endpoint = (
+            f"https://{self.account_name}.services.ai.azure.com/api/projects/"
+            f"{project_name}"
+        )
+        return RuntimeProfile(
+            name=name,
+            project_name=project_name,
+            project_endpoint=endpoint,
+            insights_endpoint=endpoint,
+            application_insights_resource_id=self.application_insights_resource_id,
+            registry_path=registry_path,
+            account_name=self.account_name,
+            container_registry_name=self.container_registry_name,
+            registry_storage_account_name=self.registry_storage_account_name,
+            account_resource_id=self.account_resource_id,
+            telemetry_resource_set=self.telemetry_resource_set,
+        )
+
+    def resolve_test_region(self) -> str:
+        if not self.account_resource_id or not self.project_name:
+            raise ContractError("Foundry Project identity is unavailable")
+        project = _run_azure_read(
+            [
+                azure_cli(),
+                "rest",
+                "--method",
+                "get",
+                "--url",
+                "https://management.azure.com"
+                + self.account_resource_id
+                + "/projects/"
+                + self.project_name
+                + "?api-version=2025-06-01",
+                "--output",
+                "json",
+            ]
+        )
+        if project.returncode != 0:
+            raise ContractError("Foundry Project location could not be queried")
+        try:
+            project_value = json.loads(project.stdout)
+        except json.JSONDecodeError as error:
+            raise ContractError("Foundry Project location response is invalid") from error
+        location = (
+            str(project_value.get("location") or "").strip()
+            if isinstance(project_value, dict)
+            else ""
+        )
+        if not location:
+            raise ContractError("Foundry Project location is missing")
+        locations = _run_azure_read(
+            [
+                azure_cli(),
+                "account",
+                "list-locations",
+                "--output",
+                "json",
+            ]
+        )
+        if locations.returncode != 0:
+            raise ContractError("Azure location metadata could not be queried")
+        try:
+            location_values = json.loads(locations.stdout)
+        except json.JSONDecodeError as error:
+            raise ContractError("Azure location metadata is invalid") from error
+        if not isinstance(location_values, list):
+            raise ContractError("Azure location metadata is invalid")
+        return location_display_name(
+            location,
+            [item for item in location_values if isinstance(item, dict)],
+        )
 
     def assert_test_agent_model(self, expected: dict[str, str]) -> None:
         if not self.account_name:

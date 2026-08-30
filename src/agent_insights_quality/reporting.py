@@ -17,8 +17,18 @@ from agent_insights_quality.selection import (
     DAILY_ISSUES_PER_AGENT,
     STAGING_ISSUE_COUNT,
 )
-from agent_insights_quality.util import ROOT, ContractError, atomic_json, read_json
+from agent_insights_quality.util import (
+    ROOT,
+    ContractError,
+    atomic_json,
+    atomic_text,
+    read_json,
+)
 from agent_insights_quality.util import content_hash
+from agent_insights_quality.azure_regions import (
+    location_display_name,
+    regions_match,
+)
 
 REQUIRED_FIELDS = {
     "root_cause",
@@ -42,6 +52,44 @@ FIELD_WEIGHTS = {
     "proposed_fix": 0.15,
     "linked_traces": 0.15,
 }
+
+def resolve_test_region(
+    live_location: Any,
+    registry_location: Any = None,
+    *,
+    location_metadata: dict[str, str] | None = None,
+) -> str:
+    """Validate the ARM-derived canonical region carried by the run manifest."""
+    if location_metadata is not None:
+        canonical = location_display_name(
+            str(live_location or ""),
+            [
+                {"name": name, "displayName": display_name}
+                for name, display_name in location_metadata.items()
+            ],
+        )
+    else:
+        canonical = str(live_location or "").strip()
+    if not canonical:
+        raise ContractError(
+            "Report test_region requires a live read-only ARM GET of the "
+            "Foundry Project location; none was provided, and a registry, "
+            "manifest, or config value cannot supply or fall back for it"
+        )
+    if re.fullmatch(r"[A-Z][A-Za-z]*[0-9]*", canonical) is None:
+        raise ContractError(
+            "Report test_region must be the canonical display resolved from "
+            "live Azure location metadata"
+        )
+    if registry_location is not None and not regions_match(
+        canonical,
+        registry_location,
+    ):
+        raise ContractError(
+            "Report test_region live Foundry Project location does not "
+            "match the registry/manifest/config cross-check value"
+        )
+    return canonical
 
 
 def _request_summaries_complete(value: dict[str, Any]) -> bool:
@@ -539,6 +587,7 @@ def build_report(
                         "ownership": assessment["ownership"],
                         "finding_type": assessment["finding_type"],
                         "ownership_reason": assessment["ownership_reason"],
+                        "reasoning": assessment["reasoning"],
                         "card_evaluations": assessment["card_evaluations"],
                     },
                     "evidence_reference": value.get("evidence_reference"),
@@ -560,6 +609,10 @@ def build_report(
         "manifest_reference": manifest["manifest_hash"],
         "catalog_hashes": manifest["catalog_hashes"],
         "source_integrity": manifest["source_integrity"],
+        "test_region": resolve_test_region(
+            manifest.get("test_region"),
+            manifest.get("test_region_registry"),
+        ),
         "status": status,
         "baseline": baseline,
         "issues": results,
@@ -627,6 +680,7 @@ def build_operational_failure_report(
             "verified": False,
             "contract_digest": None,
         },
+        "test_region": "unavailable",
         "status": "INCOMPLETE",
         "baseline": [
             {
@@ -1055,7 +1109,11 @@ def _shadow_markdown(report: dict[str, Any]) -> list[str]:
     ]
 
 
-def render_markdown(report: dict[str, Any]) -> str:
+def render_markdown(
+    report: dict[str, Any],
+    *,
+    include_improvement_link: bool = True,
+) -> str:
     summary = report["summary"]
     score = (
         "N/A"
@@ -1159,6 +1217,14 @@ def render_markdown(report: dict[str, Any]) -> str:
     for agent_name in sorted(baseline_by_agent, key=str.casefold):
         lines.append(f"- [{agent_name}](agents/{agent_name}.md)")
     lines.append("")
+    if report["profile"] == "daily" and include_improvement_link:
+        lines.extend(
+            [
+                "[View Insight Engine Improvement Report]"
+                "(../../../../insight-engine-improvement.md)",
+                "",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -1180,6 +1246,7 @@ def _evaluation_label(value: str) -> str:
         "valid_agent_finding": "Valid Agent Finding",
         "clean": "Clean",
         "inconclusive": "Incomplete",
+        "agent_finding": "Agent Finding",
     }[value]
 
 
@@ -1199,6 +1266,412 @@ def _field_result_cells(fields: dict[str, Any] | None) -> tuple[str, str]:
     return ", ".join(passing) or "None", ", ".join(failing) or "None"
 
 
+COVERAGE_PRIMARY_TYPES = {"MATCHED", "PARTIAL", "MISMATCHED"}
+COVERAGE_MISSING_TYPES = {"MISSING", "NOISE", "DUPLICATE"}
+
+
+def _coverage_label(detail: str) -> str:
+    """Map a per-issue ``detail`` to its Expected issue coverage label.
+
+    An issue whose only cards are Noise and/or Duplicate is still Missing
+    unless a primary attributable MATCHED/PARTIAL/MISMATCHED card exists.
+    """
+    if detail in COVERAGE_PRIMARY_TYPES:
+        return _evaluation_label(detail)
+    if detail == "INCOMPLETE":
+        return "Incomplete"
+    return "Missing"
+
+
+def _issue_link(issue_id: str) -> str:
+    return (
+        "https://github.com/ninghu/agent-insights-quality/blob/main/"
+        f"ISSUE_CATALOG.md#{issue_id}"
+    )
+
+
+def _issue_primary_card(item: dict[str, Any]) -> dict[str, Any] | None:
+    detail = item["detail"]
+    if detail not in COVERAGE_PRIMARY_TYPES:
+        return None
+    for card in item["assessment"].get("card_evaluations", []):
+        if card.get("finding_type") == detail:
+            return card
+    return None
+
+
+def _agent_runtime_evidence_complete(
+    baseline: dict[str, Any],
+    issues: list[dict[str, Any]],
+) -> bool:
+    baseline_cards = baseline["assessment"].get("card_evaluations", [])
+    return (
+        bool(baseline["runtime_evidence_complete"])
+        and baseline["assessment"]["verdict"] != "inconclusive"
+        and not any(card.get("evaluation") == "incomplete" for card in baseline_cards)
+        and all(item["result"] != "INCOMPLETE" for item in issues)
+    )
+
+
+def _extra_insight_rows(
+    baseline: dict[str, Any],
+    issues: list[dict[str, Any]],
+) -> list[tuple[str, str, str, str]]:
+    rows: list[tuple[str, str, str, str]] = []
+    for card in baseline["assessment"].get("card_evaluations", []):
+        if card.get("evaluation") == "valid_agent_finding":
+            continue
+        rows.append(
+            (
+                f"Baseline `v0` / `{baseline['foundry_version']}`",
+                card.get("title", "Untitled Insight"),
+                _evaluation_label(card.get("evaluation", "incomplete")),
+                card.get("reasoning") or card.get("ownership_reason", ""),
+            )
+        )
+    for item in issues:
+        primary = _issue_primary_card(item)
+        cards = item["assessment"].get("card_evaluations", [])
+        cards_by_reference = {
+            card["reference"]: card for card in cards if "reference" in card
+        }
+        observed_in = f"`{item['issue_id']}` version / `{item['foundry_version']}`"
+        for card in cards:
+            if primary is not None and card is primary:
+                continue
+            if card.get("finding_type") not in COVERAGE_MISSING_TYPES | {
+                "INCOMPLETE"
+            }:
+                continue
+            if card.get("finding_type") == "DUPLICATE":
+                primary_card = cards_by_reference.get(card.get("duplicate_of"))
+                primary_title = (
+                    primary_card["title"] if primary_card else "the primary card"
+                )
+                relationship = f"Duplicate of **{primary_title}**."
+            else:
+                relationship = card.get("reasoning") or card.get(
+                    "ownership_reason", ""
+                )
+            rows.append(
+                (
+                    observed_in,
+                    card.get("title", "Untitled Insight"),
+                    _evaluation_label(card["finding_type"]),
+                    relationship,
+                )
+            )
+    return rows
+
+
+def _decision_detail_blocks(
+    baseline: dict[str, Any],
+    issues: list[dict[str, Any]],
+) -> list[str]:
+    blocks: list[str] = []
+    baseline_assessment = baseline["assessment"]
+    if baseline_assessment["verdict"] != "clean":
+        lines = [
+            f"### Baseline `v0` - {_evaluation_label(baseline_assessment['verdict'])}",
+            "",
+            f"**Ownership:** `{baseline_assessment['ownership']}`  ",
+            f"**Why this judgment:** {baseline_assessment['ownership_reason']}",
+            "",
+        ]
+        for card in baseline_assessment.get("card_evaluations", []):
+            lines.append(
+                f"- **{card.get('title', 'Untitled Insight')}** "
+                f"({_evaluation_label(card.get('evaluation', 'incomplete'))}): "
+                f"{card.get('reasoning') or card.get('ownership_reason', '')}"
+            )
+        lines.append("")
+        blocks.append("\n".join(lines))
+
+    for item in issues:
+        label = _coverage_label(item["detail"])
+        cards = item["assessment"].get("card_evaluations", [])
+        issue_link = _issue_link(item["issue_id"])
+        reasoning = item["assessment"].get("reasoning") or "No reasoning provided."
+        if label in {"Partially Correct", "Incorrect"}:
+            primary = _issue_primary_card(item) or {}
+            passing, _unused = _field_result_cells(primary.get("fields"))
+            reasons = primary.get("field_reasons") or {}
+            lines = [
+                f"### [{item['issue_id']}]({issue_link}) - {label}",
+                "",
+                f"**Expected issue:** {item['title']}  ",
+                f"**Generated Insight:** {primary.get('title', 'Untitled Insight')}",
+                "",
+                f"**Why this judgment:** {reasoning}",
+                "",
+                f"**What was correct:** {passing}",
+                "",
+                "| Failing field | Specific reason |",
+                "| --- | --- |",
+            ]
+            for field in FIELD_WEIGHTS:
+                if primary.get("fields", {}).get(field) is True:
+                    continue
+                reason = reasons.get(field, "No reason provided.")
+                lines.append(
+                    f"| {field.replace('_', ' ').title()} | "
+                    f"{_markdown_cell(reason)} |"
+                )
+            lines.extend(
+                [
+                    "",
+                    "| Review metadata | Value |",
+                    "| --- | --- |",
+                    "| Ownership | "
+                    f"`{primary.get('ownership', item['assessment']['ownership'])}` |",
+                    "| Confidence | "
+                    f"`{primary.get('confidence', item['assessment']['confidence']):.2f}` |",
+                    "",
+                ]
+            )
+            blocks.append("\n".join(lines))
+        elif label in {"Missing", "Incomplete"}:
+            blocks.append(
+                "\n".join(
+                    [
+                        f"### [{item['issue_id']}]({issue_link}) - {label}",
+                        "",
+                        f"**Expected issue:** {item['title']}",
+                        "",
+                        f"**Why this judgment:** {reasoning}",
+                        "",
+                    ]
+                )
+            )
+        for card in cards:
+            if card.get("finding_type") != "NOISE":
+                continue
+            lines = [
+                f"### Noise card - observed in `{item['issue_id']}` version",
+                "",
+                f"**Generated Insight:** {card.get('title', 'Untitled Insight')}",
+                "**Corresponding issue:** None",
+                "",
+                f"**Rejected mapping:** `{item['issue_id']}` - {item['title']}",
+                "",
+                f"**Why this judgment:** {card.get('reasoning', '')}",
+                "",
+                "| Review metadata | Value |",
+                "| --- | --- |",
+                f"| Ownership | `{card.get('ownership', '')}` |",
+                f"| Confidence | `{card.get('confidence', 0):.2f}` |",
+                "",
+            ]
+            blocks.append("\n".join(lines))
+        cards_by_reference = {
+            card["reference"]: card for card in cards if "reference" in card
+        }
+        duplicates_by_primary: dict[str, list[dict[str, Any]]] = {}
+        for card in cards:
+            if card.get("finding_type") == "DUPLICATE":
+                duplicates_by_primary.setdefault(
+                    card.get("duplicate_of") or "", []
+                ).append(card)
+        for primary_reference, duplicate_cards in duplicates_by_primary.items():
+            primary_card = cards_by_reference.get(primary_reference)
+            primary_title = (
+                primary_card["title"]
+                if primary_card
+                else "an unresolved primary card"
+            )
+            lines = [
+                f"### Duplicate group - `{item['issue_id']}`",
+                "",
+                f"**Primary card:** {primary_title}",
+                "",
+                "**Duplicate cards:**",
+                "",
+                *[
+                    f"{index}. {card.get('title', 'Untitled Insight')}"
+                    for index, card in enumerate(duplicate_cards, start=1)
+                ],
+                "",
+                f"**Why this judgment:** {duplicate_cards[0].get('reasoning', '')}",
+                "",
+            ]
+            blocks.append("\n".join(lines))
+    return blocks
+
+
+def _context_paths(agent_name: str, ownership: str, issue_id: str | None) -> str:
+    """Deterministic repo-relative catalog/source/traffic paths for ``ownership``.
+
+    Excludes any issue-catalog reference or evaluation anchor phrase; callers
+    that have an ``issue_id`` and an anchor phrase compose them with this via
+    :func:`_context_cell`.
+    """
+    if ownership in {"insight_engine", "agent"}:
+        if issue_id is None:
+            return (
+                f"`agents/{agent_name}/v0/source/`; "
+                f"`agents/{agent_name}/v0/traffic.json`"
+            )
+        return (
+            f"`agents/{agent_name}/issues/{issue_id}/source/`; "
+            f"`agents/{agent_name}/issues/{issue_id}/traffic.json`"
+        )
+    if ownership == "test_framework":
+        return (
+            "`src/agent_insights_quality/`; `schemas/`; "
+            "`src/agent_insights_quality/prompts/`; `tests/`"
+        )
+    if ownership == "infrastructure":
+        return "`infra/`"
+    return "Investigate first; ownership is unresolved."
+
+
+_CONTEXT_PATH_OWNERSHIPS = {"insight_engine", "agent", "test_framework", "infrastructure"}
+
+
+def _context_cell(
+    agent_name: str,
+    ownership: str,
+    issue_id: str | None,
+    anchor_phrase: str,
+) -> str:
+    """Build the full ``Context to load`` cell for one coding-agent-context row.
+
+    An ``insight_engine``-owned finding still lists the Test Agent's catalog,
+    source, and traffic paths, but only as read-only context to load, never as
+    an edit target - the row's Owner column and the section's lead-in
+    sentence carry that distinction, not the paths themselves. An unresolved
+    (or otherwise unrecognized) ownership renders only the investigate-first
+    instruction, since no deterministic path is yet known.
+    """
+    paths = _context_paths(agent_name, ownership, issue_id)
+    if ownership not in _CONTEXT_PATH_OWNERSHIPS:
+        return paths
+    parts = []
+    if issue_id is not None:
+        parts.append(f"`ISSUE_CATALOG.md#{issue_id}`")
+    parts.append(anchor_phrase)
+    parts.append(paths)
+    return "; ".join(parts)
+
+
+def _baseline_context_entry(
+    baseline: dict[str, Any],
+) -> tuple[str, str, str] | None:
+    """Return ``(finding, ownership, anchor_phrase)`` for the Baseline row, or
+    ``None`` when the baseline has no actionable finding at all."""
+    assessment = baseline["assessment"]
+    verdict_non_clean = assessment["verdict"] != "clean"
+    extra_cards = [
+        card
+        for card in assessment.get("card_evaluations", [])
+        if card.get("evaluation") != "valid_agent_finding"
+    ]
+    if not verdict_non_clean and not extra_cards:
+        return None
+    parts = []
+    if verdict_non_clean:
+        parts.append(_evaluation_label(assessment["verdict"]))
+    if extra_cards:
+        parts.append("Noise")
+    finding = "Baseline " + " + ".join(parts)
+    block_count = (1 if verdict_non_clean else 0) + (1 if extra_cards else 0)
+    anchor_phrase = f"Baseline detail{'s' if block_count > 1 else ''} above"
+    ownership = (
+        assessment["ownership"]
+        if verdict_non_clean
+        else extra_cards[0].get("ownership", assessment["ownership"])
+    )
+    return finding, ownership, anchor_phrase
+
+
+def _issue_context_entry(item: dict[str, Any]) -> tuple[str, str, str] | None:
+    """Return ``(finding, ownership, anchor_phrase)`` for one issue row, or
+    ``None`` when the issue has no actionable finding at all (a plain
+    Correct with no extra generated cards)."""
+    label = _coverage_label(item["detail"])
+    primary = _issue_primary_card(item)
+    cards = item["assessment"].get("card_evaluations", [])
+    extra_noise = [
+        card
+        for card in cards
+        if card is not primary and card.get("finding_type") == "NOISE"
+    ]
+    extra_duplicates = [card for card in cards if card.get("finding_type") == "DUPLICATE"]
+    if label == "Correct" and not extra_noise and not extra_duplicates:
+        return None
+    parts = [label]
+    if extra_duplicates:
+        parts.append("Duplicate group")
+    if extra_noise:
+        parts.append("unmatched Noise")
+    finding = f"`{item['issue_id']}` " + " + ".join(parts)
+    decision_kind = label in {"Partially Correct", "Incorrect"}
+    block_count = (
+        (1 if decision_kind else 0)
+        + (1 if extra_duplicates else 0)
+        + (1 if extra_noise else 0)
+    )
+    if decision_kind:
+        anchor_word = "decision"
+    elif extra_noise:
+        anchor_word = "Noise"
+    elif extra_duplicates:
+        anchor_word = "Duplicate"
+    else:
+        anchor_word = label
+        block_count = 1
+    anchor_phrase = f"{anchor_word} detail{'s' if block_count > 1 else ''} above"
+    # Ownership follows whichever card is actually driving this row: the
+    # primary's own judgment when it is substantive (Partially Correct /
+    # Incorrect), else the unmatched Noise card, else the Duplicate card -
+    # never the primary's "none" ownership on an otherwise-Correct issue
+    # whose only actionable content is its Duplicate group.
+    if decision_kind and primary is not None:
+        ownership = primary.get("ownership", item["assessment"]["ownership"])
+    elif extra_noise:
+        ownership = extra_noise[0].get("ownership", item["assessment"]["ownership"])
+    elif extra_duplicates:
+        ownership = extra_duplicates[0].get("ownership", item["assessment"]["ownership"])
+    else:
+        ownership = item["assessment"]["ownership"]
+    return finding, ownership, anchor_phrase
+
+
+def _coding_agent_context_rows(
+    baseline: dict[str, Any],
+    issues: list[dict[str, Any]],
+    agent_name: str,
+) -> list[tuple[str, str, str]]:
+    """One compact row per actionable non-Correct result, merging an issue's
+    own evaluation with any unmatched Noise or Duplicate group generated in
+    the same version so a coding agent never has to cross-reference several
+    rows for one issue."""
+    rows: list[tuple[str, str, str]] = []
+    baseline_entry = _baseline_context_entry(baseline)
+    if baseline_entry is not None:
+        finding, ownership, anchor_phrase = baseline_entry
+        rows.append(
+            (
+                finding,
+                f"`{ownership}`",
+                _context_cell(agent_name, ownership, None, anchor_phrase),
+            )
+        )
+    for item in issues:
+        entry = _issue_context_entry(item)
+        if entry is None:
+            continue
+        finding, ownership, anchor_phrase = entry
+        rows.append(
+            (
+                finding,
+                f"`{ownership}`",
+                _context_cell(agent_name, ownership, item["issue_id"], anchor_phrase),
+            )
+        )
+    return rows
+
+
 def render_agent_markdown(report: dict[str, Any], agent_name: str) -> str:
     baseline = next(
         item for item in report["baseline"] if item["agent"] == agent_name
@@ -1213,20 +1686,15 @@ def render_agent_markdown(report: dict[str, Any], agent_name: str) -> str:
     evaluation_counts = Counter(
         _evaluation_label(card["finding_type"]) for card in issue_cards
     )
-    missing_count = sum(
-        not item["assessment"].get("card_evaluations") for item in issues
-    )
-    score = (
-        "N/A"
-        if report["summary"]["quality_score"] is None
-        else f"{report['summary']['quality_score']:g}/100"
-    )
+    missing_count = sum(item["detail"] in COVERAGE_MISSING_TYPES for item in issues)
+    runtime_complete = _agent_runtime_evidence_complete(baseline, issues)
     lines = [
         f"# {agent_name} - Insight Evaluation",
         "",
         f"- Report date: `{report['report_date']}`",
         f"- Run: `{report['run_id']}`",
-        f"- Quality score: **{score}**{_score_comparison_text(report)}",
+        f"- Runtime evidence: `{'Complete' if runtime_complete else 'Incomplete'}`",
+        "- Expected baseline Insights: `0`",
         *(
             ["- Run status: **INCOMPLETE**"]
             if report["status"] == "INCOMPLETE"
@@ -1239,7 +1707,6 @@ def render_agent_markdown(report: dict[str, Any], agent_name: str) -> str:
         "| --- | ---: |",
         f"| Expected issue Insights | {len(issues)} |",
         f"| Generated issue cards | {len(issue_cards)} |",
-        "| Expected baseline Insights | 0 |",
         f"| Generated baseline cards | {len(baseline_cards)} |",
         f"| Correct | {evaluation_counts['Correct']} |",
         f"| Partially Correct | {evaluation_counts['Partially Correct']} |",
@@ -1249,81 +1716,117 @@ def render_agent_markdown(report: dict[str, Any], agent_name: str) -> str:
         f"| Missing expected issues | {missing_count} |",
         f"| Incomplete card evaluations | {evaluation_counts['Incomplete']} |",
         "",
-        "## Evaluation guide",
+        "## Expected issue coverage",
         "",
-        "- **Correct:** the card matches the expected issue and every required field.",
-        "- **Partially Correct:** the card is useful and related, but one or more fields are wrong.",
-        "- **Incorrect:** the card is related but materially misstates the issue.",
-        "- **Noise:** the card is unrelated or a false positive.",
-        "- **Duplicate:** an extra card represents an expected root already covered by another card.",
-        "- **Missing:** no generated card represents the expected issue.",
-        "- **Incomplete:** available evidence cannot support a reliable card judgment.",
-        "",
-        "## Insight-level evaluation",
-        "",
-        "| Issue | Foundry version | Generated Insight | Evaluation | Passing fields | Failing fields |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| Expected issue | Version | Primary Insight | Evaluation | Why |",
+        "| --- | --- | --- | --- | --- |",
     ]
-    if baseline_cards:
-        for card in baseline_cards:
-            passing, failing = _field_result_cells(None)
-            lines.append(
-                f"| `v0` | `{baseline['foundry_version']}` | "
-                f"{_markdown_cell(card['title'])} | "
-                f"{_evaluation_label(card['evaluation'])} | {passing} | {failing} |"
-            )
-    else:
-        lines.append(
-            f"| `v0` | `{baseline['foundry_version']}` | "
-            "No generated Insight | Correct | - | - |"
-        )
     for item in issues:
-        issue_link = (
-            "https://github.com/ninghu/agent-insights-quality/blob/main/"
-            f"ISSUE_CATALOG.md#{item['issue_id']}"
-        )
-        cards = item["assessment"].get("card_evaluations", [])
-        if cards:
-            for card in cards:
-                passing, failing = _field_result_cells(card["fields"])
-                lines.append(
-                    f"| [{item['issue_id']}]({issue_link}) | "
-                    f"`{item['foundry_version']}` | "
-                    f"{_markdown_cell(card['title'])} | "
-                    f"{_evaluation_label(card['finding_type'])} | "
-                    f"{passing} | {failing} |"
-                )
+        label = _coverage_label(item["detail"])
+        primary = _issue_primary_card(item)
+        if primary is not None:
+            primary_title = _markdown_cell(primary.get("title", "Untitled Insight"))
+        elif label == "Incomplete":
+            primary_title = "Insufficient evidence"
         else:
-            lines.append(
-                f"| [{item['issue_id']}]({issue_link}) | "
-                f"`{item['foundry_version']}` | No generated Insight | "
-                f"{_evaluation_label(item['detail'])} | - | - |"
-            )
+            primary_title = "No matching Insight"
+        why = _markdown_cell(
+            item["assessment"].get("reasoning") or "No reasoning provided."
+        )
+        lines.append(
+            f"| [{item['issue_id']}]({_issue_link(item['issue_id'])}) | "
+            f"`{item['foundry_version']}` | {primary_title} | {label} | {why} |"
+        )
     lines.extend(
         [
             "",
+            "## Extra generated Insights",
+            "",
+            "`Observed in` identifies the Agent version that produced the card. It "
+            "does not assign the card to that version's expected issue.",
+            "",
+            "| Observed in | Generated Insight | Classification | Relationship |",
+            "| --- | --- | --- | --- |",
+        ]
+    )
+    extra_rows = _extra_insight_rows(baseline, issues)
+    if extra_rows:
+        for observed_in, title, classification, relationship in extra_rows:
+            lines.append(
+                f"| {observed_in} | {_markdown_cell(title)} | {classification} | "
+                f"{_markdown_cell(relationship)} |"
+            )
+    else:
+        lines.append("| None | - | - | No extra generated Insights were observed. |")
+    decision_blocks = _decision_detail_blocks(baseline, issues)
+    lines.extend(["", "## Decision details", ""])
+    if decision_blocks:
+        for block in decision_blocks:
+            lines.append(block)
+    else:
+        lines.append(
+            "No Partially Correct, Incorrect, Noise, Duplicate, Incomplete, "
+            "Missing, or non-clean baseline outcomes were observed."
+        )
+        lines.append("")
+    lines.extend(
+        [
+            "## Evaluation guide",
+            "",
+            "- **Correct:** the card matches the expected issue and every required field.",
+            "- **Partially Correct:** the card represents the expected root, but one or more reported fields are wrong.",
+            "- **Incorrect:** the card is related to the expected issue but materially misstates its root or behavior.",
+            "- **Noise:** the card has no corresponding reviewed issue, or independent evidence disproves its diagnosis.",
+            "- **Duplicate:** the card repeats a root already covered by a named primary card and adds no independent root.",
+            "- **Missing:** no generated card represents the expected issue.",
+            "- **Incomplete:** available evidence cannot support a reliable judgment.",
+            "",
             "## Human validation checklist",
             "",
-            "- [ ] Confirm each `issue-NNN` links to the intended reviewed defect.",
-            "- [ ] Confirm the Foundry version matches the version under review.",
-            "- [ ] Compare every generated card with the linked issue definition.",
-            "- [ ] Confirm extra cards are correctly labeled Noise or Duplicate.",
-            "- [ ] Confirm every expected issue without a card is labeled Missing.",
-            "- [ ] Open the Agent from the email and inspect linked traces for disputed cards.",
-            "- [ ] Record reviewer agree/disagree decisions outside this generated report.",
+            "- [ ] Every Partially Correct or Incorrect card has a specific reason for each failing field.",
+            "- [ ] Every Noise card has no issue assignment and explains why no reviewed issue corresponds to it.",
+            "- [ ] Every Duplicate group names the primary card and lists every card classified as its duplicate.",
+            "- [ ] An issue with only Noise or Duplicate cards is still reported Missing unless a primary card covers it.",
+            "- [ ] Baseline findings are checked against independent source, endpoint, and trace proof.",
+            "- [ ] Explanations contain only public-safe summaries, never raw traces or complete payloads.",
+            "",
+            "## Coding-agent context",
+            "",
+            "When ownership is `insight_engine`, the linked Test Agent source and traffic are "
+            "read-only authorities, not edit targets.",
             "",
         ]
     )
+    context_rows = _coding_agent_context_rows(baseline, issues, agent_name)
+    if context_rows:
+        lines.extend(
+            [
+                "| Finding | Owner | Context to load |",
+                "| --- | --- | --- |",
+            ]
+        )
+        for finding, owner, context in context_rows:
+            lines.append(f"| {finding} | {owner} | {context} |")
+        lines.append("")
+    else:
+        lines.extend(["No coding-agent action required.", ""])
     return "\n".join(lines)
 
 
-def write_report(report: dict[str, Any], output: Path) -> None:
+def write_report(
+    report: dict[str, Any],
+    output: Path,
+    *,
+    include_improvement_link: bool = True,
+) -> None:
     validate_report(report)
     atomic_json(output / "report.json", report)
-    (output / "report.md").write_text(
-        render_markdown(report),
-        encoding="utf-8",
-        newline="\n",
+    atomic_text(
+        output / "report.md",
+        render_markdown(
+            report,
+            include_improvement_link=include_improvement_link,
+        ),
     )
     agents_root = output / "agents"
     agents_root.mkdir(parents=True, exist_ok=True)
@@ -1331,10 +1834,9 @@ def write_report(report: dict[str, Any], output: Path) -> None:
         (item["agent"] for item in report["baseline"]),
         key=str.casefold,
     ):
-        (agents_root / f"{agent_name}.md").write_text(
+        atomic_text(
+            agents_root / f"{agent_name}.md",
             render_agent_markdown(report, agent_name),
-            encoding="utf-8",
-            newline="\n",
         )
 
 

@@ -27,6 +27,10 @@ Each permanent Test Agent owns one healthy baseline and one or more reviewed iss
   complete and independently deployable.
 - Deterministic synthetic traffic must exercise the deployed version through its Agent endpoint so
   telemetry is produced naturally.
+- Every authority has versioned setup/probe scenarios. Classify the observation mechanism explicitly
+  as `baseline`, `deterministic`, or `model_mediated`; never derive it from Prompt versus Hosted type.
+- Preserve the fixed validation matrices: baseline `5/5`, deterministic issue `5/5` with paired `v0`
+  `0/5`, and model-mediated issue `5/7` with paired `v0` `0/7`.
 
 ## Use the onboarding skills
 
@@ -112,10 +116,11 @@ Compile Bicep only when infrastructure changes:
 az bicep build --file infra\main.bicep --stdout
 ```
 
-## Qualify and promote
+## Validate a candidate
 
-Follow the [staging qualification skill](.github/skills/staging-qualification/SKILL.md) for live
-qualification and promotion.
+Follow the [Test Agent Validation skill](.github/skills/test-agent-validation/SKILL.md). A new cycle
+deploys all 41 authorities once; fixes may reuse only unchanged current-digest evidence from that same
+cycle. Shared validation-contract changes invalidate the complete cycle.
 
 The policy is impact-based: Agent source, definition, traffic, or assignment changes qualify each
 affected Agent's `v0` and all assigned issues. Evidence for unchanged Agents is reusable only when
@@ -123,16 +128,13 @@ content digests, mappings, and shared contracts are unchanged. Shared runtime, t
 scoring, schema, infrastructure, or cross-Agent topology changes require full-catalog qualification
 or retained-evidence re-evaluation when no new traffic is needed.
 
-Targeted qualification requires reviewed CLI support for both targeted reports and composed promotion
-receipts. The current CLI cannot produce both, so use full-catalog qualification and never combine
-evidence or receipts manually.
-
 The fixed daily contract selects four issues per Agent: 20 issues plus five baselines, for 25
-assessment packages. Full staging remains all 36 issues plus five baselines, for 41 packages.
+assessment packages. Test Agent Validation is a separate report-free merge gate and never runs Agent
+Insights, assessment, scoring, ADX publication, or email.
 
-Promote only complete, human-reviewed `PASS` or `FAIL` evidence; `INCOMPLETE` is never promotable or
-reusable. After daily provisioning, use read-only readiness and registry reconciliation rather than
-smoke traffic.
+Only a create-once protected merge receipt can authorize a later candidate. Shadow receipts are
+non-authorizing. Exact cleanup is required before either receipt. The legacy staging path remains
+unchanged only for migration history and cannot be used for a new run after `r03`.
 
 Protected runtime prerequisites and operator roles are documented in
 [`docs/AUTOMATION_SETUP.md`](docs/AUTOMATION_SETUP.md).

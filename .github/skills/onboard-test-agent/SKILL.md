@@ -21,12 +21,12 @@ Add one new synthetic Test Agent only as a human-reviewed fixed-topology migrati
    `source/` tree containing only its defect. Issue traffic must exercise the reviewed defect
    deterministically.
 5. Add the Agent, owner, and permanent issue assignments to both reviewed catalogs.
-6. Derive `agent_count`, `staging_issue_count`,
+6. Derive `agent_count`, `validation_issue_count`,
    `daily_issue_count = sum(min(4, assigned_issue_count))`, and
-   `version_count = agent_count + staging_issue_count`, then update every fixed-count contract:
+   `authority_count = agent_count + validation_issue_count`, then update every fixed-count contract:
    - Agent and Issue catalog schemas;
    - run-manifest and report schemas;
-   - daily and staging expected counts and score denominator;
+   - Daily expected counts, validation topology, and score denominator;
    - catalog, selection, reporting, promotion, and deployment tests;
    - generated Agent and Issue catalog views;
    - README, Operations, Quality Bar, and CONTRIBUTING;
@@ -40,12 +40,10 @@ Add one new synthetic Test Agent only as a human-reviewed fixed-topology migrati
 8. Verify deterministic packaging, exact-version routing, endpoint behavior, natural telemetry,
    privacy-safe trace proof, and baseline ownership.
 9. Run repository validation, Ruff, tests, and Bicep compilation.
-10. When existing Agent digests, mappings, and shared contracts are unchanged, deploy and qualify only
-   the new Agent's `v0` and all assigned issues. Otherwise qualify every affected Agent or the full
-   catalog. Complete Sol assessment and require human review before daily promotion.
-11. Compose promotion from the new Agent's complete reviewed PASS/FAIL evidence plus valid receipts
-   for unchanged Agents. Require matching mappings and every exact digest. Never promote or reuse
-   INCOMPLETE.
+10. Update each baseline and issue's fixed validation scenarios, explicit mode, `n/k`, paired-v0
+   controls, execution digest, name limits, cleanup inventory, and exact authority count.
+11. Run a fresh Test Agent Validation cycle and require its protected create-once merge receipt.
+   Validation remains report-free; never use a shadow receipt or legacy staging fallback.
 
 Use GPT-5.4 mini for the Test Agent and keep Agent Insights generation on its separate Terra
 deployment. Do not add a placeholder implementation, private endpoint, compatibility alias, shared

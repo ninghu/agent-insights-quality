@@ -1,0 +1,801 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ninghu/agent-insights-quality/schemas/test-agent-validation-lifecycle.schema.json",
+  "title": "Test Agent Validation lifecycle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "snapshot_type",
+    "cycle_id",
+    "epoch",
+    "revision",
+    "state",
+    "repository",
+    "pr_number",
+    "git",
+    "digests",
+    "policy_manifest",
+    "lease",
+    "capacity",
+    "project",
+    "runtime_topology",
+    "resources",
+    "scope_freeze",
+    "review",
+    "cleanup",
+    "event_snapshot",
+    "clean_snapshot",
+    "evidence_reference",
+    "receipt_reference",
+    "last_activity_at",
+    "absolute_expires_at",
+    "failure",
+    "previous_etag",
+    "journal_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "kind": {"const": "test-agent-validation-lifecycle"},
+    "snapshot_type": {"enum": ["active", "event", "clean"]},
+    "cycle_id": {"$ref": "#/$defs/cycleId"},
+    "epoch": {"type": "integer", "minimum": 1},
+    "revision": {"type": "integer", "minimum": 1},
+    "state": {
+      "enum": [
+        "LEASED",
+        "PREFLIGHT",
+        "CREATING",
+        "VALIDATING",
+        "FROZEN",
+        "REVIEWED",
+        "SHADOW_REVIEW_SKIPPED",
+        "REVALIDATING",
+        "FINAL_CHECKS",
+        "CLEANING",
+        "CLEAN",
+        "RECEIPT_ISSUED",
+        "FAILED_CLEAN",
+        "CLEANUP_BLOCKED"
+      ]
+    },
+    "repository": {"$ref": "#/$defs/repository"},
+    "pr_number": {"type": "integer", "minimum": 1},
+    "git": {"$ref": "#/$defs/git"},
+    "digests": {"$ref": "#/$defs/digests"},
+    "policy_manifest": {"$ref": "#/$defs/policyManifest"},
+    "lease": {"$ref": "#/$defs/lease"},
+    "capacity": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/capacity"}
+      ]
+    },
+    "project": {"$ref": "#/$defs/project"},
+    "runtime_topology": {"$ref": "#/$defs/runtimeTopology"},
+    "resources": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/resource"}
+    },
+    "scope_freeze": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/scopeFreeze"}
+      ]
+    },
+    "review": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/review"}
+      ]
+    },
+    "cleanup": {"$ref": "#/$defs/cleanup"},
+    "event_snapshot": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/snapshotReference"}
+      ]
+    },
+    "clean_snapshot": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/snapshotReference"}
+      ]
+    },
+    "evidence_reference": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/snapshotReference"}
+      ]
+    },
+    "receipt_reference": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/snapshotReference"}
+      ]
+    },
+    "last_activity_at": {"$ref": "#/$defs/timestamp"},
+    "absolute_expires_at": {"$ref": "#/$defs/timestamp"},
+    "failure": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/failure"}
+      ]
+    },
+    "previous_etag": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "string", "minLength": 1, "maxLength": 256}
+      ]
+    },
+    "journal_digest": {"$ref": "#/$defs/hash"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"snapshot_type": {"const": "active"}},
+        "required": ["snapshot_type"]
+      },
+      "then": {
+        "properties": {
+          "event_snapshot": {"$ref": "#/$defs/snapshotReference"}
+        }
+      },
+      "else": {
+        "properties": {"event_snapshot": {"type": "null"}}
+      }
+    },
+    {
+      "if": {
+        "properties": {"snapshot_type": {"const": "clean"}},
+        "required": ["snapshot_type"]
+      },
+      "then": {
+        "properties": {"clean_snapshot": {"type": "null"}}
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "snapshot_type": {"const": "active"},
+          "state": {"enum": ["CLEAN", "FAILED_CLEAN", "RECEIPT_ISSUED"]}
+        },
+        "required": ["snapshot_type", "state"]
+      },
+      "then": {
+        "properties": {
+          "clean_snapshot": {"$ref": "#/$defs/snapshotReference"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"state": {"const": "RECEIPT_ISSUED"}},
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {
+          "receipt_reference": {"$ref": "#/$defs/snapshotReference"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "FROZEN",
+              "REVIEWED",
+              "SHADOW_REVIEW_SKIPPED",
+              "REVALIDATING",
+              "FINAL_CHECKS",
+              "CLEAN",
+              "RECEIPT_ISSUED"
+            ]
+          }
+        },
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {
+          "evidence_reference": {"$ref": "#/$defs/snapshotReference"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "gitSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "nullableGitSha": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/gitSha"}
+      ]
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "cycleId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{7,63}$"
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "reference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "nullableReference": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/reference"}
+      ]
+    },
+    "git": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "initial_head_sha",
+        "initial_tree_sha",
+        "current_head_sha",
+        "current_tree_sha",
+        "frozen_head_sha",
+        "frozen_tree_sha",
+        "final_head_sha",
+        "final_tree_sha"
+      ],
+      "properties": {
+        "initial_head_sha": {"$ref": "#/$defs/gitSha"},
+        "initial_tree_sha": {"$ref": "#/$defs/gitSha"},
+        "current_head_sha": {"$ref": "#/$defs/gitSha"},
+        "current_tree_sha": {"$ref": "#/$defs/gitSha"},
+        "frozen_head_sha": {"$ref": "#/$defs/nullableGitSha"},
+        "frozen_tree_sha": {"$ref": "#/$defs/nullableGitSha"},
+        "final_head_sha": {"$ref": "#/$defs/nullableGitSha"},
+        "final_tree_sha": {"$ref": "#/$defs/nullableGitSha"}
+      }
+    },
+    "digests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_manifest_hash",
+        "source_tree_digest",
+        "validation_contract_digest",
+        "execution_matrix_digest",
+        "runtime_topology_digest",
+        "quota_plan_digest",
+        "evidence_digest"
+      ],
+      "properties": {
+        "artifact_manifest_hash": {"$ref": "#/$defs/hash"},
+        "source_tree_digest": {"$ref": "#/$defs/hash"},
+        "validation_contract_digest": {"$ref": "#/$defs/hash"},
+        "execution_matrix_digest": {"$ref": "#/$defs/hash"},
+        "runtime_topology_digest": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/hash"}
+          ]
+        },
+        "quota_plan_digest": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/hash"}
+          ]
+        },
+        "evidence_digest": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/hash"}
+          ]
+        }
+      }
+    },
+    "policyManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "path",
+        "ref",
+        "commit_sha",
+        "content_digest"
+      ],
+      "properties": {
+        "repository": {"$ref": "#/$defs/repository"},
+        "path": {"const": "config/test-agent-validation-policy.yaml"},
+        "ref": {"type": "string", "minLength": 1, "maxLength": 256},
+        "commit_sha": {"$ref": "#/$defs/gitSha"},
+        "content_digest": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "lease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "epoch",
+        "lease_id",
+        "ownership_nonce",
+        "holder_workflow_reference",
+        "holder_app_reference",
+        "holder_run_reference",
+        "acquired_at",
+        "heartbeat_at",
+        "state"
+      ],
+      "properties": {
+        "epoch": {"type": "integer", "minimum": 1},
+        "lease_id": {"$ref": "#/$defs/reference"},
+        "ownership_nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{8,128}$"
+        },
+        "holder_workflow_reference": {"$ref": "#/$defs/reference"},
+        "holder_app_reference": {"$ref": "#/$defs/reference"},
+        "holder_run_reference": {"$ref": "#/$defs/reference"},
+        "acquired_at": {"$ref": "#/$defs/timestamp"},
+        "heartbeat_at": {"$ref": "#/$defs/timestamp"},
+        "state": {"enum": ["held", "released", "broken"]}
+      }
+    },
+    "capacity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "measured_rpm",
+        "measured_tpm",
+        "measured_at",
+        "reserved_percent",
+        "reserved_rpm",
+        "reserved_tpm",
+        "available_rpm",
+        "available_tpm",
+        "outer_request_envelope",
+        "worst_case_inner_model_calls",
+        "worst_case_inner_tokens",
+        "endpoint_concurrency",
+        "provisioning_concurrency",
+        "telemetry_query_concurrency",
+        "runtime_attempt_concurrency",
+        "inner_model_call_limit",
+        "plan_digest"
+      ],
+      "properties": {
+        "measured_rpm": {"type": "integer", "minimum": 1},
+        "measured_tpm": {"type": "integer", "minimum": 1},
+        "measured_at": {"$ref": "#/$defs/timestamp"},
+        "reserved_percent": {"const": 25},
+        "reserved_rpm": {"type": "integer", "minimum": 8},
+        "reserved_tpm": {"type": "integer", "minimum": 8192},
+        "available_rpm": {"type": "integer", "minimum": 1},
+        "available_tpm": {"type": "integer", "minimum": 1},
+        "outer_request_envelope": {"type": "integer", "minimum": 1},
+        "worst_case_inner_model_calls": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4
+        },
+        "worst_case_inner_tokens": {"type": "integer", "minimum": 1},
+        "endpoint_concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        },
+        "provisioning_concurrency": {"const": 8},
+        "telemetry_query_concurrency": {"const": 4},
+        "runtime_attempt_concurrency": {"const": 1},
+        "inner_model_call_limit": {"const": 4},
+        "plan_digest": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "provider_id",
+        "endpoint_reference",
+        "state",
+        "create_intent_at",
+        "create_observed_at",
+        "delete_intent_at",
+        "delete_observed_at"
+      ],
+      "properties": {
+        "name": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{1,62}[a-z0-9]$"
+            }
+          ]
+        },
+        "provider_id": {"$ref": "#/$defs/nullableReference"},
+        "endpoint_reference": {"$ref": "#/$defs/nullableReference"},
+        "state": {"enum": ["absent", "create_intent", "created", "delete_intent", "deleted"]},
+        "create_intent_at": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]
+        },
+        "create_observed_at": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]
+        },
+        "delete_intent_at": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]
+        },
+        "delete_observed_at": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]
+        }
+      }
+    },
+    "runtimeTopology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "account_reference",
+        "project_reference",
+        "telemetry_resource_set",
+        "test_agent_model",
+        "name_policy",
+        "connection_ids",
+        "runtime_principal_ids",
+        "telemetry_identity_ids",
+        "agents"
+      ],
+      "properties": {
+        "account_reference": {"$ref": "#/$defs/reference"},
+        "project_reference": {"$ref": "#/$defs/nullableReference"},
+        "telemetry_resource_set": {"const": "g29"},
+        "test_agent_model": {
+          "const": {
+            "deployment_name": "gpt-5.4-mini",
+            "model_id": "gpt-5.4-mini",
+            "model_version": "2026-03-17"
+          }
+        },
+        "name_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "project_maximum_length",
+            "agent_maximum_length",
+            "pattern"
+          ],
+          "properties": {
+            "project_maximum_length": {"const": 64},
+            "agent_maximum_length": {"const": 63},
+            "pattern": {"const": "^[a-z][a-z0-9-]*[a-z0-9]$"}
+          }
+        },
+        "connection_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/reference"}
+        },
+        "runtime_principal_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/reference"}
+        },
+        "telemetry_identity_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/reference"}
+        },
+        "agents": {
+          "type": "array",
+          "maxItems": 41,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/runtimeAgent"}
+        }
+      }
+    },
+    "runtimeAgent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority_id",
+        "canonical_agent",
+        "logical_version",
+        "runtime_kind",
+        "framework",
+        "runtime_agent_name",
+        "runtime_agent_version",
+        "provider_agent_id",
+        "provider_agent_version_id",
+        "hosted_identity_id",
+        "hosted_blueprint_id",
+        "hosted_deployment_id",
+        "foundry_agent_name",
+        "foundry_agent_version",
+        "runtime_principal_id",
+        "telemetry_identity_id",
+        "connection_ids"
+      ],
+      "properties": {
+        "authority_id": {
+          "oneOf": [
+            {"type": "string", "pattern": "^[a-z][a-z0-9-]+-agent/v0$"},
+            {"type": "string", "pattern": "^issue-[0-9]{3}$"}
+          ]
+        },
+        "canonical_agent": {
+          "enum": [
+            "weather-agent",
+            "healthcare-agent",
+            "finance-agent",
+            "travel-agent",
+            "support-ticket-agent"
+          ]
+        },
+        "logical_version": {
+          "oneOf": [
+            {"const": "v0"},
+            {"type": "string", "pattern": "^issue-[0-9]{3}$"}
+          ]
+        },
+        "runtime_kind": {
+          "enum": ["prompt", "hosted_code", "hosted_custom_container"]
+        },
+        "framework": {
+          "enum": [
+            "foundry_prompt",
+            "microsoft_agent_framework",
+            "langgraph",
+            "custom_responses"
+          ]
+        },
+        "runtime_agent_name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{1,61}[a-z0-9]$"
+        },
+        "runtime_agent_version": {"type": "string", "minLength": 1, "maxLength": 128},
+        "provider_agent_id": {"$ref": "#/$defs/reference"},
+        "provider_agent_version_id": {"$ref": "#/$defs/reference"},
+        "hosted_identity_id": {"$ref": "#/$defs/nullableReference"},
+        "hosted_blueprint_id": {"$ref": "#/$defs/nullableReference"},
+        "hosted_deployment_id": {"$ref": "#/$defs/nullableReference"},
+        "foundry_agent_name": {"type": "string", "minLength": 1, "maxLength": 63},
+        "foundry_agent_version": {"type": "string", "minLength": 1, "maxLength": 128},
+        "runtime_principal_id": {"$ref": "#/$defs/nullableReference"},
+        "telemetry_identity_id": {"$ref": "#/$defs/reference"},
+        "connection_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/reference"}
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"runtime_kind": {"const": "prompt"}},
+            "required": ["runtime_kind"]
+          },
+          "then": {
+            "properties": {
+              "hosted_identity_id": {"type": "null"},
+              "hosted_blueprint_id": {"type": "null"},
+              "hosted_deployment_id": {"type": "null"},
+              "runtime_principal_id": {"type": "null"}
+            }
+          },
+          "else": {
+            "properties": {
+              "hosted_identity_id": {"$ref": "#/$defs/reference"},
+              "hosted_blueprint_id": {"$ref": "#/$defs/reference"},
+              "hosted_deployment_id": {"$ref": "#/$defs/reference"},
+              "runtime_principal_id": {"$ref": "#/$defs/reference"}
+            }
+          }
+        }
+      ]
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "parent_id",
+        "authority_id",
+        "deterministic_name",
+        "provider_id",
+        "ownership_nonce",
+        "create_intent_at",
+        "create_observed_at",
+        "delete_intent_at",
+        "delete_observed_at",
+        "state",
+        "cleanup_method"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "project",
+            "connection",
+            "role_assignment",
+            "provider_agent",
+            "provider_agent_version",
+            "hosted_identity",
+            "hosted_blueprint",
+            "runtime_principal",
+            "entra_service_principal",
+            "hosted_deployment",
+            "session",
+            "conversation",
+            "stored_response",
+            "acr_tag",
+            "acr_manifest"
+          ]
+        },
+        "parent_id": {"$ref": "#/$defs/nullableReference"},
+        "authority_id": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "string", "pattern": "^[a-z][a-z0-9-]+-agent/v0$"},
+            {"type": "string", "pattern": "^issue-[0-9]{3}$"}
+          ]
+        },
+        "deterministic_name": {"type": "string", "minLength": 1, "maxLength": 256},
+        "provider_id": {"$ref": "#/$defs/reference"},
+        "ownership_nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{8,128}$"
+        },
+        "create_intent_at": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]
+        },
+        "create_observed_at": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]
+        },
+        "delete_intent_at": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]
+        },
+        "delete_observed_at": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]
+        },
+        "state": {
+          "enum": [
+            "create_intent",
+            "created",
+            "ambiguous_create",
+            "delete_intent",
+            "deleted",
+            "absence_verified",
+            "cleanup_blocked"
+          ]
+        },
+        "cleanup_method": {
+          "enum": ["explicit", "documented_project_cascade"]
+        }
+      }
+    },
+    "scopeFreeze": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "head_sha",
+        "tree_sha",
+        "frozen_at",
+        "source_tree_digest",
+        "validation_contract_digest",
+        "changed_authority_ids",
+        "comprehensive_review_required"
+      ],
+      "properties": {
+        "head_sha": {"$ref": "#/$defs/gitSha"},
+        "tree_sha": {"$ref": "#/$defs/gitSha"},
+        "frozen_at": {"$ref": "#/$defs/timestamp"},
+        "source_tree_digest": {"$ref": "#/$defs/hash"},
+        "validation_contract_digest": {"$ref": "#/$defs/hash"},
+        "changed_authority_ids": {
+          "type": "array",
+          "maxItems": 41,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "comprehensive_review_required": {"type": "boolean"}
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "head_sha",
+        "check_reference",
+        "findings_digest",
+        "completed_at"
+      ],
+      "properties": {
+        "mode": {"enum": ["comprehensive", "shadow_skipped"]},
+        "head_sha": {"$ref": "#/$defs/gitSha"},
+        "check_reference": {"$ref": "#/$defs/nullableReference"},
+        "findings_digest": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/hash"}
+          ]
+        },
+        "completed_at": {"$ref": "#/$defs/timestamp"}
+      }
+    },
+    "cleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "plan_hash",
+        "exact_clean",
+        "verified_absent_ids",
+        "retained_shared_manifest_ids",
+        "residue_ids",
+        "verification_at"
+      ],
+      "properties": {
+        "status": {"enum": ["not_started", "in_progress", "exact_clean", "ambiguous"]},
+        "plan_hash": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/hash"}
+          ]
+        },
+        "exact_clean": {"type": "boolean"},
+        "verified_absent_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/reference"}
+        },
+        "retained_shared_manifest_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/reference"}
+        },
+        "residue_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/reference"}
+        },
+        "verification_at": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]
+        }
+      }
+    },
+    "snapshotReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "version_id", "etag", "digest"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "version_id": {"type": "string", "minLength": 1, "maxLength": 256},
+        "etag": {"type": "string", "minLength": 1, "maxLength": 256},
+        "digest": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["error_code", "detail_digest", "failed_at"],
+      "properties": {
+        "error_code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{2,63}$"
+        },
+        "detail_digest": {"$ref": "#/$defs/hash"},
+        "failed_at": {"$ref": "#/$defs/timestamp"}
+      }
+    }
+  }
+}

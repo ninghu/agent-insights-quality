@@ -2,11 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "profile", "project_name", "test_agent_model", "catalog_hashes", "agents"],
+  "required": ["schema_version", "profile", "project_name", "test_region", "test_agent_model", "catalog_hashes", "agents"],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"const": "2.0.0"},
     "profile": {"enum": ["daily", "staging"]},
     "project_name": {"enum": ["agent-insights-quality", "agent-insights-quality-staging"]},
+    "test_region": {"type": "string", "pattern": "^[A-Z][A-Za-z]*[0-9]*$"},
     "test_agent_model": {
       "type": "object",
       "additionalProperties": false,

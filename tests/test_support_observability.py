@@ -57,7 +57,7 @@ def _load_support_module(
         ERROR = "error"
         OK = "ok"
 
-    trace_module.get_tracer = lambda _name: tracer
+    trace_module.get_tracer = lambda *_args: tracer
     trace_module.Status = Status
     trace_module.StatusCode = StatusCode
     opentelemetry = types.ModuleType("opentelemetry")
@@ -97,7 +97,18 @@ def _load_support_module(
     package = types.ModuleType(package_name)
     package.__path__ = []
     observability = types.ModuleType(f"{package_name}.observability")
-    observability.configure_observability = lambda _name: None
+    observability.configure_observability = lambda *_args: None
+    runtime_identity = types.ModuleType(f"{package_name}.runtime_identity")
+
+    class RuntimeIdentity:
+        name = "synthetic-support-agent"
+        version = "1"
+
+        @staticmethod
+        def start_span(active_tracer, name):
+            return active_tracer.start_as_current_span(name)
+
+    runtime_identity.require_foundry_runtime_identity = RuntimeIdentity
 
     modules = {
         "opentelemetry": opentelemetry,
@@ -107,6 +118,7 @@ def _load_support_module(
         "openai": openai_module,
         package_name: package,
         f"{package_name}.observability": observability,
+        f"{package_name}.runtime_identity": runtime_identity,
     }
     for name, value in modules.items():
         monkeypatch.setitem(sys.modules, name, value)

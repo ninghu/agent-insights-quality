@@ -11,6 +11,7 @@ from agent_insights_quality.catalogs import (
     source_integrity_digest,
 )
 from agent_insights_quality.models import AgentResult, request_completion_payload
+from agent_insights_quality.azure_regions import regions_match
 from agent_insights_quality.registry import version_entry
 from agent_insights_quality.selection import select_daily
 from agent_insights_quality.util import ROOT, ContractError, content_hash, read_json
@@ -32,6 +33,8 @@ def build_manifest(
     delivery_mode: str,
     insight_lookback_hours: float,
     telemetry_resource_set: str,
+    test_region: str,
+    test_region_registry: str,
     catalog_hashes: dict[str, str],
     agent_catalog: dict[str, Any],
     issue_catalog: dict[str, Any],
@@ -80,13 +83,15 @@ def build_manifest(
             }
         )
     manifest: dict[str, Any] = {
-        "schema_version": "4.0.0",
+        "schema_version": "5.0.0",
         "run_id": run_id(report_date, rerun),
         "profile": profile,
         "delivery_mode": delivery_mode,
         "report_date": report_date.isoformat(),
         "insight_lookback_hours": insight_lookback_hours,
         "telemetry_resource_set": telemetry_resource_set,
+        "test_region": test_region,
+        "test_region_registry": test_region_registry,
         "catalog_hashes": catalog_hashes,
         "source_integrity": {
             "verified": True,
@@ -152,6 +157,13 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     )
     if errors:
         raise ContractError(f"Run manifest is invalid: {errors[0].message}")
+    if not regions_match(
+        manifest["test_region"],
+        manifest["test_region_registry"],
+    ):
+        raise ContractError(
+            "Run manifest live Project region does not match the registry cross-check"
+        )
     expected_agents = {
         "weather-agent",
         "healthcare-agent",

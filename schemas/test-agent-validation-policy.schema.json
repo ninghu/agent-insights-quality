@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ninghu/agent-insights-quality/schemas/test-agent-validation-policy.schema.json",
+  "title": "Test Agent Validation trusted policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "repository",
+    "default_branch",
+    "policy_path",
+    "protected_environment",
+    "workflow",
+    "issuer",
+    "checks",
+    "receipt",
+    "lifecycle"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "kind": {"const": "test-agent-validation-trusted-policy"},
+    "repository": {"const": "ninghu/agent-insights-quality"},
+    "default_branch": {"const": "main"},
+    "policy_path": {"const": "config/test-agent-validation-policy.yaml"},
+    "protected_environment": {"const": "test-agent-validation-receipt"},
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_path",
+        "receipt_path",
+        "reconciler_path",
+        "required_ref"
+      ],
+      "properties": {
+        "candidate_path": {"const": ".github/workflows/test-agent-validation.yml"},
+        "receipt_path": {"const": ".github/workflows/test-agent-validation-receipt.yml"},
+        "reconciler_path": {"const": ".github/workflows/test-agent-validation-reconciler.yml"},
+        "required_ref": {"const": "refs/heads/main"}
+      }
+    },
+    "issuer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["app_id", "app_slug"],
+      "properties": {
+        "app_id": {"const": 15368},
+        "app_slug": {"const": "github-actions"}
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "comprehensive_review",
+        "targeted_verification",
+        "continuous_integration",
+        "required_check"
+      ],
+      "properties": {
+        "comprehensive_review": {"const": "test-agent-validation-review"},
+        "targeted_verification": {"const": "test-agent-validation-targeted"},
+        "continuous_integration": {"const": "validate"},
+        "required_check": {"const": "test-agent-validation"}
+      }
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "merge_prefix",
+        "shadow_prefix",
+        "merge_container",
+        "shadow_container",
+        "create_once",
+        "blob_versioning_required",
+        "immutability_required"
+      ],
+      "properties": {
+        "merge_container": {"const": "test-agent-validation-receipts"},
+        "shadow_container": {"const": "test-agent-validation-shadow-receipts"},
+        "merge_prefix": {"const": "receipts"},
+        "shadow_prefix": {"const": "shadow-receipts"},
+        "create_once": {"const": true},
+        "blob_versioning_required": {"const": true},
+        "immutability_required": {"const": true}
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active_container",
+        "snapshot_container",
+        "receipt_container",
+        "shadow_receipt_container",
+        "active_blob",
+        "absolute_ttl_hours",
+        "maximum_heartbeat_seconds",
+        "reconciler_interval_minutes",
+        "alert_route"
+      ],
+      "properties": {
+        "active_container": {"const": "test-agent-validation-lifecycle"},
+        "snapshot_container": {"const": "test-agent-validation-snapshots"},
+        "receipt_container": {"const": "test-agent-validation-receipts"},
+        "shadow_receipt_container": {"const": "test-agent-validation-shadow-receipts"},
+        "active_blob": {"const": "active.json"},
+        "absolute_ttl_hours": {"const": 72},
+        "maximum_heartbeat_seconds": {"const": 60},
+        "reconciler_interval_minutes": {"const": 15},
+        "alert_route": {"const": "github-actions-summary"}
+      }
+    }
+  }
+}

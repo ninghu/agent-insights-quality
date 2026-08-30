@@ -1,0 +1,74 @@
+name: Test Agent Validation shadow preparation
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number
+        required: true
+        type: number
+      candidate_head_sha:
+        description: Exact candidate head SHA
+        required: true
+        type: string
+      candidate_tree_sha:
+        description: Exact candidate tree SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+  actions: read
+  id-token: write
+
+concurrency:
+  group: test-agent-validation-account
+  cancel-in-progress: false
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate_head_sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e ".[dev,azure]"
+      - run: python -m agent_insights_quality generate-test-agent-validation-rules --check
+      - run: python -m agent_insights_quality validate
+      - run: python -m ruff check .
+      - run: python -m pytest
+      - run: az bicep build --file infra/main.bicep --stdout >/dev/null
+
+  freeze-candidate-contract:
+    needs: contracts
+    runs-on: [self-hosted, agent-insights-quality]
+    environment: test-agent-validation-shadow
+    env:
+      AIQ_RUNTIME_ROOT: ${{ vars.AIQ_RUNTIME_ROOT }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate_head_sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[azure]"
+      - name: Prepare exact candidate contract
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:AIQ_RUNTIME_ROOT "test-agent-validation/candidates/${{ inputs.candidate_head_sha }}.json"
+          python -m agent_insights_quality prepare-test-agent-validation `
+            --pr-number ${{ inputs.pr_number }} `
+            --candidate-head-sha ${{ inputs.candidate_head_sha }} `
+            --candidate-tree-sha ${{ inputs.candidate_tree_sha }} `
+            --workflow-run-id ${{ github.run_id }} `
+            --output $output
+
+# This workflow remains a non-authorizing shadow-preparation path until the reviewed r01/r02
+# lifecycle exercises are complete. It deliberately does not publish the protected required check.
