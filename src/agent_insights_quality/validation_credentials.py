@@ -4,6 +4,8 @@ import base64
 import binascii
 import json
 import subprocess
+import threading
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -34,9 +36,31 @@ class VerifiedAzureCliCredential:
         self._credential = credential
         self._tenant_id = tenant_id.casefold()
         self._object_id = object_id.casefold()
+        self._lock = threading.Lock()
+        self._tokens: dict[tuple[str, ...], Any] = {}
 
     def get_token(self, *scopes: str, **kwargs: Any) -> Any:
-        token = self._credential.get_token(*scopes, **kwargs)
+        key = tuple(scopes)
+        with self._lock:
+            token = self._tokens.get(key) if not kwargs else None
+            expires_on = getattr(token, "expires_on", 0)
+            if (
+                not isinstance(expires_on, (int, float))
+                or expires_on <= time.time() + 300
+            ):
+                try:
+                    token = self._credential.get_token(*scopes, **kwargs)
+                except _azure_credential_errors() as error:
+                    raise ContractError(
+                        "Azure CLI token acquisition failed"
+                    ) from error
+                expires_on = getattr(token, "expires_on", 0)
+                if (
+                    not kwargs
+                    and isinstance(expires_on, (int, float))
+                    and expires_on > time.time() + 300
+                ):
+                    self._tokens[key] = token
         identity = _token_identity(str(token.token))
         if (
             identity["tenant_id"] != self._tenant_id
@@ -85,7 +109,7 @@ def local_azure_operator() -> LocalAzureOperator:
         raise ContractError(
             "Local validation requires the azure optional dependencies"
         ) from error
-    raw = AzureCliCredential()
+    raw = AzureCliCredential(process_timeout=60)
     credential = VerifiedAzureCliCredential(
         raw,
         tenant_id=tenant_id,
@@ -124,6 +148,15 @@ def _azure_json(arguments: list[str], label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ContractError(f"{label} response is not an object")
     return value
+
+
+def _azure_credential_errors() -> tuple[type[BaseException], ...]:
+    try:
+        from azure.core.exceptions import ClientAuthenticationError
+        from azure.identity import CredentialUnavailableError
+    except ImportError:
+        return ()
+    return (ClientAuthenticationError, CredentialUnavailableError)
 
 
 def _token_identity(token: str) -> dict[str, str]:

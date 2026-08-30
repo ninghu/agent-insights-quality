@@ -18,6 +18,12 @@ from agent_insights_quality.validation_cleanup import (
     CleanupPlanItem,
 )
 
+_ARM_API_VERSIONS = {
+    "connection": "2025-06-01",
+    "project": "2025-06-01",
+    "role_assignment": "2022-04-01",
+}
+
 
 class AzureValidationCleanupBackend:
     def __init__(
@@ -120,7 +126,7 @@ class AzureValidationCleanupBackend:
 
     def delete(self, item: CleanupPlanItem) -> None:
         if item.kind == "provider_agent_version":
-            agent_name, version = _agent_version(item.deterministic_name)
+            agent_name, version = self._provider_agent_version(item)
             self._client._delete_owned_version(
                 agent_name,
                 version,
@@ -188,14 +194,18 @@ class AzureValidationCleanupBackend:
             return
         actual_id = self._actual_id(item)
         if actual_id.startswith("/subscriptions/"):
+            arguments = [
+                azure_cli(),
+                "resource",
+                "delete",
+                "--ids",
+                actual_id,
+            ]
+            api_version = _ARM_API_VERSIONS.get(item.kind)
+            if api_version is not None:
+                arguments.extend(["--api-version", api_version])
             self._run(
-                [
-                    azure_cli(),
-                    "resource",
-                    "delete",
-                    "--ids",
-                    actual_id,
-                ],
+                arguments,
                 expected=(0, 3),
             )
             return
@@ -207,7 +217,7 @@ class AzureValidationCleanupBackend:
         if item.resolved_provider_id == "discovery-absent":
             return True
         if item.kind == "provider_agent_version":
-            agent_name, version = _agent_version(item.deterministic_name)
+            agent_name, version = self._provider_agent_version(item)
             return not self._client.version_exists(
                 agent_name,
                 version,
@@ -264,9 +274,14 @@ class AzureValidationCleanupBackend:
                 item.deterministic_name,
                 actual_id,
             )
+        if item.kind == "arm_deployment":
+            return self._deployment_absent(item.deterministic_name)
         actual_id = self._actual_id(item)
         if actual_id.startswith("/subscriptions/"):
-            return self._arm_resource_absent(actual_id)
+            return self._arm_resource_absent(
+                actual_id,
+                api_version=_ARM_API_VERSIONS.get(item.kind),
+            )
         return False
 
     def manifest_is_shared(self, provider_id: str) -> bool:
@@ -415,6 +430,30 @@ class AzureValidationCleanupBackend:
         if not name:
             raise ContractError("Cleanup Agent discovery key is missing")
         return name
+
+    @staticmethod
+    def _provider_agent_version(
+        item: CleanupPlanItem,
+    ) -> tuple[str, str]:
+        resolved = item.resolved_provider_id
+        if resolved is None:
+            return _agent_version(item.deterministic_name)
+        marker = "/versions/"
+        if marker not in resolved:
+            raise ContractError(
+                "Resolved validation Agent version identity is invalid"
+            )
+        agent_name, version = resolved.rsplit(marker, 1)
+        discovery_agent = item.discovery_key.split("|", 1)[0]
+        if (
+            not agent_name
+            or not version
+            or agent_name != discovery_agent
+        ):
+            raise ContractError(
+                "Resolved validation Agent version identity is inconsistent"
+            )
+        return agent_name, version
 
     def _find_version_by_logical(
         self,
@@ -601,17 +640,42 @@ class AzureValidationCleanupBackend:
         )
         return process.returncode == 3
 
-    def _arm_resource_absent(self, provider_id: str) -> bool:
+    def _deployment_absent(self, name: str) -> bool:
         process = self._run(
             [
                 azure_cli(),
-                "resource",
+                "deployment",
+                "group",
                 "show",
-                "--ids",
-                provider_id,
+                "--resource-group",
+                "agent-insights-quality-rg",
+                "--name",
+                name,
                 "--output",
                 "none",
             ],
+            expected=(0, 3),
+        )
+        return process.returncode == 3
+
+    def _arm_resource_absent(
+        self,
+        provider_id: str,
+        *,
+        api_version: str | None = None,
+    ) -> bool:
+        arguments = [
+            azure_cli(),
+            "resource",
+            "show",
+            "--ids",
+            provider_id,
+        ]
+        if api_version is not None:
+            arguments.extend(["--api-version", api_version])
+        arguments.extend(["--output", "none"])
+        process = self._run(
+            arguments,
             expected=(0, 3),
         )
         return process.returncode == 3

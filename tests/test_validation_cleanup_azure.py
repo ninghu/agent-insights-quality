@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from types import SimpleNamespace
+
+import pytest
 
 from agent_insights_quality.validation_cleanup import CleanupPlanItem
 from agent_insights_quality.validation_cleanup_azure import (
@@ -81,3 +84,97 @@ def test_other_cycle_acr_tag_keeps_shared_manifest() -> None:
         ),
     )
     assert backend.manifest_is_shared(digest) is True
+
+
+def test_arm_deployment_absence_uses_deployment_provider() -> None:
+    observed = {}
+    backend = object.__new__(AzureValidationCleanupBackend)
+
+    def run(arguments, *, expected):
+        observed["arguments"] = arguments
+        observed["expected"] = expected
+        return SimpleNamespace(returncode=3)
+
+    backend._run = run
+    item = replace(
+        _intent("arm_deployment", "synthetic-deployment"),
+        deterministic_name="synthetic-deployment",
+        provider_id=(
+            "/subscriptions/synthetic/resourceGroups/synthetic/providers/"
+            "Microsoft.Resources/deployments/synthetic-deployment"
+        ),
+        state="delete_intent",
+    )
+    assert backend.absent(item) is True
+    assert observed["arguments"][1:4] == ["deployment", "group", "show"]
+    assert observed["expected"] == (0, 3)
+
+
+def test_resumed_version_cleanup_uses_resolved_provider_version() -> None:
+    observed = []
+    backend = object.__new__(AzureValidationCleanupBackend)
+    backend._client = SimpleNamespace(
+        version_exists=lambda agent, version, *, hosted: (
+            observed.append((agent, version, hosted)) or False
+        )
+    )
+    item = replace(
+        _intent(
+            "provider_agent_version",
+            "synthetic-agent|issue-001|provider_agent_version",
+        ),
+        deterministic_name="synthetic-agent/issue-001",
+        resolved_provider_id="synthetic-agent/versions/7",
+        state="delete_intent",
+    )
+    assert backend.absent(item) is True
+    assert observed == [("synthetic-agent", "7", True)]
+
+
+def test_discovery_absent_resource_stays_idempotently_absent() -> None:
+    backend = object.__new__(AzureValidationCleanupBackend)
+    item = replace(
+        _intent(
+            "provider_agent_version",
+            "synthetic-agent|issue-001|provider_agent_version",
+        ),
+        resolved_provider_id="discovery-absent",
+        state="delete_intent",
+    )
+    assert backend.absent(item) is True
+
+
+@pytest.mark.parametrize(
+    ("kind", "api_version"),
+    [
+        ("connection", "2025-06-01"),
+        ("project", "2025-06-01"),
+        ("role_assignment", "2022-04-01"),
+    ],
+)
+def test_arm_cleanup_uses_explicit_resource_api_version(
+    kind,
+    api_version,
+) -> None:
+    calls = []
+    backend = object.__new__(AzureValidationCleanupBackend)
+
+    def run(arguments, *, expected):
+        calls.append((arguments, expected))
+        return SimpleNamespace(returncode=0)
+
+    backend._run = run
+    item = replace(
+        _intent(kind, f"synthetic-{kind}"),
+        deterministic_name=f"synthetic-{kind}",
+        provider_id=(
+            "/subscriptions/synthetic/resourceGroups/synthetic/providers/"
+            f"Synthetic.Provider/{kind}/synthetic"
+        ),
+        state="created",
+    )
+    assert backend.absent(item) is False
+    backend.delete(item)
+    for arguments, expected in calls:
+        assert arguments[arguments.index("--api-version") + 1] == api_version
+        assert expected == (0, 3)
