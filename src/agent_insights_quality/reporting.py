@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Mapping
 from pathlib import Path
 import re
 from typing import Any
@@ -281,7 +282,7 @@ def _issue_field_score(item: dict[str, Any]) -> float:
     attributable = [
         _field_score(card["fields"])
         for card in cards
-        if card.get("finding_type") != "NOISE"
+        if card.get("finding_type") in COVERAGE_PRIMARY_TYPES
     ]
     if attributable:
         score = max(attributable)
@@ -1267,20 +1268,6 @@ def _field_result_cells(fields: dict[str, Any] | None) -> tuple[str, str]:
 
 
 COVERAGE_PRIMARY_TYPES = {"MATCHED", "PARTIAL", "MISMATCHED"}
-COVERAGE_MISSING_TYPES = {"MISSING", "NOISE", "DUPLICATE"}
-
-
-def _coverage_label(detail: str) -> str:
-    """Map a per-issue ``detail`` to its Expected issue coverage label.
-
-    An issue whose only cards are Noise and/or Duplicate is still Missing
-    unless a primary attributable MATCHED/PARTIAL/MISMATCHED card exists.
-    """
-    if detail in COVERAGE_PRIMARY_TYPES:
-        return _evaluation_label(detail)
-    if detail == "INCOMPLETE":
-        return "Incomplete"
-    return "Missing"
 
 
 def _issue_link(issue_id: str) -> str:
@@ -1290,14 +1277,28 @@ def _issue_link(issue_id: str) -> str:
     )
 
 
-def _issue_primary_card(item: dict[str, Any]) -> dict[str, Any] | None:
-    detail = item["detail"]
-    if detail not in COVERAGE_PRIMARY_TYPES:
+def issue_primary_card(item: Mapping[str, Any]) -> dict[str, Any] | None:
+    if item.get("runtime_evidence_complete") is False:
+        return None
+    selected = select_shadow_primary(
+        {
+            **item,
+            "runtime_evidence_complete": True,
+        }
+    )
+    if selected is None:
         return None
     for card in item["assessment"].get("card_evaluations", []):
-        if card.get("finding_type") == detail:
+        if card.get("reference") == selected["reference"]:
             return card
     return None
+
+
+def expected_issue_coverage_label(item: Mapping[str, Any]) -> str:
+    primary = issue_primary_card(item)
+    if primary is not None:
+        return _evaluation_label(primary["finding_type"])
+    return "Incomplete" if item["detail"] == "INCOMPLETE" else "Missing"
 
 
 def _agent_runtime_evidence_complete(
@@ -1330,7 +1331,7 @@ def _extra_insight_rows(
             )
         )
     for item in issues:
-        primary = _issue_primary_card(item)
+        primary = issue_primary_card(item)
         cards = item["assessment"].get("card_evaluations", [])
         cards_by_reference = {
             card["reference"]: card for card in cards if "reference" in card
@@ -1339,16 +1340,26 @@ def _extra_insight_rows(
         for card in cards:
             if primary is not None and card is primary:
                 continue
-            if card.get("finding_type") not in COVERAGE_MISSING_TYPES | {
-                "INCOMPLETE"
-            }:
-                continue
             if card.get("finding_type") == "DUPLICATE":
                 primary_card = cards_by_reference.get(card.get("duplicate_of"))
                 primary_title = (
                     primary_card["title"] if primary_card else "the primary card"
                 )
                 relationship = f"Duplicate of **{primary_title}**."
+                reason = card.get("reasoning") or card.get(
+                    "ownership_reason", ""
+                )
+                if reason:
+                    relationship += f" {reason}"
+            elif card.get("finding_type") in COVERAGE_PRIMARY_TYPES:
+                relationship = (
+                    f"Additional attributable card for `{item['issue_id']}`; "
+                    "not selected as the primary. "
+                    + (
+                        card.get("reasoning")
+                        or card.get("ownership_reason", "")
+                    )
+                )
             else:
                 relationship = card.get("reasoning") or card.get(
                     "ownership_reason", ""
@@ -1388,49 +1399,12 @@ def _decision_detail_blocks(
         blocks.append("\n".join(lines))
 
     for item in issues:
-        label = _coverage_label(item["detail"])
+        label = expected_issue_coverage_label(item)
         cards = item["assessment"].get("card_evaluations", [])
         issue_link = _issue_link(item["issue_id"])
         reasoning = item["assessment"].get("reasoning") or "No reasoning provided."
-        if label in {"Partially Correct", "Incorrect"}:
-            primary = _issue_primary_card(item) or {}
-            passing, _unused = _field_result_cells(primary.get("fields"))
-            reasons = primary.get("field_reasons") or {}
-            lines = [
-                f"### [{item['issue_id']}]({issue_link}) - {label}",
-                "",
-                f"**Expected issue:** {item['title']}  ",
-                f"**Generated Insight:** {primary.get('title', 'Untitled Insight')}",
-                "",
-                f"**Why this judgment:** {reasoning}",
-                "",
-                f"**What was correct:** {passing}",
-                "",
-                "| Failing field | Specific reason |",
-                "| --- | --- |",
-            ]
-            for field in FIELD_WEIGHTS:
-                if primary.get("fields", {}).get(field) is True:
-                    continue
-                reason = reasons.get(field, "No reason provided.")
-                lines.append(
-                    f"| {field.replace('_', ' ').title()} | "
-                    f"{_markdown_cell(reason)} |"
-                )
-            lines.extend(
-                [
-                    "",
-                    "| Review metadata | Value |",
-                    "| --- | --- |",
-                    "| Ownership | "
-                    f"`{primary.get('ownership', item['assessment']['ownership'])}` |",
-                    "| Confidence | "
-                    f"`{primary.get('confidence', item['assessment']['confidence']):.2f}` |",
-                    "",
-                ]
-            )
-            blocks.append("\n".join(lines))
-        elif label in {"Missing", "Incomplete"}:
+        primary = issue_primary_card(item)
+        if label in {"Missing", "Incomplete"}:
             blocks.append(
                 "\n".join(
                     [
@@ -1444,6 +1418,62 @@ def _decision_detail_blocks(
                 )
             )
         for card in cards:
+            finding_type = card.get("finding_type")
+            if finding_type in {"PARTIAL", "MISMATCHED"}:
+                card_label = _evaluation_label(finding_type)
+                qualifier = "" if card is primary else "Additional card - "
+                passing, _unused = _field_result_cells(card.get("fields"))
+                reasons = card.get("field_reasons") or {}
+                lines = [
+                    f"### {qualifier}[{item['issue_id']}]({issue_link}) - {card_label}",
+                    "",
+                    f"**Expected issue:** {item['title']}  ",
+                    f"**Generated Insight:** {card.get('title', 'Untitled Insight')}",
+                    "",
+                    "**Why this judgment:** "
+                    f"{card.get('reasoning') or reasoning}",
+                    "",
+                    f"**What was correct:** {passing}",
+                    "",
+                    "| Failing field | Specific reason |",
+                    "| --- | --- |",
+                ]
+                for field in FIELD_WEIGHTS:
+                    if card.get("fields", {}).get(field) is True:
+                        continue
+                    reason = reasons.get(field, "No reason provided.")
+                    lines.append(
+                        f"| {field.replace('_', ' ').title()} | "
+                        f"{_markdown_cell(reason)} |"
+                    )
+                lines.extend(
+                    [
+                        "",
+                        "| Review metadata | Value |",
+                        "| --- | --- |",
+                        f"| Ownership | `{card.get('ownership', item['assessment']['ownership'])}` |",
+                        f"| Confidence | `{card.get('confidence', item['assessment']['confidence']):.2f}` |",
+                        "",
+                    ]
+                )
+                blocks.append("\n".join(lines))
+            elif finding_type == "INCOMPLETE":
+                blocks.append(
+                    "\n".join(
+                        [
+                            f"### Incomplete card - observed in `{item['issue_id']}` version",
+                            "",
+                            f"**Generated Insight:** {card.get('title', 'Untitled Insight')}",
+                            "",
+                            "**Why this judgment:** "
+                            f"{card.get('reasoning') or card.get('ownership_reason', '')}",
+                            "",
+                            f"**Ownership:** `{card.get('ownership', '')}`",
+                            "",
+                        ]
+                    )
+                )
+        for card in cards:
             if card.get("finding_type") != "NOISE":
                 continue
             lines = [
@@ -1452,9 +1482,14 @@ def _decision_detail_blocks(
                 f"**Generated Insight:** {card.get('title', 'Untitled Insight')}",
                 "**Corresponding issue:** None",
                 "",
+                f"**Diagnosis:** {card.get('title', 'Untitled Insight')}",
+                "",
+                f"**Evidence:** {card.get('reasoning', '')}",
+                "",
                 f"**Rejected mapping:** `{item['issue_id']}` - {item['title']}",
                 "",
-                f"**Why this judgment:** {card.get('reasoning', '')}",
+                "**Why no reviewed issue corresponds:** "
+                f"{card.get('ownership_reason') or card.get('reasoning', '')}",
                 "",
                 "| Review metadata | Value |",
                 "| --- | --- |",
@@ -1487,11 +1522,10 @@ def _decision_detail_blocks(
                 "**Duplicate cards:**",
                 "",
                 *[
-                    f"{index}. {card.get('title', 'Untitled Insight')}"
+                    f"{index}. {card.get('title', 'Untitled Insight')} - "
+                    f"{card.get('reasoning') or card.get('ownership_reason', '')}"
                     for index, card in enumerate(duplicate_cards, start=1)
                 ],
-                "",
-                f"**Why this judgment:** {duplicate_cards[0].get('reasoning', '')}",
                 "",
             ]
             blocks.append("\n".join(lines))
@@ -1588,8 +1622,8 @@ def _issue_context_entry(item: dict[str, Any]) -> tuple[str, str, str] | None:
     """Return ``(finding, ownership, anchor_phrase)`` for one issue row, or
     ``None`` when the issue has no actionable finding at all (a plain
     Correct with no extra generated cards)."""
-    label = _coverage_label(item["detail"])
-    primary = _issue_primary_card(item)
+    label = expected_issue_coverage_label(item)
+    primary = issue_primary_card(item)
     cards = item["assessment"].get("card_evaluations", [])
     extra_noise = [
         card
@@ -1686,7 +1720,9 @@ def render_agent_markdown(report: dict[str, Any], agent_name: str) -> str:
     evaluation_counts = Counter(
         _evaluation_label(card["finding_type"]) for card in issue_cards
     )
-    missing_count = sum(item["detail"] in COVERAGE_MISSING_TYPES for item in issues)
+    missing_count = sum(
+        expected_issue_coverage_label(item) == "Missing" for item in issues
+    )
     runtime_complete = _agent_runtime_evidence_complete(baseline, issues)
     lines = [
         f"# {agent_name} - Insight Evaluation",
@@ -1722,8 +1758,8 @@ def render_agent_markdown(report: dict[str, Any], agent_name: str) -> str:
         "| --- | --- | --- | --- | --- |",
     ]
     for item in issues:
-        label = _coverage_label(item["detail"])
-        primary = _issue_primary_card(item)
+        label = expected_issue_coverage_label(item)
+        primary = issue_primary_card(item)
         if primary is not None:
             primary_title = _markdown_cell(primary.get("title", "Untitled Insight"))
         elif label == "Incomplete":
@@ -1731,7 +1767,12 @@ def render_agent_markdown(report: dict[str, Any], agent_name: str) -> str:
         else:
             primary_title = "No matching Insight"
         why = _markdown_cell(
-            item["assessment"].get("reasoning") or "No reasoning provided."
+            (
+                primary.get("reasoning")
+                if primary is not None
+                else item["assessment"].get("reasoning")
+            )
+            or "No reasoning provided."
         )
         lines.append(
             f"| [{item['issue_id']}]({_issue_link(item['issue_id'])}) | "

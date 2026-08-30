@@ -9,7 +9,10 @@ Rules:
 
 - Use only entries in `insight_engine_findings` as pattern evidence. Never reassign ownership.
 - A cross-Agent pattern requires cited findings from at least two distinct Agents.
-- Cite each supporting finding by its exact `agent` and nullable `issue_id` from the input.
+- Cite each supporting finding by its exact `finding_id`, `agent`, and nullable `issue_id` from the
+  input. Never invent or shorten a finding reference.
+- Use a unique descriptive `pattern_key` only to connect this response's priorities to its patterns;
+  deterministic code replaces it with the stable living-memory ID.
 - Treat `exclusions` and incomplete evidence as limitations, never supporting evidence.
 - Describe general Insight Engine improvements and measurable later-run signals. Never encode Test
   Agent issue IDs, fixed prompts, expected defects, or known answers into production behavior.

@@ -19,6 +19,8 @@ provider IDs, or private identifiers are introduced.
 from __future__ import annotations
 
 import json
+import re
+import tempfile
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -26,7 +28,14 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from agent_insights_quality.reporting import COVERAGE_MISSING_TYPES
+from agent_insights_quality.reporting import (
+    expected_issue_coverage_label,
+    issue_primary_card,
+    render_agent_markdown,
+    render_markdown,
+    validate_report,
+    write_report,
+)
 from agent_insights_quality.util import (
     ROOT,
     ContractError,
@@ -68,21 +77,24 @@ def assessment_policy_digest() -> str:
 def current_run_signal(report: Mapping[str, Any]) -> dict[str, int]:
     """Deterministic current-run counts for the improvement memory.
 
-    ``missing_expected_issues`` uses the corrected coverage semantics: an
-    expected issue with only Noise and/or Duplicate cards is still Missing.
+    ``missing_expected_issues`` uses the corrected coverage semantics: only an
+    independently selected attributable primary satisfies expected coverage.
     """
-    details = Counter(item["detail"] for item in report["issues"])
-    generated_issue_cards = sum(
-        len(item["assessment"].get("card_evaluations", [])) for item in report["issues"]
-    )
+    cards = [
+        card
+        for item in report["issues"]
+        for card in item["assessment"].get("card_evaluations", [])
+    ]
+    classifications = Counter(card.get("finding_type") for card in cards)
     return {
-        "generated_issue_cards": generated_issue_cards,
-        "partially_correct": details.get("PARTIAL", 0),
-        "incorrect": details.get("MISMATCHED", 0),
-        "noise": details.get("NOISE", 0),
-        "duplicate": details.get("DUPLICATE", 0),
+        "generated_issue_cards": len(cards),
+        "partially_correct": classifications.get("PARTIAL", 0),
+        "incorrect": classifications.get("MISMATCHED", 0),
+        "noise": classifications.get("NOISE", 0),
+        "duplicate": classifications.get("DUPLICATE", 0),
         "missing_expected_issues": sum(
-            details.get(kind, 0) for kind in COVERAGE_MISSING_TYPES
+            expected_issue_coverage_label(item) == "Missing"
+            for item in report["issues"]
         ),
     }
 
@@ -113,27 +125,42 @@ def exercised_capabilities(report: Mapping[str, Any]) -> set[str]:
 
 def _finding_entry(
     *,
+    finding_id: str,
     agent: str,
     issue_id: str | None,
     title: str,
     reasoning: str,
     fields: Mapping[str, Any] | None = None,
+    field_reasons: Mapping[str, Any] | None = None,
     reference: str | None = None,
 ) -> dict[str, Any]:
+    failed_fields = sorted(
+        key for key, passed in (fields or {}).items() if passed is False
+    )
     return {
+        "finding_id": finding_id,
         "agent": agent,
         "issue_id": issue_id,
         "title": title,
         "reasoning": reasoning,
-        "failed_fields": sorted(
-            key for key, passed in (fields or {}).items() if passed is False
-        ),
+        "failed_fields": failed_fields,
+        "failed_field_reasons": {
+            field: str((field_reasons or {}).get(field) or "")
+            for field in failed_fields
+        },
         "reference": reference,
         "report_link": _agent_report_link(agent),
     }
 
 
-def build_normalized_summary(report: Mapping[str, Any]) -> dict[str, Any]:
+def _finding_id(agent: str, issue_id: str | None, slot: str) -> str:
+    return f"{agent}/{'v0' if issue_id is None else issue_id}/{slot}"
+
+
+def build_normalized_summary(
+    report: Mapping[str, Any],
+    previous_state: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Public-safe normalized summary that would be sent to GPT-5.6 Sol.
 
     Splits findings into ``insight_engine_findings`` (ownership=="insight_engine"
@@ -158,6 +185,7 @@ def build_normalized_summary(report: Mapping[str, Any]) -> dict[str, Any]:
             continue
         add(
             _finding_entry(
+                finding_id=_finding_id(baseline["agent"], None, "outcome"),
                 agent=baseline["agent"],
                 issue_id=None,
                 title="Baseline outcome",
@@ -167,16 +195,25 @@ def build_normalized_summary(report: Mapping[str, Any]) -> dict[str, Any]:
             assessment["ownership"],
             assessment["verdict"].upper(),
         )
-        for card in assessment.get("card_evaluations", []):
+        for index, card in enumerate(
+            assessment.get("card_evaluations", []),
+            start=1,
+        ):
             if card.get("evaluation") == "valid_agent_finding":
                 continue
             add(
                 _finding_entry(
+                    finding_id=_finding_id(
+                        baseline["agent"],
+                        None,
+                        f"card-{index:02d}",
+                    ),
                     agent=baseline["agent"],
                     issue_id=None,
                     title=card.get("title", "Untitled Insight"),
                     reasoning=card.get("reasoning") or card.get("ownership_reason", ""),
                     fields=card.get("fields", {}),
+                    field_reasons=card.get("field_reasons", {}),
                     reference=card.get("reference"),
                 ),
                 card.get("ownership", assessment["ownership"]),
@@ -185,41 +222,76 @@ def build_normalized_summary(report: Mapping[str, Any]) -> dict[str, Any]:
 
     for item in report["issues"]:
         assessment = item["assessment"]
-        primary = next(
-            (
-                card
-                for card in assessment.get("card_evaluations", [])
-                if card.get("finding_type")
-                in {"MATCHED", "PARTIAL", "MISMATCHED"}
-            ),
-            None,
-        )
+        primary = issue_primary_card(item)
+        coverage_type = {
+            "Correct": "MATCHED",
+            "Partially Correct": "PARTIAL",
+            "Incorrect": "MISMATCHED",
+            "Missing": "MISSING",
+            "Incomplete": "INCOMPLETE",
+        }[expected_issue_coverage_label(item)]
         add(
             _finding_entry(
+                finding_id=_finding_id(
+                    item["agent"],
+                    item["issue_id"],
+                    "expected",
+                ),
                 agent=item["agent"],
                 issue_id=item["issue_id"],
                 title=item["title"],
-                reasoning=assessment.get("reasoning") or "",
-                fields=assessment.get("fields", {}),
+                reasoning=(
+                    primary.get("reasoning")
+                    if isinstance(primary, Mapping)
+                    else assessment.get("reasoning")
+                )
+                or "",
+                fields=(
+                    primary.get("fields", {})
+                    if isinstance(primary, Mapping)
+                    else assessment.get("fields", {})
+                ),
+                field_reasons=(
+                    primary.get("field_reasons", {})
+                    if isinstance(primary, Mapping)
+                    else {}
+                ),
                 reference=(
                     primary.get("reference")
                     if isinstance(primary, Mapping)
                     else item.get("evidence_reference")
                 ),
             ),
-            assessment["ownership"],
-            item["detail"],
+            (
+                primary.get("ownership", assessment["ownership"])
+                if isinstance(primary, Mapping)
+                else assessment["ownership"]
+            ),
+            coverage_type,
         )
-        for card in assessment.get("card_evaluations", []):
-            if card.get("finding_type") not in {"NOISE", "DUPLICATE"}:
+        for index, card in enumerate(
+            assessment.get("card_evaluations", []),
+            start=1,
+        ):
+            if card is primary:
                 continue
             add(
                 _finding_entry(
+                    finding_id=_finding_id(
+                        item["agent"],
+                        item["issue_id"],
+                        f"card-{index:02d}",
+                    ),
                     agent=item["agent"],
-                    issue_id=None,
+                    issue_id=(
+                        None
+                        if card.get("finding_type") == "NOISE"
+                        else item["issue_id"]
+                    ),
                     title=card.get("title", "Untitled Insight"),
                     reasoning=card.get("reasoning") or card.get("ownership_reason", ""),
                     fields=card.get("fields", {}),
+                    field_reasons=card.get("field_reasons", {}),
                     reference=card.get("reference"),
                 ),
                 card.get("ownership", assessment["ownership"]),
@@ -231,6 +303,20 @@ def build_normalized_summary(report: Mapping[str, Any]) -> dict[str, Any]:
         "current_run_signal": current_run_signal(report),
         "insight_engine_findings": insight_engine_findings,
         "exclusions": exclusions,
+        "prior_patterns": [
+            {
+                "pattern_id": key,
+                "title": value["title"],
+                "status": value["status"],
+                "affected_agents": list(value.get("affected_agents", [])),
+                "supporting_capabilities": list(
+                    value.get("supporting_capabilities", [])
+                ),
+            }
+            for key, value in sorted(
+                ((previous_state or {}).get("patterns") or {}).items()
+            )
+        ],
     }
 
 
@@ -283,24 +369,81 @@ def validate_analysis_against_summary(
 ) -> None:
     validate_analysis(analysis)
     eligible = {
-        (item["agent"], item.get("issue_id"))
+        item["finding_id"]: item
         for item in normalized_summary["insight_engine_findings"]
     }
     for pattern in analysis["patterns"]:
-        citations = {
-            (item["agent"], item.get("issue_id"))
-            for item in pattern["evidence"]
+        citation_ids = [item["finding_id"] for item in pattern["evidence"]]
+        if len(citation_ids) != len(set(citation_ids)):
+            raise ContractError(
+                "Insight Engine improvement pattern repeats a finding citation"
+            )
+        citations = [eligible.get(finding_id) for finding_id in citation_ids]
+        evidence_agents = {
+            item["agent"] for item in citations if item is not None
         }
-        evidence_agents = {item[0] for item in citations}
         if (
             not citations
-            or not citations.issubset(eligible)
+            or any(item is None for item in citations)
+            or any(
+                citation["agent"] != evidence["agent"]
+                or citation.get("issue_id") != evidence.get("issue_id")
+                for citation, evidence in zip(
+                    citations,
+                    pattern["evidence"],
+                    strict=True,
+                )
+                if citation is not None
+            )
             or evidence_agents != set(pattern["supporting_agents"])
         ):
             raise ContractError(
                 "Insight Engine improvement pattern cites an ineligible or "
                 "unresolved per-Agent finding"
             )
+
+
+def assign_stable_pattern_ids(
+    analysis: Mapping[str, Any],
+    previous_patterns: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Replace model-local keys with deterministic living-memory IDs."""
+    validate_analysis(analysis)
+    prior_by_title: dict[str, str] = {}
+    for key, pattern in previous_patterns.items():
+        normalized = _normalized_title(pattern["title"])
+        if normalized in prior_by_title and prior_by_title[normalized] != key:
+            raise ContractError("Prior improvement patterns have ambiguous titles")
+        prior_by_title[normalized] = key
+    result = json.loads(json.dumps(analysis))
+    key_map: dict[str, str] = {}
+    assigned: set[str] = set()
+    for pattern in result["patterns"]:
+        source_key = pattern["pattern_key"]
+        normalized = _normalized_title(pattern["title"])
+        stable_key = prior_by_title.get(normalized) or _pattern_id(normalized)
+        if stable_key in assigned:
+            raise ContractError(
+                "Improvement analysis patterns collapse to one deterministic ID"
+            )
+        assigned.add(stable_key)
+        key_map[source_key] = stable_key
+        pattern["pattern_key"] = stable_key
+    for priority in result["improvement_priorities"]:
+        priority["pattern_key"] = key_map[priority["pattern_key"]]
+    validate_analysis(result)
+    return result
+
+
+def _normalized_title(value: str) -> str:
+    return " ".join(value.casefold().split())
+
+
+def _pattern_id(normalized_title: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", normalized_title).strip("-")
+    slug = slug[:36].rstrip("-") or "pattern"
+    digest = content_hash({"title": normalized_title}).removeprefix("sha256:")[:10]
+    return f"{slug}-{digest}"
 
 
 def reconcile_patterns(
@@ -314,6 +457,7 @@ def reconcile_patterns(
     assessment_policy: str | None = None,
     exercised_capability_names: Sequence[str] | None = None,
     pattern_capabilities: Mapping[str, Sequence[str]] | None = None,
+    pattern_priorities: Mapping[str, int] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Pure lifecycle reconciliation of the living pattern state.
 
@@ -325,10 +469,11 @@ def reconcile_patterns(
     - A pattern from prior state not seen this run keeps a ``resolved``
       status unconditionally (archived). Otherwise, if this run is not
       comparable for that pattern (either the whole run is not comparable, or
-      a previously supporting Agent was not exercised this run), it becomes
-      ``not_evaluated`` and its comparable-absence count is unchanged. Else
-      its comparable-absence count advances by one, becoming ``resolved`` at
-      two and ``watching`` otherwise.
+      a previously supporting Agent was not exercised this run), its visible
+      status and comparable-absence count are preserved while
+      ``last_evaluation`` becomes ``not_evaluated``. Else its comparable-
+      absence count advances by one, becoming ``resolved`` at two and
+      ``watching`` otherwise.
     """
     exercised = set(exercised_agents)
     policy = assessment_policy or assessment_policy_digest()
@@ -338,6 +483,7 @@ def reconcile_patterns(
         else None
     )
     capability_map = pattern_capabilities or {}
+    priority_map = pattern_priorities or {}
     seen_keys = {pattern["pattern_key"] for pattern in analysis_patterns}
     reconciled: dict[str, dict[str, Any]] = {}
 
@@ -353,8 +499,18 @@ def reconcile_patterns(
             first_seen_run = prior["first_seen_run"]
             first_seen_date = prior["first_seen_date"]
             observed_run_count = int(prior.get("observed_run_count", 0)) + 1
+        history = list((prior or {}).get("history", []))
+        history.append(
+            {
+                "run_id": run_id,
+                "run_date": run_date,
+                "evaluation": "observed",
+                "status": status,
+            }
+        )
         reconciled[key] = {
             "status": status,
+            "last_evaluation": "observed",
             "title": pattern["title"],
             "why_it_is_a_pattern": pattern["why_it_is_a_pattern"],
             "affected_agents": sorted(set(pattern["supporting_agents"])),
@@ -372,15 +528,18 @@ def reconcile_patterns(
             "supporting_capabilities": sorted(
                 set(capability_map.get(key, ()))
             ),
+            "priority": priority_map.get(
+                key,
+                int((prior or {}).get("priority", len(priority_map) + 1)),
+            ),
+            "history": history,
         }
 
     for key, prior in previous_patterns.items():
         if key in seen_keys:
             continue
         prior = dict(prior)
-        if prior["status"] == "resolved":
-            reconciled[key] = prior
-            continue
+        history = list(prior.get("history", []))
         previously_affected = set(prior.get("affected_agents", []))
         required_capabilities = set(
             prior.get("supporting_capabilities", [])
@@ -394,13 +553,47 @@ def reconcile_patterns(
                 or required_capabilities.issubset(capabilities)
             )
         )
+        if prior["status"] == "resolved":
+            prior["last_evaluation"] = (
+                "absent" if run_is_comparable else "not_evaluated"
+            )
+            history.append(
+                {
+                    "run_id": run_id,
+                    "run_date": run_date,
+                    "evaluation": prior["last_evaluation"],
+                    "status": prior["status"],
+                }
+            )
+            prior["history"] = history
+            reconciled[key] = prior
+            continue
         if not run_is_comparable:
-            prior["status"] = "not_evaluated"
+            prior["last_evaluation"] = "not_evaluated"
+            history.append(
+                {
+                    "run_id": run_id,
+                    "run_date": run_date,
+                    "evaluation": "not_evaluated",
+                    "status": prior["status"],
+                }
+            )
+            prior["history"] = history
             reconciled[key] = prior
             continue
         absence_count = int(prior.get("comparable_absence_count", 0)) + 1
         prior["comparable_absence_count"] = absence_count
         prior["status"] = "resolved" if absence_count >= 2 else "watching"
+        prior["last_evaluation"] = "absent"
+        history.append(
+            {
+                "run_id": run_id,
+                "run_date": run_date,
+                "evaluation": "absent",
+                "status": prior["status"],
+            }
+        )
+        prior["history"] = history
         reconciled[key] = prior
 
     return reconciled
@@ -410,9 +603,16 @@ def build_run_snapshot(
     report: Mapping[str, Any],
     analysis: Mapping[str, Any],
     reconciled_patterns: Mapping[str, Mapping[str, Any]],
+    *,
+    evaluated_patterns: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Assemble the immutable per-run snapshot object for this Official Daily."""
-    seen_keys = {pattern["pattern_key"] for pattern in analysis["patterns"]}
+    current_patterns = list(
+        analysis["patterns"]
+        if evaluated_patterns is None
+        else evaluated_patterns
+    )
+    seen_keys = {pattern["pattern_key"] for pattern in current_patterns}
     return {
         "schema_version": "1.0.0",
         "run_id": report["run_id"],
@@ -420,22 +620,22 @@ def build_run_snapshot(
         "coverage": report_coverage(report),
         "assessment_policy": "unchanged",
         "assessment_policy_digest": assessment_policy_digest(),
+        "analysis_digest": content_hash(analysis),
+        "analysis": json.loads(json.dumps(analysis)),
         "executive_summary": analysis["executive_summary"],
         "current_run_signal": current_run_signal(report),
-        "patterns": [
-            {
-                "pattern_key": pattern["pattern_key"],
-                "title": pattern["title"],
-                "supporting_agents": sorted(set(pattern["supporting_agents"])),
-                "measurable_signal": pattern["measurable_signal"],
-            }
-            for pattern in analysis["patterns"]
+        "patterns": [dict(pattern) for pattern in current_patterns],
+        "improvement_priorities": [
+            dict(priority)
+            for priority in analysis["improvement_priorities"]
+            if priority["pattern_key"] in seen_keys
         ],
         "reconciliation": [
             {
                 "pattern_key": key,
                 "seen_this_run": key in seen_keys,
                 "status": entry["status"],
+                "last_evaluation": entry.get("last_evaluation", "observed"),
                 "comparable_absence_count": entry.get("comparable_absence_count", 0),
             }
             for key, entry in sorted(reconciled_patterns.items())
@@ -517,19 +717,61 @@ def render_snapshot_markdown(snapshot: Mapping[str, Any]) -> str:
             )
     else:
         lines.append("| None | - | No cross-Agent pattern was identified this run. |")
+    for pattern in snapshot["patterns"]:
+        lines.extend(
+            [
+                "",
+                f"### {pattern['title']}",
+                "",
+                f"**Pattern ID:** `{pattern['pattern_key']}`  ",
+                f"**Confidence:** `{pattern['confidence']:.2f}`",
+                "",
+                f"**Why this is a pattern:** {pattern['why_it_is_a_pattern']}",
+                "",
+                f"**Recommended improvement:** {pattern['improvement']}",
+                "",
+                "**Cited findings:**",
+                "",
+            ]
+        )
+        lines.extend(
+            (
+                f"- `{evidence['finding_id']}` - "
+                f"{_agent_display(evidence['agent'])}"
+                + (
+                    f" / `{evidence['issue_id']}`"
+                    if evidence.get("issue_id")
+                    else ""
+                )
+                + f": {evidence['detail']}"
+            )
+            for evidence in pattern["evidence"]
+        )
+    lines.extend(["", "## Improvement priorities", ""])
+    if snapshot["improvement_priorities"]:
+        lines.extend(
+            f"{index}. `{priority['pattern_key']}` - {priority['why_it_matters']}"
+            for index, priority in enumerate(
+                snapshot["improvement_priorities"],
+                start=1,
+            )
+        )
+    else:
+        lines.append("No cross-Agent improvement priority was identified.")
     lines.extend(
         [
             "",
             "## Memory reconciliation input",
             "",
-            "| Pattern | Seen in this run | Status | Comparable absence |",
-            "| --- | --- | --- | ---: |",
+            "| Pattern | Seen in this run | Status | Latest evaluation | Comparable absence |",
+            "| --- | --- | --- | --- | ---: |",
         ]
     )
     for row in snapshot["reconciliation"]:
         lines.append(
             f"| `{row['pattern_key']}` | {'Yes' if row['seen_this_run'] else 'No'} | "
-            f"{row['status']} | {row['comparable_absence_count']} |"
+            f"{row['status']} | {row['last_evaluation']} | "
+            f"{row['comparable_absence_count']} |"
         )
     if snapshot["isolated_observations"]:
         lines.extend(["", "## Isolated observations", ""])
@@ -537,17 +779,10 @@ def render_snapshot_markdown(snapshot: Mapping[str, Any]) -> str:
     if snapshot["exclusions"]:
         lines.extend(["", "## Exclusions", ""])
         lines.extend(f"- {item}" for item in snapshot["exclusions"])
-    agent_names = sorted(
-        {
-            agent
-            for pattern in snapshot["patterns"]
-            for agent in pattern["supporting_agents"]
-        }
-    ) or sorted(_AGENT_DISPLAY_NAMES)
     lines.extend(["", "## Evidence links", ""])
     lines.extend(
         f"- [{_agent_display(agent)} evaluation]({_agent_report_link(agent)})"
-        for agent in agent_names
+        for agent in sorted(_AGENT_DISPLAY_NAMES)
     )
     lines.extend(
         [
@@ -622,6 +857,8 @@ def render_living_markdown(state: Mapping[str, Any]) -> str:
                     f"**Status:** `{pattern['status'].title()}`  ",
                     f"**First seen:** `{pattern['first_seen_run']}`  ",
                     f"**Last seen:** `{pattern['last_seen_run']}`  ",
+                    f"**Latest evaluation:** "
+                    f"`{pattern.get('last_evaluation', 'observed').replace('_', ' ').title()}`  ",
                     f"**Comparable absence count:** `{pattern['comparable_absence_count']}/2`",
                     "",
                     f"**Why this is a pattern:** {pattern['why_it_is_a_pattern']}",
@@ -636,22 +873,31 @@ def render_living_markdown(state: Mapping[str, Any]) -> str:
     if watching:
         lines.extend(
             [
-                "| Pattern | Last seen | Comparable absence |",
-                "| --- | --- | ---: |",
+                "| Pattern | Last seen | Latest evaluation | Comparable absence |",
+                "| --- | --- | --- | ---: |",
             ]
         )
         for key, pattern in sorted(watching.items()):
             lines.append(
                 f"| {pattern['title']} | `{pattern['last_seen_run']}` | "
+                f"{pattern.get('last_evaluation', 'absent').replace('_', ' ').title()} | "
                 f"`{pattern['comparable_absence_count']}/2` |"
             )
     else:
         lines.append("No patterns are currently Watching.")
     lines.extend(["", "## Resolved archive", ""])
     if resolved:
-        lines.extend(["| Pattern | Last seen |", "| --- | --- |"])
+        lines.extend(
+            [
+                "| Pattern | Last seen | Latest evaluation |",
+                "| --- | --- | --- |",
+            ]
+        )
         for key, pattern in sorted(resolved.items()):
-            lines.append(f"| {pattern['title']} | `{pattern['last_seen_run']}` |")
+            lines.append(
+                f"| {pattern['title']} | `{pattern['last_seen_run']}` | "
+                f"{pattern.get('last_evaluation', 'absent').replace('_', ' ').title()} |"
+            )
     else:
         lines.append("No patterns have reached two consecutive comparable complete absences.")
     lines.extend(["", "## Isolated observations", ""])
@@ -737,6 +983,12 @@ def _memory_update_text(reconciled_patterns: Mapping[str, Mapping[str, Any]]) ->
         for status in ("new", "active", "reopened", "watching", "resolved")
         if counts.get(status)
     ]
+    not_evaluated = sum(
+        entry.get("last_evaluation") == "not_evaluated"
+        for entry in reconciled_patterns.values()
+    )
+    if not_evaluated:
+        parts.append(f"{not_evaluated} Not Evaluated")
     return ", ".join(parts) if parts else "No pattern change"
 
 
@@ -783,6 +1035,7 @@ def write_improvement_memory(
     analysis: Mapping[str, Any],
     reports_root: Path,
     living_state_path: Path,
+    report_output: Path | None = None,
 ) -> dict[str, Any]:
     """Reconcile, persist, and render the improvement memory for one run.
 
@@ -798,22 +1051,17 @@ def write_improvement_memory(
             "Insight Engine improvement memory can only be written for an "
             "Official Daily report"
         )
-    normalized_summary = build_normalized_summary(report)
-    validate_analysis_against_summary(analysis, normalized_summary)
-    coverage = report_coverage(report)
     previous_state = read_json(living_state_path) if living_state_path.exists() else None
-    if previous_state is not None and previous_state.get("latest_run_id") == report["run_id"]:
-        raise ContractError(
-            f"Insight Engine improvement memory already recorded run "
-            f"{report['run_id']!r}; each Official Daily run may reconcile "
-            "pattern memory exactly once"
-        )
     previous_patterns = (previous_state or {}).get("patterns", {})
+    normalized_summary = build_normalized_summary(report, previous_state)
+    validate_analysis_against_summary(analysis, normalized_summary)
+    analysis = assign_stable_pattern_ids(analysis, previous_patterns)
+    coverage = report_coverage(report)
     exercised_agents = [item["agent"] for item in report["baseline"]]
     is_comparable = coverage["runtime_evidence_complete"]
     analysis_patterns = list(analysis["patterns"]) if is_comparable else []
     eligible_by_finding = {
-        (item["agent"], item.get("issue_id")): item
+        item["finding_id"]: item
         for item in normalized_summary["insight_engine_findings"]
     }
     pattern_capabilities = {
@@ -821,50 +1069,120 @@ def write_improvement_memory(
             {
                 capability
                 for evidence in pattern["evidence"]
-                for capability in eligible_by_finding[
-                    (evidence["agent"], evidence.get("issue_id"))
-                ]["failed_fields"]
+                for capability in eligible_by_finding[evidence["finding_id"]][
+                    "failed_fields"
+                ]
             }
         )
         for pattern in analysis_patterns
     }
-    reconciled = reconcile_patterns(
-        previous_patterns,
-        analysis_patterns,
-        run_id=report["run_id"],
-        run_date=report["report_date"],
-        comparable=is_comparable,
-        exercised_agents=exercised_agents,
-        assessment_policy=assessment_policy_digest(),
-        exercised_capability_names=sorted(
-            exercised_capabilities(report)
-        ),
-        pattern_capabilities=pattern_capabilities,
+    same_run = (
+        previous_state is not None
+        and previous_state.get("latest_run_id") == report["run_id"]
     )
-    snapshot = build_run_snapshot(report, analysis, reconciled)
+    reconciled = (
+        {key: dict(value) for key, value in previous_patterns.items()}
+        if same_run
+        else reconcile_patterns(
+            previous_patterns,
+            analysis_patterns,
+            run_id=report["run_id"],
+            run_date=report["report_date"],
+            comparable=is_comparable,
+            exercised_agents=exercised_agents,
+            assessment_policy=assessment_policy_digest(),
+            exercised_capability_names=sorted(
+                exercised_capabilities(report)
+            ),
+            pattern_capabilities=pattern_capabilities,
+            pattern_priorities={
+                priority["pattern_key"]: index
+                for index, priority in enumerate(
+                    analysis["improvement_priorities"],
+                    start=1,
+                )
+            },
+        )
+    )
+    snapshot = build_run_snapshot(
+        report,
+        analysis,
+        reconciled,
+        evaluated_patterns=analysis_patterns,
+    )
     snapshot_dir = (
         reports_root
         / "daily"
         / report["report_date"].replace("-", "/")
     )
-    snapshot_json_path = snapshot_dir / "insight-engine-improvement.json"
-    snapshot_markdown_path = snapshot_dir / "insight-engine-improvement.md"
-    immutable_json(snapshot_json_path, snapshot)
-    immutable_text(snapshot_markdown_path, render_snapshot_markdown(snapshot))
-
     relative_snapshot_link = "/".join(
         ["daily", *report["report_date"].split("-"), "insight-engine-improvement.md"]
     )
-    living_state = build_living_state(
-        previous_state,
-        report,
-        analysis,
-        reconciled,
-        snapshot_link=relative_snapshot_link,
+    if same_run:
+        living_state = dict(previous_state)
+    else:
+        living_state = build_living_state(
+            previous_state,
+            report,
+            analysis,
+            reconciled,
+            snapshot_link=relative_snapshot_link,
+        )
+    snapshot_markdown = render_snapshot_markdown(snapshot)
+    living_markdown = render_living_markdown(living_state)
+    validate_published_improvement(
+        report=report,
+        living_state=living_state,
+        living_markdown=living_markdown,
+        snapshot=snapshot,
+        snapshot_markdown=snapshot_markdown,
     )
+    if report_output is not None:
+        validate_report(dict(report))
+        render_markdown(dict(report))
+        baseline_agents = sorted(
+            item["agent"] for item in report["baseline"]
+        )
+        if len(baseline_agents) != 5 or len(set(baseline_agents)) != 5:
+            raise ContractError(
+                "Daily publication requires all five per-Agent reports"
+            )
+        for agent in baseline_agents:
+            render_agent_markdown(dict(report), agent)
+
+    reports_root.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix="aiq-improvement-publication-",
+        dir=reports_root.parent,
+    ) as temporary:
+        staged = Path(temporary)
+        atomic_json(staged / "insight-engine-improvement.json", living_state)
+        atomic_text(staged / "insight-engine-improvement.md", living_markdown)
+        immutable_json(staged / "snapshot.json", snapshot)
+        immutable_text(staged / "snapshot.md", snapshot_markdown)
+        if report_output is not None:
+            write_report(dict(report), staged / "daily-report")
+        validate_published_improvement(
+            report=report,
+            living_state=read_json(staged / "insight-engine-improvement.json"),
+            living_markdown=(staged / "insight-engine-improvement.md").read_text(
+                encoding="utf-8"
+            ),
+            snapshot=read_json(staged / "snapshot.json"),
+            snapshot_markdown=(staged / "snapshot.md").read_text(
+                encoding="utf-8"
+            ),
+        )
+
+    snapshot_json_path = snapshot_dir / "insight-engine-improvement.json"
+    snapshot_markdown_path = snapshot_dir / "insight-engine-improvement.md"
+    immutable_json(snapshot_json_path, snapshot)
+    immutable_text(snapshot_markdown_path, snapshot_markdown)
+    if report_output is not None:
+        write_report(dict(report), report_output)
     atomic_json(living_state_path, living_state)
     living_markdown_path = reports_root / "insight-engine-improvement.md"
-    atomic_text(living_markdown_path, render_living_markdown(living_state))
+    atomic_text(living_markdown_path, living_markdown)
     return living_state
 
 
@@ -880,6 +1198,7 @@ def write_improvement_preview(
         )
     normalized_summary = build_normalized_summary(report)
     validate_analysis_against_summary(analysis, normalized_summary)
+    analysis = assign_stable_pattern_ids(analysis, {})
     coverage = report_coverage(report)
     patterns = list(analysis["patterns"]) if coverage["runtime_evidence_complete"] else []
     reconciled = reconcile_patterns(
@@ -898,24 +1217,27 @@ def write_improvement_preview(
                 {
                     capability
                     for evidence in pattern["evidence"]
-                    for finding in normalized_summary[
-                        "insight_engine_findings"
-                    ]
-                    if (
-                        finding["agent"],
-                        finding.get("issue_id"),
-                    )
-                    == (
-                        evidence["agent"],
-                        evidence.get("issue_id"),
-                    )
+                    for finding in normalized_summary["insight_engine_findings"]
+                    if finding["finding_id"] == evidence["finding_id"]
                     for capability in finding["failed_fields"]
                 }
             )
             for pattern in patterns
         },
+        pattern_priorities={
+            priority["pattern_key"]: index
+            for index, priority in enumerate(
+                analysis["improvement_priorities"],
+                start=1,
+            )
+        },
     )
-    snapshot = build_run_snapshot(report, analysis, reconciled)
+    snapshot = build_run_snapshot(
+        report,
+        analysis,
+        reconciled,
+        evaluated_patterns=patterns,
+    )
     immutable_json(
         output / "insight-engine-improvement-preview.json",
         snapshot,
@@ -935,6 +1257,18 @@ def validate_published_improvement(
     snapshot: Mapping[str, Any],
     snapshot_markdown: str,
 ) -> None:
+    snapshot_analysis = snapshot.get("analysis")
+    if not isinstance(snapshot_analysis, Mapping):
+        raise ContractError(
+            "Published Insight Engine improvement snapshot lacks full analysis"
+        )
+    validate_analysis(snapshot_analysis)
+    evaluated_patterns = (
+        snapshot_analysis["patterns"]
+        if report_coverage(report)["runtime_evidence_complete"]
+        else []
+    )
+    evaluated_keys = {item["pattern_key"] for item in evaluated_patterns}
     expected_snapshot_link = "/".join(
         ["daily", *report["report_date"].split("-"), "insight-engine-improvement.md"]
     )
@@ -946,6 +1280,15 @@ def validate_published_improvement(
         or snapshot.get("current_run_signal") != current_run_signal(report)
         or snapshot.get("assessment_policy_digest")
         != assessment_policy_digest()
+        or snapshot.get("analysis_digest")
+        != content_hash(snapshot_analysis)
+        or snapshot.get("patterns") != evaluated_patterns
+        or snapshot.get("improvement_priorities")
+        != [
+            item
+            for item in snapshot_analysis["improvement_priorities"]
+            if item["pattern_key"] in evaluated_keys
+        ]
         or living_state.get("latest_run_id") != report["run_id"]
         or living_state.get("last_updated") != report["report_date"]
         or living_state.get("latest_coverage") != report_coverage(report)
@@ -963,4 +1306,12 @@ def validate_published_improvement(
     if snapshot_markdown != render_snapshot_markdown(snapshot):
         raise ContractError(
             "Published Insight Engine improvement snapshot Markdown is inconsistent"
+        )
+    if any(
+        f"agents/{agent}.md" not in snapshot_markdown
+        or f"/agents/{agent}.md" not in living_markdown
+        for agent in _AGENT_DISPLAY_NAMES
+    ):
+        raise ContractError(
+            "Published Insight Engine improvement links do not cover all five Agents"
         )

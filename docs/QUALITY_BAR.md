@@ -37,7 +37,9 @@ Structural, privacy, provenance, and
 reporting evidence must still be complete and trustworthy before a score can be used.
 The living Insight Engine improvement memory is advisory and score-neutral. It can synthesize only
 `insight_engine`-owned findings and never changes per-card assessment, ownership, run status, or
-promotion.
+promotion. Its citations use deterministic exact finding IDs, its stable pattern IDs are assigned by
+code rather than the model, and incomplete runs preserve the last visible pattern status while
+recording that the latest run was not evaluated.
 See [Insight Result Labels](INSIGHT_RESULTS.md) for Fully Correct, Partially Correct, Incorrect, and
 Noise definitions and field examples.
 

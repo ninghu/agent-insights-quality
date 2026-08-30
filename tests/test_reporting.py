@@ -1047,7 +1047,24 @@ def test_agent_report_is_a_human_validation_handoff() -> None:
             "ownership": "insight_engine",
             "confidence": 0.8,
             "reasoning": "The card names the correct root but severity and fix are wrong.",
-        }
+        },
+        {
+            "reference": "sha256:" + "8" * 64,
+            "title": "Secondary attributable finding",
+            "finding_type": "PARTIAL",
+            "fields": {
+                **assessments[first_issue_id]["fields"],
+                "root_cause": False,
+            },
+            "field_reasons": {
+                "root_cause": "The secondary card names a downstream symptom.",
+                "severity": "The secondary card understates impact.",
+                "proposed_fix": "The secondary fix targets the wrong component.",
+            },
+            "ownership": "insight_engine",
+            "confidence": 0.6,
+            "reasoning": "This additional card is attributable but not primary.",
+        },
     ]
     report = build_report(
         manifest,
@@ -1069,6 +1086,9 @@ def test_agent_report_is_a_human_validation_handoff() -> None:
     assert "Synthetic partial finding" in markdown
     assert "understates impact" in markdown
     assert "does not address the identified root cause" in markdown
+    assert "Secondary attributable finding" in markdown
+    assert "Additional attributable card" in markdown
+    assert "The secondary fix targets the wrong component." in markdown
     assert "Quality score:" not in markdown
     assert "Runtime evidence: `Complete`" in markdown
 
@@ -1080,6 +1100,18 @@ def test_extra_insights_missing_coverage_duplicates_and_coding_agent_context() -
     agent_name = manifest["agents"][0]["name"]
     agent_issue_ids = [item["issue_id"] for item in manifest["agents"][0]["issues"]]
     noise_issue_id, duplicate_issue_id = agent_issue_ids[0], agent_issue_ids[1]
+    for index, issue_id in enumerate(agent_issue_ids[2:], start=1):
+        assessments[issue_id]["card_evaluations"] = [
+            {
+                "reference": "sha256:" + f"{index + 4:02x}" * 32,
+                "title": f"Primary finding for {issue_id}",
+                "finding_type": "MATCHED",
+                "fields": deepcopy(assessments[issue_id]["fields"]),
+                "ownership": "none",
+                "confidence": 0.95,
+                "reasoning": "The card fully matches the expected issue.",
+            }
+        ]
 
     # An expected issue with only a Noise card is still Missing, and the Noise
     # card is recorded as an Extra generated Insight with no issue assignment.
@@ -1108,15 +1140,20 @@ def test_extra_insights_missing_coverage_duplicates_and_coding_agent_context() -
 
     # An issue with a primary MATCHED card plus a Duplicate of that same card
     # stays Correct, and the Duplicate renders as an explicit group.
-    assessments[duplicate_issue_id]["verdict"] = "correct"
-    assessments[duplicate_issue_id]["finding_type"] = "MATCHED"
+    assessments[duplicate_issue_id]["verdict"] = "incorrect"
+    assessments[duplicate_issue_id]["finding_type"] = "DUPLICATE"
+    assessments[duplicate_issue_id]["ownership"] = "insight_engine"
+    assessments[duplicate_issue_id]["fields"]["root_cause"] = False
     primary_reference = "sha256:" + "b2" * 32
     assessments[duplicate_issue_id]["card_evaluations"] = [
         {
             "reference": primary_reference,
             "title": "Primary root cause finding",
             "finding_type": "MATCHED",
-            "fields": deepcopy(assessments[duplicate_issue_id]["fields"]),
+            "fields": {
+                field: True
+                for field in assessments[duplicate_issue_id]["fields"]
+            },
             "ownership": "none",
             "confidence": 0.95,
             "reasoning": "The card fully matches the expected issue.",
@@ -1130,6 +1167,16 @@ def test_extra_insights_missing_coverage_duplicates_and_coding_agent_context() -
             "ownership": "insight_engine",
             "confidence": 0.9,
             "reasoning": "This card repeats the same root as the primary card.",
+        },
+        {
+            "reference": "sha256:" + "d4" * 32,
+            "title": "Second repeated finding",
+            "finding_type": "DUPLICATE",
+            "duplicate_of": primary_reference,
+            "fields": deepcopy(assessments[duplicate_issue_id]["fields"]),
+            "ownership": "insight_engine",
+            "confidence": 0.85,
+            "reasoning": "This second card also adds no independent root.",
         },
     ]
 
@@ -1152,13 +1199,17 @@ def test_extra_insights_missing_coverage_duplicates_and_coding_agent_context() -
 
     assert "Unrelated noise finding" in markdown
     assert "Duplicate of **Primary root cause finding**." in markdown
+    duplicate_coverage_row = next(
+        line for line in coverage_section.splitlines() if duplicate_issue_id in line
+    )
+    assert "Correct" in duplicate_coverage_row
 
     review_summary = markdown.split("## Review summary", 1)[1].split(
         "## Expected issue coverage", 1
     )[0]
     assert "| Missing expected issues | 1 |" in review_summary
     assert "| Noise | 1 |" in review_summary
-    assert "| Duplicate | 1 |" in review_summary
+    assert "| Duplicate | 2 |" in review_summary
 
     assert "### Noise card - observed in" in markdown
     assert "**Corresponding issue:** None" in markdown
@@ -1166,6 +1217,9 @@ def test_extra_insights_missing_coverage_duplicates_and_coding_agent_context() -
     assert "### Duplicate group" in markdown
     assert "**Primary card:** Primary root cause finding" in markdown
     assert "1. Repeated finding" in markdown
+    assert "2. Second repeated finding" in markdown
+    assert "This card repeats the same root as the primary card." in markdown
+    assert "This second card also adds no independent root." in markdown
 
     context_section = markdown.split("## Coding-agent context", 1)[1]
     # The Missing issue's row merges its own coverage label with the

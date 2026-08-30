@@ -780,7 +780,19 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         )
         improvement_analysis = None
         if manifest["profile"] == "daily":
-            normalized_summary = build_normalized_summary(report)
+            living_state_path = (
+                args.output_root / "insight-engine-improvement.json"
+            )
+            previous_improvement_state = (
+                read_json(living_state_path)
+                if not test_run and living_state_path.exists()
+                else None
+            )
+            normalized_summary = (
+                build_normalized_summary(report, previous_improvement_state)
+                if previous_improvement_state is not None
+                else build_normalized_summary(report)
+            )
             analysis_input = (
                 args.manifest.parent / "insight-engine-improvement-input.json"
             )
@@ -831,11 +843,13 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             / manifest["report_date"].replace("-", os.sep)
             / manifest["run_id"]
         )
-        write_report(
-            report,
-            output,
-            include_improvement_link=not test_run,
-        )
+        official_daily = manifest["profile"] == "daily" and not test_run
+        if not official_daily:
+            write_report(
+                report,
+                output,
+                include_improvement_link=not test_run,
+            )
         if improvement_analysis is not None:
             if test_run:
                 write_improvement_preview(
@@ -846,25 +860,20 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                         / "insight-engine-improvement-preview"
                     ),
                 )
-            else:
-                write_improvement_memory(
-                    report=report,
-                    analysis=improvement_analysis,
-                    reports_root=args.output_root,
-                    living_state_path=(
-                        args.output_root
-                        / "insight-engine-improvement.json"
-                    ),
-                )
         recipient = resolve_recipient(test_run=test_run)
         runtime_profile = RuntimeProfile.from_env(manifest["profile"])
+        official_report_candidate = (
+            args.manifest.parent / "official-report-candidate.json"
+        )
+        if official_daily:
+            atomic_json(official_report_candidate, report)
         adx_publication = (
             {"status": "skipped_test", "error_code": None}
             if test_run
             else
             publish_daily_report_best_effort(
                 report,
-                source_path=output / "report.json",
+                source_path=official_report_candidate,
                 catalogs=(agents, issues),
             )
             if manifest["profile"] == "daily"
@@ -890,11 +899,24 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             test_run=test_run,
         )
         report["delivery"]["content_digest"] = request["content_digest"]
-        write_report(
-            report,
-            output,
-            include_improvement_link=not test_run,
-        )
+        if official_daily:
+            atomic_json(
+                official_report_candidate,
+                report,
+            )
+            write_improvement_memory(
+                report=report,
+                analysis=improvement_analysis,
+                reports_root=args.output_root,
+                living_state_path=living_state_path,
+                report_output=output,
+            )
+        else:
+            write_report(
+                report,
+                output,
+                include_improvement_link=not test_run,
+            )
         private_request = args.manifest.parent / "email-send-request.json"
         atomic_json(private_request, request)
         private_preview = args.manifest.parent / "report-preview.html"

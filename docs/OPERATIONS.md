@@ -281,9 +281,12 @@ For Daily, first run `finalize --prepare-improvement-input` after assessments. G
 public-safe normalized file to GPT-5.6 Sol with
 `src/agent_insights_quality/prompts/improvement.md`, then rerun finalization with
 `--improvement-analysis <private-json>`. Schema and citation validation reject any pattern not backed
-by at least two distinct Agents with `insight_engine` ownership. Deterministic code owns new/active/
-watching/resolved/reopened/not-evaluated transitions. The stable JSON/Markdown, immutable dated
-snapshot, Daily report, latest views, and trend are submitted in one generated-only pull request.
+by at least two distinct Agents with `insight_engine` ownership and exact normalized finding IDs.
+Deterministic code replaces model-local pattern keys with stable IDs and owns new/active/watching/
+resolved/reopened transitions. An incomplete or incomparable run preserves the visible prior status
+and records `not_evaluated` without advancing absence. The complete Daily report, stable
+JSON/Markdown, and full immutable dated analysis snapshot are staged and validated before
+retry-safe publication; latest views and trend then join the same generated-only pull request.
 Optional email-only tests write only a private improvement preview.
 
 For `daily`, finalization also derives one public-safe payload and publishes it atomically to ADX.
