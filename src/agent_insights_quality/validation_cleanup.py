@@ -23,7 +23,14 @@ _DELETE_ORDER = {
     "acr_manifest": 13,
     "project": 14,
 }
-_DISCOVERABLE_AMBIGUOUS_KINDS = {"acr_tag", "project", "provider_agent"}
+_DISCOVERABLE_AMBIGUOUS_KINDS = {
+    "acr_tag",
+    "connection",
+    "project",
+    "provider_agent",
+    "role_assignment",
+    "runtime_principal",
+}
 
 
 @dataclass(frozen=True)
@@ -208,16 +215,14 @@ class CleanupEngine:
                 item.provider_id
                 for item in plan.items
                 if (
-                    (
-                        item.state != "ambiguous_create"
-                        or item.kind in _DISCOVERABLE_AMBIGUOUS_KINDS
-                    )
-                    and self._backend.absent(item)
-                    or (
-                        item.kind == "acr_manifest"
-                        and self._backend.manifest_is_shared(item.provider_id)
-                    )
+                    item.kind != "acr_manifest"
+                    or not self._backend.manifest_is_shared(item.provider_id)
                 )
+                and (
+                    item.state != "ambiguous_create"
+                    or item.kind in _DISCOVERABLE_AMBIGUOUS_KINDS
+                )
+                and self._backend.absent(item)
             )
         )
         inventory = self._backend.inventory(
@@ -232,6 +237,7 @@ def _result(
     verified_absent: tuple[str, ...],
     inventory: CleanupInventory,
 ) -> CleanupResult:
+    retained = set(inventory.retained_shared_manifest_ids)
     residue = tuple(
         sorted(
             {
@@ -240,6 +246,7 @@ def _result(
                     item.provider_id
                     for item in plan.items
                     if item.provider_id not in verified_absent
+                    and item.provider_id not in retained
                 ),
             }
         )
@@ -248,8 +255,6 @@ def _result(
         plan_hash=plan.plan_hash,
         exact_clean=not residue,
         verified_absent_ids=verified_absent,
-        retained_shared_manifest_ids=tuple(
-            sorted(inventory.retained_shared_manifest_ids)
-        ),
+        retained_shared_manifest_ids=tuple(sorted(retained)),
         residue_ids=residue,
     )

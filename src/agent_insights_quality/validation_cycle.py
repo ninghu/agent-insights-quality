@@ -13,6 +13,7 @@ from agent_insights_quality.validation_evidence import validate_evidence
 from agent_insights_quality.validation_lifecycle import (
     LifecycleJournal,
     stamp_lifecycle_digest,
+    validate_topology_resource_bindings,
 )
 from agent_insights_quality.validation_policy import ValidationPolicy
 from agent_insights_quality.validation_quota import CapacityPlan
@@ -219,6 +220,7 @@ class ValidationCycleController:
         project_principal_id: str,
         connection_ids: list[str],
         role_assignment_ids: list[str],
+        resource_observations: Mapping[str, str],
         now: datetime,
     ) -> BlobRecord:
         project = copy.deepcopy(self._active.value["project"])
@@ -234,31 +236,14 @@ class ValidationCycleController:
             project["provider_id"],
             now,
         )
-        for kind, values in (
-            ("runtime_principal", [project_principal_id]),
-            ("connection", connection_ids),
-            ("role_assignment", role_assignment_ids),
+        resources = _observe_resources(resources, resource_observations, now)
+        observed_ids = set(resource_observations.values())
+        if (
+            project_principal_id not in observed_ids
+            or not set(connection_ids).issubset(observed_ids)
+            or not set(role_assignment_ids).issubset(observed_ids)
         ):
-            resources.extend(
-                _resource(
-                    kind=kind,
-                    parent_id=project["provider_id"],
-                    authority_id=None,
-                    deterministic_name=provider_id.rsplit("/", 1)[-1],
-                    provider_id=provider_id,
-                    ownership_nonce=self._active.value["lease"][
-                        "ownership_nonce"
-                    ],
-                    state="created",
-                    cleanup_method=(
-                        "documented_project_cascade"
-                        if kind == "runtime_principal"
-                        else "explicit"
-                    ),
-                    now=now,
-                )
-                for provider_id in values
-            )
+            raise ContractError("Validation Project observations are incomplete")
         return self._commit(
             "CREATING",
             {
@@ -272,6 +257,32 @@ class ValidationCycleController:
             },
             now,
         )
+
+    def mark_resources_ambiguous(
+        self,
+        provider_ids: list[str],
+        *,
+        now: datetime,
+    ) -> BlobRecord:
+        with self._lock:
+            expected = set(provider_ids)
+            resources = []
+            found: set[str] = set()
+            for resource in self._active.value["resources"]:
+                item = copy.deepcopy(resource)
+                if item["provider_id"] in expected:
+                    item["state"] = "ambiguous_create"
+                    found.add(item["provider_id"])
+                resources.append(item)
+            if found != expected:
+                raise ContractError(
+                    "Ambiguous validation create has no complete intent set"
+                )
+            return self._commit(
+                self._active.value["state"],
+                {"resources": resources},
+                now,
+            )
 
     def resource_create_intent(
         self,
@@ -342,7 +353,7 @@ class ValidationCycleController:
                 authority_id=event.get("authority_id"),
                 deterministic_name=str(event["deterministic_name"]),
                 provider_id=intent_reference,
-                cleanup_method="explicit",
+                cleanup_method=str(event.get("cleanup_method") or "explicit"),
                 now=now,
             )
         if state == "ambiguous_create":
@@ -372,10 +383,23 @@ class ValidationCycleController:
         with self._lock:
             found = False
             resources = []
+            existing_ids = {
+                item["provider_id"]
+                for item in self._active.value["resources"]
+                if item["provider_id"] != intent_reference
+            }
             for resource in self._active.value["resources"]:
                 item = copy.deepcopy(resource)
                 if item["provider_id"] == intent_reference:
-                    item["provider_id"] = provider_id
+                    if (
+                        provider_id in existing_ids
+                        and item["kind"] != "runtime_principal"
+                    ):
+                        raise ContractError(
+                            "Observed validation resource provider ID collides"
+                        )
+                    if provider_id not in existing_ids:
+                        item["provider_id"] = provider_id
                     item["deterministic_name"] = str(
                         event["deterministic_name"]
                     )
@@ -414,6 +438,13 @@ class ValidationCycleController:
                 {item["telemetry_identity_id"] for item in runtime_agents}
             ),
         }
+        validate_topology_resource_bindings(
+            {
+                **self._active.value["runtime_topology"],
+                **topology,
+            },
+            self._active.value["resources"],
+        )
         digest = content_hash(runtime_agents)
         return self._commit(
             "VALIDATING",
@@ -480,27 +511,17 @@ class ValidationCycleController:
         *,
         now: datetime,
     ) -> BlobRecord:
-        if self._active.value["state"] != "CLEAN":
-            raise ContractError("Validation receipt requires CLEAN lifecycle state")
         digest = receipt.value.get("receipt_digest")
         if not isinstance(digest, str) or not digest.startswith("sha256:"):
             raise ContractError("Validation receipt Blob digest is invalid")
-        self._active = self._journal.commit(
+        if (
+            receipt.value.get("cycle_id") != self._active.value["cycle_id"]
+            or receipt.value.get("epoch") != self._active.value["epoch"]
+        ):
+            raise ContractError("Validation receipt belongs to another lifecycle")
+        self._active = self._journal.complete_receipt_handoff(
             self._active,
-            lease_id=self._lease_id,
-            next_state="RECEIPT_ISSUED",
-            updates={
-                "receipt_reference": {
-                    "path": f"{receipt.container}/{receipt.name}",
-                    "version_id": receipt.version_id,
-                    "etag": receipt.etag,
-                    "digest": digest,
-                }
-            },
-            now=now,
-        ).active
-        self._active = self._journal.release(
-            self._active,
+            receipt,
             lease_id=self._lease_id,
             now=now,
         )
@@ -669,6 +690,12 @@ class ValidationCycleController:
             now=now,
         )
         self._active = committed.active
+        if state == "FAILED_CLEAN":
+            self._active = self._journal.release(
+                self._active,
+                lease_id=self._lease_id,
+                now=now,
+            )
         return committed
 
     def _commit(
@@ -733,4 +760,33 @@ def _mark_created(
         result.append(item)
     if not found:
         raise ContractError("Created validation resource has no recorded intent")
+    return result
+
+
+def _observe_resources(
+    resources: list[dict[str, Any]],
+    observations: Mapping[str, str],
+    now: datetime,
+) -> list[dict[str, Any]]:
+    pending = dict(observations)
+    if (
+        not pending
+        or any(not intent or not provider_id for intent, provider_id in pending.items())
+        or len(set(pending.values())) != len(pending)
+    ):
+        raise ContractError("Validation resource observations are invalid")
+    result = []
+    for resource in resources:
+        item = copy.deepcopy(resource)
+        provider_id = pending.pop(item["provider_id"], None)
+        if provider_id is not None:
+            item["provider_id"] = provider_id
+            item["state"] = "created"
+            item["create_observed_at"] = now.astimezone(UTC).isoformat()
+        result.append(item)
+    if pending:
+        raise ContractError("Observed validation resource has no recorded intent")
+    provider_ids = [item["provider_id"] for item in result]
+    if len(provider_ids) != len(set(provider_ids)):
+        raise ContractError("Observed validation resources contain a collision")
     return result

@@ -113,7 +113,7 @@ class AzureValidationCleanupBackend:
                     "--ids",
                     item.provider_id,
                 ],
-                expected=(0,),
+                expected=(0, 3),
             )
             return
         raise ContractError(
@@ -141,6 +141,13 @@ class AzureValidationCleanupBackend:
         if item.kind == "stored_response":
             return not self._client.response_exists(item.provider_id)
         if item.kind == "runtime_principal":
+            if item.provider_id.startswith("sha256:"):
+                if item.parent_id and item.parent_id.startswith("/subscriptions/"):
+                    return self._arm_resource_absent(item.parent_id)
+                return not self._client.agent_exists(
+                    item.deterministic_name,
+                    hosted=True,
+                )
             return self._service_principal_absent(item.provider_id)
         if item.kind == "entra_service_principal":
             return self._service_principal_absent(item.provider_id)
@@ -171,19 +178,7 @@ class AzureValidationCleanupBackend:
                 item.provider_id,
             )
         if item.provider_id.startswith("/subscriptions/"):
-            process = self._run(
-                [
-                    azure_cli(),
-                    "resource",
-                    "show",
-                    "--ids",
-                    item.provider_id,
-                    "--output",
-                    "none",
-                ],
-                expected=(0, 3),
-            )
-            return process.returncode == 3
+            return self._arm_resource_absent(item.provider_id)
         return False
 
     def manifest_is_shared(self, provider_id: str) -> bool:
@@ -324,6 +319,21 @@ class AzureValidationCleanupBackend:
                 "show",
                 "--id",
                 principal_id,
+                "--output",
+                "none",
+            ],
+            expected=(0, 3),
+        )
+        return process.returncode == 3
+
+    def _arm_resource_absent(self, provider_id: str) -> bool:
+        process = self._run(
+            [
+                azure_cli(),
+                "resource",
+                "show",
+                "--ids",
+                provider_id,
                 "--output",
                 "none",
             ],

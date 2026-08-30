@@ -54,10 +54,17 @@ _TRANSITIONS = {
     "REVALIDATING": {"FINAL_CHECKS", "CLEANING"},
     "FINAL_CHECKS": {"CLEANING"},
     "CLEANING": {"CLEAN", "FAILED_CLEAN", "CLEANUP_BLOCKED"},
-    "CLEAN": {"RECEIPT_ISSUED"},
+    "CLEAN": {"RECEIPT_ISSUED", "FAILED_CLEAN"},
     "RECEIPT_ISSUED": set(),
     "FAILED_CLEAN": set(),
     "CLEANUP_BLOCKED": {"CLEANING"},
+}
+_POST_TTL_STATES = {
+    "CLEANING",
+    "CLEAN",
+    "FAILED_CLEAN",
+    "CLEANUP_BLOCKED",
+    "RECEIPT_ISSUED",
 }
 
 
@@ -153,15 +160,21 @@ def validate_lifecycle(value: Mapping[str, Any]) -> None:
         raise ContractError("Validation lifecycle journal digest is stale")
     if value["epoch"] != value["lease"]["epoch"]:
         raise ContractError("Validation lifecycle epoch and lease epoch differ")
-    if value["state"] not in {"LEASED"} and value["capacity"] is None:
+    if value["state"] not in {
+        "LEASED",
+        "CLEANING",
+        "FAILED_CLEAN",
+        "CLEANUP_BLOCKED",
+    } and value["capacity"] is None:
         raise ContractError("Validation lifecycle preflight capacity is missing")
     acquired_at = _timestamp(value["lease"]["acquired_at"], "lease acquisition")
     heartbeat_at = _timestamp(value["lease"]["heartbeat_at"], "lease heartbeat")
     expires_at = _timestamp(value["absolute_expires_at"], "absolute expiration")
     last_activity = _timestamp(value["last_activity_at"], "last activity")
-    if not acquired_at <= heartbeat_at <= last_activity < expires_at:
-        if value["state"] not in {"CLEAN", "FAILED_CLEAN", "RECEIPT_ISSUED"}:
-            raise ContractError("Validation lifecycle timestamps are inconsistent")
+    if not acquired_at <= heartbeat_at <= last_activity:
+        raise ContractError("Validation lifecycle timestamps are inconsistent")
+    if last_activity >= expires_at and value["state"] not in _POST_TTL_STATES:
+        raise ContractError("Validation lifecycle exceeded its execution TTL")
     resource_references: set[str] = set()
     for resource in value["resources"]:
         reference = resource["provider_id"]
@@ -180,10 +193,15 @@ def validate_lifecycle(value: Mapping[str, Any]) -> None:
         "SHADOW_REVIEW_SKIPPED",
         "REVALIDATING",
         "FINAL_CHECKS",
+        "CLEAN",
         "RECEIPT_ISSUED",
     } and len(agents) != 41:
         raise ContractError("Validation runtime topology must contain all 41 Agents")
     if value["state"] in {"CLEAN", "FAILED_CLEAN", "RECEIPT_ISSUED"}:
+        validate_topology_resource_bindings(
+            value["runtime_topology"],
+            value["resources"],
+        )
         cleanup = value["cleanup"]
         if (
             cleanup["status"] != "exact_clean"
@@ -191,6 +209,32 @@ def validate_lifecycle(value: Mapping[str, Any]) -> None:
             or cleanup["residue_ids"]
         ):
             raise ContractError("Terminal validation state requires exact cleanup")
+        resource_ids = {item["provider_id"] for item in value["resources"]}
+        proven_ids = {
+            *cleanup["verified_absent_ids"],
+            *cleanup["retained_shared_manifest_ids"],
+        }
+        if resource_ids != proven_ids:
+            raise ContractError(
+                "Terminal validation state lacks exhaustive resource absence proof"
+            )
+        verified = set(cleanup["verified_absent_ids"])
+        retained = set(cleanup["retained_shared_manifest_ids"])
+        for resource in value["resources"]:
+            if (
+                resource["provider_id"] in verified
+                and resource["state"] != "absence_verified"
+            ):
+                raise ContractError(
+                    "Verified-absent validation resource state is inconsistent"
+                )
+            if (
+                resource["provider_id"] in retained
+                and resource["kind"] != "acr_manifest"
+            ):
+                raise ContractError(
+                    "Only shared ACR manifests may be retained after cleanup"
+                )
     if value["state"] == "CLEANUP_BLOCKED" and (
         value["cleanup"]["status"] != "ambiguous"
         or value["cleanup"]["exact_clean"] is not False
@@ -236,7 +280,7 @@ class LifecycleJournal:
             if existing.value["state"] not in {
                 "RECEIPT_ISSUED",
                 "FAILED_CLEAN",
-            }:
+            } or existing.value["lease"]["state"] != "released":
                 raise ContractError("Validation account already has an active cycle")
             event_value["epoch"] = existing.value["epoch"] + 1
             event_value["lease"]["epoch"] = event_value["epoch"]
@@ -451,6 +495,7 @@ class LifecycleJournal:
         rebased = copy.deepcopy(current.value)
         rebased["epoch"] += 1
         rebased["lease"] = lease
+        rebased["state"] = "CLEANING"
         rebased["last_activity_at"] = moment.isoformat()
         rebased = stamp_lifecycle_digest(rebased)
         rebased_record = BlobRecord(
@@ -467,6 +512,175 @@ class LifecycleJournal:
             now=moment,
         )
 
+    def read_active(self) -> BlobRecord:
+        current = self._store.read(ACTIVE_CONTAINER, ACTIVE_BLOB)
+        validate_lifecycle(current.value)
+        return current
+
+    def abandon_expired_clean(
+        self,
+        *,
+        ownership_nonce: str,
+        holder_workflow_reference: str,
+        holder_app_reference: str,
+        holder_run_reference: str,
+        now: datetime | None = None,
+    ) -> BlobRecord:
+        moment = (now or datetime.now(UTC)).astimezone(UTC)
+        before = self.read_active()
+        if before.value["state"] != "CLEAN":
+            raise ContractError("Only an unreceipted CLEAN lifecycle can be abandoned")
+        if moment < _timestamp(
+            before.value["absolute_expires_at"],
+            "absolute expiration",
+        ):
+            raise ContractError("CLEAN receipt handoff has not reached its TTL")
+        self._store.break_lease(ACTIVE_CONTAINER, ACTIVE_BLOB)
+        lease_id = self._store.acquire_infinite_lease(
+            ACTIVE_CONTAINER,
+            ACTIVE_BLOB,
+        )
+        current = self._store.read(
+            ACTIVE_CONTAINER,
+            ACTIVE_BLOB,
+            lease_id=lease_id,
+        )
+        if current.etag != before.etag:
+            raise ContractError("Validation journal changed during terminal takeover")
+        lease = {
+            "epoch": current.value["epoch"] + 1,
+            "lease_id": lease_id,
+            "ownership_nonce": ownership_nonce,
+            "holder_workflow_reference": holder_workflow_reference,
+            "holder_app_reference": holder_app_reference,
+            "holder_run_reference": holder_run_reference,
+            "acquired_at": moment.isoformat(),
+            "heartbeat_at": moment.isoformat(),
+            "state": "held",
+        }
+        rebased = copy.deepcopy(current.value)
+        rebased["epoch"] += 1
+        rebased["lease"] = lease
+        rebased["state"] = "FAILED_CLEAN"
+        rebased["last_activity_at"] = moment.isoformat()
+        rebased = stamp_lifecycle_digest(rebased)
+        rebased_record = BlobRecord(
+            container=current.container,
+            name=current.name,
+            value=rebased,
+            etag=current.etag,
+            version_id=current.version_id,
+        )
+        committed = self.commit(
+            rebased_record,
+            lease_id=lease_id,
+            next_state="FAILED_CLEAN",
+            updates={
+                "failure": {
+                    "error_code": "receipt_handoff_expired",
+                    "detail_digest": content_hash(
+                        {"state": "CLEAN", "cycle_id": current.value["cycle_id"]}
+                    ),
+                    "failed_at": moment.isoformat(),
+                }
+            },
+            now=moment,
+        ).active
+        return self.release(committed, lease_id=lease_id, now=moment)
+
+    def complete_receipt_handoff(
+        self,
+        current: BlobRecord,
+        receipt: BlobRecord,
+        *,
+        lease_id: str,
+        now: datetime | None = None,
+    ) -> BlobRecord:
+        digest = receipt.value.get("receipt_digest")
+        if not isinstance(digest, str) or not digest.startswith("sha256:"):
+            raise ContractError("Validation receipt Blob digest is invalid")
+        if (
+            receipt.value.get("cycle_id") != current.value["cycle_id"]
+            or receipt.value.get("epoch") != current.value["epoch"]
+        ):
+            raise ContractError("Validation receipt belongs to another lifecycle")
+        reference = {
+            "path": f"{receipt.container}/{receipt.name}",
+            "version_id": receipt.version_id,
+            "etag": receipt.etag,
+            "digest": digest,
+        }
+        if current.value["state"] == "CLEAN":
+            current = self.commit(
+                current,
+                lease_id=lease_id,
+                next_state="RECEIPT_ISSUED",
+                updates={"receipt_reference": reference},
+                now=now,
+            ).active
+        elif (
+            current.value["state"] != "RECEIPT_ISSUED"
+            or current.value["receipt_reference"] != reference
+        ):
+            raise ContractError(
+                "Validation receipt handoff does not match the terminal lifecycle"
+            )
+        return self.release(current, lease_id=lease_id, now=now)
+
+    def resume_pending_receipt(
+        self,
+        *,
+        now: datetime | None = None,
+    ) -> BlobRecord | None:
+        current = self.read_active()
+        if current.value["state"] != "CLEAN":
+            return None
+        owner, repository = current.value["repository"].split("/", 1)
+        head = current.value["git"]["final_head_sha"]
+        if not isinstance(head, str):
+            return None
+        candidates = (
+            (
+                "test-agent-validation-receipts",
+                (
+                    f"receipts/{owner}/{repository}/{current.value['pr_number']}/"
+                    f"{head}/test-agent-validation-receipt.json"
+                ),
+                "merge",
+            ),
+            (
+                "test-agent-validation-shadow-receipts",
+                (
+                    f"shadow-receipts/{owner}/{repository}/"
+                    f"{current.value['pr_number']}/{current.value['cycle_id']}/"
+                    f"{head}/test-agent-validation-receipt.json"
+                ),
+                "shadow",
+            ),
+        )
+        found: list[BlobRecord] = []
+        for container, name, mode in candidates:
+            record = self._store.read_optional(container, name)
+            if record is not None:
+                from agent_insights_quality.validation_issuer import (
+                    validate_receipt,
+                )
+
+                validate_receipt(record.value)
+                if record.value["mode"] != mode:
+                    raise ContractError("Pending validation receipt mode is invalid")
+                found.append(record)
+        if len(found) > 1:
+            raise ContractError("Multiple pending validation receipts were found")
+        if not found:
+            return None
+        return self.complete_receipt_handoff(
+            current,
+            found[0],
+            lease_id=current.value["lease"]["lease_id"],
+            now=now,
+        )
+
     def release(
         self,
         current: BlobRecord,
@@ -476,13 +690,21 @@ class LifecycleJournal:
     ) -> BlobRecord:
         if current.value["state"] not in {"RECEIPT_ISSUED", "FAILED_CLEAN"}:
             raise ContractError("Validation lease cannot release before a clean terminal state")
-        committed = self.commit(
-            current,
-            lease_id=lease_id,
-            next_state=current.value["state"],
-            updates={"lease": {"state": "released"}},
-            now=now,
-        ).active
+        validate_lifecycle(current.value)
+        if current.value["lease"]["lease_id"] != lease_id:
+            raise ContractError("Validation terminal lease ID does not match")
+        if current.value["lease"]["state"] == "held":
+            committed = self.commit(
+                current,
+                lease_id=lease_id,
+                next_state=current.value["state"],
+                updates={"lease": {"state": "released"}},
+                now=now,
+            ).active
+        elif current.value["lease"]["state"] == "released":
+            committed = current
+        else:
+            raise ContractError("Broken validation lease cannot be released")
         self._store.release_lease(
             ACTIVE_CONTAINER,
             ACTIVE_BLOB,
@@ -538,10 +760,51 @@ def _merge(target: dict[str, Any], updates: Mapping[str, Any]) -> None:
 
 def _snapshot_name(value: Mapping[str, Any], prefix: str) -> str:
     repository = value["repository"].replace("/", "--")
+    digest = str(value["journal_digest"]).removeprefix("sha256:")[:16]
     return (
         f"{prefix}/{repository}/{value['pr_number']}/{value['cycle_id']}/"
-        f"e{value['epoch']}/r{value['revision']:06d}-{value['state'].lower()}.json"
+        f"e{value['epoch']}/r{value['revision']:06d}-"
+        f"{value['state'].lower()}-{digest}.json"
     )
+
+
+def validate_topology_resource_bindings(
+    topology: Mapping[str, Any],
+    resources: list[Mapping[str, Any]],
+) -> None:
+    provider_ids = {str(item["provider_id"]) for item in resources}
+    required: set[str] = set()
+    for field in (
+        "project_reference",
+        "connection_ids",
+        "runtime_principal_ids",
+        "telemetry_identity_ids",
+    ):
+        value = topology.get(field)
+        if isinstance(value, str) and value:
+            required.add(value)
+        elif isinstance(value, list):
+            required.update(str(item) for item in value)
+    for agent in topology.get("agents", []):
+        for field in (
+            "provider_agent_id",
+            "provider_agent_version_id",
+            "hosted_identity_id",
+            "hosted_blueprint_id",
+            "hosted_deployment_id",
+            "runtime_principal_id",
+            "telemetry_identity_id",
+        ):
+            value = agent.get(field)
+            if isinstance(value, str) and value:
+                required.add(value)
+        required.update(str(item) for item in agent.get("connection_ids", []))
+    missing = sorted(required - provider_ids)
+    if missing:
+        raise ContractError(
+            "Validation runtime topology has unjournaled provider identities: "
+            + ", ".join(missing)
+        )
 
 
 def _snapshot_reference(record: BlobRecord) -> dict[str, str]:

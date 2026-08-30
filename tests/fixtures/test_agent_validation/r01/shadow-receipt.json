@@ -830,7 +830,7 @@
   },
   "clean_snapshot": {
     "cleanup_plan_hash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-    "digest": "sha256:9ae4bb6bb8f866348e474e24f2cb55a3fa3421f15a29903ed83401612d404302",
+    "digest": "sha256:b9a580d424b53ea4d99a337850d97a11faa7890d4e4279a463c170f364a15c4e",
     "etag": "synthetic-etag-r01",
     "exact_clean": true,
     "path": "test-agent-validation-snapshots/clean/validation-shadow-r01.json",
@@ -848,7 +848,7 @@
     "app_id": 15368,
     "app_slug": "github-actions",
     "environment": "test-agent-validation-shadow",
-    "issuer_code_digest": "sha256:5974479cbb6d569c926c4b5b308969bb656b9b008976dd256c8c2d5f275e28df",
+    "issuer_code_digest": "sha256:87590bf5c656ca5c87fc16d3ec1cdd0aef2c6f290106dbb9e4d3ae1062aaede8",
     "oidc_subject_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "run_attempt": 1,
     "run_id": 400,
@@ -861,7 +861,7 @@
   "mode": "shadow",
   "pr_number": 999,
   "quota_plan_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "receipt_digest": "sha256:fe72aa84cb21c3465a1e7c69808138b503cce83f95382fb13431d859afe828a8",
+  "receipt_digest": "sha256:e5555432e41865c561a115e9c04a1a86f2cc8a049acc2470667063e1527d643e",
   "repository": "ninghu/agent-insights-quality",
   "required_ci": {
     "continuous_integration": {

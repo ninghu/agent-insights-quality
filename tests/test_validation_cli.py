@@ -114,3 +114,40 @@ def test_validation_cli_exposes_contract_lifecycle_receipt_and_reconciler_comman
             "client-id",
         ]
     ).command == "verify-test-agent-validation-credential"
+
+
+def test_run_validation_cli_dispatches_complete_shadow_gate(
+    monkeypatch,
+) -> None:
+    observed = {}
+
+    def run_shadow_gate(**kwargs):
+        observed.update(kwargs)
+        return {
+            "cycle_id": "validation-cycle-0001",
+            "state": "RECEIPT_ISSUED",
+            "receipt": "private.json",
+            "receipt_digest": "sha256:" + ("a" * 64),
+        }
+
+    monkeypatch.setattr(cli, "run_shadow_gate", run_shadow_gate)
+    monkeypatch.setenv("GH_TOKEN", "synthetic-scoped-token")
+    args = cli.build_parser().parse_args(
+        [
+            "run-test-agent-validation",
+            "--candidate",
+            "candidate.json",
+            "--storage-account",
+            "syntheticstorage",
+            "--expected-azure-client-id",
+            "client-id",
+            "--automation-principal-id",
+            "principal-id",
+            "--receipt-output",
+            "receipt.json",
+        ]
+    )
+    result = json.loads(cli._dispatch(args) or "{}")
+    assert result["state"] == "RECEIPT_ISSUED"
+    assert observed["github_token"] == "synthetic-scoped-token"
+    assert observed["candidate_path"] == Path("candidate.json")

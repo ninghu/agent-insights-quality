@@ -186,6 +186,7 @@ def deploy_all_authorities(
                 "hosted_identity": value.hosted_identity_id,
                 "hosted_blueprint": value.hosted_blueprint_id,
                 "hosted_deployment": value.hosted_deployment_id,
+                "runtime_principal": value.runtime_principal_id,
             }
             for event in intents:
                 provider_id = observed[event["kind"]]
@@ -240,7 +241,12 @@ def _deployment_intents(
     kinds = ["provider_agent", "provider_agent_version"]
     if authority.runtime_kind != "prompt":
         kinds.extend(
-            ["hosted_identity", "hosted_blueprint", "hosted_deployment"]
+            [
+                "hosted_identity",
+                "hosted_blueprint",
+                "hosted_deployment",
+                "runtime_principal",
+            ]
         )
     return [
         {
@@ -253,9 +259,18 @@ def _deployment_intents(
                     "kind": kind,
                 }
             ),
-            "deterministic_name": f"{planned.runtime_agent_name}-{kind}",
+            "deterministic_name": (
+                planned.runtime_agent_name
+                if kind == "runtime_principal"
+                else f"{planned.runtime_agent_name}-{kind}"
+            ),
             "authority_id": authority.authority_id,
             "parent_id": None,
+            "cleanup_method": (
+                "documented_project_cascade"
+                if kind == "runtime_principal"
+                else "explicit"
+            ),
         }
         for kind in kinds
     ]

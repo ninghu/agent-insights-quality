@@ -212,8 +212,10 @@ class Deployer:
             hosted_deployment_id=(
                 f"deployment-{authority.authority_id}" if hosted else None
             ),
-            runtime_principal_id=None,
-            telemetry_identity_id=f"telemetry-{authority.authority_id}",
+            runtime_principal_id=(
+                f"principal-{authority.authority_id}" if hosted else None
+            ),
+            telemetry_identity_id=f"version-{authority.authority_id}",
             connection_ids=(),
         )
 

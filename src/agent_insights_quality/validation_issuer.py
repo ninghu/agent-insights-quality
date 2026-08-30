@@ -744,7 +744,7 @@ class ReceiptIssuer:
         if (
             active.value.get("cycle_id") != receipt["cycle_id"]
             or active.value.get("epoch") != receipt["epoch"]
-            or active.value.get("state") != "CLEAN"
+            or active.value.get("state") not in {"CLEAN", "RECEIPT_ISSUED"}
             or active.value.get("clean_snapshot") != {
                 "path": reference["path"],
                 "version_id": reference["version_id"],
@@ -753,6 +753,12 @@ class ReceiptIssuer:
             }
         ):
             raise ContractError("Active lifecycle does not reference immutable CLEAN proof")
+        if (
+            active.value.get("state") == "RECEIPT_ISSUED"
+            and active.value.get("receipt_reference", {}).get("digest")
+            != receipt["receipt_digest"]
+        ):
+            raise ContractError("Active lifecycle references another receipt")
 
     def _write(self, receipt: Mapping[str, Any]) -> BlobRecord:
         repository = receipt["repository"]

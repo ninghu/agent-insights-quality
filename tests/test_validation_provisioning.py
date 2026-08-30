@@ -7,10 +7,12 @@ import pytest
 from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.util import ContractError, ROOT
 from agent_insights_quality.validation_provisioning import (
+    ValidationProjectProvisioner,
     _cycle_image_tag,
     _rate_limits,
     validation_runtime_profile,
 )
+from agent_insights_quality.validation_policy import load_validation_policy
 
 
 def _staging_profile() -> RuntimeProfile:
@@ -71,6 +73,34 @@ def test_validation_project_bicep_creates_no_monitor_or_insights_run() -> None:
     assert "ownershipNonce" in text
     assert "agent_insight" not in text.casefold()
     assert "monitor" not in text.casefold().replace("monitoringreader", "")
+
+
+def test_project_children_have_deterministic_intents_before_bicep() -> None:
+    provisioner = ValidationProjectProvisioner(
+        _staging_profile(),
+        automation_principal_id="synthetic-automation-principal",
+        policy=load_validation_policy(),
+    )
+    intents = provisioner.resource_intents(
+        project_name="aiq-validation-0123456789ab",
+        cycle_id="validation-cycle-0001",
+        ownership_nonce="nonce-0001",
+    )
+    assert [item["kind"] for item in intents] == [
+        "runtime_principal",
+        "connection",
+        "connection",
+        "role_assignment",
+        "role_assignment",
+        "role_assignment",
+        "role_assignment",
+    ]
+    assert len({item["intent_reference"] for item in intents}) == len(intents)
+    bicep = (
+        ROOT / "infra" / "modules" / "validation-project.bicep"
+    ).read_text(encoding="utf-8")
+    assert "automationProjectManagerName" in bicep
+    assert "appInsightsReaderName" in bicep
 
 
 def test_capacity_measurement_normalizes_provider_rate_windows() -> None:

@@ -179,14 +179,28 @@ class AzureValidationBlobStore:
 
     def break_lease(self, container: str, name: str) -> None:
         try:
+            from azure.core.exceptions import HttpResponseError
             from azure.storage.blob import BlobLeaseClient
         except ImportError as error:
             raise ContractError(
                 "Validation Blob operations require the azure optional dependencies"
             ) from error
-        BlobLeaseClient(
-            self._service.get_blob_client(container, name)
-        ).break_lease()
+        try:
+            BlobLeaseClient(
+                self._service.get_blob_client(container, name)
+            ).break_lease()
+        except HttpResponseError as error:
+            error_code = getattr(error, "error_code", None) or getattr(
+                getattr(error, "error", None),
+                "code",
+                None,
+            )
+            if getattr(error, "status_code", None) == 409 and error_code in {
+                "LeaseNotPresentWithLeaseOperation",
+                "LeaseNotPresent",
+            }:
+                return
+            raise
 
     def release_lease(
         self,
@@ -196,15 +210,29 @@ class AzureValidationBlobStore:
         lease_id: str,
     ) -> None:
         try:
+            from azure.core.exceptions import HttpResponseError
             from azure.storage.blob import BlobLeaseClient
         except ImportError as error:
             raise ContractError(
                 "Validation Blob operations require the azure optional dependencies"
             ) from error
-        BlobLeaseClient(
-            self._service.get_blob_client(container, name),
-            lease_id=lease_id,
-        ).release()
+        try:
+            BlobLeaseClient(
+                self._service.get_blob_client(container, name),
+                lease_id=lease_id,
+            ).release()
+        except HttpResponseError as error:
+            error_code = getattr(error, "error_code", None) or getattr(
+                getattr(error, "error", None),
+                "code",
+                None,
+            )
+            if getattr(error, "status_code", None) == 409 and error_code in {
+                "LeaseNotPresentWithLeaseOperation",
+                "LeaseNotPresent",
+            }:
+                return
+            raise
 
 
 def _decode_object(value: bytes, label: str) -> dict[str, Any]:

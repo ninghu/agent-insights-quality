@@ -128,14 +128,33 @@ def _execute_initial_candidate_pass(
         provider_id=project_id,
         now=now(),
     )
-    with lifecycle_heartbeat(controller, now=now):
-        project = project_provisioner.create(
-            project_name=candidate["project_name"],
-            cycle_id=candidate["cycle_id"],
-            ownership_nonce=controller.active.value["lease"][
-                "ownership_nonce"
-            ],
+    ownership_nonce = controller.active.value["lease"]["ownership_nonce"]
+    project_intents = project_provisioner.resource_intents(
+        project_name=candidate["project_name"],
+        cycle_id=candidate["cycle_id"],
+        ownership_nonce=ownership_nonce,
+    )
+    for intent in project_intents:
+        controller.dynamic_resource_event(
+            {**intent, "state": "create_intent"},
+            now=now(),
         )
+    try:
+        with lifecycle_heartbeat(controller, now=now):
+            project = project_provisioner.create(
+                project_name=candidate["project_name"],
+                cycle_id=candidate["cycle_id"],
+                ownership_nonce=ownership_nonce,
+            )
+    except (ContractError, OSError, RuntimeError):
+        controller.mark_resources_ambiguous(
+            [
+                project_id,
+                *(str(item["intent_reference"]) for item in project_intents),
+            ],
+            now=now(),
+        )
+        raise
     if project.project_id != project_id:
         raise ContractError(
             "Ephemeral validation Project ID differs from create intent"
@@ -148,6 +167,7 @@ def _execute_initial_candidate_pass(
         project_principal_id=project.project_principal_id,
         connection_ids=list(project.connection_ids),
         role_assignment_ids=list(project.role_assignment_ids),
+        resource_observations=dict(project.resource_observations),
         now=now(),
     )
     planned = plan_runtime_topology(

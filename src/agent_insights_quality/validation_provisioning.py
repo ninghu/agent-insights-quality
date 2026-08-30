@@ -4,6 +4,7 @@ import copy
 import json
 import subprocess
 import urllib.parse
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Callable, Mapping
@@ -37,6 +38,15 @@ class ProjectDeployment:
     project_endpoint: str
     connection_ids: tuple[str, ...]
     role_assignment_ids: tuple[str, ...]
+    resource_observations: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class ProjectResourcePlan:
+    intents: tuple[dict[str, str | None], ...]
+    connection_ids: tuple[str, ...]
+    role_assignment_ids: tuple[str, ...]
+    role_assignment_names: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -100,6 +110,19 @@ class ValidationProjectProvisioner:
             "application-insights-validation"
         )
 
+    def resource_intents(
+        self,
+        *,
+        project_name: str,
+        cycle_id: str,
+        ownership_nonce: str,
+    ) -> tuple[dict[str, str | None], ...]:
+        return self._resource_plan(
+            project_name=project_name,
+            cycle_id=cycle_id,
+            ownership_nonce=ownership_nonce,
+        ).intents
+
     def create(
         self,
         *,
@@ -118,6 +141,11 @@ class ValidationProjectProvisioner:
             or not application_insights_name
         ):
             raise ContractError("Validation fixed Azure substrate is incomplete")
+        plan = self._resource_plan(
+            project_name=project_name,
+            cycle_id=cycle_id,
+            ownership_nonce=ownership_nonce,
+        )
         deployment_name = f"test-agent-validation-{cycle_id}"[:64].rstrip("-")
         command = [
             azure_cli(),
@@ -139,6 +167,10 @@ class ValidationProjectProvisioner:
             f"automationPrincipalId={self._automation_principal_id}",
             f"ownershipNonce={ownership_nonce}",
             f"cycleId={cycle_id}",
+            f"automationProjectManagerName={plan.role_assignment_names[0]}",
+            f"appInsightsReaderName={plan.role_assignment_names[1]}",
+            f"modelInferenceUserName={plan.role_assignment_names[2]}",
+            f"registryPullName={plan.role_assignment_names[3]}",
             "--only-show-errors",
             "--output",
             "json",
@@ -164,6 +196,7 @@ class ValidationProjectProvisioner:
                 project_endpoint=str(outputs["projectEndpoint"]["value"]),
                 connection_ids=tuple(outputs["connectionIds"]["value"]),
                 role_assignment_ids=tuple(outputs["roleAssignmentIds"]["value"]),
+                resource_observations=(),
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
             raise ContractError(
@@ -173,9 +206,129 @@ class ValidationProjectProvisioner:
             project.project_endpoint != self._profile.project_endpoint
             or len(project.connection_ids) != 2
             or len(project.role_assignment_ids) != 4
+            or set(project.connection_ids) != set(plan.connection_ids)
+            or set(project.role_assignment_ids) != set(plan.role_assignment_ids)
         ):
             raise ContractError("Ephemeral validation Project topology is incomplete")
-        return project
+        observations = [
+            (
+                str(plan.intents[0]["intent_reference"]),
+                project.project_principal_id,
+            ),
+            *((provider_id, provider_id) for provider_id in plan.connection_ids),
+            *((provider_id, provider_id) for provider_id in plan.role_assignment_ids),
+        ]
+        return ProjectDeployment(
+            **{
+                **project.__dict__,
+                "resource_observations": tuple(observations),
+            }
+        )
+
+    def _resource_plan(
+        self,
+        *,
+        project_name: str,
+        cycle_id: str,
+        ownership_nonce: str,
+    ) -> ProjectResourcePlan:
+        if (
+            not self._profile.account_resource_id
+            or not self._profile.application_insights_resource_id
+            or not self._profile.container_registry_name
+        ):
+            raise ContractError("Validation fixed Azure substrate is incomplete")
+        project_id = self.expected_project_id(project_name)
+        account_id = self._profile.account_resource_id.rstrip("/")
+        insights_id = self._profile.application_insights_resource_id.rstrip("/")
+        registry_id = (
+            f"{account_id.split('/providers/', 1)[0]}/providers/"
+            "Microsoft.ContainerRegistry/registries/"
+            f"{self._profile.container_registry_name}"
+        )
+        connection_ids = (
+            f"{project_id}/connections/container-registry-validation",
+            f"{project_id}/connections/application-insights-validation",
+        )
+        role_scopes = (
+            project_id,
+            insights_id,
+            account_id,
+            registry_id,
+        )
+        role_labels = (
+            "automation-project-manager",
+            "application-insights-reader",
+            "model-inference-user",
+            "registry-pull",
+        )
+        role_names = tuple(
+            str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    (
+                        "test-agent-validation:"
+                        f"{cycle_id}:{ownership_nonce}:{label}:{scope}"
+                    ),
+                )
+            )
+            for label, scope in zip(role_labels, role_scopes, strict=True)
+        )
+        role_ids = tuple(
+            f"{scope}/providers/Microsoft.Authorization/roleAssignments/{name}"
+            for scope, name in zip(role_scopes, role_names, strict=True)
+        )
+        identity_intent = content_hash(
+            {
+                "kind": "runtime_principal",
+                "project_id": project_id,
+                "cycle_id": cycle_id,
+                "ownership_nonce": ownership_nonce,
+            }
+        )
+        intents: list[dict[str, str | None]] = [
+            {
+                "kind": "runtime_principal",
+                "intent_reference": identity_intent,
+                "deterministic_name": f"{project_name}-system-identity",
+                "parent_id": project_id,
+                "authority_id": None,
+                "cleanup_method": "documented_project_cascade",
+            }
+        ]
+        intents.extend(
+            {
+                "kind": "connection",
+                "intent_reference": provider_id,
+                "deterministic_name": provider_id.rsplit("/", 1)[-1],
+                "parent_id": project_id,
+                "authority_id": None,
+                "cleanup_method": "explicit",
+            }
+            for provider_id in connection_ids
+        )
+        intents.extend(
+            {
+                "kind": "role_assignment",
+                "intent_reference": provider_id,
+                "deterministic_name": label,
+                "parent_id": scope,
+                "authority_id": None,
+                "cleanup_method": "explicit",
+            }
+            for provider_id, label, scope in zip(
+                role_ids,
+                role_labels,
+                role_scopes,
+                strict=True,
+            )
+        )
+        return ProjectResourcePlan(
+            intents=tuple(intents),
+            connection_ids=connection_ids,
+            role_assignment_ids=role_ids,
+            role_assignment_names=role_names,
+        )
 
 
 def measure_test_agent_capacity(
@@ -467,9 +620,7 @@ class FoundryAuthorityDeployer:
             hosted_blueprint_id=hosted_blueprint_id if hosted else None,
             hosted_deployment_id=hosted_deployment_id if hosted else None,
             runtime_principal_id=runtime_principal_id or None,
-            telemetry_identity_id=(
-                f"{planned.runtime_agent_name}/versions/{version}"
-            ),
+            telemetry_identity_id=provider_version_id,
             connection_ids=self._project.connection_ids,
         )
 

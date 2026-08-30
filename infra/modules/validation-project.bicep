@@ -8,6 +8,10 @@ param registryName string
 param automationPrincipalId string
 param ownershipNonce string
 param cycleId string
+param automationProjectManagerName string
+param appInsightsReaderName string
+param modelInferenceUserName string
+param registryPullName string
 
 var monitoringReaderRoleId = '43d0d8ad-25c7-4714-9337-8ba259a9fe05'
 var modelInferenceRoleId = '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'
@@ -43,7 +47,7 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
 
 resource automationProjectManager 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: project
-  name: guid(project.id, automationPrincipalId, foundryProjectManagerRoleId, ownershipNonce)
+  name: automationProjectManagerName
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', foundryProjectManagerRoleId)
     principalId: automationPrincipalId
@@ -61,6 +65,9 @@ module projectRbac 'project-rbac.bicep' = {
     monitoringReaderRoleId: monitoringReaderRoleId
     modelInferenceRoleId: modelInferenceRoleId
     acrPullRoleId: acrPullRoleId
+    appInsightsReaderName: appInsightsReaderName
+    modelInferenceUserName: modelInferenceUserName
+    registryPullName: registryPullName
   }
 }
 

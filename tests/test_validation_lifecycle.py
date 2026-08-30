@@ -8,6 +8,11 @@ import pytest
 
 from agent_insights_quality.util import ContractError
 from agent_insights_quality.validation_blob import BlobRecord
+from agent_insights_quality.validation_cleanup import (
+    CleanupEngine,
+    CleanupInventory,
+    CleanupResult,
+)
 from agent_insights_quality.validation_cycle import ValidationCycleController
 from agent_insights_quality.validation_lifecycle import (
     ACTIVE_BLOB,
@@ -17,6 +22,7 @@ from agent_insights_quality.validation_lifecycle import (
     validate_lifecycle,
 )
 from agent_insights_quality.validation_policy import load_validation_policy
+from agent_insights_quality.validation_reconciler import ValidationReconciler
 
 HASH = "sha256:" + ("a" * 64)
 HEAD = "b" * 40
@@ -142,6 +148,34 @@ class MemoryStore:
         self.released = True
 
 
+class CleanupBackend:
+    def delete(self, item) -> None:
+        del item
+
+    def absent(self, item) -> bool:
+        del item
+        return True
+
+    def manifest_is_shared(self, provider_id: str) -> bool:
+        del provider_id
+        return False
+
+    def inventory(
+        self,
+        *,
+        cycle_id: str,
+        ownership_nonce: str,
+    ) -> CleanupInventory:
+        del cycle_id, ownership_nonce
+        return CleanupInventory(
+            project_exists=False,
+            nonce_owned_ids=(),
+            session_response_ids=(),
+            cycle_acr_tag_ids=(),
+            incomplete_cascade_ids=(),
+        )
+
+
 def _lifecycle(*, heartbeat: datetime = START, agents: int = 0) -> dict:
     canonical_agents = [
         "weather-agent",
@@ -208,7 +242,7 @@ def _lifecycle(*, heartbeat: datetime = START, agents: int = 0) -> dict:
                 "runtime_principal_id": (
                     f"runtime-principal-{index}" if hosted else None
                 ),
-                "telemetry_identity_id": f"telemetry-{index}",
+                "telemetry_identity_id": f"provider-version-{index}",
                 "connection_ids": [],
             }
         )
@@ -334,6 +368,89 @@ def _lifecycle(*, heartbeat: datetime = START, agents: int = 0) -> dict:
         "previous_etag": None,
         "journal_digest": HASH,
     }
+    if agents:
+        resources = [
+            {
+                "kind": "project",
+                "parent_id": None,
+                "authority_id": None,
+                "deterministic_name": "synthetic-project",
+                "provider_id": "project-id",
+                "ownership_nonce": "nonce-0001",
+                "create_intent_at": START.isoformat(),
+                "create_observed_at": START.isoformat(),
+                "delete_intent_at": None,
+                "delete_observed_at": None,
+                "state": "created",
+                "cleanup_method": "explicit",
+            }
+        ]
+
+        def add_resource(
+            kind: str,
+            provider_id: str | None,
+            authority_id: str,
+        ) -> None:
+            if provider_id is None or any(
+                item["provider_id"] == provider_id for item in resources
+            ):
+                return
+            resources.append(
+                {
+                    "kind": kind,
+                    "parent_id": "project-id",
+                    "authority_id": authority_id,
+                    "deterministic_name": provider_id,
+                    "provider_id": provider_id,
+                    "ownership_nonce": "nonce-0001",
+                    "create_intent_at": START.isoformat(),
+                    "create_observed_at": START.isoformat(),
+                    "delete_intent_at": None,
+                    "delete_observed_at": None,
+                    "state": "created",
+                    "cleanup_method": (
+                        "documented_project_cascade"
+                        if kind == "runtime_principal"
+                        else "explicit"
+                    ),
+                }
+            )
+
+        for agent in topology_agents:
+            for kind, field in (
+                ("provider_agent", "provider_agent_id"),
+                ("provider_agent_version", "provider_agent_version_id"),
+                ("hosted_identity", "hosted_identity_id"),
+                ("hosted_blueprint", "hosted_blueprint_id"),
+                ("hosted_deployment", "hosted_deployment_id"),
+                ("runtime_principal", "runtime_principal_id"),
+            ):
+                add_resource(kind, agent[field], agent["authority_id"])
+        value["project"].update(
+            {
+                "name": "synthetic-project",
+                "provider_id": "project-id",
+                "state": "created",
+                "create_intent_at": START.isoformat(),
+                "create_observed_at": START.isoformat(),
+            }
+        )
+        value["runtime_topology"].update(
+            {
+                "project_reference": "project-id",
+                "runtime_principal_ids": sorted(
+                    {
+                        item["runtime_principal_id"]
+                        for item in topology_agents
+                        if item["runtime_principal_id"]
+                    }
+                ),
+                "telemetry_identity_ids": sorted(
+                    {item["telemetry_identity_id"] for item in topology_agents}
+                ),
+            }
+        )
+        value["resources"] = resources
     return stamp_lifecycle_digest(value)
 
 
@@ -450,6 +567,62 @@ def test_reconciler_takeover_requires_stale_lease_and_fresh_epoch() -> None:
     assert takeover.active.value["state"] == "CLEANING"
 
 
+def test_reconciler_can_take_over_after_absolute_ttl() -> None:
+    value = _lifecycle(heartbeat=START)
+    value["state"] = "PREFLIGHT"
+    value = stamp_lifecycle_digest(value)
+    store = MemoryStore(value)
+    lease_id, takeover = LifecycleJournal(
+        store,
+        load_validation_policy(),
+    ).takeover_for_cleanup(
+        ownership_nonce="nonce-0002",
+        holder_workflow_reference="workflow-2",
+        holder_app_reference="app-2",
+        holder_run_reference="run-2",
+        now=START + timedelta(hours=73),
+    )
+    assert lease_id.startswith("fresh-lease-")
+    assert takeover.active.value["state"] == "CLEANING"
+    assert takeover.active.value["last_activity_at"] > value["absolute_expires_at"]
+
+
+def test_event_snapshot_retry_uses_content_addressed_name() -> None:
+    class FailOnceStore(MemoryStore):
+        fail = True
+
+        def compare_and_swap(self, *args, **kwargs):
+            if self.fail:
+                self.fail = False
+                raise ContractError("synthetic CAS interruption")
+            return super().compare_and_swap(*args, **kwargs)
+
+    store = FailOnceStore(_lifecycle())
+    journal = LifecycleJournal(store, load_validation_policy())
+    current = store.read(ACTIVE_CONTAINER, ACTIVE_BLOB)
+    with pytest.raises(ContractError, match="CAS interruption"):
+        journal.commit(
+            current,
+            lease_id="synthetic-lease-1",
+            next_state="PREFLIGHT",
+            now=START + timedelta(seconds=1),
+        )
+    committed = journal.commit(
+        current,
+        lease_id="synthetic-lease-1",
+        next_state="PREFLIGHT",
+        now=START + timedelta(seconds=2),
+    )
+    event_names = [
+        name
+        for container, name in store.values
+        if container == "test-agent-validation-snapshots"
+    ]
+    assert len(event_names) == 2
+    assert len(set(event_names)) == 2
+    assert committed.active.value["state"] == "PREFLIGHT"
+
+
 def test_normal_mutation_cannot_extend_ttl_or_continue_after_stale_heartbeat() -> None:
     value = _lifecycle()
     store = MemoryStore(value)
@@ -489,6 +662,13 @@ def test_terminal_clean_snapshot_requires_exact_exhaustive_cleanup() -> None:
     store = MemoryStore(value)
     journal = LifecycleJournal(store, load_validation_policy())
     current = store.read(ACTIVE_CONTAINER, ACTIVE_BLOB)
+    absent_ids = [item["provider_id"] for item in value["resources"]]
+    cleaned_resources = deepcopy(value["resources"])
+    for resource in cleaned_resources:
+        resource["state"] = "absence_verified"
+        resource["delete_observed_at"] = (
+            START + timedelta(minutes=1)
+        ).isoformat()
     committed = journal.commit(
         current,
         lease_id="synthetic-lease-1",
@@ -498,11 +678,12 @@ def test_terminal_clean_snapshot_requires_exact_exhaustive_cleanup() -> None:
                 "status": "exact_clean",
                 "plan_hash": HASH,
                 "exact_clean": True,
-                "verified_absent_ids": [],
+                "verified_absent_ids": absent_ids,
                 "retained_shared_manifest_ids": [],
                 "residue_ids": [],
                 "verification_at": (START + timedelta(minutes=1)).isoformat(),
-            }
+            },
+            "resources": cleaned_resources,
         },
         now=START + timedelta(minutes=1),
     )
@@ -512,6 +693,39 @@ def test_terminal_clean_snapshot_requires_exact_exhaustive_cleanup() -> None:
         committed.clean.value["journal_digest"]
     )
     validate_lifecycle(committed.active.value)
+
+
+def test_terminal_clean_rejects_unjournaled_topology_identity() -> None:
+    value = _lifecycle(agents=41)
+    value["state"] = "CLEAN"
+    value["evidence_reference"] = {
+        "path": "test-agent-validation-snapshots/evidence/evidence.json",
+        "version_id": "evidence-version",
+        "etag": "evidence-etag",
+        "digest": HASH,
+    }
+    value["resources"] = value["resources"][:-1]
+    for resource in value["resources"]:
+        resource["state"] = "absence_verified"
+    value["cleanup"].update(
+        {
+            "status": "exact_clean",
+            "plan_hash": HASH,
+            "exact_clean": True,
+            "verified_absent_ids": [
+                item["provider_id"] for item in value["resources"]
+            ],
+            "verification_at": START.isoformat(),
+        }
+    )
+    value["clean_snapshot"] = {
+        "path": "test-agent-validation-snapshots/clean/clean.json",
+        "version_id": "clean-version",
+        "etag": "clean-etag",
+        "digest": HASH,
+    }
+    with pytest.raises(ContractError, match="unjournaled provider identities"):
+        validate_lifecycle(stamp_lifecycle_digest(value))
 
 
 def test_cleanup_blocked_keeps_account_unavailable() -> None:
@@ -552,11 +766,16 @@ def test_receipt_transition_releases_lease_only_after_clean_proof() -> None:
         "status": "exact_clean",
         "plan_hash": HASH,
         "exact_clean": True,
-        "verified_absent_ids": [],
+        "verified_absent_ids": [
+            item["provider_id"] for item in value["resources"]
+        ],
         "retained_shared_manifest_ids": [],
         "residue_ids": [],
         "verification_at": START.isoformat(),
     }
+    for resource in value["resources"]:
+        resource["state"] = "absence_verified"
+        resource["delete_observed_at"] = START.isoformat()
     value["clean_snapshot"] = {
         "path": "test-agent-validation-snapshots/clean/clean.json",
         "version_id": "clean-version",
@@ -574,7 +793,11 @@ def test_receipt_transition_releases_lease_only_after_clean_proof() -> None:
     receipt = BlobRecord(
         "test-agent-validation-shadow-receipts",
         "shadow-receipts/receipt.json",
-        {"receipt_digest": HASH},
+        {
+            "receipt_digest": HASH,
+            "cycle_id": value["cycle_id"],
+            "epoch": value["epoch"],
+        },
         "receipt-etag",
         "receipt-version",
     )
@@ -585,4 +808,132 @@ def test_receipt_transition_releases_lease_only_after_clean_proof() -> None:
     assert active.value["state"] == "RECEIPT_ISSUED"
     assert active.value["lease"]["state"] == "released"
     assert active.value["receipt_reference"]["digest"] == HASH
+    assert store.released is True
+    retried = ValidationCycleController(
+        LifecycleJournal(store, load_validation_policy()),
+        lease_id="synthetic-lease-1",
+        active=store.read(ACTIVE_CONTAINER, ACTIVE_BLOB),
+    ).receipt_issued(
+        receipt,
+        now=START + timedelta(seconds=2),
+    )
+    assert retried.value["state"] == "RECEIPT_ISSUED"
+    assert retried.value["lease"]["state"] == "released"
+
+
+def test_failed_clean_releases_lease_and_reconciler_retry_is_idempotent() -> None:
+    value = _lifecycle()
+    value["state"] = "CLEANING"
+    value = stamp_lifecycle_digest(value)
+    store = MemoryStore(value)
+    journal = LifecycleJournal(store, load_validation_policy())
+    controller = ValidationCycleController(
+        journal,
+        lease_id="synthetic-lease-1",
+        active=store.read(ACTIVE_CONTAINER, ACTIVE_BLOB),
+    )
+    controller.complete_cleanup(
+        CleanupResult(
+            plan_hash=HASH,
+            exact_clean=True,
+            verified_absent_ids=(),
+            retained_shared_manifest_ids=(),
+            residue_ids=(),
+        ),
+        failed_cycle=True,
+        now=START + timedelta(seconds=1),
+    )
+    assert controller.active.value["state"] == "FAILED_CLEAN"
+    assert controller.active.value["lease"]["state"] == "released"
+    assert store.released is True
+    state = ValidationReconciler(
+        journal=journal,
+        cleanup=CleanupEngine(CleanupBackend()),
+        policy=load_validation_policy(),
+    ).reconcile(
+        ownership_nonce="nonce-0002",
+        holder_workflow_reference="workflow-2",
+        holder_app_reference="app-2",
+        holder_run_reference="run-2",
+        alert=lambda message: None,
+        now=START + timedelta(seconds=2),
+    )
+    assert state == "FAILED_CLEAN"
+
+
+def test_reconciler_preserves_successful_final_checks_as_clean() -> None:
+    value = _lifecycle(heartbeat=START, agents=41)
+    value["state"] = "FINAL_CHECKS"
+    value["git"]["final_head_sha"] = value["git"]["current_head_sha"]
+    value["git"]["final_tree_sha"] = value["git"]["current_tree_sha"]
+    value["evidence_reference"] = {
+        "path": "test-agent-validation-snapshots/evidence/evidence.json",
+        "version_id": "evidence-version",
+        "etag": "evidence-etag",
+        "digest": HASH,
+    }
+    value = stamp_lifecycle_digest(value)
+    store = MemoryStore(value)
+    state = ValidationReconciler(
+        journal=LifecycleJournal(store, load_validation_policy()),
+        cleanup=CleanupEngine(CleanupBackend()),
+        policy=load_validation_policy(),
+    ).reconcile(
+        ownership_nonce="nonce-0002",
+        holder_workflow_reference="workflow-2",
+        holder_app_reference="app-2",
+        holder_run_reference="run-2",
+        alert=lambda message: None,
+        now=START + timedelta(seconds=61),
+    )
+    assert state == "CLEAN"
+    active = store.read(ACTIVE_CONTAINER, ACTIVE_BLOB)
+    assert active.value["lease"]["state"] == "held"
+    assert active.value["cleanup"]["exact_clean"] is True
+
+
+def test_expired_unreceipted_clean_is_failed_clean_and_released() -> None:
+    value = _lifecycle(agents=41)
+    value["state"] = "CLEAN"
+    value["evidence_reference"] = {
+        "path": "test-agent-validation-snapshots/evidence/evidence.json",
+        "version_id": "evidence-version",
+        "etag": "evidence-etag",
+        "digest": HASH,
+    }
+    for resource in value["resources"]:
+        resource["state"] = "absence_verified"
+        resource["delete_observed_at"] = START.isoformat()
+    value["cleanup"].update(
+        {
+            "status": "exact_clean",
+            "plan_hash": HASH,
+            "exact_clean": True,
+            "verified_absent_ids": [
+                item["provider_id"] for item in value["resources"]
+            ],
+            "verification_at": START.isoformat(),
+        }
+    )
+    value["clean_snapshot"] = {
+        "path": "test-agent-validation-snapshots/clean/clean.json",
+        "version_id": "clean-version",
+        "etag": "clean-etag",
+        "digest": HASH,
+    }
+    value = stamp_lifecycle_digest(value)
+    store = MemoryStore(value)
+    state = ValidationReconciler(
+        journal=LifecycleJournal(store, load_validation_policy()),
+        cleanup=CleanupEngine(CleanupBackend()),
+        policy=load_validation_policy(),
+    ).reconcile(
+        ownership_nonce="nonce-0002",
+        holder_workflow_reference="workflow-2",
+        holder_app_reference="app-2",
+        holder_run_reference="run-2",
+        alert=lambda message: None,
+        now=START + timedelta(hours=73),
+    )
+    assert state == "FAILED_CLEAN"
     assert store.released is True

@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 import time
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -107,6 +107,7 @@ from agent_insights_quality.validation_cleanup_azure import (
 from agent_insights_quality.validation_credentials import (
     verify_azure_service_principal,
 )
+from agent_insights_quality.validation_cycle import ValidationCycleController
 from agent_insights_quality.validation_issuer import (
     GhGitHubStateReader,
     ReceiptIssuer,
@@ -352,9 +353,8 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         return None
     if args.command == "issue-test-agent-validation-receipt":
         receipt = read_json(args.receipt)
-        issuer = ReceiptIssuer(
-            AzureValidationBlobStore(args.storage_account)
-        )
+        store = AzureValidationBlobStore(args.storage_account)
+        issuer = ReceiptIssuer(store)
         if receipt.get("mode") == "shadow":
             record = issuer.issue_shadow(receipt)
         elif receipt.get("mode") == "merge":
@@ -367,13 +367,27 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                 oidc_subject=github_actions_oidc_subject(),
                 environment=os.environ,
             )
+        else:
+            raise ContractError("Validation receipt mode is invalid")
+        active = store.read(ACTIVE_CONTAINER, ACTIVE_BLOB)
+        controller = ValidationCycleController(
+            LifecycleJournal(
+                store,
+                load_validation_policy(),
+                mirror_root=(
+                    runtime_root() / "test-agent-validation" / "lifecycle"
+                ),
+            ),
+            lease_id=active.value["lease"]["lease_id"],
+            active=active,
+        )
+        controller.receipt_issued(record, now=datetime.now(UTC))
+        if receipt.get("mode") == "merge":
             required_check = publish_required_check(
                 receipt,
                 trusted_policy=trusted_policy,
                 token=github_token,
             )
-        else:
-            raise ContractError("Validation receipt mode is invalid")
         return json.dumps(
             {
                 "mode": receipt["mode"],
@@ -394,12 +408,6 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         if active is None:
             return json.dumps({"state": "NO_ACTIVE_CYCLE"}, sort_keys=True)
         validate_lifecycle(active.value)
-        if active.value["state"] in {
-            "CLEAN",
-            "FAILED_CLEAN",
-            "RECEIPT_ISSUED",
-        }:
-            return json.dumps({"state": active.value["state"]}, sort_keys=True)
         project_name = active.value["project"]["name"]
         if not isinstance(project_name, str) or not project_name:
             raise ContractError("Validation cleanup Project identity is missing")

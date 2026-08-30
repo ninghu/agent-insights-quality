@@ -615,6 +615,65 @@ def test_merge_receipt_fails_when_head_or_check_provenance_changes(tmp_path) -> 
         )
 
 
+def test_merge_receipt_rejects_wrong_workflow_and_completion_order(
+    tmp_path,
+) -> None:
+    policy, _ = load_trusted_policy()
+    wrong_workflow = _receipt("merge")
+    wrong_workflow["review"]["check"]["workflow_path"] = (
+        ".github/workflows/validate.yml"
+    )
+    wrong_workflow = stamp_receipt_digest(wrong_workflow)
+    with pytest.raises(ContractError, match="check proof is stale"):
+        ReceiptIssuer(
+            MemoryReceiptStore(wrong_workflow),
+            mirror_root=tmp_path,
+        ).issue_merge(
+            wrong_workflow,
+            trusted_policy=policy,
+            reader=Reader(wrong_workflow),
+            oidc_subject=OIDC_SUBJECT,
+            environment={
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_REPOSITORY": "ninghu/agent-insights-quality",
+                "GITHUB_WORKFLOW_REF": (
+                    "ninghu/agent-insights-quality/"
+                    ".github/workflows/test-agent-validation-receipt.yml@"
+                    "refs/heads/main"
+                ),
+                "GITHUB_SHA": HEAD,
+                "GITHUB_RUN_ID": "400",
+                "GITHUB_RUN_ATTEMPT": "1",
+            },
+        )
+
+    wrong_order = _receipt("merge")
+    wrong_order["scope_freeze"]["frozen_at"] = "2026-08-29T12:05:00Z"
+    wrong_order = stamp_receipt_digest(wrong_order)
+    with pytest.raises(ContractError, match="completion ordering"):
+        ReceiptIssuer(
+            MemoryReceiptStore(wrong_order),
+            mirror_root=tmp_path,
+        ).issue_merge(
+            wrong_order,
+            trusted_policy=policy,
+            reader=Reader(wrong_order),
+            oidc_subject=OIDC_SUBJECT,
+            environment={
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_REPOSITORY": "ninghu/agent-insights-quality",
+                "GITHUB_WORKFLOW_REF": (
+                    "ninghu/agent-insights-quality/"
+                    ".github/workflows/test-agent-validation-receipt.yml@"
+                    "refs/heads/main"
+                ),
+                "GITHUB_SHA": HEAD,
+                "GITHUB_RUN_ID": "400",
+                "GITHUB_RUN_ATTEMPT": "1",
+            },
+        )
+
+
 def test_receipt_summaries_must_match_immutable_evidence(tmp_path) -> None:
     receipt = _receipt("shadow")
     receipt["authorities"][0]["execution_digest"] = content_hash("tampered")
