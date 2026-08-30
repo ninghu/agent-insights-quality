@@ -1,6 +1,7 @@
 name: Test Agent Validation shadow preparation
 
 on:
+  pull_request:
   workflow_dispatch:
     inputs:
       pr_number:
@@ -22,6 +23,7 @@ permissions:
   checks: read
   actions: read
   id-token: write
+  checks: read
 
 concurrency:
   group: test-agent-validation-account
@@ -29,11 +31,12 @@ concurrency:
 
 jobs:
   contracts:
+    name: validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.candidate_head_sha }}
+          ref: ${{ github.event.pull_request.head.sha || inputs.candidate_head_sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -45,30 +48,85 @@ jobs:
       - run: python -m pytest
       - run: az bicep build --file infra/main.bicep --stdout >/dev/null
 
-  freeze-candidate-contract:
-    needs: contracts
+  targeted-verification:
+    name: test-agent-validation-targeted
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || inputs.candidate_head_sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - run: >-
+          python -m pytest
+          tests/test_validation_rules.py
+          tests/test_validation_evidence.py
+          tests/test_validation_lifecycle.py
+          tests/test_validation_cleanup.py
+          tests/test_validation_issuer.py
+          tests/test_validation_runtime.py
+          tests/test_validation_workflows.py
+
+  execute-shadow-cycle:
+    needs: [contracts, targeted-verification]
     runs-on: [self-hosted, agent-insights-quality]
     environment: test-agent-validation-shadow
     env:
       AIQ_RUNTIME_ROOT: ${{ vars.AIQ_RUNTIME_ROOT }}
+      EXPECTED_AZURE_CLIENT_ID: ${{ vars.AIQ_VALIDATION_CLIENT_ID }}
+      AUTOMATION_PRINCIPAL_ID: ${{ vars.AIQ_VALIDATION_PRINCIPAL_ID }}
+      AIQ_VALIDATION_STORAGE_ACCOUNT: ${{ vars.AIQ_VALIDATION_STORAGE_ACCOUNT }}
+      PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+      CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate_head_sha }}
+      CANDIDATE_TREE_SHA: ${{ inputs.candidate_tree_sha }}
+      WORKFLOW_RUN_ID: ${{ github.run_id }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.candidate_head_sha }}
+          ref: ${{ github.event.pull_request.head.sha || inputs.candidate_head_sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: python -m pip install -e ".[azure]"
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AIQ_VALIDATION_CLIENT_ID }}
+          tenant-id: ${{ vars.AIQ_VALIDATION_TENANT_ID }}
+          subscription-id: ${{ vars.AIQ_VALIDATION_SUBSCRIPTION_ID }}
+      - name: Verify federated Azure identity
+        shell: pwsh
+        run: |
+          python -m agent_insights_quality verify-test-agent-validation-credential `
+            --expected-client-id $env:EXPECTED_AZURE_CLIENT_ID
       - name: Prepare exact candidate contract
         shell: pwsh
         run: |
-          $output = Join-Path $env:AIQ_RUNTIME_ROOT "test-agent-validation/candidates/${{ inputs.candidate_head_sha }}.json"
+          if ($env:CANDIDATE_HEAD_SHA -notmatch '^[0-9a-f]{40}$' -or
+              $env:PR_NUMBER -notmatch '^[1-9][0-9]*$' -or
+              $env:WORKFLOW_RUN_ID -notmatch '^[1-9][0-9]*$') {
+            throw "Candidate workflow input is invalid"
+          }
+          if ($env:CANDIDATE_TREE_SHA -notmatch '^[0-9a-f]{40}$') {
+            $env:CANDIDATE_TREE_SHA = git show -s --format=%T $env:CANDIDATE_HEAD_SHA
+          }
+          $output = Join-Path $env:AIQ_RUNTIME_ROOT "test-agent-validation/candidates/$env:CANDIDATE_HEAD_SHA.json"
           python -m agent_insights_quality prepare-test-agent-validation `
-            --pr-number ${{ inputs.pr_number }} `
-            --candidate-head-sha ${{ inputs.candidate_head_sha }} `
-            --candidate-tree-sha ${{ inputs.candidate_tree_sha }} `
-            --workflow-run-id ${{ github.run_id }} `
+            --pr-number $env:PR_NUMBER `
+            --candidate-head-sha $env:CANDIDATE_HEAD_SHA `
+            --candidate-tree-sha $env:CANDIDATE_TREE_SHA `
+            --workflow-run-id $env:WORKFLOW_RUN_ID `
             --output $output
+          $receipt = Join-Path $env:AIQ_RUNTIME_ROOT "test-agent-validation/receipt-requests/$env:CANDIDATE_HEAD_SHA-shadow.json"
+          python -m agent_insights_quality run-test-agent-validation `
+            --candidate $output `
+            --storage-account $env:AIQ_VALIDATION_STORAGE_ACCOUNT `
+            --expected-azure-client-id $env:EXPECTED_AZURE_CLIENT_ID `
+            --automation-principal-id $env:AUTOMATION_PRINCIPAL_ID `
+            --receipt-output $receipt
 
 # This workflow remains a non-authorizing shadow-preparation path until the reviewed r01/r02
 # lifecycle exercises are complete. It deliberately does not publish the protected required check.

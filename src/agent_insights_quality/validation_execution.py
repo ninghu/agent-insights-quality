@@ -9,6 +9,12 @@ from typing import Any, Iterator
 from agent_insights_quality.util import ContractError, content_hash
 from agent_insights_quality.validation_cycle import ValidationCycleController
 from agent_insights_quality.validation_blob import BlobRecord
+from agent_insights_quality.validation_cleanup import (
+    CleanupBackend,
+    CleanupEngine,
+    CleanupPlanItem,
+    build_cleanup_plan,
+)
 from agent_insights_quality.validation_evidence import (
     EvidenceBlobStore,
     persist_evidence,
@@ -271,3 +277,62 @@ def lifecycle_heartbeat(
         thread.join(timeout=interval_seconds)
     if failures:
         raise ContractError("Validation lifecycle heartbeat failed") from failures[0]
+
+
+def cleanup_validation_cycle(
+    *,
+    controller: ValidationCycleController,
+    backend: CleanupBackend,
+    policy: ValidationPolicy,
+    failed_cycle: bool,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> BlobRecord:
+    controller.begin_cleanup(failure=None, now=now())
+    lifecycle = controller.active.value
+    ownership_nonces = {
+        item["ownership_nonce"] for item in lifecycle["resources"]
+    }
+    if len(ownership_nonces) > 1:
+        raise ContractError("Validation resources have mixed ownership")
+    ownership_nonce = (
+        next(iter(ownership_nonces))
+        if ownership_nonces
+        else lifecycle["lease"]["ownership_nonce"]
+    )
+    plan = build_cleanup_plan(
+        cycle_id=lifecycle["cycle_id"],
+        ownership_nonce=ownership_nonce,
+        resources=lifecycle["resources"],
+        documented_project_cascade=policy.documented_project_cascade,
+    )
+
+    def record_delete_intent(item: CleanupPlanItem) -> None:
+        resources = []
+        found = False
+        for resource in controller.active.value["resources"]:
+            value = dict(resource)
+            if resource["provider_id"] == item.provider_id:
+                value["state"] = "delete_intent"
+                value["delete_intent_at"] = now().astimezone(UTC).isoformat()
+                found = True
+            resources.append(value)
+        if not found:
+            raise ContractError("Cleanup resource disappeared before delete intent")
+        controller._commit(
+            "CLEANING",
+            {"resources": resources},
+            now(),
+        )
+
+    result = CleanupEngine(backend).execute(
+        plan,
+        record_delete_intent=record_delete_intent,
+    )
+    committed = controller.complete_cleanup(
+        result,
+        failed_cycle=failed_cycle,
+        now=now(),
+    )
+    if committed.clean is None:
+        raise ContractError("Validation cleanup did not create immutable CLEAN proof")
+    return committed.clean

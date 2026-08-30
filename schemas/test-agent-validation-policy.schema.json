@@ -29,12 +29,18 @@
       "additionalProperties": false,
       "required": [
         "candidate_path",
+        "review_path",
+        "targeted_path",
+        "ci_path",
         "receipt_path",
         "reconciler_path",
         "required_ref"
       ],
       "properties": {
         "candidate_path": {"const": ".github/workflows/test-agent-validation.yml"},
+        "review_path": {"const": ".github/workflows/test-agent-validation.yml"},
+        "targeted_path": {"const": ".github/workflows/test-agent-validation.yml"},
+        "ci_path": {"const": ".github/workflows/validate.yml"},
         "receipt_path": {"const": ".github/workflows/test-agent-validation-receipt.yml"},
         "reconciler_path": {"const": ".github/workflows/test-agent-validation-reconciler.yml"},
         "required_ref": {"const": "refs/heads/main"}

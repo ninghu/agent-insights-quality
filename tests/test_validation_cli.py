@@ -92,3 +92,25 @@ def test_validation_cli_exposes_contract_lifecycle_receipt_and_reconciler_comman
             "run",
         ]
     ).command == "reconcile-test-agent-validation"
+    assert parser.parse_args(
+        [
+            "run-test-agent-validation",
+            "--candidate",
+            "candidate.json",
+            "--storage-account",
+            "syntheticstorage",
+            "--expected-azure-client-id",
+            "client-id",
+            "--automation-principal-id",
+            "principal-id",
+            "--receipt-output",
+            "receipt.json",
+        ]
+    ).command == "run-test-agent-validation"
+    assert parser.parse_args(
+        [
+            "verify-test-agent-validation-credential",
+            "--expected-client-id",
+            "client-id",
+        ]
+    ).command == "verify-test-agent-validation-credential"

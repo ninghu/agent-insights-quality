@@ -104,10 +104,14 @@ from agent_insights_quality.validation_cleanup import CleanupEngine
 from agent_insights_quality.validation_cleanup_azure import (
     AzureValidationCleanupBackend,
 )
+from agent_insights_quality.validation_credentials import (
+    verify_azure_service_principal,
+)
 from agent_insights_quality.validation_issuer import (
     GhGitHubStateReader,
     ReceiptIssuer,
     github_actions_oidc_subject,
+    publish_required_check,
     validate_receipt as validate_test_agent_receipt,
 )
 from agent_insights_quality.validation_lifecycle import (
@@ -131,6 +135,7 @@ from agent_insights_quality.validation_provisioning import (
     validation_runtime_profile,
 )
 from agent_insights_quality.validation_reconciler import ValidationReconciler
+from agent_insights_quality.validation_gate import run_shadow_gate
 from agent_insights_quality.work_items import (
     fetch_quality_work_items,
     load_quality_work_items,
@@ -263,6 +268,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reconcile_validation.add_argument("--holder-app-reference", required=True)
     reconcile_validation.add_argument("--holder-run-reference", required=True)
+    verify_validation_credential = commands.add_parser(
+        "verify-test-agent-validation-credential"
+    )
+    verify_validation_credential.add_argument(
+        "--expected-client-id",
+        required=True,
+    )
+    execute_validation = commands.add_parser("run-test-agent-validation")
+    execute_validation.add_argument("--candidate", type=Path, required=True)
+    execute_validation.add_argument("--storage-account", required=True)
+    execute_validation.add_argument("--expected-azure-client-id", required=True)
+    execute_validation.add_argument("--automation-principal-id", required=True)
+    execute_validation.add_argument("--receipt-output", type=Path, required=True)
     return parser
 
 
@@ -286,6 +304,19 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             check=args.check,
         )
         return None
+    if args.command == "verify-test-agent-validation-credential":
+        verify_azure_service_principal(args.expected_client_id)
+        return None
+    if args.command == "run-test-agent-validation":
+        result = run_shadow_gate(
+            candidate_path=args.candidate,
+            storage_account=args.storage_account,
+            expected_azure_client_id=args.expected_azure_client_id,
+            automation_principal_id=args.automation_principal_id,
+            receipt_output=args.receipt_output,
+            github_token=str(os.environ.get("GH_TOKEN") or ""),
+        )
+        return json.dumps(result, sort_keys=True)
     if args.command == "prepare-test-agent-validation":
         agents, issues = load_catalogs()
         output = _private_validation_output(args.output)
@@ -328,12 +359,18 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             record = issuer.issue_shadow(receipt)
         elif receipt.get("mode") == "merge":
             trusted_policy, _ = load_trusted_policy()
+            github_token = str(os.environ.get("GH_TOKEN") or "").strip()
             record = issuer.issue_merge(
                 receipt,
                 trusted_policy=trusted_policy,
-                reader=GhGitHubStateReader(),
+                reader=GhGitHubStateReader(github_token),
                 oidc_subject=github_actions_oidc_subject(),
                 environment=os.environ,
+            )
+            required_check = publish_required_check(
+                receipt,
+                trusted_policy=trusted_policy,
+                token=github_token,
             )
         else:
             raise ContractError("Validation receipt mode is invalid")
@@ -343,6 +380,11 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                 "authorizes_merge": receipt["authorizes_merge"],
                 "receipt_digest": receipt["receipt_digest"],
                 "blob_version_id": record.version_id,
+                "required_check": (
+                    required_check
+                    if receipt["mode"] == "merge"
+                    else None
+                ),
             },
             sort_keys=True,
         )

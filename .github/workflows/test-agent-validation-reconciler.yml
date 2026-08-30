@@ -19,6 +19,9 @@ jobs:
     environment: test-agent-validation-shadow
     env:
       AIQ_VALIDATION_STORAGE_ACCOUNT: ${{ vars.AIQ_VALIDATION_STORAGE_ACCOUNT }}
+      EXPECTED_AZURE_CLIENT_ID: ${{ vars.AIQ_VALIDATION_CLIENT_ID }}
+      HOLDER_WORKFLOW_REFERENCE: ${{ github.workflow_ref }}
+      HOLDER_RUN_REFERENCE: ${{ github.run_id }}.${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,6 +30,16 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install -e ".[azure]"
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AIQ_VALIDATION_CLIENT_ID }}
+          tenant-id: ${{ vars.AIQ_VALIDATION_TENANT_ID }}
+          subscription-id: ${{ vars.AIQ_VALIDATION_SUBSCRIPTION_ID }}
+      - name: Verify federated Azure identity
+        shell: pwsh
+        run: |
+          python -m agent_insights_quality verify-test-agent-validation-credential `
+            --expected-client-id $env:EXPECTED_AZURE_CLIENT_ID
       - name: Reconcile stale lifecycle
         shell: pwsh
         run: |
@@ -34,6 +47,6 @@ jobs:
           python -m agent_insights_quality reconcile-test-agent-validation `
             --storage-account $env:AIQ_VALIDATION_STORAGE_ACCOUNT `
             --ownership-nonce $nonce `
-            --holder-workflow-reference "${{ github.workflow_ref }}" `
+            --holder-workflow-reference $env:HOLDER_WORKFLOW_REFERENCE `
             --holder-app-reference "github-actions" `
-            --holder-run-reference "${{ github.run_id }}.${{ github.run_attempt }}"
+            --holder-run-reference $env:HOLDER_RUN_REFERENCE

@@ -16,6 +16,7 @@ from agent_insights_quality.validation_lifecycle import (
 )
 from agent_insights_quality.validation_policy import ValidationPolicy
 from agent_insights_quality.validation_quota import CapacityPlan
+from agent_insights_quality.validation_cleanup import CleanupResult
 
 
 def initial_lifecycle(
@@ -618,6 +619,57 @@ class ValidationCycleController:
         if failure is not None:
             updates["failure"] = copy.deepcopy(dict(failure))
         return self._commit("CLEANING", updates, now)
+
+    def complete_cleanup(
+        self,
+        result: CleanupResult,
+        *,
+        failed_cycle: bool,
+        now: datetime,
+    ) -> Any:
+        resources = []
+        absent = set(result.verified_absent_ids)
+        for resource in self._active.value["resources"]:
+            item = copy.deepcopy(resource)
+            if item["provider_id"] in absent:
+                item["state"] = "absence_verified"
+                item["delete_observed_at"] = now.astimezone(UTC).isoformat()
+            resources.append(item)
+        project = copy.deepcopy(self._active.value["project"])
+        if project["provider_id"] in absent:
+            project["state"] = "deleted"
+            project["delete_observed_at"] = now.astimezone(UTC).isoformat()
+        cleanup = {
+            "status": "exact_clean" if result.exact_clean else "ambiguous",
+            "plan_hash": result.plan_hash,
+            "exact_clean": result.exact_clean,
+            "verified_absent_ids": list(result.verified_absent_ids),
+            "retained_shared_manifest_ids": list(
+                result.retained_shared_manifest_ids
+            ),
+            "residue_ids": list(result.residue_ids),
+            "verification_at": now.astimezone(UTC).isoformat(),
+        }
+        state = (
+            "FAILED_CLEAN"
+            if failed_cycle and result.exact_clean
+            else "CLEAN"
+            if result.exact_clean
+            else "CLEANUP_BLOCKED"
+        )
+        committed = self._journal.commit(
+            self._active,
+            lease_id=self._lease_id,
+            next_state=state,
+            updates={
+                "resources": resources,
+                "project": project,
+                "cleanup": cleanup,
+            },
+            now=now,
+        )
+        self._active = committed.active
+        return committed
 
     def _commit(
         self,

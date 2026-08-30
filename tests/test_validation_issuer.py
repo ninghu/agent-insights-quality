@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 import runpy
 from typing import Any
 
@@ -15,6 +16,7 @@ from agent_insights_quality.validation_issuer import (
     ReceiptIssuer,
     WorkflowState,
     oidc_subject_digest,
+    publish_required_check,
     verify_runtime_issuer,
     stamp_receipt_digest,
     validate_receipt,
@@ -115,6 +117,10 @@ def _authorities() -> list[dict]:
 def _receipt(mode: str) -> dict:
     merge = mode == "merge"
     review_check = _check("test-agent-validation-review", 1) if merge else None
+    if review_check is not None:
+        review_check["workflow_path"] = (
+            ".github/workflows/test-agent-validation.yml"
+        )
     policy, policy_digest = load_trusted_policy()
     evidence = runpy.run_path(
         str(ROOT / "tests" / "test_validation_evidence.py")
@@ -151,7 +157,7 @@ def _receipt(mode: str) -> dict:
         }
         for authority in evidence["authorities"]
     ]
-    return stamp_receipt_digest(
+    return _with_expected_check_paths(
         {
             "schema_version": "1.0.0",
             "kind": "test-agent-validation-receipt",
@@ -260,6 +266,20 @@ def _receipt(mode: str) -> dict:
             "receipt_digest": HASH,
         }
     )
+
+
+def _with_expected_check_paths(receipt: dict) -> dict:
+    if receipt["review"]["check"] is not None:
+        receipt["review"]["check"]["workflow_path"] = (
+            ".github/workflows/test-agent-validation.yml"
+        )
+    receipt["required_ci"]["targeted_verification"]["workflow_path"] = (
+        ".github/workflows/test-agent-validation.yml"
+    )
+    receipt["required_ci"]["continuous_integration"]["workflow_path"] = (
+        ".github/workflows/validate.yml"
+    )
+    return stamp_receipt_digest(receipt)
 
 
 class MemoryReceiptStore:
@@ -403,6 +423,10 @@ class Reader:
                     head_sha=item["head_sha"],
                     conclusion=item["conclusion"],
                     result_digest=item["result_digest"],
+                    workflow_id=item["workflow_id"],
+                    workflow_path=item["workflow_path"],
+                    workflow_sha=item["workflow_sha"],
+                    completed_at=item["completed_at"],
                 )
                 for item in checks
             ),
@@ -513,6 +537,50 @@ def test_protected_runtime_identity_rejects_wrong_environment_subject() -> None:
                 "GITHUB_RUN_ATTEMPT": "1",
             },
         )
+
+
+def test_required_check_is_published_on_exact_candidate_head(
+    monkeypatch,
+) -> None:
+    receipt = _receipt("merge")
+    policy, _ = load_trusted_policy()
+    observed = {}
+
+    def run(arguments, **kwargs):
+        observed["arguments"] = arguments
+        observed["payload"] = json.loads(kwargs["input"])
+        observed["token"] = kwargs["env"]["GH_TOKEN"]
+        return type(
+            "Result",
+            (),
+            {
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "id": 999,
+                        "name": "test-agent-validation",
+                        "head_sha": HEAD,
+                        "conclusion": "success",
+                        "app": {"id": 15368, "slug": "github-actions"},
+                    }
+                ),
+            },
+        )()
+
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_issuer.subprocess.run",
+        run,
+    )
+    result = publish_required_check(
+        receipt,
+        trusted_policy=policy,
+        token="synthetic-scoped-token",
+    )
+    assert observed["payload"]["head_sha"] == HEAD
+    assert observed["payload"]["external_id"] == receipt["receipt_digest"]
+    assert observed["token"] == "synthetic-scoped-token"
+    assert "main" not in observed["payload"]["head_sha"]
+    assert result["check_run_id"] == 999
 
 
 def test_merge_receipt_fails_when_head_or_check_provenance_changes(tmp_path) -> None:

@@ -13,7 +13,12 @@ from agent_insights_quality.profiles import RESOURCE_GROUP, RuntimeProfile
 from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.provisioning import FoundryProvisioner, build_artifact
 from agent_insights_quality.provisioning import _build_support_images
-from agent_insights_quality.util import ROOT, ContractError, runtime_root
+from agent_insights_quality.util import (
+    ROOT,
+    ContractError,
+    content_hash,
+    runtime_root,
+)
 from agent_insights_quality.validation_policy import ValidationPolicy
 from agent_insights_quality.validation_manifest import source_content_digest
 from agent_insights_quality.validation_runtime import (
@@ -291,6 +296,30 @@ def prepare_validation_support_images(
             )
         if record_resource is not None:
             record_resource({**tag_resource, "state": "created"})
+            manifest_intent = content_hash(
+                {
+                    "kind": "acr_manifest",
+                    "provider_id": digest,
+                    "authority_id": authority_id,
+                }
+            )
+            manifest_resource = {
+                "kind": "acr_manifest",
+                "deterministic_name": repository,
+                "authority_id": authority_id,
+                "parent_id": None,
+                "intent_reference": manifest_intent,
+            }
+            record_resource(
+                {**manifest_resource, "state": "create_intent"}
+            )
+            record_resource(
+                {
+                    **manifest_resource,
+                    "state": "created",
+                    "provider_id": digest,
+                }
+            )
         resources.extend(
             [
                 tag_resource,

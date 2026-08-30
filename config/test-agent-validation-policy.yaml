@@ -6,6 +6,9 @@ policy_path: config/test-agent-validation-policy.yaml
 protected_environment: test-agent-validation-receipt
 workflow:
   candidate_path: .github/workflows/test-agent-validation.yml
+  review_path: .github/workflows/test-agent-validation.yml
+  targeted_path: .github/workflows/test-agent-validation.yml
+  ci_path: .github/workflows/validate.yml
   receipt_path: .github/workflows/test-agent-validation-receipt.yml
   reconciler_path: .github/workflows/test-agent-validation-reconciler.yml
   required_ref: refs/heads/main

@@ -168,6 +168,57 @@ def stamp_candidate_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
+def validate_candidate_manifest(
+    value: Mapping[str, Any],
+    *,
+    agents: Mapping[str, Any],
+    issues: Mapping[str, Any],
+    policy: ValidationPolicy,
+) -> None:
+    digest = value.get("manifest_digest")
+    if digest != content_hash(
+        {
+            key: item
+            for key, item in value.items()
+            if key != "manifest_digest"
+        }
+    ):
+        raise ContractError("Validation candidate manifest digest is stale")
+    current = {
+        item.authority_id: item for item in authority_specs(agents, issues)
+    }
+    authorities = value.get("authorities")
+    if (
+        value.get("kind") != "test-agent-validation-candidate"
+        or value.get("repository") != policy.repository
+        or value.get("telemetry_resource_set") != "g29"
+        or not isinstance(authorities, list)
+        or len(authorities) != 41
+        or {
+            item.get("authority_id")
+            for item in authorities
+            if isinstance(item, Mapping)
+        }
+        != set(current)
+    ):
+        raise ContractError("Validation candidate manifest inventory is invalid")
+    for item in authorities:
+        authority_id = item["authority_id"]
+        expected = current[authority_id]
+        if (
+            item["source_content_digest"] != expected.source_content_digest
+            or item["execution_digest"] != expected.execution_digest
+            or item["validation_mode"] != expected.validation_mode
+            or item["runtime_kind"] != expected.runtime_kind
+            or item["framework"] != expected.framework
+        ):
+            raise ContractError(
+                f"{authority_id} candidate authority no longer matches repository"
+            )
+    if value.get("catalog_hashes") != catalog_hashes(dict(agents), dict(issues)):
+        raise ContractError("Validation candidate catalog hashes are stale")
+
+
 def validation_endpoint_costs(
     authorities: list[AuthoritySpec],
 ) -> list[EndpointCost]:

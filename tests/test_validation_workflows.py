@@ -19,6 +19,12 @@ def test_candidate_workflow_is_bounded_nonauthorizing_shadow_preparation() -> No
     assert "test-agent-validation-shadow" in text
     assert "prepare-test-agent-validation" in text
     assert "generate-test-agent-validation-rules --check" in text
+    assert "run-test-agent-validation" in text
+    assert "uses: azure/login@v2" in text
+    assert "EXPECTED_AZURE_CLIENT_ID" in text
+    assert "GH_TOKEN: ${{ github.token }}" in text
+    assert "--pr-number ${{" not in text
+    assert "--candidate-head-sha ${{" not in text
     assert "non-authorizing" in folded
     assert "required check" in folded
     for forbidden in (
@@ -37,6 +43,11 @@ def test_receipt_workflow_uses_protected_default_branch_issuer() -> None:
     assert "ref: main" in text
     assert "issue-test-agent-validation-receipt" in text
     assert "id-token: write" in text
+    assert "checks: write" in text
+    assert "GH_TOKEN: ${{ github.token }}" in text
+    assert "uses: azure/login@v2" in text
+    assert "AIQ_VALIDATION_RECEIPT_CLIENT_ID" in text
+    assert 'Join-Path $root "${{ inputs.receipt_file }}"' not in text
     assert "Receipt path escapes" in text
     assert "accepts merge receipts only" in text
 
@@ -47,6 +58,9 @@ def test_reconciler_is_cleanup_only_on_fifteen_minute_cadence() -> None:
     assert "cleanup-only:" in text
     assert "reconcile-test-agent-validation" in text
     assert "ref: main" in text
+    assert "uses: azure/login@v2" in text
+    assert "EXPECTED_AZURE_CLIENT_ID" in text
+    assert '--holder-workflow-reference "${{' not in text
     for forbidden in (
         "prepare-test-agent-validation",
         "run-daily",

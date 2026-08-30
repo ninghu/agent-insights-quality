@@ -168,11 +168,11 @@ class AzureValidationBlobStore:
             raise ContractError(
                 "Validation Blob operations require the azure optional dependencies"
             ) from error
-        lease = BlobLeaseClient(self._service.get_blob_client(container, name))
-        lease.acquire(
-            lease_duration=-1,
-            proposed_lease_id=proposed_lease_id,
+        lease = BlobLeaseClient(
+            self._service.get_blob_client(container, name),
+            lease_id=proposed_lease_id,
         )
+        lease.acquire(lease_duration=-1)
         if not lease.id:
             raise ContractError("Validation journal lease acquisition returned no ID")
         return str(lease.id)

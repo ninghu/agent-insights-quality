@@ -14,6 +14,7 @@ permissions:
   checks: read
   actions: read
   id-token: write
+  checks: write
 
 concurrency:
   group: test-agent-validation-account
@@ -27,6 +28,9 @@ jobs:
       AIQ_RUNTIME_ROOT: ${{ vars.AIQ_RUNTIME_ROOT }}
       AIQ_VALIDATION_STORAGE_ACCOUNT: ${{ vars.AIQ_VALIDATION_STORAGE_ACCOUNT }}
       AIQ_VALIDATION_ENVIRONMENT: test-agent-validation-receipt
+      EXPECTED_AZURE_CLIENT_ID: ${{ vars.AIQ_VALIDATION_RECEIPT_CLIENT_ID }}
+      RECEIPT_FILE: ${{ inputs.receipt_file }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,11 +39,24 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install -e ".[azure]"
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AIQ_VALIDATION_RECEIPT_CLIENT_ID }}
+          tenant-id: ${{ vars.AIQ_VALIDATION_TENANT_ID }}
+          subscription-id: ${{ vars.AIQ_VALIDATION_SUBSCRIPTION_ID }}
+      - name: Verify federated Azure identity
+        shell: pwsh
+        run: |
+          python -m agent_insights_quality verify-test-agent-validation-credential `
+            --expected-client-id $env:EXPECTED_AZURE_CLIENT_ID
       - name: Issue create-once protected receipt
         shell: pwsh
         run: |
           $root = Join-Path $env:AIQ_RUNTIME_ROOT "test-agent-validation"
-          $receipt = Join-Path $root "${{ inputs.receipt_file }}"
+          if ($env:RECEIPT_FILE -notmatch '^[A-Za-z0-9._/-]+$') {
+            throw "Receipt path contains invalid characters"
+          }
+          $receipt = Join-Path $root $env:RECEIPT_FILE
           $resolvedRoot = [IO.Path]::GetFullPath($root)
           $resolvedReceipt = [IO.Path]::GetFullPath($receipt)
           if (-not $resolvedReceipt.StartsWith($resolvedRoot + [IO.Path]::DirectorySeparatorChar)) {
