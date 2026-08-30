@@ -31,8 +31,12 @@ validation attempt threshold.
 Before any Project create, acquire the account-wide infinite lease and record measured RPM/TPM,
 25-percent and absolute headroom, the complete endpoint envelope, inner model fan-out, and bounded
 concurrency. Provision at most eight, query telemetry at most four, and allow one scenario
-attempt per runtime. Every attempt gets a fresh conversation identity; issue and v0 receive the same
-matrix. Evidence stores completion separately from a nullable defect observation.
+attempt per runtime. The shared bucket charges each request's input plus maximum output budget,
+multiplied by reviewed inner fan-out, and a provider `Retry-After` pauses every consumer. Every
+issue and paired-v0 attempt gets a globally unique execution, conversation, session, response, and
+operation identity while receiving the same matrix. Evidence binds the exact deployed Agent/version,
+derives identity from correlated telemetry, and recomputes the frozen defect predicate separately
+from completion.
 
 The lifecycle is:
 

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Iterator
 
 from agent_insights_quality.live import LiveRuntime, _normalize_fixture
 from agent_insights_quality.models import InvocationEvidence
 from agent_insights_quality.util import ContractError, content_hash
+from agent_insights_quality.validation_evidence import evaluate_defect_predicate
 from agent_insights_quality.validation_quota import (
     EndpointCost,
     ValidationScheduler,
@@ -36,16 +38,53 @@ class FoundryScenarioAttemptRunner:
         self,
         *,
         target: DeployedRuntime,
+        executing_authority_id: str,
+        conversation_role: str,
         scenario: Mapping[str, Any],
         attempt: Mapping[str, Any],
         expect_defect: bool,
         scheduler: ValidationScheduler,
     ) -> dict[str, Any]:
-        cost = self._endpoint_costs.get(target.authority_id)
+        with scheduler.runtime_attempt(target.authority_id):
+            return self._run(
+                target=target,
+                executing_authority_id=executing_authority_id,
+                conversation_role=conversation_role,
+                scenario=scenario,
+                attempt=attempt,
+                expect_defect=expect_defect,
+                scheduler=scheduler,
+            )
+
+    def _run(
+        self,
+        *,
+        target: DeployedRuntime,
+        executing_authority_id: str,
+        conversation_role: str,
+        scenario: Mapping[str, Any],
+        attempt: Mapping[str, Any],
+        expect_defect: bool,
+        scheduler: ValidationScheduler,
+    ) -> dict[str, Any]:
+        if (
+            not executing_authority_id
+            or conversation_role not in {"baseline", "issue", "paired_v0"}
+        ):
+            raise ContractError("Validation attempt execution identity is invalid")
+        cost = self._endpoint_costs.get(executing_authority_id)
         if cost is None:
             raise ContractError(
-                f"Validation endpoint cost is missing for {target.authority_id}"
+                f"Validation endpoint cost is missing for {executing_authority_id}"
             )
+        execution_scope = {
+            "executing_authority_id": executing_authority_id,
+            "target_authority_id": target.authority_id,
+            "conversation_role": conversation_role,
+            "scenario_id": scenario["id"],
+            "conversation_group": attempt["conversation_group"],
+            "attempt": attempt["index"],
+        }
         raw_steps = [
             *[("setup", item) for item in attempt["setup_steps"]],
             *[("probe", item) for item in attempt["probe_steps"]],
@@ -72,7 +111,7 @@ class FoundryScenarioAttemptRunner:
                     {
                         "authority_id": target.authority_id,
                         "kind": "stored_response",
-                        "attempt": attempt["index"],
+                        "execution_scope": execution_scope,
                         "step": fixture_index,
                     }
                 )
@@ -83,13 +122,14 @@ class FoundryScenarioAttemptRunner:
                         "intent_reference": intent_reference,
                         "deterministic_name": (
                             f"{target.runtime_agent_name}-"
-                            f"{attempt['index']}-{fixture_index}"
+                            f"{conversation_role}-{attempt['index']}-{fixture_index}"
                         ),
                         "authority_id": target.authority_id,
                         "parent_id": target.provider_agent_id,
                     }
                 )
-                with scheduler.attempt(target.authority_id, cost):
+                scheduler.acquire_request(cost)
+                with _observe_rate_limit(self._runtime, scheduler):
                     try:
                         result = self._runtime._invoke_prompt(
                             target.runtime_agent_name,
@@ -107,6 +147,7 @@ class FoundryScenarioAttemptRunner:
                                 "intent_reference": intent_reference,
                                 "deterministic_name": (
                                     f"{target.runtime_agent_name}-"
+                                    f"{conversation_role}-"
                                     f"{attempt['index']}-{fixture_index}"
                                 ),
                                 "authority_id": target.authority_id,
@@ -114,10 +155,6 @@ class FoundryScenarioAttemptRunner:
                             }
                         )
                         raise
-                    finally:
-                        scheduler.observe_rate_limit(
-                            self._runtime.rate_limit_feedback()
-                        )
                     (
                         response_ids,
                         usable,
@@ -157,7 +194,7 @@ class FoundryScenarioAttemptRunner:
                 {
                     "authority_id": target.authority_id,
                     "kind": "session",
-                    "attempt": attempt["index"],
+                    "execution_scope": execution_scope,
                 }
             )
             self._record_resource(
@@ -167,7 +204,7 @@ class FoundryScenarioAttemptRunner:
                     "intent_reference": session_intent,
                     "deterministic_name": (
                         f"{target.runtime_agent_name}-"
-                        f"session-{attempt['index']}"
+                        f"{conversation_role}-session-{attempt['index']}"
                     ),
                     "authority_id": target.authority_id,
                     "parent_id": target.provider_agent_id,
@@ -186,7 +223,7 @@ class FoundryScenarioAttemptRunner:
                         "intent_reference": session_intent,
                         "deterministic_name": (
                             f"{target.runtime_agent_name}-"
-                            f"session-{attempt['index']}"
+                            f"{conversation_role}-session-{attempt['index']}"
                         ),
                         "authority_id": target.authority_id,
                         "parent_id": target.provider_agent_id,
@@ -204,8 +241,31 @@ class FoundryScenarioAttemptRunner:
                     "parent_id": target.provider_agent_id,
                 }
             )
-            for fixture in fixtures:
-                with scheduler.attempt(target.authority_id, cost):
+            for fixture_index, fixture in enumerate(fixtures, start=1):
+                response_intent = content_hash(
+                    {
+                        "authority_id": target.authority_id,
+                        "kind": "stored_response",
+                        "execution_scope": execution_scope,
+                        "step": fixture_index,
+                    }
+                )
+                response_name = (
+                    f"{target.runtime_agent_name}-{conversation_role}-"
+                    f"{attempt['index']}-{fixture_index}"
+                )
+                self._record_resource(
+                    {
+                        "state": "create_intent",
+                        "kind": "stored_response",
+                        "intent_reference": response_intent,
+                        "deterministic_name": response_name,
+                        "authority_id": target.authority_id,
+                        "parent_id": session_id,
+                    }
+                )
+                scheduler.acquire_request(cost)
+                with _observe_rate_limit(self._runtime, scheduler):
                     try:
                         result = self._runtime._invoke_hosted(
                             target.runtime_agent_name,
@@ -213,10 +273,18 @@ class FoundryScenarioAttemptRunner:
                             fixture,
                             0,
                         )
-                    finally:
-                        scheduler.observe_rate_limit(
-                            self._runtime.rate_limit_feedback()
+                    except ContractError:
+                        self._record_resource(
+                            {
+                                "state": "ambiguous_create",
+                                "kind": "stored_response",
+                                "intent_reference": response_intent,
+                                "deterministic_name": response_name,
+                                "authority_id": target.authority_id,
+                                "parent_id": session_id,
+                            }
                         )
+                        raise
                     (
                         response_ids,
                         usable,
@@ -230,6 +298,18 @@ class FoundryScenarioAttemptRunner:
                 response_references.extend(response_ids)
                 semantic_results.append((assertion_count, assertions_passed))
                 usable_results.append(usable)
+                for response_id in response_ids:
+                    self._record_resource(
+                        {
+                            "state": "created",
+                            "kind": "stored_response",
+                            "intent_reference": response_intent,
+                            "provider_id": response_id,
+                            "deterministic_name": response_id,
+                            "authority_id": target.authority_id,
+                            "parent_id": session_id,
+                        }
+                    )
         else:
             raise ContractError("Validation target runtime kind is not reviewed")
         completed = self._now().astimezone(UTC)
@@ -245,31 +325,42 @@ class FoundryScenarioAttemptRunner:
             semantic_assertion_count=sum(item[0] for item in semantic_results),
             semantic_assertions_passed=sum(item[1] for item in semantic_results),
         )
-        operation_ids = self._runtime.wait_for_telemetry(
-            agent_name=target.runtime_agent_name,
-            foundry_version=target.runtime_agent_version,
-            invocation=invocation,
-        )
-        trace_results = self._runtime.trace_assertion_evidence_for_requests(
-            agent_name=target.runtime_agent_name,
-            foundry_version=target.runtime_agent_version,
-            operation_ids=operation_ids,
-            response_references=tuple(response_references),
-            window_start=started.isoformat(),
-            window_end=completed.isoformat(),
-            requests=[
-                {
-                    "id": step["id"],
-                    "request": step["request"],
-                    "expected": step["expected"],
-                }
-                for _, step in raw_steps
-            ],
-            stabilization_seconds=self._stabilization_seconds,
-            on_first_pass=lambda: None,
-        )
+        with scheduler.telemetry_query():
+            operation_ids = self._runtime.wait_for_telemetry(
+                agent_name=target.runtime_agent_name,
+                foundry_version=target.runtime_agent_version,
+                invocation=invocation,
+            )
+        with scheduler.telemetry_query():
+            identity_results = self._runtime.telemetry_identity_passes(
+                agent_name=target.runtime_agent_name,
+                foundry_version=target.runtime_agent_version,
+                operation_ids=operation_ids,
+                invocation=invocation,
+            )
+        with scheduler.telemetry_query():
+            trace_results = self._runtime.trace_assertion_evidence_for_requests(
+                agent_name=target.runtime_agent_name,
+                foundry_version=target.runtime_agent_version,
+                operation_ids=operation_ids,
+                response_references=tuple(response_references),
+                window_start=started.isoformat(),
+                window_end=completed.isoformat(),
+                requests=[
+                    {
+                        "id": step["id"],
+                        "request": step["request"],
+                        "expected": step["expected"],
+                    }
+                    for _, step in raw_steps
+                ],
+                stabilization_seconds=self._stabilization_seconds,
+                on_first_pass=lambda: None,
+            )
         if len(trace_results) != len(raw_steps):
             raise ContractError("Validation trace evidence step count is invalid")
+        if len(identity_results) != len(raw_steps):
+            raise ContractError("Validation telemetry identity count is invalid")
 
         step_evidence: list[dict[str, Any]] = []
         for index, (
@@ -279,6 +370,7 @@ class FoundryScenarioAttemptRunner:
             semantic,
             trace,
             usable,
+            identity_pass,
         ) in enumerate(
             zip(
                 raw_steps,
@@ -287,6 +379,7 @@ class FoundryScenarioAttemptRunner:
                 semantic_results,
                 trace_results,
                 usable_results,
+                identity_results,
                 strict=True,
             ),
             start=1,
@@ -296,6 +389,7 @@ class FoundryScenarioAttemptRunner:
             step_evidence.append(
                 {
                     "index": index,
+                    "step_id": step["id"],
                     "request_digest": content_hash(step["request"]),
                     "response_reference": content_hash(
                         {"response_reference": response_id}
@@ -307,7 +401,7 @@ class FoundryScenarioAttemptRunner:
                     "endpoint_pass": bool(usable),
                     "semantic_pass": semantic_pass,
                     "trace_pass": trace_pass,
-                    "identity_pass": True,
+                    "identity_pass": identity_pass,
                 }
             )
         setup_count = len(attempt["setup_steps"])
@@ -319,28 +413,9 @@ class FoundryScenarioAttemptRunner:
         ) and all(
             item["semantic_pass"] and item["trace_pass"] for item in setup_steps
         )
-        observed_step_ids = set(
-            scenario["defect_predicate"].get("step_ids", [])
-        )
-        required_surfaces = set(
-            scenario["defect_predicate"].get("required_surfaces", [])
-        )
-        observation_results = [
-            (
-                ("semantic" not in required_surfaces or evidence["semantic_pass"])
-                and ("trace" not in required_surfaces or evidence["trace_pass"])
-            )
-            for (_, rule_step), evidence in zip(
-                raw_steps[setup_count:],
-                probe_steps,
-                strict=True,
-            )
-            if rule_step["id"] in observed_step_ids
-        ]
-        observed = (
-            False
-            if scenario["defect_predicate"]["kind"] == "never"
-            else bool(observation_results) and all(observation_results)
+        observed = evaluate_defect_predicate(
+            scenario["defect_predicate"],
+            probe_steps,
         )
         healthy = all(
             item["semantic_pass"] and item["trace_pass"] for item in probe_steps
@@ -351,15 +426,24 @@ class FoundryScenarioAttemptRunner:
             if scenario["validation_mode"] == "baseline"
             else defect_observed is expect_defect
         )
+        error_code = (
+            None
+            if complete
+            else "telemetry_identity_mismatch"
+            if not all(item["identity_pass"] for item in step_evidence)
+            else "incomplete_endpoint_evidence"
+        )
         return {
             "index": attempt["index"],
             "conversation_reference": content_hash(
                 {
+                    **execution_scope,
                     "runtime_agent": target.runtime_agent_name,
-                    "conversation_group": attempt["conversation_group"],
                 }
             ),
-            "session_reference": content_hash({"session_id": session_id}),
+            "session_reference": content_hash(
+                {**execution_scope, "session_id": session_id}
+            ),
             "response_references": [
                 item["response_reference"] for item in step_evidence
             ],
@@ -371,5 +455,16 @@ class FoundryScenarioAttemptRunner:
             "complete": complete,
             "defect_observed": defect_observed,
             "expected_observation_pass": expected_pass,
-            "error_code": None if complete else "incomplete_endpoint_evidence",
+            "error_code": error_code,
         }
+
+
+@contextmanager
+def _observe_rate_limit(
+    runtime: LiveRuntime,
+    scheduler: ValidationScheduler,
+) -> Iterator[None]:
+    try:
+        yield
+    finally:
+        scheduler.observe_rate_limit(runtime.rate_limit_feedback())

@@ -2426,6 +2426,55 @@ def test_wait_for_telemetry_queries_r02_hosted_response_keys(monkeypatch) -> Non
     assert "request_id in" in query
 
 
+def test_validation_telemetry_identity_is_derived_per_exact_operation(
+    monkeypatch,
+) -> None:
+    query_module = types.ModuleType("azure.monitor.query")
+    query_module.LogsQueryStatus = type("LogsQueryStatus", (), {"SUCCESS": "success"})
+    monitor_module = types.ModuleType("azure.monitor")
+    azure_module = types.ModuleType("azure")
+    monkeypatch.setitem(sys.modules, "azure", azure_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor", monitor_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
+    operations = ("a" * 32, "b" * 32)
+    captured = []
+
+    class Table:
+        rows = [
+            [operations[0], ["finance-agent"], ["opaque-version"]],
+            [operations[1], ["other-agent"], ["opaque-version"]],
+        ]
+
+    class Result:
+        status = "success"
+        tables = [Table()]
+
+    runtime = _runtime()
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+    runtime._query_resource = (  # type: ignore[method-assign]
+        lambda _client, query, **_kwargs: captured.append(query) or Result()
+    )
+    invocation = InvocationEvidence(
+        operation_ids=(),
+        response_references=(
+            "resp_A1b2C3d4E5f6",
+            "resp_F6e5D4c3B2a1",
+        ),
+        started_at="2026-08-28T10:00:00+00:00",
+        completed_at="2026-08-28T10:00:01+00:00",
+        request_count=2,
+        allow_window_correlation=False,
+    )
+    assert runtime.telemetry_identity_passes(
+        agent_name="finance-agent",
+        foundry_version="opaque-version",
+        operation_ids=operations,
+        invocation=invocation,
+    ) == (True, False)
+    assert "make_set(observed_agent)" in captured[0]
+    assert "make_set(agent_version)" in captured[0]
+
+
 def test_wait_for_telemetry_rejects_ambiguous_response_mapping(
     monkeypatch,
 ) -> None:

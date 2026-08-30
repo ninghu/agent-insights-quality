@@ -230,17 +230,17 @@
   "cycle_id": "validation-shadow-r01",
   "digests": {
     "artifact_manifest_hash": "sha256:c2cb33f6b10d20f5ec8eabac6cb70c0f9a5ee79fd95e31d71edb687bde7a54b7",
-    "evidence_digest": "sha256:9c206467b663bd57b6d9934b43ac86dac0d1a7ceab81a9dd0402863ed4066e59",
+    "evidence_digest": "sha256:7dace063bf069328453fca157cbdcc87baf58bf208bbf082d359e24babe9a954",
     "execution_matrix_digest": "sha256:9871973a74edb8afcde6fab1985eea8e3ad43e1e9e83243e8baffe0d8ef86ccb",
     "quota_plan_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "runtime_topology_digest": "sha256:89001cfa44eeda48ebc7425dce40bc49bfb799533299a1aeb2b6e9260760d8a0",
+    "runtime_topology_digest": "sha256:ccfc73e8252f9ca571b00947fac320bd2787850657730f6b969b1c1aa4ac175f",
     "source_tree_digest": "sha256:7346c449276af446d346989f316aacb7d6bf67e4a1958b0564d2ef1a87144fad",
-    "validation_contract_digest": "sha256:e15961ef05ac2ba6b7a4423dd7e01f6eee6c3c21c7b4c5bd9567cfe3a5cd72b8"
+    "validation_contract_digest": "sha256:08d9c79bc53636a3e4a344766971555567864f2d0de7871392102934997027aa"
   },
   "epoch": 1,
   "event_snapshot": null,
   "evidence_reference": {
-    "digest": "sha256:9c206467b663bd57b6d9934b43ac86dac0d1a7ceab81a9dd0402863ed4066e59",
+    "digest": "sha256:7dace063bf069328453fca157cbdcc87baf58bf208bbf082d359e24babe9a954",
     "etag": "evidence-etag-r01",
     "path": "test-agent-validation-snapshots/evidence/validation-shadow-r01.json",
     "version_id": "evidence-version-r01"
@@ -256,7 +256,7 @@
     "initial_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "initial_tree_sha": "cccccccccccccccccccccccccccccccccccccccc"
   },
-  "journal_digest": "sha256:b9a580d424b53ea4d99a337850d97a11faa7890d4e4279a463c170f364a15c4e",
+  "journal_digest": "sha256:adc1c4b005eb47ee47b2add47167a7ad75b9abced2caf9e534d0d2e45bd7a3a8",
   "kind": "test-agent-validation-lifecycle",
   "last_activity_at": "2026-08-29T12:00:00+00:00",
   "lease": {

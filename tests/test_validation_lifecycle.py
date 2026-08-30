@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from agent_insights_quality.util import ContractError
+from agent_insights_quality.util import ContractError, content_hash
 from agent_insights_quality.validation_blob import BlobRecord
 from agent_insights_quality.validation_cleanup import (
     CleanupEngine,
@@ -450,6 +450,7 @@ def _lifecycle(*, heartbeat: datetime = START, agents: int = 0) -> dict:
                 ),
             }
         )
+        value["digests"]["runtime_topology_digest"] = content_hash(topology_agents)
         value["resources"] = resources
     return stamp_lifecycle_digest(value)
 

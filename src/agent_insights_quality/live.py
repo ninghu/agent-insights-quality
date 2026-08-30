@@ -804,6 +804,59 @@ union traces, dependencies, requests
             self._sleep(15)
         raise ContractError("Natural telemetry did not arrive before the bounded deadline")
 
+    def telemetry_identity_passes(
+        self,
+        *,
+        agent_name: str,
+        foundry_version: str,
+        operation_ids: tuple[str, ...],
+        invocation: InvocationEvidence,
+    ) -> tuple[bool, ...]:
+        try:
+            from azure.monitor.query import LogsQueryStatus
+        except ImportError as error:
+            raise ContractError(
+                'Live telemetry requires installation with ".[azure]"'
+            ) from error
+        _validate_operation_references(operation_ids, invocation.request_count)
+        start = datetime.fromisoformat(invocation.started_at).astimezone(UTC)
+        traffic_end = datetime.fromisoformat(invocation.completed_at).astimezone(UTC)
+        query_end = traffic_end + timedelta(minutes=15)
+        values = ", ".join(f'"{value}"' for value in operation_ids)
+        query = f"""
+union traces, dependencies, requests
+| where timestamp >= datetime({start.isoformat()})
+  and timestamp < datetime({query_end.isoformat()})
+  and operation_Id in ({values})
+| extend operation_name=tostring(customDimensions["gen_ai.operation.name"])
+| extend observed_agent=tostring(customDimensions["gen_ai.agent.name"])
+| extend agent_version=tostring(customDimensions["gen_ai.agent.version"])
+| where operation_name == "invoke_agent"
+| summarize
+    agent_names=make_set(observed_agent),
+    agent_versions=make_set(agent_version)
+  by operation_Id
+"""
+        result = self._query_resource(
+            self._logs_client(),
+            query,
+            timespan=(start, query_end),
+        )
+        if result.status != LogsQueryStatus.SUCCESS:
+            raise ContractError("Exact validation telemetry identity query failed")
+        observed: dict[str, tuple[set[str], set[str]]] = {}
+        for table in result.tables:
+            for row in table.rows:
+                operation_id = str(row[0]).lower()
+                if operation_id not in operation_ids:
+                    continue
+                observed[operation_id] = (
+                    _telemetry_string_set(row[1] if len(row) > 1 else []),
+                    _telemetry_string_set(row[2] if len(row) > 2 else []),
+                )
+        expected = ({agent_name}, {foundry_version})
+        return tuple(observed.get(operation_id) == expected for operation_id in operation_ids)
+
     def start_insights_run(
         self,
         *,
@@ -3021,6 +3074,19 @@ def _complete_operation_ids(
     if len(set(ordered)) != len(ordered):
         return None
     return tuple(ordered)
+
+
+def _telemetry_string_set(value: Any) -> set[str]:
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            decoded = [value]
+    else:
+        decoded = value
+    if not isinstance(decoded, list):
+        return set()
+    return {str(item) for item in decoded if str(item)}
 
 
 def _operation_correlation_impossible(

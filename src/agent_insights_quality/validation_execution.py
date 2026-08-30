@@ -257,7 +257,10 @@ def _execute_initial_candidate_pass(
             "evidence_digest": "",
         }
     )
-    validate_evidence(evidence)
+    validate_evidence(
+        evidence,
+        runtime_topology=controller.active.value["runtime_topology"],
+    )
     evidence_record = persist_evidence(evidence_store, evidence)
     controller.freeze(
         evidence=evidence_record,

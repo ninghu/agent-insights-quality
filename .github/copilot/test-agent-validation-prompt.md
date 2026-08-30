@@ -16,6 +16,10 @@ deployed endpoints. Use the catalog-frozen validation mode and fixed setup/probe
 issue against its paired `v0`, and query only staging `g29` telemetry. Never create a monitor, run
 Agent Insights, assess/score/report cards, publish ADX, send email, or run Daily.
 
+Require globally fresh attempt/resource references, exact telemetry-derived Agent name/version
+identity, deterministic predicate recomputation, the shared four-query KQL semaphore, conservative
+input-plus-output token accounting, and bucket-wide `Retry-After` blocking.
+
 After 41/41 evidence, freeze scope. Record exactly one comprehensive review, targeted final-head
 verification, and CI. Clean every cycle resource exactly before receipt issuance. A shadow receipt is
 non-authorizing and lacks the default-branch trust anchor. The protected merge issuer must independently

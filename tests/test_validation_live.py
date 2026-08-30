@@ -86,9 +86,16 @@ def _step(step_id: str, *, probe: bool) -> dict:
 
 
 class Runtime:
-    def __init__(self, *, assertion_pass: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        assertion_pass: bool = True,
+        identity_pass: bool = True,
+    ) -> None:
         self.assertion_pass = assertion_pass
+        self.identity_pass = identity_pass
         self.counter = 0
+        self.telemetry_counter = 0
 
     def _invoke_prompt(
         self,
@@ -117,7 +124,17 @@ class Runtime:
         )
 
     def wait_for_telemetry(self, **kwargs):
-        return tuple(f"{index + 1:032x}" for index in range(kwargs["invocation"].request_count))
+        values = tuple(
+            f"{self.telemetry_counter + index + 1:032x}"
+            for index in range(kwargs["invocation"].request_count)
+        )
+        self.telemetry_counter += kwargs["invocation"].request_count
+        return values
+
+    def telemetry_identity_passes(self, **kwargs):
+        return tuple(
+            self.identity_pass for _ in kwargs["operation_ids"]
+        )
 
     @staticmethod
     def rate_limit_feedback():
@@ -141,6 +158,32 @@ class Runtime:
         )
 
 
+class HostedRuntime(Runtime):
+    @staticmethod
+    def _activate_hosted_version(agent_name, foundry_version):
+        del agent_name, foundry_version
+
+    @staticmethod
+    def _create_hosted_session(agent_name, foundry_version):
+        del agent_name, foundry_version
+        return "session-synthetic"
+
+    def _invoke_hosted(self, agent_name, session_id, fixture, seed):
+        del agent_name, session_id, seed
+        self.counter += 1
+        count = len(fixture["semantic_assertions"])
+        return (
+            [f"response-{self.counter}"],
+            True,
+            count,
+            count,
+            1,
+            0,
+            (),
+            False,
+        )
+
+
 def _target() -> DeployedRuntime:
     return DeployedRuntime(
         authority_id="issue-001",
@@ -153,7 +196,24 @@ def _target() -> DeployedRuntime:
         hosted_blueprint_id=None,
         hosted_deployment_id=None,
         runtime_principal_id=None,
-        telemetry_identity_id="telemetry",
+        telemetry_identity_id="provider-version",
+        connection_ids=(),
+    )
+
+
+def _hosted_target() -> DeployedRuntime:
+    return DeployedRuntime(
+        authority_id="issue-013",
+        runtime_kind="hosted_code",
+        runtime_agent_name="finance-agent-issue-013-cycle",
+        runtime_agent_version="1",
+        provider_agent_id="provider-agent",
+        provider_agent_version_id="provider-version",
+        hosted_identity_id="hosted-identity",
+        hosted_blueprint_id="hosted-blueprint",
+        hosted_deployment_id="hosted-deployment",
+        runtime_principal_id="runtime-principal",
+        telemetry_identity_id="provider-version",
         connection_ids=(),
     )
 
@@ -176,6 +236,7 @@ def test_attempt_keeps_completion_independent_from_defect_observation() -> None:
     setup = _step("setup-1", probe=False)
     probe = _step("probe-1", probe=True)
     scenario = {
+        "id": "reviewed-path",
         "validation_mode": "model_mediated",
         "defect_predicate": {
             "kind": "all_observation_steps_pass",
@@ -185,6 +246,8 @@ def test_attempt_keeps_completion_independent_from_defect_observation() -> None:
     }
     result = runner.run(
         target=_target(),
+        executing_authority_id="issue-001",
+        conversation_role="issue",
         scenario=scenario,
         attempt={
             "index": 1,
@@ -224,7 +287,10 @@ def test_passing_probe_is_observed_and_evidence_contains_hashes_only() -> None:
     )
     result = runner.run(
         target=_target(),
+        executing_authority_id="issue-001",
+        conversation_role="issue",
         scenario={
+            "id": "reviewed-path",
             "validation_mode": "model_mediated",
             "defect_predicate": {
                 "kind": "all_observation_steps_pass",
@@ -252,3 +318,158 @@ def test_passing_probe_is_observed_and_evidence_contains_hashes_only() -> None:
             *result["operation_references"],
         ]
     )
+
+
+def test_telemetry_identity_mismatch_keeps_attempt_incomplete() -> None:
+    times = iter(
+        [
+            datetime(2026, 8, 29, 12, 0, tzinfo=UTC),
+            datetime(2026, 8, 29, 12, 0, 1, tzinfo=UTC),
+        ]
+    )
+    runner = FoundryScenarioAttemptRunner(
+        Runtime(identity_pass=False),
+        endpoint_costs={"issue-001": EndpointCost(1, 10, 1)},
+        stabilization_seconds=1,
+        record_resource=lambda item: None,
+        now=lambda: next(times),
+    )
+    result = runner.run(
+        target=_target(),
+        executing_authority_id="issue-001",
+        conversation_role="issue",
+        scenario={
+            "id": "reviewed-path",
+            "validation_mode": "model_mediated",
+            "defect_predicate": {
+                "kind": "all_observation_steps_pass",
+                "step_ids": ["probe-1"],
+                "required_surfaces": ["semantic", "trace"],
+            },
+        },
+        attempt={
+            "index": 1,
+            "conversation_group": "attempt-1",
+            "setup_steps": [_step("setup-1", probe=False)],
+            "probe_steps": [_step("probe-1", probe=True)],
+        },
+        expect_defect=True,
+        scheduler=_scheduler(),
+    )
+    assert result["complete"] is False
+    assert result["defect_observed"] is None
+    assert result["error_code"] == "telemetry_identity_mismatch"
+    assert all(
+        step["identity_pass"] is False
+        for step in [*result["setup_steps"], *result["probe_steps"]]
+    )
+
+
+def test_shared_v0_attempts_have_unique_execution_and_resource_references() -> None:
+    current = datetime(2026, 8, 29, 12, 0, tzinfo=UTC)
+
+    def now() -> datetime:
+        nonlocal current
+        value = current
+        current = current.replace(second=current.second + 1)
+        return value
+
+    resources = []
+    runner = FoundryScenarioAttemptRunner(
+        Runtime(),
+        endpoint_costs={
+            "issue-001": EndpointCost(1, 10, 1),
+            "issue-002": EndpointCost(1, 10, 1),
+        },
+        stabilization_seconds=1,
+        record_resource=resources.append,
+        now=now,
+    )
+    scenario = {
+        "id": "reviewed-path",
+        "validation_mode": "model_mediated",
+        "defect_predicate": {
+            "kind": "all_observation_steps_pass",
+            "step_ids": ["probe-1"],
+            "required_surfaces": ["semantic", "trace"],
+        },
+    }
+    attempt = {
+        "index": 1,
+        "conversation_group": "attempt-1",
+        "setup_steps": [_step("setup-1", probe=False)],
+        "probe_steps": [_step("probe-1", probe=True)],
+    }
+    first = runner.run(
+        target=_target(),
+        executing_authority_id="issue-001",
+        conversation_role="paired_v0",
+        scenario=scenario,
+        attempt=attempt,
+        expect_defect=False,
+        scheduler=_scheduler(),
+    )
+    second = runner.run(
+        target=_target(),
+        executing_authority_id="issue-002",
+        conversation_role="paired_v0",
+        scenario=scenario,
+        attempt=attempt,
+        expect_defect=False,
+        scheduler=_scheduler(),
+    )
+    assert first["conversation_reference"] != second["conversation_reference"]
+    assert first["session_reference"] != second["session_reference"]
+    intents = [
+        item["intent_reference"]
+        for item in resources
+        if item["state"] == "create_intent"
+    ]
+    assert len(intents) == len(set(intents))
+
+
+def test_hosted_attempt_journals_session_and_each_stored_response() -> None:
+    times = iter(
+        [
+            datetime(2026, 8, 29, 12, 0, tzinfo=UTC),
+            datetime(2026, 8, 29, 12, 0, 1, tzinfo=UTC),
+        ]
+    )
+    resources = []
+    runner = FoundryScenarioAttemptRunner(
+        HostedRuntime(),
+        endpoint_costs={"issue-013": EndpointCost(1, 10, 1)},
+        stabilization_seconds=1,
+        record_resource=resources.append,
+        now=lambda: next(times),
+    )
+    runner.run(
+        target=_hosted_target(),
+        executing_authority_id="issue-013",
+        conversation_role="issue",
+        scenario={
+            "id": "reviewed-path",
+            "validation_mode": "deterministic",
+            "defect_predicate": {
+                "kind": "all_observation_steps_pass",
+                "step_ids": ["probe-1"],
+                "required_surfaces": ["semantic", "trace"],
+            },
+        },
+        attempt={
+            "index": 1,
+            "conversation_group": "attempt-1",
+            "setup_steps": [_step("setup-1", probe=False)],
+            "probe_steps": [_step("probe-1", probe=True)],
+        },
+        expect_defect=True,
+        scheduler=_scheduler(),
+    )
+    assert [item["kind"] for item in resources] == [
+        "session",
+        "session",
+        "stored_response",
+        "stored_response",
+        "stored_response",
+        "stored_response",
+    ]

@@ -5,8 +5,10 @@ from agent_insights_quality.validation_manifest import (
     authority_specs,
     prepare_candidate_manifest,
     stamp_candidate_manifest,
+    validation_step_cost,
 )
 from agent_insights_quality.validation_policy import load_validation_policy
+from agent_insights_quality.util import canonical_bytes
 
 
 def test_candidate_manifest_binds_all_executable_and_source_inputs() -> None:
@@ -43,3 +45,20 @@ def test_authority_source_digests_include_runtime_identity_sources() -> None:
     assert len(specs) == 41
     assert all(item.source_content_digest.startswith("sha256:") for item in specs)
     assert len({item.execution_digest for item in specs}) == 41
+
+
+def test_endpoint_cost_accounts_for_input_and_output_tokens() -> None:
+    step = {
+        "request": {
+            "body": {
+                "input": [{"role": "user", "content": "synthetic request"}],
+                "max_output_tokens": 200,
+            }
+        }
+    }
+    cost = validation_step_cost("microsoft_agent_framework", step)
+    assert cost.requests == 1
+    assert cost.inner_model_calls == 4
+    assert cost.tokens == (
+        len(canonical_bytes(step["request"]["body"])) + 200
+    ) * 4

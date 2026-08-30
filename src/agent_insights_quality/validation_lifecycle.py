@@ -197,6 +197,8 @@ def validate_lifecycle(value: Mapping[str, Any]) -> None:
         "RECEIPT_ISSUED",
     } and len(agents) != 41:
         raise ContractError("Validation runtime topology must contain all 41 Agents")
+    if agents and value["digests"]["runtime_topology_digest"] != content_hash(agents):
+        raise ContractError("Validation runtime topology digest is stale")
     if value["state"] in {"CLEAN", "FAILED_CLEAN", "RECEIPT_ISSUED"}:
         validate_topology_resource_bindings(
             value["runtime_topology"],

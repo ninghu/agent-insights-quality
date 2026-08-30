@@ -39,7 +39,11 @@ class EvidenceBlobStore(Protocol):
     ) -> BlobRecord: ...
 
 
-def validate_evidence(value: Mapping[str, Any]) -> None:
+def validate_evidence(
+    value: Mapping[str, Any],
+    *,
+    runtime_topology: Mapping[str, Any] | None = None,
+) -> None:
     schema = read_json(EVIDENCE_SCHEMA)
     errors = sorted(
         Draft202012Validator(
@@ -77,6 +81,9 @@ def validate_evidence(value: Mapping[str, Any]) -> None:
                 f"{authority['authority_id']} evidence changed its reviewed contract"
             )
         _validate_authority(authority)
+    _validate_global_attempt_references(authorities)
+    if runtime_topology is not None:
+        _validate_runtime_topology_binding(value, runtime_topology)
     expected_digest = digest_without_field(value, "evidence_digest")
     if value["evidence_digest"] != expected_digest:
         raise ContractError("Validation evidence digest is stale")
@@ -183,9 +190,21 @@ def _validate_scenario(
     elif mode == "baseline" or len(v0_attempts) != n:
         raise ContractError(f"{authority_id} issue evidence requires an exact v0 control")
 
-    for attempts in (issue_attempts, v0_attempts):
-        if attempts:
-            _validate_attempts(attempts, n=n, authority_id=authority_id)
+    _validate_attempts(
+        issue_attempts,
+        n=n,
+        authority_id=authority_id,
+        defect_predicate=scenario["defect_predicate"],
+        expected_role="baseline" if authority_kind == "baseline" else "issue",
+    )
+    if v0_attempts:
+        _validate_attempts(
+            v0_attempts,
+            n=n,
+            authority_id=authority_id,
+            defect_predicate=scenario["defect_predicate"],
+            expected_role="v0",
+        )
     complete_count = sum(attempt["complete"] is True for attempt in issue_attempts)
     observed = sum(
         attempt["defect_observed"] is True for attempt in issue_attempts
@@ -196,6 +215,13 @@ def _validate_scenario(
         raise ContractError(f"{authority_id} scenario observation count is invalid")
 
     if authority_kind == "baseline":
+        if (
+            scenario["healthy_predicate"]
+            != {"kind": "all_probe_assertions_pass"}
+            or scenario["defect_predicate"] != {"kind": "never"}
+            or scenario["v0_control_predicate"] is not None
+        ):
+            raise ContractError(f"{authority_id} baseline predicate binding is invalid")
         expected_pass = (
             complete_count == n
             and observed == 0
@@ -205,6 +231,12 @@ def _validate_scenario(
             )
         )
     else:
+        if (
+            scenario["healthy_predicate"] is not None
+            or scenario["v0_control_predicate"]
+            != {"kind": "zero_defect_observations"}
+        ):
+            raise ContractError(f"{authority_id} issue predicate binding is invalid")
         control_complete = sum(
             attempt["complete"] is True for attempt in v0_attempts
         )
@@ -246,6 +278,8 @@ def _validate_attempts(
     *,
     n: int,
     authority_id: str,
+    defect_predicate: Mapping[str, Any],
+    expected_role: str,
 ) -> None:
     if [attempt["index"] for attempt in attempts] != list(range(1, n + 1)):
         raise ContractError(f"{authority_id} attempt evidence is not ordered")
@@ -256,15 +290,9 @@ def _validate_attempts(
         raise ContractError(f"{authority_id} attempt conversations are not isolated")
     for attempt in attempts:
         steps = [*attempt["setup_steps"], *attempt["probe_steps"]]
-        if not all(
-            step["complete"]
-            and step["endpoint_pass"]
-            and step["semantic_pass"]
-            and step["trace_pass"]
-            and step["identity_pass"]
-            for step in attempt["setup_steps"]
-        ):
-            raise ContractError(f"{authority_id} setup step did not pass")
+        step_ids = [step["step_id"] for step in steps]
+        if len(step_ids) != len(set(step_ids)):
+            raise ContractError(f"{authority_id} attempt step IDs are not unique")
         complete = all(
             step["complete"]
             and step["endpoint_pass"]
@@ -272,6 +300,9 @@ def _validate_attempts(
             and isinstance(step["semantic_pass"], bool)
             and isinstance(step["trace_pass"], bool)
             for step in steps
+        ) and all(
+            step["semantic_pass"] and step["trace_pass"]
+            for step in attempt["setup_steps"]
         )
         if attempt["complete"] is not complete:
             raise ContractError(
@@ -285,15 +316,138 @@ def _validate_attempts(
             raise ContractError(
                 f"{authority_id} complete attempt requires an observation result"
             )
+        recomputed = (
+            evaluate_defect_predicate(
+                defect_predicate,
+                attempt["probe_steps"],
+            )
+            if complete
+            else None
+        )
+        if attempt["defect_observed"] is not recomputed:
+            raise ContractError(
+                f"{authority_id} defect observation does not match its predicate"
+            )
+        if expected_role == "baseline":
+            expected_observation_pass = all(
+                step["semantic_pass"] and step["trace_pass"]
+                for step in attempt["probe_steps"]
+            )
+        elif expected_role == "issue":
+            expected_observation_pass = recomputed is True
+        else:
+            expected_observation_pass = recomputed is False
+        if attempt["expected_observation_pass"] is not expected_observation_pass:
+            raise ContractError(
+                f"{authority_id} expected observation result is not reproducible"
+            )
         response_references = set(attempt["response_references"])
         operation_references = set(attempt["operation_references"])
-        if any(
-            step["response_reference"] not in response_references
-            or step["operation_reference"] not in operation_references
-            for step in steps
+        if (
+            len(response_references) != len(steps)
+            or len(operation_references) != len(steps)
+            or {step["response_reference"] for step in steps}
+            != response_references
+            or {step["operation_reference"] for step in steps}
+            != operation_references
         ):
             raise ContractError(
                 f"{authority_id} step references do not match the attempt mapping"
+            )
+
+
+def evaluate_defect_predicate(
+    predicate: Mapping[str, Any],
+    probe_steps: list[Mapping[str, Any]],
+) -> bool:
+    kind = predicate.get("kind")
+    if kind == "never":
+        return False
+    if kind != "all_observation_steps_pass":
+        raise ContractError("Validation defect predicate kind is invalid")
+    selected_ids = set(predicate.get("step_ids", []))
+    required_surfaces = set(predicate.get("required_surfaces", []))
+    selected = [
+        step for step in probe_steps if step.get("step_id") in selected_ids
+    ]
+    if not selected:
+        raise ContractError(
+            "Validation defect predicate has no step in this attempt"
+        )
+    if not required_surfaces or not required_surfaces.issubset(
+        {"semantic", "trace"}
+    ):
+        raise ContractError("Validation defect predicate surfaces are invalid")
+    return all(
+        ("semantic" not in required_surfaces or step["semantic_pass"])
+        and ("trace" not in required_surfaces or step["trace_pass"])
+        for step in selected
+    )
+
+
+def _validate_global_attempt_references(
+    authorities: list[Mapping[str, Any]],
+) -> None:
+    seen: dict[str, set[str]] = {
+        "conversation": set(),
+        "session": set(),
+        "response": set(),
+        "operation": set(),
+    }
+    for authority in authorities:
+        for scenario in authority["scenarios"]:
+            for attempt in [
+                *scenario["issue_attempts"],
+                *scenario["v0_attempts"],
+            ]:
+                values = {
+                    "conversation": [attempt["conversation_reference"]],
+                    "session": [attempt["session_reference"]],
+                    "response": attempt["response_references"],
+                    "operation": attempt["operation_references"],
+                }
+                for label, references in values.items():
+                    duplicates = seen[label].intersection(references)
+                    if duplicates:
+                        raise ContractError(
+                            f"Validation evidence reuses a global {label} reference"
+                        )
+                    seen[label].update(references)
+
+
+def _validate_runtime_topology_binding(
+    evidence: Mapping[str, Any],
+    topology: Mapping[str, Any],
+) -> None:
+    agents = topology.get("agents")
+    if not isinstance(agents, list) or len(agents) != 41:
+        raise ContractError("Validation evidence runtime topology is incomplete")
+    if evidence["runtime_topology_digest"] != content_hash(agents):
+        raise ContractError("Validation evidence runtime topology digest is stale")
+    by_authority = {item["authority_id"]: item for item in agents}
+    if len(by_authority) != 41:
+        raise ContractError("Validation evidence runtime topology collides")
+    for authority in evidence["authorities"]:
+        runtime = by_authority.get(authority["authority_id"])
+        if runtime is None:
+            raise ContractError("Validation authority is absent from runtime topology")
+        expected_reference = content_hash(
+            {
+                "provider_agent_id": runtime["provider_agent_id"],
+                "provider_agent_version_id": runtime[
+                    "provider_agent_version_id"
+                ],
+            }
+        )
+        if (
+            authority["runtime_agent_name"] != runtime["runtime_agent_name"]
+            or authority["runtime_agent_version"]
+            != runtime["runtime_agent_version"]
+            or authority["provider_agent_version_reference"]
+            != expected_reference
+        ):
+            raise ContractError(
+                f"{authority['authority_id']} evidence runtime identity is stale"
             )
 
 

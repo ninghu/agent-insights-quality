@@ -228,12 +228,21 @@ class Runner:
         self,
         *,
         target,
+        executing_authority_id,
+        conversation_role,
         scenario,
         attempt,
         expect_defect,
         scheduler,
     ):
-        del scenario
+        scenario_id = scenario["id"]
+        execution = {
+            "executing_authority_id": executing_authority_id,
+            "target_authority_id": target.authority_id,
+            "conversation_role": conversation_role,
+            "scenario_id": scenario_id,
+            "attempt": attempt["index"],
+        }
         self.calls.append(
             (
                 target.authority_id,
@@ -244,12 +253,13 @@ class Runner:
         )
         step = {
             "index": 1,
+            "step_id": attempt["probe_steps"][0]["id"],
             "request_digest": content_hash(attempt["probe_steps"][0]["request"]),
             "response_reference": content_hash(
-                {"target": target.authority_id, "attempt": attempt["index"]}
+                {"response": execution, "step": "probe"}
             ),
             "operation_reference": content_hash(
-                {"operation": target.authority_id, "attempt": attempt["index"]}
+                {"operation": execution, "step": "probe"}
             ),
             "complete": True,
             "endpoint_pass": True,
@@ -258,19 +268,24 @@ class Runner:
             "identity_pass": True,
         }
         setup = {**step, "semantic_pass": True}
+        setup["step_id"] = attempt["setup_steps"][0]["id"]
         setup["request_digest"] = content_hash(attempt["setup_steps"][0]["request"])
-        with scheduler.attempt(
-            target.authority_id,
-            EndpointCost(requests=1, tokens=10, inner_model_calls=1),
-        ):
-            pass
+        setup["response_reference"] = content_hash(
+            {"response": execution, "step": "setup"}
+        )
+        setup["operation_reference"] = content_hash(
+            {"operation": execution, "step": "setup"}
+        )
+        scheduler.acquire_request(
+            EndpointCost(requests=1, tokens=10, inner_model_calls=1)
+        )
         return {
             "index": attempt["index"],
             "conversation_reference": content_hash(
-                {"conversation": target.authority_id, "attempt": attempt["index"]}
+                {"conversation": execution}
             ),
             "session_reference": content_hash(
-                {"session": target.authority_id, "attempt": attempt["index"]}
+                {"session": execution}
             ),
             "response_references": [
                 setup["response_reference"],

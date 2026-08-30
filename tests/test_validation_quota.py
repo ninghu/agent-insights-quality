@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from dataclasses import replace
 
 import pytest
@@ -10,6 +12,7 @@ from agent_insights_quality.validation_policy import load_validation_policy
 from agent_insights_quality.validation_quota import (
     CapacityMeasurement,
     EndpointCost,
+    ValidationScheduler,
     WeightedTokenBucket,
     build_capacity_plan,
     validate_capacity_plan,
@@ -92,12 +95,79 @@ def test_weighted_bucket_waits_and_honors_rate_limit_reduction() -> None:
     bucket.acquire(cost)
     assert sleeps == [pytest.approx(60.0)]
 
-    bucket.reduce_from_rate_limit(
-        remaining_requests=0,
-        remaining_tokens=0,
+    retry_bucket = WeightedTokenBucket(
+        request_capacity=2,
+        token_capacity=200,
+        clock=clock,
+        sleeper=sleeper,
+    )
+    retry_bucket.reduce_from_rate_limit(
+        remaining_requests=2,
+        remaining_tokens=200,
         retry_after_seconds=3,
     )
+    retry_bucket.acquire(cost)
     assert sleeps[-1] == 3
+
+
+def test_retry_after_blocks_every_bucket_consumer() -> None:
+    now = [0.0]
+    sleeps: list[float] = []
+
+    def sleeper(value: float) -> None:
+        sleeps.append(value)
+        now[0] += value
+
+    bucket = WeightedTokenBucket(
+        request_capacity=10,
+        token_capacity=1000,
+        clock=lambda: now[0],
+        sleeper=sleeper,
+    )
+    bucket.reduce_from_rate_limit(
+        remaining_requests=10,
+        remaining_tokens=1000,
+        retry_after_seconds=7,
+    )
+    bucket.acquire(EndpointCost(requests=1, tokens=1, inner_model_calls=1))
+    assert sleeps == [7]
+
+
+def test_scheduler_enforces_shared_telemetry_query_limit() -> None:
+    policy = load_validation_policy()
+    plan = build_capacity_plan(
+        CapacityMeasurement(
+            rpm=100,
+            tpm=100_000,
+            measured_at="2026-08-29T00:00:00Z",
+        ),
+        policy=policy,
+        costs=[EndpointCost(requests=1, tokens=100, inner_model_calls=1)],
+    )
+    scheduler = ValidationScheduler(
+        plan,
+        WeightedTokenBucket(request_capacity=100, token_capacity=10000),
+    )
+    active = 0
+    maximum = 0
+    lock = threading.Lock()
+
+    def query() -> None:
+        nonlocal active, maximum
+        with scheduler.telemetry_query():
+            with lock:
+                active += 1
+                maximum = max(maximum, active)
+            time.sleep(0.01)
+            with lock:
+                active -= 1
+
+    threads = [threading.Thread(target=query) for _ in range(12)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert 1 < maximum <= plan.telemetry_query_concurrency
 
 
 def test_policy_does_not_raise_concurrency_from_runtime_headers() -> None:

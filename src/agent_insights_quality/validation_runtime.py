@@ -65,6 +65,8 @@ class ScenarioAttemptRunner(Protocol):
         self,
         *,
         target: DeployedRuntime,
+        executing_authority_id: str,
+        conversation_role: str,
         scenario: Mapping[str, Any],
         attempt: Mapping[str, Any],
         expect_defect: bool,
@@ -369,6 +371,9 @@ def _execute_authority(
         "runtime_agent_name": deployed[
             authority.authority_id
         ].runtime_agent_name,
+        "runtime_agent_version": deployed[
+            authority.authority_id
+        ].runtime_agent_version,
         "provider_agent_version_reference": content_hash(
             {
                 "provider_agent_id": deployed[
@@ -431,6 +436,10 @@ def _execute_scenario(
     issue_attempts = [
         runner.run(
             target=deployed[authority.authority_id],
+            executing_authority_id=authority.authority_id,
+            conversation_role=(
+                "baseline" if authority.authority_kind == "baseline" else "issue"
+            ),
             scenario=scenario,
             attempt=attempt,
             expect_defect=authority.authority_kind == "issue",
@@ -444,6 +453,8 @@ def _execute_scenario(
         else [
             runner.run(
                 target=deployed[paired_v0_id],
+                executing_authority_id=authority.authority_id,
+                conversation_role="paired_v0",
                 scenario=scenario,
                 attempt=attempt,
                 expect_defect=False,
@@ -474,6 +485,9 @@ def _execute_scenario(
         "scenario_id": scenario["id"],
         "execution_digest": scenario["execution_digest"],
         "validation_mode": scenario["validation_mode"],
+        "healthy_predicate": scenario["healthy_predicate"],
+        "defect_predicate": scenario["defect_predicate"],
+        "v0_control_predicate": scenario["v0_control_predicate"],
         "n": n,
         "k": k,
         "complete_count": complete_count,

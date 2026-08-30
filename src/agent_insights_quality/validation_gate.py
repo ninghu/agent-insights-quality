@@ -45,6 +45,7 @@ from agent_insights_quality.validation_live import FoundryScenarioAttemptRunner
 from agent_insights_quality.validation_manifest import (
     authority_specs,
     validate_candidate_manifest,
+    validation_authority_cost,
     validation_endpoint_costs,
 )
 from agent_insights_quality.validation_policy import (
@@ -340,33 +341,7 @@ def run_shadow_gate(
 def _authority_costs(
     authorities: list[Any],
 ) -> dict[str, EndpointCost]:
-    result: dict[str, EndpointCost] = {}
-    for authority in authorities:
-        fanout = {
-            "foundry_prompt": 1,
-            "microsoft_agent_framework": 4,
-            "langgraph": 1,
-            "custom_responses": 1,
-        }[authority.framework]
-        attempts = authority.validation_rules["scenarios"][0]["attempts"]
-        requests = max(
-            len([*attempt["setup_steps"], *attempt["probe_steps"]])
-            for attempt in attempts
-        )
-        tokens = max(
-            sum(
-                int(step["request"]["body"].get("max_output_tokens", 400))
-                for step in [
-                    *attempt["setup_steps"],
-                    *attempt["probe_steps"],
-                ]
-            )
-            * fanout
-            for attempt in attempts
-        )
-        result[authority.authority_id] = EndpointCost(
-            requests=requests,
-            tokens=tokens,
-            inner_model_calls=fanout,
-        )
-    return result
+    return {
+        authority.authority_id: validation_authority_cost(authority)
+        for authority in authorities
+    }

@@ -100,6 +100,7 @@
         "canonical_agent",
         "logical_version",
         "runtime_agent_name",
+        "runtime_agent_version",
         "provider_agent_version_reference",
         "source_content_digest",
         "execution_digest",
@@ -138,6 +139,11 @@
         "runtime_agent_name": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9-]{2,62}$"
+        },
+        "runtime_agent_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
         },
         "provider_agent_version_reference": {"$ref": "#/$defs/hash"},
         "source_content_digest": {"$ref": "#/$defs/hash"},
@@ -185,6 +191,9 @@
         "scenario_id",
         "execution_digest",
         "validation_mode",
+        "healthy_predicate",
+        "defect_predicate",
+        "v0_control_predicate",
         "n",
         "k",
         "complete_count",
@@ -201,6 +210,63 @@
         "execution_digest": {"$ref": "#/$defs/hash"},
         "validation_mode": {
           "enum": ["baseline", "deterministic", "model_mediated"]
+        },
+        "healthy_predicate": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind"],
+              "properties": {
+                "kind": {"const": "all_probe_assertions_pass"}
+              }
+            }
+          ]
+        },
+        "defect_predicate": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind"],
+              "properties": {"kind": {"const": "never"}}
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "step_ids", "required_surfaces"],
+              "properties": {
+                "kind": {"const": "all_observation_steps_pass"},
+                "step_ids": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {"type": "string", "minLength": 1}
+                },
+                "required_surfaces": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 2,
+                  "uniqueItems": true,
+                  "items": {"enum": ["semantic", "trace"]}
+                }
+              }
+            }
+          ]
+        },
+        "v0_control_predicate": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind"],
+              "properties": {
+                "kind": {"const": "zero_defect_observations"}
+              }
+            }
+          ]
         },
         "n": {"enum": [5, 7]},
         "k": {"const": 5},
@@ -300,6 +366,7 @@
       "additionalProperties": false,
       "required": [
         "index",
+        "step_id",
         "request_digest",
         "response_reference",
         "operation_reference",
@@ -311,6 +378,10 @@
       ],
       "properties": {
         "index": {"type": "integer", "minimum": 1},
+        "step_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{2,127}$"
+        },
         "request_digest": {"$ref": "#/$defs/hash"},
         "response_reference": {"$ref": "#/$defs/hash"},
         "operation_reference": {"$ref": "#/$defs/hash"},

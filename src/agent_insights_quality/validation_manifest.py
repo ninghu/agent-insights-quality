@@ -5,7 +5,14 @@ from pathlib import Path
 from typing import Any
 
 from agent_insights_quality.catalogs import catalog_hashes
-from agent_insights_quality.util import ROOT, ContractError, content_hash, file_hash, read_json
+from agent_insights_quality.util import (
+    ROOT,
+    ContractError,
+    canonical_bytes,
+    content_hash,
+    file_hash,
+    read_json,
+)
 from agent_insights_quality.validation_policy import ValidationPolicy
 from agent_insights_quality.validation_quota import EndpointCost
 from agent_insights_quality.validation_runtime import (
@@ -73,6 +80,12 @@ def prepare_candidate_manifest(
         item.authority_id: item.execution_digest for item in authorities
     }
     costs = validation_endpoint_costs(authorities)
+    attempt_count = sum(
+        len(scenario["attempts"])
+        * (2 if authority.authority_kind == "issue" else 1)
+        for authority in authorities
+        for scenario in authority.validation_rules["scenarios"]
+    )
     validation_contract_files = [
         ROOT / "config" / "test-agent-validation.yaml",
         ROOT / "config" / "test-agent-validation-policy.yaml",
@@ -133,7 +146,7 @@ def prepare_candidate_manifest(
             ]
         ),
         "endpoint_envelope": {
-            "attempts": len(costs),
+            "attempts": attempt_count,
             "requests": sum(item.requests for item in costs),
             "worst_case_tokens": max(item.tokens for item in costs),
             "worst_case_inner_model_calls": max(
@@ -222,32 +235,57 @@ def validate_candidate_manifest(
 def validation_endpoint_costs(
     authorities: list[AuthoritySpec],
 ) -> list[EndpointCost]:
-    inner_calls = {
+    costs: list[EndpointCost] = []
+    for authority in authorities:
+        for scenario in authority.validation_rules["scenarios"]:
+            for attempt in scenario["attempts"]:
+                steps = [*attempt["setup_steps"], *attempt["probe_steps"]]
+                for step in steps:
+                    cost = validation_step_cost(authority.framework, step)
+                    costs.append(cost)
+                    if authority.authority_kind == "issue":
+                        costs.append(cost)
+    return costs
+
+
+def validation_authority_cost(authority: AuthoritySpec) -> EndpointCost:
+    costs = [
+        validation_step_cost(authority.framework, step)
+        for scenario in authority.validation_rules["scenarios"]
+        for attempt in scenario["attempts"]
+        for step in [*attempt["setup_steps"], *attempt["probe_steps"]]
+    ]
+    if not costs:
+        raise ContractError("Validation authority has no endpoint request costs")
+    return EndpointCost(
+        requests=1,
+        tokens=max(item.tokens for item in costs),
+        inner_model_calls=max(item.inner_model_calls for item in costs),
+    )
+
+
+def validation_step_cost(
+    framework: str,
+    step: Mapping[str, Any],
+) -> EndpointCost:
+    fanout = {
         "foundry_prompt": 1,
         "microsoft_agent_framework": 4,
         "langgraph": 1,
         "custom_responses": 1,
-    }
-    costs: list[EndpointCost] = []
-    for authority in authorities:
-        fanout = inner_calls[authority.framework]
-        for scenario in authority.validation_rules["scenarios"]:
-            for attempt in scenario["attempts"]:
-                steps = [*attempt["setup_steps"], *attempt["probe_steps"]]
-                request_count = len(steps)
-                tokens = sum(
-                    int(step["request"]["body"].get("max_output_tokens", 400))
-                    for step in steps
-                ) * fanout
-                cost = EndpointCost(
-                    requests=request_count,
-                    tokens=tokens,
-                    inner_model_calls=fanout,
-                )
-                costs.append(cost)
-                if authority.authority_kind == "issue":
-                    costs.append(cost)
-    return costs
+    }.get(framework)
+    if fanout is None:
+        raise ContractError("Validation framework has no reviewed cost model")
+    body = step["request"]["body"]
+    maximum_output = int(body.get("max_output_tokens", 400))
+    if maximum_output <= 0:
+        raise ContractError("Validation output token budget must be positive")
+    input_budget = len(canonical_bytes(body))
+    return EndpointCost(
+        requests=1,
+        tokens=(input_budget + maximum_output) * fanout,
+        inner_model_calls=fanout,
+    )
 
 
 def _authority(

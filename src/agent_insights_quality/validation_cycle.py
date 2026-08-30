@@ -465,7 +465,10 @@ class ValidationCycleController:
     ) -> BlobRecord:
         if head_sha != self._active.value["git"]["current_head_sha"]:
             raise ContractError("Scope freeze head differs from the validated head")
-        validate_evidence(evidence.value)
+        validate_evidence(
+            evidence.value,
+            runtime_topology=self._active.value["runtime_topology"],
+        )
         if evidence.value["candidate_head_sha"] != head_sha:
             raise ContractError("Scope freeze evidence belongs to another head")
         evidence_digest = evidence.value.get("evidence_digest")
@@ -600,7 +603,10 @@ class ValidationCycleController:
         now: datetime,
     ) -> BlobRecord:
         evidence_digest = evidence.value.get("evidence_digest")
-        validate_evidence(evidence.value)
+        validate_evidence(
+            evidence.value,
+            runtime_topology=self._active.value["runtime_topology"],
+        )
         if (
             not isinstance(evidence_digest, str)
             or evidence.value["candidate_head_sha"] != final_head_sha

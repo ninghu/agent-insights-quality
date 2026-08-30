@@ -304,8 +304,11 @@ def build_validation_receipt(
 ) -> dict[str, Any]:
     if mode not in {"shadow", "merge"}:
         raise ContractError("Validation receipt mode is invalid")
-    validate_evidence(evidence)
     lifecycle = clean_snapshot.value
+    validate_evidence(
+        evidence,
+        runtime_topology=lifecycle.get("runtime_topology"),
+    )
     if (
         lifecycle.get("snapshot_type") != "clean"
         or lifecycle.get("state") != "CLEAN"
@@ -700,7 +703,10 @@ class ReceiptIssuer:
             or evidence_reference["digest"] != receipt["evidence_digest"]
         ):
             raise ContractError("Immutable validation evidence reference is invalid")
-        validate_evidence(evidence.value)
+        validate_evidence(
+            evidence.value,
+            runtime_topology=clean.value.get("runtime_topology"),
+        )
         expected_summaries = [
             {
                 "authority_id": authority["authority_id"],

@@ -32,7 +32,10 @@ def test_sanitized_shadow_fixtures_cover_r01_and_reviewed_r02() -> None:
             (root / run / "shadow-receipt.json").read_text()
         )
         durations = json.loads((root / run / "durations.json").read_text())
-        validate_evidence(evidence)
+        validate_evidence(
+            evidence,
+            runtime_topology=lifecycle["runtime_topology"],
+        )
         validate_lifecycle(lifecycle)
         validate_receipt(receipt)
         assert len(evidence["authorities"]) == 41

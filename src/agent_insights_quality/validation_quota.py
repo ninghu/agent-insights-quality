@@ -179,6 +179,7 @@ class WeightedTokenBucket:
         self._clock = clock
         self._sleeper = sleeper
         self._last = clock()
+        self._blocked_until = self._last
         self._lock = threading.Lock()
 
     def acquire(self, cost: EndpointCost) -> None:
@@ -192,8 +193,10 @@ class WeightedTokenBucket:
         while True:
             with self._lock:
                 self._refill()
+                blocked_wait = max(0.0, self._blocked_until - self._clock())
                 if (
-                    self._requests >= cost.requests
+                    blocked_wait == 0
+                    and self._requests >= cost.requests
                     and self._tokens >= cost.tokens
                 ):
                     self._requests -= cost.requests
@@ -207,7 +210,7 @@ class WeightedTokenBucket:
                     0.0,
                     (cost.tokens - self._tokens) / self._token_refill,
                 )
-                delay = max(request_wait, token_wait, 0.001)
+                delay = max(blocked_wait, request_wait, token_wait, 0.001)
             self._sleeper(delay)
 
     def reduce_from_rate_limit(
@@ -217,6 +220,10 @@ class WeightedTokenBucket:
         remaining_tokens: int | None,
         retry_after_seconds: float | None,
     ) -> None:
+        if retry_after_seconds is not None and (
+            not math.isfinite(retry_after_seconds) or retry_after_seconds < 0
+        ):
+            raise ContractError("Retry-After value is invalid")
         with self._lock:
             self._refill()
             if remaining_requests is not None:
@@ -229,11 +236,11 @@ class WeightedTokenBucket:
                     self._tokens,
                     float(max(0, remaining_tokens)),
                 )
-        if retry_after_seconds is not None:
-            if not math.isfinite(retry_after_seconds) or retry_after_seconds < 0:
-                raise ContractError("Retry-After value is invalid")
             if retry_after_seconds:
-                self._sleeper(retry_after_seconds)
+                self._blocked_until = max(
+                    self._blocked_until,
+                    self._clock() + retry_after_seconds,
+                )
 
     def _refill(self) -> None:
         now = self._clock()
@@ -256,20 +263,30 @@ class ValidationScheduler:
         self._endpoint_slots = threading.BoundedSemaphore(
             plan.endpoint_concurrency
         )
+        self._telemetry_slots = threading.BoundedSemaphore(
+            plan.telemetry_query_concurrency
+        )
         self._runtime_locks: dict[str, threading.Lock] = {}
         self._runtime_locks_guard = threading.Lock()
 
     @contextmanager
-    def attempt(self, runtime_id: str, cost: EndpointCost) -> Iterator[None]:
-        if cost.inner_model_calls > self._plan.inner_model_call_limit:
-            raise ContractError("Attempt exceeds the reviewed inner model-call limit")
+    def runtime_attempt(self, runtime_id: str) -> Iterator[None]:
         if not runtime_id:
             raise ContractError("Runtime identity is required for scheduling")
         runtime_lock = self._runtime_lock(runtime_id)
         with self._endpoint_slots:
             with runtime_lock:
-                self._bucket.acquire(cost)
                 yield
+
+    def acquire_request(self, cost: EndpointCost) -> None:
+        if cost.inner_model_calls > self._plan.inner_model_call_limit:
+            raise ContractError("Request exceeds the reviewed inner model-call limit")
+        self._bucket.acquire(cost)
+
+    @contextmanager
+    def telemetry_query(self) -> Iterator[None]:
+        with self._telemetry_slots:
+            yield
 
     def _runtime_lock(self, runtime_id: str) -> threading.Lock:
         with self._runtime_locks_guard:
