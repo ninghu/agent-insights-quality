@@ -73,18 +73,15 @@ def assert_validation_permissions(
         ),
         PermissionRequirement(
             registry,
-            "Microsoft.ContainerRegistry/registries/repositories/content/read",
-            data_action=True,
+            "Microsoft.ContainerRegistry/registries/pull/read",
         ),
         PermissionRequirement(
             registry,
-            "Microsoft.ContainerRegistry/registries/repositories/content/write",
-            data_action=True,
+            "Microsoft.ContainerRegistry/registries/push/write",
         ),
         PermissionRequirement(
             registry,
-            "Microsoft.ContainerRegistry/registries/repositories/content/delete",
-            data_action=True,
+            "Microsoft.ContainerRegistry/registries/artifacts/delete",
         ),
         *(
             PermissionRequirement(account, action, data_action=True)

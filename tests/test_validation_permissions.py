@@ -93,3 +93,74 @@ def test_destructive_permission_preflight_rejects_missing_delete(monkeypatch) ->
     )
     with pytest.raises(ContractError, match="delete permissions"):
         assert_validation_permissions(_profile(), _operator())
+
+
+def test_registry_preflight_matches_reviewed_legacy_roles(monkeypatch) -> None:
+    def permissions(scope):
+        if "Microsoft.ContainerRegistry/registries" in scope:
+            return [
+                {
+                    "actions": [
+                        "Microsoft.ContainerRegistry/registries/pull/read",
+                        "Microsoft.ContainerRegistry/registries/push/write",
+                    ],
+                    "notActions": [],
+                    "dataActions": [],
+                    "notDataActions": [],
+                },
+                {
+                    "actions": [
+                        "Microsoft.ContainerRegistry/registries/artifacts/delete"
+                    ],
+                    "notActions": [],
+                    "dataActions": [],
+                    "notDataActions": [],
+                },
+            ]
+        return [
+            {
+                "actions": ["*"],
+                "notActions": [],
+                "dataActions": ["*"],
+                "notDataActions": [],
+            }
+        ]
+
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_permissions._effective_permissions",
+        permissions,
+    )
+    assert_validation_permissions(_profile(), _operator())
+
+
+def test_registry_preflight_rejects_abac_roles_for_legacy_registry(
+    monkeypatch,
+) -> None:
+    def permissions(scope):
+        if "Microsoft.ContainerRegistry/registries" in scope:
+            return [
+                {
+                    "actions": [],
+                    "notActions": [],
+                    "dataActions": [
+                        "Microsoft.ContainerRegistry/registries/repositories/"
+                        "content/*"
+                    ],
+                    "notDataActions": [],
+                }
+            ]
+        return [
+            {
+                "actions": ["*"],
+                "notActions": [],
+                "dataActions": ["*"],
+                "notDataActions": [],
+            }
+        ]
+
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_permissions._effective_permissions",
+        permissions,
+    )
+    with pytest.raises(ContractError, match="ContainerRegistry"):
+        assert_validation_permissions(_profile(), _operator())
