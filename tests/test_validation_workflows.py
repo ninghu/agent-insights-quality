@@ -110,6 +110,8 @@ def test_reconciler_is_cleanup_only_on_fifteen_minute_cadence() -> None:
 
 def test_review_workflow_is_protected_default_branch_attestation_producer() -> None:
     text = _workflow("test-agent-validation-review.yml")
+    workflow = yaml.load(text, Loader=_UniqueKeyLoader)
+    environment = workflow["jobs"]["review-attestation"]["env"]
     assert "name: test-agent-validation-review" in text
     assert "environment: test-agent-validation-review" in text
     assert "ref: main" in text
@@ -118,6 +120,9 @@ def test_review_workflow_is_protected_default_branch_attestation_producer() -> N
     assert "--frozen-head-sha $env:FROZEN_HEAD_SHA" in text
     assert "--findings-digest $env:FINDINGS_DIGEST" in text
     assert "AIQ_VALIDATION_RECEIPT_PRINCIPAL_ID" in text
+    assert environment["GH_TOKEN"] == "${{ github.token }}"
+    assert "$env:GH_TOKEN" not in text
+    assert "GH_TOKEN: ${{ github.token }}" in text
 
 
 def test_validation_workflows_have_no_duplicate_yaml_keys() -> None:
