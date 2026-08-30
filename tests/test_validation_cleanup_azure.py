@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from agent_insights_quality.provisioning import RemoteHttpError
 from agent_insights_quality.validation_cleanup import CleanupPlanItem
 from agent_insights_quality.validation_cleanup_azure import (
     AzureValidationCleanupBackend,
@@ -178,3 +179,26 @@ def test_arm_cleanup_uses_explicit_resource_api_version(
     for arguments, expected in calls:
         assert arguments[arguments.index("--api-version") + 1] == api_version
         assert expected == (0, 3)
+
+
+def test_hosted_intent_is_absent_after_parent_project_404() -> None:
+    backend = object.__new__(AzureValidationCleanupBackend)
+    backend._find_version_by_logical = lambda *_args, **_kwargs: "1"
+    backend._client = SimpleNamespace(
+        version_details=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RemoteHttpError(
+                404,
+                "NotFound",
+                "Project not found",
+                "GET hosted version",
+            )
+        )
+    )
+    resolved = backend.resolve_intent(
+        _intent(
+            "hosted_deployment",
+            "synthetic-agent|issue-001|hosted_deployment",
+        )
+    )
+    assert resolved is not None
+    assert resolved.resolved_provider_id == "discovery-absent"

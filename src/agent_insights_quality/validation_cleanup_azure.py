@@ -11,7 +11,7 @@ from typing import Any, Callable
 from agent_insights_quality.azure_cli import azure_cli
 from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.progress import ProgressReporter
-from agent_insights_quality.provisioning import FoundryProvisioner
+from agent_insights_quality.provisioning import FoundryProvisioner, RemoteHttpError
 from agent_insights_quality.util import ContractError
 from agent_insights_quality.validation_cleanup import (
     CleanupInventory,
@@ -78,11 +78,16 @@ class AzureValidationCleanupBackend:
         }:
             version = self._find_version_by_logical(parts[0], parts[1], hosted=True)
             if version:
-                details = self._client.version_details(
-                    parts[0],
-                    version,
-                    hosted=True,
-                )
+                try:
+                    details = self._client.version_details(
+                        parts[0],
+                        version,
+                        hosted=True,
+                    )
+                except RemoteHttpError as error:
+                    if error.status != 404:
+                        raise
+                    details = {}
                 field = {
                     "hosted_identity": "identity",
                     "hosted_blueprint": "blueprint",
