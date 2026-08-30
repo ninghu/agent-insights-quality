@@ -55,7 +55,7 @@ resource automationProjectManager 'Microsoft.Authorization/roleAssignments@2022-
   }
 }
 
-module projectRbac 'project-rbac.bicep' = {
+module projectRbac 'validation-project-rbac.bicep' = {
   name: 'validation-project-rbac-${uniqueString(project.id, ownershipNonce)}'
   params: {
     accountName: accountName

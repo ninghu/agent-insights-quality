@@ -5,6 +5,9 @@ param projectPrincipalId string
 param monitoringReaderRoleId string
 param modelInferenceRoleId string
 param acrPullRoleId string
+param appInsightsReaderName string
+param modelInferenceUserName string
+param registryPullName string
 
 resource account 'Microsoft.CognitiveServices/accounts@2025-06-01' existing = {
   name: accountName
@@ -20,7 +23,7 @@ resource registry 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' ex
 
 resource appInsightsReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: applicationInsights
-  name: guid(applicationInsights.id, projectPrincipalId, monitoringReaderRoleId)
+  name: appInsightsReaderName
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', monitoringReaderRoleId)
     principalId: projectPrincipalId
@@ -30,7 +33,7 @@ resource appInsightsReader 'Microsoft.Authorization/roleAssignments@2022-04-01' 
 
 resource modelInferenceUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: account
-  name: guid(account.id, projectPrincipalId, modelInferenceRoleId)
+  name: modelInferenceUserName
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', modelInferenceRoleId)
     principalId: projectPrincipalId
@@ -40,7 +43,7 @@ resource modelInferenceUser 'Microsoft.Authorization/roleAssignments@2022-04-01'
 
 resource registryPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: registry
-  name: guid(registry.id, projectPrincipalId, acrPullRoleId)
+  name: registryPullName
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPullRoleId)
     principalId: projectPrincipalId
