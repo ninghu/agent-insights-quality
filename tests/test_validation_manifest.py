@@ -33,7 +33,7 @@ def test_local_plan_binds_one_commit_and_all_executable_inputs() -> None:
     assert plan["commit_sha"] == "a" * 40
     assert plan["project_name"].startswith("aiq-validation-")
     assert plan["telemetry_resource_set"] == "g29"
-    assert plan["endpoint_envelope"]["attempts"] == 445
+    assert plan["endpoint_envelope"]["attempts"] == 449
     assert plan["endpoint_envelope"]["requests"] >= 890
     assert plan["endpoint_envelope"]["worst_case_inner_model_calls"] == 4
     assert plan["validation_digest"].startswith("sha256:")
