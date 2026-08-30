@@ -54,3 +54,17 @@ def test_infrastructure_has_only_approved_validation_blob_container() -> None:
     assert "test-agent-validation-shadow-receipts" not in text
     assert "validationPrincipalId" not in text
     assert "validationReceiptPrincipalId" not in text
+
+
+def test_generated_report_validation_uses_trusted_base_memory_and_history() -> None:
+    text = (
+        ROOT / ".github" / "workflows" / "validate-generated-change.yml"
+    ).read_text(encoding="utf-8")
+    assert "base-insight-engine-improvement.json" in text
+    assert "base-insight-engine-improvement.md" in text
+    assert "--base-improvement-json" in text
+    assert "--base-improvement-markdown" in text
+    assert 'git cat-file -e "${BASE_SHA}:${current_snapshot}"' in text
+    assert "Current improvement snapshot already exists in trusted base" in text
+    assert "git diff --no-renames --name-status" in text
+    assert "Existing improvement snapshot changed or was deleted" in text

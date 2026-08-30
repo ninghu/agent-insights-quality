@@ -295,6 +295,10 @@ def test_normalized_summary_keeps_duplicate_issue_and_noise_without_one() -> Non
     )
     assert duplicate["issue_id"] == "issue-001"
     assert noise["issue_id"] is None
+    assert noise["origin_version"] == "issue-002"
+    assert improvement_memory._finding_capabilities(noise) == {
+        "healthcare-agent/issue-002/outcome"
+    }
     assert duplicate["finding_id"] != noise["finding_id"]
 
 
@@ -324,6 +328,30 @@ def test_validate_analysis_rejects_invalid_and_uncited_patterns() -> None:
     private["executive_summary"] = "See https://internal.invalid/raw_trace."
     with pytest.raises(ContractError, match="private or raw"):
         validate_analysis(private)
+
+    overfit = deepcopy(_analysis())
+    overfit["patterns"][0]["improvement"] = (
+        "Special-case issue-001 and return the known answer."
+    )
+    with pytest.raises(ContractError, match="issue-specific"):
+        validate_analysis(overfit)
+    fixed_answer = deepcopy(_analysis())
+    fixed_answer["patterns"][0]["measurable_signal"] = (
+        "Return acct-demo-a exactly."
+    )
+    with pytest.raises(ContractError, match="fixed-answer"):
+        validate_analysis(fixed_answer)
+    other_fixed_identifier = deepcopy(_analysis())
+    other_fixed_identifier["patterns"][0]["measurable_signal"] = (
+        "Return slot-demo-505 exactly."
+    )
+    with pytest.raises(ContractError, match="fixed-answer"):
+        validate_analysis(other_fixed_identifier)
+    citation = deepcopy(_analysis())
+    citation["patterns"][0]["evidence"][0]["detail"] = (
+        "Report-backed citation for issue-001."
+    )
+    validate_analysis(citation)
 
 
 def test_analysis_citations_must_resolve_to_insight_engine_findings() -> None:
@@ -373,6 +401,42 @@ def test_pattern_ids_use_root_evidence_not_generated_title() -> None:
         changed_local_key,
         {},
         changed_summary,
+    )
+    assert changed["patterns"][0]["pattern_key"] == stable_id
+
+    rotated_summary = deepcopy(summary)
+    rotated_analysis = _analysis(pattern_key="rotated-local-key")
+    for evidence, issue_id in zip(
+        rotated_analysis["patterns"][0]["evidence"],
+        ("issue-008", "issue-019"),
+        strict=True,
+    ):
+        finding = next(
+            item
+            for item in rotated_summary["insight_engine_findings"]
+            if item["finding_id"] == evidence["finding_id"]
+        )
+        finding["issue_id"] = issue_id
+        finding["finding_id"] = (
+            f"{finding['agent']}/{issue_id}/expected"
+        )
+        evidence["issue_id"] = issue_id
+        evidence["finding_id"] = finding["finding_id"]
+    rotated = assign_stable_pattern_ids(
+        rotated_analysis,
+        {},
+        rotated_summary,
+    )
+    assert rotated["patterns"][0]["pattern_key"] == stable_id
+
+    changed_capability = deepcopy(summary)
+    changed_capability["insight_engine_findings"][0]["failed_fields"].append(
+        "severity"
+    )
+    changed = assign_stable_pattern_ids(
+        changed_local_key,
+        {},
+        changed_capability,
     )
     assert changed["patterns"][0]["pattern_key"] != stable_id
 
@@ -627,6 +691,10 @@ def test_write_improvement_memory_is_immutable_per_run_and_daily_only(
     assert pattern["priority"] == 1
     assert pattern["history"][0]["evaluation"] == "observed"
     assert all("finding_id" in item for item in pattern["evidence"])
+    assert pattern["supporting_capabilities"] == [
+        "finance-agent/issue-003/root_cause",
+        "healthcare-agent/issue-002/root_cause",
+    ]
     assert (reports_root / "insight-engine-improvement.md").exists()
     assert living_state_path.exists()
     snapshot_dir = reports_root / "daily" / "2026" / "08" / "24"
@@ -698,6 +766,64 @@ def test_write_improvement_memory_is_immutable_per_run_and_daily_only(
             living_state_path=living_state_path,
         )
 
+
+def test_published_memory_reconstructs_from_trusted_base_and_report(
+    tmp_path: Path,
+) -> None:
+    reports_root = tmp_path / "reports"
+    living = reports_root / "insight-engine-improvement.json"
+    first_report = _report()
+    analysis = _analysis()
+    first = write_improvement_memory(
+        report=first_report,
+        analysis=analysis,
+        reports_root=reports_root,
+        living_state_path=living,
+    )
+    first_markdown = render_living_markdown(first)
+    second_report = _report(
+        run_id="aiq-20260825",
+        report_date="2026-08-25",
+    )
+    second = write_improvement_memory(
+        report=second_report,
+        analysis=analysis,
+        reports_root=reports_root,
+        living_state_path=living,
+    )
+    snapshot_path = (
+        reports_root
+        / "daily"
+        / "2026"
+        / "08"
+        / "25"
+        / "insight-engine-improvement.json"
+    )
+    snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    validate_published_improvement(
+        report=second_report,
+        living_state=second,
+        living_markdown=render_living_markdown(second),
+        snapshot=snapshot,
+        snapshot_markdown=render_snapshot_markdown(snapshot),
+        previous_state=first,
+        previous_markdown=first_markdown,
+    )
+
+    tampered = deepcopy(snapshot)
+    tampered["analysis"]["patterns"][0]["evidence"][0][
+        "finding_id"
+    ] = "healthcare-agent/issue-999/expected"
+    with pytest.raises(ContractError, match="ineligible"):
+        validate_published_improvement(
+            report=second_report,
+            living_state=second,
+            living_markdown=render_living_markdown(second),
+            snapshot=tampered,
+            snapshot_markdown=render_snapshot_markdown(tampered),
+            previous_state=first,
+            previous_markdown=first_markdown,
+        )
 
 def test_daily_report_and_memory_are_staged_and_published_together(
     tmp_path: Path,
@@ -802,7 +928,7 @@ def test_incomplete_run_records_snapshot_but_cannot_mutate_pattern_memory(
     living_state_path = reports_root / "insight-engine-improvement.json"
     report = _report()
     analysis = _analysis()
-    write_improvement_memory(
+    prior = write_improvement_memory(
         report=report,
         analysis=analysis,
         reports_root=reports_root,
@@ -815,18 +941,21 @@ def test_incomplete_run_records_snapshot_but_cannot_mutate_pattern_memory(
         incomplete=True,
     )
     incomplete_analysis = _analysis()
+    incomplete_analysis["executive_summary"] = "Do not replace prior conclusions."
+    incomplete_analysis["isolated_observations"] = ["Do not replace prior observations."]
+    incomplete_analysis["exclusions"] = ["Do not replace prior exclusions."]
     state = write_improvement_memory(
         report=incomplete_report,
         analysis=incomplete_analysis,
         reports_root=reports_root,
         living_state_path=living_state_path,
     )
-    # The pattern is preserved (not resolved/reopened/reprioritized) but its
-    # status reflects that this run's evidence was not comparable.
-    pattern = next(iter(state["patterns"].values()))
-    assert pattern["status"] == "new"
-    assert pattern["last_evaluation"] == "not_evaluated"
-    assert pattern["comparable_absence_count"] == 0
+    assert state["patterns"] == prior["patterns"]
+    assert state["executive_summary"] == prior["executive_summary"]
+    assert state["isolated_observations"] == prior["isolated_observations"]
+    assert state["exclusions"] == prior["exclusions"]
+    assert state["latest_run_id"] == "aiq-20260825"
+    assert state["latest_coverage"]["runtime_evidence_complete"] is False
     assert len(state["snapshot_history"]) == 2
     snapshot_dir = reports_root / "daily" / "2026" / "08" / "25"
     assert (snapshot_dir / "insight-engine-improvement.json").exists()

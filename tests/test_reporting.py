@@ -130,7 +130,7 @@ def _manifest(*, full: bool = False) -> dict:
 
 
 def _assessments(manifest: dict) -> dict[str, dict]:
-    return {
+    return _with_card_evaluations({
         item["issue_id"]: {
             "issue_id": item["issue_id"],
             "verdict": "correct",
@@ -152,7 +152,7 @@ def _assessments(manifest: dict) -> dict[str, dict]:
         }
         for agent in manifest["agents"]
         for item in agent["issues"]
-    }
+    })
 
 
 def _with_card_evaluations(
@@ -162,8 +162,16 @@ def _with_card_evaluations(
         assessment["card_evaluations"] = [
             {
                 "reference": f"sha256:{index:064x}",
+                "title": f"Synthetic finding {index}",
+                "category": "synthetic",
+                "severity": "medium",
+                "verdict": assessment["verdict"],
                 "finding_type": assessment["finding_type"],
+                "ownership": assessment["ownership"],
+                "ownership_reason": assessment["ownership_reason"],
                 "fields": deepcopy(assessment["fields"]),
+                "confidence": assessment["confidence"],
+                "reasoning": assessment["reasoning"],
             }
         ]
     return assessments
@@ -399,7 +407,11 @@ def test_staging_shadow_score_does_not_change_v1_or_daily_reports() -> None:
     first["finding_type"] = "PARTIAL"
     first["fields"]["root_cause"] = False
     first["card_evaluations"][0]["finding_type"] = "PARTIAL"
+    first["card_evaluations"][0]["verdict"] = "partially_useful"
     first["card_evaluations"][0]["fields"]["root_cause"] = False
+    first["card_evaluations"][0]["field_reasons"] = {
+        "root_cause": "The synthetic root cause is incomplete."
+    }
 
     staging = build_report(
         manifest,
@@ -772,6 +784,13 @@ def test_field_quality_and_clean_card_precision_components() -> None:
         assessment["verdict"] = "partially_useful"
         assessment["finding_type"] = "PARTIAL"
         assessment["fields"]["severity"] = False
+        card = assessment["card_evaluations"][0]
+        card["verdict"] = "partially_useful"
+        card["finding_type"] = "PARTIAL"
+        card["fields"]["severity"] = False
+        card["field_reasons"] = {
+            "severity": "The synthetic severity is incomplete."
+        }
     baseline = _baseline_assessments(manifest)
     threshold = build_report(manifest, issues, assessments, baseline)
     assert threshold["summary"]["issues_correct"] == 16
@@ -933,8 +952,19 @@ def test_valid_baseline_agent_finding_is_not_noise() -> None:
         "confidence": 0.99,
         "card_evaluations": [
             {
+                "reference": "sha256:" + "1" * 64,
+                "title": "Synthetic baseline finding",
+                "category": "synthetic",
+                "severity": "medium",
                 "evaluation": "valid_agent_finding",
                 "ownership": "agent",
+                "ownership_reason": (
+                    "Independent trace proof confirms an Agent defect."
+                ),
+                "confidence": 0.99,
+                "reasoning": (
+                    "Independent trace proof confirms an Agent defect."
+                ),
             }
         ],
     }
@@ -981,6 +1011,72 @@ def test_published_report_requires_complete_consistent_content() -> None:
     report["issues"][0]["assessment"] = None
     with pytest.raises(ContractError, match="incomplete"):
         validate_published_report(report)
+
+
+def test_report_rejects_malformed_or_private_nested_content() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    report = build_report(
+        manifest,
+        issues,
+        _assessments(manifest),
+        _baseline_assessments(manifest),
+    )
+    validate_report(report)
+
+    malformed = deepcopy(report)
+    del malformed["issues"][0]["assessment"]["card_evaluations"][0]["category"]
+    with pytest.raises(ContractError, match="invalid or incomplete"):
+        validate_report(malformed)
+
+    private = deepcopy(report)
+    private["issues"][0]["assessment"]["card_evaluations"][0][
+        "ownership_reason"
+    ] = "See /subscriptions/private-resource."
+    with pytest.raises(ContractError, match="private Azure"):
+        validate_report(private)
+
+    nested = deepcopy(report)
+    nested["baseline"][0]["raw_trace"] = {"provider_id": "private"}
+    with pytest.raises(ContractError, match="invalid or incomplete"):
+        validate_report(nested)
+
+    missing_reasoning = deepcopy(report)
+    del missing_reasoning["issues"][0]["assessment"]["reasoning"]
+    with pytest.raises(ContractError, match="invalid or incomplete"):
+        validate_report(missing_reasoning)
+
+    wrong_field_reasons = deepcopy(report)
+    card = wrong_field_reasons["issues"][0]["assessment"]["card_evaluations"][0]
+    card["finding_type"] = "PARTIAL"
+    card["verdict"] = "partially_useful"
+    card["ownership"] = "insight_engine"
+    card["fields"]["severity"] = False
+    card["field_reasons"] = {
+        "title": "The title is correct, so this reason is not allowed."
+    }
+    with pytest.raises(ContractError, match="exactly each failed field"):
+        validate_report(wrong_field_reasons)
+
+    unresolved_duplicate = deepcopy(report)
+    primary = unresolved_duplicate["issues"][0]["assessment"][
+        "card_evaluations"
+    ][0]
+    duplicate = deepcopy(primary)
+    duplicate.update(
+        {
+            "reference": "sha256:" + "f" * 64,
+            "verdict": "incorrect",
+            "finding_type": "DUPLICATE",
+            "ownership": "insight_engine",
+            "duplicate_of": "sha256:" + "e" * 64,
+        }
+    )
+    unresolved_duplicate["issues"][0]["assessment"][
+        "card_evaluations"
+    ].append(duplicate)
+    with pytest.raises(ContractError, match="same assessment"):
+        validate_report(unresolved_duplicate)
 
 
 def test_published_report_rejects_incomplete_assessment_evidence() -> None:
@@ -1230,7 +1326,7 @@ def test_extra_insights_missing_coverage_duplicates_and_coding_agent_context() -
     # The otherwise-Correct issue still gets a row because of its Duplicate
     # group, and its ownership is the Duplicate card's own ownership, not
     # the primary's "no problem" ownership.
-    assert f"`{duplicate_issue_id}` Correct + Duplicate group" in context_section
+    assert f"`{duplicate_issue_id}` Duplicate group" in context_section
     assert f"`{duplicate_issue_id}` Missing" not in context_section
     noise_row = next(
         line for line in context_section.splitlines() if noise_issue_id in line
@@ -1239,7 +1335,7 @@ def test_extra_insights_missing_coverage_duplicates_and_coding_agent_context() -
         line for line in context_section.splitlines() if duplicate_issue_id in line
     )
     assert "`insight_engine`" in noise_row
-    assert "Noise detail above" in noise_row
+    assert "Missing / Noise details above" in noise_row
     assert f"agents/{agent_name}/issues/{noise_issue_id}/source/" in noise_row
     assert f"agents/{agent_name}/issues/{noise_issue_id}/traffic.json" in noise_row
     assert "`insight_engine`" in duplicate_row
@@ -1249,6 +1345,62 @@ def test_extra_insights_missing_coverage_duplicates_and_coding_agent_context() -
     # it is a deterministic repo-relative path a coding agent can open.
     assert f"`ISSUE_CATALOG.md#{noise_issue_id}`" in noise_row
     assert f"[ISSUE_CATALOG.md#{noise_issue_id}]" not in noise_row
+
+
+def test_primary_coverage_and_every_extra_owner_are_independent() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    assessments = _assessments(manifest)
+    issue_id = manifest["agents"][0]["issues"][0]["issue_id"]
+    assessment = assessments[issue_id]
+    assessment["verdict"] = "partially_useful"
+    assessment["finding_type"] = "PARTIAL"
+    assessment["ownership"] = "agent"
+    assessment["fields"]["severity"] = False
+    primary = assessment["card_evaluations"][0]
+    primary.update(
+        {
+            "verdict": "partially_useful",
+            "finding_type": "PARTIAL",
+            "ownership": "agent",
+            "ownership_reason": "The Agent emitted an incomplete severity.",
+            "field_reasons": {
+                "severity": "The synthetic severity is incomplete."
+            },
+        }
+    )
+    primary["fields"]["severity"] = False
+    noise = deepcopy(primary)
+    noise.update(
+        {
+            "reference": "sha256:" + ("f" * 64),
+            "title": "Independent extra noise",
+            "verdict": "incorrect",
+            "finding_type": "NOISE",
+            "ownership": "insight_engine",
+            "ownership_reason": "The extra card is unrelated.",
+            "reasoning": "Independent evidence disproves the extra card.",
+        }
+    )
+    noise.pop("field_reasons")
+    assessment["card_evaluations"].append(noise)
+    report = build_report(
+        manifest,
+        issues,
+        assessments,
+        _baseline_assessments(manifest),
+    )
+    assert report["summary"]["issues_partial"] == 1
+    assert report["summary"]["noise_cards"] == 1
+    markdown = render_agent_markdown(report, manifest["agents"][0]["name"])
+    context = markdown.split("## Coding-agent context", 1)[1]
+    rows = [line for line in context.splitlines() if issue_id in line]
+    assert len(rows) == 2
+    assert any("`agent`" in row and "Partially Correct" in row for row in rows)
+    assert any(
+        "`insight_engine`" in row and "unmatched Noise" in row
+        for row in rows
+    )
 
 
 def test_daily_top_level_report_links_insight_engine_improvement() -> None:

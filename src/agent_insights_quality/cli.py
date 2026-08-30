@@ -175,6 +175,16 @@ def build_parser() -> argparse.ArgumentParser:
     published.add_argument("--improvement-json", type=Path, required=True)
     published.add_argument("--improvement-markdown", type=Path, required=True)
     published.add_argument(
+        "--base-improvement-json",
+        type=Path,
+        required=True,
+    )
+    published.add_argument(
+        "--base-improvement-markdown",
+        type=Path,
+        required=True,
+    )
+    published.add_argument(
         "--improvement-snapshot-json",
         type=Path,
         required=True,
@@ -791,6 +801,10 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             ),
             snapshot=read_json(args.improvement_snapshot_json),
             snapshot_markdown=args.improvement_snapshot_markdown.read_text(
+                encoding="utf-8"
+            ),
+            previous_state=read_json(args.base_improvement_json),
+            previous_markdown=args.base_improvement_markdown.read_text(
                 encoding="utf-8"
             ),
         )

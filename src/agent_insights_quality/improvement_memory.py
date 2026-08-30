@@ -19,6 +19,7 @@ provider IDs, or private identifiers are introduced.
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 from collections import Counter
 from collections.abc import Mapping, Sequence
@@ -118,7 +119,26 @@ def exercised_capabilities(report: Mapping[str, Any]) -> set[str]:
             continue
         fields = item.get("assessment", {}).get("fields", {})
         if isinstance(fields, Mapping):
-            capabilities.update(str(key) for key in fields)
+            capabilities.update(
+                _capability_name(
+                    str(item["agent"]),
+                    str(item["issue_id"]),
+                    str(key),
+                )
+                for key in fields
+            )
+        capabilities.add(
+            _capability_name(
+                str(item["agent"]),
+                str(item["issue_id"]),
+                "outcome",
+            )
+        )
+    for item in report["baseline"]:
+        if item.get("runtime_evidence_complete") is True:
+            capabilities.add(
+                _capability_name(str(item["agent"]), "v0", "outcome")
+            )
     return capabilities
 
 
@@ -127,6 +147,7 @@ def _finding_entry(
     finding_id: str,
     agent: str,
     issue_id: str | None,
+    origin_version: str,
     title: str,
     reasoning: str,
     fields: Mapping[str, Any] | None = None,
@@ -140,6 +161,7 @@ def _finding_entry(
         "finding_id": finding_id,
         "agent": agent,
         "issue_id": issue_id,
+        "origin_version": origin_version,
         "title": title,
         "reasoning": reasoning,
         "failed_fields": failed_fields,
@@ -154,6 +176,26 @@ def _finding_entry(
 
 def _finding_id(agent: str, issue_id: str | None, slot: str) -> str:
     return f"{agent}/{'v0' if issue_id is None else issue_id}/{slot}"
+
+
+def _capability_name(agent: str, issue_id: str, capability: str) -> str:
+    return f"{agent}/{issue_id}/{capability}"
+
+
+def _finding_capabilities(finding: Mapping[str, Any]) -> set[str]:
+    agent = str(finding["agent"])
+    issue_id = str(
+        finding.get("origin_version")
+        or finding.get("issue_id")
+        or "v0"
+    )
+    failed_fields = finding.get("failed_fields")
+    if isinstance(failed_fields, list) and failed_fields:
+        return {
+            _capability_name(agent, issue_id, str(field))
+            for field in failed_fields
+        }
+    return {_capability_name(agent, issue_id, "outcome")}
 
 
 def build_normalized_summary(
@@ -187,6 +229,7 @@ def build_normalized_summary(
                 finding_id=_finding_id(baseline["agent"], None, "outcome"),
                 agent=baseline["agent"],
                 issue_id=None,
+                origin_version="v0",
                 title="Baseline outcome",
                 reasoning=assessment.get("ownership_reason", ""),
                 fields={},
@@ -209,6 +252,7 @@ def build_normalized_summary(
                     ),
                     agent=baseline["agent"],
                     issue_id=None,
+                    origin_version="v0",
                     title=card.get("title", "Untitled Insight"),
                     reasoning=card.get("reasoning") or card.get("ownership_reason", ""),
                     fields=card.get("fields", {}),
@@ -238,6 +282,9 @@ def build_normalized_summary(
                 ),
                 agent=item["agent"],
                 issue_id=item["issue_id"],
+                origin_version=str(
+                    item.get("logical_version") or item["issue_id"]
+                ),
                 title=item["title"],
                 reasoning=(
                     primary.get("reasoning")
@@ -286,6 +333,9 @@ def build_normalized_summary(
                         None
                         if card.get("finding_type") == "NOISE"
                         else item["issue_id"]
+                    ),
+                    origin_version=str(
+                        item.get("logical_version") or item["issue_id"]
                     ),
                     title=card.get("title", "Untitled Insight"),
                     reasoning=card.get("reasoning") or card.get("ownership_reason", ""),
@@ -360,6 +410,46 @@ def validate_analysis(analysis: Mapping[str, Any]) -> None:
                 "Insight Engine improvement analysis contains forbidden "
                 "private or raw evidence"
             )
+    recommendation_fields = {
+        "executive_summary": [analysis["executive_summary"]],
+        "pattern.title": [item["title"] for item in analysis["patterns"]],
+        "pattern.why_it_is_a_pattern": [
+            item["why_it_is_a_pattern"] for item in analysis["patterns"]
+        ],
+        "pattern.improvement": [
+            item["improvement"] for item in analysis["patterns"]
+        ],
+        "pattern.measurable_signal": [
+            item["measurable_signal"] for item in analysis["patterns"]
+        ],
+        "priority.why_it_matters": [
+            item["why_it_matters"]
+            for item in analysis["improvement_priorities"]
+        ],
+        "isolated_observations": analysis["isolated_observations"],
+        "exclusions": analysis["exclusions"],
+    }
+    for field, values in recommendation_fields.items():
+        for value in values:
+            _validate_generalized_recommendation(field, str(value))
+
+
+_OVERFITTING_PATTERNS = (
+    re.compile(r"\bissue-[0-9]{3}\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:[a-z0-9]+-demo|demo-[a-z0-9]+)(?:-[a-z0-9]+)*\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bfixed synthetic case\b", re.IGNORECASE),
+)
+
+
+def _validate_generalized_recommendation(field: str, value: str) -> None:
+    if any(pattern.search(value) for pattern in _OVERFITTING_PATTERNS):
+        raise ContractError(
+            "Insight Engine improvement "
+            f"{field} contains issue-specific or fixed-answer guidance"
+        )
 
 
 def validate_analysis_against_summary(
@@ -459,23 +549,34 @@ def _pattern_identities(
     identities = []
     for pattern in patterns:
         cited = [findings[item["finding_id"]] for item in pattern["evidence"]]
-        root_evidence = [
+        recurrence_evidence = [
             {
-                "finding_id": item["finding_id"],
                 "agent": item["agent"],
-                "issue_id": item.get("issue_id"),
                 "finding_type": item["finding_type"],
-                "failed_fields": item["failed_fields"],
-                "failed_field_reasons": item["failed_field_reasons"],
+                "failed_fields": sorted(item["failed_fields"]),
             }
-            for item in sorted(cited, key=lambda value: value["finding_id"])
+            for item in sorted(
+                cited,
+                key=lambda value: (
+                    value["agent"],
+                    value["finding_type"],
+                    value["failed_fields"],
+                ),
+            )
         ]
         identities.append(
             {
-                "finding_ids": [
-                    item["finding_id"] for item in root_evidence
-                ],
-                "digest": content_hash({"root_evidence": root_evidence}),
+                "finding_ids": sorted(item["finding_id"] for item in cited),
+                "digest": content_hash(
+                    {"recurrence_evidence": recurrence_evidence}
+                ),
+                "supporting_capabilities": sorted(
+                    {
+                        capability
+                        for item in cited
+                        for capability in _finding_capabilities(item)
+                    }
+                ),
             }
         )
     return identities
@@ -1066,7 +1167,11 @@ def build_living_state(
                 f"{coverage['agents']} Agents / {coverage['issues']} issues / "
                 f"{'complete' if coverage['runtime_evidence_complete'] else 'incomplete'}"
             ),
-            "memory_update_text": _memory_update_text(reconciled_patterns),
+            "memory_update_text": (
+                "No pattern change"
+                if not coverage["runtime_evidence_complete"]
+                else _memory_update_text(reconciled_patterns)
+            ),
             "snapshot_link": snapshot_link,
         },
     )
@@ -1076,12 +1181,124 @@ def build_living_state(
         "latest_run_id": report["run_id"],
         "latest_coverage": coverage,
         "latest_snapshot_link": snapshot_link,
-        "executive_summary": analysis["executive_summary"],
-        "isolated_observations": list(analysis["isolated_observations"]),
-        "exclusions": list(analysis["exclusions"]),
+        "executive_summary": (
+            previous_state["executive_summary"]
+            if previous_state is not None
+            and not coverage["runtime_evidence_complete"]
+            else analysis["executive_summary"]
+        ),
+        "isolated_observations": (
+            list(previous_state["isolated_observations"])
+            if previous_state is not None
+            and not coverage["runtime_evidence_complete"]
+            else list(analysis["isolated_observations"])
+        ),
+        "exclusions": (
+            list(previous_state["exclusions"])
+            if previous_state is not None
+            and not coverage["runtime_evidence_complete"]
+            else list(analysis["exclusions"])
+        ),
         "patterns": {key: dict(value) for key, value in reconciled_patterns.items()},
         "snapshot_history": history,
     }
+
+
+def _prepare_improvement_documents(
+    report: Mapping[str, Any],
+    analysis: Mapping[str, Any],
+    previous_state: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    previous_patterns = (previous_state or {}).get("patterns", {})
+    normalized_summary = build_normalized_summary(report, previous_state)
+    validate_analysis_against_summary(analysis, normalized_summary)
+    assigned = assign_stable_pattern_ids(
+        analysis,
+        previous_patterns,
+        normalized_summary,
+    )
+    coverage = report_coverage(report)
+    is_comparable = coverage["runtime_evidence_complete"]
+    analysis_patterns = list(assigned["patterns"]) if is_comparable else []
+    eligible_by_finding = {
+        item["finding_id"]: item
+        for item in normalized_summary["insight_engine_findings"]
+    }
+    pattern_capabilities = {
+        pattern["pattern_key"]: sorted(
+            {
+                capability
+                for evidence in pattern["evidence"]
+                for capability in _finding_capabilities(
+                    eligible_by_finding[evidence["finding_id"]]
+                )
+            }
+        )
+        for pattern in analysis_patterns
+    }
+    pattern_identities = {
+        pattern["pattern_key"]: identity
+        for pattern, identity in zip(
+            assigned["patterns"],
+            _pattern_identities(
+                assigned["patterns"],
+                normalized_summary,
+            ),
+            strict=True,
+        )
+    }
+    same_run = (
+        previous_state is not None
+        and previous_state.get("latest_run_id") == report["run_id"]
+    )
+    reconciled = (
+        {key: dict(value) for key, value in previous_patterns.items()}
+        if same_run or not is_comparable
+        else reconcile_patterns(
+            previous_patterns,
+            analysis_patterns,
+            run_id=report["run_id"],
+            run_date=report["report_date"],
+            comparable=True,
+            exercised_agents=[item["agent"] for item in report["baseline"]],
+            assessment_policy=assessment_policy_digest(),
+            exercised_capability_names=sorted(exercised_capabilities(report)),
+            pattern_capabilities=pattern_capabilities,
+            pattern_priorities={
+                priority["pattern_key"]: index
+                for index, priority in enumerate(
+                    assigned["improvement_priorities"],
+                    start=1,
+                )
+            },
+            pattern_identities=pattern_identities,
+        )
+    )
+    snapshot = build_run_snapshot(
+        report,
+        assigned,
+        reconciled,
+        evaluated_patterns=analysis_patterns,
+    )
+    snapshot_link = "/".join(
+        [
+            "daily",
+            *report["report_date"].split("-"),
+            "insight-engine-improvement.md",
+        ]
+    )
+    living_state = (
+        dict(previous_state)
+        if same_run
+        else build_living_state(
+            previous_state,
+            report,
+            assigned,
+            reconciled,
+            snapshot_link=snapshot_link,
+        )
+    )
+    return assigned, snapshot, living_state
 
 
 def write_improvement_memory(
@@ -1107,98 +1324,16 @@ def write_improvement_memory(
             "Official Daily report"
         )
     previous_state = read_json(living_state_path) if living_state_path.exists() else None
-    previous_patterns = (previous_state or {}).get("patterns", {})
-    normalized_summary = build_normalized_summary(report, previous_state)
-    validate_analysis_against_summary(analysis, normalized_summary)
-    analysis = assign_stable_pattern_ids(
-        analysis,
-        previous_patterns,
-        normalized_summary,
-    )
-    coverage = report_coverage(report)
-    exercised_agents = [item["agent"] for item in report["baseline"]]
-    is_comparable = coverage["runtime_evidence_complete"]
-    analysis_patterns = list(analysis["patterns"]) if is_comparable else []
-    eligible_by_finding = {
-        item["finding_id"]: item
-        for item in normalized_summary["insight_engine_findings"]
-    }
-    pattern_capabilities = {
-        pattern["pattern_key"]: sorted(
-            {
-                capability
-                for evidence in pattern["evidence"]
-                for capability in eligible_by_finding[evidence["finding_id"]][
-                    "failed_fields"
-                ]
-            }
-        )
-        for pattern in analysis_patterns
-    }
-    pattern_identities = {
-        pattern["pattern_key"]: identity
-        for pattern, identity in zip(
-            analysis["patterns"],
-            _pattern_identities(
-                analysis["patterns"],
-                normalized_summary,
-            ),
-            strict=True,
-        )
-    }
-    same_run = (
-        previous_state is not None
-        and previous_state.get("latest_run_id") == report["run_id"]
-    )
-    reconciled = (
-        {key: dict(value) for key, value in previous_patterns.items()}
-        if same_run
-        else reconcile_patterns(
-            previous_patterns,
-            analysis_patterns,
-            run_id=report["run_id"],
-            run_date=report["report_date"],
-            comparable=is_comparable,
-            exercised_agents=exercised_agents,
-            assessment_policy=assessment_policy_digest(),
-            exercised_capability_names=sorted(
-                exercised_capabilities(report)
-            ),
-            pattern_capabilities=pattern_capabilities,
-            pattern_priorities={
-                priority["pattern_key"]: index
-                for index, priority in enumerate(
-                    analysis["improvement_priorities"],
-                    start=1,
-                )
-            },
-            pattern_identities=pattern_identities,
-        )
-    )
-    snapshot = build_run_snapshot(
+    analysis, snapshot, living_state = _prepare_improvement_documents(
         report,
         analysis,
-        reconciled,
-        evaluated_patterns=analysis_patterns,
+        previous_state,
     )
     snapshot_dir = (
         reports_root
         / "daily"
         / report["report_date"].replace("-", "/")
     )
-    relative_snapshot_link = "/".join(
-        ["daily", *report["report_date"].split("-"), "insight-engine-improvement.md"]
-    )
-    if same_run:
-        living_state = dict(previous_state)
-    else:
-        living_state = build_living_state(
-            previous_state,
-            report,
-            analysis,
-            reconciled,
-            snapshot_link=relative_snapshot_link,
-        )
     snapshot_markdown = render_snapshot_markdown(snapshot)
     living_markdown = render_living_markdown(living_state)
     validate_published_improvement(
@@ -1207,6 +1342,12 @@ def write_improvement_memory(
         living_markdown=living_markdown,
         snapshot=snapshot,
         snapshot_markdown=snapshot_markdown,
+        previous_state=previous_state,
+        previous_markdown=(
+            render_living_markdown(previous_state)
+            if previous_state is not None
+            else None
+        ),
     )
     if report_output is not None:
         validate_report(dict(report))
@@ -1242,6 +1383,12 @@ def write_improvement_memory(
             snapshot=read_json(staged / "snapshot.json"),
             snapshot_markdown=(staged / "snapshot.md").read_text(
                 encoding="utf-8"
+            ),
+            previous_state=previous_state,
+            previous_markdown=(
+                render_living_markdown(previous_state)
+                if previous_state is not None
+                else None
             ),
         )
 
@@ -1294,7 +1441,7 @@ def write_improvement_preview(
                     for evidence in pattern["evidence"]
                     for finding in normalized_summary["insight_engine_findings"]
                     if finding["finding_id"] == evidence["finding_id"]
-                    for capability in finding["failed_fields"]
+                    for capability in _finding_capabilities(finding)
                 }
             )
             for pattern in patterns
@@ -1342,13 +1489,51 @@ def validate_published_improvement(
     living_markdown: str,
     snapshot: Mapping[str, Any],
     snapshot_markdown: str,
+    previous_state: Mapping[str, Any] | None = None,
+    previous_markdown: str | None = None,
 ) -> None:
     snapshot_analysis = snapshot.get("analysis")
     if not isinstance(snapshot_analysis, Mapping):
         raise ContractError(
             "Published Insight Engine improvement snapshot lacks full analysis"
         )
-    validate_analysis(snapshot_analysis)
+    normalized_summary = build_normalized_summary(report, previous_state)
+    validate_analysis_against_summary(snapshot_analysis, normalized_summary)
+    expected_analysis, expected_snapshot, expected_living = (
+        _prepare_improvement_documents(
+            report,
+            snapshot_analysis,
+            previous_state,
+        )
+    )
+    if (
+        dict(snapshot_analysis) != expected_analysis
+        or dict(snapshot) != expected_snapshot
+        or dict(living_state) != expected_living
+    ):
+        raise ContractError(
+            "Published Insight Engine improvement does not reconstruct from "
+            "the trusted report and base memory"
+        )
+    same_run = (
+        previous_state is not None
+        and previous_state.get("latest_run_id") == report["run_id"]
+    )
+    history_matches = (
+        living_state.get("snapshot_history", [])
+        == previous_state.get("snapshot_history", [])
+        if same_run
+        else living_state.get("snapshot_history", [])[1:]
+        == (previous_state or {}).get("snapshot_history", [])
+    )
+    if previous_state is not None and (
+        previous_markdown is None
+        or previous_markdown != render_living_markdown(previous_state)
+        or not history_matches
+    ):
+        raise ContractError(
+            "Published Insight Engine improvement base history is not immutable"
+        )
     evaluated_patterns = (
         snapshot_analysis["patterns"]
         if report_coverage(report)["runtime_evidence_complete"]

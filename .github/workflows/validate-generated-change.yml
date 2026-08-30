@@ -115,6 +115,28 @@ jobs:
           git show "${HEAD_SHA}:${report_path%report.json}insight-engine-improvement.md" \
             > "${RUNNER_TEMP}/insight-engine-improvement-snapshot.md"
           git show "${BASE_SHA}:reports/trend.json" > "${RUNNER_TEMP}/base-trend.json"
+          git show "${BASE_SHA}:reports/insight-engine-improvement.json" \
+            > "${RUNNER_TEMP}/base-insight-engine-improvement.json"
+          git show "${BASE_SHA}:reports/insight-engine-improvement.md" \
+            > "${RUNNER_TEMP}/base-insight-engine-improvement.md"
+          current_snapshot_json="${report_path%report.json}insight-engine-improvement.json"
+          current_snapshot_md="${report_path%report.json}insight-engine-improvement.md"
+          for current_snapshot in "${current_snapshot_json}" "${current_snapshot_md}"; do
+            if git cat-file -e "${BASE_SHA}:${current_snapshot}" 2>/dev/null; then
+              echo "Current improvement snapshot already exists in trusted base: ${current_snapshot}" >&2
+              exit 1
+            fi
+          done
+          while IFS=$'\t' read -r status path; do
+            case "${path}" in
+              reports/daily/*/insight-engine-improvement.json|reports/daily/*/insight-engine-improvement.md)
+                if [[ "${path}" != "${current_snapshot_json}" && "${path}" != "${current_snapshot_md}" ]]; then
+                  echo "Existing improvement snapshot changed or was deleted: ${status} ${path}" >&2
+                  exit 1
+                fi
+                ;;
+            esac
+          done < <(git diff --no-renames --name-status "${BASE_SHA}...${HEAD_SHA}")
           python -m agent_insights_quality validate-published-report \
             --report "${RUNNER_TEMP}/report.json" \
             --receipt "${RUNNER_TEMP}/email-receipt.json" \
@@ -126,6 +148,8 @@ jobs:
             --base-trend "${RUNNER_TEMP}/base-trend.json" \
             --improvement-json "${RUNNER_TEMP}/insight-engine-improvement.json" \
             --improvement-markdown "${RUNNER_TEMP}/insight-engine-improvement.md" \
+            --base-improvement-json "${RUNNER_TEMP}/base-insight-engine-improvement.json" \
+            --base-improvement-markdown "${RUNNER_TEMP}/base-insight-engine-improvement.md" \
             --improvement-snapshot-json "${RUNNER_TEMP}/insight-engine-improvement-snapshot.json" \
             --improvement-snapshot-markdown "${RUNNER_TEMP}/insight-engine-improvement-snapshot.md" \
             "${agent_args[@]}"

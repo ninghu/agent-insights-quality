@@ -89,6 +89,18 @@ def _report() -> dict:
     )
     for item in report["issues"]:
         item["title"] = issue_by_id[item["issue_id"]]["title"]
+        assessment = item["assessment"]
+        assessment.setdefault("reasoning", assessment["ownership_reason"])
+        for card in assessment["card_evaluations"]:
+            if card["finding_type"] in {"PARTIAL", "MISMATCHED"}:
+                card["field_reasons"] = {
+                    field: (
+                        f"The synthetic historical fixture marks {field} "
+                        "incorrect for this card."
+                    )
+                    for field, passed in card["fields"].items()
+                    if passed is False
+                }
     return report
 
 

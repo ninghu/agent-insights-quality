@@ -309,12 +309,13 @@ def _summary_metrics(
     )
     issues_correct = sum(
         item["status"] == "observed"
-        and item["observed_count"] == 1
-        and item["assessment"]["verdict"] == "correct"
-        and all(item["assessment"]["fields"].values())
+        and expected_issue_coverage_label(item) == "Correct"
         for item in issues
     )
-    issues_partial = sum(item["detail"] == "PARTIAL" for item in issues)
+    issues_partial = sum(
+        expected_issue_coverage_label(item) == "Partially Correct"
+        for item in issues
+    )
     noise_cards = sum(
         sum(
             card.get("evaluation") == "noise"
@@ -624,6 +625,94 @@ def build_report(
     return report
 
 
+def _validate_embedded_assessment_cards(report: Mapping[str, Any]) -> None:
+    issue_schema = read_json(ROOT / "schemas" / "assessment.schema.json")[
+        "properties"
+    ]["card_evaluations"]["items"]
+    baseline_schema = read_json(
+        ROOT / "schemas" / "baseline-assessment.schema.json"
+    )["properties"]["card_evaluations"]["items"]
+    for item, schema in [
+        *((item, baseline_schema) for item in report["baseline"]),
+        *((item, issue_schema) for item in report["issues"]),
+    ]:
+        for card in item["assessment"].get("card_evaluations", []):
+            errors = list(Draft202012Validator(schema).iter_errors(card))
+            if errors:
+                raise ContractError(
+                    "Report assessment card is invalid: " + errors[0].message
+                )
+    for item in report["issues"]:
+        cards = item["assessment"].get("card_evaluations", [])
+        references = [card["reference"] for card in cards]
+        if len(references) != len(set(references)):
+            raise ContractError(
+                "Report issue card references must be unique within an assessment"
+            )
+        reference_types = {
+            card["reference"]: card["finding_type"] for card in cards
+        }
+        for card in cards:
+            if card["finding_type"] in {"PARTIAL", "MISMATCHED"}:
+                failed_fields = {
+                    field
+                    for field, passed in card["fields"].items()
+                    if passed is False
+                }
+                if set(card.get("field_reasons", {})) != failed_fields:
+                    raise ContractError(
+                        "Report PARTIAL/MISMATCHED card requires a reason for "
+                        "exactly each failed field"
+                    )
+            if card["finding_type"] == "DUPLICATE":
+                primary = card.get("duplicate_of")
+                if (
+                    not isinstance(primary, str)
+                    or primary == card["reference"]
+                    or reference_types.get(primary)
+                    not in {"MATCHED", "PARTIAL", "MISMATCHED"}
+                ):
+                    raise ContractError(
+                        "Report DUPLICATE card must reference another "
+                        "attributable card in the same assessment"
+                    )
+
+
+_FORBIDDEN_PUBLIC_REPORT_KEYS = {
+    "azure_id",
+    "azure_resource_id",
+    "private_context",
+    "prompt",
+    "prompt_payload",
+    "provider_id",
+    "provider_ids",
+    "raw_trace",
+    "raw_traces",
+    "response_body",
+    "response_payload",
+}
+
+
+def _validate_public_report_content(value: Any, path: str = "report") -> None:
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            normalized = str(key).casefold()
+            if normalized in _FORBIDDEN_PUBLIC_REPORT_KEYS:
+                raise ContractError(
+                    f"Public report contains forbidden nested field at {path}.{key}"
+                )
+            _validate_public_report_content(child, f"{path}.{key}")
+        return
+    if isinstance(value, list):
+        for index, child in enumerate(value):
+            _validate_public_report_content(child, f"{path}[{index}]")
+        return
+    if isinstance(value, str) and "/subscriptions/" in value.casefold():
+        raise ContractError(
+            f"Public report contains a private Azure resource identifier at {path}"
+        )
+
+
 def build_operational_failure_report(
     *,
     report_date: Any,
@@ -652,6 +741,9 @@ def build_operational_failure_report(
                 "finding_type": "INCOMPLETE",
                 "ownership": "infrastructure",
                 "ownership_reason": (
+                    "Qualification failed before trustworthy issue evidence."
+                ),
+                "reasoning": (
                     "Qualification failed before trustworthy issue evidence."
                 ),
                 "confidence": 0.0,
@@ -737,7 +829,11 @@ def validate_report(report: dict[str, Any]) -> None:
         ).iter_errors(report)
     )
     if errors:
-        raise ContractError(f"Report is invalid: {errors[0].message}")
+        raise ContractError(
+            f"Report is invalid or incomplete: {errors[0].message}"
+        )
+    _validate_embedded_assessment_cards(report)
+    _validate_public_report_content(report)
     source_integrity = report["source_integrity"]
     if report["status"] in {"PASS", "FAIL"} and (
         source_integrity.get("verified") is not True
@@ -1618,57 +1714,57 @@ def _baseline_context_entry(
     return finding, ownership, anchor_phrase
 
 
-def _issue_context_entry(item: dict[str, Any]) -> tuple[str, str, str] | None:
-    """Return ``(finding, ownership, anchor_phrase)`` for one issue row, or
-    ``None`` when the issue has no actionable finding at all (a plain
-    Correct with no extra generated cards)."""
+def _issue_context_entries(
+    item: dict[str, Any],
+) -> list[tuple[str, str, str]]:
+    """Return one entry for every distinct actionable owner on an issue."""
     label = expected_issue_coverage_label(item)
     primary = issue_primary_card(item)
     cards = item["assessment"].get("card_evaluations", [])
-    extra_noise = [
-        card
-        for card in cards
-        if card is not primary and card.get("finding_type") == "NOISE"
-    ]
-    extra_duplicates = [card for card in cards if card.get("finding_type") == "DUPLICATE"]
-    if label == "Correct" and not extra_noise and not extra_duplicates:
-        return None
-    parts = [label]
-    if extra_duplicates:
-        parts.append("Duplicate group")
-    if extra_noise:
-        parts.append("unmatched Noise")
-    finding = f"`{item['issue_id']}` " + " + ".join(parts)
-    decision_kind = label in {"Partially Correct", "Incorrect"}
-    block_count = (
-        (1 if decision_kind else 0)
-        + (1 if extra_duplicates else 0)
-        + (1 if extra_noise else 0)
-    )
-    if decision_kind:
-        anchor_word = "decision"
-    elif extra_noise:
-        anchor_word = "Noise"
-    elif extra_duplicates:
-        anchor_word = "Duplicate"
-    else:
-        anchor_word = label
-        block_count = 1
-    anchor_phrase = f"{anchor_word} detail{'s' if block_count > 1 else ''} above"
-    # Ownership follows whichever card is actually driving this row: the
-    # primary's own judgment when it is substantive (Partially Correct /
-    # Incorrect), else the unmatched Noise card, else the Duplicate card -
-    # never the primary's "none" ownership on an otherwise-Correct issue
-    # whose only actionable content is its Duplicate group.
-    if decision_kind and primary is not None:
-        ownership = primary.get("ownership", item["assessment"]["ownership"])
-    elif extra_noise:
-        ownership = extra_noise[0].get("ownership", item["assessment"]["ownership"])
-    elif extra_duplicates:
-        ownership = extra_duplicates[0].get("ownership", item["assessment"]["ownership"])
-    else:
-        ownership = item["assessment"]["ownership"]
-    return finding, ownership, anchor_phrase
+    by_owner: dict[str, list[tuple[str, str]]] = {}
+    if label != "Correct":
+        ownership = (
+            primary.get("ownership", item["assessment"]["ownership"])
+            if primary is not None
+            else item["assessment"]["ownership"]
+        )
+        by_owner.setdefault(ownership, []).append(
+            (label, "decision" if label in {"Partially Correct", "Incorrect"} else label)
+        )
+    for card in cards:
+        if card is primary or card.get("finding_type") not in {
+            "NOISE",
+            "DUPLICATE",
+        }:
+            continue
+        ownership = card.get("ownership", item["assessment"]["ownership"])
+        card_label = (
+            "unmatched Noise"
+            if card["finding_type"] == "NOISE"
+            else "Duplicate group"
+        )
+        entry = (
+            card_label,
+            "Noise" if card["finding_type"] == "NOISE" else "Duplicate",
+        )
+        owner_entries = by_owner.setdefault(ownership, [])
+        if entry not in owner_entries:
+            owner_entries.append(entry)
+    entries = []
+    for ownership, values in sorted(by_owner.items()):
+        parts = [value[0] for value in values]
+        anchors = [value[1] for value in values]
+        entries.append(
+            (
+                f"`{item['issue_id']}` " + " + ".join(parts),
+                ownership,
+                (
+                    f"{' / '.join(anchors)} "
+                    f"detail{'s' if len(anchors) > 1 else ''} above"
+                ),
+            )
+        )
+    return entries
 
 
 def _coding_agent_context_rows(
@@ -1692,17 +1788,19 @@ def _coding_agent_context_rows(
             )
         )
     for item in issues:
-        entry = _issue_context_entry(item)
-        if entry is None:
-            continue
-        finding, ownership, anchor_phrase = entry
-        rows.append(
-            (
-                finding,
-                f"`{ownership}`",
-                _context_cell(agent_name, ownership, item["issue_id"], anchor_phrase),
+        for finding, ownership, anchor_phrase in _issue_context_entries(item):
+            rows.append(
+                (
+                    finding,
+                    f"`{ownership}`",
+                    _context_cell(
+                        agent_name,
+                        ownership,
+                        item["issue_id"],
+                        anchor_phrase,
+                    ),
+                )
             )
-        )
     return rows
 
 

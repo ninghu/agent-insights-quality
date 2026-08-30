@@ -29,6 +29,288 @@
     }
   ],
   "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "agent": {
+      "enum": [
+        "weather-agent",
+        "healthcare-agent",
+        "finance-agent",
+        "travel-agent",
+        "support-ticket-agent"
+      ]
+    },
+    "ownership": {
+      "enum": [
+        "none",
+        "agent",
+        "insight_engine",
+        "test_framework",
+        "infrastructure",
+        "unresolved"
+      ]
+    },
+    "fields": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root_cause",
+        "title",
+        "description",
+        "category",
+        "severity",
+        "proposed_fix",
+        "linked_traces"
+      ],
+      "properties": {
+        "root_cause": {"type": "boolean"},
+        "title": {"type": "boolean"},
+        "description": {"type": "boolean"},
+        "category": {"type": "boolean"},
+        "severity": {"type": "boolean"},
+        "proposed_fix": {"type": "boolean"},
+        "linked_traces": {"type": "boolean"}
+      }
+    },
+    "fieldReasons": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "root_cause": {"type": "string", "minLength": 1, "maxLength": 300},
+        "title": {"type": "string", "minLength": 1, "maxLength": 300},
+        "description": {"type": "string", "minLength": 1, "maxLength": 300},
+        "category": {"type": "string", "minLength": 1, "maxLength": 300},
+        "severity": {"type": "string", "minLength": 1, "maxLength": 300},
+        "proposed_fix": {"type": "string", "minLength": 1, "maxLength": 300},
+        "linked_traces": {"type": "string", "minLength": 1, "maxLength": 300}
+      }
+    },
+    "issueCard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reference",
+        "title",
+        "category",
+        "severity",
+        "verdict",
+        "finding_type",
+        "ownership",
+        "ownership_reason",
+        "fields",
+        "confidence",
+        "reasoning"
+      ],
+      "properties": {
+        "reference": {"$ref": "#/$defs/hash"},
+        "title": {"type": "string", "maxLength": 300},
+        "category": {"type": "string", "maxLength": 100},
+        "severity": {"type": "string", "maxLength": 50},
+        "verdict": {"enum": ["correct", "partially_useful", "incorrect", "incomplete"]},
+        "finding_type": {"enum": ["MATCHED", "PARTIAL", "MISMATCHED", "NOISE", "DUPLICATE", "INCOMPLETE"]},
+        "ownership": {"$ref": "#/$defs/ownership"},
+        "ownership_reason": {"type": "string", "minLength": 1, "maxLength": 1000},
+        "fields": {"$ref": "#/$defs/fields"},
+        "field_reasons": {"$ref": "#/$defs/fieldReasons"},
+        "duplicate_of": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/hash"}]
+        },
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "reasoning": {"type": "string", "minLength": 1, "maxLength": 1000}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"finding_type": {"enum": ["PARTIAL", "MISMATCHED"]}},
+            "required": ["finding_type"]
+          },
+          "then": {"required": ["field_reasons"]}
+        },
+        {
+          "if": {
+            "properties": {"finding_type": {"const": "DUPLICATE"}},
+            "required": ["finding_type"]
+          },
+          "then": {"required": ["duplicate_of"]}
+        }
+      ]
+    },
+    "baselineCard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reference",
+        "title",
+        "category",
+        "severity",
+        "evaluation",
+        "ownership",
+        "ownership_reason",
+        "confidence",
+        "reasoning"
+      ],
+      "properties": {
+        "reference": {"$ref": "#/$defs/hash"},
+        "title": {"type": "string", "maxLength": 300},
+        "category": {"type": "string", "maxLength": 100},
+        "severity": {"type": "string", "maxLength": 50},
+        "evaluation": {"enum": ["noise", "valid_agent_finding", "incomplete"]},
+        "ownership": {"$ref": "#/$defs/ownership"},
+        "ownership_reason": {"type": "string", "minLength": 1, "maxLength": 1000},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "reasoning": {"type": "string", "minLength": 1, "maxLength": 1000}
+      }
+    },
+    "baselineAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verdict",
+        "ownership",
+        "ownership_reason",
+        "confidence",
+        "card_evaluations"
+      ],
+      "properties": {
+        "verdict": {"enum": ["clean", "noise", "agent_finding", "inconclusive"]},
+        "ownership": {"$ref": "#/$defs/ownership"},
+        "ownership_reason": {"type": "string", "minLength": 1, "maxLength": 1000},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "card_evaluations": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/baselineCard"}
+        }
+      }
+    },
+    "issueAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verdict",
+        "finding_type",
+        "ownership",
+        "ownership_reason",
+        "fields",
+        "card_evaluations",
+        "confidence",
+        "reasoning"
+      ],
+      "properties": {
+        "verdict": {"enum": ["correct", "partially_useful", "incorrect", "missing"]},
+        "finding_type": {"enum": ["MATCHED", "PARTIAL", "MISMATCHED", "MISSING", "NOISE", "DUPLICATE", "INCOMPLETE"]},
+        "ownership": {"$ref": "#/$defs/ownership"},
+        "ownership_reason": {"type": "string", "minLength": 1, "maxLength": 1000},
+        "fields": {"$ref": "#/$defs/fields"},
+        "card_evaluations": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/issueCard"}
+        },
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "reasoning": {"type": "string", "minLength": 1, "maxLength": 1000}
+      }
+    },
+    "terminalEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "response_count",
+        "success_count",
+        "explicit_success_count",
+        "output_count",
+        "explicit_output_count",
+        "handled_error_count",
+        "unhandled_error_count"
+      ],
+      "properties": {
+        "response_count": {"type": "integer", "minimum": 0},
+        "success_count": {"type": "integer", "minimum": 0},
+        "explicit_success_count": {"type": "integer", "minimum": 0},
+        "output_count": {"type": "integer", "minimum": 0},
+        "explicit_output_count": {"type": "integer", "minimum": 0},
+        "handled_error_count": {"type": "integer", "minimum": 0},
+        "unhandled_error_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "activationEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request_count", "assertion_count", "assertions_passed"],
+      "properties": {
+        "request_count": {"type": "integer", "minimum": 0},
+        "assertion_count": {"type": "integer", "minimum": 0},
+        "assertions_passed": {"type": "integer", "minimum": 0}
+      }
+    },
+    "baselineItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agent",
+        "logical_version",
+        "foundry_version",
+        "status",
+        "runtime_evidence_complete",
+        "insight_count",
+        "assessment"
+      ],
+      "properties": {
+        "agent": {"$ref": "#/$defs/agent"},
+        "logical_version": {"const": "v0"},
+        "foundry_version": {"type": "string", "minLength": 1},
+        "status": {"enum": ["passed", "not_at_bar", "inconclusive"]},
+        "error_code": {"type": ["string", "null"]},
+        "runtime_evidence_complete": {"type": "boolean"},
+        "insight_count": {"type": "integer", "minimum": 0},
+        "terminal_evidence": {"$ref": "#/$defs/terminalEvidence"},
+        "assessment": {"$ref": "#/$defs/baselineAssessment"}
+      }
+    },
+    "issueItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "issue_id",
+        "agent",
+        "logical_version",
+        "foundry_version",
+        "title",
+        "status",
+        "runtime_evidence_complete",
+        "result",
+        "detail",
+        "observed_count",
+        "assessment",
+        "evidence_reference"
+      ],
+      "properties": {
+        "issue_id": {"type": "string", "pattern": "^issue-[0-9]{3}$"},
+        "agent": {"$ref": "#/$defs/agent"},
+        "logical_version": {"type": "string", "pattern": "^issue-[0-9]{3}$"},
+        "foundry_version": {"type": "string", "minLength": 1},
+        "title": {"type": "string", "minLength": 1, "maxLength": 300},
+        "status": {"enum": ["observed", "not_observed", "not_at_bar", "inconclusive", "skipped_baseline"]},
+        "error_code": {"type": ["string", "null"]},
+        "runtime_evidence_complete": {"type": "boolean"},
+        "activation_evidence": {"$ref": "#/$defs/activationEvidence"},
+        "result": {"enum": ["PASS", "FAIL", "INCOMPLETE"]},
+        "detail": {"enum": ["MATCHED", "PARTIAL", "MISMATCHED", "MISSING", "NOISE", "DUPLICATE", "INCOMPLETE"]},
+        "observed_count": {"type": "integer", "minimum": 0},
+        "assessment": {"$ref": "#/$defs/issueAssessment"},
+        "evidence_reference": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/hash"}]
+        },
+        "shadow_v2_primary": {"$ref": "#/$defs/shadowPrimary"}
+      }
+    },
+    "catalogHashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agents", "issues", "artifacts"],
+      "properties": {
+        "agents": {"$ref": "#/$defs/hash"},
+        "issues": {"$ref": "#/$defs/hash"},
+        "artifacts": {"$ref": "#/$defs/hash"}
+      }
+    },
     "shadowPrimary": {
       "oneOf": [
         {"type": "null"},
@@ -144,7 +426,7 @@
       ]
     },
     "manifest_reference": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-    "catalog_hashes": {"type": "object"},
+    "catalog_hashes": {"$ref": "#/$defs/catalogHashes"},
     "source_integrity": {
       "type": "object",
       "additionalProperties": false,
@@ -166,15 +448,15 @@
       ]
     },
     "status": {"enum": ["PASS", "FAIL", "INCOMPLETE"]},
-    "baseline": {"type": "array", "minItems": 5, "maxItems": 5},
+    "baseline": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": {"$ref": "#/$defs/baselineItem"}
+    },
     "issues": {
       "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "shadow_v2_primary": {"$ref": "#/$defs/shadowPrimary"}
-        }
-      }
+      "items": {"$ref": "#/$defs/issueItem"}
     },
     "summary": {
       "type": "object",

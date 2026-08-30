@@ -75,7 +75,10 @@ def improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str]]:
     missing = [
         item
         for item in issues
-        if item.get("detail") in {"MISSING", "NOISE", "DUPLICATE"}
+        if not any(
+            card.get("finding_type") in {"MATCHED", "PARTIAL", "MISMATCHED"}
+            for card in item.get("assessment", {}).get("card_evaluations", [])
+        )
     ]
     if missing:
         rows.append(
