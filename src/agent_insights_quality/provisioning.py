@@ -487,6 +487,7 @@ def build_artifact(
     issue: dict[str, Any] | None,
     *,
     support_images: Mapping[str, str] | None = None,
+    hosted_environment_variables: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     logical_version = issue["id"] if issue else "v0"
     root = ROOT / (
@@ -521,6 +522,9 @@ def build_artifact(
         )
         host = _read_yaml(baseline_root / "host.yaml")
         definition = _hosted_definition(host, profile_endpoint=None)
+        definition["environment_variables"].update(
+            hosted_environment_variables or {}
+        )
         return {
             "kind": "hosted_code",
             "definition": definition,
@@ -537,6 +541,9 @@ def build_artifact(
         raise ContractError(f"Digest-pinned Support image for {logical_version} is required")
     container = _read_yaml(ROOT / agent["baseline_path"] / "container.yaml")
     definition = _container_definition(container)
+    definition["environment_variables"].update(
+        hosted_environment_variables or {}
+    )
     definition["container_configuration"]["image"] = image
     return {
         "kind": "hosted_custom_container",

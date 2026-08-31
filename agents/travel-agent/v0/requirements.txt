@@ -1,4 +1,4 @@
-langchain-azure-ai[hosting]==1.2.8
+langchain-azure-ai[hosting,opentelemetry]==1.2.8
 aiohttp==3.14.3
 langchain-core==1.5.5
 langgraph==1.2.11

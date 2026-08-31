@@ -32,6 +32,32 @@ from agent_insights_quality.validation_runtime import (
 from agent_insights_quality.validation_quota import CapacityMeasurement
 
 
+HOSTED_VALIDATION_OUTPUT_TELEMETRY_ENVIRONMENT = {
+    # Each hosted framework has its own documented synthetic-content opt-in.
+    "ENABLE_SENSITIVE_DATA": "true",
+    "AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED": "true",
+    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "true",
+}
+
+
+def _build_validation_artifact(
+    catalog_agent: dict[str, Any],
+    issue: dict[str, Any] | None,
+    *,
+    support_images: Mapping[str, str],
+) -> dict[str, Any]:
+    return build_artifact(
+        catalog_agent,
+        issue,
+        support_images=support_images,
+        hosted_environment_variables=(
+            HOSTED_VALIDATION_OUTPUT_TELEMETRY_ENVIRONMENT
+            if catalog_agent["type"] != "prompt"
+            else None
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class ProjectDeployment:
     project_name: str
@@ -820,7 +846,7 @@ class FoundryAuthorityDeployer:
         )
         if authority.authority_kind == "issue" and issue is None:
             raise ContractError("Validation issue authority is not in the catalog")
-        artifact = build_artifact(
+        artifact = _build_validation_artifact(
             catalog_agent,
             issue,
             support_images=self._support_images,

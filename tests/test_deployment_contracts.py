@@ -1,7 +1,16 @@
 from __future__ import annotations
 
-from agent_insights_quality.provisioning import _hosted_definition, _resolve_definition
+from agent_insights_quality.catalogs import load_catalogs
+from agent_insights_quality.provisioning import (
+    _hosted_definition,
+    _resolve_definition,
+    build_artifact,
+)
 from agent_insights_quality.util import ROOT
+from agent_insights_quality.validation_provisioning import (
+    HOSTED_VALIDATION_OUTPUT_TELEMETRY_ENVIRONMENT,
+    _build_validation_artifact,
+)
 
 
 def test_hosted_source_uses_supported_runtime() -> None:
@@ -10,6 +19,96 @@ def test_hosted_source_uses_supported_runtime() -> None:
         profile_endpoint="https://example.invalid",
     )
     assert definition["code_configuration"]["runtime"] == "python_3_13"
+
+
+def test_validation_output_capture_reaches_every_hosted_deployment_spec() -> None:
+    agents, issues = load_catalogs()
+    issue_by_id = {item["id"]: item for item in issues["issues"]}
+    hosted_agents = [
+        agent for agent in agents["agents"] if agent["type"] != "prompt"
+    ]
+    support_versions = [
+        "v0",
+        *next(
+            agent["issue_ids"]
+            for agent in hosted_agents
+            if agent["name"] == "support-ticket-agent"
+        ),
+    ]
+    support_images = {
+        version: f"synthetic.invalid/support@sha256:{index:064x}"
+        for index, version in enumerate(support_versions, start=1)
+    }
+
+    definitions = []
+    for agent in hosted_agents:
+        for logical_version in ["v0", *agent["issue_ids"]]:
+            artifact = _build_validation_artifact(
+                agent,
+                issue_by_id.get(logical_version),
+                support_images=support_images,
+            )
+            definitions.append(artifact["definition"])
+
+    assert len(definitions) == 27
+    assert HOSTED_VALIDATION_OUTPUT_TELEMETRY_ENVIRONMENT == {
+        "ENABLE_SENSITIVE_DATA": "true",
+        "AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED": "true",
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "true",
+    }
+    assert all(
+        {
+            key: definition["environment_variables"].get(key)
+            for key in HOSTED_VALIDATION_OUTPUT_TELEMETRY_ENVIRONMENT
+        }
+        == HOSTED_VALIDATION_OUTPUT_TELEMETRY_ENVIRONMENT
+        for definition in definitions
+    )
+
+
+def test_daily_hosted_specs_do_not_enable_validation_content_capture() -> None:
+    agents, _ = load_catalogs()
+    for agent in agents["agents"]:
+        if agent["type"] != "hosted_code":
+            continue
+        definition = build_artifact(agent, None)["definition"]
+        assert not (
+            HOSTED_VALIDATION_OUTPUT_TELEMETRY_ENVIRONMENT.keys()
+            & definition["environment_variables"].keys()
+        )
+
+
+def test_hosted_sources_do_not_inject_canonical_output_messages() -> None:
+    for agent_name in (
+        "finance-agent",
+        "travel-agent",
+        "support-ticket-agent",
+    ):
+        source_files = (ROOT / "agents" / agent_name).glob("**/source/*.py")
+        assert all(
+            "gen_ai.output.messages"
+            not in source.read_text(encoding="utf-8")
+            for source in source_files
+        )
+
+
+def test_travel_authorities_use_supported_langgraph_instrumentation() -> None:
+    travel_root = ROOT / "agents" / "travel-agent"
+    requirements = (travel_root / "v0" / "requirements.txt").read_text(
+        encoding="utf-8"
+    )
+    observability_files = list(travel_root.glob("**/source/observability.py"))
+    observability_sources = [
+        source.read_text(encoding="utf-8") for source in observability_files
+    ]
+
+    assert "langchain-azure-ai[hosting,opentelemetry]==1.2.8" in requirements
+    assert len(observability_files) == 9
+    assert all(
+        "enable_auto_tracing(" in source
+        and "trace_all_langgraph_nodes=False" in source
+        for source in observability_sources
+    )
 
 
 def test_prompt_model_resolves_to_deployment_name() -> None:
