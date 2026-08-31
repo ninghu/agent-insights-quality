@@ -21,7 +21,10 @@ from agent_insights_quality.util import (
     content_hash,
     read_json,
 )
-from agent_insights_quality.validation_cleanup import CleanupEngine
+from agent_insights_quality.validation_cleanup import (
+    CleanupEngine,
+    cleanup_failure_summary,
+)
 from agent_insights_quality.validation_cleanup_azure import (
     AzureValidationCleanupBackend,
 )
@@ -492,7 +495,10 @@ def run_test_agent_validation(
             )
         except (ContractError, OSError, RuntimeError) as cleanup_error:
             if controller.active.value["state"] == "CLEANING":
-                controller.mark_cleanup_blocked(now=now())
+                controller.mark_cleanup_blocked(
+                    failure=cleanup_failure_summary(cleanup_error),
+                    now=now(),
+                )
             raise ContractError(
                 "Local Test Agent Validation cleanup is blocked"
             ) from cleanup_error

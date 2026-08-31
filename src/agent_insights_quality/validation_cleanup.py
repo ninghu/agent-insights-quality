@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -89,6 +91,15 @@ class CleanupResult:
     residue_ids: tuple[str, ...]
 
 
+class CleanupOperationError(ContractError):
+    def __init__(self, operation: str, resource_kind: str) -> None:
+        super().__init__(
+            f"Validation cleanup {operation} failed for {resource_kind}"
+        )
+        self.operation = operation
+        self.resource_kind = resource_kind
+
+
 class CleanupBackend(Protocol):
     def resolve_intent(self, item: CleanupPlanItem) -> CleanupPlanItem | None: ...
 
@@ -104,6 +115,33 @@ class CleanupBackend(Protocol):
         cycle_id: str,
         ownership_nonce: str,
     ) -> CleanupInventory: ...
+
+
+def cleanup_failure_summary(error: BaseException) -> dict[str, Any]:
+    operation = "cleanup_cycle"
+    resource_kind = "unknown"
+    cause = error
+    if isinstance(error, CleanupOperationError):
+        operation = error.operation
+        resource_kind = error.resource_kind
+        if error.__cause__ is not None:
+            cause = error.__cause__
+    status = getattr(cause, "status", None)
+    http_status = (
+        status
+        if isinstance(status, int)
+        and not isinstance(status, bool)
+        and 100 <= status <= 599
+        else None
+    )
+    provider_code = _normalized_provider_code(getattr(cause, "code", None))
+    return {
+        "operation": operation,
+        "resource_kind": resource_kind,
+        "http_status": http_status,
+        "provider_code": provider_code,
+        "error_class": type(cause).__name__,
+    }
 
 
 def build_cleanup_plan(
@@ -224,9 +262,13 @@ class CleanupEngine:
         record_discovery: Callable[[CleanupPlanItem], None] = lambda _item: None,
     ) -> CleanupResult:
         if not plan.items:
-            inventory = self._backend.inventory(
-                cycle_id=plan.cycle_id,
-                ownership_nonce=plan.ownership_nonce,
+            inventory = self._operation(
+                "inventory",
+                "inventory",
+                lambda: self._backend.inventory(
+                    cycle_id=plan.cycle_id,
+                    ownership_nonce=plan.ownership_nonce,
+                ),
             )
             return _result(plan, (), inventory)
         resolved_items: list[CleanupPlanItem] = []
@@ -235,7 +277,11 @@ class CleanupEngine:
             if item.state not in {"create_intent", "ambiguous_create"}:
                 resolved_items.append(item)
                 continue
-            resolved = self._backend.resolve_intent(item)
+            resolved = self._operation(
+                "resolve_intent",
+                item.kind,
+                lambda item=item: self._backend.resolve_intent(item),
+            )
             if resolved is None:
                 unresolved.append(item)
                 continue
@@ -244,17 +290,19 @@ class CleanupEngine:
         for item in resolved_items:
             if item.cleanup_method == "documented_project_cascade":
                 continue
-            if self._backend.absent(item):
+            if self._absent(item):
                 continue
             record_delete_intent(item)
             if (
                 item.kind == "acr_manifest"
-                and self._backend.manifest_is_shared(
-                    item.resolved_provider_id or item.provider_id
-                )
+                and self._manifest_is_shared(item)
             ):
                 continue
-            self._backend.delete(item)
+            self._operation(
+                "delete",
+                item.kind,
+                lambda item=item: self._backend.delete(item),
+            )
 
         verified_absent = tuple(
             sorted(
@@ -262,23 +310,59 @@ class CleanupEngine:
                 for item in resolved_items
                 if (
                     item.kind != "acr_manifest"
-                    or not self._backend.manifest_is_shared(
-                        item.resolved_provider_id or item.provider_id
-                    )
+                    or not self._manifest_is_shared(item)
                 )
                 and (
                     item.state not in {"create_intent", "ambiguous_create"}
                     or item.resolved_provider_id is not None
                     or item.kind in _DISCOVERABLE_AMBIGUOUS_KINDS
                 )
-                and self._backend.absent(item)
+                and self._absent(item)
             )
         )
-        inventory = self._backend.inventory(
-            cycle_id=plan.cycle_id,
-            ownership_nonce=plan.ownership_nonce,
+        inventory = self._operation(
+            "inventory",
+            "inventory",
+            lambda: self._backend.inventory(
+                cycle_id=plan.cycle_id,
+                ownership_nonce=plan.ownership_nonce,
+            ),
         )
         return _result(plan, verified_absent, inventory, unresolved=unresolved)
+
+    def _absent(self, item: CleanupPlanItem) -> bool:
+        return self._operation(
+            "verify_absent",
+            item.kind,
+            lambda: self._backend.absent(item),
+        )
+
+    def _manifest_is_shared(self, item: CleanupPlanItem) -> bool:
+        return self._operation(
+            "verify_shared_manifest",
+            item.kind,
+            lambda: self._backend.manifest_is_shared(
+                item.resolved_provider_id or item.provider_id
+            ),
+        )
+
+    @staticmethod
+    def _operation(
+        operation: str,
+        resource_kind: str,
+        callback: Callable[[], Any],
+    ) -> Any:
+        try:
+            return callback()
+        except CleanupOperationError:
+            raise
+        except (
+            ContractError,
+            OSError,
+            RuntimeError,
+            subprocess.SubprocessError,
+        ) as error:
+            raise CleanupOperationError(operation, resource_kind) from error
 
 
 def _result(
@@ -310,3 +394,11 @@ def _result(
         retained_shared_manifest_ids=tuple(sorted(retained)),
         residue_ids=residue,
     )
+
+
+def _normalized_provider_code(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    snake = re.sub(r"(?<!^)(?=[A-Z])", "_", value.strip())
+    normalized = re.sub(r"[^a-z0-9]+", "_", snake.casefold()).strip("_")
+    return normalized[:64] or None

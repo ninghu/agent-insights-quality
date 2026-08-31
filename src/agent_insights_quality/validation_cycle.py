@@ -107,6 +107,7 @@ def initial_lifecycle(
             "retained_shared_manifest_ids": [],
             "residue_ids": [],
             "verification_at": None,
+            "failure": None,
         },
         "event_reference": None,
         "clean_reference": None,
@@ -796,6 +797,7 @@ class ValidationCycleController:
         updates: dict[str, Any] = {
             "cleanup": {
                 "status": "in_progress",
+                "failure": None,
             }
         }
         if failure is not None:
@@ -831,6 +833,7 @@ class ValidationCycleController:
             ),
             "residue_ids": list(result.residue_ids),
             "verification_at": now.astimezone(UTC).isoformat(),
+            "failure": None,
         }
         state = (
             "FAILED_CLEAN"
@@ -855,7 +858,12 @@ class ValidationCycleController:
         self._active = committed
         return committed
 
-    def mark_cleanup_blocked(self, *, now: datetime) -> LocalRecord:
+    def mark_cleanup_blocked(
+        self,
+        *,
+        failure: Mapping[str, Any],
+        now: datetime,
+    ) -> LocalRecord:
         return self._commit(
             "CLEANUP_BLOCKED",
             {
@@ -864,6 +872,7 @@ class ValidationCycleController:
                     "exact_clean": False,
                     "residue_ids": ["cleanup_unverified"],
                     "verification_at": now.astimezone(UTC).isoformat(),
+                    "failure": copy.deepcopy(dict(failure)),
                 }
             },
             now,

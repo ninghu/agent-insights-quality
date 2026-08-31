@@ -8,6 +8,7 @@ from agent_insights_quality.validation_cleanup import (
     CleanupEngine,
     CleanupPlanItem,
     build_cleanup_plan,
+    cleanup_failure_summary,
 )
 from agent_insights_quality.validation_lifecycle import LifecycleJournal
 from agent_insights_quality.validation_policy import ValidationPolicy
@@ -68,6 +69,7 @@ class ValidationReconciler:
                 "cleanup": {
                     "status": "in_progress",
                     "plan_hash": plan.plan_hash,
+                    "failure": None,
                 }
             },
             now=moment,
@@ -114,11 +116,32 @@ class ValidationReconciler:
                 now=moment,
             )
 
-        result = self._cleanup.execute(
-            plan,
-            record_delete_intent=record_intent,
-            record_discovery=record_discovery,
-        )
+        try:
+            result = self._cleanup.execute(
+                plan,
+                record_delete_intent=record_intent,
+                record_discovery=record_discovery,
+            )
+        except (ContractError, OSError, RuntimeError) as error:
+            current = self._journal.commit(
+                current,
+                next_state="CLEANUP_BLOCKED",
+                updates={
+                    "cleanup": {
+                        "status": "ambiguous",
+                        "exact_clean": False,
+                        "residue_ids": ["cleanup_unverified"],
+                        "verification_at": moment.isoformat(),
+                        "failure": cleanup_failure_summary(error),
+                    }
+                },
+                now=moment,
+            )
+            try:
+                alert("test_agent_validation_cleanup_blocked")
+            except (OSError, RuntimeError):
+                pass
+            return str(current.value["state"])
         cleanup = {
             "status": "exact_clean" if result.exact_clean else "ambiguous",
             "plan_hash": result.plan_hash,
@@ -129,6 +152,7 @@ class ValidationReconciler:
             ),
             "residue_ids": list(result.residue_ids),
             "verification_at": moment.isoformat(),
+            "failure": None,
         }
         terminal = (
             "CLEAN"

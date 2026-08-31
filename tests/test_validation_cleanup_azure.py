@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import urllib.parse
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -144,6 +145,182 @@ def test_discovery_absent_resource_stays_idempotently_absent() -> None:
         state="delete_intent",
     )
     assert backend.absent(item) is True
+
+
+def test_stored_response_intent_uses_exact_agent_scoped_discovery() -> None:
+    calls = []
+    intent = _intent(
+        "stored_response",
+        f"synthetic-agent|{'sha256:' + ('a' * 64)}",
+    )
+    backend = object.__new__(AzureValidationCleanupBackend)
+
+    def request(method, route, **kwargs):
+        calls.append((method, route, kwargs))
+        return {
+            "_status": 200,
+            "data": [
+                {
+                    "id": "response-synthetic",
+                    "metadata": {
+                        "validation_intent_reference": intent.intent_reference,
+                    },
+                }
+            ],
+        }
+
+    backend._client = SimpleNamespace(_request=request)
+    resolved = backend.resolve_intent(intent)
+    assert resolved is not None
+    assert resolved.resolved_provider_id == "response-synthetic"
+    method, route, kwargs = calls[0]
+    parsed = urllib.parse.urlsplit(route)
+    assert method == "GET"
+    assert parsed.path == "/openai/v1/responses"
+    assert urllib.parse.parse_qs(parsed.query) == {
+        "agent_name": ["synthetic-agent"],
+        "limit": ["100"],
+    }
+    assert kwargs == {"hosted": False, "expected": {200, 404}}
+
+
+def test_stored_response_discovery_400_fails_closed() -> None:
+    intent = _intent(
+        "stored_response",
+        f"synthetic-agent|{'sha256:' + ('a' * 64)}",
+    )
+    backend = object.__new__(AzureValidationCleanupBackend)
+    backend._client = SimpleNamespace(
+        _request=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RemoteHttpError(
+                400,
+                "BadRequest",
+                "Synthetic rejected discovery",
+                "GET private-route",
+            )
+        )
+    )
+    with pytest.raises(RemoteHttpError) as raised:
+        backend.resolve_intent(intent)
+    assert raised.value.status == 400
+    assert raised.value.code == "BadRequest"
+
+
+def test_stored_response_empty_scoped_discovery_is_already_absent() -> None:
+    intent = _intent(
+        "stored_response",
+        f"synthetic-agent|{'sha256:' + ('a' * 64)}",
+    )
+    backend = object.__new__(AzureValidationCleanupBackend)
+    backend._client = SimpleNamespace(
+        _request=lambda *_args, **_kwargs: {"_status": 200, "data": []}
+    )
+    resolved = backend.resolve_intent(intent)
+    assert resolved is not None
+    assert resolved.resolved_provider_id == "discovery-absent"
+    assert backend.absent(resolved) is True
+
+
+def test_stored_response_discovery_checks_every_scoped_page() -> None:
+    intent = _intent(
+        "stored_response",
+        f"synthetic-agent|{'sha256:' + ('a' * 64)}",
+    )
+    routes = []
+    responses = iter(
+        [
+            {
+                "_status": 200,
+                "data": [],
+                "has_more": True,
+                "last_id": "response-page-one",
+            },
+            {
+                "_status": 200,
+                "data": [
+                    {
+                        "id": "response-synthetic",
+                        "metadata": {
+                            "validation_intent_reference": (
+                                intent.intent_reference
+                            ),
+                        },
+                    }
+                ],
+                "has_more": False,
+            },
+        ]
+    )
+    backend = object.__new__(AzureValidationCleanupBackend)
+
+    def request(_method, route, **_kwargs):
+        routes.append(route)
+        return next(responses)
+
+    backend._client = SimpleNamespace(_request=request)
+    resolved = backend.resolve_intent(intent)
+    assert resolved is not None
+    assert resolved.resolved_provider_id == "response-synthetic"
+    assert urllib.parse.parse_qs(
+        urllib.parse.urlsplit(routes[1]).query
+    ) == {
+        "after": ["response-page-one"],
+        "agent_name": ["synthetic-agent"],
+        "limit": ["100"],
+    }
+
+
+def test_exact_metadata_match_without_identity_fails_closed() -> None:
+    intent = _intent(
+        "stored_response",
+        f"synthetic-agent|{'sha256:' + ('a' * 64)}",
+    )
+    backend = object.__new__(AzureValidationCleanupBackend)
+    backend._client = SimpleNamespace(
+        _request=lambda *_args, **_kwargs: {
+            "_status": 200,
+            "data": [
+                {
+                    "metadata": {
+                        "validation_intent_reference": intent.intent_reference,
+                    },
+                }
+            ],
+        }
+    )
+    with pytest.raises(ContractError, match="identity is missing"):
+        backend.resolve_intent(intent)
+
+
+def test_session_intent_resolves_exact_agent_scoped_metadata_match() -> None:
+    intent = _intent(
+        "session",
+        f"synthetic-agent|{'sha256:' + ('a' * 64)}",
+    )
+    calls = []
+    backend = object.__new__(AzureValidationCleanupBackend)
+
+    def request(method, route, **kwargs):
+        calls.append((method, route, kwargs))
+        return {
+            "_status": 200,
+            "data": [
+                {
+                    "id": "session-synthetic",
+                    "metadata": {
+                        "validation_intent_reference": intent.intent_reference,
+                    },
+                }
+            ],
+        }
+
+    backend._client = SimpleNamespace(_request=request)
+    resolved = backend.resolve_intent(intent)
+    assert resolved is not None
+    assert resolved.resolved_provider_id == "session-synthetic"
+    assert calls[0][1] == (
+        "/agents/synthetic-agent/endpoint/sessions?limit=100"
+    )
 
 
 @pytest.mark.parametrize(

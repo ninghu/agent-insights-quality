@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 
+from agent_insights_quality.provisioning import RemoteHttpError
 from agent_insights_quality.util import ContractError, content_hash
 from agent_insights_quality.validation_cleanup import (
     CleanupEngine,
     CleanupInventory,
+    CleanupOperationError,
     CleanupPlanItem,
     build_cleanup_plan,
+    cleanup_failure_summary,
 )
 
 
@@ -183,3 +188,68 @@ def test_ambiguous_create_cannot_be_proven_clean_from_placeholder_absence() -> N
     )
     assert result.exact_clean is False
     assert result.residue_ids == ("intent-digest",)
+
+
+def test_discovery_400_never_deletes_an_unresolved_resource() -> None:
+    resource = _resource("stored_response", "intent-digest")
+    resource["state"] = "ambiguous_create"
+    plan = build_cleanup_plan(
+        cycle_id="validation-cycle-0001",
+        ownership_nonce="nonce-0001",
+        resources=[resource],
+        documented_project_cascade=(),
+    )
+
+    class FailingBackend(Backend):
+        def resolve_intent(self, _item):
+            raise RemoteHttpError(
+                400,
+                "BadRequest",
+                "Synthetic rejected discovery",
+                "GET private-route",
+            )
+
+    backend = FailingBackend()
+    with pytest.raises(CleanupOperationError) as raised:
+        CleanupEngine(backend).execute(
+            plan,
+            record_delete_intent=lambda _item: pytest.fail(
+                "unresolved resource must not receive a delete intent"
+            ),
+        )
+    assert backend.deleted == []
+    assert cleanup_failure_summary(raised.value) == {
+        "operation": "resolve_intent",
+        "resource_kind": "stored_response",
+        "http_status": 400,
+        "provider_code": "bad_request",
+        "error_class": "RemoteHttpError",
+    }
+
+
+def test_provider_timeout_is_normalized_as_cleanup_failure() -> None:
+    resource = _resource("project", "project-id")
+    resource["state"] = "create_intent"
+    plan = build_cleanup_plan(
+        cycle_id="validation-cycle-0001",
+        ownership_nonce="nonce-0001",
+        resources=[resource],
+        documented_project_cascade=(),
+    )
+
+    class FailingBackend(Backend):
+        def resolve_intent(self, _item):
+            raise subprocess.TimeoutExpired(["synthetic"], 180)
+
+    with pytest.raises(CleanupOperationError) as raised:
+        CleanupEngine(FailingBackend()).execute(
+            plan,
+            record_delete_intent=lambda _item: None,
+        )
+    assert cleanup_failure_summary(raised.value) == {
+        "operation": "resolve_intent",
+        "resource_kind": "project",
+        "http_status": None,
+        "provider_code": None,
+        "error_class": "TimeoutExpired",
+    }

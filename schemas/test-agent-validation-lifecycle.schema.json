@@ -788,6 +788,52 @@
         },
         "verification_at": {
           "oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]
+        },
+        "failure": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/cleanupFailure"}
+          ]
+        }
+      }
+    },
+    "cleanupFailure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "resource_kind",
+        "http_status",
+        "provider_code",
+        "error_class"
+      ],
+      "properties": {
+        "operation": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{2,63}$"
+        },
+        "resource_kind": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{2,63}$"
+        },
+        "http_status": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "integer", "minimum": 100, "maximum": 599}
+          ]
+        },
+        "provider_code": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$"
+            }
+          ]
+        },
+        "error_class": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9]{2,127}$"
         }
       }
     },

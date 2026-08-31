@@ -103,8 +103,19 @@ class AzureValidationCleanupBackend:
                 hosted=True,
             )
         elif item.kind == "stored_response":
+            if (
+                len(parts) != 2
+                or not parts[0]
+                or parts[1] != item.intent_reference
+            ):
+                raise ContractError(
+                    "Stored-response cleanup discovery key is invalid"
+                )
+            query = urllib.parse.urlencode(
+                {"limit": 100, "agent_name": parts[0]}
+            )
             actual = self._find_metadata_resource(
-                "/openai/v1/responses?limit=100",
+                f"/openai/v1/responses?{query}",
                 item.intent_reference,
                 hosted=False,
             )
@@ -518,36 +529,66 @@ class AzureValidationCleanupBackend:
         *,
         hosted: bool,
     ) -> str:
-        response = self._client._request(
-            "GET",
-            route,
-            hosted=hosted,
-            expected={200, 404},
-        )
-        if response["_status"] == 404:
-            if not hosted:
-                raise ContractError(
-                    "Stored-response intent discovery is unavailable"
+        matches = []
+        next_route = route
+        seen_cursors: set[str] = set()
+        while True:
+            response = self._client._request(
+                "GET",
+                next_route,
+                hosted=hosted,
+                expected={200, 404},
+            )
+            if response["_status"] == 404:
+                if not hosted:
+                    raise ContractError(
+                        "Stored-response intent discovery is unavailable"
+                    )
+                return ""
+            matches.extend(
+                item
+                for item in (
+                    response.get("data") or response.get("value") or []
                 )
-            return ""
-        matches = [
-            item
-            for item in (response.get("data") or response.get("value") or [])
-            if isinstance(item, Mapping)
-            and isinstance(item.get("metadata"), Mapping)
-            and item["metadata"].get("validation_intent_reference")
-            == intent_reference
-        ]
-        if len(matches) > 1:
-            raise ContractError("Validation runtime resource discovery is ambiguous")
+                if isinstance(item, Mapping)
+                and isinstance(item.get("metadata"), Mapping)
+                and item["metadata"].get("validation_intent_reference")
+                == intent_reference
+            )
+            if len(matches) > 1:
+                raise ContractError(
+                    "Validation runtime resource discovery is ambiguous"
+                )
+            if response.get("has_more") is not True:
+                break
+            cursor = response.get("last_id")
+            if (
+                not isinstance(cursor, str)
+                or not cursor
+                or cursor in seen_cursors
+            ):
+                raise ContractError(
+                    "Validation runtime resource pagination is invalid"
+                )
+            seen_cursors.add(cursor)
+            separator = "&" if "?" in route else "?"
+            next_route = (
+                f"{route}{separator}"
+                f"{urllib.parse.urlencode({'after': cursor})}"
+            )
         if not matches:
             return ""
-        return str(
+        provider_id = str(
             matches[0].get("agent_session_id")
             or matches[0].get("session_id")
             or matches[0].get("id")
             or ""
         )
+        if not provider_id:
+            raise ContractError(
+                "Validation runtime resource discovery identity is missing"
+            )
+        return provider_id
 
     def _find_service_principal(self, discovery_key: str) -> str:
         process = self._run(

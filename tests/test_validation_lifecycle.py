@@ -6,6 +6,7 @@ from dataclasses import replace
 import pytest
 
 from agent_insights_quality.catalogs import load_catalogs
+from agent_insights_quality.provisioning import RemoteHttpError
 from agent_insights_quality.util import ROOT, ContractError, content_hash
 from agent_insights_quality.validation_cleanup import (
     CleanupEngine,
@@ -343,3 +344,163 @@ def test_next_invocation_recovers_incomplete_journal_before_new_cycle(
         recovered = journal.read_active()
         assert recovered.value["cleanup"]["exact_clean"] is True
         assert recovered.value["clean_reference"]["digest"].startswith("sha256:")
+
+
+def test_recovery_resolves_ambiguous_response_and_session_exactly(tmp_path) -> None:
+    class Backend:
+        def __init__(self) -> None:
+            self.deleted = []
+
+        def resolve_intent(self, item):
+            return replace(
+                item,
+                resolved_provider_id=f"resolved-{item.kind}",
+            )
+
+        def delete(self, item) -> None:
+            self.deleted.append(item.resolved_provider_id)
+
+        def absent(self, item) -> bool:
+            return item.resolved_provider_id in self.deleted
+
+        def manifest_is_shared(self, _provider_id: str) -> bool:
+            return False
+
+        def inventory(self, **_kwargs) -> CleanupInventory:
+            return CleanupInventory(False, (), (), (), ())
+
+    lock = LocalValidationLock(tmp_path / "validation.lock")
+    journal = LifecycleJournal(lock=lock, root=tmp_path / "lifecycle")
+    backend = Backend()
+    with lock:
+        active = journal.begin_cycle(_initial())
+        active = journal.commit(
+            active,
+            next_state="PREFLIGHT",
+            now=START + timedelta(seconds=1),
+        )
+        controller = ValidationCycleController(journal, active=active)
+        controller.project_create_intent(
+            name="aiq-validation-synthetic",
+            provider_id="synthetic-project-id",
+            now=START + timedelta(seconds=2),
+        )
+        for index, (kind, runtime_kind) in enumerate(
+            (("stored_response", "prompt"), ("session", "hosted_code")),
+            start=3,
+        ):
+            intent_reference = content_hash({"kind": kind})
+            event = {
+                "state": "create_intent",
+                "kind": kind,
+                "intent_reference": intent_reference,
+                "deterministic_name": f"synthetic-{kind}",
+                "authority_id": "weather-agent/v0",
+                "parent_id": "synthetic-project-id",
+                "runtime_kind": runtime_kind,
+                "discovery_key": f"synthetic-agent|{intent_reference}",
+            }
+            controller.dynamic_resource_event(
+                event,
+                now=START + timedelta(seconds=index),
+            )
+            controller.dynamic_resource_event(
+                {**event, "state": "ambiguous_create"},
+                now=START + timedelta(seconds=index, milliseconds=500),
+            )
+
+        state = ValidationReconciler(
+            journal=journal,
+            cleanup=CleanupEngine(backend),
+            policy=load_validation_policy(),
+        ).reconcile(alert=lambda _: None, now=START + timedelta(hours=80))
+        assert state == "FAILED_CLEAN"
+        assert backend.deleted == [
+            "resolved-stored_response",
+            "resolved-session",
+            "resolved-project",
+        ]
+        recovered = journal.read_active()
+        assert recovered.value["cleanup"]["exact_clean"] is True
+        assert recovered.value["cleanup"]["failure"] is None
+        assert all(
+            item["state"] == "absence_verified"
+            for item in recovered.value["resources"]
+        )
+
+
+def test_recovery_persists_public_safe_cleanup_failure_before_blocking(
+    tmp_path,
+) -> None:
+    class Backend:
+        def resolve_intent(self, _item):
+            raise RemoteHttpError(
+                400,
+                "BadRequest",
+                "Synthetic payload must not be persisted",
+                "GET private-route",
+            )
+
+        def delete(self, _item) -> None:
+            pytest.fail("unresolved resource must not be deleted")
+
+        def absent(self, _item) -> bool:
+            return False
+
+        def manifest_is_shared(self, _provider_id: str) -> bool:
+            return False
+
+        def inventory(self, **_kwargs) -> CleanupInventory:
+            return CleanupInventory(False, (), (), (), ())
+
+    lock = LocalValidationLock(tmp_path / "validation.lock")
+    journal = LifecycleJournal(lock=lock, root=tmp_path / "lifecycle")
+    with lock:
+        active = journal.begin_cycle(_initial())
+        active = journal.commit(
+            active,
+            next_state="PREFLIGHT",
+            now=START + timedelta(seconds=1),
+        )
+        controller = ValidationCycleController(journal, active=active)
+        controller.project_create_intent(
+            name="aiq-validation-synthetic",
+            provider_id="synthetic-project-id",
+            now=START + timedelta(seconds=2),
+        )
+        intent_reference = content_hash({"kind": "stored_response"})
+        response_event = {
+            "state": "create_intent",
+            "kind": "stored_response",
+            "intent_reference": intent_reference,
+            "deterministic_name": "synthetic-response",
+            "authority_id": "weather-agent/v0",
+            "parent_id": "synthetic-project-id",
+            "runtime_kind": "prompt",
+            "discovery_key": f"synthetic-agent|{intent_reference}",
+        }
+        controller.dynamic_resource_event(
+            response_event,
+            now=START + timedelta(seconds=3),
+        )
+        controller.dynamic_resource_event(
+            {**response_event, "state": "ambiguous_create"},
+            now=START + timedelta(seconds=4),
+        )
+        state = ValidationReconciler(
+            journal=journal,
+            cleanup=CleanupEngine(Backend()),
+            policy=load_validation_policy(),
+        ).reconcile(alert=lambda _: None, now=START + timedelta(hours=80))
+        assert state == "CLEANUP_BLOCKED"
+        blocked = journal.read_active()
+        assert blocked.value["cleanup"]["failure"] == {
+            "operation": "resolve_intent",
+            "resource_kind": "stored_response",
+            "http_status": 400,
+            "provider_code": "bad_request",
+            "error_class": "RemoteHttpError",
+        }
+        serialized = str(blocked.value["cleanup"]["failure"])
+        assert "private-route" not in serialized
+        assert "Synthetic payload" not in serialized
