@@ -170,12 +170,19 @@ class HostedRuntime(Runtime):
         super().__init__(**kwargs)
         self.deleted_sessions = []
         self.activations = []
+        self.session_intents = []
 
-    def _activate_hosted_version(self, agent_name, foundry_version):
-        self.activations.append((agent_name, foundry_version))
+    def _activate_hosted_version(
+        self,
+        agent_name,
+        foundry_version,
+        *,
+        refresh_route=False,
+    ):
+        self.activations.append((agent_name, foundry_version, refresh_route))
 
-    @staticmethod
     def _create_hosted_session(
+        self,
         agent_name,
         foundry_version,
         *,
@@ -183,7 +190,8 @@ class HostedRuntime(Runtime):
     ):
         del agent_name, foundry_version
         assert validation_intent_reference.startswith("sha256:")
-        return "session-synthetic"
+        self.session_intents.append(validation_intent_reference)
+        return f"session-{len(self.session_intents)}"
 
     def _invoke_hosted(
         self,
@@ -575,11 +583,13 @@ def test_shared_v0_attempts_have_unique_execution_and_resource_references() -> N
     assert len(intents) == len(set(intents))
 
 
-def test_hosted_attempt_journals_only_persistent_session() -> None:
+def test_repeated_hosted_attempts_refresh_routes_and_release_unique_sessions() -> None:
     times = iter(
         [
             datetime(2026, 8, 29, 12, 0, tzinfo=UTC),
             datetime(2026, 8, 29, 12, 0, 1, tzinfo=UTC),
+            datetime(2026, 8, 29, 12, 1, tzinfo=UTC),
+            datetime(2026, 8, 29, 12, 1, 1, tzinfo=UTC),
         ]
     )
     resources = []
@@ -591,31 +601,49 @@ def test_hosted_attempt_journals_only_persistent_session() -> None:
         record_resource=resources.append,
         now=lambda: next(times),
     )
-    runner.run(
-        target=_hosted_target(),
-        executing_authority_id="issue-013",
-        conversation_role="issue",
-        scenario={
-            "id": "reviewed-path",
-            "validation_mode": "deterministic",
-            "defect_predicate": {
-                "kind": "all_observation_steps_pass",
-                "step_ids": ["probe-1"],
-                "required_surfaces": ["semantic", "trace"],
+    target = _hosted_target()
+    scenario = {
+        "id": "reviewed-path",
+        "validation_mode": "deterministic",
+        "defect_predicate": {
+            "kind": "all_observation_steps_pass",
+            "step_ids": ["probe-1"],
+            "required_surfaces": ["semantic", "trace"],
+        },
+    }
+    runner.prepare_hosted_routes([target])
+    for attempt_index in (1, 2):
+        runner.run(
+            target=target,
+            executing_authority_id="issue-013",
+            conversation_role="issue",
+            scenario=scenario,
+            attempt={
+                "index": attempt_index,
+                "conversation_group": f"attempt-{attempt_index}",
+                "setup_steps": [_step("setup-1", probe=False)],
+                "probe_steps": [_step("probe-1", probe=True)],
             },
-        },
-        attempt={
-            "index": 1,
-            "conversation_group": "attempt-1",
-            "setup_steps": [_step("setup-1", probe=False)],
-            "probe_steps": [_step("probe-1", probe=True)],
-        },
-        expect_defect=True,
-        scheduler=_scheduler(),
-    )
-    assert [item["kind"] for item in resources] == ["session", "session"]
+            expect_defect=True,
+            scheduler=_scheduler(),
+        )
+
+    assert [item["kind"] for item in resources] == ["session"] * 4
+    assert [item["state"] for item in resources] == [
+        "create_intent",
+        "created",
+        "create_intent",
+        "created",
+    ]
+    assert len(runtime.session_intents) == len(set(runtime.session_intents)) == 2
+    assert runtime.activations == [
+        ("finance-agent-issue-013-cycle", "1", False),
+        ("finance-agent-issue-013-cycle", "1", True),
+        ("finance-agent-issue-013-cycle", "1", True),
+    ]
     assert runtime.deleted_sessions == [
-        ("finance-agent-issue-013-cycle", "session-synthetic")
+        ("finance-agent-issue-013-cycle", "session-1"),
+        ("finance-agent-issue-013-cycle", "session-2"),
     ]
 
 
@@ -648,8 +676,8 @@ def test_prepare_hosted_routes_activates_first_exact_version_per_agent() -> None
     runner.prepare_hosted_routes([finance_v1, finance_v2, support_v0])
 
     assert runtime.activations == [
-        ("finance-agent-issue-013-cycle", "1"),
-        ("support-agent-cycle", "1"),
+        ("finance-agent-issue-013-cycle", "1", False),
+        ("support-agent-cycle", "1", False),
     ]
 
 

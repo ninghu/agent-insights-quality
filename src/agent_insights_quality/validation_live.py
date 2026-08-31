@@ -242,6 +242,7 @@ class FoundryScenarioAttemptRunner:
             self._runtime._activate_hosted_version(
                 target.runtime_agent_name,
                 target.runtime_agent_version,
+                refresh_route=True,
             )
             session_intent = content_hash(
                 {

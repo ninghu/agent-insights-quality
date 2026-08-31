@@ -4263,7 +4263,9 @@ def test_hosted_invocation_rejects_invalid_endpoint_response_identity(
 def test_hosted_cleanup_failure_preserves_completed_responses() -> None:
     runtime = _runtime()
     progress = []
-    runtime._activate_hosted_version = lambda *_args: None  # type: ignore[method-assign]
+    runtime._activate_hosted_version = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: None
+    )
     runtime._create_hosted_session = (  # type: ignore[method-assign]
         lambda *_args: "session-id"
     )
@@ -4301,7 +4303,9 @@ def test_hosted_cleanup_failure_preserves_completed_responses() -> None:
 def test_hosted_cleanup_failure_preserves_primary_invocation_error() -> None:
     runtime = _runtime()
     progress = []
-    runtime._activate_hosted_version = lambda *_args: None  # type: ignore[method-assign]
+    runtime._activate_hosted_version = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: None
+    )
     runtime._create_hosted_session = (  # type: ignore[method-assign]
         lambda *_args: "session-id"
     )
@@ -4526,6 +4530,7 @@ def test_hosted_routing_uses_one_fixed_ratio_rule(agent_name) -> None:
                 "content_type": kwargs["content_type"],
                 "retry_statuses": kwargs["retry_statuses"],
                 "retry_no_response": kwargs["retry_no_response"],
+                "retry_unauthorized": kwargs["retry_unauthorized"],
             }
         )
         return body
@@ -4540,6 +4545,7 @@ def test_hosted_routing_uses_one_fixed_ratio_rule(agent_name) -> None:
     assert captured["content_type"] == "application/merge-patch+json"
     assert captured["retry_statuses"] == set()
     assert captured["retry_no_response"] is False
+    assert captured["retry_unauthorized"] is False
     assert rules == [
         {
             "agent_version": "7",
@@ -4581,16 +4587,22 @@ def test_hosted_routing_retries_exact_activation_then_caches(agent_name) -> None
     runtime._sleep = sleep
     runtime.report_progress = progress.append  # type: ignore[method-assign]
     runtime._activate_hosted_version(agent_name, "7")
+    confirmed_at = runtime._hosted_routes[agent_name][1]
     runtime._activate_hosted_version(agent_name, "7")
+    assert runtime._hosted_routes[agent_name][1] == confirmed_at
+    now[0] = 100
+    runtime._activate_hosted_version(agent_name, "7", refresh_route=True)
 
-    assert len(attempts) == 3
+    assert len(attempts) == 4
     assert all(item[0] == "PATCH" for item in attempts)
     assert all(item[1].endswith(f"/agents/{agent_name}") for item in attempts)
-    assert all(item[2] is attempts[0][2] for item in attempts)
+    assert all(item[2] is attempts[0][2] for item in attempts[:3])
+    assert attempts[3][2] == attempts[0][2]
     assert all(item[3]["retry_statuses"] == set() for item in attempts)
     assert all(item[3]["retry_no_response"] is False for item in attempts)
+    assert all(item[3]["retry_unauthorized"] is False for item in attempts)
     assert sleeps == [1, 2]
-    assert runtime._hosted_routes[agent_name][0] == "7"
+    assert runtime._hosted_routes[agent_name] == ("7", 100)
     assert progress == [
         f"{agent_name}/7: exact Hosted route activation is not yet available; "
         "retrying the same selector in 1s (2/5)",
@@ -4782,6 +4794,85 @@ def test_hosted_session_retries_exact_post_activation_not_found() -> None:
     assert len(session_bodies) == 2
     assert session_bodies[0] == session_bodies[1]
     assert sleeps == [1]
+
+
+@pytest.mark.parametrize(
+    "agent_name",
+    ["finance-agent", "travel-agent", "support-ticket-agent"],
+)
+def test_each_hosted_attempt_refreshes_session_retry_proof_after_release(
+    agent_name,
+) -> None:
+    runtime = _runtime()
+    now = [0]
+    runtime._monotonic = lambda: now[0]
+    patch_calls = []
+    session_calls = []
+    released_sessions = []
+    sleeps = []
+
+    def request(method, url, body=None, **kwargs):
+        if method == "PATCH":
+            patch_calls.append((body, kwargs))
+            return body
+        if method == "DELETE":
+            released_sessions.append(url.rsplit("/", 1)[-1])
+            return {}
+        session_calls.append((body, kwargs))
+        if len(session_calls) == 2:
+            raise RemoteOperationError(
+                "Synthetic route propagation",
+                code="NotFound",
+                status=404,
+                request_accepted=False,
+            )
+        session_number = 1 if len(session_calls) == 1 else 2
+        return {
+            "agent_session_id": f"session-{session_number}",
+            "version_indicator": {
+                "type": "version_ref",
+                "agent_version": "1",
+            },
+        }
+
+    def sleep(delay):
+        sleeps.append(delay)
+        now[0] += delay
+
+    runtime._json_request = request  # type: ignore[method-assign]
+    runtime._sleep = sleep
+
+    runtime._activate_hosted_version(agent_name, "1")
+    now[0] = 203
+    runtime._activate_hosted_version(agent_name, "1", refresh_route=True)
+    first_session = runtime._create_hosted_session(
+        agent_name,
+        "1",
+        validation_intent_reference="sha256:" + ("a" * 64),
+    )
+    runtime._delete_hosted_session(agent_name, first_session)
+
+    now[0] = 927
+    runtime._activate_hosted_version(agent_name, "1", refresh_route=True)
+    second_session = runtime._create_hosted_session(
+        agent_name,
+        "1",
+        validation_intent_reference="sha256:" + ("b" * 64),
+    )
+    runtime._delete_hosted_session(agent_name, second_session)
+
+    assert len(patch_calls) == 3
+    assert runtime._hosted_routes[agent_name] == ("1", 927)
+    assert [first_session, second_session] == ["session-1", "session-2"]
+    assert released_sessions == ["session-1", "session-2"]
+    assert len(session_calls) == 3
+    assert session_calls[1][0] is session_calls[2][0]
+    assert session_calls[0][0] != session_calls[1][0]
+    assert all(call[1]["retry_statuses"] == set() for call in session_calls)
+    assert all(call[1]["retry_no_response"] is False for call in session_calls)
+    assert all(call[1]["retry_unauthorized"] is False for call in session_calls)
+    assert sleeps == [1]
+    assert not runtime._hosted_session_bindings
 
 
 @pytest.mark.parametrize(
@@ -5269,7 +5360,13 @@ def test_hosted_response_stops_retry_when_exact_route_changes_during_delay(
     assert sleeps == [1]
 
 
-def test_hosted_session_exhausts_bounded_route_propagation_retries() -> None:
+@pytest.mark.parametrize(
+    "agent_name",
+    ["finance-agent", "travel-agent", "support-ticket-agent"],
+)
+def test_hosted_session_exhausts_bounded_route_propagation_retries(
+    agent_name,
+) -> None:
     runtime = _runtime()
     runtime._monotonic = lambda: 0
     sleeps = []
@@ -5290,16 +5387,21 @@ def test_hosted_session_exhausts_bounded_route_propagation_retries() -> None:
 
     runtime._json_request = request  # type: ignore[method-assign]
     runtime._sleep = sleeps.append
-    runtime._activate_hosted_version("finance-agent", "1")
+    runtime._activate_hosted_version(agent_name, "1")
 
     with pytest.raises(RemoteOperationError) as caught:
-        runtime._create_hosted_session("finance-agent", "1")
+        runtime._create_hosted_session(agent_name, "1")
 
     assert caught.value is error
     assert session_calls == 5
     assert sleeps == [1, 2, 4, 8]
+    assert not runtime._hosted_session_bindings
 
 
+@pytest.mark.parametrize(
+    "agent_name",
+    ["finance-agent", "travel-agent", "support-ticket-agent"],
+)
 @pytest.mark.parametrize(
     "error",
     [
@@ -5349,6 +5451,7 @@ def test_hosted_session_exhausts_bounded_route_propagation_retries() -> None:
 )
 def test_hosted_session_does_not_retry_unrelated_or_ambiguous_failures(
     error,
+    agent_name,
 ) -> None:
     runtime = _runtime()
     runtime._monotonic = lambda: 0
@@ -5364,17 +5467,60 @@ def test_hosted_session_does_not_retry_unrelated_or_ambiguous_failures(
 
     runtime._json_request = request  # type: ignore[method-assign]
     runtime._sleep = sleeps.append
-    runtime._activate_hosted_version("finance-agent", "1")
+    runtime._activate_hosted_version(agent_name, "1")
 
     with pytest.raises(RemoteOperationError) as caught:
-        runtime._create_hosted_session("finance-agent", "1")
+        runtime._create_hosted_session(agent_name, "1")
 
     assert caught.value is error
     assert calls == 1
     assert sleeps == []
 
 
-def test_hosted_session_does_not_retry_without_recent_exact_activation() -> None:
+@pytest.mark.parametrize(
+    "agent_name",
+    ["finance-agent", "travel-agent", "support-ticket-agent"],
+)
+def test_hosted_session_does_not_refresh_unauthorized_request(
+    monkeypatch,
+    agent_name,
+) -> None:
+    runtime = _runtime()
+    runtime._hosted_routes[agent_name] = ("1", 0)
+    runtime._monotonic = lambda: 0
+    attempts = 0
+
+    def open_request(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise urllib.error.HTTPError(
+            "https://example.invalid",
+            401,
+            "Synthetic unauthorized",
+            {},
+            io.BytesIO(b'{"error":{"code":"Unauthorized"}}'),
+        )
+
+    monkeypatch.setattr(
+        "agent_insights_quality.live.urllib.request.urlopen",
+        open_request,
+    )
+
+    with pytest.raises(RemoteOperationError) as caught:
+        runtime._create_hosted_session(agent_name, "1")
+
+    assert caught.value.status == 401
+    assert caught.value.request_accepted is False
+    assert attempts == 1
+
+
+@pytest.mark.parametrize(
+    "agent_name",
+    ["finance-agent", "travel-agent", "support-ticket-agent"],
+)
+def test_hosted_session_does_not_retry_without_recent_exact_activation(
+    agent_name,
+) -> None:
     runtime = _runtime()
     calls = 0
     error = RemoteOperationError(
@@ -5392,7 +5538,7 @@ def test_hosted_session_does_not_retry_without_recent_exact_activation() -> None
     runtime._json_request = request  # type: ignore[method-assign]
 
     with pytest.raises(RemoteOperationError) as caught:
-        runtime._create_hosted_session("finance-agent", "1")
+        runtime._create_hosted_session(agent_name, "1")
 
     assert caught.value is error
     assert calls == 1
@@ -5402,7 +5548,12 @@ def test_hosted_session_does_not_retry_without_recent_exact_activation() -> None
     ("routed_version", "session_start"),
     [("2", 0), ("1", 16)],
 )
+@pytest.mark.parametrize(
+    "agent_name",
+    ["finance-agent", "travel-agent", "support-ticket-agent"],
+)
 def test_hosted_session_does_not_retry_wrong_or_expired_route(
+    agent_name,
     routed_version,
     session_start,
 ) -> None:
@@ -5425,11 +5576,11 @@ def test_hosted_session_does_not_retry_wrong_or_expired_route(
         raise error
 
     runtime._json_request = request  # type: ignore[method-assign]
-    runtime._activate_hosted_version("finance-agent", routed_version)
+    runtime._activate_hosted_version(agent_name, routed_version)
     now[0] = session_start
 
     with pytest.raises(RemoteOperationError) as caught:
-        runtime._create_hosted_session("finance-agent", "1")
+        runtime._create_hosted_session(agent_name, "1")
 
     assert caught.value is error
     assert calls == 1

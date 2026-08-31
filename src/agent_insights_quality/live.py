@@ -540,7 +540,11 @@ union traces, dependencies, requests
                     )
                 )
             return results
-        self._activate_hosted_version(agent_name, foundry_version)
+        self._activate_hosted_version(
+            agent_name,
+            foundry_version,
+            refresh_route=True,
+        )
         session_id = self._create_hosted_session(agent_name, foundry_version)
         try:
             results = [
@@ -595,10 +599,16 @@ union traces, dependencies, requests
         self,
         agent_name: str,
         foundry_version: str,
+        *,
+        refresh_route: bool = False,
     ) -> None:
         with self._hosted_route_lock:
             routed = self._hosted_routes.get(agent_name)
-            if routed is not None and routed[0] == foundry_version:
+            if (
+                not refresh_route
+                and routed is not None
+                and routed[0] == foundry_version
+            ):
                 return
             desired_selector = {
                 "agent_endpoint": {
@@ -631,6 +641,7 @@ union traces, dependencies, requests
                             content_type="application/merge-patch+json",
                             retry_statuses=set(),
                             retry_no_response=False,
+                            retry_unauthorized=False,
                         )
                         break
                     except RemoteOperationError as error:
@@ -850,6 +861,9 @@ union traces, dependencies, requests
                     f"{urllib.parse.quote(agent_name, safe='')}/endpoint/sessions",
                     body,
                     hosted=True,
+                    retry_statuses=set(),
+                    retry_no_response=False,
+                    retry_unauthorized=False,
                 )
                 break
             except RemoteOperationError as error:

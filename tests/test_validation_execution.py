@@ -15,6 +15,7 @@ from agent_insights_quality.validation_execution import (
     lifecycle_heartbeat,
 )
 from agent_insights_quality.validation_manifest import authority_specs
+from agent_insights_quality.validation_live import FoundryScenarioAttemptRunner
 from agent_insights_quality.validation_policy import load_validation_policy
 
 
@@ -83,6 +84,14 @@ def test_phase_clean_windows_start_only_after_hosted_routes_succeed() -> None:
     assert second_route < source.index('wait_clean_interval("phase_2")')
     assert source.index('wait_clean_interval("phase_2")') < source.index(
         "phase_two_evidence = execute_validation_phase"
+    )
+    preparation = inspect.getsource(
+        FoundryScenarioAttemptRunner.prepare_hosted_routes
+    )
+    attempt = inspect.getsource(FoundryScenarioAttemptRunner._run)
+    assert "refresh_route=True" not in preparation
+    assert attempt.index("refresh_route=True") < attempt.index(
+        "_create_hosted_session"
     )
 
 
