@@ -17,8 +17,9 @@ from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.util import (
     ROOT,
     ContractError,
+    atomic_json,
     content_hash,
-    immutable_json,
+    read_json,
 )
 from agent_insights_quality.validation_cleanup import CleanupEngine
 from agent_insights_quality.validation_cleanup_azure import (
@@ -48,6 +49,7 @@ from agent_insights_quality.validation_live import FoundryScenarioAttemptRunner
 from agent_insights_quality.validation_manifest import (
     authority_specs,
     prepare_validation_plan,
+    prepare_resumed_validation_plan,
     validate_validation_plan,
     validation_authority_cost,
     validation_endpoint_costs,
@@ -68,6 +70,7 @@ from agent_insights_quality.validation_provisioning import (
     validation_runtime_profile,
 )
 from agent_insights_quality.validation_quota import (
+    CapacityPlan,
     ValidationScheduler,
     WeightedTokenBucket,
     build_capacity_plan,
@@ -180,17 +183,32 @@ def run_test_agent_validation(
     durations = {
         "lock_preflight_seconds": 0.0,
         "project_connections_seconds": 0.0,
-        "agent_activation_seconds": 0.0,
+        "support_images_seconds": 0.0,
+        "phase_1_deployment_seconds": 0.0,
+        "phase_1_clean_interval_seconds": 0.0,
+        "phase_2_deployment_seconds": 0.0,
+        "phase_2_clean_interval_seconds": 0.0,
         "endpoint_model_seconds": 0.0,
         "ingestion_kql_seconds": 0.0,
         "cleanup_seconds": 0.0,
         "total_seconds": 0.0,
     }
     duration_lock = threading.Lock()
+    duration_path: Path | None = None
 
     def record_duration(stage: str, value: float) -> None:
         with duration_lock:
+            if stage not in durations:
+                raise ContractError(
+                    "Validation duration stage is not reviewed"
+                )
             durations[stage] += max(0.0, value)
+            if duration_path is not None:
+                _persist_durations(
+                    duration_path,
+                    cycle_id=plan["cycle_id"],
+                    durations=durations,
+                )
 
     lock = LocalValidationLock()
     with lock:
@@ -198,7 +216,7 @@ def run_test_agent_validation(
         policy = load_validation_policy()
         agents, issues = load_catalogs()
         local_run_id = uuid.uuid4().hex
-        plan = prepare_validation_plan(
+        new_plan = prepare_validation_plan(
             agents=agents,
             issues=issues,
             policy=policy,
@@ -208,7 +226,7 @@ def run_test_agent_validation(
             local_run_id=local_run_id,
         )
         validate_validation_plan(
-            plan,
+            new_plan,
             agents=agents,
             issues=issues,
             policy=policy,
@@ -217,18 +235,46 @@ def run_test_agent_validation(
         base_profile = RuntimeProfile.from_env("staging", "g29")
         journal = LifecycleJournal(lock=lock)
         previous = journal.read_optional()
+        plan = new_plan
+        resume_deployment = False
         if previous is not None and previous.value["state"] not in {
             "CLEAN",
             "FAILED_CLEAN",
         }:
-            _recover_incomplete(
-                journal=journal,
+            resumed_plan = prepare_resumed_validation_plan(
+                agents=agents,
+                issues=issues,
                 policy=policy,
-                base_profile=base_profile,
-                operator=operator,
-                now=now,
+                repository=git.repository,
+                pr_number=git.pr_number,
+                commit_sha=git.commit_sha,
+                cycle_id=str(previous.value["cycle_id"]),
             )
-            previous = journal.read_active()
+            validate_validation_plan(
+                resumed_plan,
+                agents=agents,
+                issues=issues,
+                policy=policy,
+            )
+            resume_deployment = _deployment_resume_allowed(
+                previous.value,
+                git=git,
+                plan=resumed_plan,
+                operator=operator,
+                base_profile=base_profile,
+                now=now(),
+            )
+            if resume_deployment:
+                plan = resumed_plan
+            else:
+                _recover_incomplete(
+                    journal=journal,
+                    policy=policy,
+                    base_profile=base_profile,
+                    operator=operator,
+                    now=now,
+                )
+                previous = journal.read_active()
         LiveRuntime(
             base_profile,
             token_provider=operator.token_provider,
@@ -257,15 +303,56 @@ def run_test_agent_validation(
             cycle_id=plan["cycle_id"],
             base=base_profile,
         )
+        duration_path = (
+            validation_runtime_root()
+            / "durations"
+            / git.repository.replace("/", "--")
+            / str(git.pr_number)
+            / plan["cycle_id"]
+            / "durations.json"
+        )
+        if resume_deployment and duration_path.is_file():
+            previous_durations = read_json(duration_path).get("stages")
+            if not isinstance(previous_durations, dict) or set(
+                previous_durations
+            ) != set(durations):
+                raise ContractError(
+                    "Retained validation durations are invalid"
+                )
+            durations.update(
+                {
+                    key: float(value)
+                    for key, value in previous_durations.items()
+                }
+            )
         assert_validation_permissions(base_profile, operator)
         authorities = authority_specs(agents, issues)
         measurement = measure_test_agent_capacity(profile, now=now)
         costs = validation_endpoint_costs(authorities)
-        capacity = build_capacity_plan(
+        measured_capacity = build_capacity_plan(
             measurement,
             policy=policy,
             costs=costs,
         )
+        capacity = (
+            _capacity_from_lifecycle(previous.value)
+            if resume_deployment and previous is not None
+            else measured_capacity
+        )
+        if resume_deployment and (
+            measured_capacity.available_rpm < capacity.available_rpm
+            or measured_capacity.available_tpm < capacity.available_tpm
+        ):
+            _recover_incomplete(
+                journal=journal,
+                policy=policy,
+                base_profile=base_profile,
+                operator=operator,
+                now=now,
+            )
+            raise ContractError(
+                "Retained validation capacity headroom is no longer available"
+            )
         scheduler = ValidationScheduler(
             capacity,
             WeightedTokenBucket(
@@ -278,20 +365,29 @@ def run_test_agent_validation(
             local_operator_id=operator.object_id,
             policy=policy,
         )
-        project_provisioner.assert_project_absent(plan["project_name"])
-        session_id = uuid.uuid4().hex
-        initial = initial_lifecycle(
-            plan,
-            policy=policy,
-            ownership_nonce=uuid.uuid4().hex,
-            holder_session_reference=content_hash({"session_id": session_id}),
-            holder_operator_reference=operator.operator_reference,
-            holder_run_reference=content_hash({"run_id": local_run_id}),
-            substrate=_substrate(operator, base_profile),
-            now=now(),
+        if resume_deployment:
+            assert previous is not None
+            active = previous
+        else:
+            project_provisioner.assert_project_absent(plan["project_name"])
+            session_id = uuid.uuid4().hex
+            initial = initial_lifecycle(
+                plan,
+                policy=policy,
+                ownership_nonce=uuid.uuid4().hex,
+                holder_session_reference=content_hash(
+                    {"session_id": session_id}
+                ),
+                holder_operator_reference=operator.operator_reference,
+                holder_run_reference=content_hash({"run_id": local_run_id}),
+                substrate=_substrate(operator, base_profile),
+                now=now(),
+            )
+            active = journal.begin_cycle(initial)
+        record_duration(
+            "lock_preflight_seconds",
+            monotonic() - total_started,
         )
-        active = journal.begin_cycle(initial)
-        durations["lock_preflight_seconds"] = monotonic() - total_started
         controller = ValidationCycleController(journal, active=active)
         support_agent = next(
             item
@@ -302,20 +398,40 @@ def run_test_agent_validation(
         def resource_event(event: dict[str, Any]) -> None:
             controller.dynamic_resource_event(event, now=now())
 
-        def deployer_factory(project: ProjectDeployment) -> FoundryAuthorityDeployer:
+        def support_image_factory() -> dict[str, str]:
+            stored_images = controller.active.value["deployment"][
+                "support_images"
+            ]
+            if stored_images:
+                return {
+                    item["logical_version"]: item["image"]
+                    for item in stored_images
+                }
+            support_started = monotonic()
             support = prepare_validation_support_images(
                 profile,
                 support_agent,
                 cycle_id=plan["cycle_id"],
                 record_resource=resource_event,
             )
+            controller.support_images_ready(
+                support.images,
+                now=now(),
+            )
+            record_duration(
+                "support_images_seconds",
+                monotonic() - support_started,
+            )
+            return support.images
+
+        def deployer_factory(project: ProjectDeployment) -> FoundryAuthorityDeployer:
             return FoundryAuthorityDeployer(
                 profile=profile,
                 agent_catalog=agents,
                 issue_catalog=issues,
                 token_provider=operator.token_provider,
                 project=project,
-                support_images=support.images,
+                support_images={},
             )
 
         runner = FoundryScenarioAttemptRunner(
@@ -345,6 +461,7 @@ def run_test_agent_validation(
                 controller=controller,
                 project_provisioner=project_provisioner,
                 deployer_factory=deployer_factory,
+                support_image_factory=support_image_factory,
                 runner=runner,
                 scheduler=scheduler,
                 policy=policy,
@@ -352,6 +469,7 @@ def run_test_agent_validation(
                 assert_commit=assert_commit,
                 record_duration=record_duration,
                 monotonic=monotonic,
+                sleep=time.sleep,
                 now=now,
             )
         except (ContractError, OSError, RuntimeError) as error:
@@ -378,22 +496,13 @@ def run_test_agent_validation(
             raise ContractError(
                 "Local Test Agent Validation cleanup is blocked"
             ) from cleanup_error
-        durations["cleanup_seconds"] = monotonic() - cleanup_started
-        durations["total_seconds"] = monotonic() - total_started
-        immutable_json(
-            validation_runtime_root()
-            / "durations"
-            / git.repository.replace("/", "--")
-            / str(git.pr_number)
-            / plan["cycle_id"]
-            / "durations.json",
-            {
-                "schema_version": "1.0.0",
-                "kind": "test-agent-validation-raw-durations",
-                "cycle_id": plan["cycle_id"],
-                "percentiles_calculated": False,
-                "stages": durations,
-            },
+        record_duration(
+            "cleanup_seconds",
+            monotonic() - cleanup_started,
+        )
+        record_duration(
+            "total_seconds",
+            monotonic() - total_started,
         )
         if execution_error is not None:
             raise ContractError(
@@ -406,6 +515,98 @@ def run_test_agent_validation(
         }
 
 
+def _persist_durations(
+    path: Path,
+    *,
+    cycle_id: str,
+    durations: dict[str, float],
+) -> None:
+    atomic_json(
+        path,
+        {
+            "schema_version": "1.0.0",
+            "kind": "test-agent-validation-raw-durations",
+            "cycle_id": cycle_id,
+            "percentiles_calculated": False,
+            "stages": durations,
+        },
+    )
+
+
+def _deployment_resume_allowed(
+    active: dict[str, Any],
+    *,
+    git: LocalGitContext,
+    plan: dict[str, Any],
+    operator: LocalAzureOperator,
+    base_profile: RuntimeProfile,
+    now: datetime,
+) -> bool:
+    expires = datetime.fromisoformat(
+        str(active["absolute_expires_at"]).replace("Z", "+00:00")
+    ).astimezone(UTC)
+    planned_names = {
+        item["authority_id"]: item["runtime_agent_name"]
+        for item in plan["authorities"]
+    }
+    ready_agents = active["runtime_topology"]["agents"]
+    try:
+        _assert_recovery_substrate(
+            active["substrate"],
+            operator,
+            base_profile,
+        )
+    except ContractError:
+        return False
+    return (
+        active["state"] == "CREATING"
+        and active["failure"] is None
+        and active["cleanup"]["status"] == "not_started"
+        and active["project"]["state"] == "created"
+        and active["project"]["name"] == plan["project_name"]
+        and active["repository"] == git.repository
+        and active["pr_number"] == git.pr_number
+        and active["commit_sha"] == git.commit_sha
+        and active["operator"]["operator_reference"]
+        == operator.operator_reference
+        and active["digests"]["validation_digest"]
+        == plan["validation_digest"]
+        and active["digests"]["execution_matrix_digest"]
+        == plan["execution_matrix_digest"]
+        and active["digests"]["runtime_topology_digest"]
+        == plan["planned_topology_digest"]
+        and active["capacity"] is not None
+        and active["deployment"]["phase"] == "phase_1_deployment"
+        and active["deployment"]["traffic_started"] is False
+        and not active["deployment"]["failures"]
+        and now < expires
+        and all(
+            planned_names.get(item["authority_id"])
+            == item["runtime_agent_name"]
+            for item in ready_agents
+        )
+    )
+
+
+def _capacity_from_lifecycle(active: dict[str, Any]) -> CapacityPlan:
+    value = active.get("capacity")
+    if not isinstance(value, dict):
+        raise ContractError(
+            "Retained validation capacity plan is missing"
+        )
+    try:
+        plan = CapacityPlan(**value)
+    except TypeError as error:
+        raise ContractError(
+            "Retained validation capacity plan is invalid"
+        ) from error
+    if plan.plan_digest != active["digests"]["quota_plan_digest"]:
+        raise ContractError(
+            "Retained validation capacity digest changed"
+        )
+    return plan
+
+
 def _recover_incomplete(
     *,
     journal: LifecycleJournal,
@@ -415,15 +616,14 @@ def _recover_incomplete(
     now: Callable[[], datetime],
 ) -> None:
     current = journal.read_active()
-    _assert_recovery_substrate(
-        current.value["substrate"],
-        operator,
+    persisted_profile = _profile_for_substrate(
         base_profile,
+        current.value["substrate"],
     )
     profile = validation_runtime_profile(
         str(current.value["project"]["name"]),
         cycle_id=str(current.value["cycle_id"]),
-        base=base_profile,
+        base=persisted_profile,
     )
     backend = AzureValidationCleanupBackend(
         profile=profile,
@@ -445,6 +645,42 @@ def _recover_incomplete(
         raise ContractError(
             "Prior local validation cleanup remains blocked; no new cycle started"
         )
+
+
+def _profile_for_substrate(
+    base: RuntimeProfile,
+    substrate: dict[str, str],
+) -> RuntimeProfile:
+    required = {
+        "account_name",
+        "account_resource_id",
+        "registry_name",
+        "storage_account_name",
+        "telemetry_resource_id",
+    }
+    if not required.issubset(substrate) or not all(
+        substrate[key] for key in required
+    ):
+        raise ContractError(
+            "Persisted validation cleanup substrate is incomplete"
+        )
+    return RuntimeProfile(
+        name=base.name,
+        project_name=base.project_name,
+        project_endpoint=base.project_endpoint,
+        insights_endpoint=base.insights_endpoint,
+        application_insights_resource_id=substrate[
+            "telemetry_resource_id"
+        ],
+        registry_path=base.registry_path,
+        account_name=substrate["account_name"],
+        container_registry_name=substrate["registry_name"],
+        registry_storage_account_name=substrate[
+            "storage_account_name"
+        ],
+        account_resource_id=substrate["account_resource_id"],
+        telemetry_resource_set="g29",
+    )
 
 
 def _verify_existing_clean_result(

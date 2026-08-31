@@ -5,6 +5,9 @@ test_agent_model:
   deployment_name: gpt-5.4-mini
   model_id: gpt-5.4-mini
   model_version: "2026-03-17"
+canary_agents:
+  prompt: weather-agent
+  hosted: finance-agent
 inventory:
   agents: 5
   issues: 36
@@ -19,6 +22,8 @@ limits:
   minimum_tpm_headroom: 8192
   active_heartbeat_seconds: 60
   absolute_ttl_hours: 72
+  max_recovery_versions_per_agent: 3
+  clean_interval_seconds: 360
 name_policy:
   project:
     maximum_length: 64

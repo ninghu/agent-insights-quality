@@ -62,6 +62,7 @@ _REQUIRED_FIELDS = {
     "capacity",
     "project",
     "runtime_topology",
+    "deployment",
     "resources",
     "cleanup",
     "event_reference",
@@ -349,6 +350,61 @@ def validate_lifecycle(value: Mapping[str, Any]) -> None:
     )
     if value["journal_digest"] != expected:
         raise ContractError("Local validation lifecycle digest is stale")
+    deployment = value["deployment"]
+    ready_ids = {
+        item["authority_id"] for item in value["runtime_topology"]["agents"]
+    }
+    recovery_ids = [
+        item["authority_id"] for item in deployment["recoveries"]
+    ]
+    failure_keys = [
+        (item["authority_id"], item["stage"])
+        for item in deployment["failures"]
+    ]
+    if (
+        len(ready_ids) != len(value["runtime_topology"]["agents"])
+        or len(recovery_ids) != len(set(recovery_ids))
+        or len(failure_keys) != len(set(failure_keys))
+        or (
+            deployment["phase"] == "phase_1_traffic"
+            and len(value["runtime_topology"]["agents"]) != 2
+        )
+        or (
+            deployment["phase"] == "phase_2_deployment"
+            and not 2 <= len(value["runtime_topology"]["agents"]) <= 41
+        )
+        or (
+            deployment["phase"] in {"phase_2_traffic", "complete"}
+            and len(value["runtime_topology"]["agents"]) != 41
+        )
+        or (
+            deployment["phase"] != "phase_1_deployment"
+            and deployment["traffic_started"] is not True
+        )
+        or (
+            deployment["phase"] == "phase_1_deployment"
+            and deployment["traffic_started"] is not False
+        )
+        or any(
+            (item["state"] == "ready") != (item["authority_id"] in ready_ids)
+            for item in deployment["recoveries"]
+        )
+        or any(
+            sum(
+                1
+                for recovery in deployment["recoveries"]
+                if recovery["canonical_agent"] == agent
+            )
+            > 3
+            for agent in {
+                item["canonical_agent"]
+                for item in deployment["recoveries"]
+            }
+        )
+    ):
+        raise ContractError(
+            "Local validation deployment progress is inconsistent"
+        )
     operator = value["operator"]
     if not isinstance(operator, Mapping) or set(operator) != {
         "session_reference",

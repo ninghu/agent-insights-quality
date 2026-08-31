@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -128,6 +129,59 @@ def prepare_validation_plan(
             for item, authority in zip(topology, authorities, strict=True)
         ],
     }
+
+
+def prepare_resumed_validation_plan(
+    *,
+    agents: Mapping[str, Any],
+    issues: Mapping[str, Any],
+    policy: ValidationPolicy,
+    repository: str,
+    pr_number: int,
+    commit_sha: str,
+    cycle_id: str,
+) -> dict[str, Any]:
+    if re.fullmatch(r"validation-[0-9a-f]{12}", cycle_id) is None:
+        raise ContractError("Resumed validation cycle identity is invalid")
+    suffix = cycle_id.removeprefix("validation-")
+    value = prepare_validation_plan(
+        agents=agents,
+        issues=issues,
+        policy=policy,
+        repository=repository,
+        pr_number=pr_number,
+        commit_sha=commit_sha,
+        local_run_id="resumed-local-cycle",
+    )
+    authorities = authority_specs(agents, issues)
+    topology = plan_runtime_topology(
+        authorities,
+        cycle_suffix=suffix,
+        policy=policy,
+    )
+    value["cycle_id"] = cycle_id
+    value["project_name"] = validation_project_name(
+        suffix,
+        policy=policy,
+    )
+    for item, planned in zip(
+        value["authorities"],
+        topology,
+        strict=True,
+    ):
+        item["runtime_agent_name"] = planned.runtime_agent_name
+    value["planned_topology_digest"] = content_hash(
+        [
+            {
+                "authority_id": item.authority_id,
+                "runtime_agent_name": item.runtime_agent_name,
+                "runtime_kind": item.runtime_kind,
+                "framework": item.framework,
+            }
+            for item in topology
+        ]
+    )
+    return value
 
 
 def validate_validation_plan(

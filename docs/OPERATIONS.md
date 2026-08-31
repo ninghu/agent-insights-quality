@@ -49,10 +49,21 @@ LOCKED -> PREFLIGHT -> CREATING -> VALIDATING
 The runner holds
 `~/.aiq-runtime/agent-insights-quality/test-agent-validation/validation.lock` for the whole process.
 Every mutation atomically replaces the local active journal and writes a required content-addressed,
-append-only history snapshot. Process exit releases the lock. The next invocation must recover any
-nonterminal journal through cleanup before starting a new cycle; cleanup remains allowed after the
-fixed 72-hour execution TTL. The authenticated Azure CLI user is resolved explicitly, recorded as a
-private hash, and checked on every SDK token acquisition.
+append-only history snapshot. Process exit releases the lock. Before traffic, an unchanged commit may
+resume the same cycle, Project, topology, exact source-digest Support images, and confirmed-ready
+authorities; it retries only unresolved authorities and allows at most three recovered versions per
+Agent. Phase 1 deploys only `weather-agent/v0` and `finance-agent/v0`, waits the reviewed clean
+interval, and runs both official baseline matrices concurrently. Both must pass before Phase 2
+deploys the remaining 39, waits a second clean interval, and runs five independent Agent lanes with
+versions sequential inside each lane. Agent-local failures do not cancel other lanes; shared runtime
+failures do. Commit, identity, substrate, topology, TTL, deterministic-contract, retry-exhaustion, or
+post-traffic drift forces exact full-cycle cleanup. Cleanup remains allowed after the fixed 72-hour
+execution TTL. The authenticated Azure CLI user is resolved explicitly, recorded as a private hash,
+and checked on every SDK token acquisition.
+
+Support wheelhouse artifacts and ACR build tags are reused only under exact requirements/source
+digests. Cycle tags remain cycle-owned and are removed during cleanup. Public-safe per-stage timings
+are persisted after each completed stage under the private validation runtime root.
 
 Cleanup records intent first and deletes responses, conversations/sessions, Agent versions and
 Agents, Hosted deployments/identities/blueprints, connections, role assignments, cycle principals,

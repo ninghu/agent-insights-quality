@@ -21,15 +21,24 @@ report publication, ADX, email, Optional Daily Test, or a GitHub merge gate.
    content-addressed and append-only.
 4. Before create, verify the clean PR head, authenticated Azure CLI user, fixed staging account,
    reviewed model, quota/headroom, read-only `g29` access, prior lifecycle state, and target Project
-   absence. An incomplete prior journal must resume exact cleanup before a new cycle.
+   absence. A pre-traffic partial deployment may resume only the unchanged commit, cycle, substrate,
+   Project, and topology; every other incomplete journal resumes exact cleanup before a new cycle.
 5. Create exactly one opaque temporary Project and 41 independently named Agent endpoints. Record
-   intent before every create. Provision at no more than eight, query telemetry at no more than four,
-   and allow one scenario attempt per runtime.
-6. Run every fixed setup/probe attempt through deployed endpoints. Use the identical issue matrix
-   against paired `v0`. Application Insights remains read-only; ambiguous identity or correlation
-   aborts. Never create monitors or inject traces.
+   intent before every create. Phase 1 deploys only the fixed `weather-agent/v0` Prompt baseline and
+   `finance-agent/v0` Hosted baseline, waits the clean interval, and runs their official baseline
+   attempts concurrently. Only when both pass may Phase 2 provision the remaining 39 at no more than
+   eight, wait a new clean interval, and run all remaining official traffic in five Agent lanes.
+   Retain confirmed-ready pre-traffic authorities and retry only unresolved authorities, with at most
+   three recovered versions per Agent.
+6. Run every fixed setup/probe attempt through deployed endpoints. Within each Agent, versions remain
+   sequential; independent Agent lanes continue after an Agent-local failure. Use the identical issue
+   matrix against paired `v0`. Query telemetry at no more than four and allow one scenario attempt per
+   runtime. Application Insights remains read-only; shared runtime failure or ambiguous identity/
+   correlation aborts. Never create monitors or inject traces.
 7. Any commit change aborts the cycle, performs cleanup, and requires a fresh full 41-Agent cycle.
-   There is no cross-cycle cache and no caller-supplied commit or tree identity.
+   There is no cross-cycle Agent, topology, traffic, or evidence reuse and no caller-supplied commit
+   or tree identity. Local dependencies and ACR build manifests may be reused only by exact
+   content digest; cycle tags remain cycle-owned.
 8. Delete every recorded response, conversation/session, Agent/version, Hosted
    deployment/identity/blueprint, connection, role assignment, cycle principal, tag, and unshared
    manifest in reverse dependency order, then delete the Project. Verify exact absence and every

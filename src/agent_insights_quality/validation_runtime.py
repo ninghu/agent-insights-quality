@@ -8,7 +8,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
-from agent_insights_quality.util import ContractError, content_hash
+from agent_insights_quality.util import (
+    ContractError,
+    SharedRuntimeError,
+    content_hash,
+)
 from agent_insights_quality.validation_evidence import (
     authority_predicate_contract_digest,
     digest_without_field,
@@ -57,6 +61,23 @@ class DeployedRuntime:
     runtime_principal_id: str | None
     telemetry_identity_id: str
     connection_ids: tuple[str, ...]
+
+
+class AgentDeploymentIncomplete(ContractError):
+    def __init__(self, failures: list[dict[str, Any]]) -> None:
+        super().__init__("One or more Agent deployment lanes are incomplete")
+        self.failures = failures
+
+
+class AgentExecutionIncomplete(ContractError):
+    def __init__(
+        self,
+        failures: list[dict[str, Any]],
+        partial_results: list[dict[str, Any]],
+    ) -> None:
+        super().__init__("One or more Agent traffic lanes are incomplete")
+        self.failures = failures
+        self.partial_results = partial_results
 
 
 class AuthorityDeployer(Protocol):
@@ -171,13 +192,42 @@ def deploy_all_authorities(
     deployer: AuthorityDeployer,
     maximum_concurrency: int,
     record_resource: Callable[[dict[str, Any]], None] | None = None,
+    existing_deployed: Mapping[str, DeployedRuntime] | None = None,
+    retry_counts: Mapping[str, int] | None = None,
+    max_recovery_versions_per_agent: int = 3,
+    record_ready: Callable[[AuthoritySpec, DeployedRuntime], None]
+    | None = None,
+    record_recovery: Callable[[AuthoritySpec, str, int, str], None]
+    | None = None,
+    record_failure: Callable[[dict[str, Any]], None] | None = None,
+    require_architecture_canaries: bool = True,
+    prior_recovered_authorities: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, DeployedRuntime]:
     if maximum_concurrency < 1 or maximum_concurrency > 8:
         raise ContractError("Validation provisioning concurrency must be between 1 and 8")
     by_id = {item.authority_id: item for item in planned}
     if set(by_id) != {item.authority_id for item in authorities}:
         raise ContractError("Planned validation topology is incomplete")
-    deployed: dict[str, DeployedRuntime] = {}
+    authority_by_id = {item.authority_id: item for item in authorities}
+    deployed: dict[str, DeployedRuntime] = dict(existing_deployed or {})
+    retries = dict(retry_counts or {})
+    recovered_by_agent = {
+        agent: set(authority_ids)
+        for agent, authority_ids in (
+            prior_recovered_authorities or {}
+        ).items()
+    }
+    if (
+        not set(deployed).issubset(by_id)
+        or not set(retries).issubset(by_id)
+        or max_recovery_versions_per_agent != 3
+    ):
+        raise ContractError("Validation deployment resume state is invalid")
+    for authority_id in retries:
+        recovered_by_agent.setdefault(
+            authority_by_id[authority_id].canonical_agent,
+            set(),
+        ).add(authority_id)
     lock = threading.Lock()
     def deploy(authority: AuthoritySpec) -> DeployedRuntime:
         target = by_id[authority.authority_id]
@@ -235,34 +285,215 @@ def deploy_all_authorities(
             if authority_id in deployed:
                 raise ContractError("Validation authority was deployed more than once")
             deployed[authority_id] = value
+        if record_ready is not None:
+            record_ready(authority_by_id[authority_id], value)
 
-    prompt_canary, hosted_canary = _deployment_canaries(authorities)
-    canary_ids = {
-        prompt_canary.authority_id,
-        hosted_canary.authority_id,
-    }
-    for canary in (prompt_canary, hosted_canary):
-        value = deploy(canary)
-        deployer.assert_ready(canary, value)
-        accept(canary.authority_id, value)
+    def deploy_stage(
+        stage: Sequence[AuthoritySpec],
+        *,
+        concurrency: int,
+    ) -> None:
+        pending = [
+            authority
+            for authority in stage
+            if authority.authority_id not in deployed
+        ]
+        while pending:
+            failures: list[tuple[AuthoritySpec, ContractError]] = []
+            with ThreadPoolExecutor(max_workers=concurrency) as pool:
+                futures = {
+                    pool.submit(deploy, authority): authority
+                    for authority in pending
+                }
+                for future in as_completed(futures):
+                    authority = futures[future]
+                    try:
+                        value = future.result()
+                    except ContractError as error:
+                        failures.append((authority, error))
+                    else:
+                        accept(authority.authority_id, value)
+            deterministic = [
+                (authority, error)
+                for authority, error in failures
+                if getattr(error, "transient", False) is not True
+            ]
+            shared = [
+                error
+                for _, error in failures
+                if isinstance(error, SharedRuntimeError)
+            ]
+            if shared:
+                raise shared[0]
+            if deterministic:
+                summaries = [
+                    _agent_failure_summary(
+                        authority,
+                        stage="deployment",
+                        error=error,
+                        request_accepted=False,
+                    )
+                    for authority, error in deterministic
+                ]
+                if record_failure is not None:
+                    for summary in summaries:
+                        record_failure(summary)
+                raise AgentDeploymentIncomplete(summaries)
+            if not failures:
+                return
+            next_pending = []
+            for authority, _ in failures:
+                with lock:
+                    previous_count = retries.get(
+                        authority.authority_id,
+                        0,
+                    )
+                    recovered_versions = recovered_by_agent.setdefault(
+                        authority.canonical_agent,
+                        set(),
+                    )
+                    exhausted = (
+                        previous_count
+                        >= max_recovery_versions_per_agent
+                        or (
+                            authority.authority_id
+                            not in recovered_versions
+                            and len(recovered_versions)
+                            >= max_recovery_versions_per_agent
+                        )
+                    )
+                    retry_count = previous_count + 1
+                    if not exhausted:
+                        retries[authority.authority_id] = retry_count
+                        recovered_versions.add(authority.authority_id)
+                if exhausted:
+                    summary = _agent_failure_summary(
+                        authority,
+                        stage="deployment",
+                        error_code="recovery_exhausted",
+                        request_accepted=False,
+                    )
+                    if record_failure is not None:
+                        record_failure(summary)
+                    raise AgentDeploymentIncomplete([summary])
+                if record_recovery is not None:
+                    record_recovery(
+                        authority,
+                        "failed",
+                        retry_count,
+                        "transient_provider_error",
+                    )
+                next_pending.append(authority)
+            pending = next_pending
+
+    canary_ids: set[str] = set()
+    if require_architecture_canaries:
+        prompt_canary, hosted_canary = _deployment_canaries(authorities)
+        canary_ids = {
+            prompt_canary.authority_id,
+            hosted_canary.authority_id,
+        }
+        def deploy_canary(
+            canary: AuthoritySpec,
+        ) -> list[dict[str, Any]]:
+            try:
+                if canary.authority_id not in deployed:
+                    deploy_stage([canary], concurrency=1)
+                deployer.assert_ready(canary, deployed[canary.authority_id])
+            except SharedRuntimeError:
+                raise
+            except AgentDeploymentIncomplete as error:
+                return error.failures
+            except ContractError as error:
+                summary = _agent_failure_summary(
+                    canary,
+                    stage="readiness",
+                    error=error,
+                    request_accepted=False,
+                )
+                if record_failure is not None:
+                    record_failure(summary)
+                return [summary]
+            return []
+
+        canary_failures: list[dict[str, Any]] = []
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [
+                pool.submit(deploy_canary, canary)
+                for canary in (prompt_canary, hosted_canary)
+            ]
+            for future in as_completed(futures):
+                try:
+                    canary_failures.extend(future.result())
+                except SharedRuntimeError:
+                    for pending in futures:
+                        pending.cancel()
+                    raise
+        if canary_failures:
+            raise AgentDeploymentIncomplete(canary_failures)
 
     remaining = [
         authority
         for authority in authorities
         if authority.authority_id not in canary_ids
     ]
-    with ThreadPoolExecutor(max_workers=maximum_concurrency) as pool:
+    lanes: dict[str, list[AuthoritySpec]] = {}
+    for authority in remaining:
+        lanes.setdefault(authority.canonical_agent, []).append(authority)
+    lane_failures: list[dict[str, Any]] = []
+
+    def deploy_lane(lane: Sequence[AuthoritySpec]) -> list[dict[str, Any]]:
+        for authority in lane:
+            try:
+                deploy_stage([authority], concurrency=1)
+            except AgentDeploymentIncomplete as error:
+                return error.failures
+        return []
+
+    with ThreadPoolExecutor(
+        max_workers=min(maximum_concurrency, len(lanes) or 1)
+    ) as pool:
         futures = {
-            pool.submit(deploy, authority): authority.authority_id
-            for authority in remaining
+            pool.submit(deploy_lane, lane): agent
+            for agent, lane in lanes.items()
         }
         for future in as_completed(futures):
-            authority_id = futures[future]
-            value = future.result()
-            accept(authority_id, value)
+            try:
+                lane_failures.extend(future.result())
+            except SharedRuntimeError:
+                for pending in futures:
+                    pending.cancel()
+                raise
+    if lane_failures:
+        raise AgentDeploymentIncomplete(lane_failures)
     if len(deployed) != len(authorities):
         raise ContractError("Validation did not deploy every authority")
     return deployed
+
+
+def _agent_failure_summary(
+    authority: AuthoritySpec,
+    *,
+    stage: str,
+    error: BaseException | None = None,
+    error_code: str | None = None,
+    request_accepted: bool | None,
+) -> dict[str, Any]:
+    raw_code = error_code or str(getattr(error, "code", "") or "")
+    if not raw_code and error is not None:
+        raw_code = type(error).__name__
+    normalized = re.sub(
+        r"[^a-z0-9]+",
+        "_",
+        re.sub(r"(?<!^)(?=[A-Z])", "_", raw_code).casefold(),
+    ).strip("_")
+    return {
+        "canonical_agent": authority.canonical_agent,
+        "authority_id": authority.authority_id,
+        "stage": stage,
+        "error_code": normalized[:64] or "unknown_error",
+        "request_accepted": request_accepted,
+    }
 
 
 def _deployment_canaries(
@@ -349,47 +580,165 @@ def execute_validation_matrix(
     scheduler: ValidationScheduler,
     model_contract: Mapping[str, Any],
     validated_commit_sha: str,
+    record_failure: Callable[[dict[str, Any]], None] | None = None,
+    paired_baselines: Mapping[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    return execute_validation_phase(
+        authorities,
+        deployed,
+        runner=runner,
+        scheduler=scheduler,
+        model_contract=model_contract,
+        validated_commit_sha=validated_commit_sha,
+        record_failure=record_failure,
+        paired_baselines=paired_baselines,
+    )
+
+
+def execute_validation_phase(
+    authorities: Sequence[AuthoritySpec],
+    deployed: Mapping[str, DeployedRuntime],
+    *,
+    runner: ScenarioAttemptRunner,
+    scheduler: ValidationScheduler,
+    model_contract: Mapping[str, Any],
+    validated_commit_sha: str,
+    record_failure: Callable[[dict[str, Any]], None] | None = None,
+    paired_baselines: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     by_id = {item.authority_id: item for item in authorities}
-    baseline_ids = {
+    local_baselines = {
         item.canonical_agent: item.authority_id
         for item in authorities
         if item.authority_kind == "baseline"
     }
-    if len(by_id) != 41 or len(baseline_ids) != 5 or set(deployed) != set(by_id):
-        raise ContractError("Validation execution requires the exact deployed topology")
+    baseline_ids = dict(paired_baselines or local_baselines)
+    phase_agents = {item.canonical_agent for item in authorities}
+    if (
+        not authorities
+        or not phase_agents.issubset(baseline_ids)
+        or not set(by_id).issubset(deployed)
+        or any(
+            baseline_ids[agent] not in deployed for agent in phase_agents
+        )
+    ):
+        raise ContractError(
+            "Validation phase requires its exact deployed Agent topology"
+        )
     lanes: dict[str, list[AuthoritySpec]] = {}
     for authority in authorities:
         lanes.setdefault(authority.canonical_agent, []).append(authority)
-    if len(lanes) != 5:
-        raise ContractError("Validation execution requires five Agent lanes")
-
-    def execute_lane(lane: list[AuthoritySpec]) -> list[dict[str, Any]]:
-        return [
-            _execute_authority(
-                authority,
-                deployed=deployed,
-                paired_v0_id=baseline_ids[authority.canonical_agent],
-                runner=runner,
-                scheduler=scheduler,
-                model_contract=model_contract,
-                validated_commit_sha=validated_commit_sha,
-            )
-            for authority in lane
-        ]
+    def execute_lane(
+        lane: list[AuthoritySpec],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+        results = []
+        for authority in lane:
+            try:
+                validate_validation_rules(
+                    authority.validation_rules,
+                    authority_id=authority.authority_id,
+                    authority_kind=authority.authority_kind,
+                    canonical_agent=authority.canonical_agent,
+                    logical_version=authority.logical_version,
+                    runtime_kind=authority.runtime_kind,
+                    framework=authority.framework,
+                    model_contract=model_contract,
+                    reviewed_mode=authority.validation_mode,
+                )
+            except ContractError as error:
+                return results, _agent_failure_summary(
+                    authority,
+                    stage="contract",
+                    error=error,
+                    request_accepted=False,
+                )
+            try:
+                result = _execute_authority(
+                    authority,
+                    deployed=deployed,
+                    paired_v0_id=baseline_ids[authority.canonical_agent],
+                    runner=runner,
+                    scheduler=scheduler,
+                    model_contract=model_contract,
+                    validated_commit_sha=validated_commit_sha,
+                )
+            except SharedRuntimeError:
+                raise
+            except (ContractError, OSError, RuntimeError) as error:
+                return results, _agent_failure_summary(
+                    authority,
+                    stage="traffic",
+                    error=error,
+                    request_accepted=getattr(
+                        error,
+                        "request_accepted",
+                        None,
+                    ),
+                )
+            results.append(result)
+            if not result["pass"]:
+                return results, _result_failure_summary(authority, result)
+        return results, None
 
     result_by_id: dict[str, dict[str, Any]] = {}
+    failures: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=5) as pool:
         futures = {
             pool.submit(execute_lane, lane): agent_name
             for agent_name, lane in lanes.items()
         }
         for future in as_completed(futures):
-            for result in future.result():
+            try:
+                lane_results, failure = future.result()
+            except SharedRuntimeError:
+                for pending in futures:
+                    pending.cancel()
+                raise
+            for result in lane_results:
                 result_by_id[result["authority_id"]] = result
-    if len(result_by_id) != 41:
-        raise ContractError("Validation execution did not complete every Agent lane")
+            if failure is not None:
+                failures.append(failure)
+                if record_failure is not None:
+                    record_failure(failure)
+    if failures:
+        raise AgentExecutionIncomplete(
+            failures,
+            list(result_by_id.values()),
+        )
+    if len(result_by_id) != len(authorities):
+        raise ContractError(
+            "Validation execution did not complete every Agent lane"
+        )
     return [result_by_id[item.authority_id] for item in authorities]
+
+
+def _result_failure_summary(
+    authority: AuthoritySpec,
+    result: Mapping[str, Any],
+) -> dict[str, Any]:
+    attempts = [
+        attempt
+        for scenario in result["scenarios"]
+        for key in ("issue_attempts", "v0_attempts")
+        for attempt in scenario[key]
+    ]
+    error_code = next(
+        (
+            str(item["error_code"])
+            for item in attempts
+            if item.get("error_code")
+        ),
+        "validation_contract_failed",
+    )
+    request_accepted = any(
+        item.get("response_references") for item in attempts
+    )
+    return _agent_failure_summary(
+        authority,
+        stage="traffic",
+        error_code=error_code,
+        request_accepted=request_accepted,
+    )
 
 
 def _execute_authority(

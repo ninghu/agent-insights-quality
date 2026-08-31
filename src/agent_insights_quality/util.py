@@ -16,6 +16,10 @@ class ContractError(ValueError):
     """A reviewed repository or runtime contract is invalid."""
 
 
+class SharedRuntimeError(ContractError):
+    """A shared substrate failure invalidates every active Agent lane."""
+
+
 class InsightWindowExpiredError(ContractError):
     """Correlated evidence is outside the requested Agent Insights window."""
 

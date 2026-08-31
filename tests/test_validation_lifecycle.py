@@ -59,6 +59,175 @@ def _initial() -> dict:
     )
 
 
+def _support_images() -> dict[str, str]:
+    return {
+        ("v0" if index == 0 else f"issue-{index + 28:03d}"): (
+            "synthetic.azurecr.io/agent-insights-quality-support@"
+            f"sha256:{index:064x}"
+        )
+        for index in range(9)
+    }
+
+
+def _prompt_runtime() -> dict:
+    return {
+        "authority_id": "weather-agent/v0",
+        "canonical_agent": "weather-agent",
+        "logical_version": "v0",
+        "runtime_kind": "prompt",
+        "framework": "foundry_prompt",
+        "runtime_agent_name": "weather-agent-baseline-synthetic",
+        "runtime_agent_version": "1",
+        "provider_agent_id": "synthetic-agent",
+        "provider_agent_version_id": "synthetic-version",
+        "hosted_identity_id": None,
+        "hosted_blueprint_id": None,
+        "hosted_deployment_id": None,
+        "foundry_agent_name": "weather-agent-baseline-synthetic",
+        "foundry_agent_version": "1",
+        "runtime_principal_id": None,
+        "telemetry_identity_id": "synthetic-version",
+        "connection_ids": [],
+    }
+
+
+def _hosted_runtime() -> dict:
+    return {
+        "authority_id": "finance-agent/v0",
+        "canonical_agent": "finance-agent",
+        "logical_version": "v0",
+        "runtime_kind": "hosted_code",
+        "framework": "microsoft_agent_framework",
+        "runtime_agent_name": "finance-agent-baseline-synthetic",
+        "runtime_agent_version": "1",
+        "provider_agent_id": "synthetic-finance-agent",
+        "provider_agent_version_id": "synthetic-finance-version",
+        "hosted_identity_id": "synthetic-finance-identity",
+        "hosted_blueprint_id": "synthetic-finance-blueprint",
+        "hosted_deployment_id": "synthetic-finance-deployment",
+        "foundry_agent_name": "finance-agent-baseline-synthetic",
+        "foundry_agent_version": "1",
+        "runtime_principal_id": "synthetic-finance-principal",
+        "telemetry_identity_id": "synthetic-finance-version",
+        "connection_ids": [],
+    }
+
+
+def test_partial_deployment_progress_persists_recovery_and_ready_state(
+    tmp_path,
+) -> None:
+    lock = LocalValidationLock(tmp_path / "validation.lock")
+    journal = LifecycleJournal(lock=lock, root=tmp_path / "lifecycle")
+    with lock:
+        active = journal.begin_cycle(_initial())
+        controller = ValidationCycleController(journal, active=active)
+        controller.support_images_ready(_support_images(), now=START)
+        controller.authority_recovery(
+            authority_id="weather-agent/v0",
+            canonical_agent="weather-agent",
+            state="ambiguous",
+            retry_count=1,
+            error_code="interrupted_deployment",
+            now=START + timedelta(seconds=1),
+        )
+        controller.authority_ready(
+            _prompt_runtime(),
+            now=START + timedelta(seconds=2),
+        )
+        deployment = controller.active.value["deployment"]
+        assert deployment["traffic_started"] is False
+        assert deployment["recoveries"] == [
+            {
+                "authority_id": "weather-agent/v0",
+                "canonical_agent": "weather-agent",
+                "state": "ready",
+                "retry_count": 1,
+                "error_code": "interrupted_deployment",
+            }
+        ]
+        assert controller.active.value["runtime_topology"]["agents"] == [
+            _prompt_runtime()
+        ]
+        with pytest.raises(ContractError, match="41 deployed"):
+            controller.begin_validation(
+                [_prompt_runtime()],
+                now=START + timedelta(seconds=3),
+            )
+
+
+def test_resumed_resource_intent_does_not_duplicate_or_downgrade_ready(
+    tmp_path,
+) -> None:
+    lock = LocalValidationLock(tmp_path / "validation.lock")
+    journal = LifecycleJournal(lock=lock, root=tmp_path / "lifecycle")
+    event = {
+        "state": "create_intent",
+        "kind": "provider_agent",
+        "intent_reference": content_hash("agent-intent"),
+        "deterministic_name": "synthetic-agent",
+        "runtime_kind": "prompt",
+        "discovery_key": "synthetic-agent|v0|provider_agent",
+        "authority_id": "weather-agent/v0",
+        "parent_id": None,
+        "cleanup_method": "explicit",
+    }
+    with lock:
+        controller = ValidationCycleController(
+            journal,
+            active=journal.begin_cycle(_initial()),
+        )
+        controller.dynamic_resource_event(event, now=START)
+        revision = controller.active.value["revision"]
+        controller.dynamic_resource_event(event, now=START)
+        assert controller.active.value["revision"] == revision
+        controller.dynamic_resource_event(
+            {
+                **event,
+                "state": "created",
+                "provider_id": "synthetic-provider-agent",
+            },
+            now=START + timedelta(seconds=1),
+        )
+        controller.dynamic_resource_event(
+            {**event, "state": "ambiguous_create"},
+            now=START + timedelta(seconds=2),
+        )
+        resource = controller.active.value["resources"][0]
+        assert resource["state"] == "created"
+        assert resource["provider_id"] == "synthetic-provider-agent"
+
+
+def test_phase_two_requires_both_phase_one_baselines_without_failures(
+    tmp_path,
+) -> None:
+    lock = LocalValidationLock(tmp_path / "validation.lock")
+    journal = LifecycleJournal(lock=lock, root=tmp_path / "lifecycle")
+    with lock:
+        controller = ValidationCycleController(
+            journal,
+            active=journal.begin_cycle(_initial()),
+        )
+        with pytest.raises(ContractError, match="phase 1 did not authorize"):
+            controller.begin_phase_two_deployment(now=START)
+        controller.authority_ready(_prompt_runtime(), now=START)
+        controller.authority_ready(
+            _hosted_runtime(),
+            now=START + timedelta(seconds=1),
+        )
+        controller.begin_phase_one_traffic(
+            {"weather-agent/v0", "finance-agent/v0"},
+            now=START + timedelta(seconds=2),
+        )
+        controller.begin_phase_two_deployment(
+            now=START + timedelta(seconds=3),
+        )
+        assert (
+            controller.active.value["deployment"]["phase"]
+            == "phase_2_deployment"
+        )
+        assert controller.active.value["deployment"]["traffic_started"] is True
+
+
 def test_shared_process_lock_excludes_a_second_worktree(tmp_path) -> None:
     path = tmp_path / "shared-runtime" / "validation.lock"
     first = LocalValidationLock(path)

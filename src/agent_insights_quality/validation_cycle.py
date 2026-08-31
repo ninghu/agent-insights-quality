@@ -91,6 +91,13 @@ def initial_lifecycle(
             "telemetry_identity_ids": [],
             "agents": [],
         },
+        "deployment": {
+            "phase": "phase_1_deployment",
+            "traffic_started": False,
+            "support_images": [],
+            "recoveries": [],
+            "failures": [],
+        },
         "resources": [],
         "cleanup": {
             "status": "not_started",
@@ -232,6 +239,248 @@ class ValidationCycleController:
             now,
         )
 
+    def support_images_ready(
+        self,
+        images: Mapping[str, str],
+        *,
+        now: datetime,
+    ) -> LocalRecord:
+        entries = [
+            {"logical_version": logical, "image": image}
+            for logical, image in sorted(images.items())
+        ]
+        existing = self._active.value["deployment"]["support_images"]
+        if existing:
+            if existing != entries:
+                raise ContractError(
+                    "Validation Support image cache changed during the cycle"
+                )
+            return self._active
+        if len(entries) != 9:
+            raise ContractError(
+                "Validation requires all nine Support images before deployment"
+            )
+        return self._commit(
+            self._active.value["state"],
+            {"deployment": {"support_images": entries}},
+            now,
+        )
+
+    def authority_recovery(
+        self,
+        *,
+        authority_id: str,
+        canonical_agent: str,
+        state: str,
+        retry_count: int,
+        error_code: str,
+        now: datetime,
+    ) -> LocalRecord:
+        if state not in {"ambiguous", "failed", "ready"}:
+            raise ContractError("Validation deployment recovery state is invalid")
+        with self._lock:
+            recoveries = [
+                copy.deepcopy(item)
+                for item in self._active.value["deployment"]["recoveries"]
+                if item["authority_id"] != authority_id
+            ]
+            previous = next(
+                (
+                    item
+                    for item in self._active.value["deployment"]["recoveries"]
+                    if item["authority_id"] == authority_id
+                ),
+                None,
+            )
+            if previous is not None and (
+                previous["canonical_agent"] != canonical_agent
+                or retry_count < previous["retry_count"]
+            ):
+                raise ContractError(
+                    "Validation deployment recovery identity changed"
+                )
+            recoveries.append(
+                {
+                    "authority_id": authority_id,
+                    "canonical_agent": canonical_agent,
+                    "state": state,
+                    "retry_count": retry_count,
+                    "error_code": error_code,
+                }
+            )
+            recoveries.sort(key=lambda item: item["authority_id"])
+            return self._commit(
+                self._active.value["state"],
+                {"deployment": {"recoveries": recoveries}},
+                now,
+            )
+
+    def authority_ready(
+        self,
+        runtime_agent: Mapping[str, Any],
+        *,
+        now: datetime,
+    ) -> LocalRecord:
+        authority_id = str(runtime_agent.get("authority_id") or "")
+        if not authority_id:
+            raise ContractError("Ready validation authority identity is missing")
+        with self._lock:
+            agents = [
+                copy.deepcopy(item)
+                for item in self._active.value["runtime_topology"]["agents"]
+            ]
+            existing = next(
+                (
+                    item
+                    for item in agents
+                    if item["authority_id"] == authority_id
+                ),
+                None,
+            )
+            if existing is not None:
+                if existing != dict(runtime_agent):
+                    raise ContractError(
+                        "Ready validation authority topology changed"
+                    )
+                return self._active
+            agents.append(copy.deepcopy(dict(runtime_agent)))
+            agents.sort(key=lambda item: item["authority_id"])
+            principal_ids = sorted(
+                {
+                    *self._active.value["runtime_topology"][
+                        "runtime_principal_ids"
+                    ],
+                    *(
+                        [str(runtime_agent["runtime_principal_id"])]
+                        if runtime_agent.get("runtime_principal_id")
+                        else []
+                    ),
+                }
+            )
+            telemetry_ids = sorted(
+                {
+                    *self._active.value["runtime_topology"][
+                        "telemetry_identity_ids"
+                    ],
+                    str(runtime_agent["telemetry_identity_id"]),
+                }
+            )
+            recoveries = []
+            for item in self._active.value["deployment"]["recoveries"]:
+                value = copy.deepcopy(item)
+                if value["authority_id"] == authority_id:
+                    value["state"] = "ready"
+                recoveries.append(value)
+            return self._commit(
+                self._active.value["state"],
+                {
+                    "runtime_topology": {
+                        "agents": agents,
+                        "runtime_principal_ids": principal_ids,
+                        "telemetry_identity_ids": telemetry_ids,
+                    },
+                    "deployment": {"recoveries": recoveries},
+                },
+                now,
+            )
+
+    def authority_failure(
+        self,
+        *,
+        authority_id: str,
+        canonical_agent: str,
+        stage: str,
+        error_code: str,
+        request_accepted: bool | None,
+        now: datetime,
+    ) -> LocalRecord:
+        if stage not in {
+            "deployment",
+            "readiness",
+            "contract",
+            "traffic",
+        }:
+            raise ContractError("Validation Agent failure stage is invalid")
+        with self._lock:
+            failures = [
+                copy.deepcopy(item)
+                for item in self._active.value["deployment"]["failures"]
+                if not (
+                    item["authority_id"] == authority_id
+                    and item["stage"] == stage
+                )
+            ]
+            failures.append(
+                {
+                    "authority_id": authority_id,
+                    "canonical_agent": canonical_agent,
+                    "stage": stage,
+                    "error_code": error_code,
+                    "request_accepted": request_accepted,
+                }
+            )
+            failures.sort(
+                key=lambda item: (
+                    item["canonical_agent"],
+                    item["authority_id"],
+                    item["stage"],
+                )
+            )
+            return self._commit(
+                self._active.value["state"],
+                {"deployment": {"failures": failures}},
+                now,
+            )
+
+    def begin_phase_one_traffic(
+        self,
+        authority_ids: set[str],
+        *,
+        now: datetime,
+    ) -> LocalRecord:
+        ready_ids = {
+            item["authority_id"]
+            for item in self._active.value["runtime_topology"]["agents"]
+        }
+        if (
+            self._active.value["deployment"]["phase"]
+            != "phase_1_deployment"
+            or ready_ids != authority_ids
+            or self._active.value["deployment"]["failures"]
+        ):
+            raise ContractError(
+                "Validation phase 1 topology is not fully ready"
+            )
+        return self._commit(
+            self._active.value["state"],
+            {
+                "deployment": {
+                    "phase": "phase_1_traffic",
+                    "traffic_started": True,
+                }
+            },
+            now,
+        )
+
+    def begin_phase_two_deployment(
+        self,
+        *,
+        now: datetime,
+    ) -> LocalRecord:
+        if (
+            self._active.value["deployment"]["phase"]
+            != "phase_1_traffic"
+            or self._active.value["deployment"]["failures"]
+        ):
+            raise ContractError(
+                "Validation phase 1 did not authorize phase 2"
+            )
+        return self._commit(
+            self._active.value["state"],
+            {"deployment": {"phase": "phase_2_deployment"}},
+            now,
+        )
+
     def mark_resources_ambiguous(
         self,
         provider_ids: list[str],
@@ -324,6 +573,30 @@ class ValidationCycleController:
         if not intent_reference:
             raise ContractError("Dynamic validation resource intent is missing")
         if state == "create_intent":
+            existing = next(
+                (
+                    item
+                    for item in self._active.value["resources"]
+                    if item["intent_reference"] == intent_reference
+                ),
+                None,
+            )
+            if existing is not None:
+                expected = {
+                    "kind": str(event["kind"]),
+                    "authority_id": event.get("authority_id"),
+                    "deterministic_name": str(event["deterministic_name"]),
+                    "runtime_kind": str(event["runtime_kind"]),
+                    "discovery_key": str(event["discovery_key"]),
+                    "cleanup_method": str(
+                        event.get("cleanup_method") or "explicit"
+                    ),
+                }
+                if any(existing[key] != value for key, value in expected.items()):
+                    raise ContractError(
+                        "Resumed validation resource intent changed"
+                    )
+                return self._active
             return self.resource_create_intent(
                 kind=str(event["kind"]),
                 parent_id=event.get("parent_id"),
@@ -342,7 +615,8 @@ class ValidationCycleController:
                 for resource in self._active.value["resources"]:
                     item = copy.deepcopy(resource)
                     if item["intent_reference"] == intent_reference:
-                        item["state"] = "ambiguous_create"
+                        if item["state"] != "created":
+                            item["state"] = "ambiguous_create"
                         found = True
                     resources.append(item)
                 if not found:
@@ -430,6 +704,16 @@ class ValidationCycleController:
     ) -> LocalRecord:
         if len(runtime_agents) != 41:
             raise ContractError("Validation requires 41 deployed Agent endpoints")
+        if (
+            len(self._active.value["deployment"]["support_images"]) != 9
+            or any(
+                item["state"] != "ready"
+                for item in self._active.value["deployment"]["recoveries"]
+            )
+        ):
+            raise ContractError(
+                "Validation deployment recovery is not fully ready"
+            )
         topology = {
             "agents": runtime_agents,
             "runtime_principal_ids": sorted(
@@ -456,6 +740,10 @@ class ValidationCycleController:
             {
                 "runtime_topology": topology,
                 "digests": {"runtime_topology_digest": digest},
+                "deployment": {
+                    "phase": "phase_2_traffic",
+                    "traffic_started": True,
+                },
             },
             now,
         )
@@ -494,6 +782,7 @@ class ValidationCycleController:
                     ).as_posix(),
                     "digest": evidence_digest,
                 },
+                "deployment": {"phase": "complete"},
             },
             now,
         )

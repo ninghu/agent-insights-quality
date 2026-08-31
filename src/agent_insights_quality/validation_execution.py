@@ -21,6 +21,7 @@ from agent_insights_quality.validation_evidence import (
     validate_evidence,
 )
 from agent_insights_quality.validation_lifecycle import LocalRecord
+from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.validation_provisioning import (
     FoundryAuthorityDeployer,
     ProjectDeployment,
@@ -33,10 +34,11 @@ from agent_insights_quality.validation_quota import (
 )
 from agent_insights_quality.validation_policy import ValidationPolicy
 from agent_insights_quality.validation_runtime import (
+    AgentDeploymentIncomplete,
     AuthoritySpec,
     ScenarioAttemptRunner,
     deploy_all_authorities,
-    execute_validation_matrix,
+    execute_validation_phase,
     plan_runtime_topology,
 )
 
@@ -49,6 +51,7 @@ def execute_validation_plan(
     controller: ValidationCycleController,
     project_provisioner: ValidationProjectProvisioner,
     deployer_factory: Callable[[ProjectDeployment], FoundryAuthorityDeployer],
+    support_image_factory: Callable[[], Mapping[str, str]],
     runner: ScenarioAttemptRunner,
     scheduler: ValidationScheduler,
     policy: ValidationPolicy,
@@ -56,6 +59,7 @@ def execute_validation_plan(
     assert_commit: Callable[[], None],
     record_duration: Callable[[str, float], None] = lambda _stage, _value: None,
     monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> tuple[dict[str, Any], LocalRecord]:
     try:
@@ -66,6 +70,7 @@ def execute_validation_plan(
             controller=controller,
             project_provisioner=project_provisioner,
             deployer_factory=deployer_factory,
+            support_image_factory=support_image_factory,
             runner=runner,
             scheduler=scheduler,
             policy=policy,
@@ -73,6 +78,7 @@ def execute_validation_plan(
             assert_commit=assert_commit,
             record_duration=record_duration,
             monotonic=monotonic,
+            sleep=sleep,
             now=now,
         )
     except (ContractError, OSError, RuntimeError) as error:
@@ -104,6 +110,7 @@ def _execute_validation_plan(
     controller: ValidationCycleController,
     project_provisioner: ValidationProjectProvisioner,
     deployer_factory: Callable[[ProjectDeployment], FoundryAuthorityDeployer],
+    support_image_factory: Callable[[], Mapping[str, str]],
     runner: ScenarioAttemptRunner,
     scheduler: ValidationScheduler,
     policy: ValidationPolicy,
@@ -111,6 +118,7 @@ def _execute_validation_plan(
     assert_commit: Callable[[], None],
     record_duration: Callable[[str, float], None],
     monotonic: Callable[[], float],
+    sleep: Callable[[float], None],
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> tuple[dict[str, Any], LocalRecord]:
     if plan.get("kind") != "test-agent-validation-plan":
@@ -122,63 +130,68 @@ def _execute_validation_plan(
     project_provisioner.assert_test_agent_model(
         dict(plan["test_agent_model"])
     )
-    controller.preflight(capacity_plan, now=now())
-    project_id = project_provisioner.expected_project_id(
-        plan["project_name"]
-    )
-    project_started = monotonic()
-    controller.project_create_intent(
-        name=plan["project_name"],
-        provider_id=project_id,
-        now=now(),
-    )
-    ownership_nonce = controller.active.value["ownership_nonce"]
-    project_intents = project_provisioner.resource_intents(
-        project_name=plan["project_name"],
-        cycle_id=plan["cycle_id"],
-        ownership_nonce=ownership_nonce,
-    )
-    for intent in project_intents:
-        controller.dynamic_resource_event(
-            {**intent, "state": "create_intent"},
+    if controller.active.value["project"]["state"] == "created":
+        project = _project_from_lifecycle(controller.active.value)
+    else:
+        controller.preflight(capacity_plan, now=now())
+        project_id = project_provisioner.expected_project_id(
+            plan["project_name"]
+        )
+        project_started = monotonic()
+        controller.project_create_intent(
+            name=plan["project_name"],
+            provider_id=project_id,
             now=now(),
         )
-    try:
-        with lifecycle_heartbeat(controller, now=now):
-            project = project_provisioner.create(
-                project_name=plan["project_name"],
-                cycle_id=plan["cycle_id"],
-                ownership_nonce=ownership_nonce,
+        ownership_nonce = controller.active.value["ownership_nonce"]
+        project_intents = project_provisioner.resource_intents(
+            project_name=plan["project_name"],
+            cycle_id=plan["cycle_id"],
+            ownership_nonce=ownership_nonce,
+        )
+        for intent in project_intents:
+            controller.dynamic_resource_event(
+                {**intent, "state": "create_intent"},
+                now=now(),
             )
-    except (ContractError, OSError, RuntimeError):
-        controller.mark_resources_ambiguous(
-            [
-                project_id,
-                *(str(item["intent_reference"]) for item in project_intents),
-            ],
+        try:
+            with lifecycle_heartbeat(controller, now=now):
+                project = project_provisioner.create(
+                    project_name=plan["project_name"],
+                    cycle_id=plan["cycle_id"],
+                    ownership_nonce=ownership_nonce,
+                )
+        except (ContractError, OSError, RuntimeError):
+            controller.mark_resources_ambiguous(
+                [
+                    project_id,
+                    *(
+                        str(item["intent_reference"])
+                        for item in project_intents
+                    ),
+                ],
+                now=now(),
+            )
+            raise
+        if project.project_id != project_id:
+            raise ContractError(
+                "Ephemeral validation Project ID differs from create intent"
+            )
+        project_provisioner.assert_telemetry_connection()
+        controller.project_created(
+            endpoint_reference=content_hash(
+                {"project_endpoint": project.project_endpoint}
+            ),
+            project_principal_id=project.project_principal_id,
+            connection_ids=list(project.connection_ids),
+            role_assignment_ids=list(project.role_assignment_ids),
+            resource_observations=dict(project.resource_observations),
             now=now(),
         )
-        raise
-    if project.project_id != project_id:
-        raise ContractError(
-            "Ephemeral validation Project ID differs from create intent"
+        record_duration(
+            "project_connections_seconds",
+            monotonic() - project_started,
         )
-    project_provisioner.assert_telemetry_connection()
-    controller.project_created(
-        endpoint_reference=content_hash(
-            {"project_endpoint": project.project_endpoint}
-        ),
-        project_principal_id=project.project_principal_id,
-        connection_ids=list(project.connection_ids),
-        role_assignment_ids=list(project.role_assignment_ids),
-        resource_observations=dict(project.resource_observations),
-        now=now(),
-    )
-    record_duration(
-        "project_connections_seconds",
-        monotonic() - project_started,
-    )
-    activation_started = monotonic()
     planned = plan_runtime_topology(
         authorities,
         cycle_suffix=plan["cycle_id"].removeprefix("validation-"),
@@ -189,59 +202,258 @@ def _execute_validation_plan(
     def record_resource(event: dict[str, Any]) -> None:
         controller.dynamic_resource_event(event, now=now())
 
+    planned_by_id = {item.authority_id: item for item in planned}
+    ready_by_id = {
+        item["authority_id"]: item
+        for item in controller.active.value["runtime_topology"]["agents"]
+    }
+    recovery_by_id = {
+        item["authority_id"]: item
+        for item in controller.active.value["deployment"]["recoveries"]
+    }
+    attempted = {
+        item["authority_id"]
+        for item in controller.active.value["resources"]
+        if item.get("authority_id")
+        and item["kind"] == "provider_agent"
+    }
+    for authority in authorities:
+        if (
+            authority.authority_id in ready_by_id
+            or authority.authority_id not in attempted
+        ):
+            continue
+        previous_retry = int(
+            recovery_by_id.get(authority.authority_id, {}).get(
+                "retry_count",
+                0,
+            )
+        )
+        recovered_versions = {
+            item["authority_id"]
+            for item in recovery_by_id.values()
+            if item["canonical_agent"] == authority.canonical_agent
+        }
+        if (
+            previous_retry
+            >= policy.limits.max_recovery_versions_per_agent
+            or (
+                authority.authority_id not in recovered_versions
+                and len(recovered_versions)
+                >= policy.limits.max_recovery_versions_per_agent
+            )
+        ):
+            summary = {
+                "authority_id": authority.authority_id,
+                "canonical_agent": authority.canonical_agent,
+                "stage": "deployment",
+                "error_code": "recovery_exhausted",
+                "request_accepted": False,
+            }
+            controller.authority_failure(
+                **summary,
+                now=now(),
+            )
+            raise AgentDeploymentIncomplete([summary])
+        controller.authority_recovery(
+            authority_id=authority.authority_id,
+            canonical_agent=authority.canonical_agent,
+            state="ambiguous",
+            retry_count=previous_retry + 1,
+            error_code="interrupted_deployment",
+            now=now(),
+        )
+    recovery_by_id = {
+        item["authority_id"]: item
+        for item in controller.active.value["deployment"]["recoveries"]
+    }
+
+    def record_ready(authority: AuthoritySpec, runtime: Any) -> None:
+        controller.authority_ready(
+            _runtime_agent_payload(
+                planned_by_id[authority.authority_id],
+                runtime,
+            ),
+            now=now(),
+        )
+
+    def record_recovery(
+        authority: AuthoritySpec,
+        state: str,
+        retry_count: int,
+        error_code: str,
+    ) -> None:
+        controller.authority_recovery(
+            authority_id=authority.authority_id,
+            canonical_agent=authority.canonical_agent,
+            state=state,
+            retry_count=retry_count,
+            error_code=error_code,
+            now=now(),
+        )
+
+    failure_reporter = ProgressReporter("aiq-validation-agent")
+
+    def record_agent_failure(summary: dict[str, Any]) -> None:
+        controller.authority_failure(
+            authority_id=str(summary["authority_id"]),
+            canonical_agent=str(summary["canonical_agent"]),
+            stage=str(summary["stage"]),
+            error_code=str(summary["error_code"]),
+            request_accepted=summary["request_accepted"],
+            now=now(),
+        )
+        accepted = summary["request_accepted"]
+        failure_reporter.emit(
+            "agent="
+            f"{summary['canonical_agent']} authority={summary['authority_id']} "
+            f"stage={summary['stage']} code={summary['error_code']} "
+            "request_accepted="
+            f"{'unknown' if accepted is None else str(accepted).lower()}"
+        )
+
+    phase_one, phase_two = _validation_phases(authorities, policy)
+
+    def deploy_phase(
+        phase: list[AuthoritySpec],
+        *,
+        require_canaries: bool,
+    ) -> dict[str, Any]:
+        phase_ids = {item.authority_id for item in phase}
+        current_recoveries = {
+            item["authority_id"]: item
+            for item in controller.active.value["deployment"]["recoveries"]
+        }
+        recovered_by_agent: dict[str, list[str]] = {}
+        for item in current_recoveries.values():
+            recovered_by_agent.setdefault(
+                str(item["canonical_agent"]),
+                [],
+            ).append(str(item["authority_id"]))
+        with lifecycle_heartbeat(controller, now=now):
+            return deploy_all_authorities(
+                phase,
+                [
+                    item
+                    for item in planned
+                    if item.authority_id in phase_ids
+                ],
+                deployer=deployer,
+                maximum_concurrency=capacity_plan.provisioning_concurrency,
+                record_resource=record_resource,
+                existing_deployed={
+                    authority_id: _deployed_runtime(item)
+                    for authority_id, item in ready_by_id.items()
+                    if authority_id in phase_ids
+                },
+                retry_counts={
+                    authority_id: int(item["retry_count"])
+                    for authority_id, item in current_recoveries.items()
+                    if authority_id in phase_ids
+                },
+                max_recovery_versions_per_agent=(
+                    policy.limits.max_recovery_versions_per_agent
+                ),
+                record_ready=record_ready,
+                record_recovery=record_recovery,
+                record_failure=record_agent_failure,
+                require_architecture_canaries=require_canaries,
+                prior_recovered_authorities=recovered_by_agent,
+            )
+
+    def wait_clean_interval(phase: str) -> None:
+        started = monotonic()
+        reporter = ProgressReporter("aiq-validation-clean-window")
+        with lifecycle_heartbeat(controller, now=now):
+            with reporter.heartbeat(
+                f"{phase} pre-traffic clean telemetry interval",
+                interval_seconds=60,
+            ):
+                sleep(policy.limits.clean_interval_seconds)
+        record_duration(
+            f"{phase}_clean_interval_seconds",
+            monotonic() - started,
+        )
+
     with lifecycle_heartbeat(controller, now=now):
         deployer.wait_project()
-        deployed = deploy_all_authorities(
-            authorities,
-            planned,
-            deployer=deployer,
-            maximum_concurrency=capacity_plan.provisioning_concurrency,
-            record_resource=record_resource,
+    phase_one_started = monotonic()
+    phase_one_deployed = deploy_phase(
+        phase_one,
+        require_canaries=True,
+    )
+    record_duration(
+        "phase_1_deployment_seconds",
+        monotonic() - phase_one_started,
+    )
+    wait_clean_interval("phase_1")
+    controller.begin_phase_one_traffic(
+        {item.authority_id for item in phase_one},
+        now=now(),
+    )
+    with lifecycle_heartbeat(controller, now=now):
+        phase_one_evidence = execute_validation_phase(
+            phase_one,
+            phase_one_deployed,
+            runner=runner,
+            scheduler=scheduler,
+            model_contract=model_contract,
+            validated_commit_sha=plan["commit_sha"],
+            record_failure=record_agent_failure,
+            paired_baselines={
+                item.canonical_agent: item.authority_id
+                for item in authorities
+                if item.authority_kind == "baseline"
+            },
         )
-    runtime_agents = []
-    for item in planned:
-        runtime = deployed[item.authority_id]
-        runtime_agents.append(
-            {
-                "authority_id": item.authority_id,
-                "canonical_agent": item.canonical_agent,
-                "logical_version": item.logical_version,
-                "runtime_kind": item.runtime_kind,
-                "framework": item.framework,
-                "runtime_agent_name": runtime.runtime_agent_name,
-                "runtime_agent_version": runtime.runtime_agent_version,
-                "provider_agent_id": runtime.provider_agent_id,
-                "provider_agent_version_id": runtime.provider_agent_version_id,
-                "hosted_identity_id": runtime.hosted_identity_id,
-                "hosted_blueprint_id": runtime.hosted_blueprint_id,
-                "hosted_deployment_id": runtime.hosted_deployment_id,
-                "foundry_agent_name": runtime.runtime_agent_name,
-                "foundry_agent_version": runtime.runtime_agent_version,
-                "runtime_principal_id": runtime.runtime_principal_id,
-                "telemetry_identity_id": runtime.telemetry_identity_id,
-                "connection_ids": list(runtime.connection_ids),
-            }
-        )
+
+    controller.begin_phase_two_deployment(now=now())
+    support_images = support_image_factory()
+    deployer.set_support_images(support_images)
+    phase_two_started = monotonic()
+    phase_two_deployed = deploy_phase(
+        phase_two,
+        require_canaries=False,
+    )
+    record_duration(
+        "phase_2_deployment_seconds",
+        monotonic() - phase_two_started,
+    )
+    deployed = {**phase_one_deployed, **phase_two_deployed}
+    runtime_agents = [
+        _runtime_agent_payload(item, deployed[item.authority_id])
+        for item in planned
+    ]
     actual_topology_digest = content_hash(runtime_agents)
+    wait_clean_interval("phase_2")
     controller.begin_validation(runtime_agents, now=now())
     if (
         controller.active.value["digests"]["runtime_topology_digest"]
         != actual_topology_digest
     ):
         raise ContractError("Committed validation runtime topology digest changed")
-    record_duration(
-        "agent_activation_seconds",
-        monotonic() - activation_started,
-    )
     with lifecycle_heartbeat(controller, now=now):
-        authority_evidence = execute_validation_matrix(
-            authorities,
+        phase_two_evidence = execute_validation_phase(
+            phase_two,
             deployed,
             runner=runner,
             scheduler=scheduler,
             model_contract=model_contract,
             validated_commit_sha=plan["commit_sha"],
+            record_failure=record_agent_failure,
+            paired_baselines={
+                item.canonical_agent: item.authority_id
+                for item in authorities
+                if item.authority_kind == "baseline"
+            },
         )
+    evidence_by_id = {
+        item["authority_id"]: item
+        for item in [*phase_one_evidence, *phase_two_evidence]
+    }
+    authority_evidence = [
+        evidence_by_id[item.authority_id] for item in authorities
+    ]
     assert_commit()
     evidence = stamp_evidence_digests(
         {
@@ -281,6 +493,129 @@ def _execute_validation_plan(
         now=now(),
     )
     return evidence, controller.active
+
+
+def _runtime_agent_payload(
+    planned: Any,
+    runtime: Any,
+) -> dict[str, Any]:
+    return {
+        "authority_id": planned.authority_id,
+        "canonical_agent": planned.canonical_agent,
+        "logical_version": planned.logical_version,
+        "runtime_kind": planned.runtime_kind,
+        "framework": planned.framework,
+        "runtime_agent_name": runtime.runtime_agent_name,
+        "runtime_agent_version": runtime.runtime_agent_version,
+        "provider_agent_id": runtime.provider_agent_id,
+        "provider_agent_version_id": runtime.provider_agent_version_id,
+        "hosted_identity_id": runtime.hosted_identity_id,
+        "hosted_blueprint_id": runtime.hosted_blueprint_id,
+        "hosted_deployment_id": runtime.hosted_deployment_id,
+        "foundry_agent_name": runtime.runtime_agent_name,
+        "foundry_agent_version": runtime.runtime_agent_version,
+        "runtime_principal_id": runtime.runtime_principal_id,
+        "telemetry_identity_id": runtime.telemetry_identity_id,
+        "connection_ids": list(runtime.connection_ids),
+    }
+
+
+def _validation_phases(
+    authorities: list[AuthoritySpec],
+    policy: ValidationPolicy,
+) -> tuple[list[AuthoritySpec], list[AuthoritySpec]]:
+    phase_one_ids = {
+        f"{policy.prompt_canary_agent}/v0",
+        f"{policy.hosted_canary_agent}/v0",
+    }
+    phase_one = [
+        item
+        for item in authorities
+        if item.authority_id in phase_one_ids
+    ]
+    phase_two = [
+        item
+        for item in authorities
+        if item.authority_id not in phase_one_ids
+    ]
+    if (
+        {item.authority_id for item in phase_one} != phase_one_ids
+        or len(phase_one) != 2
+        or len(phase_two) != 39
+        or any(
+            item.runtime_kind != "prompt"
+            for item in phase_one
+            if item.canonical_agent == policy.prompt_canary_agent
+        )
+        or any(
+            item.runtime_kind == "prompt"
+            for item in phase_one
+            if item.canonical_agent == policy.hosted_canary_agent
+        )
+    ):
+        raise ContractError(
+            "Validation phase Agent assignments are not reviewed"
+        )
+    return phase_one, phase_two
+
+
+def _deployed_runtime(item: Mapping[str, Any]) -> Any:
+    from agent_insights_quality.validation_runtime import DeployedRuntime
+
+    return DeployedRuntime(
+        authority_id=str(item["authority_id"]),
+        runtime_kind=str(item["runtime_kind"]),
+        runtime_agent_name=str(item["runtime_agent_name"]),
+        runtime_agent_version=str(item["runtime_agent_version"]),
+        provider_agent_id=str(item["provider_agent_id"]),
+        provider_agent_version_id=str(item["provider_agent_version_id"]),
+        hosted_identity_id=item.get("hosted_identity_id"),
+        hosted_blueprint_id=item.get("hosted_blueprint_id"),
+        hosted_deployment_id=item.get("hosted_deployment_id"),
+        runtime_principal_id=item.get("runtime_principal_id"),
+        telemetry_identity_id=str(item["telemetry_identity_id"]),
+        connection_ids=tuple(item["connection_ids"]),
+    )
+
+
+def _project_from_lifecycle(
+    lifecycle: Mapping[str, Any],
+) -> ProjectDeployment:
+    project = lifecycle["project"]
+    project_principals = [
+        item["provider_id"]
+        for item in lifecycle["resources"]
+        if item["kind"] == "runtime_principal"
+        and item.get("authority_id") is None
+        and item["state"] == "created"
+    ]
+    role_assignments = [
+        item["provider_id"]
+        for item in lifecycle["resources"]
+        if item["kind"] == "role_assignment"
+        and item["state"] == "created"
+    ]
+    if (
+        project["state"] != "created"
+        or not project["provider_id"]
+        or len(project_principals) != 1
+        or len(role_assignments) != 4
+        or len(lifecycle["runtime_topology"]["connection_ids"]) != 2
+    ):
+        raise ContractError(
+            "Retained validation Project topology is incomplete"
+        )
+    return ProjectDeployment(
+        project_name=str(project["name"]),
+        project_id=str(project["provider_id"]),
+        project_principal_id=str(project_principals[0]),
+        project_endpoint="",
+        connection_ids=tuple(
+            lifecycle["runtime_topology"]["connection_ids"]
+        ),
+        role_assignment_ids=tuple(role_assignments),
+        resource_observations=(),
+    )
 
 
 @contextmanager

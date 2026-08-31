@@ -4,12 +4,16 @@
   "percentiles_calculated": false,
   "schema_version": "1.0.0",
   "stages": {
-    "agent_activation_seconds": 310,
     "cleanup_seconds": 35,
     "endpoint_model_seconds": 420,
     "ingestion_kql_seconds": 185,
     "lock_preflight_seconds": 12,
+    "phase_1_clean_interval_seconds": 360,
+    "phase_1_deployment_seconds": 120,
+    "phase_2_clean_interval_seconds": 360,
+    "phase_2_deployment_seconds": 190,
     "project_connections_seconds": 48,
-    "total_seconds": 1010
+    "support_images_seconds": 120,
+    "total_seconds": 1850
   }
 }

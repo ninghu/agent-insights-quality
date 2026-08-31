@@ -230,22 +230,29 @@
   },
   "commit_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "cycle_id": "validation-local-r01",
+  "deployment": {
+    "failures": [],
+    "phase": "complete",
+    "recoveries": [],
+    "support_images": [],
+    "traffic_started": true
+  },
   "digests": {
     "clean_resource_inventory_digest": "sha256:80ec918fbecb394c7a28b899a24762cd9ac28a8833a2cc6f25307730908a554c",
-    "evidence_digest": "sha256:b421040c791354ad19ad4bd6a824d038bfdc5d99cd1dec794feef4a84a0270cf",
+    "evidence_digest": "sha256:c8b4420ce992711dd7c7db6d03fb12a8b689bc8054f99a67bc7fbfc7397b270c",
     "evidence_resource_inventory_digest": "sha256:839dc65aef04b7f4d02018daa273e8599369ac9957fd3f727e2595e64880e52b",
     "execution_matrix_digest": "sha256:b815023aee152f454383be3ed8bddbecc95293781ad435539f36fe7614b294fe",
     "quota_plan_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "runtime_topology_digest": "sha256:ccfc73e8252f9ca571b00947fac320bd2787850657730f6b969b1c1aa4ac175f",
-    "validation_digest": "sha256:7f753cf684f6be3f74ab3318c7f79d55a03bd78838494338556c1b5add09cb87"
+    "validation_digest": "sha256:c028f6b691a39458835926a272fe026ccb81a23cf361dec55e54add8f0b4d940"
   },
   "event_reference": null,
   "evidence_reference": {
-    "digest": "sha256:b421040c791354ad19ad4bd6a824d038bfdc5d99cd1dec794feef4a84a0270cf",
-    "path": "evidence/ninghu/agent-insights-quality/63/validation-local-r01/b421040c791354ad19ad4bd6a824d038bfdc5d99cd1dec794feef4a84a0270cf.json"
+    "digest": "sha256:c8b4420ce992711dd7c7db6d03fb12a8b689bc8054f99a67bc7fbfc7397b270c",
+    "path": "evidence/ninghu/agent-insights-quality/63/validation-local-r01/c8b4420ce992711dd7c7db6d03fb12a8b689bc8054f99a67bc7fbfc7397b270c.json"
   },
   "failure": null,
-  "journal_digest": "sha256:703d0ab5ecca131207f0e9b7794011844f5f493b5c5680b1112b4f60870e7fc1",
+  "journal_digest": "sha256:48f5cbe3eba4bfad388ab1478bbce3d8f371b74387e5bc1820e965d1bb348085",
   "kind": "test-agent-validation-lifecycle",
   "last_activity_at": "2026-08-29T12:16:50+00:00",
   "operator": {

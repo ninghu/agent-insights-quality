@@ -33,6 +33,8 @@ class ValidationLimits:
     minimum_tpm_headroom: int
     active_heartbeat_seconds: int
     absolute_ttl_hours: int
+    max_recovery_versions_per_agent: int
+    clean_interval_seconds: int
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,8 @@ class ValidationPolicy:
     repository: str
     telemetry_resource_set: str
     test_agent_model: dict[str, str]
+    prompt_canary_agent: str
+    hosted_canary_agent: str
     authority_count: int
     limits: ValidationLimits
     project_name_policy: NamePolicy
@@ -57,6 +61,7 @@ def load_validation_policy(
         "repository",
         "telemetry_resource_set",
         "test_agent_model",
+        "canary_agents",
         "inventory",
         "limits",
         "name_policy",
@@ -76,6 +81,11 @@ def load_validation_policy(
         "model_version": "2026-03-17",
     }:
         raise ContractError("Validation Test Agent model is not reviewed")
+    if value.get("canary_agents") != {
+        "prompt": "weather-agent",
+        "hosted": "finance-agent",
+    }:
+        raise ContractError("Validation canary Agents are not reviewed")
     inventory = _mapping(value.get("inventory"), "inventory")
     if inventory != {"agents": 5, "issues": 36, "authorities": 41}:
         raise ContractError("Validation authority inventory is not exact")
@@ -90,6 +100,8 @@ def load_validation_policy(
         "minimum_tpm_headroom": 8192,
         "active_heartbeat_seconds": 60,
         "absolute_ttl_hours": 72,
+        "max_recovery_versions_per_agent": 3,
+        "clean_interval_seconds": 360,
     }
     if limits_value != expected_limits:
         raise ContractError("Validation limits differ from the reviewed policy")
@@ -112,6 +124,8 @@ def load_validation_policy(
         repository=value["repository"],
         telemetry_resource_set=value["telemetry_resource_set"],
         test_agent_model=dict(value["test_agent_model"]),
+        prompt_canary_agent="weather-agent",
+        hosted_canary_agent="finance-agent",
         authority_count=inventory["authorities"],
         limits=ValidationLimits(**limits_value),
         project_name_policy=project_names,

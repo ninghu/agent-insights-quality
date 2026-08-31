@@ -10,7 +10,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent_insights_quality.azure_cli import azure_cli
-from agent_insights_quality.util import ContractError, content_hash
+from agent_insights_quality.util import (
+    ContractError,
+    SharedRuntimeError,
+    content_hash,
+)
 
 
 @dataclass(frozen=True)
@@ -51,7 +55,7 @@ class VerifiedAzureCliCredential:
                 try:
                     token = self._credential.get_token(*scopes, **kwargs)
                 except _azure_credential_errors() as error:
-                    raise ContractError(
+                    raise SharedRuntimeError(
                         "Azure CLI token acquisition failed"
                     ) from error
                 expires_on = getattr(token, "expires_on", 0)

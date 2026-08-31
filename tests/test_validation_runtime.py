@@ -6,7 +6,12 @@ from copy import deepcopy
 
 import pytest
 
-from agent_insights_quality.util import ContractError, content_hash
+from agent_insights_quality.provisioning import RemoteHttpError
+from agent_insights_quality.util import (
+    ContractError,
+    SharedRuntimeError,
+    content_hash,
+)
 from agent_insights_quality.validation_policy import load_validation_policy
 from agent_insights_quality.validation_quota import (
     CapacityPlan,
@@ -21,11 +26,14 @@ from agent_insights_quality.validation_rules import (
     stamp_execution_digests,
 )
 from agent_insights_quality.validation_runtime import (
+    AgentDeploymentIncomplete,
+    AgentExecutionIncomplete,
     AuthoritySpec,
     DeployedRuntime,
     _deployment_canaries,
     deploy_all_authorities,
     execute_validation_matrix,
+    execute_validation_phase,
     invalidated_authorities,
     opaque_cycle_suffix,
     plan_runtime_topology,
@@ -387,14 +395,14 @@ def test_deployment_is_bounded_to_eight_and_each_authority_is_independent() -> N
     assert len(deployed) == 41
     assert 1 < deployer.maximum <= 8
     prompt_canary, hosted_canary = _deployment_canaries(authorities)
-    assert deployer.started[:2] == [
+    assert set(deployer.started[:2]) == {
         prompt_canary.authority_id,
         hosted_canary.authority_id,
-    ]
-    assert deployer.ready == [
+    }
+    assert set(deployer.ready) == {
         prompt_canary.authority_id,
         hosted_canary.authority_id,
-    ]
+    }
     by_intent = {}
     for index, event in enumerate(events):
         key = event["intent_reference"]
@@ -429,7 +437,7 @@ def test_failed_hosted_canary_records_cleanup_intents_without_fanout() -> None:
             return super().deploy(authority, planned)
 
     deployer = FailingHostedCanary()
-    with pytest.raises(ContractError, match="Hosted canary"):
+    with pytest.raises(AgentDeploymentIncomplete):
         deploy_all_authorities(
             authorities,
             planned,
@@ -437,10 +445,10 @@ def test_failed_hosted_canary_records_cleanup_intents_without_fanout() -> None:
             maximum_concurrency=8,
             record_resource=events.append,
         )
-    assert deployer.started == [
+    assert set(deployer.started) == {
         prompt_canary.authority_id,
         hosted_canary.authority_id,
-    ]
+    }
     assert deployer.ready == [prompt_canary.authority_id]
     hosted_events = [
         item
@@ -456,6 +464,304 @@ def test_failed_hosted_canary_records_cleanup_intents_without_fanout() -> None:
         not in {prompt_canary.authority_id, hosted_canary.authority_id}
         for item in events
     )
+
+
+def test_prompt_readiness_failure_prevents_hosted_and_remaining_fanout() -> None:
+    policy = load_validation_policy()
+    authorities = _authorities()
+    planned = plan_runtime_topology(
+        authorities,
+        cycle_suffix="0123456789ab",
+        policy=policy,
+    )
+    prompt_canary, hosted_canary = _deployment_canaries(authorities)
+    events = []
+
+    class FailingPromptReadiness(Deployer):
+        def assert_ready(self, authority, deployed) -> None:
+            super().assert_ready(authority, deployed)
+            if authority.authority_id == prompt_canary.authority_id:
+                raise ContractError("synthetic Prompt readiness failure")
+
+    deployer = FailingPromptReadiness()
+    with pytest.raises(AgentDeploymentIncomplete):
+        deploy_all_authorities(
+            authorities,
+            planned,
+            deployer=deployer,
+            maximum_concurrency=8,
+            record_resource=events.append,
+        )
+    assert set(deployer.started) == {
+        prompt_canary.authority_id,
+        hosted_canary.authority_id,
+    }
+    assert {
+        item["state"]
+        for item in events
+        if item["authority_id"] == prompt_canary.authority_id
+    } == {"create_intent", "created"}
+    assert not any(
+        item["authority_id"]
+        not in {prompt_canary.authority_id, hosted_canary.authority_id}
+        for item in events
+    )
+
+
+def test_transient_subset_failure_retries_only_unresolved_authority() -> None:
+    policy = load_validation_policy()
+    authorities = _authorities()
+    planned = plan_runtime_topology(
+        authorities,
+        cycle_suffix="0123456789ab",
+        policy=policy,
+    )
+    target = next(
+        item for item in authorities if item.authority_id == "issue-013"
+    )
+    attempts = {}
+    recoveries = []
+    ready = []
+
+    class FlakyDeployer(Deployer):
+        def deploy(self, authority, planned):
+            attempts[authority.authority_id] = (
+                attempts.get(authority.authority_id, 0) + 1
+            )
+            if (
+                authority.authority_id == target.authority_id
+                and attempts[authority.authority_id] == 1
+            ):
+                self.started.append(authority.authority_id)
+                raise RemoteHttpError(
+                    503,
+                    "ServiceUnavailable",
+                    "Synthetic transient",
+                    "POST /agents",
+                )
+            return super().deploy(authority, planned)
+
+    deployed = deploy_all_authorities(
+        authorities,
+        planned,
+        deployer=FlakyDeployer(),
+        maximum_concurrency=8,
+        record_ready=lambda authority, _runtime: ready.append(
+            authority.authority_id
+        ),
+        record_recovery=lambda authority, state, count, code: (
+            recoveries.append(
+                (authority.authority_id, state, count, code)
+            )
+        ),
+    )
+    assert len(deployed) == 41
+    assert attempts[target.authority_id] == 2
+    assert all(
+        count == 1
+        for authority_id, count in attempts.items()
+        if authority_id != target.authority_id
+    )
+    assert recoveries == [
+        (
+            target.authority_id,
+            "failed",
+            1,
+            "transient_provider_error",
+        )
+    ]
+    assert len(ready) == 41
+
+
+def test_resume_does_not_mutate_or_redeploy_ready_authorities() -> None:
+    policy = load_validation_policy()
+    authorities = _authorities()
+    planned = plan_runtime_topology(
+        authorities,
+        cycle_suffix="0123456789ab",
+        policy=policy,
+    )
+    initial = deploy_all_authorities(
+        authorities,
+        planned,
+        deployer=Deployer(),
+        maximum_concurrency=8,
+    )
+    prompt_canary, hosted_canary = _deployment_canaries(authorities)
+    retained_ids = {
+        prompt_canary.authority_id,
+        hosted_canary.authority_id,
+        "issue-013",
+    }
+    retained = {
+        authority_id: initial[authority_id]
+        for authority_id in retained_ids
+    }
+    resumed_deployer = Deployer()
+    resumed = deploy_all_authorities(
+        authorities,
+        planned,
+        deployer=resumed_deployer,
+        maximum_concurrency=8,
+        existing_deployed=retained,
+    )
+    assert not retained_ids.intersection(resumed_deployer.started)
+    assert all(resumed[key] is value for key, value in retained.items())
+    assert set(resumed_deployer.ready) == {
+        prompt_canary.authority_id,
+        hosted_canary.authority_id,
+    }
+
+
+def test_transient_canary_retry_exhaustion_fails_before_fanout() -> None:
+    policy = load_validation_policy()
+    authorities = _authorities()
+    planned = plan_runtime_topology(
+        authorities,
+        cycle_suffix="0123456789ab",
+        policy=policy,
+    )
+    prompt_canary, hosted_canary = _deployment_canaries(authorities)
+    recoveries = []
+
+    class ExhaustedCanary(Deployer):
+        def deploy(self, authority, planned):
+            self.started.append(authority.authority_id)
+            raise RemoteHttpError(
+                503,
+                "ServiceUnavailable",
+                "Synthetic transient",
+                "POST /agents",
+            )
+
+    deployer = ExhaustedCanary()
+    with pytest.raises(AgentDeploymentIncomplete):
+        deploy_all_authorities(
+            authorities,
+            planned,
+            deployer=deployer,
+            maximum_concurrency=8,
+            record_recovery=lambda authority, state, count, code: (
+                recoveries.append(
+                    (authority.authority_id, state, count, code)
+                )
+            ),
+        )
+    assert deployer.started.count(prompt_canary.authority_id) == 4
+    assert deployer.started.count(hosted_canary.authority_id) == 4
+    assert not any(
+        authority_id
+        not in {prompt_canary.authority_id, hosted_canary.authority_id}
+        for authority_id in deployer.started
+    )
+    assert sorted(
+        item[2]
+        for item in recoveries
+        if item[0] == prompt_canary.authority_id
+    ) == [1, 2, 3]
+    assert sorted(
+        item[2]
+        for item in recoveries
+        if item[0] == hosted_canary.authority_id
+    ) == [1, 2, 3]
+
+
+def test_deterministic_deployment_failure_isolated_to_agent_lane() -> None:
+    policy = load_validation_policy()
+    all_authorities = _authorities()
+    authorities = [
+        item
+        for item in all_authorities
+        if item.authority_id in {
+            "issue-013",
+            "issue-014",
+            "issue-021",
+            "issue-022",
+        }
+    ]
+    planned = [
+        item
+        for item in plan_runtime_topology(
+            all_authorities,
+            cycle_suffix="0123456789ab",
+            policy=policy,
+        )
+        if item.authority_id in {
+            authority.authority_id for authority in authorities
+        }
+    ]
+
+    class FailingFinanceDeployer(Deployer):
+        def deploy(self, authority, planned):
+            if authority.authority_id == "issue-013":
+                self.started.append(authority.authority_id)
+                raise ContractError("synthetic deterministic failure")
+            return super().deploy(authority, planned)
+
+    deployer = FailingFinanceDeployer()
+    failures = []
+    with pytest.raises(AgentDeploymentIncomplete) as caught:
+        deploy_all_authorities(
+            authorities,
+            planned,
+            deployer=deployer,
+            maximum_concurrency=8,
+            require_architecture_canaries=False,
+            record_failure=failures.append,
+        )
+    assert caught.value.failures == failures
+    assert [item["canonical_agent"] for item in failures] == [
+        "finance-agent"
+    ]
+    assert "issue-014" not in deployer.started
+    assert {"issue-021", "issue-022"}.issubset(deployer.started)
+
+
+def test_phase_two_counts_prior_phase_recovered_versions() -> None:
+    policy = load_validation_policy()
+    all_authorities = _authorities()
+    authority = next(
+        item for item in all_authorities if item.authority_id == "issue-013"
+    )
+    planned = [
+        item
+        for item in plan_runtime_topology(
+            all_authorities,
+            cycle_suffix="0123456789ab",
+            policy=policy,
+        )
+        if item.authority_id == authority.authority_id
+    ]
+
+    class TransientDeployer(Deployer):
+        def deploy(self, authority, planned):
+            self.started.append(authority.authority_id)
+            raise RemoteHttpError(
+                503,
+                "ServiceUnavailable",
+                "Synthetic transient",
+                "POST /agents",
+            )
+
+    recoveries = []
+    with pytest.raises(AgentDeploymentIncomplete) as caught:
+        deploy_all_authorities(
+            [authority],
+            planned,
+            deployer=TransientDeployer(),
+            maximum_concurrency=8,
+            require_architecture_canaries=False,
+            prior_recovered_authorities={
+                "finance-agent": [
+                    "finance-agent/v0",
+                    "issue-014",
+                    "issue-015",
+                ]
+            },
+            record_recovery=lambda *args: recoveries.append(args),
+        )
+    assert caught.value.failures[0]["error_code"] == "recovery_exhausted"
+    assert recoveries == []
 
 
 def test_all_issues_run_exact_same_matrix_against_paired_v0_without_resampling() -> None:
@@ -504,6 +810,208 @@ def test_all_issues_run_exact_same_matrix_against_paired_v0_without_resampling()
                 and call[3] in {item[3] for item in issue_calls}
             ]
             assert len(issue_calls) == len(control_calls) == expected
+
+
+def test_agent_traffic_failure_does_not_cancel_other_agent_lanes() -> None:
+    policy = load_validation_policy()
+    authorities = _authorities()
+    planned = plan_runtime_topology(
+        authorities,
+        cycle_suffix="0123456789ab",
+        policy=policy,
+    )
+    deployed = deploy_all_authorities(
+        authorities,
+        planned,
+        deployer=Deployer(),
+        maximum_concurrency=8,
+    )
+
+    class AcceptedFailure(ContractError):
+        request_accepted = True
+
+    class FailingRunner(Runner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failure_calls = 0
+
+        def run(self, **kwargs):
+            if kwargs["executing_authority_id"] == "issue-013":
+                self.failure_calls += 1
+                raise AcceptedFailure("synthetic Agent failure")
+            return super().run(**kwargs)
+
+    failures = []
+    runner = FailingRunner()
+    with pytest.raises(AgentExecutionIncomplete) as caught:
+        execute_validation_matrix(
+            authorities,
+            deployed,
+            runner=runner,
+            scheduler=_scheduler(),
+            model_contract=MODEL,
+            validated_commit_sha=HEAD,
+            record_failure=failures.append,
+        )
+    assert caught.value.failures == failures
+    assert failures == [
+        {
+            "canonical_agent": "finance-agent",
+            "authority_id": "issue-013",
+            "stage": "traffic",
+            "error_code": "accepted_failure",
+            "request_accepted": True,
+        }
+    ]
+    completed_agents = {
+        item["canonical_agent"]
+        for item in caught.value.partial_results
+    }
+    assert completed_agents == {
+        "weather-agent",
+        "healthcare-agent",
+        "finance-agent",
+        "travel-agent",
+        "support-ticket-agent",
+    }
+    assert not any(
+        call[0] == "issue-013" for call in runner.calls
+    )
+    assert runner.failure_calls == 1
+    assert any(call[0] == "issue-036" for call in runner.calls)
+
+
+def test_shared_traffic_failure_aborts_globally() -> None:
+    policy = load_validation_policy()
+    authorities = _authorities()
+    planned = plan_runtime_topology(
+        authorities,
+        cycle_suffix="0123456789ab",
+        policy=policy,
+    )
+    deployed = deploy_all_authorities(
+        authorities,
+        planned,
+        deployer=Deployer(),
+        maximum_concurrency=8,
+    )
+
+    class SharedFailureRunner(Runner):
+        def run(self, **kwargs):
+            if kwargs["executing_authority_id"] == "weather-agent/v0":
+                raise SharedRuntimeError("synthetic shared failure")
+            return super().run(**kwargs)
+
+    with pytest.raises(SharedRuntimeError, match="shared failure"):
+        execute_validation_matrix(
+            authorities,
+            deployed,
+            runner=SharedFailureRunner(),
+            scheduler=_scheduler(),
+            model_contract=MODEL,
+            validated_commit_sha=HEAD,
+        )
+
+
+def test_phase_two_uses_retained_canary_baselines_for_paired_controls() -> None:
+    policy = load_validation_policy()
+    authorities = _authorities()
+    planned = plan_runtime_topology(
+        authorities,
+        cycle_suffix="0123456789ab",
+        policy=policy,
+    )
+    deployed = deploy_all_authorities(
+        authorities,
+        planned,
+        deployer=Deployer(),
+        maximum_concurrency=8,
+    )
+    canary_ids = {"weather-agent/v0", "finance-agent/v0"}
+    phase_two = [
+        item for item in authorities if item.authority_id not in canary_ids
+    ]
+    runner = Runner()
+    results = execute_validation_phase(
+        phase_two,
+        deployed,
+        runner=runner,
+        scheduler=_scheduler(),
+        model_contract=MODEL,
+        validated_commit_sha=HEAD,
+        paired_baselines={
+            item.canonical_agent: item.authority_id
+            for item in authorities
+            if item.authority_kind == "baseline"
+        },
+    )
+    assert len(results) == 39
+    assert any(
+        call[0] == "weather-agent/v0" and call[2] is False
+        for call in runner.calls
+    )
+    assert any(
+        call[0] == "finance-agent/v0" and call[2] is False
+        for call in runner.calls
+    )
+
+
+def test_phase_one_baseline_traffic_runs_both_agents_concurrently() -> None:
+    policy = load_validation_policy()
+    authorities = _authorities()
+    planned = plan_runtime_topology(
+        authorities,
+        cycle_suffix="0123456789ab",
+        policy=policy,
+    )
+    deployed = deploy_all_authorities(
+        authorities,
+        planned,
+        deployer=Deployer(),
+        maximum_concurrency=8,
+    )
+    phase_one = [
+        item
+        for item in authorities
+        if item.authority_id in {
+            "weather-agent/v0",
+            "finance-agent/v0",
+        }
+    ]
+
+    class ConcurrentRunner(Runner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.active = 0
+            self.maximum = 0
+            self.lock = threading.Lock()
+
+        def run(self, **kwargs):
+            with self.lock:
+                self.active += 1
+                self.maximum = max(self.maximum, self.active)
+            time.sleep(0.005)
+            try:
+                return super().run(**kwargs)
+            finally:
+                with self.lock:
+                    self.active -= 1
+
+    runner = ConcurrentRunner()
+    results = execute_validation_phase(
+        phase_one,
+        deployed,
+        runner=runner,
+        scheduler=_scheduler(),
+        model_contract=MODEL,
+        validated_commit_sha=HEAD,
+        paired_baselines={
+            "weather-agent": "weather-agent/v0",
+            "finance-agent": "finance-agent/v0",
+        },
+    )
+    assert len(results) == 2
+    assert runner.maximum == 2
 
 
 def test_invalidation_has_no_cross_cycle_cache_and_shared_changes_invalidate_all() -> None:

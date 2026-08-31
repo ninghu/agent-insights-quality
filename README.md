@@ -7,6 +7,11 @@ validation account with one temporary Project per commit:
 - `agent-insights-quality` for weekday qualification;
 - one opaque `aiq-validation-*` Project containing 41 independently deployed validation Agents.
 
+Validation first deploys and runs the official `weather-agent/v0` Prompt and `finance-agent/v0`
+Hosted baselines after a clean interval. Only when both pass does it deploy the remaining 39, wait a
+second clean interval, and run the five independent Agent lanes. A pre-traffic transient subset may
+resume only within the unchanged local cycle.
+
 Application Insights is read-only. Validation reuses the fixed staging `g29` telemetry pair, creates no
 monitor, runs no Agent Insights assessment or report, and deletes its complete resource inventory.
 Test traffic always invokes exact deployed Agent endpoints; direct trace injection is forbidden.

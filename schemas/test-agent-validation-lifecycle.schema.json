@@ -21,6 +21,7 @@
     "capacity",
     "project",
     "runtime_topology",
+    "deployment",
     "resources",
     "cleanup",
     "event_reference",
@@ -70,6 +71,7 @@
     },
     "project": {"$ref": "#/$defs/project"},
     "runtime_topology": {"$ref": "#/$defs/runtimeTopology"},
+    "deployment": {"$ref": "#/$defs/deployment"},
     "resources": {
       "type": "array",
       "uniqueItems": true,
@@ -534,6 +536,129 @@
           }
         }
       ]
+    },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "traffic_started",
+        "phase",
+        "support_images",
+        "recoveries",
+        "failures"
+      ],
+      "properties": {
+        "phase": {
+          "enum": [
+            "phase_1_deployment",
+            "phase_1_traffic",
+            "phase_2_deployment",
+            "phase_2_traffic",
+            "complete"
+          ]
+        },
+        "traffic_started": {"type": "boolean"},
+        "support_images": {
+          "type": "array",
+          "maxItems": 9,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["logical_version", "image"],
+            "properties": {
+              "logical_version": {
+                "oneOf": [
+                  {"const": "v0"},
+                  {"type": "string", "pattern": "^issue-0(?:29|3[0-6])$"}
+                ]
+              },
+              "image": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9.-]+\\.azurecr\\.io/agent-insights-quality-support@sha256:[0-9a-f]{64}$"
+              }
+            }
+          }
+        },
+        "recoveries": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "authority_id",
+              "canonical_agent",
+              "state",
+              "retry_count",
+              "error_code"
+            ],
+            "properties": {
+              "authority_id": {
+                "oneOf": [
+                  {"type": "string", "pattern": "^[a-z][a-z0-9-]+-agent/v0$"},
+                  {"type": "string", "pattern": "^issue-[0-9]{3}$"}
+                ]
+              },
+              "canonical_agent": {
+                "enum": [
+                  "weather-agent",
+                  "healthcare-agent",
+                  "finance-agent",
+                  "travel-agent",
+                  "support-ticket-agent"
+                ]
+              },
+              "state": {"enum": ["ambiguous", "failed", "ready"]},
+              "retry_count": {"type": "integer", "minimum": 1, "maximum": 3},
+              "error_code": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{2,63}$"
+              }
+            }
+          }
+        },
+        "failures": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "authority_id",
+              "canonical_agent",
+              "stage",
+              "error_code",
+              "request_accepted"
+            ],
+            "properties": {
+              "authority_id": {
+                "oneOf": [
+                  {"type": "string", "pattern": "^[a-z][a-z0-9-]+-agent/v0$"},
+                  {"type": "string", "pattern": "^issue-[0-9]{3}$"}
+                ]
+              },
+              "canonical_agent": {
+                "enum": [
+                  "weather-agent",
+                  "healthcare-agent",
+                  "finance-agent",
+                  "travel-agent",
+                  "support-ticket-agent"
+                ]
+              },
+              "stage": {
+                "enum": ["deployment", "readiness", "contract", "traffic"]
+              },
+              "error_code": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{2,63}$"
+              },
+              "request_accepted": {"type": ["boolean", "null"]}
+            }
+          }
+        }
+      }
     },
     "resource": {
       "type": "object",

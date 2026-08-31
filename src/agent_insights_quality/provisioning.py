@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import time
 import copy
 import functools
@@ -581,14 +582,58 @@ def _build_support_images(
     if all(existing.values()):
         report(f"{profile.name}/support-ticket-agent: all images found in cache")
         return {logical: str(existing[logical]) for logical in versions}
-    private_root = runtime_root()
-    private_root.mkdir(parents=True, exist_ok=True)
-    report(f"{profile.name}/support-ticket-agent: preparing Python wheelhouse")
-    with tempfile.TemporaryDirectory(
-        prefix="aiq-wheelhouse-",
-        dir=private_root,
-    ) as temporary:
-        wheelhouse = Path(temporary)
+    wheelhouse = _support_wheelhouse(root, reporter)
+    report(f"{profile.name}/support-ticket-agent: wheelhouse ready")
+    handler = functools.partial(
+        _QuietHttpHandler,
+        directory=wheelhouse,
+    )
+    server = http.server.ThreadingHTTPServer(("0.0.0.0", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        return {
+            logical: str(existing[logical])
+            if existing[logical]
+            else _build_and_push_support_image(
+                registry=registry,
+                root=root,
+                logical_version=logical,
+                wheelhouse_port=server.server_port,
+                progress=reporter,
+                record_resource=record_resource,
+            )
+            for logical in versions
+        }
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=30)
+
+
+def _support_wheelhouse(
+    root: Path,
+    reporter: ProgressReporter,
+) -> Path:
+    requirements = root / "v0" / "requirements.txt"
+    requirements_digest = file_hash(requirements)
+    cache_root = (
+        runtime_root()
+        / "test-agent-validation"
+        / "cache"
+        / "support-wheelhouse"
+    )
+    cache_root.mkdir(parents=True, exist_ok=True)
+    target = cache_root / requirements_digest.removeprefix("sha256:")
+    if target.exists():
+        _validate_support_wheelhouse(target, requirements_digest)
+        reporter.emit("support-ticket-agent: wheelhouse found in cache")
+        return target
+    reporter.emit("support-ticket-agent: preparing Python wheelhouse")
+    temporary = Path(
+        tempfile.mkdtemp(prefix="building-", dir=cache_root)
+    )
+    try:
         with reporter.heartbeat(
             "support-ticket-agent: wheelhouse download"
         ) as outcome:
@@ -599,9 +644,9 @@ def _build_support_images(
                     "pip",
                     "download",
                     "-r",
-                    str(root / "v0" / "requirements.txt"),
+                    str(requirements),
                     "--dest",
-                    str(wheelhouse),
+                    str(temporary),
                     "--platform",
                     "manylinux2014_x86_64",
                     "--python-version",
@@ -622,33 +667,65 @@ def _build_support_images(
             if download.returncode != 0:
                 outcome.fail()
         if download.returncode != 0:
-            raise ContractError("Support image wheelhouse preparation failed")
-        report(f"{profile.name}/support-ticket-agent: wheelhouse ready")
-        handler = functools.partial(
-            _QuietHttpHandler,
-            directory=wheelhouse,
+            raise ContractError(
+                "Support image wheelhouse preparation failed"
+            )
+        files = {
+            path.name: file_hash(path)
+            for path in sorted(temporary.iterdir())
+            if path.is_file()
+        }
+        if not files:
+            raise ContractError(
+                "Support image wheelhouse is empty"
+            )
+        atomic_json(
+            temporary / "receipt.json",
+            {
+                "schema_version": "1.0.0",
+                "requirements_digest": requirements_digest,
+                "files": files,
+            },
         )
-        server = http.server.ThreadingHTTPServer(("0.0.0.0", 0), handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            return {
-                logical: str(existing[logical])
-                if existing[logical]
-                else _build_and_push_support_image(
-                    registry=registry,
-                    root=root,
-                    logical_version=logical,
-                    wheelhouse_port=server.server_port,
-                    progress=reporter,
-                    record_resource=record_resource,
-                )
-                for logical in versions
-            }
-        finally:
-            server.shutdown()
-            server.server_close()
-            thread.join(timeout=30)
+        os.replace(temporary, target)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+    _validate_support_wheelhouse(target, requirements_digest)
+    return target
+
+
+def _validate_support_wheelhouse(
+    path: Path,
+    requirements_digest: str,
+) -> None:
+    receipt_path = path / "receipt.json"
+    if not receipt_path.is_file():
+        raise ContractError(
+            "Support image wheelhouse cache receipt is missing"
+        )
+    receipt = read_json(receipt_path)
+    files = receipt.get("files")
+    if (
+        set(receipt) != {
+            "schema_version",
+            "requirements_digest",
+            "files",
+        }
+        or receipt.get("schema_version") != "1.0.0"
+        or receipt.get("requirements_digest") != requirements_digest
+        or not isinstance(files, dict)
+        or not files
+        or files
+        != {
+            item.name: file_hash(item)
+            for item in sorted(path.iterdir())
+            if item.is_file() and item.name != "receipt.json"
+        }
+    ):
+        raise ContractError(
+            "Support image wheelhouse cache does not match requirements"
+        )
 
 
 def _build_and_push_support_image(
@@ -876,7 +953,7 @@ def _support_image_tag(root: Path, logical_version: str) -> str:
                 if _is_package_file(path)
             }
         )
-    return content_hash(relevant).split(":")[1][:16]
+    return content_hash(relevant).split(":")[1]
 
 
 def _existing_acr_image(
@@ -1148,6 +1225,7 @@ class FoundryProvisioner:
                     "aiq_logical_version": logical_version,
                     "aiq_content_digest": artifact["content_digest"],
                 },
+                not_found_confirmed_at=None,
             )
             return existing
         create_agent = not self._agent_exists(
@@ -1263,6 +1341,9 @@ class FoundryProvisioner:
             artifact["content_digest"],
             hosted=agent["type"] != "prompt",
         )
+        created_version_confirmed_at = (
+            time.monotonic() if recovered is not None else None
+        )
         if recovered:
             version = recovered
         if not version:
@@ -1272,6 +1353,7 @@ class FoundryProvisioner:
             version,
             hosted=agent["type"] != "prompt",
             expected_metadata=metadata,
+            not_found_confirmed_at=created_version_confirmed_at,
         )
         return version
 
@@ -1496,9 +1578,11 @@ class FoundryProvisioner:
         *,
         hosted: bool,
         expected_metadata: dict[str, str],
+        not_found_confirmed_at: float | None = None,
     ) -> None:
         deadline = time.monotonic() + 30 * 60
         next_progress = time.monotonic() + 60
+        not_found_attempt = 0
         while time.monotonic() < deadline:
             try:
                 response = self._request(
@@ -1508,6 +1592,33 @@ class FoundryProvisioner:
                     hosted=hosted,
                 )
             except RemoteHttpError as error:
+                if self._version_read_not_found_is_transient(
+                    error,
+                    name=name,
+                    version=version,
+                    exact_listing_confirmed_at=not_found_confirmed_at,
+                ):
+                    assert not_found_confirmed_at is not None
+                    elapsed = time.monotonic() - not_found_confirmed_at
+                    remaining = (
+                        _AGENT_CREATE_PROPAGATION_SECONDS - elapsed
+                    )
+                    if remaining <= 0:
+                        raise
+                    delay = min(
+                        5 * (2**min(not_found_attempt, 3)),
+                        _AGENT_CREATE_MAX_BACKOFF_SECONDS,
+                        remaining,
+                    )
+                    not_found_attempt += 1
+                    self.report_progress(
+                        f"{self._profile.name}/{name}/"
+                        f"{expected_metadata['aiq_logical_version']}: "
+                        "exact version readiness propagation pending "
+                        f"at {elapsed:.0f}s; retrying in {delay:.0f}s"
+                    )
+                    time.sleep(delay)
+                    continue
                 if not error.transient:
                     raise
                 self.report_progress(
@@ -1544,6 +1655,28 @@ class FoundryProvisioner:
                 next_progress = time.monotonic() + 60
             time.sleep(5)
         raise ContractError("Foundry version did not activate before the deadline")
+
+    def _version_read_not_found_is_transient(
+        self,
+        error: RemoteHttpError,
+        *,
+        name: str,
+        version: str,
+        exact_listing_confirmed_at: float | None,
+    ) -> bool:
+        expected_route = (
+            "GET /agents/"
+            f"{urllib.parse.quote(name, safe='')}/versions/"
+            f"{urllib.parse.quote(version, safe='')}"
+        )
+        return (
+            exact_listing_confirmed_at is not None
+            and error.status == 404
+            and error.code.casefold() == "notfound"
+            and error.route == expected_route
+            and time.monotonic() - exact_listing_confirmed_at
+            < _AGENT_CREATE_PROPAGATION_SECONDS
+        )
 
     def _request(
         self,

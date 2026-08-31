@@ -538,51 +538,13 @@ def prepare_validation_support_images(
     record_resource: Callable[[dict[str, Any]], None] | None = None,
 ) -> ValidationSupportImages:
     reporter = progress or ProgressReporter("aiq-validation-images")
-    built_manifest_ids: set[str] = set()
-    build_tag_by_authority: dict[str, str] = {}
-
-    def record_build_resource(event: dict[str, Any]) -> None:
-        authority_id = str(event.get("authority_id") or "")
-        deterministic_name = str(event.get("deterministic_name") or "")
-        if event.get("kind") == "acr_tag" and authority_id:
-            build_tag_by_authority[authority_id] = deterministic_name
-        discovery_key = (
-            build_tag_by_authority.get(authority_id, deterministic_name)
-            if event.get("kind") == "acr_manifest"
-            else deterministic_name
-        )
-        event = {
-            **event,
-            "intent_reference": (
-                str(event.get("intent_reference"))
-                if str(event.get("intent_reference") or "").startswith("sha256:")
-                else content_hash(
-                    {
-                        "kind": event.get("kind"),
-                        "authority_id": authority_id,
-                        "deterministic_name": deterministic_name,
-                    }
-                )
-            ),
-            "runtime_kind": "hosted_custom_container",
-            "discovery_key": discovery_key,
-        }
-        if (
-            event.get("kind") == "acr_manifest"
-            and event.get("state") == "created"
-            and event.get("provider_id")
-        ):
-            built_manifest_ids.add(str(event["provider_id"]))
-        if record_resource is not None:
-            record_resource(event)
-
     images = _build_support_images(
         profile,
         dict(support_agent),
         progress=reporter,
-        record_resource=record_build_resource,
+        record_resource=None,
     )
-    journaled_manifest_ids = set(built_manifest_ids)
+    journaled_manifest_ids: set[str] = set()
     resources: list[dict[str, str | None]] = []
     repository = "agent-insights-quality-support"
     for logical_version, image in sorted(images.items()):
@@ -771,6 +733,18 @@ class FoundryAuthorityDeployer:
             raise ContractError(
                 "Validation Hosted canary topology is not ready"
             )
+
+    def set_support_images(self, images: Mapping[str, str]) -> None:
+        values = dict(images)
+        if len(values) != 9:
+            raise ContractError(
+                "Validation phase 2 requires nine Support images"
+            )
+        if self._support_images and self._support_images != values:
+            raise ContractError(
+                "Validation Support image topology changed"
+            )
+        self._support_images = values
 
     def deploy(
         self,
