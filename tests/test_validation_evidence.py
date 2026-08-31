@@ -18,6 +18,12 @@ from agent_insights_quality.validation_manifest import (
     authority_specs,
     current_validation_digest,
 )
+from agent_insights_quality.validation_judge import (
+    JUDGE_MODEL,
+    JUDGE_PROMPT_VERSION,
+    aggregate_judge_digests,
+    judge_prompt_digest,
+)
 
 HASH = "sha256:" + ("a" * 64)
 HEAD = "b" * 40
@@ -53,6 +59,7 @@ def _attempt(
     defect_predicate: dict,
     should_observe: bool,
     expected: bool,
+    role: str,
 ) -> dict:
     setup = [
         _step(
@@ -94,18 +101,76 @@ def _attempt(
             )
         )
     observed = evaluate_defect_predicate(defect_predicate, probe)
+    reviewed_observed = role == "baseline" or observed
     steps = [*setup, *probe]
+    prefix = f"attempt-{index:02d}"
+    mechanical = {
+        "role": role,
+        "attempt_index": index,
+        "runtime_agent_reference": content_hash(
+            {"runtime_agent": namespace}
+        ),
+        "runtime_version_reference": content_hash({"runtime_version": "1"}),
+        "event_range_reference": content_hash(
+            {"namespace": namespace, "attempt": index}
+        ),
+        "endpoint": {
+            "citation": f"{prefix}-endpoint",
+            "request_count": 1,
+            "response_count": 1,
+            "usable_response_count": 1,
+            "terminal_output_count": 1,
+        },
+        "trace_graph": {
+            "root_count": 1,
+            "nodes": [
+                {
+                    "citation": f"{prefix}-trace-001",
+                    "parent": None,
+                    "order": 1,
+                    "operation_name": "invoke_agent",
+                    "duration_bucket": "100ms_to_1s",
+                    "tool_name": None,
+                    "status_class": "success",
+                    "result_class": "success",
+                    "error_class": None,
+                    "output_messages_present": True,
+                    "output_messages_nonempty": True,
+                    "structure": {
+                        "input_present": False,
+                        "output_present": True,
+                        "result_present": True,
+                        "error_present": False,
+                    },
+                }
+            ],
+        },
+        "evidence_digest": "",
+    }
+    mechanical["evidence_digest"] = content_hash(
+        {
+            key: value
+            for key, value in mechanical.items()
+            if key != "evidence_digest"
+        }
+    )
     return {
         "index": index,
         "conversation_reference": content_hash({"conversation": namespace, "index": index}),
         "session_reference": content_hash({"session": namespace, "index": index}),
         "response_references": [step["response_reference"] for step in steps],
         "operation_references": [step["operation_reference"] for step in steps],
+        "mechanical_evidence": mechanical,
         "setup_steps": setup,
         "probe_steps": probe,
         "complete": True,
-        "defect_observed": observed,
+        "defect_observed": reviewed_observed,
         "expected_observation_pass": expected,
+        "review_conclusion": (
+            "observed" if reviewed_observed else "not_observed"
+        ),
+        "judge_input_digest": HASH,
+        "judge_output_digest": HASH,
         "error_code": None,
     }
 
@@ -124,6 +189,7 @@ def _authority(spec, *, observed: int) -> dict:
             defect_predicate=rule["defect_predicate"],
             should_observe=not baseline and index <= observed,
             expected=(baseline or index <= observed),
+            role="baseline" if baseline else "issue",
         )
         for index, rule_attempt in enumerate(rule["attempts"], start=1)
     ]
@@ -138,6 +204,7 @@ def _authority(spec, *, observed: int) -> dict:
                 defect_predicate=rule["defect_predicate"],
                 should_observe=False,
                 expected=True,
+                role="paired_v0",
             )
             for index, rule_attempt in enumerate(rule["attempts"], start=1)
         ]
@@ -195,12 +262,11 @@ def _evidence() -> dict:
     authorities = [
         _authority(
             spec,
-            observed=0 if spec.authority_kind == "baseline" else 5,
+            observed=5,
         )
         for spec in specs
     ]
-    return stamp_evidence_digests(
-        {
+    value = {
             "schema_version": "1.0.0",
             "kind": "test-agent-validation-evidence",
             "repository": "ninghu/agent-insights-quality",
@@ -217,10 +283,18 @@ def _evidence() -> dict:
             "runtime_topology_digest": HASH,
             "resource_inventory_digest": HASH,
             "telemetry_resource_set": "g29",
+            "judge_model": JUDGE_MODEL,
+            "judge_prompt_version": JUDGE_PROMPT_VERSION,
+            "judge_prompt_digest": judge_prompt_digest(),
+            "judge_input_digest": HASH,
+            "judge_output_digest": HASH,
             "authorities": authorities,
             "evidence_digest": HASH,
         }
+    value["judge_input_digest"], value["judge_output_digest"] = (
+        aggregate_judge_digests(authorities)
     )
+    return stamp_evidence_digests(value)
 
 
 def test_evidence_accepts_exact_41_authorities_and_model_mediated_five_of_seven() -> None:
@@ -245,10 +319,15 @@ def test_identity_failure_is_visible_as_incomplete_evidence() -> None:
     attempt["setup_steps"][0]["identity_pass"] = False
     attempt["complete"] = False
     attempt["defect_observed"] = None
+    attempt["review_conclusion"] = "inconclusive"
+    attempt["judge_output_digest"] = None
+    attempt["expected_observation_pass"] = False
     attempt["error_code"] = "telemetry_identity_mismatch"
     scenario["complete_count"] = 4
+    scenario["observed"] = 4
     scenario["pass"] = False
     authority["complete_count"] = 4
+    authority["observed"] = 4
     authority["pass"] = False
     value = stamp_evidence_digests(value)
     validate_evidence(value)
@@ -258,8 +337,10 @@ def test_complete_and_defect_observed_remain_independent() -> None:
     value = _evidence()
     scenario = value["authorities"][5]["scenarios"][0]
     scenario["issue_attempts"][5]["defect_observed"] = False
+    scenario["issue_attempts"][5]["review_conclusion"] = "not_observed"
     scenario["issue_attempts"][5]["expected_observation_pass"] = False
     scenario["issue_attempts"][6]["defect_observed"] = False
+    scenario["issue_attempts"][6]["review_conclusion"] = "not_observed"
     scenario["issue_attempts"][6]["expected_observation_pass"] = False
     value = stamp_evidence_digests(value)
     validate_evidence(value)
@@ -270,6 +351,7 @@ def test_paired_v0_observation_fails_discrimination() -> None:
     authority = value["authorities"][5]
     scenario = authority["scenarios"][0]
     scenario["v0_attempts"][0]["defect_observed"] = True
+    scenario["v0_attempts"][0]["review_conclusion"] = "observed"
     scenario["v0_attempts"][0]["probe_steps"][0]["semantic_pass"] = True
     scenario["v0_attempts"][0]["expected_observation_pass"] = False
     scenario["pass"] = False
@@ -290,7 +372,7 @@ def test_evidence_recomputes_predicates_and_rejects_global_reference_reuse() -> 
     attempt = value["authorities"][5]["scenarios"][0]["issue_attempts"][0]
     attempt["defect_observed"] = False
     value = stamp_evidence_digests(value)
-    with pytest.raises(ContractError, match="does not match its predicate"):
+    with pytest.raises(ContractError, match="judge conclusion"):
         validate_evidence(value)
 
 

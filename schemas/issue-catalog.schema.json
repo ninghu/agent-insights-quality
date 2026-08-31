@@ -74,7 +74,10 @@
                 "uniqueItems": true,
                 "items": {"enum": ["invoke_agent", "execute_tool", "chat"]}
               },
-              "anomaly": {"type": "string", "pattern": "^[a-z][a-z0-9_]+$"}
+              "anomaly": {"type": "string", "pattern": "^[a-z][a-z0-9_]+$"},
+              "output_messages_expectation": {
+                "enum": ["present", "absent", "not_applicable"]
+              }
             }
           }
         }

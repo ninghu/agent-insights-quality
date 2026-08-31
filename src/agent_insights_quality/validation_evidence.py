@@ -20,6 +20,14 @@ from agent_insights_quality.validation_lifecycle import (
     LocalRecord,
     validation_runtime_root,
 )
+from agent_insights_quality.validation_judge import (
+    JUDGE_MODEL,
+    JUDGE_PROMPT_VERSION,
+    aggregate_judge_digests,
+    judge_prompt_digest,
+    mechanical_attempt_complete,
+    validate_mechanical_evidence,
+)
 from agent_insights_quality.validation_rules import (
     validate_validation_rules,
     validation_matrix,
@@ -74,6 +82,12 @@ def validate_evidence(
         }
     ):
         raise ContractError("Validation evidence execution matrix digest is stale")
+    if (
+        value["judge_model"] != JUDGE_MODEL
+        or value["judge_prompt_version"] != JUDGE_PROMPT_VERSION
+        or value["judge_prompt_digest"] != judge_prompt_digest()
+    ):
+        raise ContractError("Validation evidence judge contract is stale")
     for authority in authorities:
         if authority["validated_commit_sha"] != value["commit_sha"]:
             raise ContractError(
@@ -95,6 +109,12 @@ def validate_evidence(
         )
         _validate_authority(authority)
     _validate_global_attempt_references(authorities)
+    input_digest, output_digest = aggregate_judge_digests(authorities)
+    if (
+        value["judge_input_digest"] != input_digest
+        or value["judge_output_digest"] != output_digest
+    ):
+        raise ContractError("Validation evidence judge artifact binding is stale")
     if runtime_topology is not None:
         _validate_runtime_topology_binding(value, runtime_topology)
         if value["runtime_topology_digest"] != content_hash(
@@ -130,6 +150,11 @@ def stamp_evidence_digests(value: Mapping[str, Any]) -> dict[str, Any]:
             authority,
             "authority_evidence_digest",
         )
+    if "judge_input_digest" in result and "judge_output_digest" in result:
+        (
+            result["judge_input_digest"],
+            result["judge_output_digest"],
+        ) = aggregate_judge_digests(authorities)
     result["evidence_digest"] = digest_without_field(result, "evidence_digest")
     return result
 
@@ -272,7 +297,6 @@ def _validate_scenario(
         issue_attempts,
         n=n,
         authority_id=authority_id,
-        defect_predicate=scenario["defect_predicate"],
         expected_role="baseline" if authority_kind == "baseline" else "issue",
     )
     if v0_attempts:
@@ -280,7 +304,6 @@ def _validate_scenario(
             v0_attempts,
             n=n,
             authority_id=authority_id,
-            defect_predicate=scenario["defect_predicate"],
             expected_role="v0",
         )
     complete_count = sum(attempt["complete"] is True for attempt in issue_attempts)
@@ -302,7 +325,7 @@ def _validate_scenario(
             raise ContractError(f"{authority_id} baseline predicate binding is invalid")
         expected_pass = (
             complete_count == n
-            and observed == 0
+            and observed == n
             and all(
                 attempt["expected_observation_pass"] is True
                 for attempt in issue_attempts
@@ -356,7 +379,6 @@ def _validate_attempts(
     *,
     n: int,
     authority_id: str,
-    defect_predicate: Mapping[str, Any],
     expected_role: str,
 ) -> None:
     if [attempt["index"] for attempt in attempts] != list(range(1, n + 1)):
@@ -371,16 +393,20 @@ def _validate_attempts(
         step_ids = [step["step_id"] for step in steps]
         if len(step_ids) != len(set(step_ids)):
             raise ContractError(f"{authority_id} attempt step IDs are not unique")
-        complete = all(
+        mechanically_complete = all(
             step["complete"]
             and step["endpoint_pass"]
             and step["identity_pass"]
             and isinstance(step["semantic_pass"], bool)
             and isinstance(step["trace_pass"], bool)
             for step in steps
-        ) and all(
-            step["semantic_pass"] and step["trace_pass"]
-            for step in attempt["setup_steps"]
+        ) and mechanical_attempt_complete(attempt)
+        validate_mechanical_evidence(attempt["mechanical_evidence"])
+        complete = (
+            mechanically_complete
+            and attempt["review_conclusion"] != "inconclusive"
+            and attempt["judge_input_digest"] is not None
+            and attempt["judge_output_digest"] is not None
         )
         if attempt["complete"] is not complete:
             raise ContractError(
@@ -395,22 +421,18 @@ def _validate_attempts(
                 f"{authority_id} complete attempt requires an observation result"
             )
         recomputed = (
-            evaluate_defect_predicate(
-                defect_predicate,
-                attempt["probe_steps"],
-            )
-            if complete
+            True
+            if attempt["review_conclusion"] == "observed"
+            else False
+            if attempt["review_conclusion"] == "not_observed"
             else None
         )
         if attempt["defect_observed"] is not recomputed:
             raise ContractError(
-                f"{authority_id} defect observation does not match its predicate"
+                f"{authority_id} observation does not match its judge conclusion"
             )
         if expected_role == "baseline":
-            expected_observation_pass = all(
-                step["semantic_pass"] and step["trace_pass"]
-                for step in attempt["probe_steps"]
-            )
+            expected_observation_pass = recomputed is True
         elif expected_role == "issue":
             expected_observation_pass = recomputed is True
         else:

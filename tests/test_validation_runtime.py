@@ -258,9 +258,9 @@ class Runner:
         conversation_role,
         scenario,
         attempt,
-        expect_defect,
         scheduler,
     ):
+        expect_defect = conversation_role == "issue"
         scenario_id = scenario["id"]
         execution = {
             "executing_authority_id": executing_authority_id,
@@ -328,6 +328,45 @@ class Runner:
             "expected_observation_pass": True,
             "error_code": None,
         }
+
+
+class Judge:
+    @staticmethod
+    def review_scenario(
+        *,
+        authority,
+        scenario,
+        subject_attempts,
+        paired_v0_attempts,
+    ):
+        del scenario
+
+        def reviewed(item, conclusion):
+            return {
+                **item,
+                "complete": True,
+                "defect_observed": conclusion == "observed",
+                "expected_observation_pass": (
+                    conclusion == "not_observed"
+                    if item in paired_v0_attempts
+                    else conclusion == "observed"
+                ),
+                "review_conclusion": conclusion,
+                "judge_input_digest": HASH,
+                "judge_output_digest": HASH,
+                "error_code": None,
+            }
+
+        return (
+            [
+                reviewed(
+                    item,
+                    "observed",
+                )
+                for item in subject_attempts
+            ],
+            [reviewed(item, "not_observed") for item in paired_v0_attempts],
+        )
 
 
 def _scheduler() -> ValidationScheduler:
@@ -785,6 +824,7 @@ def test_all_issues_run_exact_same_matrix_against_paired_v0_without_resampling()
         authorities,
         deployed,
         runner=runner,
+        judge=Judge(),
         scheduler=_scheduler(),
         model_contract=MODEL,
         validated_commit_sha=HEAD,
@@ -850,6 +890,7 @@ def test_agent_traffic_failure_does_not_cancel_other_agent_lanes() -> None:
             authorities,
             deployed,
             runner=runner,
+            judge=Judge(),
             scheduler=_scheduler(),
             model_contract=MODEL,
             validated_commit_sha=HEAD,
@@ -976,6 +1017,7 @@ def test_shared_traffic_failure_aborts_globally() -> None:
             authorities,
             deployed,
             runner=SharedFailureRunner(),
+            judge=Judge(),
             scheduler=_scheduler(),
             model_contract=MODEL,
             validated_commit_sha=HEAD,
@@ -1005,6 +1047,7 @@ def test_phase_two_uses_retained_canary_baselines_for_paired_controls() -> None:
         phase_two,
         deployed,
         runner=runner,
+        judge=Judge(),
         scheduler=_scheduler(),
         model_contract=MODEL,
         validated_commit_sha=HEAD,
@@ -1071,6 +1114,7 @@ def test_phase_one_baseline_traffic_runs_both_agents_concurrently() -> None:
         phase_one,
         deployed,
         runner=runner,
+        judge=Judge(),
         scheduler=_scheduler(),
         model_contract=MODEL,
         validated_commit_sha=HEAD,

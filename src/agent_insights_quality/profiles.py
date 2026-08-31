@@ -226,6 +226,14 @@ class RuntimeProfile:
         )
 
     def assert_test_agent_model(self, expected: dict[str, str]) -> None:
+        self.assert_model_deployment(expected, label="Test Agent")
+
+    def assert_model_deployment(
+        self,
+        expected: dict[str, str],
+        *,
+        label: str,
+    ) -> None:
         if not self.account_name:
             raise ContractError("Profile account name is unavailable")
         process = _run_azure_read(
@@ -246,7 +254,7 @@ class RuntimeProfile:
             ]
         )
         if process.returncode != 0:
-            raise ContractError("Test Agent model deployment could not be queried")
+            raise ContractError(f"{label} model deployment could not be queried")
         value = json.loads(process.stdout)
         properties = value.get("properties") or {}
         model = properties.get("model") or {}
@@ -254,9 +262,12 @@ class RuntimeProfile:
             properties.get("provisioningState") != "Succeeded"
             or str(value.get("name") or "") != expected["deployment_name"]
             or str(model.get("name") or "") != expected["model_id"]
-            or str(model.get("version") or "") != expected["model_version"]
+            or (
+                "model_version" in expected
+                and str(model.get("version") or "") != expected["model_version"]
+            )
         ):
-            raise ContractError("Test Agent model deployment is not the reviewed version")
+            raise ContractError(f"{label} model deployment is not reviewed")
 
 
 def _azure_resources() -> list[dict]:

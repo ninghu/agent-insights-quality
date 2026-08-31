@@ -99,6 +99,11 @@ def approve_test_agent_validation(
                 "commit_sha": git.commit_sha,
                 "validation_digest": validation_digest,
                 "evidence_digest": evidence["evidence_digest"],
+                "judge_model": evidence["judge_model"],
+                "judge_prompt_version": evidence["judge_prompt_version"],
+                "judge_prompt_digest": evidence["judge_prompt_digest"],
+                "judge_input_digest": evidence["judge_input_digest"],
+                "judge_output_digest": evidence["judge_output_digest"],
                 "clean_digest": clean["journal_digest"],
                 "approved_by": approver,
                 "approved_at": now().astimezone(UTC).isoformat(),
@@ -200,6 +205,8 @@ def validate_local_result_binding(
         or active["evidence_reference"]["digest"] != evidence["evidence_digest"]
         or active["digests"]["validation_digest"] != validation_digest
         or active["digests"]["evidence_digest"] != evidence["evidence_digest"]
+        or evidence["judge_model"] != "gpt-5.6-sol"
+        or evidence["judge_prompt_version"] != "1.0.0"
     ):
         raise ContractError(
             "Local evidence or CLEAN proof does not match one validation cycle"

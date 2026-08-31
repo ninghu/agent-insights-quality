@@ -38,10 +38,20 @@ class ValidationLimits:
 
 
 @dataclass(frozen=True)
+class ValidationJudgePolicy:
+    deployment_name: str
+    model_id: str
+    prompt_version: str
+    maximum_concurrency: int
+    max_output_tokens: int
+
+
+@dataclass(frozen=True)
 class ValidationPolicy:
     repository: str
     telemetry_resource_set: str
     test_agent_model: dict[str, str]
+    judge: ValidationJudgePolicy
     prompt_canary_agent: str
     hosted_canary_agent: str
     authority_count: int
@@ -61,6 +71,7 @@ def load_validation_policy(
         "repository",
         "telemetry_resource_set",
         "test_agent_model",
+        "judge",
         "canary_agents",
         "inventory",
         "limits",
@@ -81,6 +92,16 @@ def load_validation_policy(
         "model_version": "2026-03-17",
     }:
         raise ContractError("Validation Test Agent model is not reviewed")
+    judge_value = _mapping(value.get("judge"), "judge")
+    expected_judge = {
+        "deployment_name": "gpt-5.6-sol",
+        "model_id": "gpt-5.6-sol",
+        "prompt_version": "1.0.0",
+        "maximum_concurrency": 4,
+        "max_output_tokens": 1200,
+    }
+    if judge_value != expected_judge:
+        raise ContractError("Validation judge policy is not reviewed")
     if value.get("canary_agents") != {
         "prompt": "weather-agent",
         "hosted": "finance-agent",
@@ -124,6 +145,7 @@ def load_validation_policy(
         repository=value["repository"],
         telemetry_resource_set=value["telemetry_resource_set"],
         test_agent_model=dict(value["test_agent_model"]),
+        judge=ValidationJudgePolicy(**judge_value),
         prompt_canary_agent="weather-agent",
         hosted_canary_agent="finance-agent",
         authority_count=inventory["authorities"],

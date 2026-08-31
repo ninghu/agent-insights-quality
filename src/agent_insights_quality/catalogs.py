@@ -357,6 +357,13 @@ def validate_semantics(
         for agent_name, agent in by_agent.items()
     ):
         raise ContractError("Agent baseline trace-operation modes are not reviewed")
+    if any(
+        agent["baseline_contract"]["output_messages"] != "present"
+        for agent in by_agent.values()
+    ):
+        raise ContractError(
+            "Agent baseline output-message expectations are not reviewed"
+        )
 
     ids = [item["id"] for item in issue_items]
     expected_ids = [f"issue-{number:03d}" for number in range(1, 37)]
@@ -782,8 +789,8 @@ def render_agent_catalog(agents: dict[str, Any]) -> str:
         "",
         "<!-- Generated from catalogs/AGENT_CATALOG.yaml; do not edit. -->",
         "",
-        "| Agent | Owner | Type | Framework | Model | Terminal evidence | Semantic assertions | Trace operations | Validation | Execution digest | Issue count |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---: |",
+        "| Agent | Owner | Type | Framework | Model | Terminal evidence | Semantic assertions | Trace operations | Output messages | Validation | Execution digest | Issue count |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---: |",
     ]
     for agent in agents["agents"]:
         rules = read_json(ROOT / agent["baseline_path"] / "traffic.json")[
@@ -797,6 +804,7 @@ def render_agent_catalog(agents: dict[str, Any]) -> str:
             f"`{agent['baseline_contract']['terminal_response']}` | "
             f"`{agent['baseline_contract']['semantic_assertions']}` | "
             f"`{agent['baseline_contract']['trace_operations']}` | "
+            f"`{agent['baseline_contract']['output_messages']}` | "
             f"`{scenario['validation_mode']} {scenario['k']}/{scenario['n']}` | "
             f"`{rules['execution_digest']}` | "
             f"{len(agent['issue_ids'])} |"

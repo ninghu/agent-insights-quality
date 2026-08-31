@@ -40,6 +40,7 @@ def test_execution_failure_enters_cleanup_with_public_safe_digest() -> None:
             deployer_factory=None,
             support_image_factory=None,
             runner=None,
+            judge=None,
             scheduler=None,
             policy=None,
             model_contract={},

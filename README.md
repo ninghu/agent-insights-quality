@@ -74,6 +74,12 @@ model-mediated defects require at least `5/7` and paired `v0` at `0/7`. The revi
 data bound into the automatic `execution_digest`; runtime results cannot reclassify, resample, or lower
 the threshold.
 
+Validation code records only endpoint counts and allowlisted structural spans from natural telemetry
+discovered by the exact cycle Agent name, version, and attempt window. One aggregate GPT-5.6 Sol
+review per authority judges baseline health or the expected issue against paired `v0`; executable
+issue-specific trace assertions are reviewer context, not decision authority. Judge inputs and
+outputs remain content-addressed under the private runtime root.
+
 An account-wide OS file lock excludes concurrent worktrees. The local atomic journal, required
 content-addressed history, and 72-hour execution TTL support same-commit cleanup recovery. Any commit
 change cleans the current cycle and requires a fresh full run. After 41/41 evidence and exact CLEAN,
