@@ -159,6 +159,9 @@ class AzureValidationCleanupBackend:
         if item.kind == "stored_response":
             self._client.delete_response(self._actual_id(item))
             return
+        if item.kind in _HOSTED_TOPOLOGY_REFERENCES:
+            self._wait_hosted_topology_absent(item)
+            return
         if item.kind == "entra_service_principal":
             self._run(
                 [azure_cli(), "ad", "sp", "delete", "--id", self._actual_id(item)],
@@ -222,6 +225,22 @@ class AzureValidationCleanupBackend:
             return
         raise ContractError(
             f"No explicit cleanup route for validation resource kind {item.kind}"
+        )
+
+    def _wait_hosted_topology_absent(self, item: CleanupPlanItem) -> None:
+        deadline = time.monotonic() + 15 * 60
+        next_progress = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if self.absent(item):
+                return
+            if time.monotonic() >= next_progress:
+                self._client.report_progress(
+                    f"{item.kind} cascade cleanup is still propagating"
+                )
+                next_progress = time.monotonic() + 60
+            time.sleep(5)
+        raise ContractError(
+            f"{item.kind} cascade cleanup did not complete within 15 minutes"
         )
 
     def absent(self, item: CleanupPlanItem) -> bool:

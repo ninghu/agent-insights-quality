@@ -429,6 +429,31 @@ def test_hosted_topology_is_absent_after_version_cleanup() -> None:
     )
 
 
+def test_hosted_topology_delete_waits_for_parent_cascade(monkeypatch) -> None:
+    backend = object.__new__(AzureValidationCleanupBackend)
+    checks = iter([False, False, True])
+    sleeps = []
+    backend.absent = lambda _item: next(checks)
+    backend._client = SimpleNamespace(report_progress=pytest.fail)
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_cleanup_azure.time.sleep",
+        sleeps.append,
+    )
+
+    backend.delete(
+        replace(
+            _intent(
+                "hosted_blueprint",
+                "synthetic-agent|issue-001|hosted_blueprint",
+            ),
+            resolved_provider_id="synthetic-blueprint-reference",
+            state="delete_intent",
+        )
+    )
+
+    assert sleeps == [5, 5]
+
+
 @pytest.mark.parametrize(
     ("kind", "details", "error_path"),
     [
