@@ -778,16 +778,24 @@ class FoundryAuthorityDeployer:
             raise ContractError("Validation authority source digest changed before deploy")
         runtime_agent = copy.deepcopy(catalog_agent)
         runtime_agent["name"] = planned.runtime_agent_name
-        version = self._client.ensure_version(
-            agent=runtime_agent,
-            logical_version=authority.logical_version,
-            artifact=artifact,
+        version, exact_listing_confirmed_at = (
+            self._client.ensure_version_for_readiness(
+                agent=runtime_agent,
+                logical_version=authority.logical_version,
+                artifact=artifact,
+            )
         )
         hosted = authority.runtime_kind != "prompt"
         details = self._client.version_details(
             planned.runtime_agent_name,
             version,
             hosted=hosted,
+            exact_listing_confirmed_at=exact_listing_confirmed_at,
+            logical_version=(
+                authority.logical_version
+                if exact_listing_confirmed_at is not None
+                else None
+            ),
         )
         provider_agent_id = str(
             details.get("agent_id")

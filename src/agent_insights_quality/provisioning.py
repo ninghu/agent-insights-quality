@@ -1132,15 +1132,49 @@ class FoundryProvisioner:
         version: str,
         *,
         hosted: bool,
+        exact_listing_confirmed_at: float | None = None,
+        logical_version: str | None = None,
     ) -> dict[str, Any]:
         if not name or not version:
             raise ContractError("Foundry Agent version identity is required")
-        return self._request(
-            "GET",
-            f"/agents/{urllib.parse.quote(name, safe='')}/versions/"
-            f"{urllib.parse.quote(version, safe='')}",
-            hosted=hosted,
-        )
+        if exact_listing_confirmed_at is not None and not logical_version:
+            raise ContractError(
+                "Foundry Agent version readiness identity is required"
+            )
+        not_found_attempt = 0
+        while True:
+            try:
+                return self._request(
+                    "GET",
+                    f"/agents/{urllib.parse.quote(name, safe='')}/versions/"
+                    f"{urllib.parse.quote(version, safe='')}",
+                    hosted=hosted,
+                )
+            except RemoteHttpError as error:
+                if not self._version_read_not_found_is_transient(
+                    error,
+                    name=name,
+                    version=version,
+                    exact_listing_confirmed_at=exact_listing_confirmed_at,
+                ):
+                    raise
+                assert exact_listing_confirmed_at is not None
+                elapsed = time.monotonic() - exact_listing_confirmed_at
+                remaining = _AGENT_CREATE_PROPAGATION_SECONDS - elapsed
+                if remaining <= 0:
+                    raise
+                delay = min(
+                    5 * (2**min(not_found_attempt, 3)),
+                    _AGENT_CREATE_MAX_BACKOFF_SECONDS,
+                    remaining,
+                )
+                not_found_attempt += 1
+                self.report_progress(
+                    f"{self._profile.name}/{name}/{logical_version}: "
+                    "exact version readiness propagation pending "
+                    f"at {elapsed:.0f}s; retrying in {delay:.0f}s"
+                )
+                time.sleep(delay)
 
     def delete_agent(self, name: str, *, hosted: bool) -> None:
         self._request(
@@ -1209,6 +1243,33 @@ class FoundryProvisioner:
         logical_version: str,
         artifact: dict[str, Any],
     ) -> str:
+        version, _ = self._ensure_version(
+            agent=agent,
+            logical_version=logical_version,
+            artifact=artifact,
+        )
+        return version
+
+    def ensure_version_for_readiness(
+        self,
+        *,
+        agent: dict[str, Any],
+        logical_version: str,
+        artifact: dict[str, Any],
+    ) -> tuple[str, float | None]:
+        return self._ensure_version(
+            agent=agent,
+            logical_version=logical_version,
+            artifact=artifact,
+        )
+
+    def _ensure_version(
+        self,
+        *,
+        agent: dict[str, Any],
+        logical_version: str,
+        artifact: dict[str, Any],
+    ) -> tuple[str, float | None]:
         existing = self._find_version(
             agent["name"],
             logical_version,
@@ -1227,7 +1288,7 @@ class FoundryProvisioner:
                 },
                 not_found_confirmed_at=None,
             )
-            return existing
+            return existing, None
         create_agent = not self._agent_exists(
             agent["name"],
             hosted=agent["type"] != "prompt",
@@ -1355,7 +1416,7 @@ class FoundryProvisioner:
             expected_metadata=metadata,
             not_found_confirmed_at=created_version_confirmed_at,
         )
-        return version
+        return version, created_version_confirmed_at
 
     def _agent_create_not_found_is_transient(
         self,
@@ -1582,43 +1643,20 @@ class FoundryProvisioner:
     ) -> None:
         deadline = time.monotonic() + 30 * 60
         next_progress = time.monotonic() + 60
-        not_found_attempt = 0
         while time.monotonic() < deadline:
             try:
-                response = self._request(
-                    "GET",
-                    f"/agents/{urllib.parse.quote(name, safe='')}/versions/"
-                    f"{urllib.parse.quote(version, safe='')}",
+                response = self.version_details(
+                    name,
+                    version,
                     hosted=hosted,
+                    exact_listing_confirmed_at=not_found_confirmed_at,
+                    logical_version=(
+                        expected_metadata["aiq_logical_version"]
+                        if not_found_confirmed_at is not None
+                        else None
+                    ),
                 )
             except RemoteHttpError as error:
-                if self._version_read_not_found_is_transient(
-                    error,
-                    name=name,
-                    version=version,
-                    exact_listing_confirmed_at=not_found_confirmed_at,
-                ):
-                    assert not_found_confirmed_at is not None
-                    elapsed = time.monotonic() - not_found_confirmed_at
-                    remaining = (
-                        _AGENT_CREATE_PROPAGATION_SECONDS - elapsed
-                    )
-                    if remaining <= 0:
-                        raise
-                    delay = min(
-                        5 * (2**min(not_found_attempt, 3)),
-                        _AGENT_CREATE_MAX_BACKOFF_SECONDS,
-                        remaining,
-                    )
-                    not_found_attempt += 1
-                    self.report_progress(
-                        f"{self._profile.name}/{name}/"
-                        f"{expected_metadata['aiq_logical_version']}: "
-                        "exact version readiness propagation pending "
-                        f"at {elapsed:.0f}s; retrying in {delay:.0f}s"
-                    )
-                    time.sleep(delay)
-                    continue
                 if not error.transient:
                     raise
                 self.report_progress(

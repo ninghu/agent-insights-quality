@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -7,6 +8,11 @@ from types import SimpleNamespace
 import pytest
 
 from agent_insights_quality.profiles import RuntimeProfile
+from agent_insights_quality.provisioning import (
+    FoundryProvisioner,
+    RemoteHttpError,
+    _build_and_push_support_image,
+)
 from agent_insights_quality.util import ContractError, ROOT
 from agent_insights_quality.validation_provisioning import (
     FoundryAuthorityDeployer,
@@ -15,7 +21,6 @@ from agent_insights_quality.validation_provisioning import (
     _rate_limits,
     validation_runtime_profile,
 )
-from agent_insights_quality.provisioning import _build_and_push_support_image
 from agent_insights_quality.validation_policy import load_validation_policy
 
 
@@ -248,3 +253,112 @@ def test_hosted_canary_readiness_rechecks_active_topology() -> None:
     details["status"] = "pending"
     with pytest.raises(ContractError, match="not active"):
         deployer.assert_ready(authority, deployed)
+
+
+def test_prompt_deploy_retries_duplicate_detail_read_after_exact_listing(
+    monkeypatch,
+) -> None:
+    now = [10.0]
+    sleeps = []
+    monkeypatch.setattr(
+        "agent_insights_quality.provisioning.time.monotonic",
+        lambda: now[0],
+    )
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        now[0] += seconds
+
+    monkeypatch.setattr(
+        "agent_insights_quality.provisioning.time.sleep",
+        sleep,
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_provisioning.source_content_digest",
+        lambda *_args, **_kwargs: "sha256:" + ("a" * 64),
+    )
+    profile = _staging_profile()
+    client = FoundryProvisioner(
+        profile,
+        token_provider=lambda _: "synthetic-token",
+    )
+    timeline = []
+    list_reads = 0
+    detail_reads = 0
+    metadata = {}
+
+    def request(method, path, *, hosted, body=None, **_kwargs):
+        nonlocal detail_reads, list_reads, metadata
+        timeline.append((method, path, hosted))
+        if path.endswith("/versions?limit=100"):
+            list_reads += 1
+            if list_reads == 1:
+                return {"_status": 200, "data": []}
+            return {
+                "_status": 200,
+                "data": [
+                    {
+                        "version": "1",
+                        "status": "active",
+                        "metadata": metadata,
+                    }
+                ]
+            }
+        if method == "GET" and path == "/agents/synthetic-weather":
+            return {"_status": 404}
+        if method == "POST" and path == "/agents":
+            metadata = json.loads(body)["metadata"]
+            return {"versions": {"latest": {"version": "1"}}}
+        if path == "/agents/synthetic-weather/versions/1":
+            detail_reads += 1
+            if detail_reads == 2:
+                raise RemoteHttpError(
+                    404,
+                    "NotFound",
+                    "Exact version propagation pending",
+                    "GET /agents/synthetic-weather/versions/1",
+                )
+            return {
+                "status": "active",
+                "agent_id": "synthetic-weather",
+                "id": "synthetic-weather/versions/1",
+                "metadata": metadata,
+            }
+        raise AssertionError(f"Unexpected request: {method} {path}")
+
+    client._request = request  # type: ignore[method-assign]
+    deployer = object.__new__(FoundryAuthorityDeployer)
+    deployer._profile = profile
+    deployer._agents = {
+        "weather-agent": {
+            "name": "weather-agent",
+            "type": "prompt",
+            "baseline_path": "agents/weather-agent/v0",
+        }
+    }
+    deployer._issues = {}
+    deployer._project = SimpleNamespace(connection_ids=())
+    deployer._support_images = {}
+    deployer._client = client
+    deployed = deployer.deploy(
+        SimpleNamespace(
+            authority_id="weather-agent/v0",
+            authority_kind="baseline",
+            canonical_agent="weather-agent",
+            logical_version="v0",
+            runtime_kind="prompt",
+            source_content_digest="sha256:" + ("a" * 64),
+        ),
+        SimpleNamespace(runtime_agent_name="synthetic-weather"),
+    )
+
+    assert deployed.runtime_agent_version == "1"
+    assert deployed.provider_agent_version_id == "synthetic-weather/versions/1"
+    assert list_reads == 2
+    assert detail_reads == 3
+    assert sleeps == [5]
+    assert timeline[-3:] == [
+        ("GET", "/agents/synthetic-weather/versions/1", False),
+        ("GET", "/agents/synthetic-weather/versions/1", False),
+        ("GET", "/agents/synthetic-weather/versions/1", False),
+    ]
