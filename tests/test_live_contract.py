@@ -20,6 +20,7 @@ from agent_insights_quality.live import (
     _complete_operation_ids,
     _correlated_request_rows,
     _normalize_fixture,
+    _prompt_agent_route_propagation_pending,
     _semantic_assertion_result,
     _trace_assertion_result,
     _trace_behavior_summary,
@@ -3151,6 +3152,291 @@ def test_json_success_with_invalid_payload_is_accepted_contract_failure(
     assert caught.value.request_accepted is True
 
 
+def test_prompt_retries_exact_first_agent_route_propagation_rejection() -> None:
+    runtime = _runtime()
+    mark_started = []
+    runtime._traffic_ledger = type(
+        "Ledger",
+        (),
+        {
+            "mark_started": staticmethod(
+                lambda *args, **kwargs: mark_started.append((args, kwargs))
+            )
+        },
+    )()
+    calls = []
+    sleeps = []
+    progress = []
+
+    def json_request(method, url, body, **kwargs):
+        calls.append((method, url, dict(body), kwargs))
+        if len(calls) == 1:
+            raise RemoteOperationError(
+                "Remote operation failed with HTTP 404 (NotFound)",
+                code="NotFound",
+                status=404,
+                request_accepted=False,
+            )
+        return {"id": "response-accepted", "output": []}
+
+    runtime._json_request = json_request  # type: ignore[method-assign]
+    runtime._sleep = sleeps.append
+    runtime.report_progress = progress.append  # type: ignore[method-assign]
+    result = runtime._invoke_prompt(
+        "weather-agent",
+        "1",
+        {
+            "body": {"input": "Synthetic first request."},
+            "expected_status": 200,
+            "semantic_assertions": {},
+            "activation_gate": False,
+        },
+        0,
+        None,
+        include_seed_metadata=False,
+        validation_intent_reference="sha256:" + ("a" * 64),
+    )
+
+    assert result[0] == ["response-accepted"]
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    assert calls[0][0] == "POST"
+    assert calls[0][1] == "https://example.invalid/openai/v1/responses"
+    assert calls[0][2] == {
+        "input": "Synthetic first request.",
+        "store": True,
+        "agent_reference": {
+            "type": "agent_reference",
+            "name": "weather-agent",
+            "version": "1",
+        },
+        "metadata": {
+            "validation_intent_reference": "sha256:" + ("a" * 64),
+        },
+    }
+    assert sleeps == [1]
+    assert len(mark_started) == 1
+    assert progress == [
+        "weather-agent/1: exact Prompt Agent route is not yet available; "
+        "retrying first request in 1s (2/5)"
+    ]
+
+
+def test_prompt_first_agent_route_retry_is_bounded() -> None:
+    runtime = _runtime()
+    runtime._monotonic = lambda: 0
+    mark_started = []
+    runtime._traffic_ledger = type(
+        "Ledger",
+        (),
+        {
+            "mark_started": staticmethod(
+                lambda *args, **kwargs: mark_started.append((args, kwargs))
+            )
+        },
+    )()
+    calls = 0
+    sleeps = []
+    error = RemoteOperationError(
+        "Remote operation failed with HTTP 404 (NotFound)",
+        code="NotFound",
+        status=404,
+        request_accepted=False,
+    )
+
+    def json_request(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise error
+
+    runtime._json_request = json_request  # type: ignore[method-assign]
+    runtime._sleep = sleeps.append
+    with pytest.raises(RemoteOperationError) as caught:
+        runtime._invoke_prompt(
+            "weather-agent",
+            "1",
+            {
+                "body": {"input": "Synthetic first request."},
+                "expected_status": 200,
+                "semantic_assertions": {},
+                "activation_gate": False,
+            },
+            0,
+            None,
+            include_seed_metadata=False,
+        )
+
+    assert caught.value is error
+    assert calls == 5
+    assert sleeps == [1, 2, 4, 8]
+    assert len(mark_started) == 1
+
+
+def test_prompt_first_agent_route_retry_observes_deadline() -> None:
+    runtime = _runtime()
+    now = [0]
+    runtime._monotonic = lambda: now[0]
+    calls = 0
+    sleeps = []
+    error = RemoteOperationError(
+        "Remote operation failed with HTTP 404 (NotFound)",
+        code="NotFound",
+        status=404,
+        request_accepted=False,
+    )
+
+    def json_request(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        now[0] = 15
+        raise error
+
+    runtime._json_request = json_request  # type: ignore[method-assign]
+    runtime._sleep = sleeps.append
+    with pytest.raises(RemoteOperationError) as caught:
+        runtime._invoke_prompt(
+            "weather-agent",
+            "1",
+            {
+                "body": {"input": "Synthetic first request."},
+                "expected_status": 200,
+                "semantic_assertions": {},
+                "activation_gate": False,
+            },
+            0,
+            None,
+            include_seed_metadata=False,
+        )
+
+    assert caught.value is error
+    assert calls == 1
+    assert sleeps == []
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RemoteOperationError(
+            "Synthetic accepted rejection",
+            code="NotFound",
+            status=404,
+            request_accepted=True,
+        ),
+        RemoteOperationError(
+            "Synthetic ambiguous rejection",
+            code="NotFound",
+            status=404,
+            request_accepted=None,
+        ),
+        RemoteOperationError(
+            "Synthetic unrelated code",
+            code="not_found",
+            status=404,
+            request_accepted=False,
+        ),
+        RemoteOperationError(
+            "Synthetic unrelated status",
+            code="NotFound",
+            status=400,
+            request_accepted=False,
+        ),
+        RemoteOperationError(
+            "Synthetic no response",
+            code="remote_no_response",
+            status=None,
+            request_accepted=None,
+        ),
+    ],
+)
+def test_prompt_first_request_does_not_retry_unrelated_failures(error) -> None:
+    runtime = _runtime()
+    calls = 0
+    sleeps = []
+
+    def json_request(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise error
+
+    runtime._json_request = json_request  # type: ignore[method-assign]
+    runtime._sleep = sleeps.append
+    with pytest.raises(RemoteOperationError) as caught:
+        runtime._invoke_prompt(
+            "weather-agent",
+            "1",
+            {
+                "body": {"input": "Synthetic first request."},
+                "expected_status": 200,
+                "semantic_assertions": {},
+                "activation_gate": False,
+            },
+            0,
+            None,
+            include_seed_metadata=False,
+        )
+
+    assert caught.value is error
+    assert calls == 1
+    assert sleeps == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"input": "Synthetic request.", "store": True},
+        {
+            "input": "Synthetic request.",
+            "store": True,
+            "agent_reference": {
+                "type": "model",
+                "name": "weather-agent",
+                "version": "1",
+            },
+        },
+        {
+            "input": "Synthetic request.",
+            "store": True,
+            "agent_reference": {
+                "type": "agent_reference",
+                "name": "other-agent",
+                "version": "1",
+            },
+        },
+        {
+            "input": "Synthetic request.",
+            "store": True,
+            "agent_reference": {
+                "type": "agent_reference",
+                "name": "weather-agent",
+                "version": "2",
+            },
+        },
+        {
+            "input": "Synthetic request.",
+            "store": True,
+            "previous_response_id": "previous-response",
+            "agent_reference": {
+                "type": "agent_reference",
+                "name": "weather-agent",
+                "version": "1",
+            },
+        },
+    ],
+)
+def test_prompt_agent_route_retry_rejects_non_exact_agent_requests(body) -> None:
+    assert not _prompt_agent_route_propagation_pending(
+        RemoteOperationError(
+            "Remote operation failed with HTTP 404 (NotFound)",
+            code="NotFound",
+            status=404,
+            request_accepted=False,
+        ),
+        body=body,
+        agent_name="weather-agent",
+        foundry_version="1",
+    )
+
+
 @pytest.mark.parametrize("code", ["NotFound", "previous_response_not_found"])
 def test_prompt_retries_exact_previous_response_propagation_rejection(code) -> None:
     runtime = _runtime()
@@ -3203,15 +3489,6 @@ def test_prompt_retries_exact_previous_response_propagation_rejection(code) -> N
 @pytest.mark.parametrize(
     ("error", "previous_response_id"),
     [
-        (
-            RemoteOperationError(
-                "Remote operation failed with HTTP 404 (NotFound)",
-                code="NotFound",
-                status=404,
-                request_accepted=False,
-            ),
-            None,
-        ),
         (
             RemoteOperationError(
                 "Remote operation failed with HTTP 404 (NotFound)",
@@ -4129,8 +4406,10 @@ def test_hosted_session_does_not_retry_wrong_or_expired_route(
     assert calls == 1
 
 
-def test_non_session_post_does_not_retry_hosted_route_not_found(
+@pytest.mark.parametrize("hosted", [False, True])
+def test_unrelated_post_does_not_retry_agent_route_not_found(
     monkeypatch,
+    hosted,
 ) -> None:
     runtime = _runtime()
     attempts = 0
@@ -4151,6 +4430,10 @@ def test_non_session_post_does_not_retry_hosted_route_not_found(
         open_request,
     )
     with pytest.raises(RemoteOperationError):
-        runtime._json_request("POST", "https://example.invalid", hosted=True)
+        runtime._json_request(
+            "POST",
+            "https://example.invalid",
+            hosted=hosted,
+        )
 
     assert attempts == 1

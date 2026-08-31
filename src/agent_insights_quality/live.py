@@ -72,6 +72,10 @@ _HOSTED_SESSION_PROPAGATION_RETRY_DELAYS = (1, 2, 4, 8)
 _HOSTED_SESSION_PROPAGATION_WINDOW_SECONDS = sum(
     _HOSTED_SESSION_PROPAGATION_RETRY_DELAYS
 )
+_PROMPT_AGENT_ROUTE_PROPAGATION_RETRY_DELAYS = (1, 2, 4, 8)
+_PROMPT_AGENT_ROUTE_PROPAGATION_WINDOW_SECONDS = sum(
+    _PROMPT_AGENT_ROUTE_PROPAGATION_RETRY_DELAYS
+)
 _PROMPT_RESPONSE_PROPAGATION_RETRY_DELAYS = (1, 2)
 _TRACE_ASSERTION_PROGRESS_SECONDS = 60
 _AUTH_PROGRESS = ProgressReporter("aiq-auth")
@@ -648,6 +652,9 @@ union traces, dependencies, requests
             now=self._utcnow().astimezone(UTC),
             uncertain_seconds=_DEFAULT_REQUEST_TIMEOUT_SECONDS,
         )
+        route_retry_deadline = (
+            self._monotonic() + _PROMPT_AGENT_ROUTE_PROPAGATION_WINDOW_SECONDS
+        )
         propagation_retry = 0
         while True:
             try:
@@ -659,21 +666,39 @@ union traces, dependencies, requests
                 )
                 break
             except RemoteOperationError as error:
+                if previous_response_id:
+                    retry_delays = _PROMPT_RESPONSE_PROPAGATION_RETRY_DELAYS
+                    if not _previous_response_propagation_pending(error):
+                        raise
+                else:
+                    retry_delays = _PROMPT_AGENT_ROUTE_PROPAGATION_RETRY_DELAYS
+                    if not _prompt_agent_route_propagation_pending(
+                        error,
+                        body=body,
+                        agent_name=agent_name,
+                        foundry_version=foundry_version,
+                    ):
+                        raise
+                if propagation_retry == len(retry_delays):
+                    raise
+                delay = retry_delays[propagation_retry]
                 if (
                     not previous_response_id
-                    or not _previous_response_propagation_pending(error)
-                    or propagation_retry
-                    == len(_PROMPT_RESPONSE_PROPAGATION_RETRY_DELAYS)
+                    and self._monotonic() + delay > route_retry_deadline
                 ):
                     raise
-                delay = _PROMPT_RESPONSE_PROPAGATION_RETRY_DELAYS[
-                    propagation_retry
-                ]
                 propagation_retry += 1
-                self.report_progress(
-                    f"{agent_name}/{foundry_version}: prior response is not yet "
-                    f"available; retrying chained request in {delay}s"
-                )
+                if previous_response_id:
+                    self.report_progress(
+                        f"{agent_name}/{foundry_version}: prior response is not yet "
+                        f"available; retrying chained request in {delay}s"
+                    )
+                else:
+                    self.report_progress(
+                        f"{agent_name}/{foundry_version}: exact Prompt Agent route "
+                        f"is not yet available; retrying first request in {delay}s "
+                        f"({propagation_retry + 1}/{len(retry_delays) + 1})"
+                    )
                 self._sleep(delay)
         response_id = str(response.get("id") or "")
         if not response_id:
@@ -2006,6 +2031,30 @@ def _previous_response_propagation_pending(
         error.request_accepted is False
         and error.status == 404
         and error.code in {"NotFound", "previous_response_not_found"}
+    )
+
+
+def _prompt_agent_route_propagation_pending(
+    error: RemoteOperationError,
+    *,
+    body: Mapping[str, Any],
+    agent_name: str,
+    foundry_version: str,
+) -> bool:
+    return (
+        bool(agent_name)
+        and bool(foundry_version)
+        and body.get("store") is True
+        and "previous_response_id" not in body
+        and body.get("agent_reference")
+        == {
+            "type": "agent_reference",
+            "name": agent_name,
+            "version": foundry_version,
+        }
+        and error.request_accepted is False
+        and error.status == 404
+        and error.code == "NotFound"
     )
 
 
