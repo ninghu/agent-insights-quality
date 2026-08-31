@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
+import agent_insights_quality.validation_live as validation_live
 from agent_insights_quality.models import TraceAssertionEvidence
 from agent_insights_quality.validation_live import FoundryScenarioAttemptRunner
 from agent_insights_quality.validation_quota import (
@@ -394,6 +397,67 @@ def test_telemetry_identity_mismatch_keeps_attempt_incomplete() -> None:
         step["identity_pass"] is False
         for step in [*result["setup_steps"], *result["probe_steps"]]
     )
+
+
+def test_post_response_telemetry_failure_keeps_request_accepted(
+    monkeypatch,
+) -> None:
+    class SyntheticTelemetryError(Exception):
+        pass
+
+    monkeypatch.setattr(
+        validation_live,
+        "_POST_RESPONSE_TELEMETRY_ERRORS",
+        (*validation_live._POST_RESPONSE_TELEMETRY_ERRORS, SyntheticTelemetryError),
+    )
+
+    class FailedTelemetryRuntime(Runtime):
+        @staticmethod
+        def telemetry_identity_passes(**_kwargs):
+            raise SyntheticTelemetryError("Synthetic telemetry failure")
+
+    times = iter(
+        [
+            datetime(2026, 8, 29, 12, 0, tzinfo=UTC),
+            datetime(2026, 8, 29, 12, 0, 1, tzinfo=UTC),
+        ]
+    )
+    runner = FoundryScenarioAttemptRunner(
+        FailedTelemetryRuntime(),
+        endpoint_costs={"issue-001": EndpointCost(1, 10, 1)},
+        stabilization_seconds=1,
+        record_resource=lambda item: None,
+        now=lambda: next(times),
+    )
+
+    with pytest.raises(
+        SyntheticTelemetryError,
+        match="Synthetic telemetry failure",
+    ) as caught:
+        runner.run(
+            target=_target(),
+            executing_authority_id="issue-001",
+            conversation_role="issue",
+            scenario={
+                "id": "reviewed-path",
+                "validation_mode": "model_mediated",
+                "defect_predicate": {
+                    "kind": "all_observation_steps_pass",
+                    "step_ids": ["probe-1"],
+                    "required_surfaces": ["semantic", "trace"],
+                },
+            },
+            attempt={
+                "index": 1,
+                "conversation_group": "attempt-1",
+                "setup_steps": [_step("setup-1", probe=False)],
+                "probe_steps": [_step("probe-1", probe=True)],
+            },
+            expect_defect=True,
+            scheduler=_scheduler(),
+        )
+
+    assert caught.value.request_accepted is True
 
 
 def test_shared_v0_attempts_have_unique_execution_and_resource_references() -> None:

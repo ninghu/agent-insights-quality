@@ -6,7 +6,11 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any, Iterator
 
-from agent_insights_quality.live import LiveRuntime, _normalize_fixture
+from agent_insights_quality.live import (
+    LiveRuntime,
+    _normalize_fixture,
+    _TELEMETRY_TRANSIENT_ERRORS,
+)
 from agent_insights_quality.models import InvocationEvidence
 from agent_insights_quality.util import ContractError, content_hash
 from agent_insights_quality.validation_evidence import evaluate_defect_predicate
@@ -15,6 +19,13 @@ from agent_insights_quality.validation_quota import (
     ValidationScheduler,
 )
 from agent_insights_quality.validation_runtime import DeployedRuntime
+
+_POST_RESPONSE_TELEMETRY_ERRORS = (
+    ContractError,
+    OSError,
+    RuntimeError,
+    *_TELEMETRY_TRANSIENT_ERRORS,
+)
 
 
 class FoundryScenarioAttemptRunner:
@@ -324,38 +335,42 @@ class FoundryScenarioAttemptRunner:
             semantic_assertions_passed=sum(item[1] for item in semantic_results),
         )
         telemetry_started = time.monotonic()
-        with scheduler.telemetry_query():
-            operation_ids = self._runtime.wait_for_telemetry(
-                agent_name=target.runtime_agent_name,
-                foundry_version=target.runtime_agent_version,
-                invocation=invocation,
-            )
-        with scheduler.telemetry_query():
-            identity_results = self._runtime.telemetry_identity_passes(
-                agent_name=target.runtime_agent_name,
-                foundry_version=target.runtime_agent_version,
-                operation_ids=operation_ids,
-                invocation=invocation,
-            )
-        with scheduler.telemetry_query():
-            trace_results = self._runtime.trace_assertion_evidence_for_requests(
-                agent_name=target.runtime_agent_name,
-                foundry_version=target.runtime_agent_version,
-                operation_ids=operation_ids,
-                response_references=tuple(response_references),
-                window_start=started.isoformat(),
-                window_end=completed.isoformat(),
-                requests=[
-                    {
-                        "id": step["id"],
-                        "request": step["request"],
-                        "expected": step["expected"],
-                    }
-                    for _, step in raw_steps
-                ],
-                stabilization_seconds=self._stabilization_seconds,
-                on_first_pass=lambda: None,
-            )
+        try:
+            with scheduler.telemetry_query():
+                operation_ids = self._runtime.wait_for_telemetry(
+                    agent_name=target.runtime_agent_name,
+                    foundry_version=target.runtime_agent_version,
+                    invocation=invocation,
+                )
+            with scheduler.telemetry_query():
+                trace_results = self._runtime.trace_assertion_evidence_for_requests(
+                    agent_name=target.runtime_agent_name,
+                    foundry_version=target.runtime_agent_version,
+                    operation_ids=operation_ids,
+                    response_references=tuple(response_references),
+                    window_start=started.isoformat(),
+                    window_end=completed.isoformat(),
+                    requests=[
+                        {
+                            "id": step["id"],
+                            "request": step["request"],
+                            "expected": step["expected"],
+                        }
+                        for _, step in raw_steps
+                    ],
+                    stabilization_seconds=self._stabilization_seconds,
+                    on_first_pass=lambda: None,
+                )
+            with scheduler.telemetry_query():
+                identity_results = self._runtime.telemetry_identity_passes(
+                    agent_name=target.runtime_agent_name,
+                    foundry_version=target.runtime_agent_version,
+                    operation_ids=operation_ids,
+                    invocation=invocation,
+                )
+        except _POST_RESPONSE_TELEMETRY_ERRORS as error:
+            error.request_accepted = True
+            raise
         self._record_duration(
             "ingestion_kql_seconds",
             time.monotonic() - telemetry_started,

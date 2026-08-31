@@ -86,6 +86,7 @@ _HOSTED_RESPONSE_PROPAGATION_WINDOW_SECONDS = sum(
 )
 _PROMPT_RESPONSE_PROPAGATION_RETRY_DELAYS = (1, 2, 4, 8)
 _TRACE_ASSERTION_PROGRESS_SECONDS = 60
+_TELEMETRY_IDENTITY_STABILIZATION_SECONDS = TRACE_ASSERTION_POLL_SECONDS
 _AUTH_PROGRESS = ProgressReporter("aiq-auth")
 
 
@@ -1127,25 +1128,68 @@ union traces, dependencies, requests
     agent_versions=make_set(agent_version)
   by operation_Id
 """
-        result = self._query_resource(
-            self._logs_client(),
-            query,
-            timespan=(start, query_end),
-        )
-        if result.status != LogsQueryStatus.SUCCESS:
-            raise ContractError("Exact validation telemetry identity query failed")
-        observed: dict[str, tuple[set[str], set[str]]] = {}
-        for table in result.tables:
-            for row in table.rows:
-                operation_id = str(row[0]).lower()
-                if operation_id not in operation_ids:
-                    continue
-                observed[operation_id] = (
-                    _telemetry_string_set(row[1] if len(row) > 1 else []),
-                    _telemetry_string_set(row[2] if len(row) > 2 else []),
-                )
         expected = ({agent_name}, {foundry_version})
-        return tuple(observed.get(operation_id) == expected for operation_id in operation_ids)
+        deadline = self._monotonic() + TRACE_ASSERTION_DEADLINE_SECONDS
+        next_progress = self._monotonic() + _TRACE_ASSERTION_PROGRESS_SECONDS
+        client = self._logs_client()
+        exact_since: float | None = None
+        while True:
+            result = self._query_resource(
+                client,
+                query,
+                timespan=(start, query_end),
+            )
+            if result.status != LogsQueryStatus.SUCCESS:
+                raise ContractError("Exact validation telemetry identity query failed")
+            observed: dict[str, tuple[set[str], set[str]]] = {}
+            for table in result.tables:
+                for row in table.rows:
+                    operation_id = str(row[0]).lower()
+                    if operation_id not in operation_ids:
+                        continue
+                    names, versions = observed.setdefault(
+                        operation_id,
+                        (set(), set()),
+                    )
+                    names.update(
+                        _telemetry_string_set(row[1] if len(row) > 1 else [])
+                    )
+                    versions.update(
+                        _telemetry_string_set(row[2] if len(row) > 2 else [])
+                    )
+            identity_results = tuple(
+                observed.get(operation_id) == expected
+                for operation_id in operation_ids
+            )
+            if any(
+                names - expected[0] or versions - expected[1]
+                for names, versions in observed.values()
+            ):
+                return identity_results
+            now = self._monotonic()
+            if all(identity_results):
+                if exact_since is None:
+                    exact_since = now
+                elif (
+                    now - exact_since
+                    >= _TELEMETRY_IDENTITY_STABILIZATION_SECONDS
+                ):
+                    return identity_results
+            else:
+                exact_since = None
+            if now >= deadline:
+                if all(identity_results):
+                    return tuple(False for _ in identity_results)
+                return identity_results
+            if now >= next_progress:
+                elapsed = int(
+                    TRACE_ASSERTION_DEADLINE_SECONDS - max(deadline - now, 0)
+                )
+                self.report_progress(
+                    f"Exact validation telemetry identity is stabilizing ({elapsed}s)"
+                )
+                next_progress = now + _TRACE_ASSERTION_PROGRESS_SECONDS
+            self._sleep(min(TRACE_ASSERTION_POLL_SECONDS, deadline - now))
 
     def start_insights_run(
         self,

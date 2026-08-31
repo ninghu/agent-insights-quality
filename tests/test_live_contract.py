@@ -2449,21 +2449,37 @@ def test_validation_telemetry_identity_is_derived_per_exact_operation(
     operations = ("a" * 32, "b" * 32)
     captured = []
 
-    class Table:
-        rows = [
+    rows = [
+        [[operations[0], ["finance-agent"], ["opaque-version"]]],
+        [
             [operations[0], ["finance-agent"], ["opaque-version"]],
-            [operations[1], ["other-agent"], ["opaque-version"]],
-        ]
-
-    class Result:
-        status = "success"
-        tables = [Table()]
+            [operations[1], ["finance-agent"], ["opaque-version"]],
+        ],
+        [
+            [operations[0], ["finance-agent"], ["opaque-version"]],
+            [operations[1], ["finance-agent"], ["opaque-version"]],
+        ],
+    ]
 
     runtime = _runtime()
+    monotonic = [0.0]
+    sleeps = []
     runtime._logs_client = lambda: object()  # type: ignore[method-assign]
-    runtime._query_resource = (  # type: ignore[method-assign]
-        lambda _client, query, **_kwargs: captured.append(query) or Result()
-    )
+    runtime._monotonic = lambda: monotonic[0]
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        monotonic[0] += seconds
+
+    runtime._sleep = sleep
+
+    def query(_client, query, **_kwargs):
+        captured.append(query)
+        current = rows.pop(0)
+        table = type("Table", (), {"rows": current})()
+        return type("Result", (), {"status": "success", "tables": [table]})()
+
+    runtime._query_resource = query  # type: ignore[method-assign]
     invocation = InvocationEvidence(
         operation_ids=(),
         response_references=(
@@ -2480,9 +2496,212 @@ def test_validation_telemetry_identity_is_derived_per_exact_operation(
         foundry_version="opaque-version",
         operation_ids=operations,
         invocation=invocation,
-    ) == (True, False)
+    ) == (True, True)
+    assert sleeps == [15, 15]
+    assert len(captured) == 3
     assert "make_set(observed_agent)" in captured[0]
     assert "make_set(agent_version)" in captured[0]
+
+
+@pytest.mark.parametrize(
+    ("agent_names", "agent_versions"),
+    [
+        (["other-agent"], ["opaque-version"]),
+        (["finance-agent", "other-agent"], ["opaque-version"]),
+        (["finance-agent"], ["opaque-version", "other-version"]),
+    ],
+)
+def test_validation_telemetry_identity_fails_closed_on_wrong_or_multiple_values(
+    monkeypatch,
+    agent_names,
+    agent_versions,
+) -> None:
+    query_module = types.ModuleType("azure.monitor.query")
+    query_module.LogsQueryStatus = type("LogsQueryStatus", (), {"SUCCESS": "success"})
+    monitor_module = types.ModuleType("azure.monitor")
+    azure_module = types.ModuleType("azure")
+    monkeypatch.setitem(sys.modules, "azure", azure_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor", monitor_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
+    operation_id = "a" * 32
+    table = type(
+        "Table",
+        (),
+        {"rows": [[operation_id, agent_names, agent_versions]]},
+    )()
+    result = type("Result", (), {"status": "success", "tables": [table]})()
+    runtime = _runtime()
+    sleeps = []
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+    runtime._query_resource = lambda *_args, **_kwargs: result  # type: ignore[method-assign]
+    runtime._sleep = sleeps.append
+    invocation = InvocationEvidence(
+        operation_ids=(),
+        response_references=("resp_A1b2C3d4E5f6",),
+        started_at="2026-08-28T10:00:00+00:00",
+        completed_at="2026-08-28T10:00:01+00:00",
+        request_count=1,
+        allow_window_correlation=False,
+    )
+
+    assert runtime.telemetry_identity_passes(
+        agent_name="finance-agent",
+        foundry_version="opaque-version",
+        operation_ids=(operation_id,),
+        invocation=invocation,
+    ) == (False,)
+    assert sleeps == []
+
+
+def test_validation_telemetry_identity_rejects_conflict_during_stabilization(
+    monkeypatch,
+) -> None:
+    query_module = types.ModuleType("azure.monitor.query")
+    query_module.LogsQueryStatus = type("LogsQueryStatus", (), {"SUCCESS": "success"})
+    monitor_module = types.ModuleType("azure.monitor")
+    azure_module = types.ModuleType("azure")
+    monkeypatch.setitem(sys.modules, "azure", azure_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor", monitor_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
+    operation_id = "a" * 32
+    rows = [
+        [[operation_id, ["finance-agent"], ["opaque-version"]]],
+        [
+            [
+                operation_id,
+                ["finance-agent", "other-agent"],
+                ["opaque-version"],
+            ]
+        ],
+    ]
+    runtime = _runtime()
+    monotonic = [0.0]
+    sleeps = []
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+    runtime._monotonic = lambda: monotonic[0]
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        monotonic[0] += seconds
+
+    runtime._sleep = sleep
+
+    def query(*_args, **_kwargs):
+        table = type("Table", (), {"rows": rows.pop(0)})()
+        return type("Result", (), {"status": "success", "tables": [table]})()
+
+    runtime._query_resource = query  # type: ignore[method-assign]
+    invocation = InvocationEvidence(
+        operation_ids=(),
+        response_references=("resp_A1b2C3d4E5f6",),
+        started_at="2026-08-28T10:00:00+00:00",
+        completed_at="2026-08-28T10:00:01+00:00",
+        request_count=1,
+        allow_window_correlation=False,
+    )
+
+    assert runtime.telemetry_identity_passes(
+        agent_name="finance-agent",
+        foundry_version="opaque-version",
+        operation_ids=(operation_id,),
+        invocation=invocation,
+    ) == (False,)
+    assert sleeps == [15]
+
+
+def test_validation_telemetry_identity_missing_value_waits_to_deadline(
+    monkeypatch,
+) -> None:
+    query_module = types.ModuleType("azure.monitor.query")
+    query_module.LogsQueryStatus = type("LogsQueryStatus", (), {"SUCCESS": "success"})
+    monitor_module = types.ModuleType("azure.monitor")
+    azure_module = types.ModuleType("azure")
+    monkeypatch.setitem(sys.modules, "azure", azure_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor", monitor_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
+    monkeypatch.setattr(
+        "agent_insights_quality.live.TRACE_ASSERTION_DEADLINE_SECONDS",
+        30,
+    )
+    operation_id = "a" * 32
+    table = type("Table", (), {"rows": [[operation_id, [], []]]})()
+    result = type("Result", (), {"status": "success", "tables": [table]})()
+    runtime = _runtime()
+    monotonic = [0.0]
+    sleeps = []
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+    runtime._query_resource = lambda *_args, **_kwargs: result  # type: ignore[method-assign]
+    runtime._monotonic = lambda: monotonic[0]
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        monotonic[0] += seconds
+
+    runtime._sleep = sleep
+    invocation = InvocationEvidence(
+        operation_ids=(),
+        response_references=("resp_A1b2C3d4E5f6",),
+        started_at="2026-08-28T10:00:00+00:00",
+        completed_at="2026-08-28T10:00:01+00:00",
+        request_count=1,
+        allow_window_correlation=False,
+    )
+
+    assert runtime.telemetry_identity_passes(
+        agent_name="finance-agent",
+        foundry_version="opaque-version",
+        operation_ids=(operation_id,),
+        invocation=invocation,
+    ) == (False,)
+    assert sleeps == [15, 15]
+
+
+def test_validation_telemetry_identity_does_not_interpolate_values(monkeypatch) -> None:
+    query_module = types.ModuleType("azure.monitor.query")
+    query_module.LogsQueryStatus = type("LogsQueryStatus", (), {"SUCCESS": "success"})
+    monitor_module = types.ModuleType("azure.monitor")
+    azure_module = types.ModuleType("azure")
+    monkeypatch.setitem(sys.modules, "azure", azure_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor", monitor_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
+    operation_id = "a" * 32
+    agent_name = 'finance-agent"\n| take 1'
+    foundry_version = "opaque\\version"
+    table = type(
+        "Table",
+        (),
+        {"rows": [[operation_id, [agent_name], [foundry_version]]]},
+    )()
+    result = type("Result", (), {"status": "success", "tables": [table]})()
+    captured = []
+    runtime = _runtime()
+    monotonic = [0.0]
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+    runtime._query_resource = (  # type: ignore[method-assign]
+        lambda _client, query, **_kwargs: captured.append(query) or result
+    )
+    runtime._monotonic = lambda: monotonic[0]
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0,
+        monotonic[0] + seconds,
+    )
+    invocation = InvocationEvidence(
+        operation_ids=(),
+        response_references=("resp_A1b2C3d4E5f6",),
+        started_at="2026-08-28T10:00:00+00:00",
+        completed_at="2026-08-28T10:00:01+00:00",
+        request_count=1,
+        allow_window_correlation=False,
+    )
+
+    assert runtime.telemetry_identity_passes(
+        agent_name=agent_name,
+        foundry_version=foundry_version,
+        operation_ids=(operation_id,),
+        invocation=invocation,
+    ) == (True,)
+    assert agent_name not in captured[0]
+    assert foundry_version not in captured[0]
 
 
 def test_wait_for_telemetry_rejects_ambiguous_response_mapping(
