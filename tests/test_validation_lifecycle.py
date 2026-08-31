@@ -229,6 +229,40 @@ def test_phase_two_requires_both_phase_one_baselines_without_failures(
         assert controller.active.value["deployment"]["traffic_started"] is True
 
 
+def test_telemetry_failure_persists_safe_correlation_counts(tmp_path) -> None:
+    lock = LocalValidationLock(tmp_path / "validation.lock")
+    journal = LifecycleJournal(lock=lock, root=tmp_path / "lifecycle")
+    with lock:
+        controller = ValidationCycleController(
+            journal,
+            active=journal.begin_cycle(_initial()),
+        )
+        controller.authority_failure(
+            authority_id="weather-agent/v0",
+            canonical_agent="weather-agent",
+            stage="traffic",
+            error_code="telemetry_correlation_timeout",
+            request_accepted=True,
+            matched_reference_count=1,
+            expected_reference_count=2,
+            missing_reference_count=1,
+            now=START,
+        )
+
+        assert controller.active.value["deployment"]["failures"] == [
+            {
+                "authority_id": "weather-agent/v0",
+                "canonical_agent": "weather-agent",
+                "stage": "traffic",
+                "error_code": "telemetry_correlation_timeout",
+                "request_accepted": True,
+                "matched_reference_count": 1,
+                "expected_reference_count": 2,
+                "missing_reference_count": 1,
+            }
+        ]
+
+
 def test_shared_process_lock_excludes_a_second_worktree(tmp_path) -> None:
     path = tmp_path / "shared-runtime" / "validation.lock"
     first = LocalValidationLock(path)

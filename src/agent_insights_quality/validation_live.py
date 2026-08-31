@@ -12,7 +12,7 @@ from agent_insights_quality.live import (
     _TELEMETRY_TRANSIENT_ERRORS,
 )
 from agent_insights_quality.models import InvocationEvidence
-from agent_insights_quality.util import ContractError, content_hash
+from agent_insights_quality.util import ContractError, SharedRuntimeError, content_hash
 from agent_insights_quality.validation_evidence import evaluate_defect_predicate
 from agent_insights_quality.validation_quota import (
     EndpointCost,
@@ -26,6 +26,21 @@ _POST_RESPONSE_TELEMETRY_ERRORS = (
     RuntimeError,
     *_TELEMETRY_TRANSIENT_ERRORS,
 )
+
+
+class PostResponseTelemetryError(ContractError):
+    request_accepted = True
+
+    def __init__(self, error: BaseException) -> None:
+        super().__init__("Post-response telemetry verification failed")
+        self.code = str(getattr(error, "code", "") or type(error).__name__)
+        for field in (
+            "matched_reference_count",
+            "expected_reference_count",
+            "missing_reference_count",
+        ):
+            if hasattr(error, field):
+                setattr(self, field, getattr(error, field))
 
 
 class FoundryScenarioAttemptRunner:
@@ -368,9 +383,10 @@ class FoundryScenarioAttemptRunner:
                     operation_ids=operation_ids,
                     invocation=invocation,
                 )
-        except _POST_RESPONSE_TELEMETRY_ERRORS as error:
-            error.request_accepted = True
+        except SharedRuntimeError:
             raise
+        except _POST_RESPONSE_TELEMETRY_ERRORS as error:
+            raise PostResponseTelemetryError(error) from error
         self._record_duration(
             "ingestion_kql_seconds",
             time.monotonic() - telemetry_started,

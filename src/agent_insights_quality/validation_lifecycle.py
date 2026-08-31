@@ -361,10 +361,28 @@ def validate_lifecycle(value: Mapping[str, Any]) -> None:
         (item["authority_id"], item["stage"])
         for item in deployment["failures"]
     ]
+    correlation_count_fields = {
+        "matched_reference_count",
+        "expected_reference_count",
+        "missing_reference_count",
+    }
     if (
         len(ready_ids) != len(value["runtime_topology"]["agents"])
         or len(recovery_ids) != len(set(recovery_ids))
         or len(failure_keys) != len(set(failure_keys))
+        or any(
+            (
+                correlation_count_fields.intersection(item)
+                and not correlation_count_fields.issubset(item)
+            )
+            or (
+                correlation_count_fields.issubset(item)
+                and item["matched_reference_count"]
+                + item["missing_reference_count"]
+                != item["expected_reference_count"]
+            )
+            for item in deployment["failures"]
+        )
         or (
             deployment["phase"] == "phase_1_traffic"
             and len(value["runtime_topology"]["agents"]) != 2

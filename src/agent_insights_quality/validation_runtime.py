@@ -489,13 +489,36 @@ def _agent_failure_summary(
         "_",
         re.sub(r"(?<!^)(?=[A-Z])", "_", raw_code).casefold(),
     ).strip("_")
-    return {
+    summary = {
         "canonical_agent": authority.canonical_agent,
         "authority_id": authority.authority_id,
         "stage": stage,
         "error_code": normalized[:64] or "unknown_error",
         "request_accepted": request_accepted,
     }
+    correlation_counts = tuple(
+        getattr(error, field, None)
+        for field in (
+            "matched_reference_count",
+            "expected_reference_count",
+            "missing_reference_count",
+        )
+    )
+    if all(
+        isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        for value in correlation_counts
+    ):
+        matched, expected, missing = correlation_counts
+        if matched + missing != expected:
+            raise ContractError("Telemetry correlation failure counts are invalid")
+        summary.update(
+            {
+                "matched_reference_count": matched,
+                "expected_reference_count": expected,
+                "missing_reference_count": missing,
+            }
+        )
+    return summary
 
 
 def _deployment_canaries(

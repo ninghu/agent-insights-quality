@@ -17,6 +17,8 @@ import pytest
 from agent_insights_quality.live import (
     LiveRuntime,
     RemoteOperationError,
+    TelemetryCorrelationError,
+    TelemetryQueryError,
     _complete_operation_ids,
     _correlated_request_rows,
     _normalize_fixture,
@@ -1135,7 +1137,7 @@ def test_negative_argument_assertions_require_parsed_telemetry() -> None:
     )[0].passed is True
 
 
-def test_trace_row_query_projects_private_values_with_exact_correlation_scope(
+def test_trace_row_query_joins_split_reference_and_identity_spans_by_operation(
     monkeypatch,
 ) -> None:
     query_module = types.ModuleType("azure.monitor.query")
@@ -1184,10 +1186,13 @@ def test_trace_row_query_projects_private_values_with_exact_correlation_scope(
     ) < query.index('customDimensions["response_id"]')
     assert "request_id in" in query
     assert "matched_reference" in query
-    assert 'agent_version == "issue-013"' in query
-    assert 'observed_agent == "finance-agent"' in query
-    assert "scoped_reference_operations" in query
-    assert "operation_Id in (scoped_reference_operations)" in query
+    assert 'set_has_element(agent_versions, "issue-013")' in query
+    assert 'set_has_element(agent_names, "finance-agent")' in query
+    assert "scoped_trace_operations" in query
+    assert "operation_Id in (scoped_trace_operations)" in query
+    assert query.index("| summarize") < query.index(
+        'set_has_element(agent_versions, "issue-013")'
+    )
     assert timespans == [
         (
             datetime.fromisoformat(window_start),
@@ -2389,7 +2394,9 @@ def test_telemetry_requires_every_request_reference() -> None:
     ) is None
 
 
-def test_wait_for_telemetry_queries_r02_hosted_response_keys(monkeypatch) -> None:
+def test_wait_for_telemetry_correlates_prompt_split_span_fields_by_operation(
+    monkeypatch,
+) -> None:
     query_module = types.ModuleType("azure.monitor.query")
     query_module.LogsQueryStatus = type("LogsQueryStatus", (), {"SUCCESS": "success"})
     monitor_module = types.ModuleType("azure.monitor")
@@ -2422,8 +2429,8 @@ def test_wait_for_telemetry_queries_r02_hosted_response_keys(monkeypatch) -> Non
     )
 
     assert runtime.wait_for_telemetry(
-        agent_name="finance-agent",
-        foundry_version="opaque-version",
+        agent_name="weather-agent",
+        foundry_version="1",
         invocation=invocation,
     ) == ("a" * 32,)
     query = captured[0]
@@ -2434,6 +2441,16 @@ def test_wait_for_telemetry_queries_r02_hosted_response_keys(monkeypatch) -> Non
         'customDimensions["azure.ai.agentserver.response_id"]'
     ) < query.index('customDimensions["response_id"]')
     assert "request_id in" in query
+    assert 'set_has_element(agent_names, "weather-agent")' in query
+    assert 'set_has_element(agent_versions, "1")' in query
+    assert query.index("| summarize") < query.index(
+        'set_has_element(agent_versions, "1")'
+    )
+    assert query.index("by operation_Id") < query.index(
+        'set_has_element(agent_names, "weather-agent")'
+    )
+    assert "| where matched_reference in" not in query
+    assert "timestamp < datetime(2026-08-28T10:15:01+00:00)" in query
 
 
 def test_validation_telemetry_identity_is_derived_per_exact_operation(
@@ -2750,6 +2767,57 @@ def test_wait_for_telemetry_rejects_ambiguous_response_mapping(
     assert sleeps == []
 
 
+def test_wait_for_telemetry_timeout_records_safe_reference_counts(
+    monkeypatch,
+) -> None:
+    query_module = types.ModuleType("azure.monitor.query")
+    query_module.LogsQueryStatus = type("LogsQueryStatus", (), {"SUCCESS": "success"})
+    monitor_module = types.ModuleType("azure.monitor")
+    azure_module = types.ModuleType("azure")
+    monkeypatch.setitem(sys.modules, "azure", azure_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor", monitor_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
+    reference_a = "resp_A1b2C3d4E5f6"
+    reference_b = "resp_F6e5D4c3B2a1"
+    monotonic = [0.0]
+
+    class Table:
+        rows = [["a" * 32, [reference_a]]]
+
+    class Result:
+        status = "success"
+        tables = [Table()]
+
+    runtime = _runtime()
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+    runtime._query_resource = lambda *_args, **_kwargs: Result()  # type: ignore[method-assign]
+    runtime._monotonic = lambda: monotonic[0]
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
+    )
+    invocation = InvocationEvidence(
+        operation_ids=(),
+        response_references=(reference_a, reference_b),
+        started_at="2026-08-28T10:00:00+00:00",
+        completed_at="2026-08-28T10:00:01+00:00",
+        request_count=2,
+        allow_window_correlation=False,
+    )
+
+    with pytest.raises(TelemetryCorrelationError) as caught:
+        runtime.wait_for_telemetry(
+            agent_name="weather-agent",
+            foundry_version="1",
+            invocation=invocation,
+        )
+
+    assert caught.value.request_accepted is True
+    assert caught.value.matched_reference_count == 1
+    assert caught.value.expected_reference_count == 2
+    assert caught.value.missing_reference_count == 1
+    assert monotonic[0] == 15 * 60
+
+
 def test_trace_contract_waits_for_child_span_hydration() -> None:
     operation_id = "a" * 32
 
@@ -2914,9 +2982,10 @@ def test_telemetry_query_does_not_retry_nontransient_http_failures(
         "agent_insights_quality.live._TELEMETRY_TRANSIENT_ERRORS",
         (SyntheticHttpError,),
     )
-    with pytest.raises(SyntheticHttpError):
+    with pytest.raises(TelemetryQueryError) as caught:
         runtime._query_resource(Client(), "query", timespan=(0, 1))
     assert attempts == 1
+    assert isinstance(caught.value.__cause__, SyntheticHttpError)
 
 
 def test_agent_insights_checkpoint_is_persisted_before_polling() -> None:

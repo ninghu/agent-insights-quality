@@ -105,6 +105,28 @@ class RemoteOperationError(ContractError):
         self.request_accepted = request_accepted
 
 
+class TelemetryCorrelationError(ContractError):
+    code = "telemetry_correlation_timeout"
+    request_accepted = True
+
+    def __init__(
+        self,
+        *,
+        matched_reference_count: int,
+        expected_reference_count: int,
+    ) -> None:
+        super().__init__("Natural telemetry did not arrive before the bounded deadline")
+        self.matched_reference_count = matched_reference_count
+        self.expected_reference_count = expected_reference_count
+        self.missing_reference_count = (
+            expected_reference_count - matched_reference_count
+        )
+
+
+class TelemetryQueryError(ContractError):
+    code = "telemetry_query_failed"
+
+
 class _RuntimeTokenCredential:
     def __init__(self, runtime: LiveRuntime) -> None:
         self._runtime = runtime
@@ -206,9 +228,13 @@ class LiveRuntime:
                     isinstance(error, _TELEMETRY_HTTP_ERRORS)
                     and error.status_code not in _TRANSIENT_HTTP
                 ):
-                    raise
+                    raise TelemetryQueryError(
+                        "Azure Monitor rejected the telemetry query"
+                    ) from error
                 if attempt == 3:
-                    raise
+                    raise TelemetryQueryError(
+                        "Azure Monitor telemetry query retries were exhausted"
+                    ) from error
                 delay = 2**attempt
                 self.report_progress(
                     f"telemetry query failed transiently; retrying in {delay}s "
@@ -1047,6 +1073,7 @@ union traces, dependencies, requests
         query = f"""
 union traces, dependencies, requests
 | where timestamp >= datetime({start.astimezone(UTC).isoformat()})
+  and timestamp < datetime({query_end.astimezone(UTC).isoformat()})
 | extend response_id = coalesce(
     tostring(customDimensions["gen_ai.response.id"]),
     tostring(customDimensions["azure.ai.agentserver.response_id"]),
@@ -1055,16 +1082,26 @@ union traces, dependencies, requests
     tostring(customDimensions["x-ms-client-request-id"]),
     tostring(customDimensions["client_request_id"]),
     tostring(customDimensions["request_id"]))
+| extend observed_agent = tostring(customDimensions["gen_ai.agent.name"])
 | extend agent_version = tostring(customDimensions["gen_ai.agent.version"])
 | extend matched_reference = case(
     response_id in ({escaped}), response_id,
     request_id in ({escaped}), request_id,
     "")
-| where matched_reference in ({escaped}) and agent_version == "{foundry_version}"
-| summarize matched_references=make_set(matched_reference) by operation_Id
+| summarize
+    matched_references=make_set_if(
+      matched_reference, matched_reference in ({escaped})),
+    agent_names=make_set_if(observed_agent, isnotempty(observed_agent)),
+    agent_versions=make_set_if(agent_version, isnotempty(agent_version))
+  by operation_Id
+| where array_length(matched_references) > 0
+  and set_has_element(agent_names, "{agent_name}")
+  and set_has_element(agent_versions, "{foundry_version}")
+| project operation_Id, matched_references
 """
         deadline = self._monotonic() + 15 * 60
         next_progress = self._monotonic() + 60
+        matched_reference_count = 0
         while self._monotonic() < deadline:
             result = self._query_resource(
                 client,
@@ -1075,6 +1112,13 @@ union traces, dependencies, requests
                 complete = _complete_operation_ids(
                     result.tables,
                     invocation.response_references,
+                )
+                matched_reference_count = max(
+                    matched_reference_count,
+                    _matched_reference_count(
+                        result.tables,
+                        invocation.response_references,
+                    ),
                 )
                 if complete is not None:
                     return complete
@@ -1093,7 +1137,10 @@ union traces, dependencies, requests
                 )
                 next_progress = self._monotonic() + 60
             self._sleep(15)
-        raise ContractError("Natural telemetry did not arrive before the bounded deadline")
+        raise TelemetryCorrelationError(
+            matched_reference_count=matched_reference_count,
+            expected_reference_count=len(invocation.response_references),
+        )
 
     def telemetry_identity_passes(
         self,
@@ -1683,7 +1730,7 @@ union traces, dependencies, requests
                 )
             query_end = traffic_end + timedelta(minutes=15)
             scoped_operations = f"""
-let scoped_reference_operations =
+let scoped_trace_operations =
     union traces, dependencies, requests
     | where timestamp >= datetime({start.isoformat()})
       and timestamp < datetime({query_end.isoformat()})
@@ -1701,22 +1748,27 @@ let scoped_reference_operations =
         response_id in ({references}), response_id,
         request_id in ({references}), request_id,
         "")
-    | where matched_reference in ({references})
-      and observed_agent == "{agent_name}"
-      and agent_version == "{foundry_version}"
-    | distinct operation_Id;
+    | summarize
+        matched_references=make_set_if(
+          matched_reference, matched_reference in ({references})),
+        agent_names=make_set_if(observed_agent, isnotempty(observed_agent)),
+        agent_versions=make_set_if(agent_version, isnotempty(agent_version))
+      by operation_Id
+    | where (
+        operation_Id in ({values})
+        or array_length(matched_references) > 0)
+      and set_has_element(agent_names, "{agent_name}")
+      and set_has_element(agent_versions, "{foundry_version}")
+    | project operation_Id;
 """
             operation_filter = (
-                f"| where operation_Id in ({values}) "
-                "or operation_Id in (scoped_reference_operations)"
+                "| where operation_Id in (scoped_trace_operations)"
             )
             timespan = (start, query_end)
         query = f"""
 {scoped_operations}
 union traces, dependencies, requests
 {operation_filter}
-| extend agent_version=tostring(customDimensions["gen_ai.agent.version"])
-{f'| where agent_version == "{foundry_version}"' if foundry_version else ''}
 | extend operation_name=tostring(customDimensions["gen_ai.operation.name"])
 | extend tool_name=coalesce(
     tostring(customDimensions["gen_ai.tool.name"]),
@@ -3493,6 +3545,32 @@ def _complete_operation_ids(
     if len(set(ordered)) != len(ordered):
         return None
     return tuple(ordered)
+
+
+def _matched_reference_count(
+    tables: Any,
+    expected_references: tuple[str, ...],
+) -> int:
+    expected = set(expected_references)
+    return len(
+        {
+            str(reference)
+            for table in tables
+            for row in table.rows
+            for reference in _telemetry_references(row)
+            if str(reference) in expected
+        }
+    )
+
+
+def _telemetry_references(row: Any) -> list[Any]:
+    references = row[1] if len(row) > 1 else []
+    if isinstance(references, str):
+        try:
+            references = json.loads(references)
+        except json.JSONDecodeError:
+            references = [references]
+    return references if isinstance(references, list) else []
 
 
 def _telemetry_string_set(value: Any) -> set[str]:

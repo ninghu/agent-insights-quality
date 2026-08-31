@@ -654,7 +654,10 @@
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9_]{2,63}$"
               },
-              "request_accepted": {"type": ["boolean", "null"]}
+              "request_accepted": {"type": ["boolean", "null"]},
+              "matched_reference_count": {"type": "integer", "minimum": 0},
+              "expected_reference_count": {"type": "integer", "minimum": 1},
+              "missing_reference_count": {"type": "integer", "minimum": 0}
             }
           }
         }

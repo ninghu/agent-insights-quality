@@ -302,14 +302,26 @@ def _execute_validation_plan(
             error_code=str(summary["error_code"]),
             request_accepted=summary["request_accepted"],
             now=now(),
+            matched_reference_count=summary.get("matched_reference_count"),
+            expected_reference_count=summary.get("expected_reference_count"),
+            missing_reference_count=summary.get("missing_reference_count"),
         )
         accepted = summary["request_accepted"]
+        correlation = (
+            ""
+            if "matched_reference_count" not in summary
+            else " telemetry_references="
+            f"{summary['matched_reference_count']}/"
+            f"{summary['expected_reference_count']} "
+            f"missing={summary['missing_reference_count']}"
+        )
         failure_reporter.emit(
             "agent="
             f"{summary['canonical_agent']} authority={summary['authority_id']} "
             f"stage={summary['stage']} code={summary['error_code']} "
             "request_accepted="
             f"{'unknown' if accepted is None else str(accepted).lower()}"
+            f"{correlation}"
         )
 
     phase_one, phase_two = _validation_phases(authorities, policy)

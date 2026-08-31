@@ -394,6 +394,9 @@ class ValidationCycleController:
         error_code: str,
         request_accepted: bool | None,
         now: datetime,
+        matched_reference_count: int | None = None,
+        expected_reference_count: int | None = None,
+        missing_reference_count: int | None = None,
     ) -> LocalRecord:
         if stage not in {
             "deployment",
@@ -402,6 +405,23 @@ class ValidationCycleController:
             "traffic",
         }:
             raise ContractError("Validation Agent failure stage is invalid")
+        correlation_counts = (
+            matched_reference_count,
+            expected_reference_count,
+            missing_reference_count,
+        )
+        has_correlation_counts = any(value is not None for value in correlation_counts)
+        if has_correlation_counts and (
+            not all(
+                isinstance(value, int)
+                and not isinstance(value, bool)
+                and value >= 0
+                for value in correlation_counts
+            )
+            or matched_reference_count + missing_reference_count
+            != expected_reference_count
+        ):
+            raise ContractError("Validation telemetry correlation counts are invalid")
         with self._lock:
             failures = [
                 copy.deepcopy(item)
@@ -411,15 +431,22 @@ class ValidationCycleController:
                     and item["stage"] == stage
                 )
             ]
-            failures.append(
-                {
-                    "authority_id": authority_id,
-                    "canonical_agent": canonical_agent,
-                    "stage": stage,
-                    "error_code": error_code,
-                    "request_accepted": request_accepted,
-                }
-            )
+            failure = {
+                "authority_id": authority_id,
+                "canonical_agent": canonical_agent,
+                "stage": stage,
+                "error_code": error_code,
+                "request_accepted": request_accepted,
+            }
+            if has_correlation_counts:
+                failure.update(
+                    {
+                        "matched_reference_count": matched_reference_count,
+                        "expected_reference_count": expected_reference_count,
+                        "missing_reference_count": missing_reference_count,
+                    }
+                )
+            failures.append(failure)
             failures.sort(
                 key=lambda item: (
                     item["canonical_agent"],

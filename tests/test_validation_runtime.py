@@ -919,6 +919,37 @@ def test_traffic_failure_summary_preserves_request_acceptance(
     }
 
 
+def test_traffic_failure_summary_preserves_safe_correlation_counts() -> None:
+    authority = next(
+        item for item in _authorities() if item.authority_id == "weather-agent/v0"
+    )
+
+    class CorrelationFailure(ContractError):
+        code = "telemetry_correlation_timeout"
+        request_accepted = True
+        matched_reference_count = 1
+        expected_reference_count = 2
+        missing_reference_count = 1
+
+    error = CorrelationFailure("Synthetic public-safe telemetry failure")
+
+    assert _agent_failure_summary(
+        authority,
+        stage="traffic",
+        error=error,
+        request_accepted=error.request_accepted,
+    ) == {
+        "canonical_agent": "weather-agent",
+        "authority_id": "weather-agent/v0",
+        "stage": "traffic",
+        "error_code": "telemetry_correlation_timeout",
+        "request_accepted": True,
+        "matched_reference_count": 1,
+        "expected_reference_count": 2,
+        "missing_reference_count": 1,
+    }
+
+
 def test_shared_traffic_failure_aborts_globally() -> None:
     policy = load_validation_policy()
     authorities = _authorities()
