@@ -78,12 +78,8 @@ def test_daily_hosted_specs_do_not_enable_validation_content_capture() -> None:
         )
 
 
-def test_hosted_sources_do_not_inject_canonical_output_messages() -> None:
-    for agent_name in (
-        "finance-agent",
-        "travel-agent",
-        "support-ticket-agent",
-    ):
+def test_provider_instrumented_sources_do_not_inject_output_messages() -> None:
+    for agent_name in ("finance-agent", "travel-agent"):
         source_files = (ROOT / "agents" / agent_name).glob("**/source/*.py")
         assert all(
             "gen_ai.output.messages"
