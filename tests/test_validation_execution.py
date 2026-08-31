@@ -69,7 +69,7 @@ def test_two_phase_contract_uses_only_fixed_v0_canaries_first() -> None:
     )
 
 
-def test_phase_two_and_traffic_follow_phase_one_and_two_clean_windows() -> None:
+def test_phase_clean_windows_start_only_after_hosted_routes_succeed() -> None:
     source = inspect.getsource(_execute_validation_plan)
     first_route = source.index("runner.prepare_hosted_routes")
     second_route = source.index("runner.prepare_hosted_routes", first_route + 1)

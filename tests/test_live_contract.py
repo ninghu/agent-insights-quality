@@ -4155,7 +4155,11 @@ def test_json_request_reserves_auth_refresh_after_transient_retries(
     assert attempts == 20
 
 
-def test_hosted_routing_uses_one_fixed_ratio_rule() -> None:
+@pytest.mark.parametrize(
+    "agent_name",
+    ["finance-agent", "travel-agent", "support-ticket-agent"],
+)
+def test_hosted_routing_uses_one_fixed_ratio_rule(agent_name) -> None:
     runtime = _runtime()
     captured = {}
 
@@ -4166,18 +4170,22 @@ def test_hosted_routing_uses_one_fixed_ratio_rule() -> None:
                 "url": url,
                 "body": body,
                 "content_type": kwargs["content_type"],
+                "retry_statuses": kwargs["retry_statuses"],
+                "retry_no_response": kwargs["retry_no_response"],
             }
         )
         return body
 
     runtime._json_request = request  # type: ignore[method-assign]
-    runtime._activate_hosted_version("travel-agent", "7")
+    runtime._activate_hosted_version(agent_name, "7")
     rules = captured["body"]["agent_endpoint"]["version_selector"][
         "version_selection_rules"
     ]
     assert captured["method"] == "PATCH"
-    assert captured["url"].endswith("/agents/travel-agent")
+    assert captured["url"].endswith(f"/agents/{agent_name}")
     assert captured["content_type"] == "application/merge-patch+json"
+    assert captured["retry_statuses"] == set()
+    assert captured["retry_no_response"] is False
     assert rules == [
         {
             "agent_version": "7",
@@ -4187,25 +4195,199 @@ def test_hosted_routing_uses_one_fixed_ratio_rule() -> None:
     ]
 
 
-def test_hosted_routing_skips_duplicate_exact_version_activation() -> None:
+@pytest.mark.parametrize(
+    "agent_name",
+    ["finance-agent", "travel-agent", "support-ticket-agent"],
+)
+def test_hosted_routing_retries_exact_activation_then_caches(agent_name) -> None:
     runtime = _runtime()
-    activated = []
+    now = [0]
+    attempts = []
+    sleeps = []
+    progress = []
+    error = RemoteOperationError(
+        "Synthetic route activation propagation",
+        code="NotFound",
+        status=404,
+        request_accepted=False,
+    )
+
+    def request(method, url, body=None, **kwargs):
+        attempts.append((method, url, body, kwargs))
+        if len(attempts) < 3:
+            raise error
+        return body
+
+    def sleep(delay):
+        sleeps.append(delay)
+        now[0] += delay
+
+    runtime._monotonic = lambda: now[0]
+    runtime._json_request = request  # type: ignore[method-assign]
+    runtime._sleep = sleep
+    runtime.report_progress = progress.append  # type: ignore[method-assign]
+    runtime._activate_hosted_version(agent_name, "7")
+    runtime._activate_hosted_version(agent_name, "7")
+
+    assert len(attempts) == 3
+    assert all(item[0] == "PATCH" for item in attempts)
+    assert all(item[1].endswith(f"/agents/{agent_name}") for item in attempts)
+    assert all(item[2] is attempts[0][2] for item in attempts)
+    assert all(item[3]["retry_statuses"] == set() for item in attempts)
+    assert all(item[3]["retry_no_response"] is False for item in attempts)
+    assert sleeps == [1, 2]
+    assert runtime._hosted_routes[agent_name][0] == "7"
+    assert progress == [
+        f"{agent_name}/7: exact Hosted route activation is not yet available; "
+        "retrying the same selector in 1s (2/5)",
+        f"{agent_name}/7: exact Hosted route activation is not yet available; "
+        "retrying the same selector in 2s (3/5)",
+    ]
+
+
+def test_hosted_routing_exhausts_bounded_activation_retries() -> None:
+    runtime = _runtime()
+    now = [0]
+    attempts = 0
+    sleeps = []
+    error = RemoteOperationError(
+        "Synthetic route activation propagation",
+        code="NotFound",
+        status=404,
+        request_accepted=False,
+    )
+
+    def request(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise error
+
+    def sleep(delay):
+        sleeps.append(delay)
+        now[0] += delay
+
+    runtime._monotonic = lambda: now[0]
+    runtime._json_request = request  # type: ignore[method-assign]
+    runtime._sleep = sleep
+
+    with pytest.raises(RemoteOperationError) as caught:
+        runtime._activate_hosted_version("finance-agent", "1")
+
+    assert caught.value is error
+    assert attempts == 5
+    assert sleeps == [1, 2, 4, 8]
+    assert "finance-agent" not in runtime._hosted_routes
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RemoteOperationError(
+            "Synthetic accepted rejection",
+            code="NotFound",
+            status=404,
+            request_accepted=True,
+        ),
+        RemoteOperationError(
+            "Synthetic ambiguous rejection",
+            code="NotFound",
+            status=404,
+            request_accepted=None,
+        ),
+        RemoteOperationError(
+            "Synthetic unrelated code",
+            code="not_found",
+            status=404,
+            request_accepted=False,
+        ),
+        RemoteOperationError(
+            "Synthetic unrelated status",
+            code="NotFound",
+            status=400,
+            request_accepted=False,
+        ),
+        RemoteOperationError(
+            "Synthetic no response",
+            code="remote_no_response",
+            status=None,
+            request_accepted=None,
+        ),
+        RemoteOperationError(
+            "Synthetic timeout",
+            code="NotFound",
+            status=408,
+            request_accepted=None,
+        ),
+        RemoteOperationError(
+            "Synthetic service failure",
+            code="NotFound",
+            status=503,
+            request_accepted=None,
+        ),
+    ],
+)
+def test_hosted_routing_does_not_retry_ambiguous_or_unrelated_failures(
+    error,
+) -> None:
+    runtime = _runtime()
+    attempts = 0
+    sleeps = []
+
+    def request(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise error
+
+    runtime._json_request = request  # type: ignore[method-assign]
+    runtime._sleep = sleeps.append
+
+    with pytest.raises(RemoteOperationError) as caught:
+        runtime._activate_hosted_version("travel-agent", "1")
+
+    assert caught.value is error
+    assert attempts == 1
+    assert sleeps == []
+    assert "travel-agent" not in runtime._hosted_routes
+
+
+def test_hosted_routing_caches_only_confirmed_exact_version() -> None:
+    runtime = _runtime()
+    attempts = 0
 
     def request(_method, _url, body=None, **_kwargs):
-        activated.append(
-            body["agent_endpoint"]["version_selector"]["version_selection_rules"][
-                0
-            ]["agent_version"]
-        )
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return {
+                "agent_endpoint": {
+                    "version_selector": {
+                        "version_selection_rules": [
+                            {
+                                "agent_version": "2",
+                                "traffic_percentage": 100,
+                                "type": "FixedRatio",
+                            }
+                        ]
+                    }
+                }
+            }
         return body
 
     runtime._json_request = request  # type: ignore[method-assign]
-    runtime._activate_hosted_version("finance-agent", "1")
-    runtime._activate_hosted_version("finance-agent", "1")
-    runtime._activate_hosted_version("finance-agent", "2")
-    runtime._activate_hosted_version("finance-agent", "2")
 
-    assert activated == ["1", "2"]
+    with pytest.raises(
+        ContractError,
+        match="did not confirm exact-version routing",
+    ):
+        runtime._activate_hosted_version("support-ticket-agent", "1")
+
+    assert "support-ticket-agent" not in runtime._hosted_routes
+
+    runtime._activate_hosted_version("support-ticket-agent", "1")
+    runtime._activate_hosted_version("support-ticket-agent", "1")
+
+    assert attempts == 2
+    assert runtime._hosted_routes["support-ticket-agent"][0] == "1"
 
 
 def test_hosted_session_retries_exact_post_activation_not_found() -> None:

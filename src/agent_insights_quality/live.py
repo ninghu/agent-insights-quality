@@ -68,6 +68,10 @@ _LOGS_SCOPE = "https://api.loganalytics.io/.default"
 _TRANSIENT_HTTP = {408, 424, 429, 500, 502, 503, 504}
 _DEFAULT_REQUEST_TIMEOUT_SECONDS = 300
 _HOSTED_RESPONSE_TIMEOUT_SECONDS = 600
+_HOSTED_ROUTE_ACTIVATION_PROPAGATION_RETRY_DELAYS = (1, 2, 4, 8)
+_HOSTED_ROUTE_ACTIVATION_PROPAGATION_WINDOW_SECONDS = sum(
+    _HOSTED_ROUTE_ACTIVATION_PROPAGATION_RETRY_DELAYS
+)
 _HOSTED_SESSION_PROPAGATION_RETRY_DELAYS = (1, 2, 4, 8)
 _HOSTED_SESSION_PROPAGATION_WINDOW_SECONDS = sum(
     _HOSTED_SESSION_PROPAGATION_RETRY_DELAYS
@@ -569,47 +573,86 @@ union traces, dependencies, requests
             routed = self._hosted_routes.get(agent_name)
             if routed is not None and routed[0] == foundry_version:
                 return
-            response = self._json_request(
-                "PATCH",
-                f"{self._profile.project_endpoint}/agents/"
-                f"{urllib.parse.quote(agent_name, safe='')}",
-                {
-                    "agent_endpoint": {
-                        "version_selector": {
-                            "version_selection_rules": [
-                                {
-                                    "agent_version": foundry_version,
-                                    "traffic_percentage": 100,
-                                    "type": "FixedRatio",
-                                }
-                            ]
-                        }
+            desired_selector = {
+                "agent_endpoint": {
+                    "version_selector": {
+                        "version_selection_rules": [
+                            {
+                                "agent_version": foundry_version,
+                                "traffic_percentage": 100,
+                                "type": "FixedRatio",
+                            }
+                        ]
                     }
-                },
-                hosted=True,
-                expected={200},
-                content_type="application/merge-patch+json",
-                retry_statuses=_TRANSIENT_HTTP,
-                retry_no_response=True,
-            )
-            rules = (
-                response.get("agent_endpoint", {})
-                .get("version_selector", {})
-                .get("version_selection_rules", [])
-            )
-            if not any(
-                str(rule.get("agent_version") or "") == foundry_version
-                and int(rule.get("traffic_percentage") or 0) == 100
-                for rule in rules
-                if isinstance(rule, dict)
+                }
+            }
+            propagation_retry = 0
+            activation_started = self._monotonic()
+            with self._progress.heartbeat(
+                f"{agent_name}/{foundry_version}: exact Hosted route activation",
+                interval_seconds=5,
             ):
-                raise ContractError(
-                    "Hosted endpoint did not confirm exact-version routing"
+                while True:
+                    try:
+                        response = self._json_request(
+                            "PATCH",
+                            f"{self._profile.project_endpoint}/agents/"
+                            f"{urllib.parse.quote(agent_name, safe='')}",
+                            desired_selector,
+                            hosted=True,
+                            expected={200},
+                            content_type="application/merge-patch+json",
+                            retry_statuses=set(),
+                            retry_no_response=False,
+                        )
+                        break
+                    except RemoteOperationError as error:
+                        if (
+                            propagation_retry
+                            == len(
+                                _HOSTED_ROUTE_ACTIVATION_PROPAGATION_RETRY_DELAYS
+                            )
+                            or not _hosted_route_activation_propagation_pending(error)
+                        ):
+                            raise
+                        delay = (
+                            _HOSTED_ROUTE_ACTIVATION_PROPAGATION_RETRY_DELAYS[
+                                propagation_retry
+                            ]
+                        )
+                        activation_age = self._monotonic() - activation_started
+                        if (
+                            activation_age < 0
+                            or activation_age + delay
+                            > _HOSTED_ROUTE_ACTIVATION_PROPAGATION_WINDOW_SECONDS
+                        ):
+                            raise
+                        propagation_retry += 1
+                        self.report_progress(
+                            f"{agent_name}/{foundry_version}: exact Hosted route "
+                            "activation is not yet available; retrying the same "
+                            f"selector in {delay}s ({propagation_retry + 1}/"
+                            f"{len(_HOSTED_ROUTE_ACTIVATION_PROPAGATION_RETRY_DELAYS) + 1})"
+                        )
+                        self._sleep(delay)
+                rules = (
+                    response.get("agent_endpoint", {})
+                    .get("version_selector", {})
+                    .get("version_selection_rules", [])
                 )
-            self._hosted_routes[agent_name] = (
-                foundry_version,
-                self._monotonic(),
-            )
+                if not any(
+                    str(rule.get("agent_version") or "") == foundry_version
+                    and int(rule.get("traffic_percentage") or 0) == 100
+                    for rule in rules
+                    if isinstance(rule, dict)
+                ):
+                    raise ContractError(
+                        "Hosted endpoint did not confirm exact-version routing"
+                    )
+                self._hosted_routes[agent_name] = (
+                    foundry_version,
+                    self._monotonic(),
+                )
 
     def _invoke_prompt(
         self,
@@ -2127,6 +2170,16 @@ def _prompt_agent_route_propagation_pending(
 
 
 def _hosted_session_route_propagation_pending(
+    error: RemoteOperationError,
+) -> bool:
+    return (
+        error.request_accepted is False
+        and error.status == 404
+        and error.code == "NotFound"
+    )
+
+
+def _hosted_route_activation_propagation_pending(
     error: RemoteOperationError,
 ) -> bool:
     return (
