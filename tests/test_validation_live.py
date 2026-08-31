@@ -96,9 +96,11 @@ class Runtime:
         *,
         assertion_pass: bool = True,
         identity_pass: bool = True,
+        output_messages_state: tuple[bool, bool] = (True, True),
     ) -> None:
         self.assertion_pass = assertion_pass
         self.identity_pass = identity_pass
+        self.output_messages_state = output_messages_state
         self.counter = 0
         self.telemetry_counter = 0
 
@@ -142,6 +144,9 @@ class Runtime:
         return tuple(
             self.identity_pass for _ in kwargs["operation_ids"]
         )
+
+    def top_level_output_messages_state(self, operation_ids):
+        return tuple(self.output_messages_state for _ in operation_ids)
 
     @staticmethod
     def rate_limit_feedback():
@@ -412,6 +417,62 @@ def test_telemetry_identity_mismatch_keeps_attempt_incomplete() -> None:
     assert result["error_code"] == "telemetry_identity_mismatch"
     assert all(
         step["identity_pass"] is False
+        for step in [*result["setup_steps"], *result["probe_steps"]]
+    )
+
+
+@pytest.mark.parametrize(
+    ("state", "error_code"),
+    [
+        ((False, False), "missing_output_messages_attribute"),
+        ((True, False), "empty_output_messages_attribute"),
+    ],
+)
+def test_top_level_output_messages_failure_keeps_issue_attempt_incomplete(
+    state,
+    error_code,
+) -> None:
+    times = iter(
+        [
+            datetime(2026, 8, 29, 12, 0, tzinfo=UTC),
+            datetime(2026, 8, 29, 12, 0, 1, tzinfo=UTC),
+        ]
+    )
+    runner = FoundryScenarioAttemptRunner(
+        Runtime(output_messages_state=state),
+        endpoint_costs={"issue-001": EndpointCost(1, 10, 1)},
+        stabilization_seconds=1,
+        record_resource=lambda item: None,
+        now=lambda: next(times),
+    )
+    result = runner.run(
+        target=_target(),
+        executing_authority_id="issue-001",
+        conversation_role="issue",
+        scenario={
+            "id": "reviewed-path",
+            "validation_mode": "model_mediated",
+            "defect_predicate": {
+                "kind": "all_observation_steps_pass",
+                "step_ids": ["probe-1"],
+                "required_surfaces": ["semantic", "trace"],
+            },
+        },
+        attempt={
+            "index": 1,
+            "conversation_group": "attempt-1",
+            "setup_steps": [_step("setup-1", probe=False)],
+            "probe_steps": [_step("probe-1", probe=True)],
+        },
+        expect_defect=True,
+        scheduler=_scheduler(),
+    )
+
+    assert result["complete"] is False
+    assert result["defect_observed"] is None
+    assert result["error_code"] == error_code
+    assert all(
+        step["endpoint_pass"] is True
         for step in [*result["setup_steps"], *result["probe_steps"]]
     )
 

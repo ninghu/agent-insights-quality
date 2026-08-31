@@ -359,6 +359,10 @@ class FoundryScenarioAttemptRunner:
                     invocation=invocation,
                 )
             with scheduler.telemetry_query():
+                output_messages_states = (
+                    self._runtime.top_level_output_messages_state(operation_ids)
+                )
+            with scheduler.telemetry_query():
                 trace_results = self._runtime.trace_assertion_evidence_for_requests(
                     agent_name=target.runtime_agent_name,
                     foundry_version=target.runtime_agent_version,
@@ -396,6 +400,10 @@ class FoundryScenarioAttemptRunner:
             raise ContractError("Validation trace evidence step count is invalid")
         if len(identity_results) != len(raw_steps):
             raise ContractError("Validation telemetry identity count is invalid")
+        if len(output_messages_states) != len(raw_steps):
+            raise ContractError(
+                "Validation output-message structure count is invalid"
+            )
 
         step_evidence: list[dict[str, Any]] = []
         for index, (
@@ -406,6 +414,7 @@ class FoundryScenarioAttemptRunner:
             trace,
             usable,
             identity_pass,
+            output_messages_state,
         ) in enumerate(
             zip(
                 raw_steps,
@@ -415,12 +424,16 @@ class FoundryScenarioAttemptRunner:
                 trace_results,
                 usable_results,
                 identity_results,
+                output_messages_states,
                 strict=True,
             ),
             start=1,
         ):
             semantic_pass = semantic[0] == semantic[1]
             trace_pass = all(item.passed for item in trace)
+            output_messages_present, output_messages_nonempty = (
+                output_messages_state
+            )
             step_evidence.append(
                 {
                     "index": index,
@@ -432,7 +445,11 @@ class FoundryScenarioAttemptRunner:
                     "operation_reference": content_hash(
                         {"operation_reference": operation_id}
                     ),
-                    "complete": bool(usable),
+                    "complete": (
+                        bool(usable)
+                        and output_messages_present
+                        and output_messages_nonempty
+                    ),
                     "endpoint_pass": bool(usable),
                     "semantic_pass": semantic_pass,
                     "trace_pass": trace_pass,
@@ -466,6 +483,10 @@ class FoundryScenarioAttemptRunner:
             if complete
             else "telemetry_identity_mismatch"
             if not all(item["identity_pass"] for item in step_evidence)
+            else "missing_output_messages_attribute"
+            if any(not present for present, _ in output_messages_states)
+            else "empty_output_messages_attribute"
+            if any(not nonempty for _, nonempty in output_messages_states)
             else "incomplete_endpoint_evidence"
         )
         result = {

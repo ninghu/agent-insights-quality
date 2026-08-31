@@ -22555,7 +22555,7 @@
   ],
   "commit_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "cycle_id": "validation-local-r01",
-  "evidence_digest": "sha256:dba80abfd4ea7a8b455956cabbc7de5481c156d97db27156c3a145fdf4782b61",
+  "evidence_digest": "sha256:12d91bbb11d17df69cc078c6a0d44d184d7880741377e21ea92aed72130884f9",
   "execution_matrix_digest": "sha256:b815023aee152f454383be3ed8bddbecc95293781ad435539f36fe7614b294fe",
   "kind": "test-agent-validation-evidence",
   "pr_number": 63,
@@ -22564,5 +22564,5 @@
   "runtime_topology_digest": "sha256:ccfc73e8252f9ca571b00947fac320bd2787850657730f6b969b1c1aa4ac175f",
   "schema_version": "1.0.0",
   "telemetry_resource_set": "g29",
-  "validation_digest": "sha256:54c2d441795fb2caab0b8d4f7a4ed5f6c29a6e4ea65dc4995931ced1cf624fd8"
+  "validation_digest": "sha256:c894b02ff94a18e8f8aac028bd4bb20438fa68140a351417ce45baf26c4e9159"
 }

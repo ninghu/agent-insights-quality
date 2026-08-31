@@ -34,7 +34,9 @@ report publication, ADX, email, Optional Daily Test, or a GitHub merge gate.
    sequential; independent Agent lanes continue after an Agent-local failure. Use the identical issue
    matrix against paired `v0`. Query telemetry at no more than four and allow one scenario attempt per
    runtime. Application Insights remains read-only; shared runtime failure or ambiguous identity/
-   correlation aborts. Never create monitors or inject traces.
+   correlation aborts. Every discovered top-level `invoke_agent` span must contain a nonempty canonical
+   `gen_ai.output.messages` attribute; child spans cannot satisfy it. Never create monitors or inject
+   traces.
 7. Any commit change aborts the cycle, performs cleanup, and requires a fresh full 41-Agent cycle.
    There is no cross-cycle Agent, topology, traffic, or evidence reuse and no caller-supplied commit
    or tree identity. Local dependencies and ACR build manifests may be reused only by exact
@@ -45,7 +47,9 @@ report publication, ADX, email, Optional Daily Test, or a GitHub merge gate.
    reviewed cascade. Ambiguity enters `CLEANUP_BLOCKED`.
 9. Keep lifecycle, history, evidence, and CLEAN files only in the shared private runtime root. The
    successful run writes no approval artifact.
-10. Only after the user explicitly approves the exact result, run
+10. After exact-clean evidence, Copilot may review the private trace rows externally before the human
+    approval decision; this does not mutate lifecycle state or become a code-generated verdict. Only
+    after the user explicitly approves the exact result, run
     `python -m agent_insights_quality approve-test-agent-validation`. It re-reads the current PR head,
     local evidence, and CLEAN proof, then create-once writes the one minimal immutable approved record.
     Merge remains manual.
