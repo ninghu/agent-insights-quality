@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -163,7 +164,10 @@ async def responses(
 ):
     del cancellation_signal
     text = input_text(payload.get("input"))
-    with RUNTIME_IDENTITY.start_span(tracer, "support.dispatch") as span:
+    with RUNTIME_IDENTITY.start_span(
+        tracer,
+        f"invoke_agent {RUNTIME_IDENTITY.name}",
+    ) as span:
         span.set_attribute("gen_ai.operation.name", "invoke_agent")
         span.set_attribute("gen_ai.agent.name", RUNTIME_IDENTITY.name)
         span.set_attribute("gen_ai.agent.version", RUNTIME_IDENTITY.version)
@@ -178,6 +182,20 @@ async def responses(
             )
             response = TextResponse(context, payload, text=result)
             output_present = bool(result.strip())
+            if output_present:
+                span.set_attribute(
+                    "gen_ai.output.messages",
+                    json.dumps(
+                        [
+                            {
+                                "role": "assistant",
+                                "parts": [{"type": "text", "content": result}],
+                                "finish_reason": "stop",
+                            }
+                        ],
+                        separators=(",", ":"),
+                    ),
+                )
             output_succeeded = True
         finally:
             span.set_attribute("aiq.terminal_response.success", output_succeeded)

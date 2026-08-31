@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import sys
 import types
 from types import SimpleNamespace
@@ -10,18 +11,34 @@ import pytest
 
 from agent_insights_quality.util import ROOT
 
+SUPPORT_VERSIONS = (
+    "v0",
+    "issue-029",
+    "issue-030",
+    "issue-031",
+    "issue-032",
+    "issue-033",
+    "issue-034",
+    "issue-035",
+    "issue-036",
+)
+
 
 class _Span:
-    def __init__(self, name: str) -> None:
+    def __init__(self, tracer: _Tracer, name: str, parent: _Span | None) -> None:
+        self._tracer = tracer
         self.name = name
+        self.parent = parent
         self.attributes: dict[str, object] = {}
         self.status = None
         self.exception: type[BaseException] | None = None
 
     def __enter__(self):
+        self._tracer.active.append(self)
         return self
 
     def __exit__(self, error_type, _error, _traceback):
+        assert self._tracer.active.pop() is self
         self.exception = error_type
         return False
 
@@ -35,9 +52,11 @@ class _Span:
 class _Tracer:
     def __init__(self) -> None:
         self.spans: list[_Span] = []
+        self.active: list[_Span] = []
 
     def start_as_current_span(self, name: str) -> _Span:
-        span = _Span(name)
+        parent = self.active[-1] if self.active else None
+        span = _Span(self, name, parent)
         self.spans.append(span)
         return span
 
@@ -138,8 +157,13 @@ def _load_support_module(
 
 
 def _root_span(tracer: _Tracer) -> _Span:
-    roots = [span for span in tracer.spans if span.name == "support.dispatch"]
+    roots = [
+        span
+        for span in tracer.spans
+        if span.attributes.get("gen_ai.operation.name") == "invoke_agent"
+    ]
     assert len(roots) == 1
+    assert roots[0].parent is None
     return roots[0]
 
 
@@ -150,6 +174,36 @@ def _invoke(module, text: str):
             SimpleNamespace(response_id="synthetic-response"),
             None,
         )
+    )
+
+
+@pytest.mark.parametrize("logical_version", SUPPORT_VERSIONS)
+def test_all_support_authorities_emit_canonical_output_on_top_level_span(
+    monkeypatch,
+    logical_version: str,
+) -> None:
+    module, tracer = _load_support_module(monkeypatch, logical_version)
+
+    async def model_response(_prompt: str, _max_output_tokens: int) -> str:
+        return f"Synthetic terminal output for {logical_version}."
+
+    module.model_response = model_response
+    response = _invoke(module, "Read ticket-demo-1.")
+    root = _root_span(tracer)
+    output_messages = root.attributes["gen_ai.output.messages"]
+    assert root.name == "invoke_agent synthetic-support-agent"
+    assert isinstance(output_messages, str)
+    assert json.loads(output_messages) == [
+        {
+            "role": "assistant",
+            "parts": [{"type": "text", "content": response.text}],
+            "finish_reason": "stop",
+        }
+    ]
+    assert all(
+        "gen_ai.output.messages" not in span.attributes
+        for span in tracer.spans
+        if span is not root
     )
 
 
@@ -206,6 +260,7 @@ def test_support_empty_output_is_not_terminal_output_evidence(monkeypatch) -> No
     assert response.text == ""
     assert root.attributes["aiq.terminal_response.success"] is True
     assert root.attributes["aiq.terminal_response.output_present"] is False
+    assert "gen_ai.output.messages" not in root.attributes
 
 
 def test_support_whitespace_output_is_not_terminal_output_evidence(monkeypatch) -> None:
@@ -220,6 +275,7 @@ def test_support_whitespace_output_is_not_terminal_output_evidence(monkeypatch) 
     assert response.text == " \n\t"
     assert root.attributes["aiq.terminal_response.success"] is True
     assert root.attributes["aiq.terminal_response.output_present"] is False
+    assert "gen_ai.output.messages" not in root.attributes
 
 
 def test_support_partial_history_preserves_request_bound_ticket(monkeypatch) -> None:
@@ -295,3 +351,4 @@ def test_support_unhandled_exception_never_reports_terminal_success(
     assert root.exception is RuntimeError
     assert root.attributes["aiq.terminal_response.success"] is False
     assert root.attributes["aiq.terminal_response.output_present"] is False
+    assert "gen_ai.output.messages" not in root.attributes

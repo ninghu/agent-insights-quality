@@ -846,7 +846,13 @@ def test_hosted_framework_and_identity_boundaries() -> None:
         assert '"aiq.terminal_response.output_present",' in text
         assert "output_present = bool(result.strip())" in text
         assert "gen_ai.input.messages" not in text
-        assert "gen_ai.output.messages" not in text
+        assert text.count('"gen_ai.output.messages"') == 1
+        assert 'f"invoke_agent {RUNTIME_IDENTITY.name}"' in text
+        assert "support.dispatch" not in text
+        assert "AzureMonitorTraceExporter" not in text
+        assert "OTLPSpanExporter" not in text
+        assert "TelemetryClient" not in text
+        assert ".export(" not in text
     assert "transient_lock = threading.Lock()" in finance
     assert "ResetTransientState" not in finance
     finance_sources = sorted(
