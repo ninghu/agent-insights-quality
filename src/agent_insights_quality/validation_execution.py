@@ -21,12 +21,6 @@ from agent_insights_quality.validation_evidence import (
     validate_evidence,
 )
 from agent_insights_quality.validation_lifecycle import LocalRecord
-from agent_insights_quality.validation_judge import (
-    JUDGE_MODEL,
-    JUDGE_PROMPT_VERSION,
-    aggregate_judge_digests,
-    judge_prompt_digest,
-)
 from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.validation_provisioning import (
     FoundryAuthorityDeployer,
@@ -42,7 +36,6 @@ from agent_insights_quality.validation_policy import ValidationPolicy
 from agent_insights_quality.validation_runtime import (
     AgentDeploymentIncomplete,
     AuthoritySpec,
-    ScenarioJudge,
     ScenarioAttemptRunner,
     deploy_all_authorities,
     execute_validation_phase,
@@ -60,7 +53,6 @@ def execute_validation_plan(
     deployer_factory: Callable[[ProjectDeployment], FoundryAuthorityDeployer],
     support_image_factory: Callable[[], Mapping[str, str]],
     runner: ScenarioAttemptRunner,
-    judge: ScenarioJudge,
     scheduler: ValidationScheduler,
     policy: ValidationPolicy,
     model_contract: Mapping[str, Any],
@@ -80,7 +72,6 @@ def execute_validation_plan(
             deployer_factory=deployer_factory,
             support_image_factory=support_image_factory,
             runner=runner,
-            judge=judge,
             scheduler=scheduler,
             policy=policy,
             model_contract=model_contract,
@@ -121,7 +112,6 @@ def _execute_validation_plan(
     deployer_factory: Callable[[ProjectDeployment], FoundryAuthorityDeployer],
     support_image_factory: Callable[[], Mapping[str, str]],
     runner: ScenarioAttemptRunner,
-    judge: ScenarioJudge,
     scheduler: ValidationScheduler,
     policy: ValidationPolicy,
     model_contract: Mapping[str, Any],
@@ -139,12 +129,6 @@ def _execute_validation_plan(
     validate_capacity_plan(capacity_plan, policy=policy)
     project_provisioner.assert_test_agent_model(
         dict(plan["test_agent_model"])
-    )
-    project_provisioner.assert_judge_model(
-        {
-            "deployment_name": policy.judge.deployment_name,
-            "model_id": policy.judge.model_id,
-        }
     )
     if controller.active.value["project"]["state"] == "created":
         project = _project_from_lifecycle(controller.active.value)
@@ -427,7 +411,6 @@ def _execute_validation_plan(
             phase_one,
             phase_one_deployed,
             runner=runner,
-            judge=judge,
             scheduler=scheduler,
             model_contract=model_contract,
             validated_commit_sha=plan["commit_sha"],
@@ -472,7 +455,6 @@ def _execute_validation_plan(
             phase_two,
             deployed,
             runner=runner,
-            judge=judge,
             scheduler=scheduler,
             model_contract=model_contract,
             validated_commit_sha=plan["commit_sha"],
@@ -490,9 +472,6 @@ def _execute_validation_plan(
     authority_evidence = [
         evidence_by_id[item.authority_id] for item in authorities
     ]
-    judge_input_digest, judge_output_digest = aggregate_judge_digests(
-        authority_evidence
-    )
     assert_commit()
     evidence = stamp_evidence_digests(
         {
@@ -509,11 +488,6 @@ def _execute_validation_plan(
                 controller.active.value["resources"]
             ),
             "telemetry_resource_set": "g29",
-            "judge_model": JUDGE_MODEL,
-            "judge_prompt_version": JUDGE_PROMPT_VERSION,
-            "judge_prompt_digest": judge_prompt_digest(),
-            "judge_input_digest": judge_input_digest,
-            "judge_output_digest": judge_output_digest,
             "authorities": authority_evidence,
             "evidence_digest": "",
         }

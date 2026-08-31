@@ -21,7 +21,6 @@ from agent_insights_quality.validation_evidence import (
 from agent_insights_quality.validation_policy import ValidationPolicy
 from agent_insights_quality.validation_quota import ValidationScheduler
 from agent_insights_quality.validation_rules import validate_validation_rules
-from agent_insights_quality.validation_judge import summarize_reviewed_scenario
 
 
 @dataclass(frozen=True)
@@ -104,19 +103,9 @@ class ScenarioAttemptRunner(Protocol):
         conversation_role: str,
         scenario: Mapping[str, Any],
         attempt: Mapping[str, Any],
+        expect_defect: bool,
         scheduler: ValidationScheduler,
     ) -> dict[str, Any]: ...
-
-
-class ScenarioJudge(Protocol):
-    def review_scenario(
-        self,
-        *,
-        authority: AuthoritySpec,
-        scenario: Mapping[str, Any],
-        subject_attempts: Sequence[Mapping[str, Any]],
-        paired_v0_attempts: Sequence[Mapping[str, Any]],
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]: ...
 
 
 def opaque_cycle_suffix(
@@ -613,7 +602,6 @@ def execute_validation_matrix(
     deployed: Mapping[str, DeployedRuntime],
     *,
     runner: ScenarioAttemptRunner,
-    judge: ScenarioJudge,
     scheduler: ValidationScheduler,
     model_contract: Mapping[str, Any],
     validated_commit_sha: str,
@@ -624,7 +612,6 @@ def execute_validation_matrix(
         authorities,
         deployed,
         runner=runner,
-        judge=judge,
         scheduler=scheduler,
         model_contract=model_contract,
         validated_commit_sha=validated_commit_sha,
@@ -638,7 +625,6 @@ def execute_validation_phase(
     deployed: Mapping[str, DeployedRuntime],
     *,
     runner: ScenarioAttemptRunner,
-    judge: ScenarioJudge,
     scheduler: ValidationScheduler,
     model_contract: Mapping[str, Any],
     validated_commit_sha: str,
@@ -697,7 +683,6 @@ def execute_validation_phase(
                     deployed=deployed,
                     paired_v0_id=baseline_ids[authority.canonical_agent],
                     runner=runner,
-                    judge=judge,
                     scheduler=scheduler,
                     model_contract=model_contract,
                     validated_commit_sha=validated_commit_sha,
@@ -787,7 +772,6 @@ def _execute_authority(
     deployed: Mapping[str, DeployedRuntime],
     paired_v0_id: str,
     runner: ScenarioAttemptRunner,
-    judge: ScenarioJudge,
     scheduler: ValidationScheduler,
     model_contract: Mapping[str, Any],
     validated_commit_sha: str,
@@ -810,7 +794,6 @@ def _execute_authority(
             deployed=deployed,
             paired_v0_id=paired_v0_id,
             runner=runner,
-            judge=judge,
             scheduler=scheduler,
         )
         for scenario in authority.validation_rules["scenarios"]
@@ -889,7 +872,6 @@ def _execute_scenario(
     deployed: Mapping[str, DeployedRuntime],
     paired_v0_id: str,
     runner: ScenarioAttemptRunner,
-    judge: ScenarioJudge,
     scheduler: ValidationScheduler,
 ) -> dict[str, Any]:
     issue_attempts = [
@@ -901,6 +883,7 @@ def _execute_scenario(
             ),
             scenario=scenario,
             attempt=attempt,
+            expect_defect=authority.authority_kind == "issue",
             scheduler=scheduler,
         )
         for attempt in scenario["attempts"]
@@ -915,23 +898,30 @@ def _execute_scenario(
                 conversation_role="paired_v0",
                 scenario=scenario,
                 attempt=attempt,
+                expect_defect=False,
                 scheduler=scheduler,
             )
             for attempt in scenario["attempts"]
         ]
     )
-    issue_attempts, v0_attempts = judge.review_scenario(
-        authority=authority,
-        scenario=scenario,
-        subject_attempts=issue_attempts,
-        paired_v0_attempts=v0_attempts,
-    )
-    summary = summarize_reviewed_scenario(
-        authority_kind=authority.authority_kind,
-        validation_mode=str(scenario["validation_mode"]),
-        subject_attempts=issue_attempts,
-        paired_v0_attempts=v0_attempts,
-    )
+    n = int(scenario["n"])
+    k = int(scenario["k"])
+    complete_count = sum(item["complete"] is True for item in issue_attempts)
+    observed = sum(item["defect_observed"] is True for item in issue_attempts)
+    if authority.authority_kind == "baseline":
+        passed = (
+            complete_count == n
+            and observed == 0
+            and all(item["expected_observation_pass"] for item in issue_attempts)
+        )
+    else:
+        passed = (
+            complete_count == n
+            and observed >= k
+            and sum(item["complete"] is True for item in v0_attempts) == n
+            and not any(item["defect_observed"] is True for item in v0_attempts)
+            and all(item["expected_observation_pass"] for item in v0_attempts)
+        )
     result = {
         "scenario_id": scenario["id"],
         "execution_digest": scenario["execution_digest"],
@@ -940,7 +930,11 @@ def _execute_scenario(
         "defect_predicate": scenario["defect_predicate"],
         "v0_control_predicate": scenario["v0_control_predicate"],
         "predicate_contract_digest": "",
-        **summary,
+        "n": n,
+        "k": k,
+        "complete_count": complete_count,
+        "observed": observed,
+        "pass": passed,
         "issue_attempts": issue_attempts,
         "v0_attempts": v0_attempts,
     }

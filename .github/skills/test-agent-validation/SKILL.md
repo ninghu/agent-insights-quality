@@ -34,12 +34,7 @@ report publication, ADX, email, Optional Daily Test, or a GitHub merge gate.
    sequential; independent Agent lanes continue after an Agent-local failure. Use the identical issue
    matrix against paired `v0`. Query telemetry at no more than four and allow one scenario attempt per
    runtime. Application Insights remains read-only; shared runtime failure or ambiguous identity/
-   correlation aborts. Discover a nonzero natural `invoke_agent` trace set by the exact cycle Agent
-   name, exact version, and attempt event-time range, then collect only allowlisted structural spans.
-   After traffic evidence exists, run one aggregate GPT-5.6 Sol review per authority within the
-   reviewed concurrency. The judge decides baseline health and issue presence versus paired `v0`;
-   catalog assertions are context only. Inconclusive output or a judge failure keeps the run
-   incomplete. Never create monitors or inject traces.
+   correlation aborts. Never create monitors or inject traces.
 7. Any commit change aborts the cycle, performs cleanup, and requires a fresh full 41-Agent cycle.
    There is no cross-cycle Agent, topology, traffic, or evidence reuse and no caller-supplied commit
    or tree identity. Local dependencies and ACR build manifests may be reused only by exact
@@ -48,8 +43,7 @@ report publication, ADX, email, Optional Daily Test, or a GitHub merge gate.
    deployment/identity/blueprint, connection, role assignment, cycle principal, tag, and unshared
    manifest in reverse dependency order, then delete the Project. Verify exact absence and every
    reviewed cascade. Ambiguity enters `CLEANUP_BLOCKED`.
-9. Keep lifecycle, history, evidence, judge inputs/outputs, and CLEAN files only in the shared private
-   runtime root. Bind the exact judge model, prompt, input, and output digests into evidence. The
+9. Keep lifecycle, history, evidence, and CLEAN files only in the shared private runtime root. The
    successful run writes no approval artifact.
 10. Only after the user explicitly approves the exact result, run
     `python -m agent_insights_quality approve-test-agent-validation`. It re-reads the current PR head,

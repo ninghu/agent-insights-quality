@@ -13,10 +13,7 @@ from agent_insights_quality.live import (
 )
 from agent_insights_quality.models import InvocationEvidence
 from agent_insights_quality.util import ContractError, SharedRuntimeError, content_hash
-from agent_insights_quality.validation_judge import (
-    mechanical_attempt_complete,
-    sanitize_collected_trace_evidence,
-)
+from agent_insights_quality.validation_evidence import evaluate_defect_predicate
 from agent_insights_quality.validation_quota import (
     EndpointCost,
     ValidationScheduler,
@@ -88,10 +85,9 @@ class FoundryScenarioAttemptRunner:
         conversation_role: str,
         scenario: Mapping[str, Any],
         attempt: Mapping[str, Any],
-        expect_defect: bool | None = None,
+        expect_defect: bool,
         scheduler: ValidationScheduler,
     ) -> dict[str, Any]:
-        del expect_defect
         with scheduler.runtime_attempt(target.authority_id):
             return self._run(
                 target=target,
@@ -99,6 +95,7 @@ class FoundryScenarioAttemptRunner:
                 conversation_role=conversation_role,
                 scenario=scenario,
                 attempt=attempt,
+                expect_defect=expect_defect,
                 scheduler=scheduler,
             )
 
@@ -110,6 +107,7 @@ class FoundryScenarioAttemptRunner:
         conversation_role: str,
         scenario: Mapping[str, Any],
         attempt: Mapping[str, Any],
+        expect_defect: bool,
         scheduler: ValidationScheduler,
     ) -> dict[str, Any]:
         if (
@@ -135,20 +133,13 @@ class FoundryScenarioAttemptRunner:
             *[("probe", item) for item in attempt["probe_steps"]],
         ]
         fixtures = [
-            {
-                **_normalize_fixture(
-                    {
-                        "id": step["id"],
-                        "request": step["request"],
-                        "expected": {
-                            **step["expected"],
-                            "semantic_assertions": {},
-                            "trace_assertions": [],
-                        },
-                    }
-                ),
-                "activation_gate": False,
-            }
+            _normalize_fixture(
+                {
+                    "id": step["id"],
+                    "request": step["request"],
+                    "expected": step["expected"],
+                }
+            )
             for _, step in raw_steps
         ]
         started = self._now().astimezone(UTC)
@@ -156,7 +147,6 @@ class FoundryScenarioAttemptRunner:
         response_references: list[str] = []
         semantic_results: list[tuple[int, int]] = []
         usable_results: list[bool] = []
-        terminal_results: list[int] = []
         session_id: str | None = None
         previous_response_id: str | None = None
         if target.runtime_kind == "prompt":
@@ -223,7 +213,7 @@ class FoundryScenarioAttemptRunner:
                         usable,
                         assertion_count,
                         assertions_passed,
-                        terminal_count,
+                        _,
                         function_call_count,
                         _,
                         _,
@@ -236,7 +226,6 @@ class FoundryScenarioAttemptRunner:
                 response_references.extend(response_ids)
                 semantic_results.append((assertion_count, assertions_passed))
                 usable_results.append(usable)
-                terminal_results.append(terminal_count)
                 for response_id in response_ids:
                     self._record_resource(
                         {
@@ -334,7 +323,7 @@ class FoundryScenarioAttemptRunner:
                         usable,
                         assertion_count,
                         assertions_passed,
-                        terminal_count,
+                        _,
                         _,
                         _,
                         _,
@@ -342,7 +331,6 @@ class FoundryScenarioAttemptRunner:
                 response_references.extend(response_ids)
                 semantic_results.append((assertion_count, assertions_passed))
                 usable_results.append(usable)
-                terminal_results.append(terminal_count)
         else:
             raise ContractError("Validation target runtime kind is not reviewed")
         completed = self._now().astimezone(UTC)
@@ -371,23 +359,31 @@ class FoundryScenarioAttemptRunner:
                     invocation=invocation,
                 )
             with scheduler.telemetry_query():
-                collected = self._runtime.collect_trace_evidence(operation_ids)
-            mechanical_evidence = sanitize_collected_trace_evidence(
-                collected,
-                role=conversation_role,
-                attempt_index=int(attempt["index"]),
-                runtime_agent_name=target.runtime_agent_name,
-                runtime_agent_version=target.runtime_agent_version,
-                window_start=started.isoformat(),
-                window_end=completed.isoformat(),
-                endpoint={
-                    "request_count": len(fixtures),
-                    "response_count": len(response_references),
-                    "usable_response_count": sum(usable_results),
-                    "terminal_output_count": sum(terminal_results),
-                },
-                operation_ids=operation_ids,
-            )
+                trace_results = self._runtime.trace_assertion_evidence_for_requests(
+                    agent_name=target.runtime_agent_name,
+                    foundry_version=target.runtime_agent_version,
+                    operation_ids=operation_ids,
+                    response_references=tuple(response_references),
+                    window_start=started.isoformat(),
+                    window_end=completed.isoformat(),
+                    requests=[
+                        {
+                            "id": step["id"],
+                            "request": step["request"],
+                            "expected": step["expected"],
+                        }
+                        for _, step in raw_steps
+                    ],
+                    stabilization_seconds=self._stabilization_seconds,
+                    on_first_pass=lambda: None,
+                )
+            with scheduler.telemetry_query():
+                identity_results = self._runtime.telemetry_identity_passes(
+                    agent_name=target.runtime_agent_name,
+                    foundry_version=target.runtime_agent_version,
+                    operation_ids=operation_ids,
+                    invocation=invocation,
+                )
         except SharedRuntimeError:
             raise
         except _POST_RESPONSE_TELEMETRY_ERRORS as error:
@@ -396,20 +392,35 @@ class FoundryScenarioAttemptRunner:
             "ingestion_kql_seconds",
             time.monotonic() - telemetry_started,
         )
+        if len(trace_results) != len(raw_steps):
+            raise ContractError("Validation trace evidence step count is invalid")
+        if len(identity_results) != len(raw_steps):
+            raise ContractError("Validation telemetry identity count is invalid")
+
         step_evidence: list[dict[str, Any]] = []
         for index, (
             (_, step),
             response_id,
+            operation_id,
+            semantic,
+            trace,
             usable,
+            identity_pass,
         ) in enumerate(
             zip(
                 raw_steps,
                 response_references,
+                operation_ids,
+                semantic_results,
+                trace_results,
                 usable_results,
+                identity_results,
                 strict=True,
             ),
             start=1,
         ):
+            semantic_pass = semantic[0] == semantic[1]
+            trace_pass = all(item.passed for item in trace)
             step_evidence.append(
                 {
                     "index": index,
@@ -419,23 +430,44 @@ class FoundryScenarioAttemptRunner:
                         {"response_reference": response_id}
                     ),
                     "operation_reference": content_hash(
-                        {
-                            "mechanical_evidence": mechanical_evidence[
-                                "evidence_digest"
-                            ],
-                            "step_index": index,
-                        }
+                        {"operation_reference": operation_id}
                     ),
                     "complete": bool(usable),
                     "endpoint_pass": bool(usable),
-                    "semantic_pass": True,
-                    "trace_pass": True,
-                    "identity_pass": True,
+                    "semantic_pass": semantic_pass,
+                    "trace_pass": trace_pass,
+                    "identity_pass": identity_pass,
                 }
             )
         setup_count = len(attempt["setup_steps"])
         setup_steps = step_evidence[:setup_count]
         probe_steps = step_evidence[setup_count:]
+        complete = all(
+            item["complete"] and item["endpoint_pass"] and item["identity_pass"]
+            for item in step_evidence
+        ) and all(
+            item["semantic_pass"] and item["trace_pass"] for item in setup_steps
+        )
+        observed = evaluate_defect_predicate(
+            scenario["defect_predicate"],
+            probe_steps,
+        )
+        healthy = all(
+            item["semantic_pass"] and item["trace_pass"] for item in probe_steps
+        )
+        defect_observed = observed if complete else None
+        expected_pass = (
+            healthy
+            if scenario["validation_mode"] == "baseline"
+            else defect_observed is expect_defect
+        )
+        error_code = (
+            None
+            if complete
+            else "telemetry_identity_mismatch"
+            if not all(item["identity_pass"] for item in step_evidence)
+            else "incomplete_endpoint_evidence"
+        )
         result = {
             "index": attempt["index"],
             "conversation_reference": content_hash(
@@ -453,18 +485,12 @@ class FoundryScenarioAttemptRunner:
             "operation_references": [
                 item["operation_reference"] for item in step_evidence
             ],
-            "mechanical_evidence": mechanical_evidence,
             "setup_steps": setup_steps,
             "probe_steps": probe_steps,
-            "complete": mechanical_attempt_complete(
-                {"mechanical_evidence": mechanical_evidence}
-            ),
-            "defect_observed": None,
-            "expected_observation_pass": False,
-            "review_conclusion": "inconclusive",
-            "judge_input_digest": None,
-            "judge_output_digest": None,
-            "error_code": None,
+            "complete": complete,
+            "defect_observed": defect_observed,
+            "expected_observation_pass": expected_pass,
+            "error_code": error_code,
         }
         if session_id is not None:
             try:

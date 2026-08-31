@@ -2,29 +2,36 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
-from agent_insights_quality.util import ROOT, ContractError
+from agent_insights_quality.catalogs import load_catalogs
+from agent_insights_quality.util import ROOT
 from agent_insights_quality.validation_approved import validate_approved_record
 from agent_insights_quality.validation_evidence import validate_evidence
 from agent_insights_quality.validation_lifecycle import validate_lifecycle
+from agent_insights_quality.validation_manifest import authority_specs
 
 
-def test_sanitized_r01_fixture_is_retained_as_superseded_history() -> None:
+def test_sanitized_r01_fixture_covers_local_clean_and_approval() -> None:
     root = ROOT / "tests" / "fixtures" / "test_agent_validation"
     run = root / "r01"
     evidence = json.loads((run / "evidence.json").read_text())
     clean = json.loads((run / "clean-lifecycle.json").read_text())
     approved = json.loads((run / "approved-record.json").read_text())
     durations = json.loads((run / "durations.json").read_text())
-    with pytest.raises(ContractError, match="judge_model"):
-        validate_evidence(
-            evidence,
-            runtime_topology=clean["runtime_topology"],
-        )
+    validate_evidence(
+        evidence,
+        runtime_topology=clean["runtime_topology"],
+    )
     validate_lifecycle(clean)
-    with pytest.raises(ContractError, match="judge_model"):
-        validate_approved_record(approved)
+    validate_approved_record(approved)
+    agents, issues = load_catalogs()
+    expected = {
+        item.authority_id: item.execution_digest
+        for item in authority_specs(agents, issues)
+    }
+    assert {
+        item["authority_id"]: item["execution_digest"]
+        for item in evidence["authorities"]
+    } == expected
     assert len(evidence["authorities"]) == 41
     assert all(item["pass"] for item in evidence["authorities"])
     assert clean["state"] == "CLEAN"

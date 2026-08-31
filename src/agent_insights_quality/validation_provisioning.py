@@ -122,9 +122,6 @@ class ValidationProjectProvisioner:
     def assert_test_agent_model(self, expected: dict[str, str]) -> None:
         self._profile.assert_test_agent_model(expected)
 
-    def assert_judge_model(self, expected: dict[str, str]) -> None:
-        self._profile.assert_model_deployment(expected, label="validation judge")
-
     def assert_telemetry_connection(self) -> None:
         self._profile.assert_insights_connection(
             "application-insights-validation"

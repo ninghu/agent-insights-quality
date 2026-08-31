@@ -49,10 +49,6 @@ from agent_insights_quality.validation_lifecycle import (
     validate_lifecycle,
 )
 from agent_insights_quality.validation_live import FoundryScenarioAttemptRunner
-from agent_insights_quality.validation_judge import (
-    FoundryJudgeClient,
-    ValidationJudge,
-)
 from agent_insights_quality.validation_manifest import (
     authority_specs,
     prepare_validation_plan,
@@ -441,9 +437,8 @@ def run_test_agent_validation(
                 support_images={},
             )
 
-        runtime = LiveRuntime(profile, token_provider=operator.token_provider)
         runner = FoundryScenarioAttemptRunner(
-            runtime,
+            LiveRuntime(profile, token_provider=operator.token_provider),
             endpoint_costs={
                 item.authority_id: validation_authority_cost(item)
                 for item in authorities
@@ -452,25 +447,6 @@ def run_test_agent_validation(
             record_resource=resource_event,
             record_duration=record_duration,
             now=now,
-        )
-        judge = ValidationJudge(
-            client=FoundryJudgeClient(
-                endpoint=profile.project_endpoint,
-                request_json=runtime._json_request,
-                max_output_tokens=policy.judge.max_output_tokens,
-            ),
-            issues={item["id"]: item for item in issues["issues"]},
-            baseline_output_messages={
-                item["name"]: item["baseline_contract"]["output_messages"]
-                for item in agents["agents"]
-            },
-            repository=plan["repository"],
-            pr_number=plan["pr_number"],
-            cycle_id=plan["cycle_id"],
-            commit_sha=plan["commit_sha"],
-            validation_digest=plan["validation_digest"],
-            runtime_topology_digest=plan["planned_topology_digest"],
-            maximum_concurrency=policy.judge.maximum_concurrency,
         )
 
         def assert_commit() -> None:
@@ -490,7 +466,6 @@ def run_test_agent_validation(
                 deployer_factory=deployer_factory,
                 support_image_factory=support_image_factory,
                 runner=runner,
-                judge=judge,
                 scheduler=scheduler,
                 policy=policy,
                 model_contract=agents["models"]["test_agents"],

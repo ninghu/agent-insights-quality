@@ -5,12 +5,6 @@ test_agent_model:
   deployment_name: gpt-5.4-mini
   model_id: gpt-5.4-mini
   model_version: "2026-03-17"
-judge:
-  deployment_name: gpt-5.6-sol
-  model_id: gpt-5.6-sol
-  prompt_version: "1.0.0"
-  maximum_concurrency: 4
-  max_output_tokens: 1200
 canary_agents:
   prompt: weather-agent
   hosted: finance-agent

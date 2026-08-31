@@ -20,7 +20,7 @@ from agent_insights_quality.validation_rules import (
     RUNTIME_AGENT_NAME_PLACEHOLDER,
     RUNTIME_AGENT_VERSION_PLACEHOLDER,
 )
-from agent_insights_quality.util import ContractError, content_hash
+from agent_insights_quality.util import ContractError
 
 HASH = "sha256:" + ("a" * 64)
 
@@ -142,46 +142,6 @@ class Runtime:
         return tuple(
             self.identity_pass for _ in kwargs["operation_ids"]
         )
-
-    @staticmethod
-    def collect_trace_evidence(operation_ids):
-        operations = []
-        for index, operation_id in enumerate(operation_ids, start=1):
-            root = content_hash({"operation": operation_id, "span": "root"})
-            operations.append(
-                {
-                    "operation_reference": content_hash(
-                        {"operation_id": operation_id}
-                    ),
-                    "spans": [
-                        {
-                            "sequence": index,
-                            "span_reference": root,
-                            "parent_span_reference": "",
-                            "telemetry_type": "request",
-                            "operation_name": "invoke_agent",
-                            "timestamp": "2026-08-31T00:00:00+00:00",
-                            "duration": 10,
-                            "success": "True",
-                            "result_code": "200",
-                            "tool_name": "",
-                            "tool_call_reference": "",
-                            "error_type": "",
-                            "tool_ok": "",
-                            "terminal_success": "True",
-                            "terminal_output": "True",
-                            "handled_error": "",
-                            "output_messages_present": True,
-                            "output_messages_nonempty": True,
-                        }
-                    ],
-                }
-            )
-        return {
-            "operation_count": len(operations),
-            "span_count": len(operations),
-            "operations": operations,
-        }
 
     @staticmethod
     def rate_limit_feedback():
@@ -344,8 +304,7 @@ def test_attempt_keeps_completion_independent_from_defect_observation() -> None:
         scheduler=_scheduler(),
     )
     assert result["complete"] is True
-    assert result["defect_observed"] is None
-    assert result["review_conclusion"] == "inconclusive"
+    assert result["defect_observed"] is False
     assert result["expected_observation_pass"] is False
     assert len(resources) == 4
     assert all(resource["kind"] == "stored_response" for resource in resources)
@@ -399,9 +358,8 @@ def test_passing_probe_is_observed_and_evidence_contains_hashes_only() -> None:
         expect_defect=True,
         scheduler=_scheduler(),
     )
-    assert result["defect_observed"] is None
-    assert result["review_conclusion"] == "inconclusive"
-    assert result["expected_observation_pass"] is False
+    assert result["defect_observed"] is True
+    assert result["expected_observation_pass"] is True
     assert all(
         reference.startswith("sha256:")
         for reference in [
@@ -413,7 +371,7 @@ def test_passing_probe_is_observed_and_evidence_contains_hashes_only() -> None:
     )
 
 
-def test_collector_owns_exact_telemetry_identity() -> None:
+def test_telemetry_identity_mismatch_keeps_attempt_incomplete() -> None:
     times = iter(
         [
             datetime(2026, 8, 29, 12, 0, tzinfo=UTC),
@@ -449,11 +407,11 @@ def test_collector_owns_exact_telemetry_identity() -> None:
         expect_defect=True,
         scheduler=_scheduler(),
     )
-    assert result["complete"] is True
+    assert result["complete"] is False
     assert result["defect_observed"] is None
-    assert result["error_code"] is None
+    assert result["error_code"] == "telemetry_identity_mismatch"
     assert all(
-        step["identity_pass"] is True
+        step["identity_pass"] is False
         for step in [*result["setup_steps"], *result["probe_steps"]]
     )
 
@@ -472,7 +430,7 @@ def test_post_response_telemetry_failure_keeps_request_accepted(
 
     class FailedTelemetryRuntime(Runtime):
         @staticmethod
-        def collect_trace_evidence(_operation_ids):
+        def telemetry_identity_passes(**_kwargs):
             raise SyntheticTelemetryError("Synthetic telemetry failure")
 
     times = iter(
