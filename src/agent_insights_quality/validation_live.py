@@ -268,46 +268,15 @@ class FoundryScenarioAttemptRunner:
                         "step": fixture_index,
                     }
                 )
-                response_name = (
-                    f"{target.runtime_agent_name}-{conversation_role}-"
-                    f"{attempt['index']}-{fixture_index}"
-                )
-                self._record_resource(
-                    {
-                        "state": "create_intent",
-                        "kind": "stored_response",
-                        "intent_reference": response_intent,
-                        "deterministic_name": response_name,
-                        "authority_id": target.authority_id,
-                        "parent_id": session_id,
-                        "runtime_kind": target.runtime_kind,
-                        "discovery_key": (
-                            f"{target.runtime_agent_name}|{response_intent}"
-                        ),
-                    }
-                )
                 scheduler.acquire_request(cost)
                 with _observe_rate_limit(self._runtime, scheduler):
-                    try:
-                        result = self._runtime._invoke_hosted(
-                            target.runtime_agent_name,
-                            session_id,
-                            fixture,
-                            0,
-                            validation_intent_reference=response_intent,
-                        )
-                    except ContractError:
-                        self._record_resource(
-                            {
-                                "state": "ambiguous_create",
-                                "kind": "stored_response",
-                                "intent_reference": response_intent,
-                                "deterministic_name": response_name,
-                                "authority_id": target.authority_id,
-                                "parent_id": session_id,
-                            }
-                        )
-                        raise
+                    result = self._runtime._invoke_hosted(
+                        target.runtime_agent_name,
+                        session_id,
+                        fixture,
+                        0,
+                        validation_intent_reference=response_intent,
+                    )
                     (
                         response_ids,
                         usable,
@@ -321,18 +290,6 @@ class FoundryScenarioAttemptRunner:
                 response_references.extend(response_ids)
                 semantic_results.append((assertion_count, assertions_passed))
                 usable_results.append(usable)
-                for response_id in response_ids:
-                    self._record_resource(
-                        {
-                            "state": "created",
-                            "kind": "stored_response",
-                            "intent_reference": response_intent,
-                            "provider_id": response_id,
-                            "deterministic_name": response_id,
-                            "authority_id": target.authority_id,
-                            "parent_id": session_id,
-                        }
-                    )
         else:
             raise ContractError("Validation target runtime kind is not reviewed")
         completed = self._now().astimezone(UTC)

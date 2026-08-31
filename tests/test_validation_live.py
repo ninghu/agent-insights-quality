@@ -451,7 +451,7 @@ def test_shared_v0_attempts_have_unique_execution_and_resource_references() -> N
     assert len(intents) == len(set(intents))
 
 
-def test_hosted_attempt_journals_session_and_each_stored_response() -> None:
+def test_hosted_attempt_journals_only_persistent_session() -> None:
     times = iter(
         [
             datetime(2026, 8, 29, 12, 0, tzinfo=UTC),
@@ -488,11 +488,4 @@ def test_hosted_attempt_journals_session_and_each_stored_response() -> None:
         expect_defect=True,
         scheduler=_scheduler(),
     )
-    assert [item["kind"] for item in resources] == [
-        "session",
-        "session",
-        "stored_response",
-        "stored_response",
-        "stored_response",
-        "stored_response",
-    ]
+    assert [item["kind"] for item in resources] == ["session", "session"]

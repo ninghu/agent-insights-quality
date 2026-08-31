@@ -28,6 +28,7 @@ _HOSTED_TOPOLOGY_REFERENCES = {
     "hosted_blueprint": ("blueprint_reference", "blueprint_id"),
     "hosted_deployment": (None, "agent_guid"),
 }
+_HOSTED_RUNTIME_KINDS = {"hosted_code", "hosted_custom_container"}
 
 
 class AzureValidationCleanupBackend:
@@ -103,6 +104,12 @@ class AzureValidationCleanupBackend:
                 hosted=True,
             )
         elif item.kind == "stored_response":
+            if item.runtime_kind != "prompt":
+                return (
+                    replace(item, resolved_provider_id="discovery-absent")
+                    if self._hosted_ephemeral_response_absent(item)
+                    else None
+                )
             if (
                 len(parts) != 2
                 or not parts[0]
@@ -157,6 +164,16 @@ class AzureValidationCleanupBackend:
             )
             return
         if item.kind == "stored_response":
+            if item.runtime_kind != "prompt":
+                try:
+                    self._client.delete_session(
+                        self._agent_name(item),
+                        self._hosted_response_session_id(item),
+                    )
+                except RemoteHttpError as error:
+                    if not _session_not_accessible(error):
+                        raise
+                return
             self._client.delete_response(self._actual_id(item))
             return
         if item.kind in _HOSTED_TOPOLOGY_REFERENCES:
@@ -243,6 +260,52 @@ class AzureValidationCleanupBackend:
             f"{item.kind} cascade cleanup did not complete within 15 minutes"
         )
 
+    def _hosted_ephemeral_response_absent(
+        self,
+        item: CleanupPlanItem,
+    ) -> bool:
+        try:
+            return not self._client.session_exists(
+                self._agent_name(item),
+                self._hosted_response_session_id(item),
+            )
+        except RemoteHttpError as error:
+            if _session_not_accessible(error):
+                return True
+            raise
+
+    def _hosted_response_session_id(self, item: CleanupPlanItem) -> str:
+        if item.runtime_kind not in _HOSTED_RUNTIME_KINDS or not item.parent_id:
+            raise ContractError(
+                "Hosted ephemeral response cleanup binding is invalid"
+            )
+        agent_name = self._agent_name(item)
+        matches = [
+            resource
+            for resource in self._resources
+            if resource.get("kind") == "session"
+            and (
+                resource.get("resolved_provider_id")
+                or resource.get("provider_id")
+            )
+            == item.parent_id
+        ]
+        if len(matches) != 1:
+            raise ContractError(
+                "Hosted ephemeral response cleanup parent is ambiguous"
+            )
+        session = matches[0]
+        session_agent = str(session.get("discovery_key") or "").split("|", 1)[0]
+        if (
+            session.get("authority_id") != item.authority_id
+            or session.get("runtime_kind") != item.runtime_kind
+            or session_agent != agent_name
+        ):
+            raise ContractError(
+                "Hosted ephemeral response cleanup parent does not match"
+            )
+        return item.parent_id
+
     def absent(self, item: CleanupPlanItem) -> bool:
         if item.resolved_provider_id == "discovery-absent":
             return True
@@ -292,6 +355,8 @@ class AzureValidationCleanupBackend:
                 self._actual_id(item),
             )
         if item.kind == "stored_response":
+            if item.runtime_kind != "prompt":
+                return self._hosted_ephemeral_response_absent(item)
             return not self._client.response_exists(self._actual_id(item))
         if item.kind == "runtime_principal":
             actual_id = self._actual_id(item)
@@ -837,6 +902,13 @@ def _topology_reference(
             "blueprint_reference.type"
         )
     return result
+
+
+def _session_not_accessible(error: RemoteHttpError) -> bool:
+    return (
+        error.status == 403
+        and error.code == "session_not_accessible"
+    )
 
 
 def _agent_version(value: str) -> tuple[str, str]:

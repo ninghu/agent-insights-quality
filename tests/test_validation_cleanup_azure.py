@@ -153,6 +153,7 @@ def test_stored_response_intent_uses_exact_agent_scoped_discovery() -> None:
         "stored_response",
         f"synthetic-agent|{'sha256:' + ('a' * 64)}",
     )
+    intent = replace(intent, runtime_kind="prompt")
     backend = object.__new__(AzureValidationCleanupBackend)
 
     def request(method, route, **kwargs):
@@ -189,6 +190,7 @@ def test_stored_response_discovery_400_fails_closed() -> None:
         "stored_response",
         f"synthetic-agent|{'sha256:' + ('a' * 64)}",
     )
+    intent = replace(intent, runtime_kind="prompt")
     backend = object.__new__(AzureValidationCleanupBackend)
     backend._client = SimpleNamespace(
         _request=lambda *_args, **_kwargs: (_ for _ in ()).throw(
@@ -211,6 +213,7 @@ def test_stored_response_empty_scoped_discovery_is_already_absent() -> None:
         "stored_response",
         f"synthetic-agent|{'sha256:' + ('a' * 64)}",
     )
+    intent = replace(intent, runtime_kind="prompt")
     backend = object.__new__(AzureValidationCleanupBackend)
     backend._client = SimpleNamespace(
         _request=lambda *_args, **_kwargs: {"_status": 200, "data": []}
@@ -226,6 +229,7 @@ def test_stored_response_discovery_checks_every_scoped_page() -> None:
         "stored_response",
         f"synthetic-agent|{'sha256:' + ('a' * 64)}",
     )
+    intent = replace(intent, runtime_kind="prompt")
     routes = []
     responses = iter(
         [
@@ -275,6 +279,7 @@ def test_exact_metadata_match_without_identity_fails_closed() -> None:
         "stored_response",
         f"synthetic-agent|{'sha256:' + ('a' * 64)}",
     )
+    intent = replace(intent, runtime_kind="prompt")
     backend = object.__new__(AzureValidationCleanupBackend)
     backend._client = SimpleNamespace(
         _request=lambda *_args, **_kwargs: {
@@ -290,6 +295,126 @@ def test_exact_metadata_match_without_identity_fails_closed() -> None:
     )
     with pytest.raises(ContractError, match="identity is missing"):
         backend.resolve_intent(intent)
+
+
+def _hosted_response_and_session():
+    response = replace(
+        _intent(
+            "stored_response",
+            f"synthetic-agent|{'sha256:' + ('b' * 64)}",
+        ),
+        provider_id="synthetic-response",
+        parent_id="synthetic-session",
+        state="created",
+    )
+    session = {
+        "kind": "session",
+        "provider_id": "synthetic-session",
+        "resolved_provider_id": None,
+        "authority_id": response.authority_id,
+        "runtime_kind": response.runtime_kind,
+        "discovery_key": (
+            f"synthetic-agent|{'sha256:' + ('c' * 64)}"
+        ),
+    }
+    return response, session
+
+
+def test_hosted_ephemeral_response_is_absent_when_session_is_inaccessible() -> None:
+    response, session = _hosted_response_and_session()
+    backend = object.__new__(AzureValidationCleanupBackend)
+    backend._resources = [session]
+    backend._client = SimpleNamespace(
+        session_exists=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RemoteHttpError(
+                403,
+                "session_not_accessible",
+                "Synthetic inaccessible session",
+                "GET private-route",
+            )
+        )
+    )
+
+    assert backend.absent(response) is True
+
+
+def test_hosted_ephemeral_response_rejects_unrelated_session_403() -> None:
+    response, session = _hosted_response_and_session()
+    backend = object.__new__(AzureValidationCleanupBackend)
+    backend._resources = [session]
+    backend._client = SimpleNamespace(
+        session_exists=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RemoteHttpError(
+                403,
+                "Forbidden",
+                "Synthetic unrelated rejection",
+                "GET private-route",
+            )
+        )
+    )
+
+    with pytest.raises(RemoteHttpError) as raised:
+        backend.absent(response)
+    assert raised.value.code == "Forbidden"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"parent_id": None},
+        {"parent_id": "foreign-session"},
+        {"authority_id": "foreign-authority"},
+        {"runtime_kind": "hosted_other"},
+    ],
+)
+def test_hosted_ephemeral_response_requires_exact_parent_binding(change) -> None:
+    response, session = _hosted_response_and_session()
+    response = replace(response, **change)
+    backend = object.__new__(AzureValidationCleanupBackend)
+    backend._resources = [session]
+    backend._client = SimpleNamespace(session_exists=lambda *_args, **_kwargs: False)
+
+    with pytest.raises(ContractError, match="cleanup"):
+        backend.absent(response)
+
+
+def test_hosted_ephemeral_response_rejects_foreign_agent_parent() -> None:
+    response, session = _hosted_response_and_session()
+    session["discovery_key"] = (
+        f"foreign-agent|{'sha256:' + ('c' * 64)}"
+    )
+    backend = object.__new__(AzureValidationCleanupBackend)
+    backend._resources = [session]
+    backend._client = SimpleNamespace(session_exists=lambda *_args, **_kwargs: False)
+
+    with pytest.raises(ContractError, match="does not match"):
+        backend.absent(response)
+
+
+def test_hosted_ephemeral_response_rejects_duplicate_parent_binding() -> None:
+    response, session = _hosted_response_and_session()
+    backend = object.__new__(AzureValidationCleanupBackend)
+    backend._resources = [session, dict(session)]
+    backend._client = SimpleNamespace(session_exists=lambda *_args, **_kwargs: False)
+
+    with pytest.raises(ContractError, match="ambiguous"):
+        backend.absent(response)
+
+
+def test_hosted_ephemeral_response_deletes_owning_session() -> None:
+    response, session = _hosted_response_and_session()
+    deleted = []
+    backend = object.__new__(AzureValidationCleanupBackend)
+    backend._resources = [session]
+    backend._client = SimpleNamespace(
+        delete_session=lambda agent, session_id: deleted.append(
+            (agent, session_id)
+        )
+    )
+
+    backend.delete(response)
+
+    assert deleted == [("synthetic-agent", "synthetic-session")]
 
 
 def test_session_intent_resolves_exact_agent_scoped_metadata_match() -> None:
