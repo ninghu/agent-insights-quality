@@ -1217,7 +1217,7 @@ def test_collect_trace_evidence_emits_allowlisted_hashed_graph(monkeypatch) -> N
             [
                 operation_id,
                 "span-root",
-                "",
+                "upstream-server-span",
                 "requests",
                 "invoke_agent",
                 "2026-08-31T10:00:00+00:00",
@@ -1276,6 +1276,7 @@ def test_collect_trace_evidence_emits_allowlisted_hashed_graph(monkeypatch) -> N
     root, child = operation["spans"]
     assert root["sequence"] == 1
     assert root["operation_name"] == "invoke_agent"
+    assert root["parent_span_reference"].startswith("sha256:")
     assert root["output_messages_present"] is True
     assert root["output_messages_nonempty"] is True
     assert child["sequence"] == 2
@@ -1291,6 +1292,7 @@ def test_collect_trace_evidence_emits_allowlisted_hashed_graph(monkeypatch) -> N
     serialized = json.dumps(evidence)
     assert "span-root" not in serialized
     assert "span-child" not in serialized
+    assert "upstream-server-span" not in serialized
     assert "tool-call-private" not in serialized
     query = captured[0]
     assert "operation_Id in" in query
@@ -1323,15 +1325,17 @@ def test_output_messages_state_uses_only_top_level_invoke_agent(
     runtime._collect_trace_rows = lambda _operations: [  # type: ignore[method-assign]
         {
             "operation_id": operation_id,
+            "telemetry_type": "requests",
             "operation_name": "invoke_agent",
-            "parent_span_id": "",
+            "parent_span_id": "upstream-server-span",
             "output_messages_present": root_state[0],
             "output_messages_nonempty": root_state[1],
         },
         {
             "operation_id": operation_id,
-            "operation_name": "chat",
-            "parent_span_id": "span-root",
+            "telemetry_type": "dependencies",
+            "operation_name": "invoke_agent",
+            "parent_span_id": "request-span",
             "output_messages_present": child_state[0],
             "output_messages_nonempty": child_state[1],
         },
@@ -1340,6 +1344,83 @@ def test_output_messages_state_uses_only_top_level_invoke_agent(
     assert runtime.top_level_output_messages_state((operation_id,)) == (
         root_state,
     )
+
+
+@pytest.mark.parametrize("telemetry_type", ["dependencies", "traces"])
+def test_output_messages_state_rejects_only_child_invoke_agent(
+    telemetry_type,
+) -> None:
+    operation_id = "a" * 32
+    runtime = _runtime()
+    runtime._collect_trace_rows = lambda _operations: [  # type: ignore[method-assign]
+        {
+            "operation_id": operation_id,
+            "telemetry_type": telemetry_type,
+            "operation_name": "invoke_agent",
+            "parent_span_id": "request-span",
+            "output_messages_present": True,
+            "output_messages_nonempty": True,
+        }
+    ]
+
+    with pytest.raises(
+        ContractError,
+        match="missing a top-level invoke_agent span",
+    ):
+        runtime.top_level_output_messages_state((operation_id,))
+
+
+def test_output_messages_state_combines_multiple_top_level_requests() -> None:
+    operation_a = "a" * 32
+    operation_b = "b" * 32
+    runtime = _runtime()
+    runtime._collect_trace_rows = lambda _operations: [  # type: ignore[method-assign]
+        {
+            "operation_id": operation_a,
+            "telemetry_type": "requests",
+            "operation_name": "invoke_agent",
+            "parent_span_id": "upstream-span-a",
+            "output_messages_present": True,
+            "output_messages_nonempty": True,
+        },
+        {
+            "operation_id": operation_b,
+            "telemetry_type": "requests",
+            "operation_name": "invoke_agent",
+            "parent_span_id": "upstream-span-b",
+            "output_messages_present": True,
+            "output_messages_nonempty": False,
+        },
+    ]
+
+    assert runtime.top_level_output_messages_state((operation_a, operation_b)) == (
+        (True, True),
+        (True, False),
+    )
+
+
+@pytest.mark.parametrize("telemetry_type", [None, "", "foreign"])
+def test_output_messages_state_rejects_malformed_or_foreign_source(
+    telemetry_type,
+) -> None:
+    operation_id = "a" * 32
+    runtime = _runtime()
+    runtime._collect_trace_rows = lambda _operations: [  # type: ignore[method-assign]
+        {
+            "operation_id": operation_id,
+            "telemetry_type": telemetry_type,
+            "operation_name": "invoke_agent",
+            "parent_span_id": "",
+            "output_messages_present": True,
+            "output_messages_nonempty": True,
+        }
+    ]
+
+    with pytest.raises(
+        ContractError,
+        match="missing a top-level invoke_agent span",
+    ):
+        runtime.top_level_output_messages_state((operation_id,))
 
 
 def test_collect_trace_evidence_rejects_incomplete_operation_set() -> None:

@@ -1587,8 +1587,7 @@ union traces, dependencies, requests
                                     "output_messages_nonempty"
                                 ],
                             }
-                            if row["operation_name"] == "invoke_agent"
-                            and not row["parent_span_id"]
+                            if _is_top_level_invoke_agent(row)
                             else {}
                         ),
                     }
@@ -1612,23 +1611,30 @@ union traces, dependencies, requests
     ) -> tuple[tuple[bool, bool], ...]:
         _validate_operation_references(operation_ids, len(operation_ids))
         rows = self._collect_trace_rows(operation_ids)
-        roots_by_operation: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        top_level_by_operation: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in rows:
             operation_id = str(row.get("operation_id") or "").lower()
             if (
                 operation_id in operation_ids
-                and row.get("operation_name") == "invoke_agent"
-                and not row.get("parent_span_id")
+                and _is_top_level_invoke_agent(row)
             ):
-                roots_by_operation[operation_id].append(row)
-        if any(not roots_by_operation[operation_id] for operation_id in operation_ids):
+                top_level_by_operation[operation_id].append(row)
+        if any(
+            not top_level_by_operation[operation_id] for operation_id in operation_ids
+        ):
             raise ContractError(
                 "Trace collection is missing a top-level invoke_agent span"
             )
         return tuple(
             (
-                all(row["output_messages_present"] for row in roots_by_operation[operation_id]),
-                all(row["output_messages_nonempty"] for row in roots_by_operation[operation_id]),
+                all(
+                    row["output_messages_present"]
+                    for row in top_level_by_operation[operation_id]
+                ),
+                all(
+                    row["output_messages_nonempty"]
+                    for row in top_level_by_operation[operation_id]
+                ),
             )
             for operation_id in operation_ids
         )
@@ -2406,6 +2412,13 @@ def _telemetry_boolean(value: Any, *, field: str) -> bool:
     if not isinstance(value, bool):
         raise ContractError(f"Trace collection returned invalid {field}")
     return value
+
+
+def _is_top_level_invoke_agent(row: Mapping[str, Any]) -> bool:
+    return (
+        row.get("telemetry_type") == "requests"
+        and row.get("operation_name") == "invoke_agent"
+    )
 
 
 def _remote_error(payload: bytes) -> tuple[str, str]:
