@@ -1952,11 +1952,10 @@ def _http_request_accepted(status: int) -> bool | None:
 def _previous_response_propagation_pending(
     error: RemoteOperationError,
 ) -> bool:
-    code = re.sub(r"[^a-z0-9]+", "_", error.code.casefold()).strip("_")
     return (
         error.request_accepted is False
-        and error.status in {400, 404}
-        and code == "previous_response_not_found"
+        and error.status == 404
+        and error.code in {"NotFound", "previous_response_not_found"}
     )
 
 

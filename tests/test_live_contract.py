@@ -3151,7 +3151,8 @@ def test_json_success_with_invalid_payload_is_accepted_contract_failure(
     assert caught.value.request_accepted is True
 
 
-def test_prompt_retries_exact_previous_response_propagation_rejection() -> None:
+@pytest.mark.parametrize("code", ["NotFound", "previous_response_not_found"])
+def test_prompt_retries_exact_previous_response_propagation_rejection(code) -> None:
     runtime = _runtime()
     runtime._traffic_ledger = type(
         "Ledger",
@@ -3165,9 +3166,8 @@ def test_prompt_retries_exact_previous_response_propagation_rejection() -> None:
         calls.append((method, url, body, kwargs))
         if len(calls) == 1:
             raise RemoteOperationError(
-                "Remote operation failed with HTTP 404 "
-                "(previous_response_not_found)",
-                code="previous_response_not_found",
+                f"Remote operation failed with HTTP 404 ({code})",
+                code=code,
                 status=404,
                 request_accepted=False,
             )
@@ -3192,34 +3192,105 @@ def test_prompt_retries_exact_previous_response_propagation_rejection() -> None:
 
     assert result[0] == ["response-accepted"]
     assert len(calls) == 2
+    assert all(call[0] == "POST" for call in calls)
+    assert all(
+        call[1] == "https://example.invalid/openai/v1/responses" for call in calls
+    )
     assert all(call[2]["previous_response_id"] == "previous-response" for call in calls)
     assert sleeps == [1]
 
 
 @pytest.mark.parametrize(
-    "error",
+    ("error", "previous_response_id"),
     [
-        RemoteOperationError(
-            "Remote operation failed before a response was received",
-            code="remote_no_response",
-            status=None,
-            request_accepted=None,
+        (
+            RemoteOperationError(
+                "Remote operation failed with HTTP 404 (NotFound)",
+                code="NotFound",
+                status=404,
+                request_accepted=False,
+            ),
+            None,
         ),
-        RemoteOperationError(
-            "Remote operation failed with HTTP 400 (invalid_request)",
-            code="invalid_request",
-            status=400,
-            request_accepted=False,
+        (
+            RemoteOperationError(
+                "Remote operation failed with HTTP 404 (NotFound)",
+                code="NotFound",
+                status=404,
+                request_accepted=None,
+            ),
+            "previous-response",
         ),
-        RemoteOperationError(
-            "Remote operation failed with HTTP 503 (service_unavailable)",
-            code="service_unavailable",
-            status=503,
-            request_accepted=None,
+        (
+            RemoteOperationError(
+                "Remote operation failed with HTTP 404 (NotFound)",
+                code="NotFound",
+                status=404,
+                request_accepted=True,
+            ),
+            "previous-response",
+        ),
+        (
+            RemoteOperationError(
+                "Remote operation failed with HTTP 404 (notfound)",
+                code="notfound",
+                status=404,
+                request_accepted=False,
+            ),
+            "previous-response",
+        ),
+        (
+            RemoteOperationError(
+                "Remote operation failed with HTTP 400 "
+                "(previous_response_not_found)",
+                code="previous_response_not_found",
+                status=400,
+                request_accepted=False,
+            ),
+            "previous-response",
+        ),
+        (
+            RemoteOperationError(
+                "Remote operation failed with HTTP 404 (invalid_request)",
+                code="invalid_request",
+                status=404,
+                request_accepted=False,
+            ),
+            "previous-response",
+        ),
+        (
+            RemoteOperationError(
+                "Remote operation failed before a response was received",
+                code="remote_no_response",
+                status=None,
+                request_accepted=None,
+            ),
+            "previous-response",
+        ),
+        (
+            RemoteOperationError(
+                "Remote operation failed with HTTP 408 (request_timeout)",
+                code="request_timeout",
+                status=408,
+                request_accepted=None,
+            ),
+            "previous-response",
+        ),
+        (
+            RemoteOperationError(
+                "Remote operation failed with HTTP 503 (service_unavailable)",
+                code="service_unavailable",
+                status=503,
+                request_accepted=None,
+            ),
+            "previous-response",
         ),
     ],
 )
-def test_prompt_does_not_retry_ambiguous_or_unrelated_failures(error) -> None:
+def test_prompt_does_not_retry_ambiguous_or_unrelated_failures(
+    error,
+    previous_response_id,
+) -> None:
     runtime = _runtime()
     runtime._traffic_ledger = type(
         "Ledger",
@@ -3247,11 +3318,98 @@ def test_prompt_does_not_retry_ambiguous_or_unrelated_failures(error) -> None:
                 "activation_gate": False,
             },
             0,
+            previous_response_id,
+            include_seed_metadata=False,
+        )
+
+    assert caught.value is error
+    assert calls == 1
+    assert sleeps == []
+
+
+def test_prompt_generic_not_found_retry_is_bounded() -> None:
+    runtime = _runtime()
+    mark_started = []
+    runtime._traffic_ledger = type(
+        "Ledger",
+        (),
+        {
+            "mark_started": staticmethod(
+                lambda *args, **kwargs: mark_started.append((args, kwargs))
+            )
+        },
+    )()
+    calls = 0
+    sleeps = []
+    error = RemoteOperationError(
+        "Remote operation failed with HTTP 404 (NotFound)",
+        code="NotFound",
+        status=404,
+        request_accepted=False,
+    )
+
+    def json_request(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise error
+
+    runtime._json_request = json_request  # type: ignore[method-assign]
+    runtime._sleep = sleeps.append
+    with pytest.raises(RemoteOperationError) as caught:
+        runtime._invoke_prompt(
+            "weather-agent",
+            "1",
+            {
+                "body": {"input": "Synthetic chained request."},
+                "expected_status": 200,
+                "semantic_assertions": {},
+                "activation_gate": False,
+            },
+            0,
             "previous-response",
             include_seed_metadata=False,
         )
 
     assert caught.value is error
+    assert calls == 3
+    assert sleeps == [1, 2]
+    assert len(mark_started) == 1
+
+
+def test_prompt_does_not_retry_post_response_contract_failure() -> None:
+    runtime = _runtime()
+    runtime._traffic_ledger = type(
+        "Ledger",
+        (),
+        {"mark_started": staticmethod(lambda *_args, **_kwargs: None)},
+    )()
+    calls = 0
+    sleeps = []
+
+    def json_request(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return {"output": []}
+
+    runtime._json_request = json_request  # type: ignore[method-assign]
+    runtime._sleep = sleeps.append
+    with pytest.raises(RemoteOperationError) as caught:
+        runtime._invoke_prompt(
+            "weather-agent",
+            "1",
+            {
+                "body": {"input": "Synthetic chained request."},
+                "expected_status": 200,
+                "semantic_assertions": {},
+                "activation_gate": False,
+            },
+            0,
+            "previous-response",
+            include_seed_metadata=False,
+        )
+
+    assert caught.value.code == "prompt_response_identity_missing"
+    assert caught.value.request_accepted is True
     assert calls == 1
     assert sleeps == []
 
