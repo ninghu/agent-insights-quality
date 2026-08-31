@@ -4,7 +4,9 @@ import threading
 import time
 from copy import deepcopy
 
-from agent_insights_quality.util import content_hash
+import pytest
+
+from agent_insights_quality.util import ContractError, content_hash
 from agent_insights_quality.validation_policy import load_validation_policy
 from agent_insights_quality.validation_quota import (
     CapacityPlan,
@@ -21,6 +23,7 @@ from agent_insights_quality.validation_rules import (
 from agent_insights_quality.validation_runtime import (
     AuthoritySpec,
     DeployedRuntime,
+    _deployment_canaries,
     deploy_all_authorities,
     execute_validation_matrix,
     invalidated_authorities,
@@ -71,6 +74,7 @@ def _authority(
     *,
     baseline: bool,
     model_mediated: bool = False,
+    runtime_kind: str = "hosted_code",
 ) -> AuthoritySpec:
     mode = "baseline" if baseline else (
         "model_mediated" if model_mediated else "deterministic"
@@ -129,8 +133,8 @@ def _authority(
         authority_kind="baseline" if baseline else "issue",
         canonical_agent=agent,
         logical_version="v0" if baseline else authority_id,
-        runtime_kind="hosted_code",
-        framework="langgraph",
+        runtime_kind=runtime_kind,
+        framework="prompt" if runtime_kind == "prompt" else "langgraph",
         model_contract=MODEL,
     )
     return AuthoritySpec(
@@ -138,8 +142,8 @@ def _authority(
         authority_kind="baseline" if baseline else "issue",
         canonical_agent=agent,
         logical_version="v0" if baseline else authority_id,
-        runtime_kind="hosted_code",
-        framework="langgraph",
+        runtime_kind=runtime_kind,
+        framework="prompt" if runtime_kind == "prompt" else "langgraph",
         source_content_digest=HASH,
         execution_digest=rules["execution_digest"],
         validation_mode=mode,
@@ -156,7 +160,12 @@ def _authorities() -> list[AuthoritySpec]:
         "support-ticket-agent",
     ]
     values = [
-        _authority(f"{agent}/v0", agent, baseline=True)
+        _authority(
+            f"{agent}/v0",
+            agent,
+            baseline=True,
+            runtime_kind="prompt" if agent == "weather-agent" else "hosted_code",
+        )
         for agent in agents
     ]
     for number in range(1, 37):
@@ -177,6 +186,7 @@ def _authorities() -> list[AuthoritySpec]:
                 agent,
                 baseline=False,
                 model_mediated=number <= 12 or number in {21, 25, 26},
+                runtime_kind="prompt" if agent == "weather-agent" else "hosted_code",
             )
         )
     return values
@@ -187,9 +197,12 @@ class Deployer:
         self.active = 0
         self.maximum = 0
         self.lock = threading.Lock()
+        self.ready: list[str] = []
+        self.started: list[str] = []
 
     def deploy(self, authority, planned) -> DeployedRuntime:
         with self.lock:
+            self.started.append(authority.authority_id)
             self.active += 1
             self.maximum = max(self.maximum, self.active)
         time.sleep(0.001)
@@ -218,6 +231,9 @@ class Deployer:
             telemetry_identity_id=f"version-{authority.authority_id}",
             connection_ids=(),
         )
+
+    def assert_ready(self, authority, _deployed) -> None:
+        self.ready.append(authority.authority_id)
 
 
 class Runner:
@@ -370,6 +386,15 @@ def test_deployment_is_bounded_to_eight_and_each_authority_is_independent() -> N
     )
     assert len(deployed) == 41
     assert 1 < deployer.maximum <= 8
+    prompt_canary, hosted_canary = _deployment_canaries(authorities)
+    assert deployer.started[:2] == [
+        prompt_canary.authority_id,
+        hosted_canary.authority_id,
+    ]
+    assert deployer.ready == [
+        prompt_canary.authority_id,
+        hosted_canary.authority_id,
+    ]
     by_intent = {}
     for index, event in enumerate(events):
         key = event["intent_reference"]
@@ -383,6 +408,54 @@ def test_deployment_is_bounded_to_eight_and_each_authority_is_independent() -> N
             by_intent[key] = index
         elif event["state"] == "created":
             assert by_intent[key] < index
+
+
+def test_failed_hosted_canary_records_cleanup_intents_without_fanout() -> None:
+    policy = load_validation_policy()
+    authorities = _authorities()
+    planned = plan_runtime_topology(
+        authorities,
+        cycle_suffix="0123456789ab",
+        policy=policy,
+    )
+    prompt_canary, hosted_canary = _deployment_canaries(authorities)
+    events = []
+
+    class FailingHostedCanary(Deployer):
+        def deploy(self, authority, planned):
+            if authority.authority_id == hosted_canary.authority_id:
+                self.started.append(authority.authority_id)
+                raise ContractError("synthetic Hosted canary failure")
+            return super().deploy(authority, planned)
+
+    deployer = FailingHostedCanary()
+    with pytest.raises(ContractError, match="Hosted canary"):
+        deploy_all_authorities(
+            authorities,
+            planned,
+            deployer=deployer,
+            maximum_concurrency=8,
+            record_resource=events.append,
+        )
+    assert deployer.started == [
+        prompt_canary.authority_id,
+        hosted_canary.authority_id,
+    ]
+    assert deployer.ready == [prompt_canary.authority_id]
+    hosted_events = [
+        item
+        for item in events
+        if item["authority_id"] == hosted_canary.authority_id
+    ]
+    assert {item["state"] for item in hosted_events} == {
+        "create_intent",
+        "ambiguous_create",
+    }
+    assert not any(
+        item["authority_id"]
+        not in {prompt_canary.authority_id, hosted_canary.authority_id}
+        for item in events
+    )
 
 
 def test_all_issues_run_exact_same_matrix_against_paired_v0_without_resampling() -> None:

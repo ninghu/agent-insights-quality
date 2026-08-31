@@ -733,6 +733,45 @@ class FoundryAuthorityDeployer:
     def wait_project(self) -> None:
         self._client.wait_project()
 
+    def assert_ready(
+        self,
+        authority: AuthoritySpec,
+        deployed: DeployedRuntime,
+    ) -> None:
+        hosted = authority.runtime_kind != "prompt"
+        details = self._client.version_details(
+            deployed.runtime_agent_name,
+            deployed.runtime_agent_version,
+            hosted=hosted,
+        )
+        if str(details.get("status") or "").casefold() != "active":
+            raise ContractError(
+                "Validation canary Agent version is not active"
+            )
+        provider_version_id = str(
+            details.get("id")
+            or details.get("version_id")
+            or (
+                f"{deployed.provider_agent_id}/versions/"
+                f"{deployed.runtime_agent_version}"
+            )
+        )
+        if provider_version_id != deployed.provider_agent_version_id:
+            raise ContractError(
+                "Validation canary Agent version identity changed"
+            )
+        if hosted and (
+            _nested_reference(details, "identity", "id")
+            != deployed.hosted_identity_id
+            or _nested_reference(details, "blueprint", "id")
+            != deployed.hosted_blueprint_id
+            or _nested_reference(details, "deployment", "id")
+            != deployed.hosted_deployment_id
+        ):
+            raise ContractError(
+                "Validation Hosted canary topology is not ready"
+            )
+
     def deploy(
         self,
         authority: AuthoritySpec,

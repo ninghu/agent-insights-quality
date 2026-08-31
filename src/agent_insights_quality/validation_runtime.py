@@ -63,6 +63,13 @@ class AuthorityDeployer(Protocol):
     def deploy(self, authority: AuthoritySpec, planned: PlannedRuntime) -> DeployedRuntime:
         ...
 
+    def assert_ready(
+        self,
+        authority: AuthoritySpec,
+        deployed: DeployedRuntime,
+    ) -> None:
+        ...
+
 
 class ScenarioAttemptRunner(Protocol):
     def run(
@@ -217,27 +224,75 @@ def deploy_all_authorities(
                 )
         return value
 
+    def accept(authority_id: str, value: DeployedRuntime) -> None:
+        if (
+            value.authority_id != authority_id
+            or value.runtime_kind != by_id[authority_id].runtime_kind
+            or value.runtime_agent_name != by_id[authority_id].runtime_agent_name
+        ):
+            raise ContractError("Deployed runtime identity differs from its plan")
+        with lock:
+            if authority_id in deployed:
+                raise ContractError("Validation authority was deployed more than once")
+            deployed[authority_id] = value
+
+    prompt_canary, hosted_canary = _deployment_canaries(authorities)
+    canary_ids = {
+        prompt_canary.authority_id,
+        hosted_canary.authority_id,
+    }
+    for canary in (prompt_canary, hosted_canary):
+        value = deploy(canary)
+        deployer.assert_ready(canary, value)
+        accept(canary.authority_id, value)
+
+    remaining = [
+        authority
+        for authority in authorities
+        if authority.authority_id not in canary_ids
+    ]
     with ThreadPoolExecutor(max_workers=maximum_concurrency) as pool:
         futures = {
             pool.submit(deploy, authority): authority.authority_id
-            for authority in authorities
+            for authority in remaining
         }
         for future in as_completed(futures):
             authority_id = futures[future]
             value = future.result()
-            if (
-                value.authority_id != authority_id
-                or value.runtime_kind != by_id[authority_id].runtime_kind
-                or value.runtime_agent_name != by_id[authority_id].runtime_agent_name
-            ):
-                raise ContractError("Deployed runtime identity differs from its plan")
-            with lock:
-                if authority_id in deployed:
-                    raise ContractError("Validation authority was deployed more than once")
-                deployed[authority_id] = value
+            accept(authority_id, value)
     if len(deployed) != len(authorities):
         raise ContractError("Validation did not deploy every authority")
     return deployed
+
+
+def _deployment_canaries(
+    authorities: Sequence[AuthoritySpec],
+) -> tuple[AuthoritySpec, AuthoritySpec]:
+    prompt = sorted(
+        (
+            item
+            for item in authorities
+            if item.authority_kind == "baseline"
+            and item.validation_mode == "baseline"
+            and item.runtime_kind == "prompt"
+        ),
+        key=lambda item: item.authority_id,
+    )
+    hosted = sorted(
+        (
+            item
+            for item in authorities
+            if item.authority_kind == "baseline"
+            and item.validation_mode == "baseline"
+            and item.runtime_kind != "prompt"
+        ),
+        key=lambda item: item.authority_id,
+    )
+    if not prompt or not hosted:
+        raise ContractError(
+            "Validation deployment requires healthy Prompt and Hosted canaries"
+        )
+    return prompt[0], hosted[0]
 
 
 def _deployment_intents(

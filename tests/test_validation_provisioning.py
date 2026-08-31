@@ -9,6 +9,7 @@ import pytest
 from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.util import ContractError, ROOT
 from agent_insights_quality.validation_provisioning import (
+    FoundryAuthorityDeployer,
     ValidationProjectProvisioner,
     _cycle_image_tag,
     _rate_limits,
@@ -215,3 +216,35 @@ def test_support_image_records_acr_intents_before_push(
     assert ("event", "created", "acr_tag") in timeline[push_index + 1 :]
     assert ("event", "created", "acr_manifest") in timeline[push_index + 1 :]
     assert result.endswith(f"@{digest}")
+
+
+def test_hosted_canary_readiness_rechecks_active_topology() -> None:
+    calls = []
+    deployer = object.__new__(FoundryAuthorityDeployer)
+    details = {
+        "status": "active",
+        "id": "synthetic-version",
+        "identity": {"id": "synthetic-identity"},
+        "blueprint": {"id": "synthetic-blueprint"},
+        "deployment": {"id": "synthetic-deployment"},
+    }
+    deployer._client = SimpleNamespace(
+        version_details=lambda name, version, *, hosted: (
+            calls.append((name, version, hosted)) or details
+        )
+    )
+    authority = SimpleNamespace(runtime_kind="hosted_code")
+    deployed = SimpleNamespace(
+        runtime_agent_name="synthetic-agent",
+        runtime_agent_version="1",
+        provider_agent_id="synthetic-agent",
+        provider_agent_version_id="synthetic-version",
+        hosted_identity_id="synthetic-identity",
+        hosted_blueprint_id="synthetic-blueprint",
+        hosted_deployment_id="synthetic-deployment",
+    )
+    deployer.assert_ready(authority, deployed)
+    assert calls == [("synthetic-agent", "1", True)]
+    details["status"] = "pending"
+    with pytest.raises(ContractError, match="not active"):
+        deployer.assert_ready(authority, deployed)

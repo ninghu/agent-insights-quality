@@ -60,6 +60,9 @@ def _is_package_file(path: Path) -> bool:
         and path.suffix.casefold() not in {".pyc", ".pyo"}
     )
 
+_AGENT_CREATE_PROPAGATION_SECONDS = 10 * 60
+_AGENT_CREATE_MAX_BACKOFF_SECONDS = 30
+
 
 class RemoteHttpError(ContractError):
     def __init__(self, status: int, code: str, message: str, route: str) -> None:
@@ -68,6 +71,8 @@ class RemoteHttpError(ContractError):
             + (f" ({code}: {message})" if code else "")
         )
         self.status = status
+        self.code = code
+        self.route = route
 
     @property
     def transient(self) -> bool:
@@ -1010,6 +1015,7 @@ class FoundryProvisioner:
         self._profile = profile
         self._token_provider = token_provider
         self._progress = progress or ProgressReporter("aiq-provision")
+        self._project_ready_at: float | None = None
 
     def report_progress(self, message: str) -> None:
         self._progress.emit(message)
@@ -1030,6 +1036,7 @@ class FoundryProvisioner:
                     raise
                 response = {"_status": error.status}
             if response["_status"] == 200:
+                self._project_ready_at = time.monotonic()
                 self.report_progress(
                     f"{self._profile.name}: Foundry Project data plane ready"
                 )
@@ -1157,7 +1164,9 @@ class FoundryProvisioner:
             project_endpoint=self._profile.project_endpoint,
         )
         version = ""
-        for attempt in range(3):
+        transient_attempt = 0
+        propagation_attempt = 0
+        while True:
             try:
                 if artifact["kind"] == "hosted_code":
                     version = self._create_source_version(
@@ -1188,11 +1197,50 @@ class FoundryProvisioner:
                     version = _version_from_response(response)
                 break
             except RemoteHttpError as error:
-                if not error.transient or attempt == 2:
+                if self._agent_create_not_found_is_transient(
+                    error,
+                    create_agent=create_agent,
+                ):
+                    assert self._project_ready_at is not None
+                    elapsed = time.monotonic() - self._project_ready_at
+                    remaining = (
+                        _AGENT_CREATE_PROPAGATION_SECONDS - elapsed
+                    )
+                    if remaining <= 0:
+                        raise
+                    delay = min(
+                        5 * (2**min(propagation_attempt, 3)),
+                        _AGENT_CREATE_MAX_BACKOFF_SECONDS,
+                        remaining,
+                    )
+                    propagation_attempt += 1
+                    self.report_progress(
+                        f"{self._profile.name}/{agent['name']}/"
+                        f"{logical_version}: Agent-create propagation pending "
+                        f"at {elapsed:.0f}s; retrying in {delay:.0f}s"
+                    )
+                    time.sleep(delay)
+                    recovered = self._find_version(
+                        agent["name"],
+                        logical_version,
+                        artifact["content_digest"],
+                        hosted=agent["type"] != "prompt",
+                    )
+                    if recovered:
+                        version = recovered
+                        break
+                    create_agent = not self._agent_exists(
+                        agent["name"],
+                        hosted=agent["type"] != "prompt",
+                    )
+                    continue
+                if not error.transient or transient_attempt == 2:
                     raise
+                transient_attempt += 1
                 self.report_progress(
                     f"{self._profile.name}/{agent['name']}/{logical_version}: "
-                    f"transient create failure; recovering ({attempt + 2}/3)"
+                    "transient create failure; recovering "
+                    f"({transient_attempt + 1}/3)"
                 )
                 time.sleep(5)
                 recovered = self._find_version(
@@ -1204,7 +1252,7 @@ class FoundryProvisioner:
                 if recovered:
                     version = recovered
                     break
-                time.sleep(60 * (attempt + 1))
+                time.sleep(60 * transient_attempt)
                 create_agent = not self._agent_exists(
                     agent["name"],
                     hosted=agent["type"] != "prompt",
@@ -1226,6 +1274,23 @@ class FoundryProvisioner:
             expected_metadata=metadata,
         )
         return version
+
+    def _agent_create_not_found_is_transient(
+        self,
+        error: RemoteHttpError,
+        *,
+        create_agent: bool,
+    ) -> bool:
+        ready_at = self._project_ready_at
+        return (
+            create_agent
+            and ready_at is not None
+            and error.status == 404
+            and error.code.casefold() == "notfound"
+            and error.route == "POST /agents"
+            and time.monotonic() - ready_at
+            < _AGENT_CREATE_PROPAGATION_SECONDS
+        )
 
     def _recover_exact_version(
         self,
