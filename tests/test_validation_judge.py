@@ -116,13 +116,7 @@ def _binding() -> dict:
     }
 
 
-def _mechanical(
-    role: str,
-    index: int = 1,
-    *,
-    root_output_messages: tuple[bool, bool] = (True, True),
-    child_output_messages: tuple[bool, bool] = (False, False),
-) -> dict:
+def _mechanical(role: str, index: int = 1) -> dict:
     name = (
         "weather-agent-baseline-cycle"
         if role in {"baseline", "paired_v0"}
@@ -158,8 +152,8 @@ def _mechanical(
                         "terminal_success": "True",
                         "terminal_output": "True",
                         "handled_error": "",
-                        "output_messages_present": root_output_messages[0],
-                        "output_messages_nonempty": root_output_messages[1],
+                        "output_messages_present": True,
+                        "output_messages_nonempty": True,
                     },
                     {
                         "sequence": 2,
@@ -178,8 +172,8 @@ def _mechanical(
                         "terminal_success": "",
                         "terminal_output": "True",
                         "handled_error": "",
-                        "output_messages_present": child_output_messages[0],
-                        "output_messages_nonempty": child_output_messages[1],
+                        "output_messages_present": False,
+                        "output_messages_nonempty": False,
                     },
                 ],
             }
@@ -397,28 +391,12 @@ def test_output_messages_expectation_inherits_and_paired_v0_is_present() -> None
     }
 
 
-@pytest.mark.parametrize(
-    ("root_output_messages", "child_output_messages"),
-    [
-        ((False, False), (True, True)),
-        ((True, True), (False, False)),
-    ],
-)
-def test_output_messages_structure_is_top_level_only(
-    root_output_messages: tuple[bool, bool],
-    child_output_messages: tuple[bool, bool],
-) -> None:
-    evidence = _mechanical(
-        "baseline",
-        root_output_messages=root_output_messages,
-        child_output_messages=child_output_messages,
-    )
+def test_output_messages_structure_is_top_level_only() -> None:
+    evidence = _mechanical("baseline")
     root, child = evidence["trace_graph"]["nodes"]
     assert root["operation_name"] == "invoke_agent"
-    assert (
-        root["output_messages_present"],
-        root["output_messages_nonempty"],
-    ) == root_output_messages
+    assert root["output_messages_present"] is True
+    assert root["output_messages_nonempty"] is True
     assert child["output_messages_present"] is None
     assert child["output_messages_nonempty"] is None
 

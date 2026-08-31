@@ -1578,19 +1578,6 @@ union traces, dependencies, requests
                         "terminal_success": row["terminal_success"],
                         "terminal_output": row["terminal_output"],
                         "handled_error": row["handled_error"],
-                        **(
-                            {
-                                "output_messages_present": row[
-                                    "output_messages_present"
-                                ],
-                                "output_messages_nonempty": row[
-                                    "output_messages_nonempty"
-                                ],
-                            }
-                            if row["operation_name"] == "invoke_agent"
-                            and not row["parent_span_id"]
-                            else {}
-                        ),
                     }
                     for sequence, row in enumerate(
                         rows_by_operation[operation_id],
@@ -1632,15 +1619,10 @@ union withsource=telemetry_type traces, dependencies, requests
 | extend terminal_success=tostring(customDimensions["aiq.terminal_response.success"])
 | extend terminal_output=tostring(customDimensions["aiq.terminal_response.output_present"])
 | extend handled_error=tostring(customDimensions["aiq.tool.error.handled"])
-| extend output_messages_present=bag_has_key(
-    customDimensions, "gen_ai.output.messages")
-| extend output_messages_nonempty=output_messages_present
-    and isnotempty(tostring(customDimensions["gen_ai.output.messages"]))
 | project operation_Id, id, operation_ParentId, telemetry_type,
     operation_name, timestamp, duration, success, resultCode,
     tool_name, tool_call_id, error_type, tool_ok,
-    terminal_success, terminal_output, handled_error,
-    output_messages_present, output_messages_nonempty
+    terminal_success, terminal_output, handled_error
 | order by operation_Id asc, timestamp asc, id asc
 """
         result = self._query_resource(
@@ -1668,14 +1650,6 @@ union withsource=telemetry_type traces, dependencies, requests
                 "terminal_success": str(row[13] or ""),
                 "terminal_output": str(row[14] or ""),
                 "handled_error": str(row[15] or ""),
-                "output_messages_present": _telemetry_boolean(
-                    row[16],
-                    field="output-message presence",
-                ),
-                "output_messages_nonempty": _telemetry_boolean(
-                    row[17],
-                    field="output-message nonempty state",
-                ),
             }
             for table in result.tables
             for row in table.rows
@@ -2373,12 +2347,6 @@ def _opaque(value: str) -> str:
     import hashlib
 
     return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def _telemetry_boolean(value: Any, *, field: str) -> bool:
-    if not isinstance(value, bool):
-        raise ContractError(f"Trace collection returned invalid {field}")
-    return value
 
 
 def _remote_error(payload: bytes) -> tuple[str, str]:
