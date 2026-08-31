@@ -1231,6 +1231,8 @@ def test_collect_trace_evidence_emits_allowlisted_hashed_graph(monkeypatch) -> N
                 "true",
                 "true",
                 "false",
+                True,
+                True,
             ],
             [
                 operation_id,
@@ -1249,6 +1251,8 @@ def test_collect_trace_evidence_emits_allowlisted_hashed_graph(monkeypatch) -> N
                 "",
                 "",
                 "false",
+                True,
+                True,
             ],
         ]
 
@@ -1272,8 +1276,12 @@ def test_collect_trace_evidence_emits_allowlisted_hashed_graph(monkeypatch) -> N
     root, child = operation["spans"]
     assert root["sequence"] == 1
     assert root["operation_name"] == "invoke_agent"
+    assert root["output_messages_present"] is True
+    assert root["output_messages_nonempty"] is True
     assert child["sequence"] == 2
     assert child["operation_name"] == "execute_tool"
+    assert "output_messages_present" not in child
+    assert "output_messages_nonempty" not in child
     assert child["tool_name"] == "synthetic_lookup"
     assert child["success"] == "False"
     assert child["result_code"] == "0"
@@ -1289,7 +1297,13 @@ def test_collect_trace_evidence_emits_allowlisted_hashed_graph(monkeypatch) -> N
     assert 'customDimensions["gen_ai.response.id"]' not in query
     assert 'customDimensions["x-ms-client-request-id"]' not in query
     assert 'customDimensions["gen_ai.input.messages"]' not in query
-    assert 'customDimensions["gen_ai.output.messages"]' not in query
+    assert 'bag_has_key(\n    customDimensions, "gen_ai.output.messages")' in query
+    assert (
+        'isnotempty(tostring(customDimensions["gen_ai.output.messages"]))'
+        in query
+    )
+    assert "| project" in query
+    assert "output_messages_present, output_messages_nonempty" in query
     assert 'customDimensions["gen_ai.tool.call.arguments"]' not in query
     assert 'customDimensions["gen_ai.tool.call.result"]' not in query
 

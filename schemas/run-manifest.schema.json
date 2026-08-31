@@ -47,13 +47,14 @@
           "baseline_contract": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["request_count", "terminal_response", "semantic_assertions", "function_calling", "trace_operations", "validation_mode"],
+            "required": ["request_count", "terminal_response", "semantic_assertions", "function_calling", "trace_operations", "output_messages", "validation_mode"],
             "properties": {
               "request_count": {"const": 5},
               "terminal_response": {"enum": ["direct_prompt", "standard_assistant_message", "explicit_span_attributes"]},
               "semantic_assertions": {"enum": ["required", "required_per_request"]},
               "function_calling": {"enum": ["forbidden", "not_applicable"]},
               "trace_operations": {"enum": ["uniform", "required_per_request"]},
+              "output_messages": {"const": "present"},
               "validation_mode": {"const": "baseline"}
             }
           },
