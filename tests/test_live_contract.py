@@ -1201,6 +1201,111 @@ def test_trace_row_query_joins_split_reference_and_identity_spans_by_operation(
     ]
 
 
+def test_collect_trace_evidence_emits_allowlisted_hashed_graph(monkeypatch) -> None:
+    query_module = types.ModuleType("azure.monitor.query")
+    query_module.LogsQueryStatus = type("LogsQueryStatus", (), {"SUCCESS": "success"})
+    monitor_module = types.ModuleType("azure.monitor")
+    azure_module = types.ModuleType("azure")
+    monkeypatch.setitem(sys.modules, "azure", azure_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor", monitor_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
+    operation_id = "a" * 32
+    captured = []
+
+    class Table:
+        rows = [
+            [
+                operation_id,
+                "span-root",
+                "",
+                "requests",
+                "invoke_agent",
+                "2026-08-31T10:00:00+00:00",
+                25.0,
+                True,
+                "200",
+                "",
+                "",
+                "",
+                "",
+                "true",
+                "true",
+                "false",
+            ],
+            [
+                operation_id,
+                "span-child",
+                "span-root",
+                "dependencies",
+                "execute_tool",
+                "2026-08-31T10:00:00.010+00:00",
+                10.0,
+                False,
+                0,
+                "synthetic_lookup",
+                "tool-call-private",
+                "",
+                "true",
+                "",
+                "",
+                "false",
+            ],
+        ]
+
+    class Result:
+        status = "success"
+        tables = [Table()]
+
+    runtime = _runtime()
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+    runtime._query_resource = (  # type: ignore[method-assign]
+        lambda _client, query, **_kwargs: captured.append(query) or Result()
+    )
+
+    evidence = runtime.collect_trace_evidence((operation_id,))
+
+    assert evidence["operation_count"] == 1
+    assert evidence["span_count"] == 2
+    operation = evidence["operations"][0]
+    assert operation["operation_reference"].startswith("sha256:")
+    assert operation_id not in json.dumps(evidence)
+    root, child = operation["spans"]
+    assert root["sequence"] == 1
+    assert root["operation_name"] == "invoke_agent"
+    assert child["sequence"] == 2
+    assert child["operation_name"] == "execute_tool"
+    assert child["tool_name"] == "synthetic_lookup"
+    assert child["success"] == "False"
+    assert child["result_code"] == "0"
+    assert child["span_reference"].startswith("sha256:")
+    assert child["parent_span_reference"] == root["span_reference"]
+    assert child["tool_call_reference"].startswith("sha256:")
+    serialized = json.dumps(evidence)
+    assert "span-root" not in serialized
+    assert "span-child" not in serialized
+    assert "tool-call-private" not in serialized
+    query = captured[0]
+    assert "operation_Id in" in query
+    assert 'customDimensions["gen_ai.response.id"]' not in query
+    assert 'customDimensions["x-ms-client-request-id"]' not in query
+    assert 'customDimensions["gen_ai.input.messages"]' not in query
+    assert 'customDimensions["gen_ai.output.messages"]' not in query
+    assert 'customDimensions["gen_ai.tool.call.arguments"]' not in query
+    assert 'customDimensions["gen_ai.tool.call.result"]' not in query
+
+
+def test_collect_trace_evidence_rejects_incomplete_operation_set() -> None:
+    runtime = _runtime()
+    operation_a = "a" * 32
+    operation_b = "b" * 32
+    runtime._collect_trace_rows = lambda _operations: [  # type: ignore[method-assign]
+        {"operation_id": operation_a}
+    ]
+
+    with pytest.raises(ContractError, match="incomplete"):
+        runtime.collect_trace_evidence((operation_a, operation_b))
+
+
 def _write_trace_assertion_traffic(
     path: Path,
     request_count: int = 1,
@@ -2394,8 +2499,19 @@ def test_telemetry_requires_every_request_reference() -> None:
     ) is None
 
 
-def test_wait_for_telemetry_correlates_prompt_split_span_fields_by_operation(
+@pytest.mark.parametrize(
+    "agent_name",
+    [
+        "weather-agent-cycle",
+        "healthcare-agent-cycle",
+        "finance-agent-cycle",
+        "travel-agent-cycle",
+        "support-ticket-agent-cycle",
+    ],
+)
+def test_wait_for_telemetry_discovers_exact_attempt_operations_for_every_agent(
     monkeypatch,
+    agent_name,
 ) -> None:
     query_module = types.ModuleType("azure.monitor.query")
     query_module.LogsQueryStatus = type("LogsQueryStatus", (), {"SUCCESS": "success"})
@@ -2404,53 +2520,69 @@ def test_wait_for_telemetry_correlates_prompt_split_span_fields_by_operation(
     monkeypatch.setitem(sys.modules, "azure", azure_module)
     monkeypatch.setitem(sys.modules, "azure.monitor", monitor_module)
     monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
-    reference = "resp_A1b2C3d4E5f6"
+    operations = ("a" * 32, "b" * 32)
     captured = []
+    timespans = []
 
     class Table:
-        rows = [["a" * 32, [reference]]]
+        rows = [[operations[0]], [operations[1]]]
 
     class Result:
         status = "success"
         tables = [Table()]
 
     runtime = _runtime()
+    monotonic = [0.0]
     runtime._logs_client = lambda: object()  # type: ignore[method-assign]
-    runtime._query_resource = (  # type: ignore[method-assign]
-        lambda _client, query, **_kwargs: captured.append(query) or Result()
+    runtime._monotonic = lambda: monotonic[0]
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
     )
+
+    def query(_client, query, **kwargs):
+        captured.append(query)
+        timespans.append(kwargs["timespan"])
+        return Result()
+
+    runtime._query_resource = query  # type: ignore[method-assign]
     invocation = InvocationEvidence(
         operation_ids=(),
-        response_references=(reference,),
+        response_references=(
+            "resp_A1b2C3d4E5f6",
+            "resp_F6e5D4c3B2a1",
+        ),
         started_at="2026-08-28T10:00:00+00:00",
         completed_at="2026-08-28T10:00:01+00:00",
-        request_count=1,
+        request_count=2,
         allow_window_correlation=False,
     )
 
     assert runtime.wait_for_telemetry(
-        agent_name="weather-agent",
-        foundry_version="1",
+        agent_name=agent_name,
+        foundry_version="cycle-version",
         invocation=invocation,
-    ) == ("a" * 32,)
-    query = captured[0]
-    assert query.index('customDimensions["gen_ai.response.id"]') < query.index(
-        'customDimensions["azure.ai.agentserver.response_id"]'
+    ) == operations
+    query_text = captured[0]
+    assert len(captured) == 2
+    assert 'customDimensions["gen_ai.response.id"]' not in query_text
+    assert 'customDimensions["x-ms-client-request-id"]' not in query_text
+    assert 'set_has_element(operation_names, "invoke_agent")' in query_text
+    assert f'set_has_element(agent_names, "{agent_name}")' in query_text
+    assert 'set_has_element(agent_versions, "cycle-version")' in query_text
+    assert "array_length(agent_names) == 1" in query_text
+    assert "array_length(agent_versions) == 1" in query_text
+    assert query_text.index("| summarize") < query_text.index(
+        'set_has_element(operation_names, "invoke_agent")'
     )
-    assert query.index(
-        'customDimensions["azure.ai.agentserver.response_id"]'
-    ) < query.index('customDimensions["response_id"]')
-    assert "request_id in" in query
-    assert 'set_has_element(agent_names, "weather-agent")' in query
-    assert 'set_has_element(agent_versions, "1")' in query
-    assert query.index("| summarize") < query.index(
-        'set_has_element(agent_versions, "1")'
-    )
-    assert query.index("by operation_Id") < query.index(
-        'set_has_element(agent_names, "weather-agent")'
-    )
-    assert "| where matched_reference in" not in query
-    assert "timestamp < datetime(2026-08-28T10:15:01+00:00)" in query
+    assert "timestamp >= datetime(2026-08-28T10:00:00+00:00)" in query_text
+    assert "timestamp <= datetime(2026-08-28T10:00:01+00:00)" in query_text
+    assert "order by first_seen asc" in query_text
+    assert timespans == [
+        (
+            datetime.fromisoformat(invocation.started_at),
+            datetime.fromisoformat(invocation.completed_at),
+        )
+    ] * 2
 
 
 def test_validation_telemetry_identity_is_derived_per_exact_operation(
@@ -2721,7 +2853,7 @@ def test_validation_telemetry_identity_does_not_interpolate_values(monkeypatch) 
     assert foundry_version not in captured[0]
 
 
-def test_wait_for_telemetry_rejects_ambiguous_response_mapping(
+def test_wait_for_telemetry_preserves_all_exact_identity_operations(
     monkeypatch,
 ) -> None:
     query_module = types.ModuleType("azure.monitor.query")
@@ -2731,14 +2863,13 @@ def test_wait_for_telemetry_rejects_ambiguous_response_mapping(
     monkeypatch.setitem(sys.modules, "azure", azure_module)
     monkeypatch.setitem(sys.modules, "azure.monitor", monitor_module)
     monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
-    reference_a = "resp_A1b2C3d4E5f6"
-    reference_b = "resp_F6e5D4c3B2a1"
     sleeps = []
 
     class Table:
         rows = [
-            ["a" * 32, [reference_a]],
-            ["b" * 32, [reference_a, reference_b]],
+            ["a" * 32],
+            ["b" * 32],
+            ["c" * 32],
         ]
 
     class Result:
@@ -2746,25 +2877,34 @@ def test_wait_for_telemetry_rejects_ambiguous_response_mapping(
         tables = [Table()]
 
     runtime = _runtime()
+    monotonic = [0.0]
     runtime._logs_client = lambda: object()  # type: ignore[method-assign]
     runtime._query_resource = lambda *_args, **_kwargs: Result()  # type: ignore[method-assign]
-    runtime._sleep = sleeps.append
+    runtime._monotonic = lambda: monotonic[0]
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        monotonic[0] += seconds
+
+    runtime._sleep = sleep
     invocation = InvocationEvidence(
         operation_ids=(),
-        response_references=(reference_a, reference_b),
+        response_references=(
+            "resp_A1b2C3d4E5f6",
+            "resp_F6e5D4c3B2a1",
+        ),
         started_at="2026-08-28T10:00:00+00:00",
         completed_at="2026-08-28T10:00:01+00:00",
         request_count=2,
         allow_window_correlation=False,
     )
 
-    with pytest.raises(ContractError, match="ambiguous"):
-        runtime.wait_for_telemetry(
-            agent_name="finance-agent",
-            foundry_version="opaque-version",
-            invocation=invocation,
-        )
-    assert sleeps == []
+    assert runtime.wait_for_telemetry(
+        agent_name="finance-agent",
+        foundry_version="opaque-version",
+        invocation=invocation,
+    ) == ("a" * 32, "b" * 32, "c" * 32)
+    assert sleeps == [15]
 
 
 def test_wait_for_telemetry_timeout_records_safe_reference_counts(
@@ -2777,12 +2917,10 @@ def test_wait_for_telemetry_timeout_records_safe_reference_counts(
     monkeypatch.setitem(sys.modules, "azure", azure_module)
     monkeypatch.setitem(sys.modules, "azure.monitor", monitor_module)
     monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
-    reference_a = "resp_A1b2C3d4E5f6"
-    reference_b = "resp_F6e5D4c3B2a1"
     monotonic = [0.0]
 
     class Table:
-        rows = [["a" * 32, [reference_a]]]
+        rows = []
 
     class Result:
         status = "success"
@@ -2797,7 +2935,10 @@ def test_wait_for_telemetry_timeout_records_safe_reference_counts(
     )
     invocation = InvocationEvidence(
         operation_ids=(),
-        response_references=(reference_a, reference_b),
+        response_references=(
+            "resp_A1b2C3d4E5f6",
+            "resp_F6e5D4c3B2a1",
+        ),
         started_at="2026-08-28T10:00:00+00:00",
         completed_at="2026-08-28T10:00:01+00:00",
         request_count=2,
@@ -2812,8 +2953,8 @@ def test_wait_for_telemetry_timeout_records_safe_reference_counts(
         )
 
     assert caught.value.request_accepted is True
-    assert caught.value.matched_reference_count == 1
-    assert caught.value.expected_reference_count == 2
+    assert caught.value.matched_reference_count == 0
+    assert caught.value.expected_reference_count == 1
     assert caught.value.missing_reference_count == 1
     assert monotonic[0] == 15 * 60
 

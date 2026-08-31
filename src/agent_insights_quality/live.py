@@ -115,7 +115,9 @@ class TelemetryCorrelationError(ContractError):
         matched_reference_count: int,
         expected_reference_count: int,
     ) -> None:
-        super().__init__("Natural telemetry did not arrive before the bounded deadline")
+        super().__init__(
+            "Natural telemetry operations did not arrive before the bounded deadline"
+        )
         self.matched_reference_count = matched_reference_count
         self.expected_reference_count = expected_reference_count
         self.missing_reference_count = (
@@ -1075,85 +1077,78 @@ union traces, dependencies, requests
         client = self._logs_client()
         start = datetime.fromisoformat(invocation.started_at)
         traffic_end = datetime.fromisoformat(invocation.completed_at)
-        query_end = traffic_end + timedelta(minutes=15)
+        if traffic_end < start:
+            raise ContractError("Telemetry discovery has an invalid invocation window")
         _validate_response_references(
             invocation.response_references,
             invocation.request_count,
         )
-        escaped = ", ".join(
-            f'"{value.replace(chr(34), chr(92) + chr(34))}"'
-            for value in invocation.response_references
-        )
         query = f"""
 union traces, dependencies, requests
 | where timestamp >= datetime({start.astimezone(UTC).isoformat()})
-  and timestamp < datetime({query_end.astimezone(UTC).isoformat()})
-| extend response_id = coalesce(
-    tostring(customDimensions["gen_ai.response.id"]),
-    tostring(customDimensions["azure.ai.agentserver.response_id"]),
-    tostring(customDimensions["response_id"]))
-| extend request_id = coalesce(
-    tostring(customDimensions["x-ms-client-request-id"]),
-    tostring(customDimensions["client_request_id"]),
-    tostring(customDimensions["request_id"]))
+  and timestamp <= datetime({traffic_end.astimezone(UTC).isoformat()})
+| extend operation_name = tostring(customDimensions["gen_ai.operation.name"])
 | extend observed_agent = tostring(customDimensions["gen_ai.agent.name"])
 | extend agent_version = tostring(customDimensions["gen_ai.agent.version"])
-| extend matched_reference = case(
-    response_id in ({escaped}), response_id,
-    request_id in ({escaped}), request_id,
-    "")
 | summarize
-    matched_references=make_set_if(
-      matched_reference, matched_reference in ({escaped})),
+    operation_names=make_set_if(operation_name, isnotempty(operation_name)),
     agent_names=make_set_if(observed_agent, isnotempty(observed_agent)),
-    agent_versions=make_set_if(agent_version, isnotempty(agent_version))
+    agent_versions=make_set_if(agent_version, isnotempty(agent_version)),
+    first_seen=min(timestamp)
   by operation_Id
-| where array_length(matched_references) > 0
+| where set_has_element(operation_names, "invoke_agent")
+  and array_length(agent_names) == 1
+  and array_length(agent_versions) == 1
   and set_has_element(agent_names, "{agent_name}")
   and set_has_element(agent_versions, "{foundry_version}")
-| project operation_Id, matched_references
+| order by first_seen asc, operation_Id asc
+| project operation_Id
 """
         deadline = self._monotonic() + 15 * 60
         next_progress = self._monotonic() + 60
-        matched_reference_count = 0
-        while self._monotonic() < deadline:
+        matched_operation_count = 0
+        stable_operations: tuple[str, ...] | None = None
+        stable_since: float | None = None
+        while True:
             result = self._query_resource(
                 client,
                 query,
-                timespan=(start, query_end),
+                timespan=(start, traffic_end),
             )
             if result.status == LogsQueryStatus.SUCCESS and result.tables:
-                complete = _complete_operation_ids(
-                    result.tables,
-                    invocation.response_references,
+                operations = _discovered_operation_ids(result.tables)
+                matched_operation_count = max(
+                    matched_operation_count,
+                    len(operations),
                 )
-                matched_reference_count = max(
-                    matched_reference_count,
-                    _matched_reference_count(
-                        result.tables,
-                        invocation.response_references,
-                    ),
-                )
-                if complete is not None:
-                    return complete
-                if _operation_correlation_impossible(
-                    result.tables,
-                    invocation.response_references,
-                ):
-                    raise ContractError(
-                        "Natural telemetry response correlation is ambiguous"
-                    )
-            if self._monotonic() >= next_progress:
+                now = self._monotonic()
+                if operations:
+                    if operations != stable_operations:
+                        stable_operations = operations
+                        stable_since = now
+                    elif (
+                        stable_since is not None
+                        and now - stable_since
+                        >= _TELEMETRY_IDENTITY_STABILIZATION_SECONDS
+                    ):
+                        return operations
+                else:
+                    stable_operations = None
+                    stable_since = None
+            now = self._monotonic()
+            if now >= deadline:
+                break
+            if now >= next_progress:
                 elapsed = int(15 * 60 - max(deadline - self._monotonic(), 0))
                 self.report_progress(
                     f"{agent_name}/{foundry_version}: waiting for telemetry "
                     f"({elapsed}s)"
                 )
                 next_progress = self._monotonic() + 60
-            self._sleep(15)
+            self._sleep(min(15, deadline - now))
         raise TelemetryCorrelationError(
-            matched_reference_count=matched_reference_count,
-            expected_reference_count=len(invocation.response_references),
+            matched_reference_count=matched_operation_count,
+            expected_reference_count=1,
         )
 
     def telemetry_identity_passes(
@@ -1536,6 +1531,129 @@ union traces, dependencies, requests
         operation_ids: tuple[str, ...],
     ) -> dict[str, Any]:
         return _trace_behavior_summary(self._trace_rows(operation_ids))
+
+    def collect_trace_evidence(
+        self,
+        operation_ids: tuple[str, ...],
+    ) -> dict[str, Any]:
+        _validate_operation_references(operation_ids, len(operation_ids))
+        rows = self._collect_trace_rows(operation_ids)
+        allowed = set(operation_ids)
+        rows_by_operation: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in rows:
+            operation_id = str(row.get("operation_id") or "").lower()
+            if operation_id not in allowed:
+                raise ContractError("Trace collection returned an unexpected operation")
+            rows_by_operation[operation_id].append(row)
+        if set(rows_by_operation) != allowed:
+            raise ContractError("Trace collection is incomplete")
+        operations = [
+            {
+                "operation_reference": _opaque(operation_id),
+                "spans": [
+                    {
+                        "sequence": sequence,
+                        "span_reference": (
+                            _opaque(str(row["span_id"])) if row["span_id"] else ""
+                        ),
+                        "parent_span_reference": (
+                            _opaque(str(row["parent_span_id"]))
+                            if row["parent_span_id"]
+                            else ""
+                        ),
+                        "telemetry_type": row["telemetry_type"],
+                        "operation_name": row["operation_name"],
+                        "timestamp": row["timestamp"],
+                        "duration": row["duration"],
+                        "success": row["success"],
+                        "result_code": row["result_code"],
+                        "tool_name": row["tool_name"],
+                        "tool_call_reference": (
+                            _opaque(str(row["tool_call_id"]))
+                            if row["tool_call_id"]
+                            else ""
+                        ),
+                        "error_type": row["error_type"],
+                        "tool_ok": row["tool_ok"],
+                        "terminal_success": row["terminal_success"],
+                        "terminal_output": row["terminal_output"],
+                        "handled_error": row["handled_error"],
+                    }
+                    for sequence, row in enumerate(
+                        rows_by_operation[operation_id],
+                        start=1,
+                    )
+                ],
+            }
+            for operation_id in operation_ids
+        ]
+        return {
+            "operation_count": len(operations),
+            "span_count": sum(len(item["spans"]) for item in operations),
+            "operations": operations,
+        }
+
+    def _collect_trace_rows(
+        self,
+        operation_ids: tuple[str, ...],
+    ) -> list[dict[str, Any]]:
+        try:
+            from azure.monitor.query import LogsQueryStatus
+        except ImportError as error:
+            raise ContractError(
+                'Trace collection requires installation with ".[azure]"'
+            ) from error
+        values = ", ".join(f'"{value}"' for value in operation_ids)
+        query = f"""
+union withsource=telemetry_type traces, dependencies, requests
+| where operation_Id in ({values})
+| extend operation_name=tostring(customDimensions["gen_ai.operation.name"])
+| extend tool_name=coalesce(
+    tostring(customDimensions["gen_ai.tool.name"]),
+    tostring(customDimensions["tool.name"]))
+| extend tool_call_id=coalesce(
+    tostring(customDimensions["gen_ai.tool.call.id"]),
+    tostring(customDimensions["tool.call.id"]))
+| extend error_type=tostring(customDimensions["error.type"])
+| extend tool_ok=tostring(customDimensions["tool.ok"])
+| extend terminal_success=tostring(customDimensions["aiq.terminal_response.success"])
+| extend terminal_output=tostring(customDimensions["aiq.terminal_response.output_present"])
+| extend handled_error=tostring(customDimensions["aiq.tool.error.handled"])
+| project operation_Id, id, operation_ParentId, telemetry_type,
+    operation_name, timestamp, duration, success, resultCode,
+    tool_name, tool_call_id, error_type, tool_ok,
+    terminal_success, terminal_output, handled_error
+| order by operation_Id asc, timestamp asc, id asc
+"""
+        result = self._query_resource(
+            self._logs_client(),
+            query,
+            timespan=timedelta(days=90),
+        )
+        if result.status != LogsQueryStatus.SUCCESS:
+            raise ContractError("Trace collection query failed")
+        return [
+            {
+                "operation_id": str(row[0] or ""),
+                "span_id": str(row[1] or ""),
+                "parent_span_id": str(row[2] or ""),
+                "telemetry_type": str(row[3] or ""),
+                "operation_name": str(row[4] or ""),
+                "timestamp": str(row[5] or ""),
+                "duration": row[6],
+                "success": "" if row[7] is None else str(row[7]),
+                "result_code": "" if row[8] is None else str(row[8]),
+                "tool_name": str(row[9] or ""),
+                "tool_call_id": str(row[10] or ""),
+                "error_type": str(row[11] or ""),
+                "tool_ok": str(row[12] or ""),
+                "terminal_success": str(row[13] or ""),
+                "terminal_output": str(row[14] or ""),
+                "handled_error": str(row[15] or ""),
+            }
+            for table in result.tables
+            for row in table.rows
+        ]
 
     def trace_assertion_evidence(
         self,
@@ -3528,6 +3646,19 @@ def _normalize_fixture(value: Any) -> dict[str, Any]:
         "activation_gate": activation_gate,
         "conversation_key": conversation_key,
     }
+
+
+def _discovered_operation_ids(tables: Any) -> tuple[str, ...]:
+    operation_ids: list[str] = []
+    seen: set[str] = set()
+    for table in tables:
+        for row in table.rows:
+            operation_id = str(row[0]).lower()
+            if _TRACE_ID.fullmatch(operation_id) is None or operation_id in seen:
+                continue
+            seen.add(operation_id)
+            operation_ids.append(operation_id)
+    return tuple(operation_ids)
 
 
 def _complete_operation_ids(
