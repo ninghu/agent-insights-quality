@@ -3495,6 +3495,72 @@ def test_prompt_retries_exact_previous_response_propagation_rejection(code) -> N
 
 
 @pytest.mark.parametrize(
+    ("code", "rejection_count", "expected_sleeps"),
+    [
+        ("NotFound", 3, [1, 2, 4]),
+        ("previous_response_not_found", 4, [1, 2, 4, 8]),
+    ],
+)
+def test_prompt_chained_response_retry_succeeds_at_extended_delays(
+    code,
+    rejection_count,
+    expected_sleeps,
+) -> None:
+    runtime = _runtime()
+    mark_started = []
+    runtime._traffic_ledger = type(
+        "Ledger",
+        (),
+        {
+            "mark_started": staticmethod(
+                lambda *args, **kwargs: mark_started.append((args, kwargs))
+            )
+        },
+    )()
+    calls = []
+    sleeps = []
+
+    def json_request(method, url, body, **kwargs):
+        calls.append((method, url, body, kwargs))
+        if len(calls) <= rejection_count:
+            raise RemoteOperationError(
+                f"Remote operation failed with HTTP 404 ({code})",
+                code=code,
+                status=404,
+                request_accepted=False,
+            )
+        return {"id": "response-accepted", "output": []}
+
+    runtime._json_request = json_request  # type: ignore[method-assign]
+    runtime._sleep = sleeps.append
+    result = runtime._invoke_prompt(
+        "weather-agent",
+        "1",
+        {
+            "body": {
+                "input": "Synthetic chained request.",
+                "metadata": {"logical_attempt": "fixed"},
+            },
+            "expected_status": 200,
+            "semantic_assertions": {},
+            "activation_gate": False,
+        },
+        0,
+        "previous-response",
+        include_seed_metadata=False,
+    )
+
+    assert result[0] == ["response-accepted"]
+    assert len(calls) == rejection_count + 1
+    assert all(call == calls[0] for call in calls)
+    assert all(call[2] is calls[0][2] for call in calls)
+    assert calls[0][2]["metadata"] == {"logical_attempt": "fixed"}
+    assert calls[0][2]["previous_response_id"] == "previous-response"
+    assert sleeps == expected_sleeps
+    assert len(mark_started) == 1
+
+
+@pytest.mark.parametrize(
     ("error", "previous_response_id"),
     [
         (
@@ -3612,7 +3678,7 @@ def test_prompt_does_not_retry_ambiguous_or_unrelated_failures(
     assert sleeps == []
 
 
-def test_prompt_generic_not_found_retry_is_bounded() -> None:
+def test_prompt_chained_response_retry_is_bounded() -> None:
     runtime = _runtime()
     mark_started = []
     runtime._traffic_ledger = type(
@@ -3656,8 +3722,8 @@ def test_prompt_generic_not_found_retry_is_bounded() -> None:
         )
 
     assert caught.value is error
-    assert calls == 3
-    assert sleeps == [1, 2]
+    assert calls == 5
+    assert sleeps == [1, 2, 4, 8]
     assert len(mark_started) == 1
 
 
