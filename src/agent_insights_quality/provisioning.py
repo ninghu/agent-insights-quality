@@ -1741,11 +1741,11 @@ class FoundryProvisioner:
         status = 0
         payload = b""
         for attempt in range(attempts):
+            url = self._profile.project_endpoint + path
+            if not path.startswith("/openai/v1/"):
+                url += ("&" if "?" in path else "?") + "api-version=v1"
             request = urllib.request.Request(
-                self._profile.project_endpoint
-                + path
-                + ("&" if "?" in path else "?")
-                + "api-version=v1",
+                url,
                 data=body,
                 headers=headers,
                 method=method,

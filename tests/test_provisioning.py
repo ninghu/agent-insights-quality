@@ -160,6 +160,50 @@ def test_foundry_error_progress_is_public_safe(monkeypatch) -> None:
     ]
 
 
+def test_openai_response_cleanup_route_omits_foundry_api_version(
+    monkeypatch,
+) -> None:
+    urls = []
+
+    class Response:
+        status = 404
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        @staticmethod
+        def read():
+            return b""
+
+    def open_request(request, **_kwargs):
+        urls.append(request.full_url)
+        return Response()
+
+    monkeypatch.setattr(
+        "agent_insights_quality.provisioning.urllib.request.urlopen",
+        open_request,
+    )
+    client = FoundryProvisioner(
+        RuntimeProfile(
+            name="validation",
+            project_name="validation",
+            project_endpoint="https://example.invalid",
+            insights_endpoint="https://example.invalid",
+            application_insights_resource_id="/subscriptions/hidden/insights",
+            registry_path=Path("registry.json"),
+        ),
+        token_provider=lambda _: "synthetic-token",
+    )
+
+    assert client.response_exists("synthetic-response") is False
+    assert urls == [
+        "https://example.invalid/openai/v1/responses/synthetic-response"
+    ]
+
+
 def test_early_agent_create_not_found_retries_with_capped_backoff(
     monkeypatch,
 ) -> None:
