@@ -16,6 +16,7 @@ from agent_insights_quality.validation_rules import (
     RUNTIME_AGENT_NAME_PLACEHOLDER,
     RUNTIME_AGENT_VERSION_PLACEHOLDER,
 )
+from agent_insights_quality.util import ContractError
 
 HASH = "sha256:" + ("a" * 64)
 
@@ -161,6 +162,10 @@ class Runtime:
 
 
 class HostedRuntime(Runtime):
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.deleted_sessions = []
+
     @staticmethod
     def _activate_hosted_version(agent_name, foundry_version):
         del agent_name, foundry_version
@@ -199,6 +204,9 @@ class HostedRuntime(Runtime):
             (),
             False,
         )
+
+    def _delete_hosted_session(self, agent_name, session_id):
+        self.deleted_sessions.append((agent_name, session_id))
 
 
 def _target() -> DeployedRuntime:
@@ -459,8 +467,9 @@ def test_hosted_attempt_journals_only_persistent_session() -> None:
         ]
     )
     resources = []
+    runtime = HostedRuntime()
     runner = FoundryScenarioAttemptRunner(
-        HostedRuntime(),
+        runtime,
         endpoint_costs={"issue-013": EndpointCost(1, 10, 1)},
         stabilization_seconds=1,
         record_resource=resources.append,
@@ -489,3 +498,64 @@ def test_hosted_attempt_journals_only_persistent_session() -> None:
         scheduler=_scheduler(),
     )
     assert [item["kind"] for item in resources] == ["session", "session"]
+    assert runtime.deleted_sessions == [
+        ("finance-agent-issue-013-cycle", "session-synthetic")
+    ]
+
+
+def test_hosted_attempt_defers_failed_session_release_without_losing_evidence() -> None:
+    class RuntimeWithFailedRelease(HostedRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.progress = []
+
+        def _delete_hosted_session(self, agent_name, session_id):
+            del agent_name, session_id
+            raise ContractError("synthetic release failure")
+
+        def report_progress(self, message):
+            self.progress.append(message)
+
+    times = iter(
+        [
+            datetime(2026, 8, 29, 12, 0, tzinfo=UTC),
+            datetime(2026, 8, 29, 12, 0, 1, tzinfo=UTC),
+        ]
+    )
+    runtime = RuntimeWithFailedRelease()
+    runner = FoundryScenarioAttemptRunner(
+        runtime,
+        endpoint_costs={"issue-013": EndpointCost(1, 10, 1)},
+        stabilization_seconds=1,
+        record_resource=lambda _item: None,
+        now=lambda: next(times),
+    )
+
+    result = runner.run(
+        target=_hosted_target(),
+        executing_authority_id="issue-013",
+        conversation_role="issue",
+        scenario={
+            "id": "reviewed-path",
+            "validation_mode": "deterministic",
+            "defect_predicate": {
+                "kind": "all_observation_steps_pass",
+                "step_ids": ["probe-1"],
+                "required_surfaces": ["semantic", "trace"],
+            },
+        },
+        attempt={
+            "index": 1,
+            "conversation_group": "attempt-1",
+            "setup_steps": [_step("setup-1", probe=False)],
+            "probe_steps": [_step("probe-1", probe=True)],
+        },
+        expect_defect=True,
+        scheduler=_scheduler(),
+    )
+
+    assert result["complete"] is True
+    assert runtime.progress == [
+        "issue-013: Hosted session release failed after evidence completion; "
+        "deferring to cycle cleanup"
+    ]

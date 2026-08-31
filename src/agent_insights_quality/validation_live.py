@@ -422,7 +422,7 @@ class FoundryScenarioAttemptRunner:
             if not all(item["identity_pass"] for item in step_evidence)
             else "incomplete_endpoint_evidence"
         )
-        return {
+        result = {
             "index": attempt["index"],
             "conversation_reference": content_hash(
                 {
@@ -446,6 +446,18 @@ class FoundryScenarioAttemptRunner:
             "expected_observation_pass": expected_pass,
             "error_code": error_code,
         }
+        if session_id is not None:
+            try:
+                self._runtime._delete_hosted_session(
+                    target.runtime_agent_name,
+                    session_id,
+                )
+            except ContractError:
+                self._runtime.report_progress(
+                    f"{target.authority_id}: Hosted session release failed after "
+                    "evidence completion; deferring to cycle cleanup"
+                )
+        return result
 
 
 @contextmanager
