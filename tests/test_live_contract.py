@@ -16,6 +16,7 @@ import pytest
 
 from agent_insights_quality.live import (
     LiveRuntime,
+    RemoteOperationError,
     _complete_operation_ids,
     _correlated_request_rows,
     _normalize_fixture,
@@ -3068,6 +3069,193 @@ def test_json_post_retries_foundry_failed_dependency(monkeypatch) -> None:
     assert value["_request_reference"] == request_references[-1]
 
 
+@pytest.mark.parametrize(
+    ("status", "code", "request_accepted"),
+    [
+        (429, "too_many_requests", False),
+        (503, "service_unavailable", None),
+    ],
+)
+def test_json_post_classifies_sanitized_remote_failures(
+    monkeypatch,
+    status,
+    code,
+    request_accepted,
+) -> None:
+    runtime = _runtime()
+    progress = []
+    runtime.report_progress = progress.append  # type: ignore[method-assign]
+
+    def open_request(*_args, **_kwargs):
+        raise urllib.error.HTTPError(
+            "https://example.invalid",
+            status,
+            "Synthetic failure",
+            {},
+            io.BytesIO(
+                json.dumps(
+                    {
+                        "error": {
+                            "code": code,
+                            "message": "private diagnostic must not escape",
+                        }
+                    }
+                ).encode()
+            ),
+        )
+
+    monkeypatch.setattr(
+        "agent_insights_quality.live.urllib.request.urlopen",
+        open_request,
+    )
+    with pytest.raises(RemoteOperationError) as caught:
+        runtime._json_request("POST", "https://example.invalid")
+
+    assert caught.value.status == status
+    assert caught.value.code == code
+    assert caught.value.request_accepted is request_accepted
+    assert "private diagnostic" not in str(caught.value)
+    assert progress == [f"remote POST rejected: status={status}; code={code}"]
+
+
+@pytest.mark.parametrize("payload", [b"[]", b"\xff"])
+def test_json_success_with_invalid_payload_is_accepted_contract_failure(
+    monkeypatch,
+    payload,
+) -> None:
+    runtime = _runtime()
+
+    class Response:
+        status = 200
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        @staticmethod
+        def read():
+            return payload
+
+    monkeypatch.setattr(
+        "agent_insights_quality.live.urllib.request.urlopen",
+        lambda *_args, **_kwargs: Response(),
+    )
+    with pytest.raises(RemoteOperationError) as caught:
+        runtime._json_request("POST", "https://example.invalid")
+
+    assert caught.value.status == 200
+    assert caught.value.code in {"invalid_json", "invalid_json_shape"}
+    assert caught.value.request_accepted is True
+
+
+def test_prompt_retries_exact_previous_response_propagation_rejection() -> None:
+    runtime = _runtime()
+    runtime._traffic_ledger = type(
+        "Ledger",
+        (),
+        {"mark_started": staticmethod(lambda *_args, **_kwargs: None)},
+    )()
+    calls = []
+    sleeps = []
+
+    def json_request(method, url, body, **kwargs):
+        calls.append((method, url, body, kwargs))
+        if len(calls) == 1:
+            raise RemoteOperationError(
+                "Remote operation failed with HTTP 404 "
+                "(previous_response_not_found)",
+                code="previous_response_not_found",
+                status=404,
+                request_accepted=False,
+            )
+        return {"id": "response-accepted", "output": []}
+
+    runtime._json_request = json_request  # type: ignore[method-assign]
+    runtime._sleep = sleeps.append
+    result = runtime._invoke_prompt(
+        "weather-agent",
+        "1",
+        {
+            "body": {"input": "Synthetic chained request."},
+            "expected_status": 200,
+            "semantic_assertions": {},
+            "activation_gate": False,
+        },
+        0,
+        "previous-response",
+        include_seed_metadata=False,
+        validation_intent_reference="sha256:" + ("a" * 64),
+    )
+
+    assert result[0] == ["response-accepted"]
+    assert len(calls) == 2
+    assert all(call[2]["previous_response_id"] == "previous-response" for call in calls)
+    assert sleeps == [1]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RemoteOperationError(
+            "Remote operation failed before a response was received",
+            code="remote_no_response",
+            status=None,
+            request_accepted=None,
+        ),
+        RemoteOperationError(
+            "Remote operation failed with HTTP 400 (invalid_request)",
+            code="invalid_request",
+            status=400,
+            request_accepted=False,
+        ),
+        RemoteOperationError(
+            "Remote operation failed with HTTP 503 (service_unavailable)",
+            code="service_unavailable",
+            status=503,
+            request_accepted=None,
+        ),
+    ],
+)
+def test_prompt_does_not_retry_ambiguous_or_unrelated_failures(error) -> None:
+    runtime = _runtime()
+    runtime._traffic_ledger = type(
+        "Ledger",
+        (),
+        {"mark_started": staticmethod(lambda *_args, **_kwargs: None)},
+    )()
+    calls = 0
+    sleeps = []
+
+    def json_request(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise error
+
+    runtime._json_request = json_request  # type: ignore[method-assign]
+    runtime._sleep = sleeps.append
+    with pytest.raises(RemoteOperationError) as caught:
+        runtime._invoke_prompt(
+            "weather-agent",
+            "1",
+            {
+                "body": {"input": "Synthetic chained request."},
+                "expected_status": 200,
+                "semantic_assertions": {},
+                "activation_gate": False,
+            },
+            0,
+            "previous-response",
+            include_seed_metadata=False,
+        )
+
+    assert caught.value is error
+    assert calls == 1
+    assert sleeps == []
+
+
 def test_json_patch_retries_no_response_with_explicit_policy(monkeypatch) -> None:
     runtime = _runtime()
     request_references = []
@@ -3152,15 +3340,18 @@ def test_json_post_requires_explicit_no_response_retry(monkeypatch) -> None:
         open_request,
     )
     with pytest.raises(
-        ContractError,
+        RemoteOperationError,
         match="Remote operation failed before a response was received",
-    ):
+    ) as caught:
         runtime._json_request(
             "POST",
             "https://example.invalid",
             retry_statuses={408, 503},
         )
     assert attempts == 1
+    assert caught.value.code == "remote_no_response"
+    assert caught.value.status is None
+    assert caught.value.request_accepted is None
 
 
 def test_hosted_invocation_persists_endpoint_response_identity(

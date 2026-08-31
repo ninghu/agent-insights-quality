@@ -68,8 +68,24 @@ _LOGS_SCOPE = "https://api.loganalytics.io/.default"
 _TRANSIENT_HTTP = {408, 424, 429, 500, 502, 503, 504}
 _DEFAULT_REQUEST_TIMEOUT_SECONDS = 300
 _HOSTED_RESPONSE_TIMEOUT_SECONDS = 600
+_PROMPT_RESPONSE_PROPAGATION_RETRY_DELAYS = (1, 2)
 _TRACE_ASSERTION_PROGRESS_SECONDS = 60
 _AUTH_PROGRESS = ProgressReporter("aiq-auth")
+
+
+class RemoteOperationError(ContractError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        status: int | None,
+        request_accepted: bool | None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status = status
+        self.request_accepted = request_accepted
 
 
 class _RuntimeTokenCredential:
@@ -616,15 +632,41 @@ union traces, dependencies, requests
             now=self._utcnow().astimezone(UTC),
             uncertain_seconds=_DEFAULT_REQUEST_TIMEOUT_SECONDS,
         )
-        response = self._json_request(
-            "POST",
-            f"{self._profile.project_endpoint}/openai/v1/responses",
-            body,
-            expected={fixture["expected_status"]},
-        )
+        propagation_retry = 0
+        while True:
+            try:
+                response = self._json_request(
+                    "POST",
+                    f"{self._profile.project_endpoint}/openai/v1/responses",
+                    body,
+                    expected={fixture["expected_status"]},
+                )
+                break
+            except RemoteOperationError as error:
+                if (
+                    not previous_response_id
+                    or not _previous_response_propagation_pending(error)
+                    or propagation_retry
+                    == len(_PROMPT_RESPONSE_PROPAGATION_RETRY_DELAYS)
+                ):
+                    raise
+                delay = _PROMPT_RESPONSE_PROPAGATION_RETRY_DELAYS[
+                    propagation_retry
+                ]
+                propagation_retry += 1
+                self.report_progress(
+                    f"{agent_name}/{foundry_version}: prior response is not yet "
+                    f"available; retrying chained request in {delay}s"
+                )
+                self._sleep(delay)
         response_id = str(response.get("id") or "")
         if not response_id:
-            raise ContractError("Prompt response identity is missing")
+            raise RemoteOperationError(
+                "Prompt response identity is missing",
+                code="prompt_response_identity_missing",
+                status=int(response.get("_http_status") or fixture["expected_status"]),
+                request_accepted=True,
+            )
         calls = [
             value
             for value in response.get("output", [])
@@ -632,9 +674,12 @@ union traces, dependencies, requests
         ]
         function_call_count = len(calls)
         if function_call_count:
-            raise ContractError(
+            raise RemoteOperationError(
                 "Prompt emitted a function call; pure Prompt traffic requires one "
-                "direct terminal response"
+                "direct terminal response",
+                code="prompt_function_call",
+                status=int(response.get("_http_status") or fixture["expected_status"]),
+                request_accepted=True,
             )
         assertion_count, assertions_passed, assertion_results = (
             _semantic_assertion_result(
@@ -697,7 +742,12 @@ union traces, dependencies, requests
             or indicator.get("type") != "version_ref"
             or str(indicator.get("agent_version") or "") != foundry_version
         ):
-            raise ContractError("Hosted session did not bind to the exact version")
+            raise RemoteOperationError(
+                "Hosted session did not bind to the exact version",
+                code="hosted_session_version_mismatch",
+                status=int(session.get("_http_status") or 200),
+                request_accepted=True,
+            )
         return session_id
 
     def _invoke_hosted(
@@ -755,7 +805,12 @@ union traces, dependencies, requests
             not isinstance(response_reference, str)
             or _RESPONSE_REFERENCE.fullmatch(response_reference) is None
         ):
-            raise ContractError("Hosted response identity is missing or invalid")
+            raise RemoteOperationError(
+                "Hosted response identity is missing or invalid",
+                code="hosted_response_identity_invalid",
+                status=int(response.get("_http_status") or fixture["expected_status"]),
+                request_accepted=True,
+            )
         assertion_count, assertions_passed, assertion_results = (
             _semantic_assertion_result(
                 response,
@@ -1738,8 +1793,11 @@ union traces, dependencies, requests
                     )
                     self._sleep(delay)
                     continue
-                raise ContractError(
-                    "Remote operation failed before a response was received"
+                raise RemoteOperationError(
+                    "Remote operation failed before a response was received",
+                    code="remote_no_response",
+                    status=None,
+                    request_accepted=None,
                 ) from error
             if status == 401 and not credential_refreshed:
                 self._invalidate_token(_FOUNDRY_SCOPE)
@@ -1766,24 +1824,37 @@ union traces, dependencies, requests
         self._rate_limit_feedback.value = feedback
         allowed = expected or {200, 201, 202}
         if status not in allowed:
-            code, message = _remote_error(payload)
-            raise ContractError(
+            code, _ = _remote_error(payload)
+            safe_code = code or f"http_{status}"
+            self.report_progress(
+                f"remote {method} rejected: status={status}; code={safe_code}"
+            )
+            raise RemoteOperationError(
                 f"Remote operation failed with HTTP {status}"
-                + (
-                    f" ({code or 'remote_error'}: {message})"
-                    if code or message
-                    else ""
-                )
+                + (f" ({safe_code})" if safe_code else ""),
+                code=safe_code,
+                status=status,
+                request_accepted=_http_request_accepted(status),
             )
         if not payload:
             value: Any = {}
         else:
             try:
                 value = json.loads(payload)
-            except json.JSONDecodeError:
-                value = {}
+            except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                raise RemoteOperationError(
+                    "Remote operation returned invalid JSON",
+                    code="invalid_json",
+                    status=status,
+                    request_accepted=True,
+                ) from error
         if not isinstance(value, dict):
-            raise ContractError("Remote operation returned an invalid JSON shape")
+            raise RemoteOperationError(
+                "Remote operation returned an invalid JSON shape",
+                code="invalid_json_shape",
+                status=status,
+                request_accepted=True,
+            )
         value["_http_status"] = status
         value["_request_reference"] = request_reference
         value["_rate_limit"] = feedback
@@ -1870,6 +1941,23 @@ def _remote_error(payload: bytes) -> tuple[str, str]:
     code = re.sub(r"[^A-Za-z0-9_.-]", "", str(error.get("code") or ""))[:80]
     message = re.sub(r"\s+", " ", str(error.get("message") or "")).strip()[:300]
     return code, message
+
+
+def _http_request_accepted(status: int) -> bool | None:
+    if 400 <= status < 500 and status != 408:
+        return False
+    return None
+
+
+def _previous_response_propagation_pending(
+    error: RemoteOperationError,
+) -> bool:
+    code = re.sub(r"[^a-z0-9]+", "_", error.code.casefold()).strip("_")
+    return (
+        error.request_accepted is False
+        and error.status in {400, 404}
+        and code == "previous_response_not_found"
+    )
 
 
 def _trace_contract_ready(

@@ -6,6 +6,7 @@ from copy import deepcopy
 
 import pytest
 
+from agent_insights_quality.live import RemoteOperationError
 from agent_insights_quality.provisioning import RemoteHttpError
 from agent_insights_quality.util import (
     ContractError,
@@ -30,6 +31,7 @@ from agent_insights_quality.validation_runtime import (
     AgentExecutionIncomplete,
     AuthoritySpec,
     DeployedRuntime,
+    _agent_failure_summary,
     _deployment_canaries,
     deploy_all_authorities,
     execute_validation_matrix,
@@ -879,6 +881,42 @@ def test_agent_traffic_failure_does_not_cancel_other_agent_lanes() -> None:
     )
     assert runner.failure_calls == 1
     assert any(call[0] == "issue-036" for call in runner.calls)
+
+
+@pytest.mark.parametrize(
+    ("code", "request_accepted"),
+    [
+        ("prompt_response_identity_missing", True),
+        ("too_many_requests", False),
+        ("remote_no_response", None),
+    ],
+)
+def test_traffic_failure_summary_preserves_request_acceptance(
+    code,
+    request_accepted,
+) -> None:
+    authority = next(
+        item for item in _authorities() if item.authority_id == "weather-agent/v0"
+    )
+    error = RemoteOperationError(
+        "Synthetic public-safe traffic failure",
+        code=code,
+        status=None,
+        request_accepted=request_accepted,
+    )
+
+    assert _agent_failure_summary(
+        authority,
+        stage="traffic",
+        error=error,
+        request_accepted=error.request_accepted,
+    ) == {
+        "canonical_agent": "weather-agent",
+        "authority_id": "weather-agent/v0",
+        "stage": "traffic",
+        "error_code": code,
+        "request_accepted": request_accepted,
+    }
 
 
 def test_shared_traffic_failure_aborts_globally() -> None:
