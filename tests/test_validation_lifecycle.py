@@ -504,3 +504,44 @@ def test_recovery_persists_public_safe_cleanup_failure_before_blocking(
         serialized = str(blocked.value["cleanup"]["failure"])
         assert "private-route" not in serialized
         assert "Synthetic payload" not in serialized
+
+
+def test_recovery_adds_cleanup_failure_field_to_active_legacy_cycle(
+    tmp_path,
+) -> None:
+    class Backend:
+        def resolve_intent(self, _item):
+            return None
+
+        def delete(self, _item) -> None:
+            raise AssertionError("No resource should be deleted")
+
+        def absent(self, _item) -> bool:
+            return True
+
+        def manifest_is_shared(self, _provider_id: str) -> bool:
+            return False
+
+        def inventory(self, **_kwargs):
+            return CleanupInventory(
+                project_exists=False,
+                nonce_owned_ids=(),
+                session_response_ids=(),
+                cycle_acr_tag_ids=(),
+                incomplete_cascade_ids=(),
+            )
+
+    initial = _initial()
+    initial["cleanup"].pop("failure")
+    lock = LocalValidationLock(tmp_path / "validation.lock")
+    journal = LifecycleJournal(lock=lock, root=tmp_path / "lifecycle")
+    with lock:
+        journal.begin_cycle(initial)
+        state = ValidationReconciler(
+            journal=journal,
+            cleanup=CleanupEngine(Backend()),
+            policy=load_validation_policy(),
+        ).reconcile(alert=lambda _: None, now=START + timedelta(hours=80))
+
+    assert state == "FAILED_CLEAN"
+    assert journal.read_active().value["cleanup"]["failure"] is None

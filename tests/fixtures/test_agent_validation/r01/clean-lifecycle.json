@@ -240,20 +240,20 @@
   },
   "digests": {
     "clean_resource_inventory_digest": "sha256:80ec918fbecb394c7a28b899a24762cd9ac28a8833a2cc6f25307730908a554c",
-    "evidence_digest": "sha256:c43f6badb4a944af6f167bcbf78d0d06641e53dc520a91c70b00f18537791dd0",
+    "evidence_digest": "sha256:d5d20f229a2697a537771de5b2fd57bae629faa75618e63ce0962902c9c1b8db",
     "evidence_resource_inventory_digest": "sha256:839dc65aef04b7f4d02018daa273e8599369ac9957fd3f727e2595e64880e52b",
     "execution_matrix_digest": "sha256:b815023aee152f454383be3ed8bddbecc95293781ad435539f36fe7614b294fe",
     "quota_plan_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "runtime_topology_digest": "sha256:ccfc73e8252f9ca571b00947fac320bd2787850657730f6b969b1c1aa4ac175f",
-    "validation_digest": "sha256:6a2e53d67592a8f25267b42b0387e3a0311a43ba272cac7c3cb953da15abae27"
+    "validation_digest": "sha256:c10a57e3eb4ab73bfa2e5afc9c537e8223e23c383277c57200175a424f4253d0"
   },
   "event_reference": null,
   "evidence_reference": {
-    "digest": "sha256:c43f6badb4a944af6f167bcbf78d0d06641e53dc520a91c70b00f18537791dd0",
-    "path": "evidence/ninghu/agent-insights-quality/63/validation-local-r01/c43f6badb4a944af6f167bcbf78d0d06641e53dc520a91c70b00f18537791dd0.json"
+    "digest": "sha256:d5d20f229a2697a537771de5b2fd57bae629faa75618e63ce0962902c9c1b8db",
+    "path": "evidence/ninghu/agent-insights-quality/63/validation-local-r01/d5d20f229a2697a537771de5b2fd57bae629faa75618e63ce0962902c9c1b8db.json"
   },
   "failure": null,
-  "journal_digest": "sha256:233cbf9eac9f2166049c4157663323d9d044b24eeeabd98848ecfe7a701a8c90",
+  "journal_digest": "sha256:c8d849f4229cb45c0a104cc82241d28919ae41a77e1d8029834760e799d3b232",
   "kind": "test-agent-validation-lifecycle",
   "last_activity_at": "2026-08-29T12:16:50+00:00",
   "operator": {

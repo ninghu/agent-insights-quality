@@ -511,12 +511,20 @@ def read_bound_local_record(
     return LocalRecord(path=path, value=value, digest=str(digest))
 
 
-def _merge(target: dict[str, Any], updates: Mapping[str, Any]) -> None:
+def _merge(
+    target: dict[str, Any],
+    updates: Mapping[str, Any],
+    *,
+    path: tuple[str, ...] = (),
+) -> None:
     for key, value in updates.items():
         if key not in target:
+            if path == ("cleanup",) and key == "failure":
+                target[key] = copy.deepcopy(value)
+                continue
             raise ContractError(f"Lifecycle update contains unknown field: {key}")
         if isinstance(target[key], dict) and isinstance(value, Mapping):
-            _merge(target[key], value)
+            _merge(target[key], value, path=(*path, key))
         else:
             target[key] = copy.deepcopy(value)
 
