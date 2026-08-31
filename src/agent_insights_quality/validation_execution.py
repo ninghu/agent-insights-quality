@@ -386,6 +386,9 @@ def _execute_validation_plan(
         "phase_1_deployment_seconds",
         monotonic() - phase_one_started,
     )
+    runner.prepare_hosted_routes(
+        [phase_one_deployed[item.authority_id] for item in phase_one]
+    )
     wait_clean_interval("phase_1")
     controller.begin_phase_one_traffic(
         {item.authority_id for item in phase_one},
@@ -418,6 +421,9 @@ def _execute_validation_plan(
     record_duration(
         "phase_2_deployment_seconds",
         monotonic() - phase_two_started,
+    )
+    runner.prepare_hosted_routes(
+        [phase_two_deployed[item.authority_id] for item in phase_two]
     )
     deployed = {**phase_one_deployed, **phase_two_deployed}
     runtime_agents = [

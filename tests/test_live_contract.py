@@ -3900,3 +3900,257 @@ def test_hosted_routing_uses_one_fixed_ratio_rule() -> None:
             "type": "FixedRatio",
         }
     ]
+
+
+def test_hosted_routing_skips_duplicate_exact_version_activation() -> None:
+    runtime = _runtime()
+    activated = []
+
+    def request(_method, _url, body=None, **_kwargs):
+        activated.append(
+            body["agent_endpoint"]["version_selector"]["version_selection_rules"][
+                0
+            ]["agent_version"]
+        )
+        return body
+
+    runtime._json_request = request  # type: ignore[method-assign]
+    runtime._activate_hosted_version("finance-agent", "1")
+    runtime._activate_hosted_version("finance-agent", "1")
+    runtime._activate_hosted_version("finance-agent", "2")
+    runtime._activate_hosted_version("finance-agent", "2")
+
+    assert activated == ["1", "2"]
+
+
+def test_hosted_session_retries_exact_post_activation_not_found() -> None:
+    runtime = _runtime()
+    runtime._monotonic = lambda: 0
+    sleeps = []
+    session_bodies = []
+
+    def request(method, _url, body=None, **_kwargs):
+        if method == "PATCH":
+            return body
+        session_bodies.append(body)
+        if len(session_bodies) == 1:
+            raise RemoteOperationError(
+                "Synthetic route propagation",
+                code="NotFound",
+                status=404,
+                request_accepted=False,
+            )
+        return {
+            "agent_session_id": "session-synthetic",
+            "version_indicator": {
+                "type": "version_ref",
+                "agent_version": "1",
+            },
+        }
+
+    runtime._json_request = request  # type: ignore[method-assign]
+    runtime._sleep = sleeps.append
+    runtime._activate_hosted_version("finance-agent", "1")
+    session_id = runtime._create_hosted_session(
+        "finance-agent",
+        "1",
+        validation_intent_reference="sha256:" + ("a" * 64),
+    )
+
+    assert session_id == "session-synthetic"
+    assert len(session_bodies) == 2
+    assert session_bodies[0] == session_bodies[1]
+    assert sleeps == [1]
+
+
+def test_hosted_session_exhausts_bounded_route_propagation_retries() -> None:
+    runtime = _runtime()
+    runtime._monotonic = lambda: 0
+    sleeps = []
+    session_calls = 0
+    error = RemoteOperationError(
+        "Synthetic route propagation",
+        code="NotFound",
+        status=404,
+        request_accepted=False,
+    )
+
+    def request(method, _url, body=None, **_kwargs):
+        nonlocal session_calls
+        if method == "PATCH":
+            return body
+        session_calls += 1
+        raise error
+
+    runtime._json_request = request  # type: ignore[method-assign]
+    runtime._sleep = sleeps.append
+    runtime._activate_hosted_version("finance-agent", "1")
+
+    with pytest.raises(RemoteOperationError) as caught:
+        runtime._create_hosted_session("finance-agent", "1")
+
+    assert caught.value is error
+    assert session_calls == 5
+    assert sleeps == [1, 2, 4, 8]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RemoteOperationError(
+            "Synthetic unrelated rejection",
+            code="not_found",
+            status=404,
+            request_accepted=False,
+        ),
+        RemoteOperationError(
+            "Synthetic unrelated rejection",
+            code="NotFound",
+            status=400,
+            request_accepted=False,
+        ),
+        RemoteOperationError(
+            "Synthetic accepted rejection",
+            code="NotFound",
+            status=404,
+            request_accepted=True,
+        ),
+        RemoteOperationError(
+            "Synthetic ambiguous rejection",
+            code="NotFound",
+            status=404,
+            request_accepted=None,
+        ),
+        RemoteOperationError(
+            "Synthetic no response",
+            code="remote_no_response",
+            status=None,
+            request_accepted=None,
+        ),
+        RemoteOperationError(
+            "Synthetic timeout",
+            code="NotFound",
+            status=408,
+            request_accepted=None,
+        ),
+        RemoteOperationError(
+            "Synthetic service failure",
+            code="NotFound",
+            status=503,
+            request_accepted=None,
+        ),
+    ],
+)
+def test_hosted_session_does_not_retry_unrelated_or_ambiguous_failures(
+    error,
+) -> None:
+    runtime = _runtime()
+    runtime._monotonic = lambda: 0
+    calls = 0
+    sleeps = []
+
+    def request(method, _url, body=None, **_kwargs):
+        nonlocal calls
+        if method == "PATCH":
+            return body
+        calls += 1
+        raise error
+
+    runtime._json_request = request  # type: ignore[method-assign]
+    runtime._sleep = sleeps.append
+    runtime._activate_hosted_version("finance-agent", "1")
+
+    with pytest.raises(RemoteOperationError) as caught:
+        runtime._create_hosted_session("finance-agent", "1")
+
+    assert caught.value is error
+    assert calls == 1
+    assert sleeps == []
+
+
+def test_hosted_session_does_not_retry_without_recent_exact_activation() -> None:
+    runtime = _runtime()
+    calls = 0
+    error = RemoteOperationError(
+        "Synthetic route propagation",
+        code="NotFound",
+        status=404,
+        request_accepted=False,
+    )
+
+    def request(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise error
+
+    runtime._json_request = request  # type: ignore[method-assign]
+
+    with pytest.raises(RemoteOperationError) as caught:
+        runtime._create_hosted_session("finance-agent", "1")
+
+    assert caught.value is error
+    assert calls == 1
+
+
+@pytest.mark.parametrize(
+    ("routed_version", "session_start"),
+    [("2", 0), ("1", 16)],
+)
+def test_hosted_session_does_not_retry_wrong_or_expired_route(
+    routed_version,
+    session_start,
+) -> None:
+    runtime = _runtime()
+    now = [0]
+    runtime._monotonic = lambda: now[0]
+    calls = 0
+    error = RemoteOperationError(
+        "Synthetic route propagation",
+        code="NotFound",
+        status=404,
+        request_accepted=False,
+    )
+
+    def request(method, _url, body=None, **_kwargs):
+        nonlocal calls
+        if method == "PATCH":
+            return body
+        calls += 1
+        raise error
+
+    runtime._json_request = request  # type: ignore[method-assign]
+    runtime._activate_hosted_version("finance-agent", routed_version)
+    now[0] = session_start
+
+    with pytest.raises(RemoteOperationError) as caught:
+        runtime._create_hosted_session("finance-agent", "1")
+
+    assert caught.value is error
+    assert calls == 1
+
+
+def test_non_session_post_does_not_retry_hosted_route_not_found(
+    monkeypatch,
+) -> None:
+    runtime = _runtime()
+    attempts = 0
+
+    def open_request(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise urllib.error.HTTPError(
+            "https://example.invalid",
+            404,
+            "Synthetic route propagation",
+            {},
+            io.BytesIO(b'{"error":{"code":"NotFound"}}'),
+        )
+
+    monkeypatch.setattr(
+        "agent_insights_quality.live.urllib.request.urlopen",
+        open_request,
+    )
+    with pytest.raises(RemoteOperationError):
+        runtime._json_request("POST", "https://example.invalid", hosted=True)
+
+    assert attempts == 1

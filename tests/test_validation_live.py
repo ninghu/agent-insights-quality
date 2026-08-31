@@ -165,10 +165,10 @@ class HostedRuntime(Runtime):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self.deleted_sessions = []
+        self.activations = []
 
-    @staticmethod
-    def _activate_hosted_version(agent_name, foundry_version):
-        del agent_name, foundry_version
+    def _activate_hosted_version(self, agent_name, foundry_version):
+        self.activations.append((agent_name, foundry_version))
 
     @staticmethod
     def _create_hosted_session(
@@ -500,6 +500,40 @@ def test_hosted_attempt_journals_only_persistent_session() -> None:
     assert [item["kind"] for item in resources] == ["session", "session"]
     assert runtime.deleted_sessions == [
         ("finance-agent-issue-013-cycle", "session-synthetic")
+    ]
+
+
+def test_prepare_hosted_routes_activates_first_exact_version_per_agent() -> None:
+    runtime = HostedRuntime()
+    runner = FoundryScenarioAttemptRunner(
+        runtime,
+        endpoint_costs={"issue-013": EndpointCost(1, 10, 1)},
+        stabilization_seconds=1,
+        record_resource=lambda _item: None,
+    )
+    finance_v1 = _hosted_target()
+    finance_v2 = DeployedRuntime(
+        **{
+            **finance_v1.__dict__,
+            "authority_id": "issue-014",
+            "runtime_agent_version": "2",
+        }
+    )
+    support_v0 = DeployedRuntime(
+        **{
+            **finance_v1.__dict__,
+            "authority_id": "support-ticket-agent/v0",
+            "runtime_kind": "hosted_custom_container",
+            "runtime_agent_name": "support-agent-cycle",
+            "runtime_agent_version": "1",
+        }
+    )
+
+    runner.prepare_hosted_routes([finance_v1, finance_v2, support_v0])
+
+    assert runtime.activations == [
+        ("finance-agent-issue-013-cycle", "1"),
+        ("support-agent-cycle", "1"),
     ]
 
 

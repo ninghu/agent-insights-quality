@@ -68,6 +68,10 @@ _LOGS_SCOPE = "https://api.loganalytics.io/.default"
 _TRANSIENT_HTTP = {408, 424, 429, 500, 502, 503, 504}
 _DEFAULT_REQUEST_TIMEOUT_SECONDS = 300
 _HOSTED_RESPONSE_TIMEOUT_SECONDS = 600
+_HOSTED_SESSION_PROPAGATION_RETRY_DELAYS = (1, 2, 4, 8)
+_HOSTED_SESSION_PROPAGATION_WINDOW_SECONDS = sum(
+    _HOSTED_SESSION_PROPAGATION_RETRY_DELAYS
+)
 _PROMPT_RESPONSE_PROPAGATION_RETRY_DELAYS = (1, 2)
 _TRACE_ASSERTION_PROGRESS_SECONDS = 60
 _AUTH_PROGRESS = ProgressReporter("aiq-auth")
@@ -123,6 +127,8 @@ class LiveRuntime:
         self._token_cache: dict[str, tuple[float, str]] = {}
         self._rate_limit_feedback = threading.local()
         self._telemetry_query_lock = threading.Lock()
+        self._hosted_route_lock = threading.Lock()
+        self._hosted_routes: dict[str, tuple[str, float]] = {}
         self._logs_client_instance: Any | None = None
         self._progress = ProgressReporter("aiq", monotonic=monotonic)
         self._traffic_ledger = TrafficLedger(profile.name)
@@ -546,41 +552,51 @@ union traces, dependencies, requests
         agent_name: str,
         foundry_version: str,
     ) -> None:
-        response = self._json_request(
-            "PATCH",
-            f"{self._profile.project_endpoint}/agents/"
-            f"{urllib.parse.quote(agent_name, safe='')}",
-            {
-                "agent_endpoint": {
-                    "version_selector": {
-                        "version_selection_rules": [
-                            {
-                                "agent_version": foundry_version,
-                                "traffic_percentage": 100,
-                                "type": "FixedRatio",
-                            }
-                        ]
+        with self._hosted_route_lock:
+            routed = self._hosted_routes.get(agent_name)
+            if routed is not None and routed[0] == foundry_version:
+                return
+            response = self._json_request(
+                "PATCH",
+                f"{self._profile.project_endpoint}/agents/"
+                f"{urllib.parse.quote(agent_name, safe='')}",
+                {
+                    "agent_endpoint": {
+                        "version_selector": {
+                            "version_selection_rules": [
+                                {
+                                    "agent_version": foundry_version,
+                                    "traffic_percentage": 100,
+                                    "type": "FixedRatio",
+                                }
+                            ]
+                        }
                     }
-                }
-            },
-            hosted=True,
-            expected={200},
-            content_type="application/merge-patch+json",
-            retry_statuses=_TRANSIENT_HTTP,
-            retry_no_response=True,
-        )
-        rules = (
-            response.get("agent_endpoint", {})
-            .get("version_selector", {})
-            .get("version_selection_rules", [])
-        )
-        if not any(
-            str(rule.get("agent_version") or "") == foundry_version
-            and int(rule.get("traffic_percentage") or 0) == 100
-            for rule in rules
-            if isinstance(rule, dict)
-        ):
-            raise ContractError("Hosted endpoint did not confirm exact-version routing")
+                },
+                hosted=True,
+                expected={200},
+                content_type="application/merge-patch+json",
+                retry_statuses=_TRANSIENT_HTTP,
+                retry_no_response=True,
+            )
+            rules = (
+                response.get("agent_endpoint", {})
+                .get("version_selector", {})
+                .get("version_selection_rules", [])
+            )
+            if not any(
+                str(rule.get("agent_version") or "") == foundry_version
+                and int(rule.get("traffic_percentage") or 0) == 100
+                for rule in rules
+                if isinstance(rule, dict)
+            ):
+                raise ContractError(
+                    "Hosted endpoint did not confirm exact-version routing"
+                )
+            self._hosted_routes[agent_name] = (
+                foundry_version,
+                self._monotonic(),
+            )
 
     def _invoke_prompt(
         self,
@@ -706,29 +722,63 @@ union traces, dependencies, requests
         *,
         validation_intent_reference: str | None = None,
     ) -> str:
-        session = self._json_request(
-            "POST",
-            f"{self._profile.project_endpoint}/agents/"
-            f"{urllib.parse.quote(agent_name, safe='')}/endpoint/sessions",
-            {
-                "version_indicator": {
-                    "type": "version_ref",
-                    "agent_version": foundry_version,
-                },
-                **(
-                    {
-                        "metadata": {
-                            "validation_intent_reference": (
-                                validation_intent_reference
-                            )
-                        }
-                    }
-                    if validation_intent_reference is not None
-                    else {}
-                ),
+        body = {
+            "version_indicator": {
+                "type": "version_ref",
+                "agent_version": foundry_version,
             },
-            hosted=True,
-        )
+            **(
+                {
+                    "metadata": {
+                        "validation_intent_reference": validation_intent_reference
+                    }
+                }
+                if validation_intent_reference is not None
+                else {}
+            ),
+        }
+        propagation_retry = 0
+        while True:
+            try:
+                session = self._json_request(
+                    "POST",
+                    f"{self._profile.project_endpoint}/agents/"
+                    f"{urllib.parse.quote(agent_name, safe='')}/endpoint/sessions",
+                    body,
+                    hosted=True,
+                )
+                break
+            except RemoteOperationError as error:
+                if (
+                    propagation_retry
+                    == len(_HOSTED_SESSION_PROPAGATION_RETRY_DELAYS)
+                    or not _hosted_session_route_propagation_pending(error)
+                ):
+                    raise
+                delay = _HOSTED_SESSION_PROPAGATION_RETRY_DELAYS[
+                    propagation_retry
+                ]
+                with self._hosted_route_lock:
+                    routed = self._hosted_routes.get(agent_name)
+                route_age = (
+                    self._monotonic() - routed[1]
+                    if routed is not None and routed[0] == foundry_version
+                    else -1
+                )
+                if (
+                    route_age < 0
+                    or route_age + delay
+                    > _HOSTED_SESSION_PROPAGATION_WINDOW_SECONDS
+                ):
+                    raise
+                propagation_retry += 1
+                self.report_progress(
+                    f"{agent_name}/{foundry_version}: exact route is not yet "
+                    f"available for session creation; retrying in {delay}s "
+                    f"({propagation_retry + 1}/"
+                    f"{len(_HOSTED_SESSION_PROPAGATION_RETRY_DELAYS) + 1})"
+                )
+                self._sleep(delay)
         session_id = str(
             session.get("agent_session_id")
             or session.get("session_id")
@@ -1956,6 +2006,16 @@ def _previous_response_propagation_pending(
         error.request_accepted is False
         and error.status == 404
         and error.code in {"NotFound", "previous_response_not_found"}
+    )
+
+
+def _hosted_session_route_propagation_pending(
+    error: RemoteOperationError,
+) -> bool:
+    return (
+        error.request_accepted is False
+        and error.status == 404
+        and error.code == "NotFound"
     )
 
 

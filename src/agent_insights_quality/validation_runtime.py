@@ -93,6 +93,8 @@ class AuthorityDeployer(Protocol):
 
 
 class ScenarioAttemptRunner(Protocol):
+    def prepare_hosted_routes(self, targets: list[DeployedRuntime]) -> None: ...
+
     def run(
         self,
         *,

@@ -37,6 +37,20 @@ class FoundryScenarioAttemptRunner:
         self._record_duration = record_duration
         self._now = now
 
+    def prepare_hosted_routes(self, targets: list[DeployedRuntime]) -> None:
+        prepared: set[str] = set()
+        for target in targets:
+            if (
+                target.runtime_kind not in {"hosted_code", "hosted_custom_container"}
+                or target.runtime_agent_name in prepared
+            ):
+                continue
+            self._runtime._activate_hosted_version(
+                target.runtime_agent_name,
+                target.runtime_agent_version,
+            )
+            prepared.add(target.runtime_agent_name)
+
     def run(
         self,
         *,

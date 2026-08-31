@@ -71,12 +71,16 @@ def test_two_phase_contract_uses_only_fixed_v0_canaries_first() -> None:
 
 def test_phase_two_and_traffic_follow_phase_one_and_two_clean_windows() -> None:
     source = inspect.getsource(_execute_validation_plan)
+    first_route = source.index("runner.prepare_hosted_routes")
+    second_route = source.index("runner.prepare_hosted_routes", first_route + 1)
+    assert first_route < source.index('wait_clean_interval("phase_1")')
     assert source.index('wait_clean_interval("phase_1")') < source.index(
         "phase_one_evidence = execute_validation_phase"
     )
     assert source.index(
         "phase_one_evidence = execute_validation_phase"
     ) < source.index("controller.begin_phase_two_deployment")
+    assert second_route < source.index('wait_clean_interval("phase_2")')
     assert source.index('wait_clean_interval("phase_2")') < source.index(
         "phase_two_evidence = execute_validation_phase"
     )
