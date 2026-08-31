@@ -56,6 +56,16 @@ class ValidationSupportImages:
     resources: tuple[dict[str, str | None], ...]
 
 
+@dataclass(frozen=True)
+class HostedVersionTopology:
+    agent_id: str
+    version_id: str
+    identity_id: str
+    blueprint_id: str
+    deployment_id: str
+    runtime_principal_id: str
+
+
 def validation_runtime_profile(
     project_name: str,
     *,
@@ -706,29 +716,40 @@ class FoundryAuthorityDeployer:
             deployed.runtime_agent_version,
             hosted=hosted,
         )
-        if str(details.get("status") or "").casefold() != "active":
-            raise ContractError(
-                "Validation canary Agent version is not active"
+        topology = (
+            _hosted_version_topology(
+                details,
+                expected_agent_name=deployed.runtime_agent_name,
+                expected_version=deployed.runtime_agent_version,
             )
-        provider_version_id = str(
-            details.get("id")
-            or details.get("version_id")
-            or (
-                f"{deployed.provider_agent_id}/versions/"
-                f"{deployed.runtime_agent_version}"
-            )
+            if hosted
+            else None
         )
+        if hosted:
+            assert topology is not None
+            provider_version_id = topology.version_id
+        else:
+            if str(details.get("status") or "").casefold() != "active":
+                raise ContractError(
+                    "Validation canary Agent version is not active"
+                )
+            provider_version_id = str(
+                details.get("id")
+                or details.get("version_id")
+                or (
+                    f"{deployed.provider_agent_id}/versions/"
+                    f"{deployed.runtime_agent_version}"
+                )
+            )
         if provider_version_id != deployed.provider_agent_version_id:
             raise ContractError(
                 "Validation canary Agent version identity changed"
             )
         if hosted and (
-            _nested_reference(details, "identity", "id")
-            != deployed.hosted_identity_id
-            or _nested_reference(details, "blueprint", "id")
-            != deployed.hosted_blueprint_id
-            or _nested_reference(details, "deployment", "id")
-            != deployed.hosted_deployment_id
+            topology.identity_id != deployed.hosted_identity_id
+            or topology.blueprint_id != deployed.hosted_blueprint_id
+            or topology.deployment_id != deployed.hosted_deployment_id
+            or topology.runtime_principal_id != deployed.runtime_principal_id
         ):
             raise ContractError(
                 "Validation Hosted canary topology is not ready"
@@ -797,50 +818,45 @@ class FoundryAuthorityDeployer:
                 else None
             ),
         )
-        provider_agent_id = str(
-            details.get("agent_id")
-            or details.get("agentId")
-            or planned.runtime_agent_name
-        )
-        provider_version_id = str(
-            details.get("id")
-            or details.get("version_id")
-            or f"{provider_agent_id}/versions/{version}"
-        )
-        identity = details.get("identity")
-        runtime_principal_id = (
-            str(
-                identity.get("principal_id")
-                or identity.get("principalId")
-                or ""
+        topology = (
+            _hosted_version_topology(
+                details,
+                expected_agent_name=planned.runtime_agent_name,
+                expected_version=version,
             )
-            if isinstance(identity, dict)
-            else ""
+            if hosted
+            else None
         )
-        if hosted and not runtime_principal_id:
-            runtime_principal_id = self._project.project_principal_id
-        hosted_identity_id = _nested_reference(
-            details,
-            "identity",
-            "id",
-        )
-        hosted_blueprint_id = _nested_reference(
-            details,
-            "blueprint",
-            "id",
-        )
-        hosted_deployment_id = _nested_reference(
-            details,
-            "deployment",
-            "id",
-        )
-        if hosted and (
-            hosted_identity_id is None
-            or hosted_blueprint_id is None
-            or hosted_deployment_id is None
-        ):
-            raise ContractError(
-                "Hosted validation deployment identity topology is incomplete"
+        if topology is not None:
+            provider_agent_id = topology.agent_id
+            provider_version_id = topology.version_id
+            hosted_identity_id = topology.identity_id
+            hosted_blueprint_id = topology.blueprint_id
+            hosted_deployment_id = topology.deployment_id
+            runtime_principal_id = topology.runtime_principal_id
+        else:
+            provider_agent_id = str(
+                details.get("agent_id")
+                or details.get("agentId")
+                or planned.runtime_agent_name
+            )
+            provider_version_id = str(
+                details.get("id")
+                or details.get("version_id")
+                or f"{provider_agent_id}/versions/{version}"
+            )
+            hosted_identity_id = None
+            hosted_blueprint_id = None
+            hosted_deployment_id = None
+            identity = details.get("identity")
+            runtime_principal_id = (
+                str(
+                    identity.get("principal_id")
+                    or identity.get("principalId")
+                    or ""
+                )
+                if isinstance(identity, dict)
+                else ""
             )
         return DeployedRuntime(
             authority_id=authority.authority_id,
@@ -868,21 +884,123 @@ def _deployment_name(cycle_id: str) -> str:
     return f"test-agent-validation-{cycle_id}"[:64].rstrip("-")
 
 
-def _nested_reference(
+def _required_mapping(
     value: Mapping[str, Any],
     field: str,
-    child: str,
-) -> str | None:
+) -> Mapping[str, Any]:
     nested = value.get(field)
     if not isinstance(nested, Mapping):
-        return None
-    result = str(
-        nested.get(child)
-        or nested.get("resource_id")
-        or nested.get("resourceId")
-        or ""
+        raise ContractError(
+            f"Hosted Agent version topology field is invalid: {field}"
+        )
+    return nested
+
+
+def _required_string(
+    value: Mapping[str, Any],
+    field: str,
+    *,
+    path: str,
+) -> str:
+    result = value.get(field)
+    if (
+        not isinstance(result, str)
+        or not result
+        or result != result.strip()
+    ):
+        raise ContractError(
+            f"Hosted Agent version topology field is invalid: {path}"
+        )
+    return result
+
+
+def _hosted_version_topology(
+    details: Mapping[str, Any],
+    *,
+    expected_agent_name: str,
+    expected_version: str,
+) -> HostedVersionTopology:
+    if details.get("status") != "active":
+        raise ContractError("Validation canary Agent version is not active")
+    if details.get("object") != "agent.version":
+        raise ContractError(
+            "Hosted Agent version topology field is invalid: object"
+        )
+    agent_id = _required_string(
+        details,
+        "name",
+        path="name",
     )
-    return result or None
+    version = _required_string(
+        details,
+        "version",
+        path="version",
+    )
+    if agent_id != expected_agent_name or version != expected_version:
+        raise ContractError("Validation canary Agent version identity changed")
+    version_id = _required_string(
+        details,
+        "id",
+        path="id",
+    )
+    instance_identity = _required_mapping(details, "instance_identity")
+    runtime_principal_id = _required_string(
+        instance_identity,
+        "principal_id",
+        path="instance_identity.principal_id",
+    )
+    identity_id = _required_string(
+        instance_identity,
+        "client_id",
+        path="instance_identity.client_id",
+    )
+    if (
+        "status" in instance_identity
+        and instance_identity["status"] != "active"
+    ):
+        raise ContractError(
+            "Hosted Agent version topology field is invalid: "
+            "instance_identity.status"
+        )
+    blueprint = _required_mapping(details, "blueprint")
+    _required_string(
+        blueprint,
+        "principal_id",
+        path="blueprint.principal_id",
+    )
+    _required_string(
+        blueprint,
+        "client_id",
+        path="blueprint.client_id",
+    )
+    if "status" in blueprint and blueprint["status"] != "active":
+        raise ContractError(
+            "Hosted Agent version topology field is invalid: blueprint.status"
+        )
+    blueprint_reference = _required_mapping(details, "blueprint_reference")
+    if blueprint_reference.get("type") != "ManagedAgentIdentityBlueprint":
+        raise ContractError(
+            "Hosted Agent version topology field is invalid: "
+            "blueprint_reference.type"
+        )
+    blueprint_id = _required_string(
+        blueprint_reference,
+        "blueprint_id",
+        path="blueprint_reference.blueprint_id",
+    )
+    deployment_id = _required_string(
+        details,
+        "agent_guid",
+        path="agent_guid",
+    )
+    return HostedVersionTopology(
+        agent_id=agent_id,
+        version_id=version_id,
+        identity_id=identity_id,
+        blueprint_id=blueprint_id,
+        deployment_id=deployment_id,
+        runtime_principal_id=runtime_principal_id,
+    )
 
 
 def _rate_limits(value: Any) -> tuple[int, int]:

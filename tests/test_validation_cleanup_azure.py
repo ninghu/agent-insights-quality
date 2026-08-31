@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from agent_insights_quality.provisioning import RemoteHttpError
+from agent_insights_quality.util import ContractError
 from agent_insights_quality.validation_cleanup import CleanupPlanItem
 from agent_insights_quality.validation_cleanup_azure import (
     AzureValidationCleanupBackend,
@@ -202,3 +203,94 @@ def test_hosted_intent_is_absent_after_parent_project_404() -> None:
     )
     assert resolved is not None
     assert resolved.resolved_provider_id == "discovery-absent"
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected"),
+    [
+        ("hosted_identity", "synthetic-instance-client"),
+        ("hosted_blueprint", "synthetic-blueprint-reference"),
+        ("hosted_deployment", "synthetic-agent-guid"),
+    ],
+)
+def test_hosted_intent_resolves_public_version_topology(
+    kind,
+    expected,
+) -> None:
+    backend = object.__new__(AzureValidationCleanupBackend)
+    backend._find_version_by_logical = lambda *_args, **_kwargs: "1"
+    backend._client = SimpleNamespace(
+        version_details=lambda *_args, **_kwargs: {
+            "agent_guid": "synthetic-agent-guid",
+            "instance_identity": {
+                "client_id": "synthetic-instance-client",
+            },
+            "blueprint_reference": {
+                "type": "ManagedAgentIdentityBlueprint",
+                "blueprint_id": "synthetic-blueprint-reference",
+            },
+        }
+    )
+    discovery_key = f"synthetic-agent|issue-001|{kind}"
+    resolved = backend.resolve_intent(_intent(kind, discovery_key))
+    assert resolved is not None
+    assert resolved.discovery_key == discovery_key
+    assert resolved.resolved_provider_id == expected
+
+
+def test_hosted_topology_is_absent_after_version_cleanup() -> None:
+    backend = object.__new__(AzureValidationCleanupBackend)
+    backend._find_version_by_logical = lambda *_args, **_kwargs: ""
+    assert backend.absent(
+        replace(
+            _intent(
+                "hosted_identity",
+                "synthetic-agent|issue-001|hosted_identity",
+            ),
+            resolved_provider_id="synthetic-instance-client",
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "details", "error_path"),
+    [
+        (
+            "hosted_identity",
+            {"instance_identity": {}},
+            "instance_identity.client_id",
+        ),
+        (
+            "hosted_blueprint",
+            {
+                "blueprint_reference": {
+                    "type": "unexpected",
+                    "blueprint_id": "synthetic-blueprint-reference",
+                }
+            },
+            "blueprint_reference.type",
+        ),
+        (
+            "hosted_deployment",
+            {"agent_guid": []},
+            "agent_guid",
+        ),
+    ],
+)
+def test_hosted_intent_rejects_malformed_public_version_topology(
+    kind,
+    details,
+    error_path,
+) -> None:
+    backend = object.__new__(AzureValidationCleanupBackend)
+    backend._find_version_by_logical = lambda *_args, **_kwargs: "1"
+    backend._client = SimpleNamespace(
+        version_details=lambda *_args, **_kwargs: details
+    )
+    with pytest.raises(ContractError, match=error_path):
+        backend.resolve_intent(
+            _intent(
+                kind,
+                f"synthetic-agent|issue-001|{kind}",
+            )
+        )

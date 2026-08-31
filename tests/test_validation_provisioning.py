@@ -24,6 +24,44 @@ from agent_insights_quality.validation_provisioning import (
 from agent_insights_quality.validation_policy import load_validation_policy
 
 
+def _active_hosted_version(
+    agent_name: str = "synthetic-agent",
+) -> dict:
+    return {
+        "_status": 200,
+        "object": "agent.version",
+        "id": "synthetic-version",
+        "name": agent_name,
+        "version": "1",
+        "status": "active",
+        "agent_guid": "synthetic-agent-guid",
+        "definition": {
+            "kind": "hosted",
+            "cpu": "1",
+            "memory": "2Gi",
+            "code_configuration": {
+                "runtime": "python_3_13",
+                "entry_point": ["python", "-m", "agent"],
+                "dependency_resolution": "remote_build",
+            },
+        },
+        "instance_identity": {
+            "principal_id": "synthetic-instance-principal",
+            "client_id": "synthetic-instance-client",
+            "status": "active",
+        },
+        "blueprint": {
+            "principal_id": "synthetic-blueprint-principal",
+            "client_id": "synthetic-blueprint-client",
+            "status": "active",
+        },
+        "blueprint_reference": {
+            "type": "ManagedAgentIdentityBlueprint",
+            "blueprint_id": "synthetic-blueprint-reference",
+        },
+    }
+
+
 def _staging_profile() -> RuntimeProfile:
     return RuntimeProfile(
         name="staging",
@@ -226,13 +264,7 @@ def test_support_image_records_acr_intents_before_push(
 def test_hosted_canary_readiness_rechecks_active_topology() -> None:
     calls = []
     deployer = object.__new__(FoundryAuthorityDeployer)
-    details = {
-        "status": "active",
-        "id": "synthetic-version",
-        "identity": {"id": "synthetic-identity"},
-        "blueprint": {"id": "synthetic-blueprint"},
-        "deployment": {"id": "synthetic-deployment"},
-    }
+    details = _active_hosted_version()
     deployer._client = SimpleNamespace(
         version_details=lambda name, version, *, hosted: (
             calls.append((name, version, hosted)) or details
@@ -244,14 +276,19 @@ def test_hosted_canary_readiness_rechecks_active_topology() -> None:
         runtime_agent_version="1",
         provider_agent_id="synthetic-agent",
         provider_agent_version_id="synthetic-version",
-        hosted_identity_id="synthetic-identity",
-        hosted_blueprint_id="synthetic-blueprint",
-        hosted_deployment_id="synthetic-deployment",
+        hosted_identity_id="synthetic-instance-client",
+        hosted_blueprint_id="synthetic-blueprint-reference",
+        hosted_deployment_id="synthetic-agent-guid",
+        runtime_principal_id="synthetic-instance-principal",
     )
     deployer.assert_ready(authority, deployed)
     assert calls == [("synthetic-agent", "1", True)]
     details["status"] = "pending"
     with pytest.raises(ContractError, match="not active"):
+        deployer.assert_ready(authority, deployed)
+    details["status"] = "active"
+    details["agent_guid"] = "different-agent-guid"
+    with pytest.raises(ContractError, match="topology is not ready"):
         deployer.assert_ready(authority, deployed)
 
 
@@ -362,3 +399,211 @@ def test_prompt_deploy_retries_duplicate_detail_read_after_exact_listing(
         ("GET", "/agents/synthetic-weather/versions/1", False),
         ("GET", "/agents/synthetic-weather/versions/1", False),
     ]
+
+
+@pytest.mark.parametrize(
+    (
+        "canonical_agent",
+        "authority_kind",
+        "authority_id",
+        "logical_version",
+        "runtime_kind",
+        "runtime_agent_name",
+    ),
+    [
+        (
+            "finance-agent",
+            "baseline",
+            "finance-agent/v0",
+            "v0",
+            "hosted_code",
+            "finance-agent-baseline-cycle",
+        ),
+        (
+            "finance-agent",
+            "issue",
+            "issue-013",
+            "issue-013",
+            "hosted_code",
+            "finance-agent-issue-013-cycle",
+        ),
+        (
+            "travel-agent",
+            "baseline",
+            "travel-agent/v0",
+            "v0",
+            "hosted_code",
+            "travel-agent-baseline-cycle",
+        ),
+        (
+            "travel-agent",
+            "issue",
+            "issue-021",
+            "issue-021",
+            "hosted_code",
+            "travel-agent-issue-021-cycle",
+        ),
+        (
+            "support-ticket-agent",
+            "baseline",
+            "support-ticket-agent/v0",
+            "v0",
+            "hosted_custom_container",
+            "support-ticket-agent-baseline-cycle",
+        ),
+        (
+            "support-ticket-agent",
+            "issue",
+            "issue-028",
+            "issue-028",
+            "hosted_custom_container",
+            "support-ticket-agent-issue-028-cycle",
+        ),
+    ],
+)
+def test_hosted_deploy_reads_public_version_topology(
+    monkeypatch,
+    canonical_agent,
+    authority_kind,
+    authority_id,
+    logical_version,
+    runtime_kind,
+    runtime_agent_name,
+) -> None:
+    deployer = object.__new__(FoundryAuthorityDeployer)
+    deployer._agents = {
+        canonical_agent: {
+            "name": canonical_agent,
+            "type": "hosted",
+            "baseline_path": f"agents/{canonical_agent}/v0",
+        }
+    }
+    deployer._issues = (
+        {}
+        if authority_kind == "baseline"
+        else {
+            authority_id: {
+                "implementation": (
+                    f"agents/{canonical_agent}/versions/{logical_version}"
+                )
+            }
+        }
+    )
+    deployer._support_images = {}
+    deployer._project = SimpleNamespace(
+        connection_ids=("synthetic-connection",),
+    )
+    deployer._client = SimpleNamespace(
+        ensure_version_for_readiness=lambda **_kwargs: ("1", None),
+        version_details=lambda *_args, **_kwargs: _active_hosted_version(
+            runtime_agent_name
+        ),
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_provisioning.build_artifact",
+        lambda *_args, **_kwargs: {"kind": "hosted_code"},
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_provisioning.source_content_digest",
+        lambda *_args, **_kwargs: "synthetic-digest",
+    )
+    deployed = deployer.deploy(
+        SimpleNamespace(
+            authority_id=authority_id,
+            authority_kind=authority_kind,
+            canonical_agent=canonical_agent,
+            logical_version=logical_version,
+            runtime_kind=runtime_kind,
+            source_content_digest="synthetic-digest",
+        ),
+        SimpleNamespace(runtime_agent_name=runtime_agent_name),
+    )
+    assert deployed.provider_agent_id == runtime_agent_name
+    assert deployed.provider_agent_version_id == "synthetic-version"
+    assert deployed.hosted_identity_id == "synthetic-instance-client"
+    assert deployed.hosted_blueprint_id == "synthetic-blueprint-reference"
+    assert deployed.hosted_deployment_id == "synthetic-agent-guid"
+    assert deployed.runtime_principal_id == "synthetic-instance-principal"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error_path"),
+    [
+        (
+            "instance_identity",
+            {
+                "principal_id": "synthetic-instance-principal",
+                "status": "active",
+            },
+            "instance_identity.client_id",
+        ),
+        ("blueprint", [], "blueprint"),
+        (
+            "blueprint_reference",
+            {
+                "type": "unexpected",
+                "blueprint_id": "synthetic-blueprint-reference",
+            },
+            "blueprint_reference.type",
+        ),
+        ("agent_guid", None, "agent_guid"),
+    ],
+)
+def test_hosted_canary_readiness_rejects_malformed_public_topology(
+    field,
+    value,
+    error_path,
+) -> None:
+    details = _active_hosted_version()
+    details[field] = value
+    deployer = object.__new__(FoundryAuthorityDeployer)
+    deployer._client = SimpleNamespace(
+        version_details=lambda *_args, **_kwargs: details,
+    )
+    with pytest.raises(ContractError, match=error_path):
+        deployer.assert_ready(
+            SimpleNamespace(runtime_kind="hosted_code"),
+            SimpleNamespace(
+                runtime_agent_name="synthetic-agent",
+                runtime_agent_version="1",
+                provider_agent_version_id="synthetic-version",
+                hosted_identity_id="synthetic-instance-client",
+                hosted_blueprint_id="synthetic-blueprint-reference",
+                hosted_deployment_id="synthetic-agent-guid",
+                runtime_principal_id="synthetic-instance-principal",
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("hosted_identity_id", "different-instance-client"),
+        ("hosted_blueprint_id", "different-blueprint-reference"),
+        ("hosted_deployment_id", "different-agent-guid"),
+        ("runtime_principal_id", "different-instance-principal"),
+    ],
+)
+def test_hosted_canary_readiness_rejects_mismatched_topology(
+    field,
+    value,
+) -> None:
+    deployed = {
+        "runtime_agent_name": "synthetic-agent",
+        "runtime_agent_version": "1",
+        "provider_agent_version_id": "synthetic-version",
+        "hosted_identity_id": "synthetic-instance-client",
+        "hosted_blueprint_id": "synthetic-blueprint-reference",
+        "hosted_deployment_id": "synthetic-agent-guid",
+        "runtime_principal_id": "synthetic-instance-principal",
+    }
+    deployed[field] = value
+    deployer = object.__new__(FoundryAuthorityDeployer)
+    deployer._client = SimpleNamespace(
+        version_details=lambda *_args, **_kwargs: _active_hosted_version(),
+    )
+    with pytest.raises(ContractError, match="topology is not ready"):
+        deployer.assert_ready(
+            SimpleNamespace(runtime_kind="hosted_code"),
+            SimpleNamespace(**deployed),
+        )

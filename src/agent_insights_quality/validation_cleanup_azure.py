@@ -23,6 +23,11 @@ _ARM_API_VERSIONS = {
     "project": "2025-06-01",
     "role_assignment": "2022-04-01",
 }
+_HOSTED_TOPOLOGY_REFERENCES = {
+    "hosted_identity": ("instance_identity", "client_id"),
+    "hosted_blueprint": ("blueprint_reference", "blueprint_id"),
+    "hosted_deployment": (None, "agent_guid"),
+}
 
 
 class AzureValidationCleanupBackend:
@@ -71,11 +76,7 @@ class AzureValidationCleanupBackend:
             if version:
                 actual = f"{parts[0]}/versions/{version}"
                 deterministic_name = f"{parts[0]}/{version}"
-        elif item.kind in {
-            "hosted_identity",
-            "hosted_blueprint",
-            "hosted_deployment",
-        }:
+        elif item.kind in _HOSTED_TOPOLOGY_REFERENCES:
             version = self._find_version_by_logical(parts[0], parts[1], hosted=True)
             if version:
                 try:
@@ -88,18 +89,12 @@ class AzureValidationCleanupBackend:
                     if error.status != 404:
                         raise
                     details = {}
-                field = {
-                    "hosted_identity": "identity",
-                    "hosted_blueprint": "blueprint",
-                    "hosted_deployment": "deployment",
-                }[item.kind]
-                nested = details.get(field)
-                if isinstance(nested, Mapping):
-                    actual = str(
-                        nested.get("id")
-                        or nested.get("resource_id")
-                        or nested.get("resourceId")
-                        or ""
+                if details:
+                    field, child = _HOSTED_TOPOLOGY_REFERENCES[item.kind]
+                    actual = _topology_reference(
+                        details,
+                        field,
+                        child,
                     )
         elif item.kind == "session":
             actual = self._find_metadata_resource(
@@ -233,6 +228,34 @@ class AzureValidationCleanupBackend:
                 item.deterministic_name,
                 hosted=item.runtime_kind != "prompt",
             )
+        if item.kind in _HOSTED_TOPOLOGY_REFERENCES:
+            parts = item.discovery_key.split("|")
+            if len(parts) != 3 or parts[2] != item.kind:
+                raise ContractError(
+                    "Hosted cleanup discovery key is invalid"
+                )
+            version = self._find_version_by_logical(
+                parts[0],
+                parts[1],
+                hosted=True,
+            )
+            if not version:
+                return True
+            try:
+                details = self._client.version_details(
+                    parts[0],
+                    version,
+                    hosted=True,
+                )
+            except RemoteHttpError as error:
+                if error.status == 404:
+                    return True
+                raise
+            field, child = _HOSTED_TOPOLOGY_REFERENCES[item.kind]
+            observed = _topology_reference(details, field, child)
+            if observed != self._actual_id(item):
+                raise ContractError("Hosted cleanup topology identity changed")
+            return False
         if item.kind == "session":
             return not self._client.session_exists(
                 self._agent_name(item),
@@ -288,6 +311,7 @@ class AzureValidationCleanupBackend:
                 api_version=_ARM_API_VERSIONS.get(item.kind),
             )
         return False
+
 
     def manifest_is_shared(self, provider_id: str) -> bool:
         matches = [
@@ -719,6 +743,40 @@ class AzureValidationCleanupBackend:
         if process.returncode not in expected:
             raise ContractError("Validation cleanup provider operation failed")
         return process
+
+
+def _topology_reference(
+    details: Mapping[str, Any],
+    field: str | None,
+    child: str,
+) -> str:
+    if field is None:
+        nested = details
+        path = child
+    else:
+        nested = details.get(field)
+        path = f"{field}.{child}"
+        if not isinstance(nested, Mapping):
+            raise ContractError(
+                f"Hosted cleanup topology field is invalid: {field}"
+            )
+    result = nested.get(child)
+    if (
+        not isinstance(result, str)
+        or not result
+        or result != result.strip()
+    ):
+        raise ContractError(
+            f"Hosted cleanup topology field is invalid: {path}"
+        )
+    if field == "blueprint_reference" and (
+        nested.get("type") != "ManagedAgentIdentityBlueprint"
+    ):
+        raise ContractError(
+            "Hosted cleanup topology field is invalid: "
+            "blueprint_reference.type"
+        )
+    return result
 
 
 def _agent_version(value: str) -> tuple[str, str]:
