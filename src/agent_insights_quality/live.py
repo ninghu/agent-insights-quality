@@ -922,7 +922,7 @@ union traces, dependencies, requests
             uncertain_seconds=_HOSTED_RESPONSE_TIMEOUT_SECONDS,
         )
         with self._hosted_route_lock:
-            binding = self._hosted_session_bindings.pop(
+            binding = self._hosted_session_bindings.get(
                 (agent_name, session_id),
                 None,
             )
@@ -934,6 +934,7 @@ union traces, dependencies, requests
             and routed[0] == binding[0]
             else None
         )
+        retry_started_at = self._monotonic()
         propagation_retry = 0
         propagation_error: RemoteOperationError | None = None
         while True:
@@ -953,6 +954,9 @@ union traces, dependencies, requests
                     expected={fixture["expected_status"]},
                     correlation_id=correlation_id,
                     timeout_seconds=_HOSTED_RESPONSE_TIMEOUT_SECONDS,
+                    retry_statuses=set(),
+                    retry_no_response=False,
+                    retry_unauthorized=False,
                 )
                 break
             except RemoteOperationError as error:
@@ -970,7 +974,7 @@ union traces, dependencies, requests
                 delay = _HOSTED_RESPONSE_PROPAGATION_RETRY_DELAYS[
                     propagation_retry
                 ]
-                retry_age = self._monotonic() - retry_binding[1]
+                retry_age = self._monotonic() - retry_started_at
                 if (
                     retry_age < 0
                     or retry_age + delay
@@ -1904,6 +1908,7 @@ union traces, dependencies, requests
         content_type: str = "application/json",
         retry_statuses: set[int] | None = None,
         retry_no_response: bool = False,
+        retry_unauthorized: bool = True,
         timeout_seconds: int | float = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
         request_deadline: datetime | None = None,
     ) -> dict[str, Any]:
@@ -1985,7 +1990,7 @@ union traces, dependencies, requests
                     status=None,
                     request_accepted=None,
                 ) from error
-            if status == 401 and not credential_refreshed:
+            if status == 401 and retry_unauthorized and not credential_refreshed:
                 self._invalidate_token(_FOUNDRY_SCOPE)
                 headers["Authorization"] = (
                     "Bearer " + self._token_provider(_FOUNDRY_SCOPE)
