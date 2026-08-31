@@ -76,6 +76,10 @@ _PROMPT_AGENT_ROUTE_PROPAGATION_RETRY_DELAYS = (1, 2, 4, 8)
 _PROMPT_AGENT_ROUTE_PROPAGATION_WINDOW_SECONDS = sum(
     _PROMPT_AGENT_ROUTE_PROPAGATION_RETRY_DELAYS
 )
+_HOSTED_RESPONSE_PROPAGATION_RETRY_DELAYS = (1, 2, 4, 8)
+_HOSTED_RESPONSE_PROPAGATION_WINDOW_SECONDS = sum(
+    _HOSTED_RESPONSE_PROPAGATION_RETRY_DELAYS
+)
 _PROMPT_RESPONSE_PROPAGATION_RETRY_DELAYS = (1, 2)
 _TRACE_ASSERTION_PROGRESS_SECONDS = 60
 _AUTH_PROGRESS = ProgressReporter("aiq-auth")
@@ -133,6 +137,7 @@ class LiveRuntime:
         self._telemetry_query_lock = threading.Lock()
         self._hosted_route_lock = threading.Lock()
         self._hosted_routes: dict[str, tuple[str, float]] = {}
+        self._hosted_session_bindings: dict[tuple[str, str], tuple[str, float]] = {}
         self._logs_client_instance: Any | None = None
         self._progress = ProgressReporter("aiq", monotonic=monotonic)
         self._traffic_ledger = TrafficLedger(profile.name)
@@ -541,15 +546,19 @@ union traces, dependencies, requests
         agent_name: str,
         session_id: str,
     ) -> None:
-        self._json_request(
-            "DELETE",
-            f"{self._profile.project_endpoint}/agents/"
-            f"{urllib.parse.quote(agent_name, safe='')}/endpoint/sessions/"
-            f"{urllib.parse.quote(session_id, safe='')}",
-            hosted=True,
-            expected={200, 202, 204, 404},
-            retry_statuses=_TRANSIENT_HTTP,
-        )
+        try:
+            self._json_request(
+                "DELETE",
+                f"{self._profile.project_endpoint}/agents/"
+                f"{urllib.parse.quote(agent_name, safe='')}/endpoint/sessions/"
+                f"{urllib.parse.quote(session_id, safe='')}",
+                hosted=True,
+                expected={200, 202, 204, 404},
+                retry_statuses=_TRANSIENT_HTTP,
+            )
+        finally:
+            with self._hosted_route_lock:
+                self._hosted_session_bindings.pop((agent_name, session_id), None)
 
     def _activate_hosted_version(
         self,
@@ -823,6 +832,11 @@ union traces, dependencies, requests
                 status=int(session.get("_http_status") or 200),
                 request_accepted=True,
             )
+        with self._hosted_route_lock:
+            self._hosted_session_bindings[(agent_name, session_id)] = (
+                foundry_version,
+                self._monotonic(),
+            )
         return session_id
 
     def _invoke_hosted(
@@ -864,17 +878,71 @@ union traces, dependencies, requests
             now=self._utcnow().astimezone(UTC),
             uncertain_seconds=_HOSTED_RESPONSE_TIMEOUT_SECONDS,
         )
-        response = self._json_request(
-            "POST",
-            f"{self._profile.project_endpoint}/agents/"
-            f"{urllib.parse.quote(agent_name, safe='')}"
-            "/endpoint/protocols/openai/responses",
-            body,
-            hosted=True,
-            expected={fixture["expected_status"]},
-            correlation_id=correlation_id,
-            timeout_seconds=_HOSTED_RESPONSE_TIMEOUT_SECONDS,
+        with self._hosted_route_lock:
+            binding = self._hosted_session_bindings.pop(
+                (agent_name, session_id),
+                None,
+            )
+            routed = self._hosted_routes.get(agent_name)
+        retry_binding = (
+            binding
+            if binding is not None
+            and routed is not None
+            and routed[0] == binding[0]
+            else None
         )
+        propagation_retry = 0
+        propagation_error: RemoteOperationError | None = None
+        while True:
+            if retry_binding is not None and propagation_error is not None:
+                with self._hosted_route_lock:
+                    routed = self._hosted_routes.get(agent_name)
+                if routed is None or routed[0] != retry_binding[0]:
+                    raise propagation_error
+            try:
+                response = self._json_request(
+                    "POST",
+                    f"{self._profile.project_endpoint}/agents/"
+                    f"{urllib.parse.quote(agent_name, safe='')}"
+                    "/endpoint/protocols/openai/responses",
+                    body,
+                    hosted=True,
+                    expected={fixture["expected_status"]},
+                    correlation_id=correlation_id,
+                    timeout_seconds=_HOSTED_RESPONSE_TIMEOUT_SECONDS,
+                )
+                break
+            except RemoteOperationError as error:
+                if (
+                    retry_binding is None
+                    or not _hosted_session_route_propagation_pending(error)
+                    or propagation_retry
+                    == len(_HOSTED_RESPONSE_PROPAGATION_RETRY_DELAYS)
+                ):
+                    raise
+                with self._hosted_route_lock:
+                    routed = self._hosted_routes.get(agent_name)
+                if routed is None or routed[0] != retry_binding[0]:
+                    raise
+                delay = _HOSTED_RESPONSE_PROPAGATION_RETRY_DELAYS[
+                    propagation_retry
+                ]
+                retry_age = self._monotonic() - retry_binding[1]
+                if (
+                    retry_age < 0
+                    or retry_age + delay
+                    > _HOSTED_RESPONSE_PROPAGATION_WINDOW_SECONDS
+                ):
+                    raise
+                propagation_retry += 1
+                propagation_error = error
+                self.report_progress(
+                    f"{agent_name}/{retry_binding[0]}: Hosted response route is not yet "
+                    f"available; retrying the same session request in {delay}s "
+                    f"({propagation_retry + 1}/"
+                    f"{len(_HOSTED_RESPONSE_PROPAGATION_RETRY_DELAYS) + 1})"
+                )
+                self._sleep(delay)
         response_reference = response.get("id")
         if (
             not isinstance(response_reference, str)

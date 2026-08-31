@@ -51,6 +51,14 @@ def _runtime() -> LiveRuntime:
     )
 
 
+def _disable_traffic_ledger(runtime: LiveRuntime) -> None:
+    runtime._traffic_ledger = type(
+        "Ledger",
+        (),
+        {"mark_started": staticmethod(lambda *_args, **_kwargs: None)},
+    )()
+
+
 def _text_response(text: str) -> dict:
     return {
         "output": [
@@ -4238,6 +4246,404 @@ def test_hosted_session_retries_exact_post_activation_not_found() -> None:
     assert len(session_bodies) == 2
     assert session_bodies[0] == session_bodies[1]
     assert sleeps == [1]
+
+
+def test_hosted_response_retries_exact_first_post_session_not_found() -> None:
+    runtime = _runtime()
+    _disable_traffic_ledger(runtime)
+    runtime._monotonic = lambda: 0
+    sleeps = []
+    progress = []
+    session_calls = 0
+    session_releases = 0
+    response_calls = []
+
+    def request(method, url, body=None, **kwargs):
+        nonlocal session_calls, session_releases
+        if method == "PATCH":
+            return body
+        if method == "DELETE":
+            session_releases += 1
+            return {}
+        if url.endswith("/endpoint/sessions"):
+            session_calls += 1
+            return {
+                "agent_session_id": "session-synthetic",
+                "version_indicator": {
+                    "type": "version_ref",
+                    "agent_version": "1",
+                },
+            }
+        response_calls.append((method, url, body, kwargs))
+        if len(response_calls) == 1:
+            raise RemoteOperationError(
+                "Synthetic response route propagation",
+                code="NotFound",
+                status=404,
+                request_accepted=False,
+            )
+        return {"id": "response-synthetic", "output": []}
+
+    runtime._json_request = request  # type: ignore[method-assign]
+    runtime._sleep = sleeps.append
+    runtime.report_progress = progress.append  # type: ignore[method-assign]
+
+    result = runtime._invoke_group(
+        "finance-agent",
+        "hosted",
+        "1",
+        [
+            {
+                "_index": 0,
+                "body": {"input": "synthetic request"},
+                "expected_status": 200,
+            }
+        ],
+        1,
+    )
+
+    assert result[0][1] == ["response-synthetic"]
+    assert session_calls == 1
+    assert session_releases == 1
+    assert len(response_calls) == 2
+    assert all(call[0] == "POST" for call in response_calls)
+    assert all(
+        call[1].endswith(
+            "/agents/finance-agent/endpoint/protocols/openai/responses"
+        )
+        for call in response_calls
+    )
+    assert response_calls[0][2] == response_calls[1][2] == {
+        "input": "synthetic request",
+        "agent_session_id": "session-synthetic",
+        "store": False,
+    }
+    assert (
+        response_calls[0][3]["correlation_id"]
+        == response_calls[1][3]["correlation_id"]
+    )
+    assert sleeps == [1]
+    assert progress == [
+        "finance-agent/1: Hosted response route is not yet available; retrying "
+        "the same session request in 1s (2/5)"
+    ]
+
+
+def test_hosted_response_exhausts_bounded_route_propagation_retries() -> None:
+    runtime = _runtime()
+    _disable_traffic_ledger(runtime)
+    now = [0]
+    runtime._monotonic = lambda: now[0]
+    sleeps = []
+    session_calls = 0
+    session_releases = 0
+    response_calls = 0
+    error = RemoteOperationError(
+        "Synthetic response route propagation",
+        code="NotFound",
+        status=404,
+        request_accepted=False,
+    )
+
+    def request(method, url, body=None, **_kwargs):
+        nonlocal response_calls, session_calls, session_releases
+        if method == "PATCH":
+            return body
+        if method == "DELETE":
+            session_releases += 1
+            return {}
+        if url.endswith("/endpoint/sessions"):
+            session_calls += 1
+            return {
+                "agent_session_id": "session-synthetic",
+                "version_indicator": {
+                    "type": "version_ref",
+                    "agent_version": "1",
+                },
+            }
+        response_calls += 1
+        raise error
+
+    def sleep(delay):
+        sleeps.append(delay)
+        now[0] += delay
+
+    runtime._json_request = request  # type: ignore[method-assign]
+    runtime._sleep = sleep
+
+    with pytest.raises(RemoteOperationError) as caught:
+        runtime._invoke_group(
+            "finance-agent",
+            "hosted",
+            "1",
+            [
+                {
+                    "_index": 0,
+                    "body": {"input": "synthetic request"},
+                    "expected_status": 200,
+                }
+            ],
+            1,
+        )
+
+    assert caught.value is error
+    assert session_calls == 1
+    assert session_releases == 1
+    assert response_calls == 5
+    assert sleeps == [1, 2, 4, 8]
+    assert now[0] == 15
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RemoteOperationError(
+            "Synthetic accepted rejection",
+            code="NotFound",
+            status=404,
+            request_accepted=True,
+        ),
+        RemoteOperationError(
+            "Synthetic ambiguous rejection",
+            code="NotFound",
+            status=404,
+            request_accepted=None,
+        ),
+        RemoteOperationError(
+            "Synthetic no response",
+            code="remote_no_response",
+            status=None,
+            request_accepted=None,
+        ),
+    ],
+)
+def test_hosted_response_does_not_retry_accepted_or_unknown_failures(error) -> None:
+    runtime = _runtime()
+    _disable_traffic_ledger(runtime)
+    runtime._hosted_routes["finance-agent"] = ("1", 0)
+    runtime._hosted_session_bindings[("finance-agent", "session-synthetic")] = (
+        "1",
+        0,
+    )
+    runtime._monotonic = lambda: 0
+    calls = 0
+
+    def request(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise error
+
+    runtime._json_request = request  # type: ignore[method-assign]
+
+    with pytest.raises(RemoteOperationError) as caught:
+        runtime._invoke_hosted(
+            "finance-agent",
+            "session-synthetic",
+            {
+                "body": {"input": "synthetic request"},
+                "expected_status": 200,
+            },
+            1,
+        )
+
+    assert caught.value is error
+    assert calls == 1
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RemoteOperationError(
+            "Synthetic unrelated code",
+            code="not_found",
+            status=404,
+            request_accepted=False,
+        ),
+        RemoteOperationError(
+            "Synthetic unrelated status",
+            code="NotFound",
+            status=400,
+            request_accepted=False,
+        ),
+    ],
+)
+def test_hosted_response_does_not_retry_unrelated_rejections(error) -> None:
+    runtime = _runtime()
+    _disable_traffic_ledger(runtime)
+    runtime._hosted_routes["finance-agent"] = ("1", 0)
+    runtime._hosted_session_bindings[("finance-agent", "session-synthetic")] = (
+        "1",
+        0,
+    )
+    runtime._monotonic = lambda: 0
+    calls = 0
+
+    def request(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise error
+
+    runtime._json_request = request  # type: ignore[method-assign]
+
+    with pytest.raises(RemoteOperationError) as caught:
+        runtime._invoke_hosted(
+            "finance-agent",
+            "session-synthetic",
+            {
+                "body": {"input": "synthetic request"},
+                "expected_status": 200,
+            },
+            1,
+        )
+
+    assert caught.value is error
+    assert calls == 1
+
+
+@pytest.mark.parametrize("binding_state", ["missing", "wrong-route", "expired"])
+def test_hosted_response_requires_recent_exact_session_binding(binding_state) -> None:
+    runtime = _runtime()
+    _disable_traffic_ledger(runtime)
+    runtime._monotonic = lambda: 16 if binding_state == "expired" else 0
+    if binding_state != "missing":
+        runtime._hosted_session_bindings[
+            ("finance-agent", "session-synthetic")
+        ] = ("1", 0)
+    runtime._hosted_routes["finance-agent"] = (
+        "2" if binding_state == "wrong-route" else "1",
+        0,
+    )
+    calls = 0
+    sleeps = []
+    error = RemoteOperationError(
+        "Synthetic response route propagation",
+        code="NotFound",
+        status=404,
+        request_accepted=False,
+    )
+
+    def request(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise error
+
+    runtime._json_request = request  # type: ignore[method-assign]
+    runtime._sleep = sleeps.append
+
+    with pytest.raises(RemoteOperationError) as caught:
+        runtime._invoke_hosted(
+            "finance-agent",
+            "session-synthetic",
+            {
+                "body": {"input": "synthetic request"},
+                "expected_status": 200,
+            },
+            1,
+        )
+
+    assert caught.value is error
+    assert calls == 1
+    assert sleeps == []
+
+
+def test_hosted_response_stops_retry_when_exact_route_changes_during_delay() -> None:
+    runtime = _runtime()
+    _disable_traffic_ledger(runtime)
+    runtime._hosted_routes["finance-agent"] = ("1", 0)
+    runtime._hosted_session_bindings[("finance-agent", "session-synthetic")] = (
+        "1",
+        0,
+    )
+    runtime._monotonic = lambda: 0
+    calls = 0
+    sleeps = []
+    error = RemoteOperationError(
+        "Synthetic response route propagation",
+        code="NotFound",
+        status=404,
+        request_accepted=False,
+    )
+
+    def request(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise error
+
+    def sleep(delay):
+        sleeps.append(delay)
+        runtime._hosted_routes["finance-agent"] = ("2", 0)
+
+    runtime._json_request = request  # type: ignore[method-assign]
+    runtime._sleep = sleep
+
+    with pytest.raises(RemoteOperationError) as caught:
+        runtime._invoke_hosted(
+            "finance-agent",
+            "session-synthetic",
+            {
+                "body": {"input": "synthetic request"},
+                "expected_status": 200,
+            },
+            1,
+        )
+
+    assert caught.value is error
+    assert calls == 1
+    assert sleeps == [1]
+
+
+def test_hosted_response_retry_binding_is_consumed_by_first_invocation() -> None:
+    runtime = _runtime()
+    _disable_traffic_ledger(runtime)
+    runtime._hosted_routes["finance-agent"] = ("1", 0)
+    runtime._hosted_session_bindings[("finance-agent", "session-synthetic")] = (
+        "1",
+        0,
+    )
+    runtime._monotonic = lambda: 0
+    calls = 0
+    sleeps = []
+    error = RemoteOperationError(
+        "Synthetic response route propagation",
+        code="NotFound",
+        status=404,
+        request_accepted=False,
+    )
+
+    def request(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"id": "response-first", "output": []}
+        raise error
+
+    runtime._json_request = request  # type: ignore[method-assign]
+    runtime._sleep = sleeps.append
+
+    assert runtime._invoke_hosted(
+        "finance-agent",
+        "session-synthetic",
+        {
+            "body": {"input": "synthetic first request"},
+            "expected_status": 200,
+        },
+        1,
+    )[0] == ["response-first"]
+
+    with pytest.raises(RemoteOperationError) as caught:
+        runtime._invoke_hosted(
+            "finance-agent",
+            "session-synthetic",
+            {
+                "body": {"input": "synthetic later request"},
+                "expected_status": 200,
+            },
+            2,
+        )
+
+    assert caught.value is error
+    assert calls == 2
+    assert sleeps == []
 
 
 def test_hosted_session_exhausts_bounded_route_propagation_retries() -> None:
