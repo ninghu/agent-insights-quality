@@ -134,6 +134,131 @@ def test_resumed_version_cleanup_uses_resolved_provider_version() -> None:
     assert observed == [("synthetic-agent", "7", True)]
 
 
+def test_version_delete_retries_exact_session_conflict(monkeypatch) -> None:
+    calls = []
+    sleeps = []
+    backend = object.__new__(AzureValidationCleanupBackend)
+
+    def delete_version(agent, version, *, hosted):
+        calls.append((agent, version, hosted))
+        if len(calls) < 3:
+            raise RemoteHttpError(
+                409,
+                "conflict",
+                "Synthetic session deletion is propagating",
+                "DELETE private-route",
+            )
+
+    backend._client = SimpleNamespace(
+        _delete_owned_version=delete_version,
+        report_progress=lambda _message: None,
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_cleanup_azure.time.sleep",
+        sleeps.append,
+    )
+    item = replace(
+        _intent(
+            "provider_agent_version",
+            "synthetic-agent|issue-001|provider_agent_version",
+        ),
+        deterministic_name="synthetic-agent/issue-001",
+        resolved_provider_id="synthetic-agent/versions/7",
+        state="delete_intent",
+    )
+
+    backend.delete(item)
+
+    assert calls == [
+        ("synthetic-agent", "7", True),
+        ("synthetic-agent", "7", True),
+        ("synthetic-agent", "7", True),
+    ]
+    assert sleeps == [5, 10]
+
+
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [(409, "OtherConflict"), (403, "conflict")],
+)
+def test_version_delete_does_not_retry_unrelated_failure(
+    monkeypatch,
+    status,
+    code,
+) -> None:
+    calls = []
+    backend = object.__new__(AzureValidationCleanupBackend)
+
+    def delete_version(*_args, **_kwargs):
+        calls.append(None)
+        raise RemoteHttpError(
+            status,
+            code,
+            "Synthetic unrelated failure",
+            "DELETE private-route",
+        )
+
+    backend._client = SimpleNamespace(
+        _delete_owned_version=delete_version,
+        report_progress=lambda _message: None,
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_cleanup_azure.time.sleep",
+        pytest.fail,
+    )
+    item = replace(
+        _intent(
+            "provider_agent_version",
+            "synthetic-agent|issue-001|provider_agent_version",
+        ),
+        deterministic_name="synthetic-agent/issue-001",
+        resolved_provider_id="synthetic-agent/versions/7",
+        state="delete_intent",
+    )
+
+    with pytest.raises(RemoteHttpError):
+        backend.delete(item)
+    assert calls == [None]
+
+
+def test_version_delete_conflict_retry_is_bounded(monkeypatch) -> None:
+    calls = []
+    sleeps = []
+    backend = object.__new__(AzureValidationCleanupBackend)
+
+    def delete_version(*_args, **_kwargs):
+        calls.append(None)
+        raise RemoteHttpError(
+            409,
+            "conflict",
+            "Synthetic session deletion is propagating",
+            "DELETE private-route",
+        )
+
+    backend._client = SimpleNamespace(
+        _delete_owned_version=delete_version,
+        report_progress=lambda _message: None,
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_cleanup_azure.time.sleep",
+        sleeps.append,
+    )
+    item = replace(
+        _intent(
+            "provider_agent_version",
+            "synthetic-agent|issue-001|provider_agent_version",
+        ),
+        deterministic_name="synthetic-agent/issue-001",
+        resolved_provider_id="synthetic-agent/versions/7",
+        state="delete_intent",
+    )
+
+    with pytest.raises(RemoteHttpError):
+        backend.delete(item)
+    assert len(calls) == 5
+    assert sleeps == [5, 10, 20, 30]
+
+
 def test_discovery_absent_resource_stays_idempotently_absent() -> None:
     backend = object.__new__(AzureValidationCleanupBackend)
     item = replace(

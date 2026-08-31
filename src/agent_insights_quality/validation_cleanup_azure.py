@@ -29,6 +29,7 @@ _HOSTED_TOPOLOGY_REFERENCES = {
     "hosted_deployment": (None, "agent_guid"),
 }
 _HOSTED_RUNTIME_KINDS = {"hosted_code", "hosted_custom_container"}
+_VERSION_DELETE_CONFLICT_DELAYS = (5, 10, 20, 30)
 
 
 class AzureValidationCleanupBackend:
@@ -145,11 +146,27 @@ class AzureValidationCleanupBackend:
     def delete(self, item: CleanupPlanItem) -> None:
         if item.kind == "provider_agent_version":
             agent_name, version = self._provider_agent_version(item)
-            self._client._delete_owned_version(
-                agent_name,
-                version,
-                hosted=item.runtime_kind != "prompt",
-            )
+            for attempt in range(len(_VERSION_DELETE_CONFLICT_DELAYS) + 1):
+                try:
+                    self._client._delete_owned_version(
+                        agent_name,
+                        version,
+                        hosted=item.runtime_kind != "prompt",
+                    )
+                    break
+                except RemoteHttpError as error:
+                    if (
+                        attempt == len(_VERSION_DELETE_CONFLICT_DELAYS)
+                        or error.status != 409
+                        or error.code.casefold() != "conflict"
+                    ):
+                        raise
+                    delay = _VERSION_DELETE_CONFLICT_DELAYS[attempt]
+                    self._client.report_progress(
+                        "Agent-version cleanup is waiting for session "
+                        f"deletion propagation; retrying in {delay}s"
+                    )
+                    time.sleep(delay)
             return
         if item.kind == "provider_agent":
             self._client.delete_agent(
