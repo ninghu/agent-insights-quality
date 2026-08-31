@@ -253,3 +253,49 @@ def test_provider_timeout_is_normalized_as_cleanup_failure() -> None:
         "provider_code": None,
         "error_class": "TimeoutExpired",
     }
+
+
+def test_resolved_ambiguous_intent_is_not_rediscovered() -> None:
+    resource = _resource("stored_response", "response-intent")
+    resource.update(
+        state="ambiguous_create",
+        resolved_provider_id="response-resolved",
+    )
+    plan = build_cleanup_plan(
+        cycle_id="validation-cycle-0001",
+        ownership_nonce="nonce-0001",
+        resources=[resource],
+        documented_project_cascade=[],
+    )
+
+    class Backend:
+        deleted = []
+
+        def resolve_intent(self, _item):
+            raise AssertionError("Resolved intent must not be rediscovered")
+
+        def absent(self, _item) -> bool:
+            return False
+
+        def delete(self, item) -> None:
+            self.deleted.append(item.resolved_provider_id)
+
+        def manifest_is_shared(self, _provider_id: str) -> bool:
+            return False
+
+        def inventory(self, **_kwargs):
+            return CleanupInventory(
+                project_exists=False,
+                nonce_owned_ids=(),
+                session_response_ids=(),
+                cycle_acr_tag_ids=(),
+                incomplete_cascade_ids=(),
+            )
+
+    backend = Backend()
+    CleanupEngine(backend).execute(
+        plan,
+        record_delete_intent=lambda _item: None,
+    )
+
+    assert backend.deleted == ["response-resolved"]

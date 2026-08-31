@@ -274,7 +274,10 @@ class CleanupEngine:
         resolved_items: list[CleanupPlanItem] = []
         unresolved: list[CleanupPlanItem] = []
         for item in plan.items:
-            if item.state not in {"create_intent", "ambiguous_create"}:
+            if (
+                item.state not in {"create_intent", "ambiguous_create"}
+                or item.resolved_provider_id is not None
+            ):
                 resolved_items.append(item)
                 continue
             resolved = self._operation(
