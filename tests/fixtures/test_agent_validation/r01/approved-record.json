@@ -1,13 +1,13 @@
 {
   "approved_at": "2026-08-29T13:00:00+00:00",
   "approved_by": "synthetic-approver",
-  "clean_digest": "sha256:9d76139154229b3eecd2ea14be16f9415eeb71eb868c6990ae51ac40d47b5ae9",
+  "clean_digest": "sha256:d5c31c4dd9877b318a94dbe2744cdfd551728e59fa52fce40dd9c204ab36b68f",
   "commit_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-  "evidence_digest": "sha256:7e2bed624deb72c4437a1a92e93254fa8f66e289e28e7cc7b0dbc40c139d68fb",
+  "evidence_digest": "sha256:9967bdd469806b7c1c9f8096b0c65c1199630a5d85f693cb221e5e47aab3b9cd",
   "kind": "test-agent-validation-approved-record",
   "pr_number": 63,
-  "record_digest": "sha256:2e22223564aeeefe25ac1c930f20f1a6cbca8d2ab1c5e80808ee0f5f9d842820",
+  "record_digest": "sha256:830f43c95d2d4500cdb5d520c2f678d4ee452be7f15f26915f96cd49cc92d6a7",
   "repository": "ninghu/agent-insights-quality",
   "schema_version": "1.0.0",
-  "validation_digest": "sha256:435b4c11273ee97e5d78d0cc1fc53fb20da772bc1192428d0ef1ad5e8a7d3e0c"
+  "validation_digest": "sha256:ec4ba624670f0b2352c1c532e38a20aafe4b112b2d3523658f482aa93b3c8bfb"
 }
