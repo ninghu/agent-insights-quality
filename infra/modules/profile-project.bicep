@@ -105,6 +105,7 @@ resource insightsConnection 'Microsoft.CognitiveServices/accounts/projects/conne
     metadata: {
       ApiType: 'Azure'
       ResourceId: applicationInsights.id
+      ApplicationInsightsConnectionString: applicationInsights.properties.ConnectionString
       purpose: 'agent-insights-quality'
       profile: profile
     }

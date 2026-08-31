@@ -136,10 +136,26 @@ class RuntimeProfile:
         if process.returncode != 0:
             raise ContractError("Project telemetry connection could not be queried")
         value = json.loads(process.stdout)
-        target = str(value.get("properties", {}).get("target") or "")
+        properties = value.get("properties", {})
+        metadata = (
+            properties.get("metadata", {}) if isinstance(properties, dict) else {}
+        )
+        target = str(properties.get("target") or "")
         if target.casefold() != self.application_insights_resource_id.casefold():
             raise ContractError(
                 "Project telemetry connection does not match the active resource set"
+            )
+        if (
+            properties.get("category") != "AppInsights"
+            or properties.get("authType") != "ApiKey"
+            or not isinstance(metadata, dict)
+            or str(metadata.get("ApiType") or "") != "Azure"
+            or str(metadata.get("ResourceId") or "").casefold()
+            != self.application_insights_resource_id.casefold()
+            or not str(metadata.get("ApplicationInsightsConnectionString") or "")
+        ):
+            raise ContractError(
+                "Project telemetry connection is not ready for server-side tracing"
             )
 
     def with_project(

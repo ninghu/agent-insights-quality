@@ -119,6 +119,10 @@ def test_validation_project_bicep_creates_no_monitor_or_insights_run() -> None:
     assert "application-insights-validation" in text
     assert "container-registry-validation" in text
     assert "validation-project-rbac.bicep" in text
+    assert (
+        "ApplicationInsightsConnectionString: "
+        "applicationInsights.properties.ConnectionString"
+    ) in text
     assert "ownershipNonce" in text
     assert "agent_insight" not in text.casefold()
     assert "monitor" not in text.casefold().replace("monitoringreader", "")

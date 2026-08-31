@@ -2612,6 +2612,10 @@ def test_wait_for_telemetry_discovers_exact_attempt_operations_for_every_agent(
     ) == operations
     query_text = captured[0]
     assert len(captured) == 2
+    assert "union traces, dependencies, requests" in query_text
+    assert 'customDimensions["gen_ai.operation.name"]' in query_text
+    assert 'customDimensions["gen_ai.agent.name"]' in query_text
+    assert 'customDimensions["gen_ai.agent.version"]' in query_text
     assert 'customDimensions["gen_ai.response.id"]' not in query_text
     assert 'customDimensions["x-ms-client-request-id"]' not in query_text
     assert 'set_has_element(operation_names, "invoke_agent")' in query_text

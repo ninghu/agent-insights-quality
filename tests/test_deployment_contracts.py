@@ -26,6 +26,10 @@ def test_infrastructure_grants_automation_data_plane_roles() -> None:
     ).read_text(encoding="utf-8")
     assert "automationInsightsReader" in content
     assert "automationProjectManager" in content
+    assert (
+        "ApplicationInsightsConnectionString: "
+        "applicationInsights.properties.ConnectionString"
+    ) in content
     lab = (ROOT / "infra" / "modules" / "lab.bicep").read_text(encoding="utf-8")
     assert "eadc314b-1a2d-4efa-be10-5d325db5065e" in lab
     assert "automationRegistryPush" in lab

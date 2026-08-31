@@ -86,7 +86,20 @@ def test_profile_requires_matching_project_telemetry_connection(monkeypatch) -> 
         lambda *args, **kwargs: SimpleNamespace(
             returncode=0,
             stdout=json.dumps(
-                {"properties": {"target": "/subscriptions/hidden/active"}}
+                {
+                    "properties": {
+                        "target": "/subscriptions/hidden/active",
+                        "category": "AppInsights",
+                        "authType": "ApiKey",
+                        "metadata": {
+                            "ApiType": "Azure",
+                            "ResourceId": "/subscriptions/hidden/active",
+                            "ApplicationInsightsConnectionString": (
+                                "InstrumentationKey=synthetic"
+                            ),
+                        },
+                    }
+                }
             ),
         ),
     )
@@ -110,11 +123,57 @@ def test_profile_rejects_mismatched_project_telemetry_connection(
         lambda *args, **kwargs: SimpleNamespace(
             returncode=0,
             stdout=json.dumps(
-                {"properties": {"target": "/subscriptions/hidden/wrong"}}
+                {
+                    "properties": {
+                        "target": "/subscriptions/hidden/wrong",
+                        "category": "AppInsights",
+                        "authType": "ApiKey",
+                        "metadata": {
+                            "ApiType": "Azure",
+                            "ResourceId": "/subscriptions/hidden/wrong",
+                            "ApplicationInsightsConnectionString": (
+                                "InstrumentationKey=synthetic"
+                            ),
+                        },
+                    }
+                }
             ),
         ),
     )
     with pytest.raises(ContractError, match="does not match"):
+        profile.assert_insights_connection()
+
+
+def test_profile_requires_server_side_trace_ingestion_metadata(monkeypatch) -> None:
+    profile = RuntimeProfile(
+        name="validation",
+        project_name="synthetic-validation",
+        project_endpoint="https://example.invalid",
+        insights_endpoint="https://example.invalid",
+        application_insights_resource_id="/subscriptions/hidden/active",
+        registry_path=SimpleNamespace(),
+        account_resource_id="/subscriptions/hidden/account",
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.profiles.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "properties": {
+                        "target": "/subscriptions/hidden/active",
+                        "category": "AppInsights",
+                        "authType": "ApiKey",
+                        "metadata": {
+                            "ApiType": "Azure",
+                            "ResourceId": "/subscriptions/hidden/active",
+                        },
+                    }
+                }
+            ),
+        ),
+    )
+    with pytest.raises(ContractError, match="server-side tracing"):
         profile.assert_insights_connection()
 
 
