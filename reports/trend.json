@@ -23,6 +23,14 @@
       "quality_score": 35.5,
       "report_date": "2026-08-28",
       "status": "FAIL"
+    },
+    {
+      "baseline_passed": 0,
+      "issues_correct": 1,
+      "issues_expected": 25,
+      "quality_score": null,
+      "report_date": "2026-08-31",
+      "status": "INCOMPLETE"
     }
   ],
   "schema_version": "1.0.0"
