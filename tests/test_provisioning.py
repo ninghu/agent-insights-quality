@@ -394,7 +394,7 @@ def test_exact_new_version_readiness_not_found_retries_then_succeeds(
     client._request = request  # type: ignore[method-assign]
     progress = []
     client.report_progress = progress.append  # type: ignore[method-assign]
-    client._wait_active(
+    details = client._wait_active(
         "synthetic-agent",
         "1",
         hosted=False,
@@ -405,6 +405,7 @@ def test_exact_new_version_readiness_not_found_retries_then_succeeds(
         },
         not_found_confirmed_at=0.0,
     )
+    assert details["status"] == "active"
     assert calls == 2
     assert sleeps == [5]
     assert progress == [

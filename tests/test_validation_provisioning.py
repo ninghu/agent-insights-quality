@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -292,7 +293,37 @@ def test_hosted_canary_readiness_rechecks_active_topology() -> None:
         deployer.assert_ready(authority, deployed)
 
 
-def test_prompt_deploy_retries_duplicate_detail_read_after_exact_listing(
+def test_resumed_canary_readiness_not_found_fails_without_create_proof() -> None:
+    calls = []
+    deployer = object.__new__(FoundryAuthorityDeployer)
+
+    def version_details(name, version, *, hosted):
+        calls.append((name, version, hosted))
+        raise RemoteHttpError(
+            404,
+            "NotFound",
+            "Synthetic missing version",
+            "GET /agents/synthetic-agent/versions/1",
+        )
+
+    deployer._client = SimpleNamespace(version_details=version_details)
+    with pytest.raises(RemoteHttpError):
+        deployer.assert_ready(
+            SimpleNamespace(
+                authority_id="synthetic-agent/v0",
+                runtime_kind="prompt",
+            ),
+            SimpleNamespace(
+                runtime_agent_name="synthetic-agent",
+                runtime_agent_version="1",
+                provider_agent_id="synthetic-agent",
+                provider_agent_version_id="synthetic-agent/versions/1",
+            ),
+        )
+    assert calls == [("synthetic-agent", "1", False)]
+
+
+def test_prompt_deploy_reuses_activation_details_after_temporary_propagation(
     monkeypatch,
 ) -> None:
     now = [10.0]
@@ -348,7 +379,7 @@ def test_prompt_deploy_retries_duplicate_detail_read_after_exact_listing(
             return {"versions": {"latest": {"version": "1"}}}
         if path == "/agents/synthetic-weather/versions/1":
             detail_reads += 1
-            if detail_reads == 2:
+            if detail_reads == 1:
                 raise RemoteHttpError(
                     404,
                     "NotFound",
@@ -377,25 +408,28 @@ def test_prompt_deploy_retries_duplicate_detail_read_after_exact_listing(
     deployer._project = SimpleNamespace(connection_ids=())
     deployer._support_images = {}
     deployer._client = client
+    deployer._readiness_lock = threading.Lock()
+    deployer._readiness_proofs = {}
+    authority = SimpleNamespace(
+        authority_id="weather-agent/v0",
+        authority_kind="baseline",
+        canonical_agent="weather-agent",
+        logical_version="v0",
+        runtime_kind="prompt",
+        source_content_digest="sha256:" + ("a" * 64),
+    )
     deployed = deployer.deploy(
-        SimpleNamespace(
-            authority_id="weather-agent/v0",
-            authority_kind="baseline",
-            canonical_agent="weather-agent",
-            logical_version="v0",
-            runtime_kind="prompt",
-            source_content_digest="sha256:" + ("a" * 64),
-        ),
+        authority,
         SimpleNamespace(runtime_agent_name="synthetic-weather"),
     )
+    deployer.assert_ready(authority, deployed)
 
     assert deployed.runtime_agent_version == "1"
     assert deployed.provider_agent_version_id == "synthetic-weather/versions/1"
     assert list_reads == 2
-    assert detail_reads == 3
+    assert detail_reads == 2
     assert sleeps == [5]
-    assert timeline[-3:] == [
-        ("GET", "/agents/synthetic-weather/versions/1", False),
+    assert timeline[-2:] == [
         ("GET", "/agents/synthetic-weather/versions/1", False),
         ("GET", "/agents/synthetic-weather/versions/1", False),
     ]
@@ -471,6 +505,8 @@ def test_hosted_deploy_reads_public_version_topology(
     runtime_agent_name,
 ) -> None:
     deployer = object.__new__(FoundryAuthorityDeployer)
+    detail_reads = []
+    details = _active_hosted_version(runtime_agent_name)
     deployer._agents = {
         canonical_agent: {
             "name": canonical_agent,
@@ -494,11 +530,11 @@ def test_hosted_deploy_reads_public_version_topology(
         connection_ids=("synthetic-connection",),
     )
     deployer._client = SimpleNamespace(
-        ensure_version_for_readiness=lambda **_kwargs: ("1", None),
-        version_details=lambda *_args, **_kwargs: _active_hosted_version(
-            runtime_agent_name
-        ),
+        ensure_version_for_readiness=lambda **_kwargs: ("1", details),
+        version_details=lambda *_args, **_kwargs: detail_reads.append(True),
     )
+    deployer._readiness_lock = threading.Lock()
+    deployer._readiness_proofs = {}
     monkeypatch.setattr(
         "agent_insights_quality.validation_provisioning.build_artifact",
         lambda *_args, **_kwargs: {"kind": "hosted_code"},
@@ -507,23 +543,26 @@ def test_hosted_deploy_reads_public_version_topology(
         "agent_insights_quality.validation_provisioning.source_content_digest",
         lambda *_args, **_kwargs: "synthetic-digest",
     )
+    authority = SimpleNamespace(
+        authority_id=authority_id,
+        authority_kind=authority_kind,
+        canonical_agent=canonical_agent,
+        logical_version=logical_version,
+        runtime_kind=runtime_kind,
+        source_content_digest="synthetic-digest",
+    )
     deployed = deployer.deploy(
-        SimpleNamespace(
-            authority_id=authority_id,
-            authority_kind=authority_kind,
-            canonical_agent=canonical_agent,
-            logical_version=logical_version,
-            runtime_kind=runtime_kind,
-            source_content_digest="synthetic-digest",
-        ),
+        authority,
         SimpleNamespace(runtime_agent_name=runtime_agent_name),
     )
+    deployer.assert_ready(authority, deployed)
     assert deployed.provider_agent_id == runtime_agent_name
     assert deployed.provider_agent_version_id == "synthetic-version"
     assert deployed.hosted_identity_id == "synthetic-instance-client"
     assert deployed.hosted_blueprint_id == "synthetic-blueprint-reference"
     assert deployed.hosted_deployment_id == "synthetic-agent-guid"
     assert deployed.runtime_principal_id == "synthetic-instance-principal"
+    assert detail_reads == []
 
 
 @pytest.mark.parametrize(

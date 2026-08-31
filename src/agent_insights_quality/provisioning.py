@@ -1256,7 +1256,7 @@ class FoundryProvisioner:
         agent: dict[str, Any],
         logical_version: str,
         artifact: dict[str, Any],
-    ) -> tuple[str, float | None]:
+    ) -> tuple[str, dict[str, Any]]:
         return self._ensure_version(
             agent=agent,
             logical_version=logical_version,
@@ -1269,7 +1269,7 @@ class FoundryProvisioner:
         agent: dict[str, Any],
         logical_version: str,
         artifact: dict[str, Any],
-    ) -> tuple[str, float | None]:
+    ) -> tuple[str, dict[str, Any]]:
         existing = self._find_version(
             agent["name"],
             logical_version,
@@ -1277,7 +1277,7 @@ class FoundryProvisioner:
             hosted=agent["type"] != "prompt",
         )
         if existing:
-            self._wait_active(
+            details = self._wait_active(
                 agent["name"],
                 existing,
                 hosted=agent["type"] != "prompt",
@@ -1288,7 +1288,7 @@ class FoundryProvisioner:
                 },
                 not_found_confirmed_at=None,
             )
-            return existing, None
+            return existing, details
         create_agent = not self._agent_exists(
             agent["name"],
             hosted=agent["type"] != "prompt",
@@ -1409,14 +1409,14 @@ class FoundryProvisioner:
             version = recovered
         if not version:
             raise ContractError("Foundry version creation returned no version")
-        self._wait_active(
+        details = self._wait_active(
             agent["name"],
             version,
             hosted=agent["type"] != "prompt",
             expected_metadata=metadata,
             not_found_confirmed_at=created_version_confirmed_at,
         )
-        return version, created_version_confirmed_at
+        return version, details
 
     def _agent_create_not_found_is_transient(
         self,
@@ -1640,7 +1640,7 @@ class FoundryProvisioner:
         hosted: bool,
         expected_metadata: dict[str, str],
         not_found_confirmed_at: float | None = None,
-    ) -> None:
+    ) -> dict[str, Any]:
         deadline = time.monotonic() + 30 * 60
         next_progress = time.monotonic() + 60
         while time.monotonic() < deadline:
@@ -1674,7 +1674,7 @@ class FoundryProvisioner:
                     for key, value in expected_metadata.items()
                 ):
                     raise ContractError("Active version metadata does not match its artifact")
-                return
+                return response
             if status in {"failed", "canceled", "deleted"}:
                 code = ""
                 if isinstance(response.get("error"), dict):

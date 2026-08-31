@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import subprocess
+import threading
 import time
 import urllib.parse
 import uuid
@@ -64,6 +65,12 @@ class HostedVersionTopology:
     blueprint_id: str
     deployment_id: str
     runtime_principal_id: str
+
+
+@dataclass(frozen=True)
+class _VersionReadinessProof:
+    provider_version_id: str
+    hosted_topology: HostedVersionTopology | None
 
 
 def validation_runtime_profile(
@@ -701,6 +708,10 @@ class FoundryAuthorityDeployer:
             token_provider=token_provider,
             progress=progress or ProgressReporter("aiq-validation-deploy"),
         )
+        self._readiness_lock = threading.Lock()
+        self._readiness_proofs: dict[
+            tuple[str, str, str, str, str, str], _VersionReadinessProof
+        ] = {}
 
     def wait_project(self) -> None:
         self._client.wait_project()
@@ -711,48 +722,75 @@ class FoundryAuthorityDeployer:
         deployed: DeployedRuntime,
     ) -> None:
         hosted = authority.runtime_kind != "prompt"
-        details = self._client.version_details(
-            deployed.runtime_agent_name,
-            deployed.runtime_agent_version,
-            hosted=hosted,
-        )
-        topology = (
-            _hosted_version_topology(
+        proof = self._take_readiness_proof(authority, deployed)
+        if proof is None:
+            details = self._client.version_details(
+                deployed.runtime_agent_name,
+                deployed.runtime_agent_version,
+                hosted=hosted,
+            )
+            proof = _version_readiness_proof(
                 details,
+                hosted=hosted,
                 expected_agent_name=deployed.runtime_agent_name,
                 expected_version=deployed.runtime_agent_version,
+                fallback_agent_id=(
+                    deployed.provider_agent_id if not hosted else None
+                ),
             )
-            if hosted
-            else None
-        )
-        if hosted:
-            assert topology is not None
-            provider_version_id = topology.version_id
-        else:
-            if str(details.get("status") or "").casefold() != "active":
-                raise ContractError(
-                    "Validation canary Agent version is not active"
-                )
-            provider_version_id = str(
-                details.get("id")
-                or details.get("version_id")
-                or (
-                    f"{deployed.provider_agent_id}/versions/"
-                    f"{deployed.runtime_agent_version}"
-                )
-            )
-        if provider_version_id != deployed.provider_agent_version_id:
+        topology = proof.hosted_topology
+        if proof.provider_version_id != deployed.provider_agent_version_id:
             raise ContractError(
                 "Validation canary Agent version identity changed"
             )
         if hosted and (
-            topology.identity_id != deployed.hosted_identity_id
+            topology is None
+            or topology.identity_id != deployed.hosted_identity_id
             or topology.blueprint_id != deployed.hosted_blueprint_id
             or topology.deployment_id != deployed.hosted_deployment_id
             or topology.runtime_principal_id != deployed.runtime_principal_id
         ):
             raise ContractError(
                 "Validation Hosted canary topology is not ready"
+            )
+
+    @staticmethod
+    def _readiness_key(
+        authority: AuthoritySpec,
+        deployed: DeployedRuntime,
+    ) -> tuple[str, str, str, str, str, str]:
+        return (
+            authority.authority_id,
+            authority.runtime_kind,
+            deployed.authority_id,
+            deployed.runtime_kind,
+            deployed.runtime_agent_name,
+            deployed.runtime_agent_version,
+        )
+
+    def _remember_readiness_proof(
+        self,
+        authority: AuthoritySpec,
+        deployed: DeployedRuntime,
+        proof: _VersionReadinessProof,
+    ) -> None:
+        with self._readiness_lock:
+            self._readiness_proofs[
+                self._readiness_key(authority, deployed)
+            ] = proof
+
+    def _take_readiness_proof(
+        self,
+        authority: AuthoritySpec,
+        deployed: DeployedRuntime,
+    ) -> _VersionReadinessProof | None:
+        lock = getattr(self, "_readiness_lock", None)
+        if lock is None:
+            return None
+        with lock:
+            return self._readiness_proofs.pop(
+                self._readiness_key(authority, deployed),
+                None,
             )
 
     def set_support_images(self, images: Mapping[str, str]) -> None:
@@ -799,7 +837,7 @@ class FoundryAuthorityDeployer:
             raise ContractError("Validation authority source digest changed before deploy")
         runtime_agent = copy.deepcopy(catalog_agent)
         runtime_agent["name"] = planned.runtime_agent_name
-        version, exact_listing_confirmed_at = (
+        version, details = (
             self._client.ensure_version_for_readiness(
                 agent=runtime_agent,
                 logical_version=authority.logical_version,
@@ -807,29 +845,16 @@ class FoundryAuthorityDeployer:
             )
         )
         hosted = authority.runtime_kind != "prompt"
-        details = self._client.version_details(
-            planned.runtime_agent_name,
-            version,
-            hosted=hosted,
-            exact_listing_confirmed_at=exact_listing_confirmed_at,
-            logical_version=(
-                authority.logical_version
-                if exact_listing_confirmed_at is not None
-                else None
-            ),
-        )
-        topology = (
-            _hosted_version_topology(
+        if hosted:
+            proof = _version_readiness_proof(
                 details,
+                hosted=True,
                 expected_agent_name=planned.runtime_agent_name,
                 expected_version=version,
             )
-            if hosted
-            else None
-        )
-        if topology is not None:
+            topology = proof.hosted_topology
+            assert topology is not None
             provider_agent_id = topology.agent_id
-            provider_version_id = topology.version_id
             hosted_identity_id = topology.identity_id
             hosted_blueprint_id = topology.blueprint_id
             hosted_deployment_id = topology.deployment_id
@@ -840,10 +865,12 @@ class FoundryAuthorityDeployer:
                 or details.get("agentId")
                 or planned.runtime_agent_name
             )
-            provider_version_id = str(
-                details.get("id")
-                or details.get("version_id")
-                or f"{provider_agent_id}/versions/{version}"
+            proof = _version_readiness_proof(
+                details,
+                hosted=False,
+                expected_agent_name=planned.runtime_agent_name,
+                expected_version=version,
+                fallback_agent_id=provider_agent_id,
             )
             hosted_identity_id = None
             hosted_blueprint_id = None
@@ -858,20 +885,22 @@ class FoundryAuthorityDeployer:
                 if isinstance(identity, dict)
                 else ""
             )
-        return DeployedRuntime(
+        deployed = DeployedRuntime(
             authority_id=authority.authority_id,
             runtime_kind=authority.runtime_kind,
             runtime_agent_name=planned.runtime_agent_name,
             runtime_agent_version=version,
             provider_agent_id=provider_agent_id,
-            provider_agent_version_id=provider_version_id,
+            provider_agent_version_id=proof.provider_version_id,
             hosted_identity_id=hosted_identity_id if hosted else None,
             hosted_blueprint_id=hosted_blueprint_id if hosted else None,
             hosted_deployment_id=hosted_deployment_id if hosted else None,
             runtime_principal_id=runtime_principal_id or None,
-            telemetry_identity_id=provider_version_id,
+            telemetry_identity_id=proof.provider_version_id,
             connection_ids=self._project.connection_ids,
         )
+        self._remember_readiness_proof(authority, deployed, proof)
+        return deployed
 
 
 def _resource_name(resource_id: str) -> str:
@@ -912,6 +941,45 @@ def _required_string(
             f"Hosted Agent version topology field is invalid: {path}"
         )
     return result
+
+
+def _version_readiness_proof(
+    details: Mapping[str, Any],
+    *,
+    hosted: bool,
+    expected_agent_name: str,
+    expected_version: str,
+    fallback_agent_id: str | None = None,
+) -> _VersionReadinessProof:
+    if hosted:
+        topology = _hosted_version_topology(
+            details,
+            expected_agent_name=expected_agent_name,
+            expected_version=expected_version,
+        )
+        return _VersionReadinessProof(
+            provider_version_id=topology.version_id,
+            hosted_topology=topology,
+        )
+    if str(details.get("status") or "").casefold() != "active":
+        raise ContractError("Validation canary Agent version is not active")
+    provider_version_id = str(
+        details.get("id")
+        or details.get("version_id")
+        or (
+            f"{fallback_agent_id}/versions/{expected_version}"
+            if fallback_agent_id
+            else ""
+        )
+    )
+    if not provider_version_id:
+        raise ContractError(
+            "Validation canary Agent version identity is missing"
+        )
+    return _VersionReadinessProof(
+        provider_version_id=provider_version_id,
+        hosted_topology=None,
+    )
 
 
 def _hosted_version_topology(
