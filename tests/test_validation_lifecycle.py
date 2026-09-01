@@ -23,6 +23,7 @@ from agent_insights_quality.validation_lifecycle import (
     LocalRecord,
     LocalValidationLock,
     stamp_lifecycle_digest,
+    validate_topology_resource_bindings,
     validate_lifecycle,
     validation_runtime_root,
 )
@@ -31,6 +32,11 @@ from agent_insights_quality.validation_manifest import (
     prepare_validation_plan,
 )
 from agent_insights_quality.validation_policy import load_validation_policy
+from agent_insights_quality.validation_quota import (
+    CapacityMeasurement,
+    EndpointCost,
+    build_capacity_plan,
+)
 from agent_insights_quality.validation_reconciler import ValidationReconciler
 
 START = datetime(2026, 8, 29, 12, 0, tzinfo=UTC)
@@ -238,6 +244,77 @@ def test_partial_deployment_progress_persists_recovery_and_ready_state(
                 [_prompt_runtime()],
                 now=START + timedelta(seconds=3),
             )
+
+
+def test_project_bindings_are_unique_retained_durable_topology_resources(
+    tmp_path,
+) -> None:
+    lock = LocalValidationLock(tmp_path / "validation.lock")
+    journal = LifecycleJournal(lock=lock, root=tmp_path / "lifecycle")
+    project_id = "/subscriptions/synthetic/projects/aiq-staging"
+    principal_id = "synthetic-project-principal"
+    connection_ids = [
+        "/subscriptions/synthetic/connections/app-insights",
+        "/subscriptions/synthetic/connections/model",
+    ]
+    with lock:
+        controller = ValidationCycleController(
+            journal,
+            active=journal.begin_cycle(_initial()),
+        )
+        controller.preflight(
+            build_capacity_plan(
+                CapacityMeasurement(
+                    rpm=100,
+                    tpm=100_000,
+                    measured_at=START.isoformat(),
+                ),
+                policy=load_validation_policy(),
+                costs=[
+                    EndpointCost(
+                        requests=1,
+                        tokens=2048,
+                        inner_model_calls=1,
+                    )
+                ],
+            ),
+            now=START,
+        )
+        controller.project_bound(
+            name=controller.active.value["project"]["name"],
+            provider_id=project_id,
+            endpoint_reference="https://synthetic.invalid",
+            project_principal_id=principal_id,
+            connection_ids=connection_ids,
+            now=START,
+        )
+        controller.project_bound(
+            name=controller.active.value["project"]["name"],
+            provider_id=project_id,
+            endpoint_reference="https://synthetic.invalid",
+            project_principal_id=principal_id,
+            connection_ids=connection_ids,
+            now=START,
+        )
+
+        resources = controller.active.value["resources"]
+        assert {
+            (item["kind"], item["provider_id"], item["cleanup_method"])
+            for item in resources
+        } == {
+            ("runtime_principal", principal_id, "retained_durable"),
+            ("connection", connection_ids[0], "retained_durable"),
+            ("connection", connection_ids[1], "retained_durable"),
+        }
+        topology = controller.active.value["runtime_topology"]
+        topology["agents"] = [
+            {
+                "authority_id": f"synthetic-agent/authority-{index:02d}",
+                "connection_ids": connection_ids,
+            }
+            for index in range(41)
+        ]
+        validate_topology_resource_bindings(topology, resources)
 
 
 def test_resumed_resource_intent_does_not_duplicate_or_downgrade_ready(

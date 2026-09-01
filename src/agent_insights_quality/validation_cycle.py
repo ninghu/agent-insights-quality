@@ -180,7 +180,7 @@ class ValidationCycleController:
                 "bound_observed_at": now.astimezone(UTC).isoformat(),
             }
         )
-        return self._commit(
+        self._commit(
             "CREATING",
             {
                 "project": project,
@@ -192,6 +192,80 @@ class ValidationCycleController:
             },
             now,
         )
+        durable_bindings = [
+            (
+                "runtime_principal",
+                project_principal_id,
+                f"{name}-project-principal",
+            ),
+            *[
+                (
+                    "connection",
+                    connection_id,
+                    f"{name}-project-connection-{index:02d}",
+                )
+                for index, connection_id in enumerate(
+                    sorted(set(connection_ids)),
+                    start=1,
+                )
+            ],
+        ]
+        for kind, binding_id, deterministic_name in durable_bindings:
+            event = {
+                "kind": kind,
+                "intent_reference": content_hash(
+                    {
+                        "kind": kind,
+                        "parent_id": provider_id,
+                        "provider_id": binding_id,
+                    }
+                ),
+                "deterministic_name": deterministic_name,
+                "runtime_kind": "control",
+                "discovery_key": f"{provider_id}|{kind}|{binding_id}",
+                "authority_id": None,
+                "parent_id": provider_id,
+                "cleanup_method": "retained_durable",
+            }
+            self.dynamic_resource_event(
+                {**event, "state": "create_intent"},
+                now=now,
+            )
+            resource = next(
+                item
+                for item in self._active.value["resources"]
+                if item["intent_reference"] == event["intent_reference"]
+            )
+            expected = {
+                "kind": kind,
+                "parent_id": provider_id,
+                "authority_id": None,
+                "deterministic_name": deterministic_name,
+                "runtime_kind": "control",
+                "discovery_key": event["discovery_key"],
+                "ownership_nonce": self._active.value["ownership_nonce"],
+                "cleanup_method": "retained_durable",
+            }
+            if any(resource[key] != value for key, value in expected.items()):
+                raise ContractError("Durable validation Project binding changed")
+            if resource["state"] == "created":
+                if resource["provider_id"] != binding_id:
+                    raise ContractError(
+                        "Durable validation Project provider binding changed"
+                    )
+                continue
+            if (
+                resource["state"] != "create_intent"
+                or resource["provider_id"] != event["intent_reference"]
+            ):
+                raise ContractError(
+                    "Durable validation Project binding state is invalid"
+                )
+            self.dynamic_resource_event(
+                {**event, "state": "created", "provider_id": binding_id},
+                now=now,
+            )
+        return self._active
 
     def support_images_ready(
         self,

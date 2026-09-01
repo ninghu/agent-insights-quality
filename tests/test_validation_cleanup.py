@@ -184,6 +184,8 @@ def test_cleanup_retains_durable_topology_without_absence_or_delete_calls() -> N
         "stable-agent",
         "stable-version",
         "stable-hosted-deployment",
+        "stable-project-connection",
+        "stable-project-principal",
     )
     plan = build_cleanup_plan(
         cycle_id="validation-cycle-0001",
@@ -202,6 +204,16 @@ def test_cleanup_retains_durable_topology_without_absence_or_delete_calls() -> N
             _resource(
                 "hosted_deployment",
                 retained_ids[2],
+                cleanup_method="retained_durable",
+            ),
+            _resource(
+                "connection",
+                retained_ids[3],
+                cleanup_method="retained_durable",
+            ),
+            _resource(
+                "runtime_principal",
+                retained_ids[4],
                 cleanup_method="retained_durable",
             ),
             _resource("stored_response", "response-id"),
