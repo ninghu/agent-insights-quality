@@ -88,7 +88,7 @@ def test_provider_instrumented_sources_do_not_inject_output_messages() -> None:
         )
 
 
-def test_finance_authorities_enable_maf_output_after_host_observability() -> None:
+def test_finance_authorities_enable_maf_before_runtime_construction() -> None:
     finance_root = ROOT / "agents" / "finance-agent"
     requirements = (finance_root / "v0" / "requirements.txt").read_text(
         encoding="utf-8"
@@ -118,9 +118,14 @@ def test_finance_authorities_enable_maf_output_after_host_observability() -> Non
         assert source.count("enable_instrumentation(") == 1
         main = source[source.index("def main() -> None:") :]
         host_setup = "host = ResponsesHostServer(build_agent())"
-        enable_maf = "enable_instrumentation(enable_sensitive_data=True)"
+        enable_maf = "enable_instrumentation(enable_sensitive_data=enable_sensitive_data)"
         host_run = "host.run(port=port)"
-        assert main.index(host_setup) < main.index(enable_maf) < main.index(host_run)
+        assert (
+            'os.getenv("ENABLE_SENSITIVE_DATA", "").strip().casefold() == "true"'
+            in main
+        )
+        assert "enable_sensitive_data=True" not in source
+        assert main.index(enable_maf) < main.index(host_setup) < main.index(host_run)
         assert "configure_otel_providers" not in source
         assert "gen_ai.output.messages" not in source
 

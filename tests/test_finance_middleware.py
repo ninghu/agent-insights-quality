@@ -206,11 +206,21 @@ def _load_finance_app(monkeypatch, logical_version: str):
     "logical_version",
     ["v0", *(f"issue-{issue_number:03}" for issue_number in range(13, 21))],
 )
-def test_finance_main_enables_maf_before_direct_agent_response(
+@pytest.mark.parametrize(
+    ("sensitive_data_environment", "expected_sensitive_data"),
+    [(None, False), ("true", True)],
+)
+def test_finance_main_enables_maf_before_runtime_construction(
     monkeypatch,
     logical_version,
+    sensitive_data_environment,
+    expected_sensitive_data,
 ) -> None:
     monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", "https://example.invalid")
+    if sensitive_data_environment is None:
+        monkeypatch.delenv("ENABLE_SENSITIVE_DATA", raising=False)
+    else:
+        monkeypatch.setenv("ENABLE_SENSITIVE_DATA", sensitive_data_environment)
     module = _load_finance_app(monkeypatch, logical_version)
 
     module.main()
@@ -218,13 +228,15 @@ def test_finance_main_enables_maf_before_direct_agent_response(
     events = module._test_events
     assert [event[0] for event in events] == [
         "app_observability",
-        "host_observability",
         "maf_instrumentation",
+        "host_observability",
         "host_run",
         "agent_response",
     ]
-    assert events[2][1] == {"enable_sensitive_data": True}
-    assert events[1][1] is events[3][1]
+    assert events[1][1] == {
+        "enable_sensitive_data": expected_sensitive_data,
+    }
+    assert events[2][1] is events[3][1]
     response = events[4][1]
     assert response.messages[0].role == "assistant"
     assert response.messages[0].contents == ["natural response"]

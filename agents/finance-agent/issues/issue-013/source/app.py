@@ -232,8 +232,11 @@ def build_agent() -> Agent:
 
 def main() -> None:
     port = int(os.environ.get("PORT", "8088"))
+    enable_sensitive_data = (
+        os.getenv("ENABLE_SENSITIVE_DATA", "").strip().casefold() == "true"
+    )
+    enable_instrumentation(enable_sensitive_data=enable_sensitive_data)
     host = ResponsesHostServer(build_agent())
-    enable_instrumentation(enable_sensitive_data=True)
     host.run(port=port)
 
 
