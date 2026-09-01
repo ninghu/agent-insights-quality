@@ -7,6 +7,8 @@ from typing import Annotated
 
 from agent_framework import (
     Agent,
+    ChatContext,
+    ChatMiddleware,
     FunctionInvocationContext,
     FunctionMiddleware,
     tool,
@@ -19,6 +21,7 @@ from opentelemetry import trace
 from pydantic import Field
 
 from .observability import configure_observability
+from .retry import tool_result_payload
 from .runtime_identity import require_foundry_runtime_identity
 from .tools import ACCOUNTS
 
@@ -164,8 +167,36 @@ class MissingTransientRetry(FunctionMiddleware):
         context: FunctionInvocationContext,
         call_next,
     ) -> None:
-        del context
         await call_next()
+
+
+class StopAfterTransientFailure(ChatMiddleware):
+    async def process(self, context: ChatContext, call_next) -> None:
+        if context.options is not None and _latest_transient_failure(context.messages):
+            context.options["tool_choice"] = "none"
+        await call_next()
+
+
+def _latest_transient_failure(messages) -> bool:
+    if not messages:
+        return False
+    results = [
+        content
+        for content in messages[-1].contents
+        if content.type == "function_result" and content.call_id
+    ]
+    for content in results:
+        result = tool_result_payload(content.items)
+        error = result.get("error") if isinstance(result, dict) else None
+        if (
+            result is not None
+            and result.get("ok") is False
+            and isinstance(error, dict)
+            and error.get("code") == "temporary_unavailable"
+            and error.get("retryable") is True
+        ):
+            return True
+    return False
 
 
 def build_agent() -> Agent:
@@ -176,6 +207,7 @@ def build_agent() -> Agent:
     )
     instructions = BASE_INSTRUCTIONS
     middleware = [MissingTransientRetry()]
+    middleware.append(StopAfterTransientFailure())
     return Agent(
         client=client,
         name=RUNTIME_IDENTITY.name,

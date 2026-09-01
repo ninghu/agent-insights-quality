@@ -637,3 +637,63 @@ def test_issue_018_executes_real_tool_once_without_retry_wrapper(
     ).read_text(encoding="utf-8")
     build = source[source.index("def build_agent") :]
     assert "ExactTransientRetry()" not in build
+    assert "middleware.append(StopAfterTransientFailure())" in build
+
+
+def test_issue_018_disables_dispatch_after_matching_transient_result(
+    monkeypatch,
+) -> None:
+    module = _load_finance_app(monkeypatch, "issue-018")
+    call_id = "synthetic-call"
+    tools = ["get_balance_with_transient", "get_balance"]
+    context = SimpleNamespace(
+        messages=[
+            SimpleNamespace(
+                contents=[
+                    SimpleNamespace(
+                        type="function_result",
+                        call_id=call_id,
+                        items=[
+                            SimpleNamespace(
+                                text=json.dumps(
+                                    {
+                                        "ok": False,
+                                        "error": {
+                                            "code": "temporary_unavailable",
+                                            "retryable": True,
+                                        },
+                                    }
+                                )
+                            )
+                        ],
+                    )
+                ]
+            ),
+        ],
+        options={"tools": tools, "tool_choice": "auto"},
+    )
+    outgoing = []
+
+    async def call_next() -> None:
+        outgoing.append(dict(context.options))
+
+    asyncio.run(module.StopAfterTransientFailure().process(context, call_next))
+
+    assert outgoing == [{"tools": tools, "tool_choice": "none"}]
+    assert outgoing[0]["tools"]
+
+
+def test_issue_018_keeps_dispatch_for_nonmatching_latest_turn(monkeypatch) -> None:
+    module = _load_finance_app(monkeypatch, "issue-018")
+    context = SimpleNamespace(
+        messages=[SimpleNamespace(contents=[])],
+        options={"tools": ["get_balance_with_transient"], "tool_choice": "auto"},
+    )
+
+    async def call_next() -> None:
+        pass
+
+    asyncio.run(module.StopAfterTransientFailure().process(context, call_next))
+
+    assert context.options["tool_choice"] == "auto"
+    assert context.options["tools"] == ["get_balance_with_transient"]

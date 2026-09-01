@@ -28,7 +28,7 @@ issues:
     middleware_kind: ChatMiddleware
   issue-018:
     declared_delta: "Issue-specific orchestration stops after one retryable failure."
-    expected_app_diff_digest: sha256:de3afba52f1ab912d876f2fa5be8a404b91c9008fe43948c7d81ccffdbea7880
+    expected_app_diff_digest: sha256:4afc81a812e52e20d55ea8f9b025be57e3a0a4d5a45d5f47296411d1e2693fdf
     expected_class: MissingTransientRetry
     middleware_kind: FunctionMiddleware
   issue-019:
