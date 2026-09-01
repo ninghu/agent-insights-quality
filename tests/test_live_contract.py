@@ -36,6 +36,7 @@ from agent_insights_quality.util import (
     ROOT,
     ContractError,
     InsightWindowExpiredError,
+    TraceAssertionActivationError,
     read_json,
 )
 
@@ -1726,6 +1727,26 @@ def _write_trace_assertion_traffic(
     )
 
 
+def _invoke_agent_trace_row(
+    reference: str,
+    *,
+    present: bool,
+    nonempty: bool,
+    telemetry_type: str = "requests",
+) -> dict:
+    row = _tool_trace_row("")
+    row.update(
+        {
+            "operation_name": "invoke_agent",
+            "matched_reference": reference,
+            "telemetry_type": telemetry_type,
+            "output_messages_present": present,
+            "output_messages_nonempty": nonempty,
+        }
+    )
+    return row
+
+
 def test_trace_assertion_correlation_fails_immediately_when_ambiguous(
     tmp_path,
 ) -> None:
@@ -1777,6 +1798,240 @@ def test_trace_assertion_correlation_fails_immediately_when_ambiguous(
         )
     assert sleeps == []
     assert first_passes == []
+
+
+def test_trace_assertion_waits_for_invoke_agent_hydration(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    statuses = _install_logs_query_status(monkeypatch)
+    monotonic = [0.0]
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+    )
+    operation_id = "a" * 32
+    reference = "resp_A1b2C3d4E5f6"
+    correlated = [
+        operation_id,
+        "execute_tool",
+        "lookup",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "2026-08-28T10:00:00+00:00",
+        10.0,
+        "tool.lookup",
+        "",
+        "",
+        "",
+        reference,
+        False,
+        False,
+    ]
+    hydrated = [
+        operation_id,
+        "invoke_agent",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        '[{"role":"assistant","parts":[{"type":"text","content":"synthetic"}]}]',
+        "2026-08-28T10:00:01+00:00",
+        25.0,
+        "invoke_agent",
+        "",
+        "",
+        "",
+        reference,
+        True,
+        True,
+    ]
+    polls = []
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+
+    def query(*_args, **_kwargs):
+        polls.append(monotonic[0])
+        rows = [correlated] if monotonic[0] < 135 else [correlated, hydrated]
+        return types.SimpleNamespace(
+            status=statuses.SUCCESS,
+            tables=[types.SimpleNamespace(rows=rows)],
+        )
+
+    runtime._query_resource = query  # type: ignore[method-assign]
+    runtime._collect_trace_rows = (  # type: ignore[method-assign]
+        lambda *_args: pytest.fail("Stable trace rows must be reused")
+    )
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
+    )
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(traffic_path)
+    states = []
+
+    evidence = runtime.trace_assertion_evidence(
+        agent_name="finance-agent",
+        foundry_version="issue-013",
+        operation_ids=(operation_id,),
+        response_references=(reference,),
+        window_start="2026-08-28T10:00:00+00:00",
+        window_end="2026-08-28T10:00:30+00:00",
+        traffic_path=traffic_path,
+        stabilization_seconds=180,
+        on_first_pass=lambda: None,
+        on_stable_output_messages=states.append,
+    )
+
+    assert evidence[0][0].passed is True
+    assert states == [((True, True),)]
+    assert monotonic[0] == 315
+    assert polls[0] == 0
+    assert polls[-1] == 315
+
+
+def test_trace_assertion_waits_for_inner_maf_output_hydration(tmp_path) -> None:
+    monotonic = [0.0]
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+    )
+    operation_id = "a" * 32
+    reference = "resp_A1b2C3d4E5f6"
+    outer = _invoke_agent_trace_row(
+        reference,
+        present=False,
+        nonempty=False,
+    )
+    inner = _invoke_agent_trace_row(
+        reference,
+        present=True,
+        nonempty=True,
+        telemetry_type="dependencies",
+    )
+    runtime._trace_rows = (  # type: ignore[method-assign]
+        lambda *_args: [outer] if monotonic[0] < 135 else [outer, inner]
+    )
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
+    )
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(traffic_path, with_trace_assertions=False)
+    states = []
+
+    runtime.trace_assertion_evidence(
+        agent_name="finance-agent",
+        foundry_version="v0",
+        operation_ids=(operation_id,),
+        response_references=(reference,),
+        window_start="2026-08-28T10:00:00+00:00",
+        window_end="2026-08-28T10:00:30+00:00",
+        traffic_path=traffic_path,
+        stabilization_seconds=180,
+        on_first_pass=lambda: None,
+        on_stable_output_messages=states.append,
+    )
+
+    assert states == [((True, True),)]
+    assert monotonic[0] == 315
+
+
+@pytest.mark.parametrize("state", [(False, False), (True, False)])
+def test_trace_assertion_returns_stable_empty_output_state(
+    tmp_path,
+    state,
+) -> None:
+    monotonic = [0.0]
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+    )
+    operation_id = "a" * 32
+    reference = "resp_A1b2C3d4E5f6"
+    rows = [
+        _invoke_agent_trace_row(
+            reference,
+            present=state[0],
+            nonempty=state[1],
+        )
+    ]
+    runtime._trace_rows = lambda *_args: rows  # type: ignore[method-assign]
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
+    )
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(traffic_path, with_trace_assertions=False)
+    states = []
+
+    runtime.trace_assertion_evidence(
+        agent_name="finance-agent",
+        foundry_version="v0",
+        operation_ids=(operation_id,),
+        response_references=(reference,),
+        window_start="2026-08-28T10:00:00+00:00",
+        window_end="2026-08-28T10:00:30+00:00",
+        traffic_path=traffic_path,
+        stabilization_seconds=180,
+        on_first_pass=lambda: None,
+        on_stable_output_messages=states.append,
+    )
+
+    assert states == [(state,)]
+    assert monotonic[0] == 180
+
+
+def test_trace_assertion_bounds_missing_invoke_agent_hydration(tmp_path) -> None:
+    monotonic = [0.0]
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+    )
+    operation_id = "a" * 32
+    reference = "resp_A1b2C3d4E5f6"
+    rows = [
+        {
+            **_tool_trace_row("lookup"),
+            "operation_id": operation_id,
+            "matched_reference": reference,
+        }
+    ]
+    runtime._trace_rows = lambda *_args: rows  # type: ignore[method-assign]
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
+    )
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(traffic_path)
+
+    with pytest.raises(
+        TraceAssertionActivationError,
+        match="did not stabilize before the bounded deadline",
+    ):
+        runtime.trace_assertion_evidence(
+            agent_name="finance-agent",
+            foundry_version="issue-013",
+            operation_ids=(operation_id,),
+            response_references=(reference,),
+            window_start="2026-08-28T10:00:00+00:00",
+            window_end="2026-08-28T10:00:30+00:00",
+            traffic_path=traffic_path,
+            stabilization_seconds=180,
+            on_first_pass=lambda: None,
+            on_stable_output_messages=lambda _states: None,
+        )
+
+    assert monotonic[0] == 15 * 60
 
 
 def test_trace_assertion_stable_failure_waits_for_deadline(

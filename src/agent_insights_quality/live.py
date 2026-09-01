@@ -1620,31 +1620,10 @@ union traces, dependencies, requests
     ) -> tuple[tuple[bool, bool], ...]:
         _validate_operation_references(operation_ids, len(operation_ids))
         rows = self._collect_trace_rows(operation_ids)
-        invoke_by_operation: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for row in rows:
-            operation_id = str(row.get("operation_id") or "").lower()
-            if (
-                operation_id in operation_ids
-                and _is_invoke_agent_span(row)
-            ):
-                invoke_by_operation[operation_id].append(row)
-        if any(
-            not invoke_by_operation[operation_id] for operation_id in operation_ids
-        ):
+        states = _canonical_output_messages_state_from_rows(rows, operation_ids)
+        if states is None:
             raise ContractError("Trace collection is missing an invoke_agent span")
-        return tuple(
-            (
-                any(
-                    row["output_messages_present"]
-                    for row in invoke_by_operation[operation_id]
-                ),
-                any(
-                    row["output_messages_nonempty"]
-                    for row in invoke_by_operation[operation_id]
-                ),
-            )
-            for operation_id in operation_ids
-        )
+        return states
 
     def _collect_trace_rows(
         self,
@@ -1757,6 +1736,9 @@ union withsource=telemetry_type traces, dependencies, requests
         stabilization_seconds: int,
         on_first_pass: Callable[[], None],
         on_stable: Callable[[dict[str, Any]], None] | None = None,
+        on_stable_output_messages: (
+            Callable[[tuple[tuple[bool, bool], ...]], None] | None
+        ) = None,
     ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
         payload = json.loads(traffic_path.read_text(encoding="utf-8"))
         requests = payload if isinstance(payload, list) else payload.get("requests")
@@ -1774,6 +1756,7 @@ union withsource=telemetry_type traces, dependencies, requests
             stabilization_seconds=stabilization_seconds,
             on_first_pass=on_first_pass,
             on_stable=on_stable,
+            on_stable_output_messages=on_stable_output_messages,
         )
 
     def trace_assertion_evidence_for_requests(
@@ -1789,6 +1772,9 @@ union withsource=telemetry_type traces, dependencies, requests
         stabilization_seconds: int,
         on_first_pass: Callable[[], None],
         on_stable: Callable[[dict[str, Any]], None] | None = None,
+        on_stable_output_messages: (
+            Callable[[tuple[tuple[bool, bool], ...]], None] | None
+        ) = None,
     ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
         if stabilization_seconds <= 0:
             raise ContractError("Hosted evidence stabilization interval must be positive")
@@ -1809,6 +1795,7 @@ union withsource=telemetry_type traces, dependencies, requests
         first_mapping_observed = False
         passing = False
         correlated: tuple[list[dict[str, Any]], ...] | None = None
+        output_messages_states: tuple[tuple[bool, bool], ...] | None = None
         while True:
             rows = self._trace_rows(
                 operation_ids,
@@ -1830,7 +1817,15 @@ union withsource=telemetry_type traces, dependencies, requests
                 raise TraceAssertionActivationError(
                     "Hosted evidence found ambiguous response-to-operation correlation"
                 )
-            if correlated is not None:
+            output_messages_states = (
+                _canonical_output_messages_state_from_rows(rows, operation_ids)
+                if on_stable_output_messages is not None
+                else None
+            )
+            if correlated is not None and (
+                on_stable_output_messages is None
+                or output_messages_states is not None
+            ):
                 if not first_mapping_observed:
                     first_mapping_observed = True
                     on_first_pass()
@@ -1862,6 +1857,8 @@ union withsource=telemetry_type traces, dependencies, requests
                     and stable_since is not None
                     and now - stable_since >= stabilization_seconds
                 ):
+                    if on_stable_output_messages is not None:
+                        on_stable_output_messages(output_messages_states)
                     if on_stable is not None:
                         on_stable(_trace_behavior_summary(rows))
                     return last_results
@@ -1895,6 +1892,12 @@ union withsource=telemetry_type traces, dependencies, requests
             and stable_since is not None
             and self._monotonic() - stable_since >= stabilization_seconds
         ):
+            if on_stable_output_messages is not None:
+                if output_messages_states is None:
+                    raise ContractError(
+                        "Stable trace evidence is missing output-message state"
+                    )
+                on_stable_output_messages(output_messages_states)
             if on_stable is not None:
                 on_stable(_trace_behavior_summary(rows))
             return last_results
@@ -2008,6 +2011,10 @@ union traces, dependencies, requests
 | extend structural_tool=tostring(customDimensions["aiq.tool.call.result"])
 | extend input_messages=tostring(customDimensions["gen_ai.input.messages"])
 | extend output_messages=tostring(customDimensions["gen_ai.output.messages"])
+| extend output_messages_present=bag_has_key(
+    customDimensions, "gen_ai.output.messages")
+| extend output_messages_nonempty=output_messages_present
+    and isnotempty(output_messages)
 | extend terminal_success=tostring(customDimensions["aiq.terminal_response.success"])
 | extend terminal_output=tostring(customDimensions["aiq.terminal_response.output_present"])
 | extend handled_error=tostring(customDimensions["aiq.tool.error.handled"])
@@ -2025,7 +2032,8 @@ union traces, dependencies, requests
     "")
 | project operation_Id, operation_name, tool_name, tool_call_id, error_type, tool_ok, tool_result,
     tool_arguments, structural_tool, input_messages, output_messages, timestamp, duration, name,
-    terminal_success, terminal_output, handled_error, matched_reference
+    terminal_success, terminal_output, handled_error, matched_reference,
+    output_messages_present, output_messages_nonempty
 """
         result = self._query_resource(
             self._logs_client(),
@@ -2053,6 +2061,14 @@ union traces, dependencies, requests
                 "terminal_output": str(row[15] or ""),
                 "handled_error": str(row[16] or ""),
                 "matched_reference": str(row[17] or ""),
+                "output_messages_present": _telemetry_boolean(
+                    row[18],
+                    field="output-message presence",
+                ),
+                "output_messages_nonempty": _telemetry_boolean(
+                    row[19],
+                    field="output-message nonempty state",
+                ),
             }
             for table in result.tables
             for row in table.rows
@@ -2461,6 +2477,38 @@ def _permanent_logs_query_failure(result: Any, statuses: Any) -> bool:
 
 def _is_invoke_agent_span(row: Mapping[str, Any]) -> bool:
     return row.get("operation_name") == "invoke_agent"
+
+
+def _canonical_output_messages_state_from_rows(
+    rows: list[dict[str, Any]],
+    operation_ids: tuple[str, ...],
+) -> tuple[tuple[bool, bool], ...] | None:
+    invoke_by_operation: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        operation_id = str(row.get("operation_id") or "").lower()
+        if operation_id in operation_ids and _is_invoke_agent_span(row):
+            invoke_by_operation[operation_id].append(row)
+    if any(not invoke_by_operation[operation_id] for operation_id in operation_ids):
+        return None
+    return tuple(
+        (
+            any(
+                _telemetry_boolean(
+                    row.get("output_messages_present"),
+                    field="output-message presence",
+                )
+                for row in invoke_by_operation[operation_id]
+            ),
+            any(
+                _telemetry_boolean(
+                    row.get("output_messages_nonempty"),
+                    field="output-message nonempty state",
+                )
+                for row in invoke_by_operation[operation_id]
+            ),
+        )
+        for operation_id in operation_ids
+    )
 
 
 def _canonical_output_messages_expectation_passes(

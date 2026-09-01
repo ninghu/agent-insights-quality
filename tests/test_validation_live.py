@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from agent_insights_quality.live import TelemetryCorrelationError, TelemetryQueryError
+from agent_insights_quality.live import TelemetryCorrelationError
 from agent_insights_quality.models import TraceAssertionEvidence
 from agent_insights_quality.validation_live import FoundryScenarioAttemptRunner
 from agent_insights_quality.validation_quota import (
@@ -19,7 +19,7 @@ from agent_insights_quality.validation_rules import (
     RUNTIME_AGENT_NAME_PLACEHOLDER,
     RUNTIME_AGENT_VERSION_PLACEHOLDER,
 )
-from agent_insights_quality.util import ContractError
+from agent_insights_quality.util import ContractError, TraceAssertionActivationError
 
 HASH = "sha256:" + ("a" * 64)
 
@@ -102,6 +102,7 @@ class Runtime:
         self.output_messages_state = output_messages_state
         self.counter = 0
         self.telemetry_counter = 0
+        self.canonical_output_queries = 0
 
     def _invoke_prompt(
         self,
@@ -145,6 +146,7 @@ class Runtime:
         )
 
     def canonical_output_messages_state(self, operation_ids):
+        self.canonical_output_queries += 1
         return tuple(self.output_messages_state for _ in operation_ids)
 
     @staticmethod
@@ -156,6 +158,14 @@ class Runtime:
         }
 
     def trace_assertion_evidence_for_requests(self, **kwargs):
+        callback = kwargs.get("on_stable_output_messages")
+        if callback is not None:
+            callback(
+                tuple(
+                    self.output_messages_state
+                    for _ in kwargs["operation_ids"]
+                )
+            )
         return tuple(
             (
                 TraceAssertionEvidence(
@@ -333,8 +343,9 @@ def test_passing_probe_is_observed_and_evidence_contains_hashes_only() -> None:
             datetime(2026, 8, 29, 12, 0, 1, tzinfo=UTC),
         ]
     )
+    runtime = Runtime(assertion_pass=True)
     runner = FoundryScenarioAttemptRunner(
-        Runtime(assertion_pass=True),
+        runtime,
         endpoint_costs={"issue-001": EndpointCost(1, 10, 1)},
         stabilization_seconds=1,
         record_resource=lambda item: None,
@@ -373,6 +384,8 @@ def test_passing_probe_is_observed_and_evidence_contains_hashes_only() -> None:
             *result["operation_references"],
         ]
     )
+    assert runtime.counter == 2
+    assert runtime.canonical_output_queries == 0
 
 
 def test_telemetry_identity_mismatch_keeps_attempt_incomplete() -> None:
@@ -476,11 +489,13 @@ def test_canonical_output_messages_failure_keeps_issue_attempt_incomplete(
     )
 
 
-def test_post_response_telemetry_query_failure_keeps_request_accepted() -> None:
+def test_bounded_trace_hydration_exhaustion_keeps_request_accepted() -> None:
     class FailedTelemetryRuntime(Runtime):
-        @staticmethod
-        def canonical_output_messages_state(_operation_ids):
-            raise TelemetryQueryError("Synthetic trace query failure")
+        def trace_assertion_evidence_for_requests(self, **kwargs):
+            del kwargs
+            raise TraceAssertionActivationError(
+                "Hosted evidence did not stabilize before the bounded deadline"
+            )
 
     times = iter(
         [
@@ -488,8 +503,9 @@ def test_post_response_telemetry_query_failure_keeps_request_accepted() -> None:
             datetime(2026, 8, 29, 12, 0, 1, tzinfo=UTC),
         ]
     )
+    runtime = FailedTelemetryRuntime()
     runner = FoundryScenarioAttemptRunner(
-        FailedTelemetryRuntime(),
+        runtime,
         endpoint_costs={"issue-001": EndpointCost(1, 10, 1)},
         stabilization_seconds=1,
         record_resource=lambda item: None,
@@ -521,7 +537,9 @@ def test_post_response_telemetry_query_failure_keeps_request_accepted() -> None:
         )
 
     assert caught.value.request_accepted is True
-    assert caught.value.code == "telemetry_query_failed"
+    assert caught.value.code == "TraceAssertionActivationError"
+    assert runtime.counter == 2
+    assert runtime.canonical_output_queries == 0
 
 
 def test_post_response_correlation_failure_preserves_counts_and_acceptance() -> None:

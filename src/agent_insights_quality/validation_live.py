@@ -352,16 +352,20 @@ class FoundryScenarioAttemptRunner:
             semantic_assertions_passed=sum(item[1] for item in semantic_results),
         )
         telemetry_started = time.monotonic()
+        output_messages_states: tuple[tuple[bool, bool], ...] | None = None
+
+        def capture_output_messages_states(
+            states: tuple[tuple[bool, bool], ...],
+        ) -> None:
+            nonlocal output_messages_states
+            output_messages_states = states
+
         try:
             with scheduler.telemetry_query():
                 operation_ids = self._runtime.wait_for_telemetry(
                     agent_name=target.runtime_agent_name,
                     foundry_version=target.runtime_agent_version,
                     invocation=invocation,
-                )
-            with scheduler.telemetry_query():
-                output_messages_states = (
-                    self._runtime.canonical_output_messages_state(operation_ids)
                 )
             with scheduler.telemetry_query():
                 trace_results = self._runtime.trace_assertion_evidence_for_requests(
@@ -381,6 +385,7 @@ class FoundryScenarioAttemptRunner:
                     ],
                     stabilization_seconds=self._stabilization_seconds,
                     on_first_pass=lambda: None,
+                    on_stable_output_messages=capture_output_messages_states,
                 )
             with scheduler.telemetry_query():
                 identity_results = self._runtime.telemetry_identity_passes(
@@ -401,6 +406,8 @@ class FoundryScenarioAttemptRunner:
             raise ContractError("Validation trace evidence step count is invalid")
         if len(identity_results) != len(raw_steps):
             raise ContractError("Validation telemetry identity count is invalid")
+        if output_messages_states is None:
+            raise ContractError("Validation output-message structure state is missing")
         if len(output_messages_states) != len(raw_steps):
             raise ContractError(
                 "Validation output-message structure count is invalid"
