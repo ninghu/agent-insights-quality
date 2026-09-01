@@ -150,13 +150,9 @@ def test_infrastructure_creates_and_locks_missing_approved_record_policy(
     shows = iter(
         [
             SimpleNamespace(
-                returncode=1,
+                returncode=0,
                 stdout="",
-                stderr=(
-                    "(ResourceNotFound) Operation returned an invalid status 'Not Found'\n"
-                    "Code: ResourceNotFound\n"
-                    "Message: Operation returned an invalid status 'Not Found'\n"
-                ),
+                stderr="",
             ),
             SimpleNamespace(
                 returncode=0,
@@ -213,6 +209,98 @@ def test_infrastructure_creates_and_locks_missing_approved_record_policy(
     assert lock[lock.index("--if-match") + 1] == "created-etag"
 
 
+def test_infrastructure_accepts_exact_resource_not_found_policy_response(
+    monkeypatch,
+) -> None:
+    calls = []
+    shows = iter(
+        [
+            SimpleNamespace(
+                returncode=1,
+                stdout="",
+                stderr=(
+                    "(ResourceNotFound) Operation returned an invalid status 'Not Found'\n"
+                    "Code: ResourceNotFound\n"
+                ),
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "state": "Unlocked",
+                        "etag": "created-etag",
+                        "immutabilityPeriodSinceCreationInDays": 90,
+                        "allowProtectedAppendWrites": False,
+                    }
+                ),
+                stderr="",
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "state": "Locked",
+                        "immutabilityPeriodSinceCreationInDays": 90,
+                        "allowProtectedAppendWrites": False,
+                    }
+                ),
+                stderr="",
+            ),
+        ]
+    )
+
+    def run(arguments, **_kwargs):
+        calls.append(arguments)
+        if arguments[1:4] == ["storage", "account", "list"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout="aiqsweartsynthetic\n",
+                stderr="",
+            )
+        if "immutability-policy" in arguments and "show" in arguments:
+            return next(shows)
+        return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr("agent_insights_quality.azure.subprocess.run", run)
+    _lock_approved_validation_policy(ProgressReporter("test"))
+    assert [
+        next(value for value in item if value in {"show", "create", "lock"})
+        for item in calls
+        if "immutability-policy" in item
+    ] == ["show", "create", "show", "lock", "show"]
+
+
+def test_empty_policy_response_after_create_fails_closed(monkeypatch) -> None:
+    calls = []
+    shows = iter(
+        [
+            SimpleNamespace(returncode=0, stdout="", stderr=""),
+            SimpleNamespace(returncode=0, stdout="", stderr=""),
+        ]
+    )
+
+    def run(arguments, **_kwargs):
+        calls.append(arguments)
+        if arguments[1:4] == ["storage", "account", "list"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout="aiqsweartsynthetic\n",
+                stderr="",
+            )
+        if "immutability-policy" in arguments and "show" in arguments:
+            return next(shows)
+        return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr("agent_insights_quality.azure.subprocess.run", run)
+    with pytest.raises(ContractError, match="policy is invalid"):
+        _lock_approved_validation_policy(ProgressReporter("test"))
+    assert [
+        next(value for value in item if value in {"show", "create", "lock"})
+        for item in calls
+        if "immutability-policy" in item
+    ] == ["show", "create", "show"]
+
+
 def test_infrastructure_does_not_mutate_locked_approved_record_policy(
     monkeypatch,
 ) -> None:
@@ -263,6 +351,43 @@ def test_infrastructure_does_not_mutate_locked_approved_record_policy(
             "invalid",
         ),
         (0, "not-json", "", "invalid"),
+        (0, " \n", "", "invalid"),
+        (0, "", " \n", "invalid"),
+        (0, "", "WARNING: unexpected diagnostic\n", "invalid"),
+        (
+            1,
+            "unexpected",
+            (
+                "(ResourceNotFound) Operation returned an invalid status 'Not Found'\n"
+                "Code: ResourceNotFound\n"
+            ),
+            "invalid",
+        ),
+        (
+            1,
+            "",
+            (
+                "(ResourceNotFound) Operation returned an invalid status 'Not Found'\n"
+                "Code: ResourceNotFound\n"
+                "(AuthorizationFailed) Access denied\n"
+                "Code: AuthorizationFailed\n"
+            ),
+            "invalid",
+        ),
+        (0, "null", "", "does not match 90-day WORM"),
+        (0, "{}", "", "does not match 90-day WORM"),
+        (
+            0,
+            json.dumps(
+                {
+                    "state": "Locked",
+                    "immutabilityPeriodSinceCreationInDays": 90,
+                    "allowProtectedAppendWrites": False,
+                }
+            ),
+            "WARNING: unexpected diagnostic\n",
+            "invalid",
+        ),
     ],
 )
 def test_policy_read_errors_do_not_create(
@@ -294,6 +419,50 @@ def test_policy_read_errors_do_not_create(
     with pytest.raises(ContractError, match=message):
         _lock_approved_validation_policy(ProgressReporter("test"))
     assert not any("create" in item for item in calls)
+
+
+def test_policy_read_after_create_rejects_valid_json_with_stderr(
+    monkeypatch,
+) -> None:
+    calls = []
+    shows = iter(
+        [
+            SimpleNamespace(returncode=0, stdout="", stderr=""),
+            SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "state": "Unlocked",
+                        "etag": "created-etag",
+                        "immutabilityPeriodSinceCreationInDays": 90,
+                        "allowProtectedAppendWrites": False,
+                    }
+                ),
+                stderr="WARNING: unexpected diagnostic\n",
+            ),
+        ]
+    )
+
+    def run(arguments, **_kwargs):
+        calls.append(arguments)
+        if arguments[1:4] == ["storage", "account", "list"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout="aiqsweartsynthetic\n",
+                stderr="",
+            )
+        if "immutability-policy" in arguments and "show" in arguments:
+            return next(shows)
+        return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr("agent_insights_quality.azure.subprocess.run", run)
+    with pytest.raises(ContractError, match="policy is invalid"):
+        _lock_approved_validation_policy(ProgressReporter("test"))
+    assert [
+        next(value for value in item if value in {"show", "create", "lock"})
+        for item in calls
+        if "immutability-policy" in item
+    ] == ["show", "create", "show"]
 
 
 def test_ambiguous_storage_discovery_does_not_create_policy(monkeypatch) -> None:

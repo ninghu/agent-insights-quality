@@ -208,21 +208,42 @@ def _lock_approved_validation_policy(progress: ProgressReporter) -> None:
             timeout=120,
             check=False,
         )
+        stdout = str(getattr(process, "stdout", "") or "")
+        stderr = str(getattr(process, "stderr", "") or "")
         error_lines = [
             line.strip()
-            for line in str(getattr(process, "stderr", "") or "").splitlines()
+            for line in stderr.splitlines()
             if line.strip()
         ]
         if (
             allow_missing
-            and process.returncode != 0
-            and error_lines
-            and error_lines[0].startswith("(ResourceNotFound)")
-            and "Code: ResourceNotFound" in error_lines
+            and process.returncode == 0
+            and stdout == ""
+            and stderr == ""
         ):
             return None
+        if (
+            allow_missing
+            and process.returncode != 0
+            and stdout == ""
+            and len(error_lines) in {2, 3}
+            and error_lines[0].startswith("(ResourceNotFound)")
+            and error_lines[1] == "Code: ResourceNotFound"
+            and (
+                len(error_lines) == 2
+                or (
+                    error_lines[2].startswith("Message: ")
+                    and "Not Found" in error_lines[2]
+                )
+            )
+        ):
+            return None
+        if stderr != "":
+            raise ContractError(
+                "Approved validation immutability policy is invalid"
+            )
         try:
-            value = json.loads(process.stdout)
+            value = json.loads(stdout)
         except json.JSONDecodeError as error:
             raise ContractError(
                 "Approved validation immutability policy is invalid"

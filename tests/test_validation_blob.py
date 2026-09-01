@@ -136,6 +136,70 @@ def test_blob_contract_rejects_public_or_unlocked_storage(monkeypatch) -> None:
         store.assert_approved_record_contract(APPROVED_RECORD_CONTAINER)
 
 
+def test_blob_contract_rejects_empty_success_policy_response(monkeypatch) -> None:
+    store = object.__new__(AzureValidationBlobStore)
+    store._storage_account_name = "aiqsweartsynthetic"
+    store._service = SimpleNamespace(
+        get_service_properties=lambda: {"is_versioning_enabled": True},
+        get_container_client=lambda _container: SimpleNamespace(
+            get_container_properties=lambda: {
+                "public_access": None,
+                "has_immutability_policy": True,
+                "immutable_storage_with_versioning_enabled": True,
+            }
+        ),
+    )
+    responses = iter(
+        [
+            SimpleNamespace(returncode=0, stdout="false\n"),
+            SimpleNamespace(returncode=0, stdout="", stderr=""),
+        ]
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_blob.subprocess.run",
+        lambda *_args, **_kwargs: next(responses),
+    )
+    with pytest.raises(ContractError, match="response is invalid"):
+        store.assert_approved_record_contract(APPROVED_RECORD_CONTAINER)
+
+
+def test_blob_contract_rejects_valid_policy_with_stderr(monkeypatch) -> None:
+    store = object.__new__(AzureValidationBlobStore)
+    store._storage_account_name = "aiqsweartsynthetic"
+    store._service = SimpleNamespace(
+        get_service_properties=lambda: {"is_versioning_enabled": True},
+        get_container_client=lambda _container: SimpleNamespace(
+            get_container_properties=lambda: {
+                "public_access": None,
+                "has_immutability_policy": True,
+                "immutable_storage_with_versioning_enabled": True,
+            }
+        ),
+    )
+    responses = iter(
+        [
+            SimpleNamespace(returncode=0, stdout="false\n"),
+            SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "state": "Locked",
+                        "immutabilityPeriodSinceCreationInDays": 90,
+                        "allowProtectedAppendWrites": False,
+                    }
+                ),
+                stderr="WARNING: unexpected diagnostic\n",
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_blob.subprocess.run",
+        lambda *_args, **_kwargs: next(responses),
+    )
+    with pytest.raises(ContractError, match="response is invalid"):
+        store.assert_approved_record_contract(APPROVED_RECORD_CONTAINER)
+
+
 def test_approved_record_blob_is_create_once_and_idempotent() -> None:
     class Client:
         value = None

@@ -144,6 +144,10 @@ class AzureValidationBlobStore:
             timeout=120,
             check=False,
         )
+        if str(getattr(policy, "stderr", "") or "") != "":
+            raise ContractError(
+                "Approved record immutability policy response is invalid"
+            )
         try:
             policy_value = json.loads(policy.stdout)
         except json.JSONDecodeError as error:
