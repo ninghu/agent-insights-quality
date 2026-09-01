@@ -174,33 +174,6 @@ def digest_without_field(value: Mapping[str, Any], field: str) -> str:
     return content_hash(payload)
 
 
-def scenario_predicate_contract_digest(
-    scenario: Mapping[str, Any],
-) -> str:
-    return content_hash(
-        {
-            "scenario_execution_digest": scenario["execution_digest"],
-            "healthy_predicate": scenario["healthy_predicate"],
-            "defect_predicate": scenario["defect_predicate"],
-            "v0_control_predicate": scenario["v0_control_predicate"],
-        }
-    )
-
-
-def authority_predicate_contract_digest(
-    authority: Mapping[str, Any],
-) -> str:
-    return content_hash(
-        {
-            "authority_execution_digest": authority["execution_digest"],
-            "scenario_predicate_contract_digests": [
-                scenario["predicate_contract_digest"]
-                for scenario in authority["scenarios"]
-            ],
-        }
-    )
-
-
 def _validate_authority(authority: Mapping[str, Any]) -> None:
     authority_id = authority["authority_id"]
     expected_digest = digest_without_field(
@@ -209,12 +182,6 @@ def _validate_authority(authority: Mapping[str, Any]) -> None:
     )
     if authority["authority_evidence_digest"] != expected_digest:
         raise ContractError(f"{authority_id} authority evidence digest is stale")
-    if authority["predicate_contract_digest"] != (
-        authority_predicate_contract_digest(authority)
-    ):
-        raise ContractError(
-            f"{authority_id} predicate contract is not bound to execution"
-        )
     scenario_ids: set[str] = set()
     for scenario in authority["scenarios"]:
         scenario_id = scenario["scenario_id"]
@@ -227,11 +194,8 @@ def _validate_authority(authority: Mapping[str, Any]) -> None:
             authority_id=authority_id,
         )
     complete_count = sum(item["complete_count"] for item in authority["scenarios"])
-    observed = sum(item["observed"] for item in authority["scenarios"])
     if authority["complete_count"] != complete_count:
         raise ContractError(f"{authority_id} aggregate complete count is invalid")
-    if authority["observed"] != observed:
-        raise ContractError(f"{authority_id} aggregate observation count is invalid")
     expected_pass = all(item["pass"] for item in authority["scenarios"])
     if authority["pass"] is not expected_pass:
         raise ContractError(f"{authority_id} aggregate pass cannot hide a failed scenario")
@@ -244,17 +208,10 @@ def _validate_scenario(
     authority_id: str,
 ) -> None:
     mode = scenario["validation_mode"]
-    if scenario["predicate_contract_digest"] != (
-        scenario_predicate_contract_digest(scenario)
-    ):
+    n, _ = validation_matrix(mode)
+    if scenario["n"] != n:
         raise ContractError(
-            f"{authority_id}/{scenario['scenario_id']} predicate contract "
-            "is not bound to execution"
-        )
-    n, k = validation_matrix(mode)
-    if scenario["n"] != n or scenario["k"] != k:
-        raise ContractError(
-            f"{authority_id}/{scenario['scenario_id']} thresholds were downgraded"
+            f"{authority_id}/{scenario['scenario_id']} attempt count changed"
         )
     issue_attempts = scenario["issue_attempts"]
     v0_attempts = scenario["v0_attempts"]
@@ -272,83 +229,24 @@ def _validate_scenario(
         issue_attempts,
         n=n,
         authority_id=authority_id,
-        defect_predicate=scenario["defect_predicate"],
-        expected_role="baseline" if authority_kind == "baseline" else "issue",
     )
     if v0_attempts:
         _validate_attempts(
             v0_attempts,
             n=n,
             authority_id=authority_id,
-            defect_predicate=scenario["defect_predicate"],
-            expected_role="v0",
         )
     complete_count = sum(attempt["complete"] is True for attempt in issue_attempts)
-    observed = sum(
-        attempt["defect_observed"] is True for attempt in issue_attempts
-    )
     if scenario["complete_count"] != complete_count:
         raise ContractError(f"{authority_id} scenario complete count is invalid")
-    if scenario["observed"] != observed:
-        raise ContractError(f"{authority_id} scenario observation count is invalid")
-
-    if authority_kind == "baseline":
-        if (
-            scenario["healthy_predicate"]
-            != {"kind": "all_probe_assertions_pass"}
-            or scenario["defect_predicate"] != {"kind": "never"}
-            or scenario["v0_control_predicate"] is not None
-        ):
-            raise ContractError(f"{authority_id} baseline predicate binding is invalid")
-        expected_pass = (
-            complete_count == n
-            and observed == 0
-            and all(
-                attempt["expected_observation_pass"] is True
-                for attempt in issue_attempts
-            )
-        )
-    else:
-        if (
-            scenario["healthy_predicate"] is not None
-            or scenario["v0_control_predicate"]
-            != {"kind": "zero_defect_observations"}
-        ):
-            raise ContractError(f"{authority_id} issue predicate binding is invalid")
-        control_complete = sum(
-            attempt["complete"] is True for attempt in v0_attempts
-        )
-        control_observed = sum(
-            attempt["defect_observed"] is True for attempt in v0_attempts
-        )
-        expected_pass = (
-            complete_count == n
-            and observed >= k
-            and control_complete == n
-            and control_observed == 0
-            and all(
-                attempt["expected_observation_pass"] is True
-                for attempt in v0_attempts
-            )
-        )
-        if any(
-            attempt["expected_observation_pass"]
-            is not (attempt["defect_observed"] is True)
-            for attempt in issue_attempts
-        ):
-            raise ContractError(
-                f"{authority_id} issue observation expectations are invalid"
-            )
-        if any(
-            attempt["expected_observation_pass"]
-            is not (attempt["defect_observed"] is False)
-            for attempt in v0_attempts
-        ):
-            raise ContractError(
-                f"{authority_id} v0 observation expectations are invalid"
-            )
+    expected_pass = complete_count == n and (
+        authority_kind == "baseline"
+        or sum(attempt["complete"] is True for attempt in v0_attempts) == n
+    )
     if scenario["pass"] is not expected_pass:
-        raise ContractError(f"{authority_id} scenario pass result is invalid")
+        raise ContractError(
+            f"{authority_id} mechanical evidence result is invalid"
+        )
 
 
 def _validate_attempts(
@@ -356,8 +254,6 @@ def _validate_attempts(
     *,
     n: int,
     authority_id: str,
-    defect_predicate: Mapping[str, Any],
-    expected_role: str,
 ) -> None:
     if [attempt["index"] for attempt in attempts] != list(range(1, n + 1)):
         raise ContractError(f"{authority_id} attempt evidence is not ordered")
@@ -375,49 +271,11 @@ def _validate_attempts(
             step["complete"]
             and step["endpoint_pass"]
             and step["identity_pass"]
-            and isinstance(step["semantic_pass"], bool)
-            and isinstance(step["trace_pass"], bool)
             for step in steps
-        ) and all(
-            step["semantic_pass"] and step["trace_pass"]
-            for step in attempt["setup_steps"]
         )
         if attempt["complete"] is not complete:
             raise ContractError(
                 f"{authority_id} attempt completion is not independently supported"
-            )
-        if not complete and attempt["defect_observed"] is not None:
-            raise ContractError(
-                f"{authority_id} incomplete attempt cannot claim an observation"
-            )
-        if complete and not isinstance(attempt["defect_observed"], bool):
-            raise ContractError(
-                f"{authority_id} complete attempt requires an observation result"
-            )
-        recomputed = (
-            evaluate_defect_predicate(
-                defect_predicate,
-                attempt["probe_steps"],
-            )
-            if complete
-            else None
-        )
-        if attempt["defect_observed"] is not recomputed:
-            raise ContractError(
-                f"{authority_id} defect observation does not match its predicate"
-            )
-        if expected_role == "baseline":
-            expected_observation_pass = all(
-                step["semantic_pass"] and step["trace_pass"]
-                for step in attempt["probe_steps"]
-            )
-        elif expected_role == "issue":
-            expected_observation_pass = recomputed is True
-        else:
-            expected_observation_pass = recomputed is False
-        if attempt["expected_observation_pass"] is not expected_observation_pass:
-            raise ContractError(
-                f"{authority_id} expected observation result is not reproducible"
             )
         response_references = set(attempt["response_references"])
         operation_references = set(attempt["operation_references"])
@@ -432,35 +290,6 @@ def _validate_attempts(
             raise ContractError(
                 f"{authority_id} step references do not match the attempt mapping"
             )
-
-
-def evaluate_defect_predicate(
-    predicate: Mapping[str, Any],
-    probe_steps: list[Mapping[str, Any]],
-) -> bool:
-    kind = predicate.get("kind")
-    if kind == "never":
-        return False
-    if kind != "all_observation_steps_pass":
-        raise ContractError("Validation defect predicate kind is invalid")
-    selected_ids = set(predicate.get("step_ids", []))
-    required_surfaces = set(predicate.get("required_surfaces", []))
-    selected = [
-        step for step in probe_steps if step.get("step_id") in selected_ids
-    ]
-    if not selected:
-        raise ContractError(
-            "Validation defect predicate has no step in this attempt"
-        )
-    if not required_surfaces or not required_surfaces.issubset(
-        {"semantic", "trace"}
-    ):
-        raise ContractError("Validation defect predicate surfaces are invalid")
-    return all(
-        ("semantic" not in required_surfaces or step["semantic_pass"])
-        and ("trace" not in required_surfaces or step["trace_pass"])
-        for step in selected
-    )
 
 
 def _validate_global_attempt_references(
@@ -576,11 +405,6 @@ def _reviewed_execution_contracts(
             "scenarios": {
                 scenario["id"]: {
                     "execution_digest": scenario["execution_digest"],
-                    "healthy_predicate": scenario["healthy_predicate"],
-                    "defect_predicate": scenario["defect_predicate"],
-                    "v0_control_predicate": scenario[
-                        "v0_control_predicate"
-                    ],
                     "attempts": [
                         {
                             "index": attempt["index"],
@@ -650,13 +474,7 @@ def _validate_reviewed_execution_contract(
         )
     for scenario in authority["scenarios"]:
         expected = scenarios[scenario["scenario_id"]]
-        if (
-            scenario["execution_digest"] != expected["execution_digest"]
-            or scenario["healthy_predicate"] != expected["healthy_predicate"]
-            or scenario["defect_predicate"] != expected["defect_predicate"]
-            or scenario["v0_control_predicate"]
-            != expected["v0_control_predicate"]
-        ):
+        if scenario["execution_digest"] != expected["execution_digest"]:
             raise ContractError(
                 f"{authority_id}/{scenario['scenario_id']} canonical execution "
                 "contract is stale"

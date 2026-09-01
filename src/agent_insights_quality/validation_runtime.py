@@ -6,6 +6,7 @@ import threading
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Callable, Protocol
 
 from agent_insights_quality.util import (
@@ -14,9 +15,7 @@ from agent_insights_quality.util import (
     content_hash,
 )
 from agent_insights_quality.validation_evidence import (
-    authority_predicate_contract_digest,
     digest_without_field,
-    scenario_predicate_contract_digest,
 )
 from agent_insights_quality.validation_policy import ValidationPolicy
 from agent_insights_quality.validation_quota import ValidationScheduler
@@ -74,10 +73,17 @@ class AgentExecutionIncomplete(ContractError):
         self,
         failures: list[dict[str, Any]],
         partial_results: list[dict[str, Any]],
+        *,
+        recoverable_authority_ids: set[str] | None = None,
+        failure_windows: Mapping[str, tuple[str, str]] | None = None,
     ) -> None:
         super().__init__("One or more Agent traffic lanes are incomplete")
         self.failures = failures
         self.partial_results = partial_results
+        self.recoverable_authority_ids = frozenset(
+            recoverable_authority_ids or ()
+        )
+        self.failure_windows = dict(failure_windows or {})
 
 
 class AuthorityDeployer(Protocol):
@@ -103,7 +109,6 @@ class ScenarioAttemptRunner(Protocol):
         conversation_role: str,
         scenario: Mapping[str, Any],
         attempt: Mapping[str, Any],
-        expect_defect: bool,
         scheduler: ValidationScheduler,
     ) -> dict[str, Any]: ...
 
@@ -151,6 +156,28 @@ def validation_agent_name(
         f"{canonical_agent}-{qualifier}-{cycle_suffix}",
         maximum=policy.agent_name_policy.maximum_length,
         pattern=policy.agent_name_policy.pattern,
+    )
+
+
+def recovery_runtime_plan(
+    planned: PlannedRuntime,
+    *,
+    recovery_ordinal: int,
+    policy: ValidationPolicy,
+) -> PlannedRuntime:
+    if recovery_ordinal < 1 or recovery_ordinal > 3:
+        raise ContractError("Validation recovery generation is out of range")
+    return PlannedRuntime(
+        authority_id=planned.authority_id,
+        canonical_agent=planned.canonical_agent,
+        logical_version=planned.logical_version,
+        runtime_kind=planned.runtime_kind,
+        framework=planned.framework,
+        runtime_agent_name=_bounded_name(
+            f"{planned.runtime_agent_name}-r{recovery_ordinal:02d}",
+            maximum=policy.agent_name_policy.maximum_length,
+            pattern=policy.agent_name_policy.pattern,
+        ),
     )
 
 
@@ -204,6 +231,7 @@ def deploy_all_authorities(
     record_failure: Callable[[dict[str, Any]], None] | None = None,
     require_architecture_canaries: bool = True,
     prior_recovered_authorities: Mapping[str, Sequence[str]] | None = None,
+    retry_transient_failures: bool = True,
 ) -> dict[str, DeployedRuntime]:
     if maximum_concurrency < 1 or maximum_concurrency > 8:
         raise ContractError("Validation provisioning concurrency must be between 1 and 8")
@@ -343,6 +371,20 @@ def deploy_all_authorities(
                 raise AgentDeploymentIncomplete(summaries)
             if not failures:
                 return
+            if not retry_transient_failures:
+                summaries = [
+                    _agent_failure_summary(
+                        authority,
+                        stage="deployment",
+                        error=error,
+                        request_accepted=False,
+                    )
+                    for authority, error in failures
+                ]
+                if record_failure is not None:
+                    for summary in summaries:
+                        record_failure(summary)
+                raise AgentDeploymentIncomplete(summaries)
             next_pending = []
             for authority, _ in failures:
                 with lock:
@@ -630,6 +672,207 @@ def execute_validation_phase(
     validated_commit_sha: str,
     record_failure: Callable[[dict[str, Any]], None] | None = None,
     paired_baselines: Mapping[str, str] | None = None,
+    recover_issue: Callable[
+        [
+            AuthoritySpec,
+            DeployedRuntime,
+            Mapping[str, Any],
+            str,
+            str,
+            int,
+        ],
+        DeployedRuntime,
+    ]
+    | None = None,
+    record_completion: Callable[
+        [
+            AuthoritySpec,
+            DeployedRuntime,
+            str,
+            str,
+            Mapping[str, Any],
+        ],
+        None,
+    ]
+    | None = None,
+    max_recovery_versions_per_agent: int = 3,
+    prior_recovery_counts: Mapping[str, int] | None = None,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> list[dict[str, Any]]:
+    if recover_issue is None:
+        return _execute_validation_phase_once(
+            authorities,
+            deployed,
+            runner=runner,
+            scheduler=scheduler,
+            model_contract=model_contract,
+            validated_commit_sha=validated_commit_sha,
+            record_failure=record_failure,
+            paired_baselines=paired_baselines,
+            record_completion=record_completion,
+            now=now,
+        )
+    if max_recovery_versions_per_agent != 3:
+        raise ContractError("Validation execution recovery limit is not reviewed")
+    active_deployed = dict(deployed)
+    accepted: dict[str, dict[str, Any]] = {}
+    pending = list(authorities)
+    recovery_counts = dict(prior_recovery_counts or {})
+    if any(
+        not isinstance(count, int)
+        or isinstance(count, bool)
+        or count < 0
+        or count > max_recovery_versions_per_agent
+        for count in recovery_counts.values()
+    ):
+        raise ContractError("Validation prior recovery counts are invalid")
+    runtime_identity_pairs = {
+        (
+            item.runtime_agent_name,
+            item.runtime_agent_version,
+        )
+        for item in active_deployed.values()
+    }
+    provider_identities = {
+        value
+        for item in active_deployed.values()
+        for value in (
+            item.provider_agent_id,
+            item.provider_agent_version_id,
+            item.hosted_identity_id,
+            item.hosted_blueprint_id,
+            item.hosted_deployment_id,
+            item.runtime_principal_id,
+            item.telemetry_identity_id,
+        )
+        if value is not None
+    }
+    while pending:
+        try:
+            results = _execute_validation_phase_once(
+                pending,
+                active_deployed,
+                runner=runner,
+                scheduler=scheduler,
+                model_contract=model_contract,
+                validated_commit_sha=validated_commit_sha,
+                record_failure=record_failure,
+                paired_baselines=paired_baselines,
+                record_completion=record_completion,
+                now=now,
+            )
+        except AgentExecutionIncomplete as error:
+            for result in error.partial_results:
+                if result["pass"]:
+                    accepted[result["authority_id"]] = result
+            failures_by_id = {
+                str(item["authority_id"]): item for item in error.failures
+            }
+            if (
+                not failures_by_id
+                or set(failures_by_id) != error.recoverable_authority_ids
+            ):
+                raise
+            for authority_id, failure in sorted(failures_by_id.items()):
+                authority = next(
+                    item
+                    for item in pending
+                    if item.authority_id == authority_id
+                )
+                count = recovery_counts.get(authority.canonical_agent, 0)
+                if count >= max_recovery_versions_per_agent:
+                    exhausted = _agent_failure_summary(
+                        authority,
+                        stage="traffic",
+                        error_code="recovery_exhausted",
+                        request_accepted=failure["request_accepted"],
+                    )
+                    if record_failure is not None:
+                        record_failure(exhausted)
+                    raise AgentExecutionIncomplete(
+                        [exhausted],
+                        list(accepted.values()),
+                    ) from error
+                started_at, completed_at = error.failure_windows[authority_id]
+                replacement = recover_issue(
+                    authority,
+                    active_deployed[authority_id],
+                    failure,
+                    started_at,
+                    completed_at,
+                    count + 1,
+                )
+                identity_pair = (
+                    replacement.runtime_agent_name,
+                    replacement.runtime_agent_version,
+                )
+                replacement_provider_ids = {
+                    value
+                    for value in (
+                        replacement.provider_agent_id,
+                        replacement.provider_agent_version_id,
+                        replacement.hosted_identity_id,
+                        replacement.hosted_blueprint_id,
+                        replacement.hosted_deployment_id,
+                        replacement.runtime_principal_id,
+                        replacement.telemetry_identity_id,
+                    )
+                    if value is not None
+                }
+                if (
+                    replacement.authority_id != authority_id
+                    or replacement.runtime_kind != authority.runtime_kind
+                    or identity_pair in runtime_identity_pairs
+                    or provider_identities.intersection(
+                        replacement_provider_ids
+                    )
+                ):
+                    raise ContractError(
+                        "Replacement validation runtime identity is not fresh"
+                    )
+                runtime_identity_pairs.add(identity_pair)
+                provider_identities.update(replacement_provider_ids)
+                active_deployed[authority_id] = replacement
+                recovery_counts[authority.canonical_agent] = count + 1
+            pending = [
+                item
+                for item in authorities
+                if item.authority_id not in accepted
+            ]
+        else:
+            accepted.update(
+                (result["authority_id"], result) for result in results
+            )
+            break
+    if len(accepted) != len(authorities):
+        raise ContractError(
+            "Validation recovery did not converge every Agent lane"
+        )
+    return [accepted[item.authority_id] for item in authorities]
+
+
+def _execute_validation_phase_once(
+    authorities: Sequence[AuthoritySpec],
+    deployed: Mapping[str, DeployedRuntime],
+    *,
+    runner: ScenarioAttemptRunner,
+    scheduler: ValidationScheduler,
+    model_contract: Mapping[str, Any],
+    validated_commit_sha: str,
+    record_failure: Callable[[dict[str, Any]], None] | None,
+    paired_baselines: Mapping[str, str] | None,
+    record_completion: Callable[
+        [
+            AuthoritySpec,
+            DeployedRuntime,
+            str,
+            str,
+            Mapping[str, Any],
+        ],
+        None,
+    ]
+    | None,
+    now: Callable[[], datetime],
 ) -> list[dict[str, Any]]:
     by_id = {item.authority_id: item for item in authorities}
     local_baselines = {
@@ -655,7 +898,12 @@ def execute_validation_phase(
         lanes.setdefault(authority.canonical_agent, []).append(authority)
     def execute_lane(
         lane: list[AuthoritySpec],
-    ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    ) -> tuple[
+        list[dict[str, Any]],
+        dict[str, Any] | None,
+        bool,
+        tuple[str, str] | None,
+    ]:
         results = []
         for authority in lane:
             try:
@@ -671,12 +919,18 @@ def execute_validation_phase(
                     reviewed_mode=authority.validation_mode,
                 )
             except ContractError as error:
-                return results, _agent_failure_summary(
-                    authority,
-                    stage="contract",
-                    error=error,
-                    request_accepted=False,
+                return (
+                    results,
+                    _agent_failure_summary(
+                        authority,
+                        stage="contract",
+                        error=error,
+                        request_accepted=False,
+                    ),
+                    False,
+                    None,
                 )
+            started_at = now().astimezone(UTC).isoformat()
             try:
                 result = _execute_authority(
                     authority,
@@ -690,23 +944,48 @@ def execute_validation_phase(
             except SharedRuntimeError:
                 raise
             except (ContractError, OSError, RuntimeError) as error:
-                return results, _agent_failure_summary(
-                    authority,
-                    stage="traffic",
-                    error=error,
-                    request_accepted=getattr(
-                        error,
-                        "request_accepted",
-                        None,
+                completed_at = now().astimezone(UTC).isoformat()
+                return (
+                    results,
+                    _agent_failure_summary(
+                        authority,
+                        stage="traffic",
+                        error=error,
+                        request_accepted=getattr(
+                            error,
+                            "request_accepted",
+                            None,
+                        ),
                     ),
+                    (
+                        authority.authority_kind == "issue"
+                        and _issue_execution_error_is_recoverable(error)
+                    ),
+                    (started_at, completed_at),
                 )
+            completed_at = now().astimezone(UTC).isoformat()
             results.append(result)
             if not result["pass"]:
-                return results, _result_failure_summary(authority, result)
-        return results, None
+                return (
+                    results,
+                    _result_failure_summary(authority, result),
+                    _issue_result_is_recoverable(authority, result),
+                    (started_at, completed_at),
+                )
+            if record_completion is not None:
+                record_completion(
+                    authority,
+                    deployed[authority.authority_id],
+                    started_at,
+                    completed_at,
+                    result,
+                )
+        return results, None, False, None
 
     result_by_id: dict[str, dict[str, Any]] = {}
     failures: list[dict[str, Any]] = []
+    recoverable_authority_ids: set[str] = set()
+    failure_windows: dict[str, tuple[str, str]] = {}
     with ThreadPoolExecutor(max_workers=5) as pool:
         futures = {
             pool.submit(execute_lane, lane): agent_name
@@ -714,7 +993,12 @@ def execute_validation_phase(
         }
         for future in as_completed(futures):
             try:
-                lane_results, failure = future.result()
+                (
+                    lane_results,
+                    failure,
+                    recoverable,
+                    failure_window,
+                ) = future.result()
             except SharedRuntimeError:
                 for pending in futures:
                     pending.cancel()
@@ -723,18 +1007,76 @@ def execute_validation_phase(
                 result_by_id[result["authority_id"]] = result
             if failure is not None:
                 failures.append(failure)
+                authority_id = str(failure["authority_id"])
+                if recoverable:
+                    recoverable_authority_ids.add(authority_id)
+                if failure_window is not None:
+                    failure_windows[authority_id] = failure_window
                 if record_failure is not None:
                     record_failure(failure)
     if failures:
         raise AgentExecutionIncomplete(
             failures,
             list(result_by_id.values()),
+            recoverable_authority_ids=recoverable_authority_ids,
+            failure_windows=failure_windows,
         )
     if len(result_by_id) != len(authorities):
         raise ContractError(
             "Validation execution did not complete every Agent lane"
         )
     return [result_by_id[item.authority_id] for item in authorities]
+
+
+def _issue_execution_error_is_recoverable(error: BaseException) -> bool:
+    if getattr(error, "recoverable_issue_execution", False) is True:
+        return True
+    if getattr(error, "transient", False) is True:
+        return True
+    if isinstance(error, (OSError, RuntimeError)):
+        return True
+    if not hasattr(error, "status") and not hasattr(error, "request_accepted"):
+        return False
+    status = getattr(error, "status", None)
+    request_accepted = getattr(error, "request_accepted", None)
+    return (
+        request_accepted is True
+        or (status is None and request_accepted is not False)
+        or (
+            isinstance(status, int)
+            and (status in {404, 408, 429} or status >= 500)
+        )
+    )
+
+
+def _issue_result_is_recoverable(
+    authority: AuthoritySpec,
+    result: Mapping[str, Any],
+) -> bool:
+    if authority.authority_kind != "issue":
+        return False
+    recoverable_codes = {
+        "telemetry_identity_mismatch",
+        "missing_output_messages_attribute",
+        "empty_output_messages_attribute",
+        "incomplete_endpoint_evidence",
+    }
+    found_incomplete_issue_attempt = False
+    for scenario in result["scenarios"]:
+        issue_attempts = scenario["issue_attempts"]
+        v0_attempts = scenario["v0_attempts"]
+        if (
+            len(v0_attempts) != scenario["n"]
+            or not all(item["complete"] for item in v0_attempts)
+        ):
+            return False
+        for attempt in issue_attempts:
+            if attempt["complete"]:
+                continue
+            found_incomplete_issue_attempt = True
+            if attempt.get("error_code") not in recoverable_codes:
+                return False
+    return found_incomplete_issue_attempt
 
 
 def _result_failure_summary(
@@ -799,7 +1141,6 @@ def _execute_authority(
         for scenario in authority.validation_rules["scenarios"]
     ]
     n = sum(item["n"] for item in scenarios)
-    k = sum(item["k"] for item in scenarios)
     authority_result = {
         "authority_id": authority.authority_id,
         "authority_kind": authority.authority_kind,
@@ -823,19 +1164,13 @@ def _execute_authority(
         ),
         "source_content_digest": authority.source_content_digest,
         "execution_digest": authority.execution_digest,
-        "predicate_contract_digest": "",
         "validated_commit_sha": validated_commit_sha,
         "n": n,
-        "k": k,
         "complete_count": sum(item["complete_count"] for item in scenarios),
-        "observed": sum(item["observed"] for item in scenarios),
         "pass": all(item["pass"] for item in scenarios),
         "scenarios": scenarios,
         "authority_evidence_digest": "",
     }
-    authority_result["predicate_contract_digest"] = (
-        authority_predicate_contract_digest(authority_result)
-    )
     authority_result["authority_evidence_digest"] = digest_without_field(
         authority_result,
         "authority_evidence_digest",
@@ -883,7 +1218,6 @@ def _execute_scenario(
             ),
             scenario=scenario,
             attempt=attempt,
-            expect_defect=authority.authority_kind == "issue",
             scheduler=scheduler,
         )
         for attempt in scenario["attempts"]
@@ -898,49 +1232,27 @@ def _execute_scenario(
                 conversation_role="paired_v0",
                 scenario=scenario,
                 attempt=attempt,
-                expect_defect=False,
                 scheduler=scheduler,
             )
             for attempt in scenario["attempts"]
         ]
     )
     n = int(scenario["n"])
-    k = int(scenario["k"])
     complete_count = sum(item["complete"] is True for item in issue_attempts)
-    observed = sum(item["defect_observed"] is True for item in issue_attempts)
-    if authority.authority_kind == "baseline":
-        passed = (
-            complete_count == n
-            and observed == 0
-            and all(item["expected_observation_pass"] for item in issue_attempts)
-        )
-    else:
-        passed = (
-            complete_count == n
-            and observed >= k
-            and sum(item["complete"] is True for item in v0_attempts) == n
-            and not any(item["defect_observed"] is True for item in v0_attempts)
-            and all(item["expected_observation_pass"] for item in v0_attempts)
-        )
+    passed = complete_count == n and (
+        authority.authority_kind == "baseline"
+        or sum(item["complete"] is True for item in v0_attempts) == n
+    )
     result = {
         "scenario_id": scenario["id"],
         "execution_digest": scenario["execution_digest"],
         "validation_mode": scenario["validation_mode"],
-        "healthy_predicate": scenario["healthy_predicate"],
-        "defect_predicate": scenario["defect_predicate"],
-        "v0_control_predicate": scenario["v0_control_predicate"],
-        "predicate_contract_digest": "",
         "n": n,
-        "k": k,
         "complete_count": complete_count,
-        "observed": observed,
         "pass": passed,
         "issue_attempts": issue_attempts,
         "v0_attempts": v0_attempts,
     }
-    result["predicate_contract_digest"] = scenario_predicate_contract_digest(
-        result
-    )
     return result
 
 

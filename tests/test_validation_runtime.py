@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import time
 from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 
@@ -39,6 +40,7 @@ from agent_insights_quality.validation_runtime import (
     invalidated_authorities,
     opaque_cycle_suffix,
     plan_runtime_topology,
+    recovery_runtime_plan,
     validation_project_name,
 )
 
@@ -258,7 +260,6 @@ class Runner:
         conversation_role,
         scenario,
         attempt,
-        expect_defect,
         scheduler,
     ):
         scenario_id = scenario["id"]
@@ -273,7 +274,7 @@ class Runner:
             (
                 target.authority_id,
                 attempt["index"],
-                expect_defect,
+                conversation_role,
                 content_hash(attempt),
             )
         )
@@ -289,11 +290,9 @@ class Runner:
             ),
             "complete": True,
             "endpoint_pass": True,
-            "semantic_pass": expect_defect,
-            "trace_pass": True,
             "identity_pass": True,
         }
-        setup = {**step, "semantic_pass": True}
+        setup = dict(step)
         setup["step_id"] = attempt["setup_steps"][0]["id"]
         setup["request_digest"] = content_hash(attempt["setup_steps"][0]["request"])
         setup["response_reference"] = content_hash(
@@ -324,8 +323,6 @@ class Runner:
             "setup_steps": [setup],
             "probe_steps": [step],
             "complete": True,
-            "defect_observed": expect_defect,
-            "expected_observation_pass": True,
             "error_code": None,
         }
 
@@ -808,7 +805,7 @@ def test_all_issues_run_exact_same_matrix_against_paired_v0_without_resampling()
                 call
                 for call in runner.calls
                 if call[0] == baseline_id
-                and call[2] is False
+                and call[2] == "paired_v0"
                 and call[3] in {item[3] for item in issue_calls}
             ]
             assert len(issue_calls) == len(control_calls) == expected
@@ -881,6 +878,419 @@ def test_agent_traffic_failure_does_not_cancel_other_agent_lanes() -> None:
     )
     assert runner.failure_calls == 1
     assert any(call[0] == "issue-036" for call in runner.calls)
+
+
+@pytest.mark.parametrize(
+    ("authority_id", "runtime_kind"),
+    [
+        ("issue-001", "prompt"),
+        ("issue-013", "hosted_code"),
+    ],
+)
+def test_issue_execution_failure_uses_fresh_generation_and_evidence_window(
+    authority_id,
+    runtime_kind,
+) -> None:
+    policy = load_validation_policy()
+    authority = next(
+        item for item in _authorities() if item.authority_id == authority_id
+    )
+    assert authority.runtime_kind == runtime_kind
+    baseline = next(
+        item
+        for item in _authorities()
+        if item.authority_id == f"{authority.canonical_agent}/v0"
+    )
+    planned = plan_runtime_topology(
+        _authorities(),
+        cycle_suffix="0123456789ab",
+        policy=policy,
+    )
+    planned_by_id = {item.authority_id: item for item in planned}
+    deployed = deploy_all_authorities(
+        [authority, baseline],
+        [
+            planned_by_id[authority.authority_id],
+            planned_by_id[baseline.authority_id],
+        ],
+        deployer=Deployer(),
+        maximum_concurrency=1,
+        require_architecture_canaries=False,
+    )
+
+    class AcceptedFailure(ContractError):
+        request_accepted = True
+
+    class FailingOnceRunner(Runner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failed = False
+
+        def run(self, **kwargs):
+            if (
+                kwargs["executing_authority_id"] == authority_id
+                and not self.failed
+            ):
+                self.failed = True
+                raise AcceptedFailure("synthetic execution failure")
+            return super().run(**kwargs)
+
+    recoveries = []
+    completions = []
+
+    def recover(
+        spec,
+        superseded,
+        failure,
+        started_at,
+        completed_at,
+        ordinal,
+    ):
+        replacement_plan = recovery_runtime_plan(
+            planned_by_id[spec.authority_id],
+            recovery_ordinal=ordinal,
+            policy=policy,
+        )
+        replacement = Deployer().deploy(spec, replacement_plan)
+        replacement = replace(
+            replacement,
+            runtime_agent_version=f"{ordinal + 1}",
+            provider_agent_id=f"agent-{authority_id}-r{ordinal:02d}",
+            provider_agent_version_id=f"version-{authority_id}-r{ordinal:02d}",
+            hosted_identity_id=(
+                f"identity-{authority_id}-r{ordinal:02d}"
+                if runtime_kind != "prompt"
+                else None
+            ),
+            hosted_blueprint_id=(
+                f"blueprint-{authority_id}-r{ordinal:02d}"
+                if runtime_kind != "prompt"
+                else None
+            ),
+            hosted_deployment_id=(
+                f"deployment-{authority_id}-r{ordinal:02d}"
+                if runtime_kind != "prompt"
+                else None
+            ),
+            runtime_principal_id=(
+                f"principal-{authority_id}-r{ordinal:02d}"
+                if runtime_kind != "prompt"
+                else None
+            ),
+            telemetry_identity_id=f"version-{authority_id}-r{ordinal:02d}",
+        )
+        recoveries.append(
+            (
+                superseded.runtime_agent_name,
+                replacement.runtime_agent_name,
+                failure["request_accepted"],
+                started_at,
+                completed_at,
+                ordinal,
+            )
+        )
+        return replacement
+
+    runner = FailingOnceRunner()
+    results = execute_validation_phase(
+        [authority],
+        deployed,
+        runner=runner,
+        scheduler=_scheduler(),
+        model_contract=MODEL,
+        validated_commit_sha=HEAD,
+        paired_baselines={
+            authority.canonical_agent: baseline.authority_id,
+        },
+        recover_issue=recover,
+        record_completion=lambda *args: completions.append(args),
+    )
+
+    assert len(results) == 1
+    assert results[0]["runtime_agent_name"].endswith("-r01")
+    assert len(recoveries) == 1
+    assert recoveries[0][0] != recoveries[0][1]
+    assert recoveries[0][2] is True
+    assert recoveries[0][3] <= recoveries[0][4]
+    assert len(completions) == 1
+    assert completions[0][1].runtime_agent_name.endswith("-r01")
+    assert len(
+        [
+            call
+            for call in runner.calls
+            if call[0] == authority.authority_id
+        ]
+    ) == authority.validation_rules["scenarios"][0]["n"]
+
+
+def test_recovery_preserves_completed_authorities_and_converges_lanes() -> None:
+    policy = load_validation_policy()
+    authorities = _authorities()
+    planned = plan_runtime_topology(
+        authorities,
+        cycle_suffix="0123456789ab",
+        policy=policy,
+    )
+    planned_by_id = {item.authority_id: item for item in planned}
+    deployed = deploy_all_authorities(
+        authorities,
+        planned,
+        deployer=Deployer(),
+        maximum_concurrency=8,
+    )
+
+    class AcceptedFailure(ContractError):
+        request_accepted = True
+
+    class FailingOnceRunner(Runner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failed = False
+
+        def run(self, **kwargs):
+            if (
+                kwargs["executing_authority_id"] == "issue-013"
+                and not self.failed
+            ):
+                self.failed = True
+                raise AcceptedFailure("synthetic execution failure")
+            return super().run(**kwargs)
+
+    recovered = []
+
+    def recover(spec, _superseded, _failure, _started, _completed, ordinal):
+        replacement_plan = recovery_runtime_plan(
+            planned_by_id[spec.authority_id],
+            recovery_ordinal=ordinal,
+            policy=policy,
+        )
+        value = Deployer().deploy(spec, replacement_plan)
+        value = replace(
+            value,
+            provider_agent_id=f"agent-{spec.authority_id}-r{ordinal:02d}",
+            provider_agent_version_id=(
+                f"version-{spec.authority_id}-r{ordinal:02d}"
+            ),
+            hosted_identity_id=(
+                f"identity-{spec.authority_id}-r{ordinal:02d}"
+            ),
+            hosted_blueprint_id=(
+                f"blueprint-{spec.authority_id}-r{ordinal:02d}"
+            ),
+            hosted_deployment_id=(
+                f"deployment-{spec.authority_id}-r{ordinal:02d}"
+            ),
+            runtime_principal_id=(
+                f"principal-{spec.authority_id}-r{ordinal:02d}"
+            ),
+            telemetry_identity_id=(
+                f"version-{spec.authority_id}-r{ordinal:02d}"
+            ),
+        )
+        recovered.append(spec.authority_id)
+        return value
+
+    runner = FailingOnceRunner()
+    results = execute_validation_phase(
+        authorities,
+        deployed,
+        runner=runner,
+        scheduler=_scheduler(),
+        model_contract=MODEL,
+        validated_commit_sha=HEAD,
+        paired_baselines={
+            item.canonical_agent: item.authority_id
+            for item in authorities
+            if item.authority_kind == "baseline"
+        },
+        recover_issue=recover,
+    )
+
+    assert len(results) == 41
+    assert len({item["authority_id"] for item in results}) == 41
+    assert recovered == ["issue-013"]
+    for authority in authorities:
+        successful_calls = [
+            call for call in runner.calls if call[0] == authority.authority_id
+        ]
+        expected = authority.validation_rules["scenarios"][0]["n"]
+        if authority.authority_kind == "baseline":
+            expected += sum(
+                item.validation_rules["scenarios"][0]["n"]
+                for item in authorities
+                if item.authority_kind == "issue"
+                and item.canonical_agent == authority.canonical_agent
+            )
+        assert len(successful_calls) == expected
+    assert sum(
+        1 for item in results if item["authority_id"] == "issue-013"
+    ) == 1
+
+
+def test_issue_recovery_exhaustion_fails_closed_without_rerunning_successes() -> None:
+    policy = load_validation_policy()
+    authorities = _authorities()
+    target = next(
+        item for item in authorities if item.authority_id == "issue-013"
+    )
+    baseline = next(
+        item
+        for item in authorities
+        if item.authority_id == "finance-agent/v0"
+    )
+    planned = plan_runtime_topology(
+        authorities,
+        cycle_suffix="0123456789ab",
+        policy=policy,
+    )
+    planned_by_id = {item.authority_id: item for item in planned}
+    deployed = deploy_all_authorities(
+        [target, baseline],
+        [planned_by_id[target.authority_id], planned_by_id[baseline.authority_id]],
+        deployer=Deployer(),
+        maximum_concurrency=1,
+        require_architecture_canaries=False,
+    )
+
+    class AlwaysFailRunner(Runner):
+        def run(self, **kwargs):
+            if kwargs["executing_authority_id"] == target.authority_id:
+                raise OSError("synthetic transient execution failure")
+            return super().run(**kwargs)
+
+    ordinals = []
+
+    def recover(spec, _superseded, _failure, _started, _completed, ordinal):
+        ordinals.append(ordinal)
+        replacement = Deployer().deploy(
+            spec,
+            recovery_runtime_plan(
+                planned_by_id[spec.authority_id],
+                recovery_ordinal=ordinal,
+                policy=policy,
+            ),
+        )
+        return replace(
+            replacement,
+            provider_agent_id=f"agent-{spec.authority_id}-r{ordinal:02d}",
+            provider_agent_version_id=(
+                f"version-{spec.authority_id}-r{ordinal:02d}"
+            ),
+            hosted_identity_id=f"identity-{spec.authority_id}-r{ordinal:02d}",
+            hosted_blueprint_id=f"blueprint-{spec.authority_id}-r{ordinal:02d}",
+            hosted_deployment_id=(
+                f"deployment-{spec.authority_id}-r{ordinal:02d}"
+            ),
+            runtime_principal_id=(
+                f"principal-{spec.authority_id}-r{ordinal:02d}"
+            ),
+            telemetry_identity_id=(
+                f"version-{spec.authority_id}-r{ordinal:02d}"
+            ),
+        )
+
+    with pytest.raises(AgentExecutionIncomplete) as caught:
+        execute_validation_phase(
+            [target],
+            deployed,
+            runner=AlwaysFailRunner(),
+            scheduler=_scheduler(),
+            model_contract=MODEL,
+            validated_commit_sha=HEAD,
+            paired_baselines={"finance-agent": baseline.authority_id},
+            recover_issue=recover,
+            prior_recovery_counts={"finance-agent": 2},
+        )
+    assert ordinals == [3]
+    assert caught.value.failures[0]["error_code"] == "recovery_exhausted"
+
+
+def test_issue_recovery_rejects_reused_runtime_identity() -> None:
+    policy = load_validation_policy()
+    authorities = _authorities()
+    target = next(
+        item for item in authorities if item.authority_id == "issue-001"
+    )
+    baseline = next(
+        item for item in authorities if item.authority_id == "weather-agent/v0"
+    )
+    planned = plan_runtime_topology(
+        authorities,
+        cycle_suffix="0123456789ab",
+        policy=policy,
+    )
+    planned_by_id = {item.authority_id: item for item in planned}
+    deployed = deploy_all_authorities(
+        [target, baseline],
+        [planned_by_id[target.authority_id], planned_by_id[baseline.authority_id]],
+        deployer=Deployer(),
+        maximum_concurrency=1,
+        require_architecture_canaries=False,
+    )
+
+    class AcceptedFailure(ContractError):
+        request_accepted = True
+
+    class FailingRunner(Runner):
+        def run(self, **kwargs):
+            if kwargs["executing_authority_id"] == target.authority_id:
+                raise AcceptedFailure("synthetic execution failure")
+            return super().run(**kwargs)
+
+    with pytest.raises(ContractError, match="identity is not fresh"):
+        execute_validation_phase(
+            [target],
+            deployed,
+            runner=FailingRunner(),
+            scheduler=_scheduler(),
+            model_contract=MODEL,
+            validated_commit_sha=HEAD,
+            paired_baselines={"weather-agent": baseline.authority_id},
+            recover_issue=lambda *args: deployed[target.authority_id],
+        )
+
+
+def test_mechanically_complete_issue_package_is_not_rebuilt() -> None:
+    policy = load_validation_policy()
+    authorities = _authorities()
+    target = next(
+        item for item in authorities if item.authority_id == "issue-013"
+    )
+    baseline = next(
+        item
+        for item in authorities
+        if item.authority_id == "finance-agent/v0"
+    )
+    planned = plan_runtime_topology(
+        authorities,
+        cycle_suffix="0123456789ab",
+        policy=policy,
+    )
+    planned_by_id = {item.authority_id: item for item in planned}
+    deployed = deploy_all_authorities(
+        [target, baseline],
+        [planned_by_id[target.authority_id], planned_by_id[baseline.authority_id]],
+        deployer=Deployer(),
+        maximum_concurrency=1,
+        require_architecture_canaries=False,
+    )
+
+    recoveries = []
+    results = execute_validation_phase(
+        [target],
+        deployed,
+        runner=Runner(),
+        scheduler=_scheduler(),
+        model_contract=MODEL,
+        validated_commit_sha=HEAD,
+        paired_baselines={"finance-agent": baseline.authority_id},
+        recover_issue=lambda *args: recoveries.append(args),
+    )
+    assert recoveries == []
+    assert results[0]["pass"] is True
+    serialized = str(results[0])
+    assert "defect_observed" not in serialized
+    assert "expected_observation_pass" not in serialized
 
 
 @pytest.mark.parametrize(
@@ -1016,11 +1426,11 @@ def test_phase_two_uses_retained_canary_baselines_for_paired_controls() -> None:
     )
     assert len(results) == 39
     assert any(
-        call[0] == "weather-agent/v0" and call[2] is False
+        call[0] == "weather-agent/v0" and call[2] == "paired_v0"
         for call in runner.calls
     )
     assert any(
-        call[0] == "finance-agent/v0" and call[2] is False
+        call[0] == "finance-agent/v0" and call[2] == "paired_v0"
         for call in runner.calls
     )
 

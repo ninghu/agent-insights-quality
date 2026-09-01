@@ -105,6 +105,47 @@ def test_cleanup_is_intent_first_reverse_dependency_and_exhaustive() -> None:
     assert result.residue_ids == ()
 
 
+def test_final_cleanup_covers_superseded_and_accepted_issue_generations() -> None:
+    resources = []
+    for generation in ("initial", "r01", "r02"):
+        agent = _resource(
+            "provider_agent",
+            f"issue-agent-{generation}",
+        )
+        version = _resource(
+            "provider_agent_version",
+            f"issue-version-{generation}",
+        )
+        agent["authority_id"] = "issue-013"
+        version["authority_id"] = "issue-013"
+        resources.extend([agent, version])
+    unaffected = _resource("provider_agent", "unaffected-agent")
+    unaffected["authority_id"] = "issue-014"
+    resources.append(unaffected)
+    plan = build_cleanup_plan(
+        cycle_id="validation-cycle-0001",
+        ownership_nonce="nonce-0001",
+        resources=resources,
+        documented_project_cascade=(),
+    )
+    backend = Backend()
+    result = CleanupEngine(backend).execute(
+        plan,
+        record_delete_intent=lambda _item: None,
+    )
+
+    assert result.exact_clean is True
+    assert set(backend.deleted) == {
+        "issue-agent-initial",
+        "issue-version-initial",
+        "issue-agent-r01",
+        "issue-version-r01",
+        "issue-agent-r02",
+        "issue-version-r02",
+        "unaffected-agent",
+    }
+
+
 def test_cleanup_allows_only_reviewed_cascade_and_shared_acr_manifest() -> None:
     with pytest.raises(ContractError, match="cascade is not reviewed"):
         build_cleanup_plan(

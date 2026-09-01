@@ -7,10 +7,7 @@ from agent_insights_quality.catalogs import load_catalogs
 
 from agent_insights_quality.util import ContractError, content_hash
 from agent_insights_quality.validation_evidence import (
-    authority_predicate_contract_digest,
-    evaluate_defect_predicate,
     persist_evidence,
-    scenario_predicate_contract_digest,
     stamp_evidence_digests,
     validate_evidence,
 )
@@ -28,8 +25,6 @@ def _step(
     *,
     namespace: str,
     rule_step: dict,
-    semantic_pass: bool = True,
-    trace_pass: bool = True,
 ) -> dict:
     return {
         "index": index,
@@ -39,8 +34,6 @@ def _step(
         "operation_reference": content_hash({"operation": namespace, "index": index}),
         "complete": True,
         "endpoint_pass": True,
-        "semantic_pass": semantic_pass,
-        "trace_pass": trace_pass,
         "identity_pass": True,
     }
 
@@ -50,9 +43,6 @@ def _attempt(
     *,
     namespace: str,
     rule_attempt: dict,
-    defect_predicate: dict,
-    should_observe: bool,
-    expected: bool,
 ) -> dict:
     setup = [
         _step(
@@ -65,35 +55,17 @@ def _attempt(
             start=1,
         )
     ]
-    selected_ids = set(defect_predicate.get("step_ids", []))
-    required_surfaces = set(defect_predicate.get("required_surfaces", []))
-    probe = []
-    failed_selected = False
-    for position, rule_step in enumerate(
-        rule_attempt["probe_steps"],
-        start=len(setup) + 1,
-    ):
-        semantic_pass = True
-        trace_pass = True
-        if (
-            defect_predicate["kind"] != "never"
-            and rule_step["id"] in selected_ids
-            and not should_observe
-            and not failed_selected
-        ):
-            semantic_pass = "semantic" not in required_surfaces
-            trace_pass = "trace" not in required_surfaces
-            failed_selected = True
-        probe.append(
-            _step(
-                position,
-                namespace=f"{namespace}:attempt:{index}:probe:{position}",
-                rule_step=rule_step,
-                semantic_pass=semantic_pass,
-                trace_pass=trace_pass,
-            )
+    probe = [
+        _step(
+            position,
+            namespace=f"{namespace}:attempt:{index}:probe:{position}",
+            rule_step=rule_step,
         )
-    observed = evaluate_defect_predicate(defect_predicate, probe)
+        for position, rule_step in enumerate(
+            rule_attempt["probe_steps"],
+            start=len(setup) + 1,
+        )
+    ]
     steps = [*setup, *probe]
     return {
         "index": index,
@@ -104,13 +76,11 @@ def _attempt(
         "setup_steps": setup,
         "probe_steps": probe,
         "complete": True,
-        "defect_observed": observed,
-        "expected_observation_pass": expected,
         "error_code": None,
     }
 
 
-def _authority(spec, *, observed: int) -> dict:
+def _authority(spec) -> dict:
     authority_id = spec.authority_id
     baseline = spec.authority_kind == "baseline"
     rule = spec.validation_rules["scenarios"][0]
@@ -121,9 +91,6 @@ def _authority(spec, *, observed: int) -> dict:
             index,
             namespace=f"{authority_id}:authority",
             rule_attempt=rule_attempt,
-            defect_predicate=rule["defect_predicate"],
-            should_observe=not baseline and index <= observed,
-            expected=(baseline or index <= observed),
         )
         for index, rule_attempt in enumerate(rule["attempts"], start=1)
     ]
@@ -135,9 +102,6 @@ def _authority(spec, *, observed: int) -> dict:
                 index,
                 namespace=f"{authority_id}:paired-v0",
                 rule_attempt=rule_attempt,
-                defect_predicate=rule["defect_predicate"],
-                should_observe=False,
-                expected=True,
             )
             for index, rule_attempt in enumerate(rule["attempts"], start=1)
         ]
@@ -146,21 +110,12 @@ def _authority(spec, *, observed: int) -> dict:
         "scenario_id": rule["id"],
         "execution_digest": rule["execution_digest"],
         "validation_mode": mode,
-        "healthy_predicate": rule["healthy_predicate"],
-        "defect_predicate": rule["defect_predicate"],
-        "v0_control_predicate": rule["v0_control_predicate"],
-        "predicate_contract_digest": HASH,
         "n": n,
-        "k": 5,
         "complete_count": n,
-        "observed": observed,
         "pass": True,
         "issue_attempts": issue_attempts,
         "v0_attempts": v0_attempts,
     }
-    scenario["predicate_contract_digest"] = scenario_predicate_contract_digest(
-        scenario
-    )
     authority = {
         "authority_id": authority_id,
         "authority_kind": "baseline" if baseline else "issue",
@@ -173,32 +128,20 @@ def _authority(spec, *, observed: int) -> dict:
         "provider_agent_version_reference": HASH,
         "source_content_digest": spec.source_content_digest,
         "execution_digest": spec.execution_digest,
-        "predicate_contract_digest": HASH,
         "validated_commit_sha": HEAD,
         "n": n,
-        "k": 5,
         "complete_count": n,
-        "observed": observed,
         "pass": True,
         "scenarios": [scenario],
         "authority_evidence_digest": HASH,
     }
-    authority["predicate_contract_digest"] = (
-        authority_predicate_contract_digest(authority)
-    )
     return authority
 
 
 def _evidence() -> dict:
     agents, issues = load_catalogs()
     specs = authority_specs(agents, issues)
-    authorities = [
-        _authority(
-            spec,
-            observed=0 if spec.authority_kind == "baseline" else 5,
-        )
-        for spec in specs
-    ]
+    authorities = [_authority(spec) for spec in specs]
     return stamp_evidence_digests(
         {
             "schema_version": "1.0.0",
@@ -223,14 +166,13 @@ def _evidence() -> dict:
     )
 
 
-def test_evidence_accepts_exact_41_authorities_and_model_mediated_five_of_seven() -> None:
+def test_evidence_accepts_exact_41_mechanically_complete_authorities() -> None:
     validate_evidence(_evidence())
 
 
-def test_incomplete_attempt_cannot_claim_defect() -> None:
+def test_evidence_schema_rejects_removed_issue_verdict_fields() -> None:
     value = _evidence()
     attempt = value["authorities"][5]["scenarios"][0]["issue_attempts"][0]
-    attempt["complete"] = False
     attempt["defect_observed"] = True
     value = stamp_evidence_digests(value)
     with pytest.raises(ContractError, match="schema error"):
@@ -244,7 +186,6 @@ def test_identity_failure_is_visible_as_incomplete_evidence() -> None:
     attempt = scenario["issue_attempts"][0]
     attempt["setup_steps"][0]["identity_pass"] = False
     attempt["complete"] = False
-    attempt["defect_observed"] = None
     attempt["error_code"] = "telemetry_identity_mismatch"
     scenario["complete_count"] = 4
     scenario["pass"] = False
@@ -254,24 +195,27 @@ def test_identity_failure_is_visible_as_incomplete_evidence() -> None:
     validate_evidence(value)
 
 
-def test_complete_and_defect_observed_remain_independent() -> None:
+def test_issue_evidence_contains_no_code_generated_verdict() -> None:
     value = _evidence()
-    scenario = value["authorities"][5]["scenarios"][0]
-    scenario["issue_attempts"][5]["defect_observed"] = False
-    scenario["issue_attempts"][5]["expected_observation_pass"] = False
-    scenario["issue_attempts"][6]["defect_observed"] = False
-    scenario["issue_attempts"][6]["expected_observation_pass"] = False
-    value = stamp_evidence_digests(value)
-    validate_evidence(value)
+    serialized = str(value["authorities"][5])
+    for field in (
+        "defect_observed",
+        "expected_observation_pass",
+        "semantic_pass",
+        "trace_pass",
+        "observed",
+        "defect_predicate",
+    ):
+        assert field not in serialized
 
 
-def test_paired_v0_observation_fails_discrimination() -> None:
+def test_incomplete_paired_v0_fails_mechanical_completeness() -> None:
     value = _evidence()
     authority = value["authorities"][5]
     scenario = authority["scenarios"][0]
-    scenario["v0_attempts"][0]["defect_observed"] = True
-    scenario["v0_attempts"][0]["probe_steps"][0]["semantic_pass"] = True
-    scenario["v0_attempts"][0]["expected_observation_pass"] = False
+    scenario["v0_attempts"][0]["complete"] = False
+    scenario["v0_attempts"][0]["probe_steps"][0]["identity_pass"] = False
+    scenario["v0_attempts"][0]["error_code"] = "telemetry_identity_mismatch"
     scenario["pass"] = False
     authority["pass"] = False
     value = stamp_evidence_digests(value)
@@ -281,34 +225,11 @@ def test_paired_v0_observation_fails_discrimination() -> None:
     tampered["authorities"][5]["scenarios"][0]["pass"] = True
     tampered["authorities"][5]["pass"] = True
     tampered = stamp_evidence_digests(tampered)
-    with pytest.raises(ContractError, match="scenario pass result"):
+    with pytest.raises(ContractError, match="mechanical evidence result"):
         validate_evidence(tampered)
 
 
-def test_evidence_recomputes_predicates_and_rejects_global_reference_reuse() -> None:
-    value = _evidence()
-    attempt = value["authorities"][5]["scenarios"][0]["issue_attempts"][0]
-    attempt["defect_observed"] = False
-    value = stamp_evidence_digests(value)
-    with pytest.raises(ContractError, match="does not match its predicate"):
-        validate_evidence(value)
-
-
-def test_predicate_mutation_rejects_original_execution_binding() -> None:
-    value = _evidence()
-    authority = value["authorities"][5]
-    scenario = authority["scenarios"][0]
-    scenario["defect_predicate"]["required_surfaces"] = ["trace"]
-    scenario["predicate_contract_digest"] = (
-        scenario_predicate_contract_digest(scenario)
-    )
-    authority["predicate_contract_digest"] = (
-        authority_predicate_contract_digest(authority)
-    )
-    value = stamp_evidence_digests(value)
-    with pytest.raises(ContractError, match="canonical execution contract"):
-        validate_evidence(value)
-
+def test_evidence_rejects_global_reference_reuse() -> None:
     value = _evidence()
     first = value["authorities"][0]["scenarios"][0]["issue_attempts"][0]
     second = value["authorities"][1]["scenarios"][0]["issue_attempts"][0]

@@ -95,6 +95,28 @@ def test_phase_clean_windows_start_only_after_hosted_routes_succeed() -> None:
     )
 
 
+def test_issue_recovery_keeps_superseded_generation_until_final_cleanup() -> None:
+    source = inspect.getsource(_execute_validation_plan)
+    recovery = source[
+        source.index("def recover_issue(") : source.index(
+            "def record_completion("
+        )
+    ]
+    assert "issue_execution_recovery_intent" in recovery
+    assert "recovery_runtime_plan" in recovery
+    assert "retry_transient_failures=False" in recovery
+    assert "CleanupEngine" not in recovery
+    assert "authority_replacement_ready" in recovery
+    assert recovery.index("runner.prepare_hosted_routes") < recovery.index(
+        "wait_clean_interval("
+    )
+    assert "phase_two_deployed[authority.authority_id] = replacement" in recovery
+    assert "deployed[authority.authority_id] = replacement" in recovery
+    phase_call = source[source.index("phase_two_evidence =") :]
+    assert "recover_issue=recover_issue" in phase_call
+    assert "record_completion=record_completion" in phase_call
+
+
 def test_lifecycle_heartbeat_must_stay_below_reviewed_maximum() -> None:
     with pytest.raises(ContractError, match="below 60"):
         with lifecycle_heartbeat(

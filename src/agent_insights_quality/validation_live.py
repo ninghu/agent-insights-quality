@@ -14,7 +14,6 @@ from agent_insights_quality.live import (
 )
 from agent_insights_quality.models import InvocationEvidence
 from agent_insights_quality.util import ContractError, SharedRuntimeError, content_hash
-from agent_insights_quality.validation_evidence import evaluate_defect_predicate
 from agent_insights_quality.validation_quota import (
     EndpointCost,
     ValidationScheduler,
@@ -31,6 +30,7 @@ _POST_RESPONSE_TELEMETRY_ERRORS = (
 
 class PostResponseTelemetryError(ContractError):
     request_accepted = True
+    recoverable_issue_execution = True
 
     def __init__(self, error: BaseException) -> None:
         super().__init__("Post-response telemetry verification failed")
@@ -86,7 +86,6 @@ class FoundryScenarioAttemptRunner:
         conversation_role: str,
         scenario: Mapping[str, Any],
         attempt: Mapping[str, Any],
-        expect_defect: bool,
         scheduler: ValidationScheduler,
     ) -> dict[str, Any]:
         with scheduler.runtime_attempt(target.authority_id):
@@ -96,7 +95,6 @@ class FoundryScenarioAttemptRunner:
                 conversation_role=conversation_role,
                 scenario=scenario,
                 attempt=attempt,
-                expect_defect=expect_defect,
                 scheduler=scheduler,
             )
 
@@ -108,7 +106,6 @@ class FoundryScenarioAttemptRunner:
         conversation_role: str,
         scenario: Mapping[str, Any],
         attempt: Mapping[str, Any],
-        expect_defect: bool,
         scheduler: ValidationScheduler,
     ) -> dict[str, Any]:
         if (
@@ -138,7 +135,11 @@ class FoundryScenarioAttemptRunner:
                 {
                     "id": step["id"],
                     "request": step["request"],
-                    "expected": step["expected"],
+                    "expected": {
+                        "http_status": step["expected"].get("http_status", 200),
+                        "semantic_assertions": {},
+                        "trace_assertions": [],
+                    },
                 }
             )
             for _, step in raw_steps
@@ -146,7 +147,6 @@ class FoundryScenarioAttemptRunner:
         started = self._now().astimezone(UTC)
         endpoint_started = time.monotonic()
         response_references: list[str] = []
-        semantic_results: list[tuple[int, int]] = []
         usable_results: list[bool] = []
         session_id: str | None = None
         previous_response_id: str | None = None
@@ -212,8 +212,8 @@ class FoundryScenarioAttemptRunner:
                     (
                         response_ids,
                         usable,
-                        assertion_count,
-                        assertions_passed,
+                        _,
+                        _,
                         _,
                         function_call_count,
                         _,
@@ -225,7 +225,6 @@ class FoundryScenarioAttemptRunner:
                     )
                 previous_response_id = response_ids[-1]
                 response_references.extend(response_ids)
-                semantic_results.append((assertion_count, assertions_passed))
                 usable_results.append(usable)
                 for response_id in response_ids:
                     self._record_resource(
@@ -322,15 +321,14 @@ class FoundryScenarioAttemptRunner:
                     (
                         response_ids,
                         usable,
-                        assertion_count,
-                        assertions_passed,
+                        _,
+                        _,
                         _,
                         _,
                         _,
                         _,
                     ) = result
                 response_references.extend(response_ids)
-                semantic_results.append((assertion_count, assertions_passed))
                 usable_results.append(usable)
         else:
             raise ContractError("Validation target runtime kind is not reviewed")
@@ -348,8 +346,8 @@ class FoundryScenarioAttemptRunner:
             allow_window_correlation=False,
             response_count=len(response_references),
             usable_response_count=sum(usable_results),
-            semantic_assertion_count=sum(item[0] for item in semantic_results),
-            semantic_assertions_passed=sum(item[1] for item in semantic_results),
+            semantic_assertion_count=0,
+            semantic_assertions_passed=0,
         )
         telemetry_started = time.monotonic()
         output_messages_states: tuple[tuple[bool, bool], ...] | None = None
@@ -379,7 +377,14 @@ class FoundryScenarioAttemptRunner:
                         {
                             "id": step["id"],
                             "request": step["request"],
-                            "expected": step["expected"],
+                            "expected": {
+                                "http_status": step["expected"].get(
+                                    "http_status",
+                                    200,
+                                ),
+                                "semantic_assertions": {},
+                                "trace_assertions": [],
+                            },
                         }
                         for _, step in raw_steps
                     ],
@@ -418,8 +423,6 @@ class FoundryScenarioAttemptRunner:
             (_, step),
             response_id,
             operation_id,
-            semantic,
-            trace,
             usable,
             identity_pass,
             output_messages_state,
@@ -428,8 +431,6 @@ class FoundryScenarioAttemptRunner:
                 raw_steps,
                 response_references,
                 operation_ids,
-                semantic_results,
-                trace_results,
                 usable_results,
                 identity_results,
                 output_messages_states,
@@ -437,8 +438,6 @@ class FoundryScenarioAttemptRunner:
             ),
             start=1,
         ):
-            semantic_pass = semantic[0] == semantic[1]
-            trace_pass = all(item.passed for item in trace)
             step_evidence.append(
                 {
                     "index": index,
@@ -458,8 +457,6 @@ class FoundryScenarioAttemptRunner:
                         )
                     ),
                     "endpoint_pass": bool(usable),
-                    "semantic_pass": semantic_pass,
-                    "trace_pass": trace_pass,
                     "identity_pass": identity_pass,
                 }
             )
@@ -469,21 +466,6 @@ class FoundryScenarioAttemptRunner:
         complete = all(
             item["complete"] and item["endpoint_pass"] and item["identity_pass"]
             for item in step_evidence
-        ) and all(
-            item["semantic_pass"] and item["trace_pass"] for item in setup_steps
-        )
-        observed = evaluate_defect_predicate(
-            scenario["defect_predicate"],
-            probe_steps,
-        )
-        healthy = all(
-            item["semantic_pass"] and item["trace_pass"] for item in probe_steps
-        )
-        defect_observed = observed if complete else None
-        expected_pass = (
-            healthy
-            if scenario["validation_mode"] == "baseline"
-            else defect_observed is expect_defect
         )
         error_code = (
             None
@@ -516,8 +498,6 @@ class FoundryScenarioAttemptRunner:
             "setup_steps": setup_steps,
             "probe_steps": probe_steps,
             "complete": complete,
-            "defect_observed": defect_observed,
-            "expected_observation_pass": expected_pass,
             "error_code": error_code,
         }
         if session_id is not None:

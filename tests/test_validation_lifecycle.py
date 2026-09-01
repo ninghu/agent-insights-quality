@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -18,10 +20,16 @@ from agent_insights_quality.validation_cycle import (
 )
 from agent_insights_quality.validation_lifecycle import (
     LifecycleJournal,
+    LocalRecord,
     LocalValidationLock,
+    stamp_lifecycle_digest,
+    validate_lifecycle,
     validation_runtime_root,
 )
-from agent_insights_quality.validation_manifest import prepare_validation_plan
+from agent_insights_quality.validation_manifest import (
+    authority_specs,
+    prepare_validation_plan,
+)
 from agent_insights_quality.validation_policy import load_validation_policy
 from agent_insights_quality.validation_reconciler import ValidationReconciler
 
@@ -112,6 +120,192 @@ def _hosted_runtime() -> dict:
         "telemetry_identity_id": "synthetic-finance-version",
         "connection_ids": [],
     }
+
+
+def _validating_lifecycle() -> dict:
+    value = _initial()
+    agents, issues = load_catalogs()
+    runtimes = []
+    for index, authority in enumerate(authority_specs(agents, issues), start=1):
+        hosted = authority.runtime_kind != "prompt"
+        runtime_name = f"synthetic-{index:02d}-agent"
+        runtimes.append(
+            {
+                "authority_id": authority.authority_id,
+                "canonical_agent": authority.canonical_agent,
+                "logical_version": authority.logical_version,
+                "runtime_kind": authority.runtime_kind,
+                "framework": authority.framework,
+                "runtime_agent_name": runtime_name,
+                "runtime_agent_version": "1",
+                "provider_agent_id": f"provider-agent-{index}",
+                "provider_agent_version_id": f"provider-version-{index}",
+                "hosted_identity_id": (
+                    f"hosted-identity-{index}" if hosted else None
+                ),
+                "hosted_blueprint_id": (
+                    f"hosted-blueprint-{index}" if hosted else None
+                ),
+                "hosted_deployment_id": (
+                    f"hosted-deployment-{index}" if hosted else None
+                ),
+                "foundry_agent_name": runtime_name,
+                "foundry_agent_version": "1",
+                "runtime_principal_id": (
+                    f"runtime-principal-{index}" if hosted else None
+                ),
+                "telemetry_identity_id": f"provider-version-{index}",
+                "connection_ids": [],
+            }
+        )
+    value["state"] = "VALIDATING"
+    value["deployment"]["phase"] = "phase_2_traffic"
+    value["deployment"]["traffic_started"] = True
+    value["runtime_topology"]["agents"] = runtimes
+    value["runtime_topology"]["runtime_principal_ids"] = sorted(
+        item["runtime_principal_id"]
+        for item in runtimes
+        if item["runtime_principal_id"] is not None
+    )
+    value["runtime_topology"]["telemetry_identity_ids"] = sorted(
+        item["telemetry_identity_id"] for item in runtimes
+    )
+    value["digests"]["runtime_topology_digest"] = content_hash(runtimes)
+    return stamp_lifecycle_digest(value)
+
+
+class _MemoryJournal:
+    @staticmethod
+    def commit(current, *, next_state, updates, now):
+        value = deepcopy(current.value)
+        value["state"] = next_state
+        value["revision"] += 1
+        value["last_activity_at"] = now.isoformat()
+
+        def merge(target, source):
+            for key, item in source.items():
+                if isinstance(item, dict) and isinstance(target.get(key), dict):
+                    merge(target[key], item)
+                else:
+                    target[key] = deepcopy(item)
+
+        merge(value, updates)
+        value = stamp_lifecycle_digest(value)
+        validate_lifecycle(value)
+        return LocalRecord(Path("synthetic-active.json"), value, value["journal_digest"])
+
+
+@pytest.mark.parametrize("authority_id", ["issue-001", "issue-013"])
+def test_issue_recovery_journals_superseded_and_accepted_generation(
+    authority_id,
+) -> None:
+    value = _validating_lifecycle()
+    current = next(
+        item
+        for item in value["runtime_topology"]["agents"]
+        if item["authority_id"] == authority_id
+    )
+    replacement = deepcopy(current)
+    replacement["runtime_agent_name"] = (
+        f"{current['runtime_agent_name']}-r01"
+    )
+    replacement["runtime_agent_version"] = "2"
+    replacement["provider_agent_id"] = f"{current['provider_agent_id']}-r01"
+    replacement["provider_agent_version_id"] = (
+        f"{current['provider_agent_version_id']}-r01"
+    )
+    replacement["foundry_agent_name"] = replacement["runtime_agent_name"]
+    replacement["foundry_agent_version"] = "2"
+    replacement["telemetry_identity_id"] = (
+        replacement["provider_agent_version_id"]
+    )
+    for field in (
+        "hosted_identity_id",
+        "hosted_blueprint_id",
+        "hosted_deployment_id",
+        "runtime_principal_id",
+    ):
+        if replacement[field] is not None:
+            replacement[field] = f"{replacement[field]}-r01"
+    active = LocalRecord(
+        Path("synthetic-active.json"),
+        value,
+        value["journal_digest"],
+    )
+    controller = ValidationCycleController(_MemoryJournal(), active=active)
+    authority_order = [
+        item["authority_id"] for item in value["runtime_topology"]["agents"]
+    ]
+    failure = {
+        "authority_id": authority_id,
+        "canonical_agent": current["canonical_agent"],
+        "stage": "traffic",
+        "error_code": "telemetry_correlation_timeout",
+        "request_accepted": True,
+    }
+    controller.issue_execution_recovery_intent(
+        authority_id=authority_id,
+        canonical_agent=current["canonical_agent"],
+        recovery_ordinal=1,
+        superseded_runtime=current,
+        replacement_runtime_agent_name=replacement["runtime_agent_name"],
+        failure=failure,
+        failed_traffic_started_at="2026-08-29T12:00:00+00:00",
+        failed_traffic_completed_at="2026-08-29T12:01:00+00:00",
+        now=START + timedelta(minutes=2),
+    )
+    recovery = controller.active.value["deployment"][
+        "execution_recoveries"
+    ][0]
+    assert recovery["state"] == "replacement_intent"
+    assert recovery["superseded_runtime_agent_name"] == current[
+        "runtime_agent_name"
+    ]
+    assert next(
+        item
+        for item in controller.active.value["runtime_topology"]["agents"]
+        if item["authority_id"] == authority_id
+    ) == current
+
+    controller.authority_replacement_ready(
+        replacement,
+        recovery_ordinal=1,
+        now=START + timedelta(minutes=3),
+    )
+    recovery = controller.active.value["deployment"][
+        "execution_recoveries"
+    ][0]
+    assert recovery["state"] == "ready"
+    assert recovery["replacement_runtime_agent_version"] == "2"
+    assert next(
+        item
+        for item in controller.active.value["runtime_topology"]["agents"]
+        if item["authority_id"] == authority_id
+    ) == replacement
+    assert [
+        item["authority_id"]
+        for item in controller.active.value["runtime_topology"]["agents"]
+    ] == authority_order
+    assert current["telemetry_identity_id"] not in controller.active.value[
+        "runtime_topology"
+    ]["telemetry_identity_ids"]
+
+    controller.authority_replacement_accepted(
+        authority_id=authority_id,
+        runtime_agent_name=replacement["runtime_agent_name"],
+        runtime_agent_version="2",
+        traffic_started_at="2026-08-29T12:04:00+00:00",
+        traffic_completed_at="2026-08-29T12:05:00+00:00",
+        authority_evidence_digest=content_hash("accepted-evidence"),
+        now=START + timedelta(minutes=6),
+    )
+    recovery = controller.active.value["deployment"][
+        "execution_recoveries"
+    ][0]
+    assert recovery["state"] == "accepted"
+    assert recovery["authority_evidence_digest"] == content_hash(
+        "accepted-evidence"
+    )
 
 
 def test_partial_deployment_progress_persists_recovery_and_ready_state(

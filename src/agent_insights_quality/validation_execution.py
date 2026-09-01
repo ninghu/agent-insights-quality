@@ -40,6 +40,7 @@ from agent_insights_quality.validation_runtime import (
     deploy_all_authorities,
     execute_validation_phase,
     plan_runtime_topology,
+    recovery_runtime_plan,
 )
 
 
@@ -442,14 +443,96 @@ def _execute_validation_plan(
         _runtime_agent_payload(item, deployed[item.authority_id])
         for item in planned
     ]
-    actual_topology_digest = content_hash(runtime_agents)
+    initial_topology_digest = content_hash(runtime_agents)
     wait_clean_interval("phase_2")
     controller.begin_validation(runtime_agents, now=now())
     if (
         controller.active.value["digests"]["runtime_topology_digest"]
-        != actual_topology_digest
+        != initial_topology_digest
     ):
         raise ContractError("Committed validation runtime topology digest changed")
+
+    def recover_issue(
+        authority: AuthoritySpec,
+        superseded: Any,
+        failure: Mapping[str, Any],
+        failed_traffic_started_at: str,
+        failed_traffic_completed_at: str,
+        recovery_ordinal: int,
+    ) -> Any:
+        replacement_plan = recovery_runtime_plan(
+            planned_by_id[authority.authority_id],
+            recovery_ordinal=recovery_ordinal,
+            policy=policy,
+        )
+        controller.issue_execution_recovery_intent(
+            authority_id=authority.authority_id,
+            canonical_agent=authority.canonical_agent,
+            recovery_ordinal=recovery_ordinal,
+            superseded_runtime=_runtime_agent_payload(
+                planned_by_id[authority.authority_id],
+                superseded,
+            ),
+            replacement_runtime_agent_name=(
+                replacement_plan.runtime_agent_name
+            ),
+            failure=failure,
+            failed_traffic_started_at=failed_traffic_started_at,
+            failed_traffic_completed_at=failed_traffic_completed_at,
+            now=now(),
+        )
+        replacement = deploy_all_authorities(
+            [authority],
+            [replacement_plan],
+            deployer=deployer,
+            maximum_concurrency=1,
+            record_resource=record_resource,
+            max_recovery_versions_per_agent=(
+                policy.limits.max_recovery_versions_per_agent
+            ),
+            record_failure=record_agent_failure,
+            require_architecture_canaries=False,
+            retry_transient_failures=False,
+        )[authority.authority_id]
+        deployer.assert_ready(authority, replacement)
+        controller.authority_replacement_ready(
+            _runtime_agent_payload(replacement_plan, replacement),
+            recovery_ordinal=recovery_ordinal,
+            now=now(),
+        )
+        runner.prepare_hosted_routes([replacement])
+        wait_clean_interval(
+            f"recovery_{authority.authority_id}_{recovery_ordinal:02d}"
+        )
+        phase_two_deployed[authority.authority_id] = replacement
+        deployed[authority.authority_id] = replacement
+        return replacement
+
+    def record_completion(
+        authority: AuthoritySpec,
+        runtime: Any,
+        started_at: str,
+        completed_at: str,
+        result: Mapping[str, Any],
+    ) -> None:
+        controller.authority_replacement_accepted(
+            authority_id=authority.authority_id,
+            runtime_agent_name=runtime.runtime_agent_name,
+            runtime_agent_version=runtime.runtime_agent_version,
+            traffic_started_at=started_at,
+            traffic_completed_at=completed_at,
+            authority_evidence_digest=str(
+                result["authority_evidence_digest"]
+            ),
+            now=now(),
+        )
+
+    prior_recovery_counts: dict[str, int] = {}
+    for recovery in controller.active.value["deployment"]["recoveries"]:
+        agent = str(recovery["canonical_agent"])
+        prior_recovery_counts[agent] = prior_recovery_counts.get(agent, 0) + int(
+            recovery["retry_count"]
+        )
     with lifecycle_heartbeat(controller, now=now):
         phase_two_evidence = execute_validation_phase(
             phase_two,
@@ -464,7 +547,24 @@ def _execute_validation_plan(
                 for item in authorities
                 if item.authority_kind == "baseline"
             },
+            recover_issue=recover_issue,
+            record_completion=record_completion,
+            max_recovery_versions_per_agent=(
+                policy.limits.max_recovery_versions_per_agent
+            ),
+            prior_recovery_counts=prior_recovery_counts,
+            now=now,
         )
+    runtime_agents = [
+        _runtime_agent_payload(item, deployed[item.authority_id])
+        for item in planned
+    ]
+    actual_topology_digest = content_hash(runtime_agents)
+    if (
+        controller.active.value["digests"]["runtime_topology_digest"]
+        != actual_topology_digest
+    ):
+        raise ContractError("Recovered validation runtime topology is stale")
     evidence_by_id = {
         item["authority_id"]: item
         for item in [*phase_one_evidence, *phase_two_evidence]

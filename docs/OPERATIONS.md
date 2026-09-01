@@ -25,9 +25,10 @@ generation, ADX publication, email, or Daily.
 The executable authority is each `traffic.json` `validation_rules` contract. Its automatic digest
 includes complete setup/probe request bodies, ordered conversation grouping, parameters, fixtures,
 semantic/trace/identity assertions, reviewed mode, `n`, `k`, runtime kind, framework, and model
-contract. Baseline is `5/5`; deterministic issues are `5/5` with paired-v0 `0/5`; model-mediated
-issues are `5/7` with paired-v0 `0/7`. `minimum_traces` keeps its Daily meaning and is never used as a
-validation attempt threshold.
+contract. Baselines require five mechanically complete attempts; deterministic issue packages
+require five issue and five paired-v0 attempts; model-mediated packages require seven of each.
+Expected issue observations remain private-review context rather than a local verdict.
+`minimum_traces` keeps its Daily meaning and is never used as a validation attempt threshold.
 
 Before any Project create, acquire the account-wide OS file lock and record measured RPM/TPM,
 25-percent and absolute headroom, the complete endpoint envelope, inner model fan-out, and bounded
@@ -35,9 +36,9 @@ concurrency. Provision at most eight, query telemetry at most four, and allow on
 attempt per runtime. The shared bucket charges each request's input plus maximum output budget,
 multiplied by reviewed inner fan-out, and a provider `Retry-After` pauses every consumer. Every
 issue and paired-v0 attempt gets a globally unique execution, conversation, session, response, and
-operation identity while receiving the same matrix. Evidence binds the exact deployed Agent/version,
-derives identity from correlated telemetry, and recomputes the frozen defect predicate separately
-from completion.
+operation identity while receiving the same matrix. Evidence binds the exact deployed Agent/version and derives identity from correlated telemetry.
+Semantic and trace assertions remain reviewed context for later private Copilot review; local
+validation records only mechanical execution and evidence completeness and produces no issue verdict.
 
 The local lifecycle is:
 
@@ -55,18 +56,22 @@ authorities; it retries only unresolved authorities and allows at most three rec
 Agent. Phase 1 deploys only `weather-agent/v0` and `finance-agent/v0`, waits the reviewed clean
 interval, and runs both official baseline matrices concurrently. Both must pass before Phase 2
 deploys the remaining 39, waits a second clean interval, and runs five independent Agent lanes with
-versions sequential inside each lane. Agent-local failures do not cancel other lanes; shared runtime
-failures do. Commit, identity, substrate, topology, TTL, deterministic-contract, retry-exhaustion, or
-post-traffic drift forces exact full-cycle cleanup. Cleanup remains allowed after the fixed 72-hour
-execution TTL. The authenticated Azure CLI user is resolved explicitly, recorded as a private hash,
-and checked on every SDK token acquisition.
+versions sequential inside each lane. A recoverable issue execution/evidence failure supersedes only
+that runtime generation: the runner retains it for final cleanup, journals a fresh `-r01`/`-r02`/
+`-r03` replacement identity in the same Project, waits the reviewed clean interval, and accepts only
+replacement evidence from its exact identity and time window. Completed authorities remain accepted
+and are never rerun; pre-traffic source/contract failures that rebuilding cannot change and Phase 1
+baselines are not eligible. Agent-local failures do not cancel other lanes; shared runtime failures do. Commit,
+identity, substrate, topology, TTL, retry exhaustion, or post-traffic drift forces exact full-cycle
+cleanup. Cleanup remains allowed after the fixed 72-hour execution TTL. The authenticated Azure CLI
+user is resolved explicitly, recorded as a private hash, and checked on every SDK token acquisition.
 
 Support wheelhouse artifacts and ACR build tags are reused only under exact requirements/source
 digests. Cycle tags remain cycle-owned and are removed during cleanup. Public-safe per-stage timings
 are persisted after each completed stage under the private validation runtime root.
 
-Cleanup records intent first and deletes responses, conversations/sessions, Agent versions and
-Agents, Hosted deployments/identities/blueprints, connections, role assignments, cycle principals,
+Cleanup records intent first and deletes responses, conversations/sessions, every accepted or
+superseded Agent generation and its Hosted topology, connections, role assignments, cycle principals,
 ACR tags and unshared manifests, then the Project. Final proof requires Project `404`, no nonce-owned
 resources, sessions/responses, cycle tags, or incomplete reviewed cascades. Ambiguity enters
 `CLEANUP_BLOCKED` and keeps the account unavailable.

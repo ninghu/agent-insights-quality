@@ -103,6 +103,8 @@ class Runtime:
         self.counter = 0
         self.telemetry_counter = 0
         self.canonical_output_queries = 0
+        self.invocation_fixtures = []
+        self.telemetry_requests = []
 
     def _invoke_prompt(
         self,
@@ -118,6 +120,7 @@ class Runtime:
         del agent_name, foundry_version, seed, previous_response_id
         assert include_seed_metadata is False
         assert validation_intent_reference.startswith("sha256:")
+        self.invocation_fixtures.append(fixture)
         self.counter += 1
         count = len(fixture["semantic_assertions"])
         passed = count if self.assertion_pass or not count else 0
@@ -158,6 +161,7 @@ class Runtime:
         }
 
     def trace_assertion_evidence_for_requests(self, **kwargs):
+        self.telemetry_requests.extend(kwargs["requests"])
         callback = kwargs.get("on_stable_output_messages")
         if callback is not None:
             callback(
@@ -277,7 +281,7 @@ def _hosted_target() -> DeployedRuntime:
     )
 
 
-def test_attempt_keeps_completion_independent_from_defect_observation() -> None:
+def test_semantic_and_trace_mismatch_still_produces_mechanical_evidence() -> None:
     times = iter(
         [
             datetime(2026, 8, 29, 12, 0, tzinfo=UTC),
@@ -285,8 +289,9 @@ def test_attempt_keeps_completion_independent_from_defect_observation() -> None:
         ]
     )
     resources = []
+    runtime = Runtime(assertion_pass=False)
     runner = FoundryScenarioAttemptRunner(
-        Runtime(assertion_pass=False),
+        runtime,
         endpoint_costs={"issue-001": EndpointCost(1, 10, 1)},
         stabilization_seconds=1,
         record_resource=resources.append,
@@ -314,12 +319,31 @@ def test_attempt_keeps_completion_independent_from_defect_observation() -> None:
             "setup_steps": [setup],
             "probe_steps": [probe],
         },
-        expect_defect=True,
         scheduler=_scheduler(),
     )
     assert result["complete"] is True
-    assert result["defect_observed"] is False
-    assert result["expected_observation_pass"] is False
+    serialized = str(result)
+    assert "defect_observed" not in serialized
+    assert "expected_observation_pass" not in serialized
+    assert "semantic_pass" not in serialized
+    assert "trace_pass" not in serialized
+    assert all(
+        fixture["semantic_assertions"] == {}
+        for fixture in runtime.invocation_fixtures
+    )
+    assert all(
+        fixture["trace_assertions"] == []
+        for fixture in runtime.invocation_fixtures
+    )
+    assert all(
+        request["expected"]
+        == {
+            "http_status": 200,
+            "semantic_assertions": {},
+            "trace_assertions": [],
+        }
+        for request in runtime.telemetry_requests
+    )
     assert len(resources) == 4
     assert all(resource["kind"] == "stored_response" for resource in resources)
     assert all(
@@ -336,7 +360,7 @@ def test_attempt_keeps_completion_independent_from_defect_observation() -> None:
     ]
 
 
-def test_passing_probe_is_observed_and_evidence_contains_hashes_only() -> None:
+def test_complete_evidence_contains_hashes_only() -> None:
     times = iter(
         [
             datetime(2026, 8, 29, 12, 0, tzinfo=UTC),
@@ -370,11 +394,9 @@ def test_passing_probe_is_observed_and_evidence_contains_hashes_only() -> None:
             "setup_steps": [_step("setup-1", probe=False)],
             "probe_steps": [_step("probe-1", probe=True)],
         },
-        expect_defect=True,
         scheduler=_scheduler(),
     )
-    assert result["defect_observed"] is True
-    assert result["expected_observation_pass"] is True
+    assert result["complete"] is True
     assert all(
         reference.startswith("sha256:")
         for reference in [
@@ -421,11 +443,9 @@ def test_telemetry_identity_mismatch_keeps_attempt_incomplete() -> None:
             "setup_steps": [_step("setup-1", probe=False)],
             "probe_steps": [_step("probe-1", probe=True)],
         },
-        expect_defect=True,
         scheduler=_scheduler(),
     )
     assert result["complete"] is False
-    assert result["defect_observed"] is None
     assert result["error_code"] == "telemetry_identity_mismatch"
     assert all(
         step["identity_pass"] is False
@@ -476,12 +496,10 @@ def test_canonical_output_messages_failure_keeps_issue_attempt_incomplete(
             "setup_steps": [_step("setup-1", probe=False)],
             "probe_steps": [_step("probe-1", probe=True)],
         },
-        expect_defect=True,
         scheduler=_scheduler(),
     )
 
     assert result["complete"] is False
-    assert result["defect_observed"] is None
     assert result["error_code"] == error_code
     assert all(
         step["endpoint_pass"] is True
@@ -532,7 +550,6 @@ def test_bounded_trace_hydration_exhaustion_keeps_request_accepted() -> None:
                 "setup_steps": [_step("setup-1", probe=False)],
                 "probe_steps": [_step("probe-1", probe=True)],
             },
-            expect_defect=True,
             scheduler=_scheduler(),
         )
 
@@ -630,7 +647,6 @@ def test_post_response_correlation_failure_preserves_counts_and_acceptance() -> 
                 "setup_steps": [_step("setup-1", probe=False)],
                 "probe_steps": [_step("probe-1", probe=True)],
             },
-            expect_defect=True,
             scheduler=_scheduler(),
         )
 
@@ -682,7 +698,6 @@ def test_shared_v0_attempts_have_unique_execution_and_resource_references() -> N
         conversation_role="paired_v0",
         scenario=scenario,
         attempt=attempt,
-        expect_defect=False,
         scheduler=_scheduler(),
     )
     second = runner.run(
@@ -691,7 +706,6 @@ def test_shared_v0_attempts_have_unique_execution_and_resource_references() -> N
         conversation_role="paired_v0",
         scenario=scenario,
         attempt=attempt,
-        expect_defect=False,
         scheduler=_scheduler(),
     )
     assert first["conversation_reference"] != second["conversation_reference"]
@@ -745,7 +759,6 @@ def test_repeated_hosted_attempts_refresh_routes_and_release_unique_sessions() -
                 "setup_steps": [_step("setup-1", probe=False)],
                 "probe_steps": [_step("probe-1", probe=True)],
             },
-            expect_defect=True,
             scheduler=_scheduler(),
         )
 
@@ -849,7 +862,6 @@ def test_hosted_attempt_defers_failed_session_release_without_losing_evidence() 
             "setup_steps": [_step("setup-1", probe=False)],
             "probe_steps": [_step("probe-1", probe=True)],
         },
-        expect_defect=True,
         scheduler=_scheduler(),
     )
 

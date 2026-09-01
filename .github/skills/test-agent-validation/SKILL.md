@@ -12,9 +12,11 @@ report publication, ADX, email, Optional Daily Test, or a GitHub merge gate.
 1. Freeze one clean commit after the comprehensive review and targeted mechanical verification. Run
    `python -m agent_insights_quality run-test-agent-validation` with no identity, path, or SHA
    arguments; it discovers the repository, open PR, exact head, and shared runtime root.
-2. Freeze every reviewed mode before traffic. Baselines are `5/5`; deterministic issues are `5/5`
-   with paired `v0` `0/5`; model-mediated issues are `5/7` with paired `v0` `0/7`. Never infer mode,
-   resample, reclassify from results, or lower a threshold.
+2. Freeze every reviewed mode before traffic. Baselines require five mechanically complete attempts;
+   deterministic issue packages require five issue and five paired-`v0` attempts; model-mediated
+   packages require seven of each. Expected issue observations remain context for later private
+   Copilot review, never a local verdict or gate. Never infer mode, resample, reclassify from results,
+   or lower an attempt count.
 3. Hold the account-wide OS file lock under
    `~/.aiq-runtime/agent-insights-quality/test-agent-validation/` for the whole invocation. A second
    worktree fails closed. Every journal update is atomic and every required history snapshot is
@@ -33,10 +35,16 @@ report publication, ADX, email, Optional Daily Test, or a GitHub merge gate.
 6. Run every fixed setup/probe attempt through deployed endpoints. Within each Agent, versions remain
    sequential; independent Agent lanes continue after an Agent-local failure. Use the identical issue
    matrix against paired `v0`. Query telemetry at no more than four and allow one scenario attempt per
-   runtime. Application Insights remains read-only; shared runtime failure or ambiguous identity/
-   correlation aborts. Each selected operation must contain an `invoke_agent` span with a nonempty
-   canonical `gen_ai.output.messages` attribute; the span's telemetry table and parent do not matter,
-   and chat, tool, or other spans cannot satisfy it. Never create monitors or inject traces.
+   runtime. If an issue authority has a recoverable execution or evidence failure, retain and
+   quarantine that generation, create only its replacement under a fresh `-r01`/`-r02`/`-r03`
+   Agent identity in the same Project, wait the reviewed clean interval, and bind replacement
+   evidence to that identity and its own time window. Never rerun completed authorities, splice
+   superseded evidence, recover a baseline this way, or retry a pre-traffic source/contract failure
+   that rebuilding cannot change. Application Insights remains read-only; shared runtime failure or ambiguous
+   identity/correlation aborts. Each selected operation must contain an `invoke_agent` span with a
+   nonempty canonical `gen_ai.output.messages` attribute; the span's telemetry table and parent do
+   not matter, and chat, tool, or other spans cannot satisfy it. Never create monitors or inject
+   traces.
 7. Any commit change aborts the cycle, performs cleanup, and requires a fresh full 41-Agent cycle.
    There is no cross-cycle Agent, topology, traffic, or evidence reuse and no caller-supplied commit
    or tree identity. Local dependencies and ACR build manifests may be reused only by exact
