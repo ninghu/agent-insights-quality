@@ -72,7 +72,9 @@ def _mock_connection_reads(
     return observed
 
 
-def test_profile_discovers_fixed_azure_resources(monkeypatch) -> None:
+def test_profile_selects_sweden_storage_amid_legacy_unversioned_storage(
+    monkeypatch,
+) -> None:
     resources = [
         {
             "type": "Microsoft.CognitiveServices/accounts",
@@ -114,8 +116,24 @@ def test_profile_discovers_fixed_azure_resources(monkeypatch) -> None:
         },
         {
             "type": "Microsoft.Storage/storageAccounts",
-            "name": "syntheticstorage",
+            "kind": "StorageV2",
+            "name": "aiqartifactslegacy",
+            "location": "westus2",
             "tags": {"purpose": "agent-insights-quality"},
+            "properties": {"blobVersioningEnabled": False},
+        },
+        {
+            "type": "Microsoft.Storage/storageAccounts",
+            "kind": "StorageV2",
+            "name": "aiqsweartsynthetic",
+            "location": "swedencentral",
+            "tags": {
+                "purpose": "agent-insights-quality",
+                "environment": "swedencentral",
+                "location": "swedencentral",
+                "generation": "g30",
+                "resourceRole": "qualification-storage",
+            },
         },
         {
             "type": "Microsoft.Insights/components",
@@ -160,11 +178,67 @@ def test_profile_discovers_fixed_azure_resources(monkeypatch) -> None:
     assert profile.project_name == "aiq-daily-swedencentral"
     assert profile.account_name == "aiq-daily-swedencentral"
     assert profile.container_registry_name == "syntheticregistry"
-    assert profile.registry_storage_account_name == "syntheticstorage"
+    assert profile.registry_storage_account_name == "aiqsweartsynthetic"
     assert profile.project_endpoint.endswith(
         "/api/projects/aiq-daily-swedencentral"
     )
     assert profile.telemetry_resource_set == FIXED_TELEMETRY_RESOURCE_SET
+
+
+def test_profile_rejects_ambiguous_sweden_storage(monkeypatch) -> None:
+    tags = {
+        "purpose": "agent-insights-quality",
+        "environment": "swedencentral",
+        "location": "swedencentral",
+        "generation": "g30",
+        "resourceRole": "qualification-storage",
+    }
+    resources = [
+        {
+            "type": "Microsoft.CognitiveServices/accounts",
+            "kind": "AIServices",
+            "name": "aiq-daily-swedencentral",
+            "id": "/subscriptions/hidden/daily-account",
+            "location": "swedencentral",
+            "tags": {
+                "profile": "daily",
+                "environment": "swedencentral",
+                "location": "swedencentral",
+                "generation": "g30",
+            },
+        },
+        {
+            "type": "Microsoft.ContainerRegistry/registries",
+            "name": "syntheticregistry",
+        },
+        *[
+            {
+                "type": "Microsoft.Storage/storageAccounts",
+                "kind": "StorageV2",
+                "name": f"aiqsweartsynthetic{suffix}",
+                "location": "swedencentral",
+                "tags": tags,
+            }
+            for suffix in ("a", "b")
+        ],
+        {
+            "type": "Microsoft.Insights/components",
+            "id": "/subscriptions/hidden/daily-insights",
+            "location": "swedencentral",
+            "tags": {
+                "profile": "daily",
+                "environment": "swedencentral",
+                "location": "swedencentral",
+                "generation": "g30",
+            },
+        },
+    ]
+    monkeypatch.setattr(
+        "agent_insights_quality.profiles._azure_resources",
+        lambda: resources,
+    )
+    with pytest.raises(ContractError, match="could not be resolved uniquely"):
+        RuntimeProfile.from_env("daily")
 
 
 def test_profile_requires_official_project_connection(

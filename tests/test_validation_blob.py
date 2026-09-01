@@ -24,16 +24,18 @@ def test_blob_store_uses_only_injected_credential(monkeypatch) -> None:
     monkeypatch.setattr("azure.storage.blob.BlobServiceClient", Service)
     credential = object()
     store = AzureValidationBlobStore(
-        "syntheticstorage",
+        "aiqsweartsynthetic",
         credential=credential,
     )
     assert store._service is not None
     assert observed == {
-        "account_url": "https://syntheticstorage.blob.core.windows.net",
+        "account_url": "https://aiqsweartsynthetic.blob.core.windows.net",
         "credential": credential,
     }
     with pytest.raises(ContractError, match="Explicit"):
-        AzureValidationBlobStore("syntheticstorage", credential=None)
+        AzureValidationBlobStore("aiqsweartsynthetic", credential=None)
+    with pytest.raises(ContractError, match="reviewed Sweden environment"):
+        AzureValidationBlobStore("aiqartifactslegacy", credential=credential)
 
 
 def test_blob_contract_checks_private_locked_exact_worm(monkeypatch) -> None:
@@ -57,7 +59,7 @@ def test_blob_contract_checks_private_locked_exact_worm(monkeypatch) -> None:
             )
 
     store = object.__new__(AzureValidationBlobStore)
-    store._storage_account_name = "syntheticstorage"
+    store._storage_account_name = "aiqsweartsynthetic"
     store._service = Service()
     responses = iter(
         [
@@ -93,7 +95,7 @@ def test_blob_contract_checks_private_locked_exact_worm(monkeypatch) -> None:
 
 def test_blob_contract_rejects_public_or_unlocked_storage(monkeypatch) -> None:
     store = object.__new__(AzureValidationBlobStore)
-    store._storage_account_name = "syntheticstorage"
+    store._storage_account_name = "aiqsweartsynthetic"
     store._service = SimpleNamespace(
         get_service_properties=lambda: {"is_versioning_enabled": True},
         get_container_client=lambda _container: SimpleNamespace(
@@ -152,7 +154,7 @@ def test_approved_record_blob_is_create_once_and_idempotent() -> None:
 
     client = Client()
     store = object.__new__(AzureValidationBlobStore)
-    store._storage_account_name = "syntheticstorage"
+    store._storage_account_name = "aiqsweartsynthetic"
     store._service = SimpleNamespace(
         get_blob_client=lambda *_args, **_kwargs: client
     )
@@ -183,7 +185,7 @@ def test_semantically_equal_but_byte_different_blob_is_not_idempotent() -> None:
             return SimpleNamespace(etag="etag", version_id="version")
 
     store = object.__new__(AzureValidationBlobStore)
-    store._storage_account_name = "syntheticstorage"
+    store._storage_account_name = "aiqsweartsynthetic"
     store._service = SimpleNamespace(
         get_blob_client=lambda *_args, **_kwargs: Client()
     )

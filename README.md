@@ -128,10 +128,11 @@ python -m agent_insights_quality render-adx-dashboard
 Full infrastructure deployment creates only the Sweden Central profile resources in the existing
 resource group. It pins `gpt-5.4-mini` `2026-03-17` at DataZoneStandard capacity 4500 and
 `gpt-5.6-terra` `2026-07-09` at DataZoneStandard capacity 100 per account with `NoAutoUpgrade`;
-there is no model or regional fallback. Shared ACR, Blob registry storage, ADX, and all West US 2
-resources are referenced or left untouched. The only new shared-storage child is the
-environment-namespaced Sweden g30 approved-record container with a locked 90-day WORM policy. Use the
-scoped `deploy-analytics` command
+there is no model or regional fallback. Shared ACR, ADX, and all West US 2 resources, including the
+legacy unversioned storage account, are referenced or left untouched. The dedicated
+`aiqsweart${uniqueSuffix}` Sweden g30 StorageV2 account owns private quality artifacts, deployment
+registries, and the environment-namespaced approved-record container with its locked 90-day WORM
+policy. Use the scoped `deploy-analytics` command
 to create or update only the two-node production ADX trend database in the existing
 `agent-insights-quality-rg` without changing Foundry or telemetry. Daily finalization publishes
 sanitized results and explanations there and includes the reviewed

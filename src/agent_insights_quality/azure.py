@@ -28,6 +28,10 @@ def deploy_infrastructure() -> None:
             f"telemetryGeneration={telemetry_resource_set}",
             "testAgentCapacity=4500",
             "insightGenerationCapacity=100",
+            f"storageAccountPrefix={policy.storage_account_prefix}",
+            f"storageResourceRole={policy.storage_resource_role}",
+            f"qualityArtifactContainerName={policy.quality_artifact_container}",
+            f"deploymentRegistryContainerName={policy.deployment_registry_container}",
             f"approvedRecordContainerName={policy.approved_record_container}",
             "automationOwner=ninghu",
             f"automationPrincipalId={principal_id}",
@@ -123,7 +127,22 @@ def _deploy_template(
 
 
 def _lock_approved_validation_policy(progress: ProgressReporter) -> None:
-    container = load_automation_policy().approved_record_container
+    policy = load_automation_policy()
+    container = policy.approved_record_container
+    account_query = (
+        "[?starts_with(name, '"
+        + policy.storage_account_prefix
+        + "') && kind=='StorageV2'"
+        " && location=='swedencentral'"
+        " && tags.purpose=='agent-insights-quality'"
+        " && tags.environment=='swedencentral'"
+        " && tags.location=='swedencentral'"
+        " && tags.generation=='"
+        + policy.telemetry_resource_set
+        + "' && tags.resourceRole=='"
+        + policy.storage_resource_role
+        + "'].name"
+    )
     account = subprocess.run(
         [
             azure_cli(),
@@ -133,7 +152,7 @@ def _lock_approved_validation_policy(progress: ProgressReporter) -> None:
             "--resource-group",
             "agent-insights-quality-rg",
             "--query",
-            "[?tags.purpose=='agent-insights-quality'].name",
+            account_query,
             "--output",
             "tsv",
         ],
@@ -143,7 +162,11 @@ def _lock_approved_validation_policy(progress: ProgressReporter) -> None:
         check=False,
     )
     names = [item for item in account.stdout.splitlines() if item.strip()]
-    if account.returncode != 0 or len(names) != 1:
+    if (
+        account.returncode != 0
+        or len(names) != 1
+        or not names[0].startswith(policy.storage_account_prefix)
+    ):
         raise ContractError(
             "Approved validation record storage account is missing or ambiguous"
         )

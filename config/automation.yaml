@@ -17,4 +17,8 @@ agent_start_stagger_seconds: 5
 qualification_profiles_allow_debug_traffic: false
 clean_window_preflight_required: false
 telemetry_resource_set: g30
+storage_account_prefix: aiqsweart
+storage_resource_role: qualification-storage
+quality_artifact_container: quality-artifacts
+deployment_registry_container: deployment-registries
 approved_record_container: test-agent-validation-approved-records-swedencentral-g30

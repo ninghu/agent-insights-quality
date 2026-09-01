@@ -190,28 +190,43 @@ def test_infrastructure_grants_automation_data_plane_roles() -> None:
         "existing"
     ) in lab
     assert (
-        "resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' existing"
+        "resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' ="
         in lab
     )
+    assert "var storageName = '${storageAccountPrefix}${uniqueSuffix}'" in lab
+    assert "substring(uniqueString(subscription().subscriptionId, resourceGroup().id), 0, 11)" in lab
+    assert len("aiqsweart") + 11 <= 24
+    assert "aiqartifacts" not in lab
+    assert "resourceRole: storageResourceRole" in lab
+    assert "kind: 'StorageV2'" in lab
+    assert "name: 'Standard_LRS'" in lab
+    assert "allowBlobPublicAccess: false" in lab
+    assert "allowSharedKeyAccess: false" in lab
+    assert "minimumTlsVersion: 'TLS1_2'" in lab
+    assert "supportsHttpsTrafficOnly: true" in lab
     assert (
         "resource blobService "
-        "'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' existing"
+        "'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' ="
         in lab
     )
-    assert "isVersioningEnabled" not in lab
+    assert "isVersioningEnabled: true" in lab
+    assert "name: qualityArtifactContainerName" in lab
+    assert "name: deploymentRegistryContainerName" in lab
     assert "name: approvedRecordContainerName" in lab
     assert "immutableStorageWithVersioning" in lab
     assert "immutabilityPolicies" not in lab
     assert "approvedValidationRecordPolicy" not in lab
-    assert "quality-artifacts" not in lab
-    assert "deployment-registries" not in lab
-    assert "managementPolicies" not in lab
+    assert "qualityArtifactLifecycle" in lab
+    assert "Microsoft.Storage/storageAccounts/managementPolicies@2023-05-01" in lab
+    assert "prefixMatch: ['${qualityArtifactContainerName}/']" in lab
+    assert "daysAfterModificationGreaterThan: 90" in lab
+    assert "scope: storage" in lab
     assert "test-agent-validation-lifecycle" not in lab
     assert "test-agent-validation-snapshots" not in lab
     assert "test-agent-validation-receipts" not in lab
     assert "validationReceiptPrincipalId" not in lab
     assert "validationPrincipalId" not in lab
-    assert "principalType: 'ServicePrincipal'" not in lab
+    assert lab.count("scope: storage") == 1
 
 
 def test_support_provisioning_publishes_to_acr() -> None:

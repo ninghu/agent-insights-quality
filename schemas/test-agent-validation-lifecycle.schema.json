@@ -281,7 +281,10 @@
         "account_name": {"$ref": "#/$defs/reference"},
         "account_resource_id": {"$ref": "#/$defs/reference"},
         "registry_name": {"$ref": "#/$defs/reference"},
-        "storage_account_name": {"$ref": "#/$defs/reference"},
+        "storage_account_name": {
+          "$ref": "#/$defs/reference",
+          "description": "Exact Sweden Central g30 qualification storage account selected by reviewed environment and resource-role tags."
+        },
         "telemetry_resource_id": {"$ref": "#/$defs/reference"}
       }
     },

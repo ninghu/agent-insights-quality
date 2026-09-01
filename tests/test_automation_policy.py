@@ -5,6 +5,10 @@ from pathlib import Path
 import pytest
 
 from agent_insights_quality.automation_policy import (
+    FIXED_DEPLOYMENT_REGISTRY_CONTAINER,
+    FIXED_QUALITY_ARTIFACT_CONTAINER,
+    FIXED_STORAGE_ACCOUNT_PREFIX,
+    FIXED_STORAGE_RESOURCE_ROLE,
     FIXED_TELEMETRY_RESOURCE_SET,
     load_automation_policy,
 )
@@ -19,6 +23,22 @@ def test_repository_uses_fractional_fixed_telemetry_policy() -> None:
     assert (
         policy.approved_record_container
         == "test-agent-validation-approved-records-swedencentral-g30"
+    )
+    assert policy.storage_account_prefix == FIXED_STORAGE_ACCOUNT_PREFIX == "aiqsweart"
+    assert (
+        policy.storage_resource_role
+        == FIXED_STORAGE_RESOURCE_ROLE
+        == "qualification-storage"
+    )
+    assert (
+        policy.quality_artifact_container
+        == FIXED_QUALITY_ARTIFACT_CONTAINER
+        == "quality-artifacts"
+    )
+    assert (
+        policy.deployment_registry_container
+        == FIXED_DEPLOYMENT_REGISTRY_CONTAINER
+        == "deployment-registries"
     )
     assert policy.max_recovery_versions == 3
     assert policy.agent_start_stagger_seconds == 5
@@ -47,6 +67,10 @@ def test_repository_uses_fractional_fixed_telemetry_policy() -> None:
         ),
         ("insight_start_margin_seconds", "345", "within lookback"),
         ("telemetry_resource_set", "g29", "fixed reviewed set"),
+        ("storage_account_prefix", "aiqartifacts", "reviewed value"),
+        ("storage_resource_role", "legacy-storage", "reviewed value"),
+        ("quality_artifact_container", "legacy-artifacts", "not reviewed"),
+        ("deployment_registry_container", "legacy-registry", "not reviewed"),
         (
             "approved_record_container",
             "test-agent-validation-approved-records",

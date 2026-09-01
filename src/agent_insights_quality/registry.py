@@ -9,6 +9,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
+from agent_insights_quality.automation_policy import load_automation_policy
 from agent_insights_quality.azure_cli import azure_cli
 from agent_insights_quality.catalogs import agent_model_contract
 from agent_insights_quality.progress import ProgressReporter
@@ -21,7 +22,7 @@ PROFILE_PROJECTS = {
 ENVIRONMENT_ID = "swedencentral-g30"
 PROFILE_LOCATION = "swedencentral"
 TELEMETRY_RESOURCE_SET = "g30"
-REGISTRY_CONTAINER = "deployment-registries"
+REGISTRY_CONTAINER = load_automation_policy().deployment_registry_container
 _PROGRESS = ProgressReporter("aiq-registry")
 
 

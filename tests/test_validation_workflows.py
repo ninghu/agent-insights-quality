@@ -38,20 +38,28 @@ def test_ordinary_validate_workflow_has_no_live_validation_permissions() -> None
         assert forbidden not in folded
 
 
-def test_infrastructure_reuses_approved_validation_blob_storage() -> None:
+def test_infrastructure_owns_dedicated_sweden_validation_storage() -> None:
     text = (
         ROOT / "infra" / "modules" / "lab.bicep"
     ).read_text(encoding="utf-8")
     assert (
-        "resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' existing"
+        "resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' ="
         in text
     )
+    assert "var storageName = '${storageAccountPrefix}${uniqueSuffix}'" in text
+    assert "aiqartifacts" not in text
+    assert "resourceRole: storageResourceRole" in text
+    assert "allowSharedKeyAccess: false" in text
+    assert "allowBlobPublicAccess: false" in text
+    assert "isVersioningEnabled: true" in text
+    assert "name: qualityArtifactContainerName" in text
+    assert "name: deploymentRegistryContainerName" in text
     assert "name: approvedRecordContainerName" in text
     assert "immutableStorageWithVersioning" in text
     assert "immutabilityPolicies" not in text
-    assert "quality-artifacts" not in text
-    assert "deployment-registries" not in text
-    assert "managementPolicies" not in text
+    assert "qualityArtifactLifecycle" in text
+    assert "prefixMatch: ['${qualityArtifactContainerName}/']" in text
+    assert "daysAfterModificationGreaterThan: 90" in text
     azure = (
         ROOT / "src" / "agent_insights_quality" / "azure.py"
     ).read_text(encoding="utf-8")
@@ -60,6 +68,8 @@ def test_infrastructure_reuses_approved_validation_blob_storage() -> None:
     assert '"lock",' in azure
     assert 'policy.get("state") != "Locked"' in azure
     assert "policy.approved_record_container" in azure
+    assert "policy.storage_account_prefix" in azure
+    assert "policy.storage_resource_role" in azure
     assert (
         APPROVED_RECORD_CONTAINER
         == BLOB_APPROVED_RECORD_CONTAINER

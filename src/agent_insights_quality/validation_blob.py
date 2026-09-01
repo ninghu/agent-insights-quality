@@ -11,6 +11,7 @@ from agent_insights_quality.automation_policy import load_automation_policy
 from agent_insights_quality.util import ContractError, canonical_bytes
 
 APPROVED_RECORD_CONTAINER = load_automation_policy().approved_record_container
+STORAGE_ACCOUNT_PREFIX = load_automation_policy().storage_account_prefix
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,10 @@ class AzureValidationBlobStore:
     def __init__(self, storage_account_name: str, *, credential: Any) -> None:
         if not storage_account_name:
             raise ContractError("Validation storage account name is required")
+        if not storage_account_name.startswith(STORAGE_ACCOUNT_PREFIX):
+            raise ContractError(
+                "Validation storage account is not the reviewed Sweden environment"
+            )
         if credential is None:
             raise ContractError("Explicit Validation Blob credential is required")
         try:

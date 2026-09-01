@@ -26,7 +26,7 @@ def test_deployment_reads_fixed_telemetry_resource_set(
         if "signed-in-user" in arguments:
             return SimpleNamespace(returncode=0, stdout="synthetic-principal")
         if arguments[1:4] == ["storage", "account", "list"]:
-            return SimpleNamespace(returncode=0, stdout="syntheticstorage\n")
+            return SimpleNamespace(returncode=0, stdout="aiqsweartsynthetic\n")
         if "immutability-policy" in arguments and "show" in arguments:
             return SimpleNamespace(
                 returncode=0,
@@ -54,11 +54,37 @@ def test_deployment_reads_fixed_telemetry_resource_set(
     assert "terraModelVersion=2026-07-09" in deployment
     assert "testAgentCapacity=4500" in deployment
     assert "insightGenerationCapacity=100" in deployment
+    policy = load_automation_policy()
+    assert f"storageAccountPrefix={policy.storage_account_prefix}" in deployment
+    assert f"storageResourceRole={policy.storage_resource_role}" in deployment
     assert (
-        "approvedRecordContainerName="
-        + load_automation_policy().approved_record_container
+        f"qualityArtifactContainerName={policy.quality_artifact_container}"
         in deployment
     )
+    assert (
+        f"deploymentRegistryContainerName={policy.deployment_registry_container}"
+        in deployment
+    )
+    assert (
+        "approvedRecordContainerName="
+        + policy.approved_record_container
+        in deployment
+    )
+    storage_lookup = next(
+        item for item in calls if item[1:4] == ["storage", "account", "list"]
+    )
+    query = storage_lookup[storage_lookup.index("--query") + 1]
+    for exact_filter in (
+        "starts_with(name, 'aiqsweart')",
+        "kind=='StorageV2'",
+        "location=='swedencentral'",
+        "tags.purpose=='agent-insights-quality'",
+        "tags.environment=='swedencentral'",
+        "tags.location=='swedencentral'",
+        "tags.generation=='g30'",
+        "tags.resourceRole=='qualification-storage'",
+    ):
+        assert exact_filter in query
     assert not any("validationPrincipalId=" in value for value in deployment)
     assert not any("validationReceiptPrincipalId=" in value for value in deployment)
 
@@ -86,7 +112,7 @@ def test_infrastructure_locks_unlocked_approved_record_policy(
     def run(arguments, **_kwargs):
         calls.append(arguments)
         if arguments[1:4] == ["storage", "account", "list"]:
-            return SimpleNamespace(returncode=0, stdout="syntheticstorage\n")
+            return SimpleNamespace(returncode=0, stdout="aiqsweartsynthetic\n")
         if "immutability-policy" in arguments and "show" in arguments:
             return SimpleNamespace(
                 returncode=0,
@@ -156,7 +182,11 @@ def test_infrastructure_creates_and_locks_missing_approved_record_policy(
     def run(arguments, **_kwargs):
         calls.append(arguments)
         if arguments[1:4] == ["storage", "account", "list"]:
-            return SimpleNamespace(returncode=0, stdout="syntheticstorage\n", stderr="")
+            return SimpleNamespace(
+                returncode=0,
+                stdout="aiqsweartsynthetic\n",
+                stderr="",
+            )
         if "immutability-policy" in arguments and "show" in arguments:
             return next(shows)
         return SimpleNamespace(returncode=0, stdout="{}", stderr="")
@@ -186,7 +216,11 @@ def test_infrastructure_does_not_mutate_locked_approved_record_policy(
     def run(arguments, **_kwargs):
         calls.append(arguments)
         if arguments[1:4] == ["storage", "account", "list"]:
-            return SimpleNamespace(returncode=0, stdout="syntheticstorage\n", stderr="")
+            return SimpleNamespace(
+                returncode=0,
+                stdout="aiqsweartsynthetic\n",
+                stderr="",
+            )
         if "immutability-policy" in arguments and "show" in arguments:
             return SimpleNamespace(
                 returncode=0,
@@ -238,7 +272,11 @@ def test_policy_read_errors_do_not_create(
     def run(arguments, **_kwargs):
         calls.append(arguments)
         if arguments[1:4] == ["storage", "account", "list"]:
-            return SimpleNamespace(returncode=0, stdout="syntheticstorage\n", stderr="")
+            return SimpleNamespace(
+                returncode=0,
+                stdout="aiqsweartsynthetic\n",
+                stderr="",
+            )
         if "immutability-policy" in arguments and "show" in arguments:
             return SimpleNamespace(
                 returncode=returncode,
@@ -260,7 +298,24 @@ def test_ambiguous_storage_discovery_does_not_create_policy(monkeypatch) -> None
         calls.append(arguments)
         return SimpleNamespace(
             returncode=0,
-            stdout="syntheticstorage\notherstorage\n",
+            stdout="aiqsweartsynthetic\naiqsweartother\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr("agent_insights_quality.azure.subprocess.run", run)
+    with pytest.raises(ContractError, match="missing or ambiguous"):
+        _lock_approved_validation_policy(ProgressReporter("test"))
+    assert not any("immutability-policy" in item for item in calls)
+
+
+def test_legacy_storage_discovery_does_not_create_policy(monkeypatch) -> None:
+    calls = []
+
+    def run(arguments, **_kwargs):
+        calls.append(arguments)
+        return SimpleNamespace(
+            returncode=0,
+            stdout="aiqartifactslegacy\n",
             stderr="",
         )
 
@@ -324,7 +379,11 @@ def test_policy_ensure_is_idempotent_across_repeated_reconciliation(
     def run(arguments, **_kwargs):
         calls.append(arguments)
         if arguments[1:4] == ["storage", "account", "list"]:
-            return SimpleNamespace(returncode=0, stdout="syntheticstorage\n", stderr="")
+            return SimpleNamespace(
+                returncode=0,
+                stdout="aiqsweartsynthetic\n",
+                stderr="",
+            )
         if "immutability-policy" in arguments and "show" in arguments:
             return next(shows)
         return SimpleNamespace(returncode=0, stdout="{}", stderr="")
@@ -353,7 +412,11 @@ def test_policy_failure_prevents_infrastructure_completed_status(
                 stderr="",
             )
         if arguments[1:4] == ["storage", "account", "list"]:
-            return SimpleNamespace(returncode=0, stdout="syntheticstorage\n", stderr="")
+            return SimpleNamespace(
+                returncode=0,
+                stdout="aiqsweartsynthetic\n",
+                stderr="",
+            )
         if "immutability-policy" in arguments and "show" in arguments:
             return SimpleNamespace(
                 returncode=1,

@@ -17,6 +17,14 @@ param testAgentCapacity int = 4500
 @minValue(1)
 @maxValue(1000)
 param insightGenerationCapacity int = 100
+@allowed(['aiqsweart'])
+param storageAccountPrefix string = 'aiqsweart'
+@allowed(['qualification-storage'])
+param storageResourceRole string = 'qualification-storage'
+@allowed(['quality-artifacts'])
+param qualityArtifactContainerName string = 'quality-artifacts'
+@allowed(['deployment-registries'])
+param deploymentRegistryContainerName string = 'deployment-registries'
 param approvedRecordContainerName string
 
 resource resourceGroup 'Microsoft.Resources/resourceGroups@2024-11-01' existing = {
@@ -35,6 +43,10 @@ module lab 'modules/lab.bicep' = {
     telemetryGeneration: telemetryGeneration
     testAgentCapacity: testAgentCapacity
     insightGenerationCapacity: insightGenerationCapacity
+    storageAccountPrefix: storageAccountPrefix
+    storageResourceRole: storageResourceRole
+    qualityArtifactContainerName: qualityArtifactContainerName
+    deploymentRegistryContainerName: deploymentRegistryContainerName
     approvedRecordContainerName: approvedRecordContainerName
   }
 }

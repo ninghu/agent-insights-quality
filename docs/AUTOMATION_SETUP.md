@@ -8,7 +8,8 @@
 - read-only Application Insights queries;
 - deployed Foundry Agent endpoint access;
 - read access to one privately configured Azure Boards saved query;
-- Storage Blob Data Reader access to the private `deployment-registries` container;
+- Storage Blob Data Reader access to the dedicated Sweden Central `g30` storage account's private
+  `deployment-registries` container;
 - an authenticated local Azure CLI user with Foundry Project Manager on the validation account,
   Monitoring Reader on Sweden staging `g30`, ACR push, and Blob contributor access for the immutable
   `test-agent-validation-approved-records-swedencentral-g30` container;
@@ -30,8 +31,9 @@ run-scoped cleanup.
 Keep the Boards query URL and fetched work-item snapshot private; neither belongs in repository
 configuration or generated reports. Deployment registries and run state live under the durable
 user-level `~/.aiq-runtime/agent-insights-quality/` root so scheduled worktrees share approved state.
-The canonical registry is stored in the existing private Azure storage account; provisioning operators
-need Storage Blob Data Contributor, while qualification-only operators need Storage Blob Data Reader.
+The canonical registry is stored in the dedicated Sweden Central `g30` storage account; provisioning
+operators need Storage Blob Data Contributor, while qualification-only operators need Storage Blob
+Data Reader. The retained legacy storage account is not a fallback and is never modified.
 ADX publication receipts and the rendered dashboard import file also stay under this durable private
 root. Daily email uses the reviewed public `https://aka.ms/agent-insights/quality` short link.
 

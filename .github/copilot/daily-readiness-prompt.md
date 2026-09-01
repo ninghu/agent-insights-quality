@@ -8,7 +8,8 @@ Fetch `origin/main`, read `AGENTS.md`, the daily skill, and automation configura
 1. repository validation, Ruff, tests, and Bicep compilation;
 2. Azure authentication and unique daily profile resolution;
 3. daily deployment registry/catalog hash consistency;
-4. private Azure Blob registry download access;
+4. exact dedicated Sweden `g30` storage selection and private Azure Blob registry download access,
+   with no legacy storage fallback;
 5. read-only Application Insights query capability;
 6. read access to the privately configured Azure Boards saved query;
 7. availability of the reviewed Azure optional dependencies, unique ADX quality-cluster resolution,

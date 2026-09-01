@@ -10,6 +10,10 @@ from agent_insights_quality.selection import DAILY_ISSUES_PER_AGENT
 from agent_insights_quality.util import ROOT, ContractError, read_yaml
 
 FIXED_TELEMETRY_RESOURCE_SET = "g30"
+FIXED_STORAGE_ACCOUNT_PREFIX = "aiqsweart"
+FIXED_STORAGE_RESOURCE_ROLE = "qualification-storage"
+FIXED_QUALITY_ARTIFACT_CONTAINER = "quality-artifacts"
+FIXED_DEPLOYMENT_REGISTRY_CONTAINER = "deployment-registries"
 MINIMUM_LOOKBACK_HOURS = 0.1
 TRAFFIC_UNCERTAINTY_SECONDS = 10 * 60
 TRACE_ASSERTION_DEADLINE_SECONDS = 15 * 60
@@ -28,6 +32,10 @@ class AutomationPolicy:
     max_recovery_versions: int
     agent_start_stagger_seconds: int
     telemetry_resource_set: str
+    storage_account_prefix: str
+    storage_resource_role: str
+    quality_artifact_container: str
+    deployment_registry_container: str
     approved_record_container: str
 
 
@@ -98,6 +106,20 @@ def load_automation_policy(
         or resource_set != FIXED_TELEMETRY_RESOURCE_SET
     ):
         raise ContractError("Automation telemetry resource set is not the fixed reviewed set")
+    storage_account_prefix = str(value.get("storage_account_prefix") or "")
+    if storage_account_prefix != FIXED_STORAGE_ACCOUNT_PREFIX:
+        raise ContractError("Automation storage account prefix is not the reviewed value")
+    storage_resource_role = str(value.get("storage_resource_role") or "")
+    if storage_resource_role != FIXED_STORAGE_RESOURCE_ROLE:
+        raise ContractError("Automation storage resource role is not the reviewed value")
+    quality_artifact_container = str(value.get("quality_artifact_container") or "")
+    if quality_artifact_container != FIXED_QUALITY_ARTIFACT_CONTAINER:
+        raise ContractError("Automation quality-artifact container is not reviewed")
+    deployment_registry_container = str(
+        value.get("deployment_registry_container") or ""
+    )
+    if deployment_registry_container != FIXED_DEPLOYMENT_REGISTRY_CONTAINER:
+        raise ContractError("Automation deployment-registry container is not reviewed")
     approved_record_container = str(value.get("approved_record_container") or "")
     if approved_record_container != (
         f"test-agent-validation-approved-records-swedencentral-{resource_set}"
@@ -116,6 +138,10 @@ def load_automation_policy(
         max_recovery_versions=recoveries,
         agent_start_stagger_seconds=stagger,
         telemetry_resource_set=resource_set,
+        storage_account_prefix=storage_account_prefix,
+        storage_resource_role=storage_resource_role,
+        quality_artifact_container=quality_artifact_container,
+        deployment_registry_container=deployment_registry_container,
         approved_record_container=approved_record_container,
     )
 

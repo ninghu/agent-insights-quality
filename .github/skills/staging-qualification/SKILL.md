@@ -13,7 +13,9 @@ workflow is `.github/skills/test-agent-validation/SKILL.md`; follow that complet
    checks, Ruff, tests, and Bicep compilation before cloud mutation.
 2. Bind the exact existing `aiq-staging-swedencentral` Account and identically named durable Project.
    Verify the Sweden Central `g30` Project-scoped Application Insights connection and the exact
-   `gpt-5.4-mini` `2026-03-17` DataZoneStandard deployment. Never create or delete the Project.
+   `gpt-5.4-mini` `2026-03-17` DataZoneStandard deployment. Exact-select the dedicated Sweden `g30`
+   storage account for registries and approval records; never fall back to or modify legacy storage.
+   Never create or delete the Project.
 3. Hold the environment-namespaced OS lock and keep lifecycle, history, evidence, and CLEAN state
    under `~/.aiq-runtime/agent-insights-quality/test-agent-validation/`.
 4. Reconcile all five baselines and 36 issues as 41 stable baseline/issue Agent names. Persist and

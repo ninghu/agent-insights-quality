@@ -61,7 +61,8 @@ report publication, ADX, email, Optional Daily Test, or a GitHub merge gate.
     approval decision; this does not mutate lifecycle state or become a code-generated verdict. Only
     after the user explicitly approves the exact result, run
     `python -m agent_insights_quality approve-test-agent-validation`. It re-reads the current PR head,
-    local evidence, and CLEAN proof, then create-once writes the one minimal immutable approved record.
-    Merge remains manual.
+    local evidence, and CLEAN proof, then exact-selects the dedicated Sweden `g30` storage account and
+    create-once writes the one minimal immutable approved record. It never reads or mutates legacy
+    storage. Merge remains manual.
 
 Never put raw prompts, responses, traces, provider IDs, Azure IDs, or private context in Git.

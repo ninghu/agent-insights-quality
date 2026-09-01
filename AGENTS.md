@@ -20,9 +20,9 @@ Agents and 36 reviewed, single-root issues.
   validation records, provider receipts,
   work-item snapshots, ADX publication receipts, and rendered dashboards under the durable user-level
   `~/.aiq-runtime/agent-insights-quality/` root shared by all worktrees.
-- Canonical daily and staging deployment registries live in the private Azure
-  `deployment-registries` blob container and synchronize into the local runtime root. Never commit
-  them to Git.
+- Canonical daily and staging deployment registries live in the dedicated Sweden Central `g30`
+  storage account's private `deployment-registries` blob container and synchronize into the local
+  runtime root. Never commit them to Git or fall back to the retained legacy storage account.
 
 ## Authorities
 

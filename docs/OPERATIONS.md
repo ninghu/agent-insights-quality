@@ -18,7 +18,8 @@ resources or lifecycle state.
 ## Test Agent Validation
 
 Test Agent Validation reuses the durable `aiq-staging-swedencentral` Account and identically named
-Project, exact GPT-5.4 mini deployment, shared ACR/storage, and read-only Sweden `g30` telemetry. It
+Project, exact GPT-5.4 mini deployment, shared ACR, dedicated Sweden `g30` storage, and read-only
+Sweden `g30` telemetry. It
 reconciles 41 stable baseline/issue Agent names to exact server-assigned provider versions and content
 digests. It creates no monitor and does not run Agent Insights, Sol assessment, score/report
 generation, ADX publication, email, or Daily.
@@ -131,12 +132,13 @@ python -m agent_insights_quality deploy-analytics
 ```
 
 The infrastructure command creates only the two Sweden accounts, identically named Projects,
-Project-scoped `g30` telemetry pairs, and exact reviewed model deployments in the existing resource
-group. It references the existing shared ACR and Blob storage and does not create, update, or delete
-existing containers or data. It creates only the environment-namespaced
-`test-agent-validation-approved-records-swedencentral-g30` child container in that shared storage,
-then idempotently ensures and locks its 90-day WORM policy. It does not create, update, or delete ADX
-or any West US 2 resource.
+Project-scoped `g30` telemetry pairs, exact reviewed model deployments, and the dedicated
+`aiqsweart${uniqueSuffix}` Sweden StorageV2 account in the existing resource group. The new account
+uses Blob versioning and private `quality-artifacts`, `deployment-registries`, and
+`test-agent-validation-approved-records-swedencentral-g30` containers. Its 90-day lifecycle rule is
+scoped only to `quality-artifacts`; the approved-record WORM policy is ensured and locked
+idempotently after deployment. The command references the shared ACR but does not create, update, or
+delete ADX, the retained legacy storage account or its data, or any other West US 2 resource.
 `deploy-analytics` is a separately reviewed ADX-only operation that
 cannot change Foundry models, Projects, telemetry, storage, or registries. Neither command creates a
 native ADX dashboard because that dashboard surface has no ARM/Bicep deployment resource.

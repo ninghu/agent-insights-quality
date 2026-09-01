@@ -58,3 +58,27 @@ def test_staging_skill_routes_current_durable_sweden_qualification() -> None:
     assert ".github/skills/test-agent-validation/SKILL.md" in staging
     assert "`r03`" not in staging
     assert "`r04`" not in staging
+
+
+def test_active_docs_require_dedicated_sweden_storage_without_legacy_fallback() -> None:
+    combined = "\n".join(
+        _text(path)
+        for path in (
+            "README.md",
+            "AGENTS.md",
+            "docs/AUTOMATION_SETUP.md",
+            "docs/OPERATIONS.md",
+            ".github/skills/staging-qualification/SKILL.md",
+        )
+    )
+    normalized = " ".join(combined.split()).casefold()
+    for requirement in (
+        "dedicated sweden",
+        "deployment-registries",
+        "quality-artifacts",
+        "legacy storage",
+        "never modified",
+    ):
+        assert requirement in normalized
+    assert "existing shared acr and blob storage" not in normalized
+    assert "shared acr/storage" not in normalized

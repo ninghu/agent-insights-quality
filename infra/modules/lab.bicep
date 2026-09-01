@@ -6,6 +6,10 @@ param automationPrincipalId string
 param telemetryGeneration string
 param testAgentCapacity int
 param insightGenerationCapacity int
+param storageAccountPrefix string
+param storageResourceRole string
+param qualityArtifactContainerName string
+param deploymentRegistryContainerName string
 param approvedRecordContainerName string
 
 var commonTags = {
@@ -20,7 +24,7 @@ var uniqueSuffix = substring(uniqueString(subscription().subscriptionId, resourc
 var dailyAccountName = 'aiq-daily-swedencentral'
 var stagingAccountName = 'aiq-staging-swedencentral'
 var registryName = 'aiqacr${uniqueSuffix}'
-var storageName = 'aiqartifacts${uniqueSuffix}'
+var storageName = '${storageAccountPrefix}${uniqueSuffix}'
 var monitoringReaderRoleId = '43d0d8ad-25c7-4714-9337-8ba259a9fe05'
 var modelInferenceRoleId = '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'
 var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
@@ -189,13 +193,46 @@ resource registry 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' ex
   name: registryName
 }
 
-resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
+resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageName
+  location: location
+  tags: union(commonTags, {
+    resourceRole: storageResourceRole
+  })
+  kind: 'StorageV2'
+  sku: {
+    name: 'Standard_LRS'
+  }
+  properties: {
+    allowBlobPublicAccess: false
+    allowSharedKeyAccess: false
+    minimumTlsVersion: 'TLS1_2'
+    supportsHttpsTrafficOnly: true
+  }
 }
 
-resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' existing = {
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
   parent: storage
   name: 'default'
+  properties: {
+    isVersioningEnabled: true
+  }
+}
+
+resource qualityArtifacts 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: qualityArtifactContainerName
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+resource deploymentRegistries 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: deploymentRegistryContainerName
+  properties: {
+    publicAccess: 'None'
+  }
 }
 
 resource approvedValidationRecords 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
@@ -207,6 +244,38 @@ resource approvedValidationRecords 'Microsoft.Storage/storageAccounts/blobServic
       enabled: true
     }
   }
+}
+
+resource qualityArtifactLifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05-01' = {
+  parent: storage
+  name: 'default'
+  properties: {
+    policy: {
+      rules: [
+        {
+          name: 'expire-quality-artifacts'
+          enabled: true
+          type: 'Lifecycle'
+          definition: {
+            filters: {
+              blobTypes: ['blockBlob']
+              prefixMatch: ['${qualityArtifactContainerName}/']
+            }
+            actions: {
+              baseBlob: {
+                delete: {
+                  daysAfterModificationGreaterThan: 90
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+  dependsOn: [
+    qualityArtifacts
+  ]
 }
 
 resource automationArtifactContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {

@@ -69,10 +69,11 @@ paths, create a pull request, or enable auto-merge. Stop after importing the pro
 private run directory. Scheduled official runs never pass `--test-run`.
 
 The runner executes five Agents concurrently and versions sequentially within each Agent. Complete
-runs use the reviewed score threshold of 90. Daily provisioning is new-only: it derives and fetches
-the exact clean commit's immutable approved-record Blob, checks its locked WORM metadata, and
+runs use the reviewed score threshold of 90. Daily provisioning is new-only: it exact-selects the
+dedicated Sweden `g30` storage account, derives and fetches the exact clean commit's immutable
+approved-record Blob, checks its locked WORM metadata, and
 recomputes the validation digest. It never accepts an operator-supplied local record or falls back to
-an old West US 2 promotion receipt. Local Test Agent Validation covers all 36 issues plus five
+legacy storage or an old West US 2 promotion receipt. Local Test Agent Validation covers all 36 issues plus five
 baselines outside this Daily workflow.
 
 Any `inconclusive` baseline assessment or `INCOMPLETE` issue assessment makes the whole run

@@ -46,10 +46,11 @@ class RuntimeProfile:
     ) -> "RuntimeProfile":
         if name not in PROFILE_PROJECTS:
             raise ContractError("Profile must be daily or staging")
+        policy = load_automation_policy()
         resource_set = (
             telemetry_resource_set
             if telemetry_resource_set is not None
-            else load_automation_policy().telemetry_resource_set
+            else policy.telemetry_resource_set
         )
         if resource_set != TELEMETRY_RESOURCE_SET:
             raise ContractError("Profile telemetry resource set is not the active environment")
@@ -80,8 +81,15 @@ class RuntimeProfile:
             for item in resources
             if str(item.get("type") or "").casefold()
             == "microsoft.storage/storageaccounts"
+            and str(item.get("kind") or "").casefold() == "storagev2"
+            and str(item.get("name") or "").startswith(policy.storage_account_prefix)
             and isinstance(item.get("tags"), dict)
             and item["tags"].get("purpose") == "agent-insights-quality"
+            and item["tags"].get("environment") == PROFILE_LOCATION
+            and item["tags"].get("location") == PROFILE_LOCATION
+            and item["tags"].get("generation") == resource_set
+            and item["tags"].get("resourceRole") == policy.storage_resource_role
+            and str(item.get("location") or "").casefold() == PROFILE_LOCATION
         ]
         profile_insights = [
             item
