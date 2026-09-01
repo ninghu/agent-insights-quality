@@ -155,6 +155,20 @@ class _RuntimeTokenCredential:
         )
 
 
+class _NoopTrafficLedger:
+    @staticmethod
+    def mark_started(*_args: Any, **_kwargs: Any) -> None:
+        pass
+
+    @staticmethod
+    def mark_completed(*_args: Any, **_kwargs: Any) -> None:
+        pass
+
+    @staticmethod
+    def clean_after(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
 class LiveRuntime:
     """Endpoint-only traffic with read-only telemetry access."""
 
@@ -166,6 +180,7 @@ class LiveRuntime:
         sleep: Callable[[float], None] = time.sleep,
         utcnow: Callable[[], datetime] = lambda: datetime.now(UTC),
         monotonic: Callable[[], float] = time.monotonic,
+        use_traffic_ledger: bool = True,
     ) -> None:
         self._profile = profile
         self._raw_token_provider = token_provider or _azure_cli_token
@@ -181,7 +196,11 @@ class LiveRuntime:
         self._hosted_session_bindings: dict[tuple[str, str], tuple[str, float]] = {}
         self._logs_client_instance: Any | None = None
         self._progress = ProgressReporter("aiq", monotonic=monotonic)
-        self._traffic_ledger = TrafficLedger(profile.name)
+        self._traffic_ledger = (
+            TrafficLedger(profile.name)
+            if use_traffic_ledger
+            else _NoopTrafficLedger()
+        )
 
     def report_progress(self, message: str) -> None:
         self._progress.emit(message)

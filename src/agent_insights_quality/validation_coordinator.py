@@ -629,6 +629,7 @@ def _runner(
         LiveRuntime(
             context["profile"],
             token_provider=context["operator"].token_provider,
+            use_traffic_ledger=False,
         ),
         endpoint_costs={
             item.authority_id: validation_authority_cost(item)
