@@ -18,7 +18,7 @@ issues:
     middleware_kind: FunctionMiddleware
   issue-016:
     declared_delta: "Issue-specific orchestration presents a structured error as a successful balance."
-    expected_app_diff_digest: sha256:6537a3844095fe40a0973627377a72b8e2d56666255874d308459c9bce8ec6cd
+    expected_app_diff_digest: sha256:4ebe8110736db73ad292a21bcc6a247ac19328fb438db7fadafc83a5f65e9213
     expected_class: StructuredErrorAsBalance
     middleware_kind: ChatMiddleware
   issue-017:

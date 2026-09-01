@@ -183,6 +183,8 @@ class StructuredErrorAsBalance(ChatMiddleware):
             await call_next()
             return
         await call_next()
+        if context.stream:
+            await context.result.get_final_response()
         answer = "The successful balance is account_not_found."
         response = ChatResponse(
             messages=[Message(role="assistant", contents=[answer])]

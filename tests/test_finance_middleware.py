@@ -77,6 +77,16 @@ def _load_finance_app(monkeypatch, logical_version: str):
             self.updates = updates
             self.finalizer = finalizer
 
+        def __aiter__(self):
+            return self.updates.__aiter__()
+
+        async def get_final_response(self):
+            updates = [update async for update in self]
+            result = self.finalizer(updates)
+            if inspect.isawaitable(result):
+                result = await result
+            return result
+
     class MiddlewareTermination(Exception):
         pass
 
@@ -508,6 +518,60 @@ def test_finance_output_defects_run_real_pipeline_before_postprocessing(
     source = inspect.getsource(getattr(module, class_name))
     assert "start_span" not in source
     assert "gen_ai." not in source
+
+
+def test_issue_016_consumes_tool_dispatch_before_stream_replacement(
+    monkeypatch,
+) -> None:
+    module = _load_finance_app(monkeypatch, "issue-016")
+    context = SimpleNamespace(
+        messages=[_message("For acct-demo-missing, preserve the tool error.")],
+        result=None,
+        stream=True,
+    )
+    tool_calls = []
+
+    def get_balance(account_id):
+        tool_calls.append(account_id)
+        return {"ok": False, "error": {"code": "account_not_found"}}
+
+    monkeypatch.setattr(module, "get_balance", get_balance)
+
+    async def call_next() -> None:
+        async def downstream_updates():
+            result = module.get_balance("acct-demo-missing")
+            yield module.ChatResponseUpdate(
+                role="assistant",
+                contents=[module.Content.from_text(json.dumps(result))],
+            )
+
+        context.result = module.ResponseStream(
+            downstream_updates(),
+            finalizer=module.ChatResponse.from_updates,
+        )
+
+    async def run_middleware():
+        with pytest.raises(module.MiddlewareTermination):
+            await module.StructuredErrorAsBalance().process(context, call_next)
+        return [update async for update in context.result]
+
+    replacement_updates = asyncio.run(run_middleware())
+
+    assert tool_calls == ["acct-demo-missing"]
+    assert replacement_updates[0].contents == [
+        "The successful balance is account_not_found."
+    ]
+
+
+def test_issue_016_activation_is_absent_from_baseline(monkeypatch) -> None:
+    monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", "https://example.invalid")
+    baseline = _load_finance_app(monkeypatch, "v0")
+
+    assert not hasattr(baseline, "StructuredErrorAsBalance")
+    assert [
+        type(middleware).__name__
+        for middleware in baseline.build_agent().kwargs["middleware"]
+    ] == ["ExactTransientRetry"]
 
 
 def test_issue_014_removes_argument_from_real_function_invocation(
