@@ -89,11 +89,14 @@ _TRACE_ASSERTION_PROGRESS_SECONDS = 60
 _TELEMETRY_IDENTITY_STABILIZATION_SECONDS = TRACE_ASSERTION_POLL_SECONDS
 _TELEMETRY_QUERY_RETRY_DELAYS = (1, 2, 4)
 _PERMANENT_LOGS_QUERY_ERROR_CODES = {
+    "badargument",
     "badargumenterror",
     "invalidquery",
     "invalidqueryerror",
     "querysyntaxerror",
+    "semantic",
     "semanticerror",
+    "syntax",
     "syntaxerror",
 }
 _AUTH_PROGRESS = ProgressReporter("aiq-auth")
@@ -253,6 +256,43 @@ class LiveRuntime:
                 )
                 self._sleep(delay)
         raise ContractError("Telemetry query retry loop did not execute")
+
+    def _query_logs_result(
+        self,
+        query: str,
+        *,
+        timespan: Any,
+        statuses: Any,
+        purpose: str,
+    ) -> Any:
+        started = self._monotonic()
+        with self._progress.heartbeat(f"{purpose.capitalize()} query stabilization"):
+            for attempt in range(len(_TELEMETRY_QUERY_RETRY_DELAYS) + 1):
+                result = self._query_resource(
+                    self._logs_client(),
+                    query,
+                    timespan=timespan,
+                )
+                if result.status == statuses.SUCCESS:
+                    return result
+                status_class = _logs_query_status_class(result, statuses)
+                if _permanent_logs_query_failure(result, statuses):
+                    raise TelemetryQueryError(
+                        f"Azure Monitor rejected the {purpose} query"
+                    )
+                if attempt == len(_TELEMETRY_QUERY_RETRY_DELAYS):
+                    raise TelemetryQueryError(
+                        f"Azure Monitor {purpose} query retries were exhausted"
+                    )
+                delay = _TELEMETRY_QUERY_RETRY_DELAYS[attempt]
+                elapsed = max(0.0, self._monotonic() - started)
+                self.report_progress(
+                    f"{purpose.capitalize()} query returned {status_class} after "
+                    f"{elapsed:.0f}s; retrying in {delay}s "
+                    f"({attempt + 2}/{len(_TELEMETRY_QUERY_RETRY_DELAYS) + 1})"
+                )
+                self._sleep(delay)
+        raise TelemetryQueryError(f"Azure Monitor {purpose} query did not execute")
 
     def assert_telemetry_read_access(self) -> None:
         try:
@@ -1662,36 +1702,12 @@ union withsource=telemetry_type traces, dependencies, requests
     output_messages_present, output_messages_nonempty
 | order by operation_Id asc, timestamp asc, id asc
 """
-        result = None
-        started = self._monotonic()
-        with self._progress.heartbeat("Trace collection query stabilization"):
-            for attempt in range(len(_TELEMETRY_QUERY_RETRY_DELAYS) + 1):
-                result = self._query_resource(
-                    self._logs_client(),
-                    query,
-                    timespan=timedelta(days=90),
-                )
-                if result.status == LogsQueryStatus.SUCCESS:
-                    break
-                status_class = _logs_query_status_class(result, LogsQueryStatus)
-                if _permanent_logs_query_failure(result, LogsQueryStatus):
-                    raise TelemetryQueryError(
-                        "Azure Monitor rejected the trace collection query"
-                    )
-                if attempt == len(_TELEMETRY_QUERY_RETRY_DELAYS):
-                    raise TelemetryQueryError(
-                        "Azure Monitor trace collection query retries were exhausted"
-                    )
-                delay = _TELEMETRY_QUERY_RETRY_DELAYS[attempt]
-                elapsed = max(0.0, self._monotonic() - started)
-                self.report_progress(
-                    f"Trace collection query returned {status_class} after "
-                    f"{elapsed:.0f}s; retrying in {delay}s "
-                    f"({attempt + 2}/{len(_TELEMETRY_QUERY_RETRY_DELAYS) + 1})"
-                )
-                self._sleep(delay)
-        if result is None:
-            raise ContractError("Trace collection query retry loop did not execute")
+        result = self._query_logs_result(
+            query,
+            timespan=timedelta(days=90),
+            statuses=LogsQueryStatus,
+            purpose="trace collection",
+        )
         return [
             {
                 "operation_id": str(row[0] or ""),
@@ -2035,13 +2051,12 @@ union traces, dependencies, requests
     terminal_success, terminal_output, handled_error, matched_reference,
     output_messages_present, output_messages_nonempty
 """
-        result = self._query_resource(
-            self._logs_client(),
+        result = self._query_logs_result(
             query,
             timespan=timespan,
+            statuses=LogsQueryStatus,
+            purpose="trace behavior evidence",
         )
-        if result.status != LogsQueryStatus.SUCCESS:
-            raise ContractError("Trace behavior evidence query failed")
         rows = [
             {
                 "operation_id": str(row[0]),

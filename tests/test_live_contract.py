@@ -1223,6 +1223,192 @@ def test_trace_row_query_joins_split_reference_and_identity_spans_by_operation(
     ]
 
 
+def _trace_behavior_query_row(
+    operation_id: str,
+    reference: str,
+    *,
+    output_present: bool = True,
+    output_nonempty: bool = True,
+) -> list:
+    return [
+        operation_id,
+        "invoke_agent",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        '[{"role":"assistant","parts":[{"type":"text","content":"synthetic"}]}]',
+        "2026-08-31T10:00:00+00:00",
+        25.0,
+        "invoke_agent",
+        "true",
+        "true",
+        "false",
+        reference,
+        output_present,
+        output_nonempty,
+    ]
+
+
+def test_trace_behavior_query_retries_transient_failure_and_uses_final_rows(
+    monkeypatch,
+) -> None:
+    statuses = _install_logs_query_status(monkeypatch)
+    operation_id = "a" * 32
+    reference = "resp_A1b2C3d4E5f6"
+    results = [
+        types.SimpleNamespace(status=statuses.FAILURE, code="GatewayTimeout"),
+        types.SimpleNamespace(
+            status=statuses.SUCCESS,
+            tables=[
+                types.SimpleNamespace(
+                    rows=[_trace_behavior_query_row(operation_id, reference)]
+                )
+            ],
+        ),
+    ]
+    sleeps = []
+    runtime = _runtime()
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+    runtime._query_resource = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: results.pop(0)
+    )
+    runtime._sleep = sleeps.append
+
+    rows = runtime._trace_rows((operation_id,))
+
+    assert rows[0]["operation_id"] == operation_id
+    assert rows[0]["matched_reference"] == reference
+    assert sleeps == [1]
+    assert results == []
+
+
+def test_trace_behavior_query_retries_partial_result(monkeypatch) -> None:
+    statuses = _install_logs_query_status(monkeypatch)
+    operation_id = "a" * 32
+    results = [
+        types.SimpleNamespace(status=statuses.PARTIAL, partial_data=[]),
+        types.SimpleNamespace(
+            status=statuses.SUCCESS,
+            tables=[
+                types.SimpleNamespace(
+                    rows=[
+                        _trace_behavior_query_row(
+                            operation_id,
+                            "resp_A1b2C3d4E5f6",
+                        )
+                    ]
+                )
+            ],
+        ),
+    ]
+    sleeps = []
+    runtime = _runtime()
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+    runtime._query_resource = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: results.pop(0)
+    )
+    runtime._sleep = sleeps.append
+
+    assert runtime._trace_rows((operation_id,))[0]["operation_id"] == operation_id
+    assert sleeps == [1]
+    assert results == []
+
+
+def test_trace_behavior_query_rejects_permanent_failure_without_retry(
+    monkeypatch,
+) -> None:
+    statuses = _install_logs_query_status(monkeypatch)
+    attempts = 0
+    sleeps = []
+    runtime = _runtime()
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+
+    def query(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        return types.SimpleNamespace(
+            status=statuses.FAILURE,
+            code="BadArgument",
+        )
+
+    runtime._query_resource = query  # type: ignore[method-assign]
+    runtime._sleep = sleeps.append
+
+    with pytest.raises(
+        TelemetryQueryError,
+        match="rejected the trace behavior evidence query",
+    ):
+        runtime._trace_rows(("a" * 32,))
+
+    assert attempts == 1
+    assert sleeps == []
+
+
+def test_trace_behavior_query_non_success_retries_are_bounded(monkeypatch) -> None:
+    statuses = _install_logs_query_status(monkeypatch)
+    attempts = 0
+    sleeps = []
+    runtime = _runtime()
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+
+    def query(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        return types.SimpleNamespace(
+            status=statuses.FAILURE,
+            code="GatewayTimeout",
+        )
+
+    runtime._query_resource = query  # type: ignore[method-assign]
+    runtime._sleep = sleeps.append
+
+    with pytest.raises(
+        TelemetryQueryError,
+        match="trace behavior evidence query retries were exhausted",
+    ):
+        runtime._trace_rows(("a" * 32,))
+
+    assert attempts == 4
+    assert sleeps == [1, 2, 4]
+
+
+def test_trace_behavior_query_reuses_successful_rows_for_correlation_and_output(
+    monkeypatch,
+) -> None:
+    statuses = _install_logs_query_status(monkeypatch)
+    operation_id = "a" * 32
+    reference = "resp_A1b2C3d4E5f6"
+    attempts = 0
+    runtime = _runtime()
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+
+    def query(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        return types.SimpleNamespace(
+            status=statuses.SUCCESS,
+            tables=[
+                types.SimpleNamespace(
+                    rows=[_trace_behavior_query_row(operation_id, reference)]
+                )
+            ],
+        )
+
+    runtime._query_resource = query  # type: ignore[method-assign]
+
+    rows = runtime._trace_rows((operation_id,))
+
+    assert attempts == 1
+    assert rows[0]["matched_reference"] == reference
+    assert rows[0]["output_messages_present"] is True
+    assert rows[0]["output_messages_nonempty"] is True
+
+
 def test_collect_trace_evidence_emits_allowlisted_hashed_graph(monkeypatch) -> None:
     query_module = types.ModuleType("azure.monitor.query")
     query_module.LogsQueryStatus = type("LogsQueryStatus", (), {"SUCCESS": "success"})
