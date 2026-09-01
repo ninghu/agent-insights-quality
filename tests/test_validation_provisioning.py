@@ -116,14 +116,14 @@ def test_validation_project_bicep_creates_no_monitor_or_insights_run() -> None:
         ROOT / "infra" / "modules" / "validation-project.bicep"
     ).read_text(encoding="utf-8")
     assert "Microsoft.CognitiveServices/accounts/projects" in text
-    assert "application-insights-validation" not in text
+    assert "application-insights-validation" in text
     assert "container-registry-validation" in text
     assert "validation-project-rbac.bicep" in text
     assert "ApplicationInsightsConnectionString" not in text
     assert "Microsoft.CognitiveServices/accounts/connections" not in text
     assert "isSharedToAll: true" not in text
-    assert "key: applicationInsights.properties.ConnectionString" not in text
-    assert "ApiType: 'Azure'\n      ResourceId: applicationInsights.id" not in text
+    assert "key: applicationInsights.properties.ConnectionString" in text
+    assert "ApiType: 'Azure'\n      ResourceId: applicationInsights.id" in text
     assert "ownershipNonce" in text
     assert "agent_insight" not in text.casefold()
     assert "monitor" not in text.casefold().replace("monitoringreader", "")
@@ -144,6 +144,7 @@ def test_project_children_have_deterministic_intents_before_bicep() -> None:
         "arm_deployment",
         "runtime_principal",
         "connection",
+        "connection",
         "role_assignment",
         "role_assignment",
         "role_assignment",
@@ -152,10 +153,12 @@ def test_project_children_have_deterministic_intents_before_bicep() -> None:
     assert len({item["intent_reference"] for item in intents}) == len(intents)
     assert all(item["runtime_kind"] == "control" for item in intents)
     assert all(item["discovery_key"] for item in intents)
-    assert all(
-        item["deterministic_name"] != "application-insights-staging"
-        for item in intents
-    )
+    assert "application-insights-validation" in {
+        item["deterministic_name"] for item in intents
+    }
+    assert "application-insights-staging" not in {
+        item["deterministic_name"] for item in intents
+    }
     bicep = (
         ROOT / "infra" / "modules" / "validation-project.bicep"
     ).read_text(encoding="utf-8")
@@ -163,7 +166,7 @@ def test_project_children_have_deterministic_intents_before_bicep() -> None:
     assert "appInsightsReaderName" in bicep
 
 
-def test_project_create_accepts_account_only_connection_outputs(monkeypatch) -> None:
+def test_project_create_accepts_project_connection_outputs(monkeypatch) -> None:
     project_name = "aiq-validation-0123456789ab"
     cycle_id = "validation-cycle-0001"
     ownership_nonce = "nonce-0001"
@@ -224,10 +227,10 @@ def test_project_create_accepts_account_only_connection_outputs(monkeypatch) -> 
     )
 
     assert project.connection_ids == plan.connection_ids
-    assert len(project.connection_ids) == 1
-    assert project.connection_ids[0].endswith(
-        "/connections/container-registry-validation"
-    )
+    assert len(project.connection_ids) == 2
+    assert {
+        item.rsplit("/", 1)[-1] for item in project.connection_ids
+    } == {"container-registry-validation", "application-insights-validation"}
     assert project.role_assignment_ids == plan.role_assignment_ids
     assert len(observed) == 1
 

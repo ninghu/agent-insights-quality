@@ -115,18 +115,19 @@ class RuntimeProfile:
     ) -> None:
         if not self.account_resource_id:
             raise ContractError("Profile account resource identity is unavailable")
-        durable_connection_name = connection_name or f"application-insights-{self.name}"
-        account_connection_id = (
-            f"{self.account_resource_id}/connections/{durable_connection_name}"
+        project_connection_name = connection_name or f"application-insights-{self.name}"
+        project_connection_id = (
+            f"{self.account_resource_id}/projects/{self.project_name}/connections/"
+            f"{project_connection_name}"
         )
-        account_connection = _read_arm_connection(
-            account_connection_id,
-            "Account",
+        project_connection = _read_arm_connection(
+            project_connection_id,
+            "Project",
         )
         _assert_arm_insights_connection(
-            account_connection,
+            project_connection,
             expected_target=self.application_insights_resource_id,
-            scope="Account",
+            scope="Project",
         )
 
     def with_project(
@@ -290,15 +291,13 @@ def _assert_arm_insights_connection(
     if (
         properties.get("category") != "AppInsights"
         or properties.get("authType") != "ApiKey"
-        or properties.get("isSharedToAll") is not True
         or not isinstance(metadata, dict)
-        or set(metadata) != {"ApiType", "ResourceId"}
         or metadata.get("ApiType") != "Azure"
         or str(metadata.get("ResourceId") or "").casefold()
         != expected_target.casefold()
     ):
         raise ContractError(
-            f"{scope} telemetry connection is not the official shared App Insights shape"
+            f"{scope} telemetry connection is not the official App Insights shape"
         )
 
 

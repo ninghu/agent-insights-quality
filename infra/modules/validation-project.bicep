@@ -22,6 +22,10 @@ resource account 'Microsoft.CognitiveServices/accounts@2025-06-01' existing = {
   name: accountName
 }
 
+resource applicationInsights 'Microsoft.Insights/components@2020-02-02' existing = {
+  name: applicationInsightsName
+}
+
 resource registry 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' existing = {
   name: registryName
 }
@@ -90,11 +94,36 @@ resource registryConnection 'Microsoft.CognitiveServices/accounts/projects/conne
   ]
 }
 
+resource insightsConnection 'Microsoft.CognitiveServices/accounts/projects/connections@2025-06-01' = {
+  parent: project
+  name: 'application-insights-validation'
+  properties: {
+    category: 'AppInsights'
+    target: applicationInsights.id
+    authType: 'ApiKey'
+    credentials: {
+      key: applicationInsights.properties.ConnectionString
+    }
+    metadata: {
+      ApiType: 'Azure'
+      ResourceId: applicationInsights.id
+      purpose: 'test-agent-validation'
+      ownershipNonce: ownershipNonce
+      cycleId: cycleId
+    }
+  }
+  dependsOn: [
+    projectRbac
+    registryConnection
+  ]
+}
+
 output projectId string = project.id
 output projectPrincipalId string = project.identity.principalId
 output projectEndpoint string = 'https://${accountName}.services.ai.azure.com/api/projects/${projectName}'
 output connectionIds array = [
   registryConnection.id
+  insightsConnection.id
 ]
 output roleAssignmentIds array = [
   validationOperatorProjectManager.id

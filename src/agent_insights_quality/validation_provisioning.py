@@ -149,7 +149,7 @@ class ValidationProjectProvisioner:
         self._profile.assert_test_agent_model(expected)
 
     def assert_telemetry_connection(self) -> None:
-        self._profile.assert_insights_connection("application-insights-staging")
+        self._profile.assert_insights_connection("application-insights-validation")
 
     def assert_project_absent(self, project_name: str) -> None:
         project_id = self.expected_project_id(project_name)
@@ -414,6 +414,7 @@ class ValidationProjectProvisioner:
         )
         connection_ids = (
             f"{project_id}/connections/container-registry-validation",
+            f"{project_id}/connections/application-insights-validation",
         )
         role_scopes = (
             project_id,

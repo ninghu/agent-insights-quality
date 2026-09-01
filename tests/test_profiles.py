@@ -30,14 +30,12 @@ def _profile(name: str = "daily") -> RuntimeProfile:
 def _arm_connection(
     *,
     target: str = _ACTIVE_INSIGHTS_ID,
-    shared: bool = True,
 ) -> dict:
     return {
         "properties": {
             "target": target,
             "category": "AppInsights",
             "authType": "ApiKey",
-            "isSharedToAll": shared,
             "metadata": {
                 "ApiType": "Azure",
                 "ResourceId": target,
@@ -50,21 +48,22 @@ def _mock_connection_reads(
     monkeypatch,
     *,
     profile: RuntimeProfile,
-    account_connection_name: str,
-    account_connection: dict | None = None,
+    project_connection_name: str,
+    project_connection: dict | None = None,
 ) -> list[list[str]]:
     observed: list[list[str]] = []
-    account_id = (
-        f"{profile.account_resource_id}/connections/{account_connection_name}"
+    project_id = (
+        f"{profile.account_resource_id}/projects/{profile.project_name}/connections/"
+        f"{project_connection_name}"
     )
-    account_value = account_connection or _arm_connection()
+    project_value = project_connection or _arm_connection()
 
     def run(arguments, **_kwargs):
         observed.append(arguments)
         url = arguments[arguments.index("--url") + 1]
-        if account_id not in url:
+        if project_id not in url:
             raise AssertionError(f"Unexpected ARM connection URL: {url}")
-        return SimpleNamespace(returncode=0, stdout=json.dumps(account_value))
+        return SimpleNamespace(returncode=0, stdout=json.dumps(project_value))
 
     monkeypatch.setattr(
         "agent_insights_quality.profiles.subprocess.run",
@@ -133,18 +132,18 @@ def test_profile_discovers_fixed_azure_resources(monkeypatch) -> None:
     assert profile.telemetry_resource_set == FIXED_TELEMETRY_RESOURCE_SET
 
 
-def test_profile_requires_official_shared_account_connection(
+def test_profile_requires_official_project_connection(
     monkeypatch,
 ) -> None:
     profile = _profile()
     observed = _mock_connection_reads(
         monkeypatch,
         profile=profile,
-        account_connection_name="application-insights-daily",
+        project_connection_name="application-insights-daily",
     )
     profile.assert_insights_connection()
     assert len(observed) == 1
-    assert "/projects/" not in " ".join(observed[0])
+    assert "/projects/" in " ".join(observed[0])
     assert "--resource" not in observed[0]
 
 
@@ -158,31 +157,32 @@ def test_profile_preflight_uses_deterministic_connection_names(
     observed = _mock_connection_reads(
         monkeypatch,
         profile=profile,
-        account_connection_name=connection_name,
+        project_connection_name=connection_name,
     )
     profile.assert_insights_connection()
     assert connection_name in " ".join(observed[0])
 
 
-@pytest.mark.parametrize("defect", ["missing", "unshared", "wrong-target"])
-def test_profile_rejects_invalid_account_connection(
+@pytest.mark.parametrize("defect", ["missing", "wrong-shape", "wrong-target"])
+def test_profile_rejects_invalid_project_connection(
     monkeypatch,
     defect,
 ) -> None:
     profile = _profile()
-    account_connection = _arm_connection()
-    if defect == "unshared":
-        invalid = _arm_connection(shared=False)
+    project_connection = _arm_connection()
+    if defect == "wrong-shape":
+        invalid = _arm_connection()
+        invalid["properties"]["category"] = "CustomKeys"
     elif defect == "wrong-target":
         invalid = _arm_connection(target="/subscriptions/hidden/wrong")
     else:
         invalid = _arm_connection()
-    account_connection = invalid
+    project_connection = invalid
     _mock_connection_reads(
         monkeypatch,
         profile=profile,
-        account_connection_name="application-insights-daily",
-        account_connection=account_connection,
+        project_connection_name="application-insights-daily",
+        project_connection=project_connection,
     )
     if defect == "missing":
         original_run = subprocess.run
@@ -196,22 +196,25 @@ def test_profile_rejects_invalid_account_connection(
             "agent_insights_quality.profiles.subprocess.run",
             missing,
         )
-    with pytest.raises(ContractError, match="Account"):
+    with pytest.raises(ContractError, match="Project"):
         profile.assert_insights_connection()
 
 
-def test_validation_preflight_requires_durable_staging_account_connection(
+def test_validation_preflight_requires_ephemeral_project_connection(
     monkeypatch,
 ) -> None:
     profile = _profile("validation-cycle")
-    account_id = f"{_ACCOUNT_ID}/connections/application-insights-staging"
+    project_id = (
+        f"{_ACCOUNT_ID}/projects/{profile.project_name}/connections/"
+        "application-insights-validation"
+    )
     observed = _mock_connection_reads(
         monkeypatch,
         profile=profile,
-        account_connection_name="application-insights-staging",
+        project_connection_name="application-insights-validation",
     )
-    profile.assert_insights_connection("application-insights-staging")
-    assert account_id in " ".join(observed[0])
+    profile.assert_insights_connection("application-insights-validation")
+    assert project_id in " ".join(observed[0])
 
 
 def test_profile_requires_reviewed_test_agent_model(monkeypatch) -> None:
