@@ -140,9 +140,10 @@ def test_validation_skill_enforces_local_report_free_approval() -> None:
     normalized = " ".join(skill.split())
     for requirement in (
         "local, report-free validation",
-        "Baselines are `5/5`",
-        "deterministic issues are `5/5`",
-        "model-mediated issues are `5/7`",
+        "Baselines require five mechanically complete attempts",
+        "deterministic issue packages require five issue and five paired-`v0` attempts",
+        "model-mediated packages require seven of each",
+        "never a local verdict or gate",
         "Never infer mode",
         "account-wide OS file lock",
         "one opaque temporary Project",

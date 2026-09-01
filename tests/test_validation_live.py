@@ -602,7 +602,6 @@ def test_trace_query_exhaustion_keeps_request_accepted() -> None:
                 "setup_steps": [_step("setup-1", probe=False)],
                 "probe_steps": [_step("probe-1", probe=True)],
             },
-            expect_defect=True,
             scheduler=_scheduler(),
         )
 
