@@ -20,9 +20,18 @@ from agent_insights_quality.util import ROOT, read_json
 
 def _load_finance_app(monkeypatch, logical_version: str):
     agent_framework = types.ModuleType("agent_framework")
+    events = []
 
     class Agent:
-        pass
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def run(self):
+            response = AgentResponse(
+                messages=[Message(role="assistant", contents=["natural response"])]
+            )
+            events.append(("agent_response", response))
+            return response
 
     class ChatContext:
         pass
@@ -45,6 +54,10 @@ def _load_finance_app(monkeypatch, logical_version: str):
         def __init__(self, *, role, contents):
             self.role = role
             self.contents = contents
+
+    class AgentResponse:
+        def __init__(self, *, messages):
+            self.messages = messages
 
     class ChatResponse:
         def __init__(self, *, messages):
@@ -71,6 +84,7 @@ def _load_finance_app(monkeypatch, logical_version: str):
         return lambda function: function
 
     agent_framework.Agent = Agent
+    agent_framework.AgentResponse = AgentResponse
     agent_framework.ChatContext = ChatContext
     agent_framework.ChatMiddleware = ChatMiddleware
     agent_framework.FunctionInvocationContext = FunctionInvocationContext
@@ -84,9 +98,30 @@ def _load_finance_app(monkeypatch, logical_version: str):
     agent_framework.tool = tool
 
     foundry = types.ModuleType("agent_framework.foundry")
-    foundry.FoundryChatClient = object
+
+    class FoundryChatClient:
+        def __init__(self, **_kwargs):
+            pass
+
+    foundry.FoundryChatClient = FoundryChatClient
+    framework_observability = types.ModuleType("agent_framework.observability")
+
+    def enable_instrumentation(**kwargs):
+        events.append(("maf_instrumentation", kwargs))
+
+    framework_observability.enable_instrumentation = enable_instrumentation
     hosting = types.ModuleType("agent_framework_foundry_hosting")
-    hosting.ResponsesHostServer = object
+
+    class ResponsesHostServer:
+        def __init__(self, agent):
+            self.agent = agent
+            events.append(("host_observability", agent))
+
+        def run(self, *, port):
+            events.append(("host_run", self.agent, port))
+            return self.agent.run()
+
+    hosting.ResponsesHostServer = ResponsesHostServer
     identity = types.ModuleType("azure.identity")
     identity.DefaultAzureCredential = object
 
@@ -102,7 +137,11 @@ def _load_finance_app(monkeypatch, logical_version: str):
     package = types.ModuleType(package_name)
     package.__path__ = []
     observability = types.ModuleType(f"{package_name}.observability")
-    observability.configure_observability = lambda *_args: None
+
+    def configure_observability(*args):
+        events.append(("app_observability", args))
+
+    observability.configure_observability = configure_observability
     runtime_identity = types.ModuleType(f"{package_name}.runtime_identity")
 
     class RuntimeIdentity:
@@ -123,6 +162,7 @@ def _load_finance_app(monkeypatch, logical_version: str):
     modules = {
         "agent_framework": agent_framework,
         "agent_framework.foundry": foundry,
+        "agent_framework.observability": framework_observability,
         "agent_framework_foundry_hosting": hosting,
         "azure.identity": identity,
         "opentelemetry": opentelemetry,
@@ -158,7 +198,36 @@ def _load_finance_app(monkeypatch, logical_version: str):
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, spec.name, module)
     spec.loader.exec_module(module)
+    module._test_events = events
     return module
+
+
+@pytest.mark.parametrize(
+    "logical_version",
+    ["v0", *(f"issue-{issue_number:03}" for issue_number in range(13, 21))],
+)
+def test_finance_main_enables_maf_before_direct_agent_response(
+    monkeypatch,
+    logical_version,
+) -> None:
+    monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", "https://example.invalid")
+    module = _load_finance_app(monkeypatch, logical_version)
+
+    module.main()
+
+    events = module._test_events
+    assert [event[0] for event in events] == [
+        "app_observability",
+        "host_observability",
+        "maf_instrumentation",
+        "host_run",
+        "agent_response",
+    ]
+    assert events[2][1] == {"enable_sensitive_data": True}
+    assert events[1][1] is events[3][1]
+    response = events[4][1]
+    assert response.messages[0].role == "assistant"
+    assert response.messages[0].contents == ["natural response"]
 
 
 def _message(text: str):

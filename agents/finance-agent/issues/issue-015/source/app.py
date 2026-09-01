@@ -12,6 +12,7 @@ from agent_framework import (
     tool,
 )
 from agent_framework.foundry import FoundryChatClient
+from agent_framework.observability import enable_instrumentation
 from agent_framework_foundry_hosting import ResponsesHostServer
 from azure.identity import DefaultAzureCredential
 from opentelemetry import trace
@@ -208,7 +209,9 @@ def build_agent() -> Agent:
 
 def main() -> None:
     port = int(os.environ.get("PORT", "8088"))
-    ResponsesHostServer(build_agent()).run(port=port)
+    host = ResponsesHostServer(build_agent())
+    enable_instrumentation(enable_sensitive_data=True)
+    host.run(port=port)
 
 
 if __name__ == "__main__":

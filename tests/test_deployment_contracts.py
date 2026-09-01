@@ -88,6 +88,43 @@ def test_provider_instrumented_sources_do_not_inject_output_messages() -> None:
         )
 
 
+def test_finance_authorities_enable_maf_output_after_host_observability() -> None:
+    finance_root = ROOT / "agents" / "finance-agent"
+    requirements = (finance_root / "v0" / "requirements.txt").read_text(
+        encoding="utf-8"
+    )
+    app_sources = [
+        path.read_text(encoding="utf-8")
+        for path in sorted(finance_root.glob("**/source/app.py"))
+    ]
+    observability_sources = [
+        path.read_text(encoding="utf-8")
+        for path in sorted(finance_root.glob("**/source/observability.py"))
+    ]
+
+    assert "agent-framework-core==1.14.0" in requirements
+    assert len(app_sources) == 9
+    assert len(observability_sources) == 9
+    assert all(
+        source.count("trace.set_tracer_provider(provider)") == 1
+        and "enable_instrumentation" not in source
+        for source in observability_sources
+    )
+    for source in app_sources:
+        assert (
+            "from agent_framework.observability import enable_instrumentation"
+            in source
+        )
+        assert source.count("enable_instrumentation(") == 1
+        main = source[source.index("def main() -> None:") :]
+        host_setup = "host = ResponsesHostServer(build_agent())"
+        enable_maf = "enable_instrumentation(enable_sensitive_data=True)"
+        host_run = "host.run(port=port)"
+        assert main.index(host_setup) < main.index(enable_maf) < main.index(host_run)
+        assert "configure_otel_providers" not in source
+        assert "gen_ai.output.messages" not in source
+
+
 def test_travel_authorities_use_supported_langgraph_instrumentation() -> None:
     travel_root = ROOT / "agents" / "travel-agent"
     requirements = (travel_root / "v0" / "requirements.txt").read_text(
