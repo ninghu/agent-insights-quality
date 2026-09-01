@@ -81,7 +81,7 @@ def test_new_issue_skill_covers_complete_reviewed_contract() -> None:
         "previous Agent count, issue count, version count",
         "fresh full Test Agent Validation cycle",
         "single create-once approved validation record",
-        "Never use legacy staging as a fallback",
+        "Never use the preserved old West US 2 environment as a fallback",
     ):
         assert requirement in normalized
 
@@ -107,7 +107,7 @@ def test_onboard_test_agent_skill_covers_topology_and_baseline_safety() -> None:
         "baseline ownership",
         "fixed validation scenarios",
         "single approved validation record",
-        "never use legacy staging as a fallback",
+        "never use the preserved old West US 2 environment as a fallback",
     ):
         assert requirement in normalized
 
@@ -145,9 +145,11 @@ def test_validation_skill_enforces_local_report_free_approval() -> None:
         "model-mediated packages require seven of each",
         "never a local verdict or gate",
         "Never infer mode",
-        "account-wide OS file lock",
-        "one opaque temporary Project",
-        "41 independently named Agent endpoints",
+        "Sweden-environment OS file lock",
+        "aiq-staging-swedencentral",
+        "41 stable baseline/issue Agent names",
+        "server-assigned provider version ID and content digest",
+        "run-scoped cleanup",
         "Application Insights",
         "CLEANUP_BLOCKED",
         "approve-test-agent-validation",
@@ -155,11 +157,64 @@ def test_validation_skill_enforces_local_report_free_approval() -> None:
         "Merge remains manual",
     ):
         assert requirement in normalized
-    legacy = " ".join(
+    staging = " ".join(
         _text(".github/skills/staging-qualification/SKILL.md").split()
     )
-    assert "`r03` is the final staging run" in legacy
-    assert "do not execute" in legacy.casefold()
+    for requirement in (
+        "official human-reviewed gate",
+        "aiq-staging-swedencentral",
+        "41 stable baseline/issue Agent names",
+        "server-assigned provider version ID and content digest",
+        "bounded post-invoke hydration and stability deadline",
+        "Retain the durable Project",
+        "approve-test-agent-validation",
+        "send no Daily smoke traffic",
+    ):
+        assert requirement in staging
+
+
+def test_active_contract_docs_exclude_superseded_environment_rules() -> None:
+    paths = [
+        ROOT / "AGENTS.md",
+        ROOT / "README.md",
+        ROOT / "docs" / "OPERATIONS.md",
+        ROOT / "docs" / "AUTOMATION_SETUP.md",
+        ROOT / "docs" / "FRAMEWORK_OVERVIEW.md",
+        ROOT / ".github" / "skills" / "test-agent-validation" / "SKILL.md",
+        ROOT / ".github" / "skills" / "agent-insights-quality-daily" / "SKILL.md",
+        ROOT / ".github" / "copilot" / "test-agent-validation-prompt.md",
+        ROOT / ".github" / "github-app.yml",
+        ROOT / "catalogs" / "AGENT_CATALOG.yaml",
+        ROOT / "config" / "test-agent-validation.yaml",
+        ROOT / "schemas" / "agent-catalog.schema.json",
+        ROOT / "schemas" / "deployment-registry.schema.json",
+        ROOT / "schemas" / "test-agent-validation-lifecycle.schema.json",
+        ROOT / "schemas" / "test-agent-validation-evidence.schema.json",
+    ]
+    text = "\n".join(path.read_text(encoding="utf-8") for path in paths)
+    folded = " ".join(text.casefold().split())
+    for stale in (
+        "agent-insights-quality-staging",
+        "one opaque temporary project",
+        "ephemeral project",
+        "wait the reviewed clean interval",
+        "wait a second clean interval",
+        "latest gpt-5.6",
+        "aiq-validation-",
+        "`r03` is the final staging run",
+        "create `r04`",
+        "must not be invoked after r03",
+    ):
+        assert stale not in folded
+    for required in (
+        "aiq-staging-swedencentral",
+        "aiq-daily-swedencentral",
+        "swedencentral-g30",
+        "server-assigned",
+        "run-scoped",
+        "noautoupgrade",
+    ):
+        assert required in folded
 
 
 def test_daily_skill_publishes_adx_without_blocking_email() -> None:

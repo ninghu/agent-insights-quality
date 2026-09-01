@@ -1,7 +1,7 @@
 schema_version: "1.0.0"
 project_contract:
-  daily_project: agent-insights-quality
-  staging_project: agent-insights-quality-staging
+  daily_project: aiq-daily-swedencentral
+  staging_project: aiq-staging-swedencentral
   telemetry_retention_days: 90
   artifact_retention_days: 90
   application_insights_access: read_only

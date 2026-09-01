@@ -28,7 +28,7 @@ def _profile() -> RuntimeProfile:
         project_endpoint="https://example.invalid",
         insights_endpoint="https://example.invalid",
         application_insights_resource_id=(
-            f"{prefix}/providers/Microsoft.Insights/components/g29"
+            f"{prefix}/providers/Microsoft.Insights/components/g30"
         ),
         registry_path=Path("registry.json"),
         account_name="synthetic-account",
@@ -37,7 +37,7 @@ def _profile() -> RuntimeProfile:
         account_resource_id=(
             f"{prefix}/providers/Microsoft.CognitiveServices/accounts/account"
         ),
-        telemetry_resource_set="g29",
+        telemetry_resource_set="g30",
     )
 
 
@@ -75,7 +75,7 @@ def test_destructive_permission_preflight_covers_every_scope(monkeypatch) -> Non
     )
     assert_validation_permissions(_profile(), _operator())
     assert any("Microsoft.CognitiveServices/accounts/account" in item for item in scopes)
-    assert any("Microsoft.Insights/components/g29" in item for item in scopes)
+    assert any("Microsoft.Insights/components/g30" in item for item in scopes)
     assert any("Microsoft.ContainerRegistry/registries" in item for item in scopes)
 
 

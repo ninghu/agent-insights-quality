@@ -1,6 +1,9 @@
-schema_version: "1.0.0"
+schema_version: "2.0.0"
 repository: ninghu/agent-insights-quality
-telemetry_resource_set: g29
+environment_id: swedencentral-g30
+location: swedencentral
+project_name: aiq-staging-swedencentral
+telemetry_resource_set: g30
 test_agent_model:
   deployment_name: gpt-5.4-mini
   model_id: gpt-5.4-mini
@@ -23,7 +26,10 @@ limits:
   active_heartbeat_seconds: 60
   absolute_ttl_hours: 72
   max_recovery_versions_per_agent: 3
-  clean_interval_seconds: 360
+trace_hydration:
+  poll_seconds: 15
+  stabilization_seconds: 180
+  maximum_wait_seconds: 900
 name_policy:
   project:
     maximum_length: 64
@@ -32,10 +38,6 @@ name_policy:
     maximum_length: 63
     pattern: "^[a-z][a-z0-9-]*[a-z0-9]$"
 resource_kinds:
-  - arm_deployment
-  - project
-  - connection
-  - role_assignment
   - provider_agent
   - provider_agent_version
   - hosted_identity
@@ -48,5 +50,4 @@ resource_kinds:
   - stored_response
   - acr_tag
   - acr_manifest
-documented_project_cascade:
-  - runtime_principal
+documented_project_cascade: []

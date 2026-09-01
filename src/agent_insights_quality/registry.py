@@ -15,9 +15,12 @@ from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.util import ROOT, ContractError, read_json, read_yaml
 
 PROFILE_PROJECTS = {
-    "daily": "agent-insights-quality",
-    "staging": "agent-insights-quality-staging",
+    "daily": "aiq-daily-swedencentral",
+    "staging": "aiq-staging-swedencentral",
 }
+ENVIRONMENT_ID = "swedencentral-g30"
+PROFILE_LOCATION = "swedencentral"
+TELEMETRY_RESOURCE_SET = "g30"
 REGISTRY_CONTAINER = "deployment-registries"
 _PROGRESS = ProgressReporter("aiq-registry")
 
@@ -44,7 +47,7 @@ def sync_registry(profile: Any) -> None:
                 "--container-name",
                 REGISTRY_CONTAINER,
                 "--name",
-                f"{profile.name}.json",
+                f"{profile.environment_id}/{profile.name}.json",
                 "--file",
                 temporary,
                 "--auth-mode",
@@ -79,7 +82,7 @@ def publish_registry(profile: Any) -> None:
             "--container-name",
             REGISTRY_CONTAINER,
             "--name",
-            f"{profile.name}.json",
+            f"{profile.environment_id}/{profile.name}.json",
             "--file",
             str(profile.registry_path),
             "--auth-mode",
@@ -148,6 +151,10 @@ def load_registry(
     if (
         registry["profile"] != profile
         or registry["project_name"] != PROFILE_PROJECTS[profile]
+        or registry["account_name"] != PROFILE_PROJECTS[profile]
+        or registry["environment_id"] != ENVIRONMENT_ID
+        or registry["location"] != PROFILE_LOCATION
+        or registry["telemetry_resource_set"] != TELEMETRY_RESOURCE_SET
     ):
         raise ContractError("Deployment registry belongs to a different profile")
     if registry["catalog_hashes"] != catalog_hashes:

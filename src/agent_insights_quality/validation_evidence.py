@@ -350,6 +350,8 @@ def _validate_runtime_topology_binding(
             != runtime["runtime_agent_version"]
             or authority["provider_agent_version_reference"]
             != expected_reference
+            or authority["provider_content_digest"]
+            != runtime["provider_content_digest"]
         ):
             raise ContractError(
                 f"{authority['authority_id']} evidence runtime identity is stale"

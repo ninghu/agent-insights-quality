@@ -15,6 +15,8 @@
     "execution_matrix_digest",
     "runtime_topology_digest",
     "resource_inventory_digest",
+    "environment_id",
+    "location",
     "telemetry_resource_set",
     "authorities",
     "evidence_digest"
@@ -30,7 +32,9 @@
     "execution_matrix_digest": {"$ref": "#/$defs/hash"},
     "runtime_topology_digest": {"$ref": "#/$defs/hash"},
     "resource_inventory_digest": {"$ref": "#/$defs/hash"},
-    "telemetry_resource_set": {"const": "g29"},
+    "environment_id": {"const": "swedencentral-g30"},
+    "location": {"const": "swedencentral"},
+    "telemetry_resource_set": {"const": "g30"},
     "authorities": {
       "type": "array",
       "minItems": 41,
@@ -68,6 +72,7 @@
         "runtime_agent_name",
         "runtime_agent_version",
         "provider_agent_version_reference",
+        "provider_content_digest",
         "source_content_digest",
         "execution_digest",
         "validated_commit_sha",
@@ -110,6 +115,7 @@
           "maxLength": 128
         },
         "provider_agent_version_reference": {"$ref": "#/$defs/hash"},
+        "provider_content_digest": {"$ref": "#/$defs/hash"},
         "source_content_digest": {"$ref": "#/$defs/hash"},
         "execution_digest": {"$ref": "#/$defs/hash"},
         "validated_commit_sha": {"$ref": "#/$defs/gitSha"},

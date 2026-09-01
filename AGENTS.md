@@ -40,8 +40,9 @@ Agents and 36 reviewed, single-root issues.
 
 ## Execution model
 
-- Official Daily and Test Agent Validation use separate Foundry accounts and telemetry. Daily keeps
-  its Project and monitors; validation creates one temporary Project and no monitor.
+- Official Daily and Test Agent Validation use the durable
+  `aiq-daily-swedencentral` and `aiq-staging-swedencentral` Foundry accounts and identically named
+  Projects with separate Sweden Central telemetry. Validation creates no monitor.
 - Run the five test Agents concurrently.
 - Stagger Agent starts by the reviewed short delay to avoid a simultaneous endpoint burst.
 - Within one Agent, run `v0` and issue versions sequentially.
@@ -58,13 +59,16 @@ Agents and 36 reviewed, single-root issues.
   ADX, send email, or run Daily from a validation cycle.
 - Every potentially long-running operation emits public-safe start, elapsed heartbeat, and
   completion/failure progress. Progress-output failures must never abort the operation.
-- `g29` is the fixed telemetry resource set: one App Insights and Log Analytics pair per profile.
-- `rNN` is a qualification rerun identity.
-- Routine runs and reruns reuse `g29`; they must not create or rotate telemetry resources.
+- `g30` is the active Sweden Central telemetry topology: one App Insights and Log Analytics pair per
+  profile with Project-scoped App Insights connections. The West US 2 `g29` topology remains
+  untouched until a later reviewed retirement.
+- Run identity is opaque and system-generated; never encode manual revision, generation, or recovery
+  suffixes in Project or Agent names.
 - The telemetry resource set is not an Agent deployment change and must not invalidate promotion
   receipts or Agent content digests.
-- Monitor reset does not delete telemetry. Wait for the reviewed `0.1`-hour clean interval before a
-  new traffic attempt.
+- Monitor reset does not delete telemetry. Do not impose an unconditional pre-traffic sleep; bind
+  evidence to exact run, Agent, provider version, operation, and time-window identities, then wait
+  within the bounded post-invoke hydration and stability deadline.
 - Recover at most three transiently incomplete versions per Agent before declaring the run incomplete.
 - Never send ad-hoc debug traffic to Daily or the validation account.
 - Quality-tagged Azure Boards work items are private email context only. Never write their query URL,
@@ -112,12 +116,13 @@ Agents and 36 reviewed, single-root issues.
 4. Compile Bicep when infrastructure changes.
 5. Freeze one clean commit after exactly one comprehensive review and targeted mechanical
    verification, then run one local full 41-authority Test Agent Validation cycle.
-6. Hold the shared OS lock, keep atomic lifecycle/history/evidence/CLEAN under the durable runtime
-   root, and clean every cycle resource exactly. Any commit change requires a fresh full cycle.
+6. Hold the shared OS lock, keep atomic lifecycle/history/evidence/CLEAN under the
+   environment-namespaced durable runtime root, retain the durable Project and reconciled Agent
+   topology, and clean every run-scoped resource exactly. Any commit change requires a fresh full cycle.
 7. After explicit human approval, create the single minimal create-once approved validation record.
    GitHub has no validation gate and merge remains manual.
-8. Keep the legacy staging path unchanged only for migration retention; `r03` is final and staging is
-   never a fallback.
+8. Preserve the legacy West US 2 resources and lifecycle state unchanged. The Sweden staging gate is
+   the only active validation path and is never a fallback to the legacy environment.
 
 ```powershell
 python -m agent_insights_quality generate-docs
@@ -131,6 +136,6 @@ az bicep build --file infra\main.bicep --stdout
 
 - `.github/skills/agent-insights-quality-daily/SKILL.md`: weekday qualification and publication.
 - `.github/skills/test-agent-validation/SKILL.md`: local 41-authority validation and approval.
-- `.github/skills/staging-qualification/SKILL.md`: retained legacy `r03` history; do not execute.
+- `.github/skills/staging-qualification/SKILL.md`: durable Sweden Central staging qualification.
 - `.github/skills/onboard-test-agent/SKILL.md`: add one reviewed fixed Test Agent.
 - `.github/skills/onboard-new-issue/SKILL.md`: add one reviewed issue.

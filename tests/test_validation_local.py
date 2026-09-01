@@ -207,7 +207,7 @@ def test_local_git_context_rejects_malformed_pull_response(monkeypatch) -> None:
         discover_local_git_context()
 
 
-def test_local_preflight_executes_a_read_only_g29_query() -> None:
+def test_local_preflight_executes_a_read_only_g30_query() -> None:
     observed = {}
 
     class Client:
@@ -223,13 +223,13 @@ def test_local_preflight_executes_a_read_only_g29_query() -> None:
     runtime = LiveRuntime(
         SimpleNamespace(
             name="validation-test",
-            application_insights_resource_id="synthetic-g29",
+            application_insights_resource_id="synthetic-g30",
         ),
         token_provider=lambda _scope: "synthetic-token",
     )
     runtime._logs_client_instance = Client()
     runtime.assert_telemetry_read_access()
-    assert observed["resource_id"] == "synthetic-g29"
+    assert observed["resource_id"] == "synthetic-g30"
     assert observed["query"] == "print readiness=1"
 
 
@@ -281,7 +281,7 @@ def test_recovery_substrate_binds_subscription_and_resources() -> None:
             container_registry_name="synthetic-registry",
             registry_storage_account_name="synthetic-storage",
             application_insights_resource_id=(
-                f"{prefix}/providers/Microsoft.Insights/components/g29"
+                f"{prefix}/providers/Microsoft.Insights/components/g30"
             ),
         ),
     )
@@ -316,7 +316,7 @@ def test_cleanup_profile_uses_persisted_substrate_after_drift() -> None:
         container_registry_name="current-registry",
         registry_storage_account_name="current-storage",
         account_resource_id="/subscriptions/current/account",
-        telemetry_resource_set="g29",
+        telemetry_resource_set="g30",
     )
     persisted = _profile_for_substrate(
         base,
@@ -357,13 +357,14 @@ def test_partial_deployment_resume_requires_exact_unchanged_cycle() -> None:
     prefix = "/subscriptions/synthetic-subscription/resourceGroups/synthetic"
     profile = SimpleNamespace(
         account_name="synthetic-account",
+        project_endpoint="https://example.invalid/staging",
         account_resource_id=(
             f"{prefix}/providers/Microsoft.CognitiveServices/accounts/account"
         ),
         container_registry_name="synthetic-registry",
         registry_storage_account_name="synthetic-storage",
         application_insights_resource_id=(
-            f"{prefix}/providers/Microsoft.Insights/components/g29"
+            f"{prefix}/providers/Microsoft.Insights/components/g30"
         ),
     )
     started = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
@@ -379,7 +380,18 @@ def test_partial_deployment_resume_requires_exact_unchanged_cycle() -> None:
     )
     active["state"] = "CREATING"
     active["capacity"] = {"plan_digest": content_hash("capacity")}
-    active["project"]["state"] = "created"
+    active["project"].update(
+        {
+            "state": "bound",
+            "provider_id": (
+                f"{profile.account_resource_id}/projects/"
+                "aiq-staging-swedencentral"
+            ),
+            "project_principal_id": "synthetic-project-principal",
+            "endpoint_reference": content_hash(profile.project_endpoint),
+            "bound_observed_at": started.isoformat(),
+        }
+    )
     active["deployment"]["support_images"] = [
         {
             "logical_version": (

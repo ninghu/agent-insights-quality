@@ -131,62 +131,21 @@ def _execute_validation_plan(
     project_provisioner.assert_test_agent_model(
         dict(plan["test_agent_model"])
     )
-    if controller.active.value["project"]["state"] == "created":
+    if controller.active.value["project"]["state"] == "bound":
         project = _project_from_lifecycle(controller.active.value)
     else:
         controller.preflight(capacity_plan, now=now())
-        project_id = project_provisioner.expected_project_id(
-            plan["project_name"]
-        )
         project_started = monotonic()
-        controller.project_create_intent(
-            name=plan["project_name"],
-            provider_id=project_id,
-            now=now(),
-        )
-        ownership_nonce = controller.active.value["ownership_nonce"]
-        project_intents = project_provisioner.resource_intents(
-            project_name=plan["project_name"],
-            cycle_id=plan["cycle_id"],
-            ownership_nonce=ownership_nonce,
-        )
-        for intent in project_intents:
-            controller.dynamic_resource_event(
-                {**intent, "state": "create_intent"},
-                now=now(),
-            )
-        try:
-            with lifecycle_heartbeat(controller, now=now):
-                project = project_provisioner.create(
-                    project_name=plan["project_name"],
-                    cycle_id=plan["cycle_id"],
-                    ownership_nonce=ownership_nonce,
-                )
-        except (ContractError, OSError, RuntimeError):
-            controller.mark_resources_ambiguous(
-                [
-                    project_id,
-                    *(
-                        str(item["intent_reference"])
-                        for item in project_intents
-                    ),
-                ],
-                now=now(),
-            )
-            raise
-        if project.project_id != project_id:
-            raise ContractError(
-                "Ephemeral validation Project ID differs from create intent"
-            )
-        project_provisioner.assert_telemetry_connection()
-        controller.project_created(
+        with lifecycle_heartbeat(controller, now=now):
+            project = project_provisioner.bind(plan["project_name"])
+        controller.project_bound(
+            name=project.project_name,
+            provider_id=project.project_id,
             endpoint_reference=content_hash(
                 {"project_endpoint": project.project_endpoint}
             ),
             project_principal_id=project.project_principal_id,
             connection_ids=list(project.connection_ids),
-            role_assignment_ids=list(project.role_assignment_ids),
-            resource_observations=dict(project.resource_observations),
             now=now(),
         )
         record_duration(
@@ -374,20 +333,6 @@ def _execute_validation_plan(
                 prior_recovered_authorities=recovered_by_agent,
             )
 
-    def wait_clean_interval(phase: str) -> None:
-        started = monotonic()
-        reporter = ProgressReporter("aiq-validation-clean-window")
-        with lifecycle_heartbeat(controller, now=now):
-            with reporter.heartbeat(
-                f"{phase} pre-traffic clean telemetry interval",
-                interval_seconds=60,
-            ):
-                sleep(policy.limits.clean_interval_seconds)
-        record_duration(
-            f"{phase}_clean_interval_seconds",
-            monotonic() - started,
-        )
-
     with lifecycle_heartbeat(controller, now=now):
         deployer.wait_project()
     phase_one_started = monotonic()
@@ -402,7 +347,6 @@ def _execute_validation_plan(
     runner.prepare_hosted_routes(
         [phase_one_deployed[item.authority_id] for item in phase_one]
     )
-    wait_clean_interval("phase_1")
     controller.begin_phase_one_traffic(
         {item.authority_id for item in phase_one},
         now=now(),
@@ -444,7 +388,6 @@ def _execute_validation_plan(
         for item in planned
     ]
     initial_topology_digest = content_hash(runtime_agents)
-    wait_clean_interval("phase_2")
     controller.begin_validation(runtime_agents, now=now())
     if (
         controller.active.value["digests"]["runtime_topology_digest"]
@@ -493,6 +436,7 @@ def _execute_validation_plan(
             record_failure=record_agent_failure,
             require_architecture_canaries=False,
             retry_transient_failures=False,
+            force_new_authority_ids={authority.authority_id},
         )[authority.authority_id]
         deployer.assert_ready(authority, replacement)
         controller.authority_replacement_ready(
@@ -501,9 +445,6 @@ def _execute_validation_plan(
             now=now(),
         )
         runner.prepare_hosted_routes([replacement])
-        wait_clean_interval(
-            f"recovery_{authority.authority_id}_{recovery_ordinal:02d}"
-        )
         phase_two_deployed[authority.authority_id] = replacement
         deployed[authority.authority_id] = replacement
         return replacement
@@ -587,7 +528,9 @@ def _execute_validation_plan(
             "resource_inventory_digest": content_hash(
                 controller.active.value["resources"]
             ),
-            "telemetry_resource_set": "g29",
+            "environment_id": plan["environment_id"],
+            "location": plan["location"],
+            "telemetry_resource_set": "g30",
             "authorities": authority_evidence,
             "evidence_digest": "",
         }
@@ -627,6 +570,7 @@ def _runtime_agent_payload(
         "runtime_agent_version": runtime.runtime_agent_version,
         "provider_agent_id": runtime.provider_agent_id,
         "provider_agent_version_id": runtime.provider_agent_version_id,
+        "provider_content_digest": runtime.provider_content_digest,
         "hosted_identity_id": runtime.hosted_identity_id,
         "hosted_blueprint_id": runtime.hosted_blueprint_id,
         "hosted_deployment_id": runtime.hosted_deployment_id,
@@ -687,6 +631,7 @@ def _deployed_runtime(item: Mapping[str, Any]) -> Any:
         runtime_agent_version=str(item["runtime_agent_version"]),
         provider_agent_id=str(item["provider_agent_id"]),
         provider_agent_version_id=str(item["provider_agent_version_id"]),
+        provider_content_digest=str(item["provider_content_digest"]),
         hosted_identity_id=item.get("hosted_identity_id"),
         hosted_blueprint_id=item.get("hosted_blueprint_id"),
         hosted_deployment_id=item.get("hosted_deployment_id"),
@@ -700,24 +645,10 @@ def _project_from_lifecycle(
     lifecycle: Mapping[str, Any],
 ) -> ProjectDeployment:
     project = lifecycle["project"]
-    project_principals = [
-        item["provider_id"]
-        for item in lifecycle["resources"]
-        if item["kind"] == "runtime_principal"
-        and item.get("authority_id") is None
-        and item["state"] == "created"
-    ]
-    role_assignments = [
-        item["provider_id"]
-        for item in lifecycle["resources"]
-        if item["kind"] == "role_assignment"
-        and item["state"] == "created"
-    ]
     if (
-        project["state"] != "created"
+        project["state"] != "bound"
         or not project["provider_id"]
-        or len(project_principals) != 1
-        or len(role_assignments) != 4
+        or not project["project_principal_id"]
         or len(lifecycle["runtime_topology"]["connection_ids"]) != 2
     ):
         raise ContractError(
@@ -726,12 +657,12 @@ def _project_from_lifecycle(
     return ProjectDeployment(
         project_name=str(project["name"]),
         project_id=str(project["provider_id"]),
-        project_principal_id=str(project_principals[0]),
+        project_principal_id=str(project["project_principal_id"]),
         project_endpoint="",
         connection_ids=tuple(
             lifecycle["runtime_topology"]["connection_ids"]
         ),
-        role_assignment_ids=tuple(role_assignments),
+        role_assignment_ids=(),
         resource_observations=(),
     )
 

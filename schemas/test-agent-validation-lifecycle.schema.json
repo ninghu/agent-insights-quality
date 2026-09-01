@@ -9,7 +9,7 @@
     "kind",
     "snapshot_type",
     "cycle_id",
-    "revision",
+    "event_sequence",
     "state",
     "repository",
     "pr_number",
@@ -39,7 +39,7 @@
     "kind": {"const": "test-agent-validation-lifecycle"},
     "snapshot_type": {"enum": ["active", "event", "clean"]},
     "cycle_id": {"$ref": "#/$defs/cycleId"},
-    "revision": {"type": "integer", "minimum": 1},
+    "event_sequence": {"type": "integer", "minimum": 1},
     "state": {
       "enum": [
         "LOCKED",
@@ -342,11 +342,9 @@
         "name",
         "provider_id",
         "endpoint_reference",
+        "project_principal_id",
         "state",
-        "create_intent_at",
-        "create_observed_at",
-        "delete_intent_at",
-        "delete_observed_at"
+        "bound_observed_at"
       ],
       "properties": {
         "name": {
@@ -360,17 +358,9 @@
         },
         "provider_id": {"$ref": "#/$defs/nullableReference"},
         "endpoint_reference": {"$ref": "#/$defs/nullableReference"},
-        "state": {"enum": ["absent", "create_intent", "created", "delete_intent", "deleted"]},
-        "create_intent_at": {
-          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]
-        },
-        "create_observed_at": {
-          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]
-        },
-        "delete_intent_at": {
-          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]
-        },
-        "delete_observed_at": {
+        "project_principal_id": {"$ref": "#/$defs/nullableReference"},
+        "state": {"enum": ["unbound", "bound"]},
+        "bound_observed_at": {
           "oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]
         }
       }
@@ -392,7 +382,7 @@
       "properties": {
         "account_reference": {"$ref": "#/$defs/reference"},
         "project_reference": {"$ref": "#/$defs/nullableReference"},
-        "telemetry_resource_set": {"const": "g29"},
+        "telemetry_resource_set": {"const": "g30"},
         "test_agent_model": {
           "const": {
             "deployment_name": "gpt-5.4-mini",
@@ -450,6 +440,7 @@
         "runtime_agent_version",
         "provider_agent_id",
         "provider_agent_version_id",
+        "provider_content_digest",
         "hosted_identity_id",
         "hosted_blueprint_id",
         "hosted_deployment_id",
@@ -499,6 +490,7 @@
         "runtime_agent_version": {"type": "string", "minLength": 1, "maxLength": 128},
         "provider_agent_id": {"$ref": "#/$defs/reference"},
         "provider_agent_version_id": {"$ref": "#/$defs/reference"},
+        "provider_content_digest": {"$ref": "#/$defs/hash"},
         "hosted_identity_id": {"$ref": "#/$defs/nullableReference"},
         "hosted_blueprint_id": {"$ref": "#/$defs/nullableReference"},
         "hosted_deployment_id": {"$ref": "#/$defs/nullableReference"},
@@ -856,7 +848,7 @@
           ]
         },
         "cleanup_method": {
-          "enum": ["explicit", "documented_project_cascade"]
+          "enum": ["explicit", "documented_project_cascade", "retained_durable"]
         }
       }
     },
@@ -869,6 +861,7 @@
         "exact_clean",
         "verified_absent_ids",
         "retained_shared_manifest_ids",
+        "retained_durable_ids",
         "residue_ids",
         "verification_at"
       ],
@@ -887,6 +880,11 @@
           "items": {"$ref": "#/$defs/reference"}
         },
         "retained_shared_manifest_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/reference"}
+        },
+        "retained_durable_ids": {
           "type": "array",
           "uniqueItems": true,
           "items": {"$ref": "#/$defs/reference"}

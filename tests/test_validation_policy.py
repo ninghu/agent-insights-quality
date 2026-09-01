@@ -15,13 +15,19 @@ from agent_insights_quality.validation_policy import (
 def test_validation_policy_freezes_local_inventory_and_limits() -> None:
     policy = load_validation_policy()
     assert policy.authority_count == 41
-    assert policy.telemetry_resource_set == "g29"
+    assert policy.environment_id == "swedencentral-g30"
+    assert policy.location == "swedencentral"
+    assert policy.project_name == "aiq-staging-swedencentral"
+    assert policy.telemetry_resource_set == "g30"
     assert policy.limits.provisioning_concurrency == 8
     assert policy.limits.telemetry_query_concurrency == 4
     assert policy.limits.runtime_attempt_concurrency == 1
     assert policy.limits.absolute_ttl_hours == 72
     assert policy.limits.active_heartbeat_seconds == 60
-    assert policy.documented_project_cascade == ("runtime_principal",)
+    assert policy.documented_project_cascade == ()
+    assert policy.trace_hydration_poll_seconds == 15
+    assert policy.trace_hydration_stabilization_seconds == 180
+    assert policy.trace_hydration_maximum_wait_seconds == 900
 
 
 def test_validation_policy_rejects_threshold_or_telemetry_drift(tmp_path) -> None:
@@ -34,9 +40,9 @@ def test_validation_policy_rejects_threshold_or_telemetry_drift(tmp_path) -> Non
         load_validation_policy(path)
 
     changed = deepcopy(value)
-    changed["telemetry_resource_set"] = "g30"
+    changed["telemetry_resource_set"] = "g29"
     path.write_text(yaml.safe_dump(changed), encoding="utf-8")
-    with pytest.raises(ContractError, match="read-only g29"):
+    with pytest.raises(ContractError, match="reviewed Sweden"):
         load_validation_policy(path)
 
 

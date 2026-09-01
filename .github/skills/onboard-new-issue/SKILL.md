@@ -36,6 +36,7 @@ Add one independently fixable issue only after human review.
 13. Run repository validation, Ruff, tests, and Bicep compilation.
 14. Run a fresh full Test Agent Validation cycle from one exact clean commit.
 15. Require exact issue/v0 discrimination, exact cleanup, explicit human approval, and the single
-    create-once approved validation record. Never use legacy staging as a fallback.
+    create-once approved validation record. Never use the preserved old West US 2 environment as a
+    fallback.
 
 Never add a multi-root issue, compatibility alias, telemetry injection, or private data.

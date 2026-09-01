@@ -26,12 +26,12 @@ def _registry(profile: str) -> dict:
     return {
         "schema_version": "2.0.0",
         "profile": profile,
-        "project_name": (
-            "agent-insights-quality"
-            if profile == "daily"
-            else "agent-insights-quality-staging"
-        ),
-        "test_region": "WestUS2",
+        "environment_id": "swedencentral-g30",
+        "location": "swedencentral",
+        "account_name": f"aiq-{profile}-swedencentral",
+        "project_name": f"aiq-{profile}-swedencentral",
+        "telemetry_resource_set": "g30",
+        "test_region": "SwedenCentral",
         "test_agent_model": agent_model_contract(agents),
         "catalog_hashes": catalog_hashes(agents, issues),
         "agents": {
@@ -59,7 +59,7 @@ def test_registry_is_profile_isolated(tmp_path: Path) -> None:
         profile="daily",
         catalog_hashes=catalog_hashes(agents, issues),
     )
-    assert loaded["project_name"] == "agent-insights-quality"
+    assert loaded["project_name"] == "aiq-daily-swedencentral"
     with pytest.raises(ContractError, match="different profile"):
         load_registry(
             path,
@@ -88,6 +88,7 @@ def test_registry_syncs_through_private_blob_storage(
         name="daily",
         registry_path=path,
         registry_storage_account_name="syntheticstorage",
+        environment_id="swedencentral-g30",
     )
     calls = []
 

@@ -35,14 +35,19 @@ def initial_lifecycle(
     moment = (now or datetime.now(UTC)).astimezone(UTC)
     if plan.get("kind") != "test-agent-validation-plan":
         raise ContractError("Local validation plan kind is invalid")
-    if plan.get("telemetry_resource_set") != "g29":
-        raise ContractError("Local validation must use g29")
+    if (
+        plan.get("environment_id") != policy.environment_id
+        or plan.get("location") != policy.location
+        or plan.get("project_name") != policy.project_name
+        or plan.get("telemetry_resource_set") != "g30"
+    ):
+        raise ContractError("Local validation must use the reviewed Sweden environment")
     value = {
         "schema_version": "1.0.0",
         "kind": "test-agent-validation-lifecycle",
         "snapshot_type": "event",
         "cycle_id": plan["cycle_id"],
-        "revision": 1,
+        "event_sequence": 1,
         "state": "LOCKED",
         "repository": plan["repository"],
         "pr_number": plan["pr_number"],
@@ -68,18 +73,16 @@ def initial_lifecycle(
             "name": plan["project_name"],
             "provider_id": None,
             "endpoint_reference": None,
-            "state": "absent",
-            "create_intent_at": None,
-            "create_observed_at": None,
-            "delete_intent_at": None,
-            "delete_observed_at": None,
+            "project_principal_id": None,
+            "state": "unbound",
+            "bound_observed_at": None,
         },
         "runtime_topology": {
             "account_reference": content_hash(
                 {"account_resource_id": substrate["account_resource_id"]}
             ),
             "project_reference": None,
-            "telemetry_resource_set": "g29",
+            "telemetry_resource_set": "g30",
             "test_agent_model": policy.test_agent_model,
             "name_policy": {
                 "project_maximum_length": policy.project_name_policy.maximum_length,
@@ -106,6 +109,7 @@ def initial_lifecycle(
             "exact_clean": False,
             "verified_absent_ids": [],
             "retained_shared_manifest_ids": [],
+            "retained_durable_ids": [],
             "residue_ids": [],
             "verification_at": None,
             "failure": None,
@@ -155,83 +159,32 @@ class ValidationCycleController:
             now,
         )
 
-    def project_create_intent(
+    def project_bound(
         self,
         *,
         name: str,
         provider_id: str,
-        now: datetime,
-    ) -> LocalRecord:
-        project = copy.deepcopy(self._active.value["project"])
-        project.update(
-            {
-                "name": name,
-                "provider_id": provider_id,
-                "state": "create_intent",
-                "create_intent_at": now.astimezone(UTC).isoformat(),
-            }
-        )
-        resources = [
-            *self._active.value["resources"],
-            _resource(
-                kind="project",
-                parent_id=None,
-                authority_id=None,
-                deterministic_name=name,
-                intent_reference=content_hash(
-                    {"kind": "project", "provider_id": provider_id}
-                ),
-                provider_id=provider_id,
-                runtime_kind="control",
-                discovery_key=provider_id,
-                ownership_nonce=self._active.value["ownership_nonce"],
-                state="create_intent",
-                cleanup_method="explicit",
-                now=now,
-            ),
-        ]
-        return self._commit(
-            "CREATING",
-            {"project": project, "resources": resources},
-            now,
-        )
-
-    def project_created(
-        self,
-        *,
         endpoint_reference: str,
         project_principal_id: str,
         connection_ids: list[str],
-        role_assignment_ids: list[str],
-        resource_observations: Mapping[str, str],
         now: datetime,
     ) -> LocalRecord:
+        if name != self._active.value["project"]["name"]:
+            raise ContractError("Durable validation Project name changed")
         project = copy.deepcopy(self._active.value["project"])
         project.update(
             {
+                "provider_id": provider_id,
                 "endpoint_reference": endpoint_reference,
-                "state": "created",
-                "create_observed_at": now.astimezone(UTC).isoformat(),
+                "project_principal_id": project_principal_id,
+                "state": "bound",
+                "bound_observed_at": now.astimezone(UTC).isoformat(),
             }
         )
-        resources = _mark_created(
-            self._active.value["resources"],
-            project["provider_id"],
-            now,
-        )
-        resources = _observe_resources(resources, resource_observations, now)
-        observed_ids = set(resource_observations.values())
-        if (
-            project_principal_id not in observed_ids
-            or not set(connection_ids).issubset(observed_ids)
-            or not set(role_assignment_ids).issubset(observed_ids)
-        ):
-            raise ContractError("Validation Project observations are incomplete")
         return self._commit(
             "CREATING",
             {
                 "project": project,
-                "resources": resources,
                 "runtime_topology": {
                     "project_reference": project["provider_id"],
                     "connection_ids": connection_ids,
@@ -496,7 +449,7 @@ class ValidationCycleController:
                 active_runtime is None
                 or dict(active_runtime) != dict(superseded_runtime)
                 or active_runtime["runtime_agent_name"]
-                == replacement_runtime_agent_name
+                != replacement_runtime_agent_name
             ):
                 raise ContractError(
                     "Issue execution recovery superseded identity is stale"
@@ -521,14 +474,9 @@ class ValidationCycleController:
                 recovery_ordinal
                 != prior_deployment_recoveries + len(agent_ordinals) + 1
                 or prior_deployment_recoveries + len(agent_ordinals) >= 3
-                or any(
-                    item["replacement_runtime_agent_name"]
-                    == replacement_runtime_agent_name
-                    for item in recoveries
-                )
             ):
                 raise ContractError(
-                    "Issue execution recovery generation is not fresh"
+                    "Issue execution recovery version is not fresh"
                 )
             for item in recoveries:
                 if (
@@ -1100,9 +1048,6 @@ class ValidationCycleController:
                 item["delete_observed_at"] = now.astimezone(UTC).isoformat()
             resources.append(item)
         project = copy.deepcopy(self._active.value["project"])
-        if project["provider_id"] in absent:
-            project["state"] = "deleted"
-            project["delete_observed_at"] = now.astimezone(UTC).isoformat()
         cleanup = {
             "status": "exact_clean" if result.exact_clean else "ambiguous",
             "plan_hash": result.plan_hash,
@@ -1111,6 +1056,7 @@ class ValidationCycleController:
             "retained_shared_manifest_ids": list(
                 result.retained_shared_manifest_ids
             ),
+            "retained_durable_ids": list(result.retained_durable_ids),
             "residue_ids": list(result.residue_ids),
             "verification_at": now.astimezone(UTC).isoformat(),
             "failure": None,

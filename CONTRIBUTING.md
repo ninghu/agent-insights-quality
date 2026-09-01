@@ -127,8 +127,9 @@ assessment packages. Test Agent Validation is a separate local report-free proce
 Insights, assessment, scoring, ADX publication, or email.
 
 After exact 41/41 evidence and cleanup, explicit human approval permits one minimal create-once
-approved validation record. GitHub runs ordinary mechanical CI only and merge remains manual. The
-legacy staging path remains only for migration history and cannot run after `r03`.
+approved validation record. GitHub runs ordinary mechanical CI only and merge remains manual. This
+durable `aiq-staging-swedencentral` process is the official staging qualification gate for new
+candidates.
 
 Local runtime prerequisites and operator roles are documented in
 [`docs/AUTOMATION_SETUP.md`](docs/AUTOMATION_SETUP.md).

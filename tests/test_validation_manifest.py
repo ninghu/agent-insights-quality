@@ -33,8 +33,10 @@ def test_local_plan_binds_one_commit_and_all_executable_inputs() -> None:
     )
     assert len(plan["authorities"]) == 41
     assert plan["commit_sha"] == "a" * 40
-    assert plan["project_name"].startswith("aiq-validation-")
-    assert plan["telemetry_resource_set"] == "g29"
+    assert plan["environment_id"] == "swedencentral-g30"
+    assert plan["location"] == "swedencentral"
+    assert plan["project_name"] == "aiq-staging-swedencentral"
+    assert plan["telemetry_resource_set"] == "g30"
     assert plan["endpoint_envelope"]["attempts"] == 449
     assert plan["endpoint_envelope"]["requests"] >= 890
     assert plan["endpoint_envelope"]["worst_case_inner_model_calls"] == 4
@@ -66,9 +68,11 @@ def test_resumed_plan_keeps_exact_cycle_and_topology() -> None:
     )
     assert first == second
     assert first["cycle_id"] == "validation-0123456789ab"
-    assert first["project_name"].endswith("0123456789ab")
+    assert first["project_name"] == "aiq-staging-swedencentral"
     assert all(
-        item["runtime_agent_name"].endswith("0123456789ab")
+        item["runtime_agent_name"].endswith(
+            "baseline" if item["logical_version"] == "v0" else item["logical_version"]
+        )
         for item in first["authorities"]
     )
     validate_validation_plan(

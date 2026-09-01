@@ -15,5 +15,6 @@ insight_start_margin_seconds: 30
 max_recovery_versions: 3
 agent_start_stagger_seconds: 5
 qualification_profiles_allow_debug_traffic: false
-clean_window_preflight_required: true
-telemetry_resource_set: g29
+clean_window_preflight_required: false
+telemetry_resource_set: g30
+approved_record_container: test-agent-validation-approved-records-swedencentral-g30

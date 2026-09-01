@@ -185,13 +185,27 @@ def test_infrastructure_grants_automation_data_plane_roles() -> None:
     assert "name: 'gpt-5.4-mini'" in lab
     assert "name: 'terra-insight-generation'" in lab
     assert "name: 'terra-test-agents'" not in lab
-    assert "isVersioningEnabled: true" in lab
-    assert "test-agent-validation-approved-records" in lab
-    assert lab.count("immutableStorageWithVersioning") == 1
-    assert "immutabilityPeriodSinceCreationInDays: 90" in lab
-    assert "expire-approved-validation-records-after-worm" in lab
-    assert "daysAfterModificationGreaterThan: 91" in lab
-    assert "expire-deployment-registry-versions" in lab
+    assert (
+        "resource registry 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' "
+        "existing"
+    ) in lab
+    assert (
+        "resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' existing"
+        in lab
+    )
+    assert (
+        "resource blobService "
+        "'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' existing"
+        in lab
+    )
+    assert "isVersioningEnabled" not in lab
+    assert "name: approvedRecordContainerName" in lab
+    assert "immutableStorageWithVersioning" in lab
+    assert "immutabilityPolicies" not in lab
+    assert "approvedValidationRecordPolicy" not in lab
+    assert "quality-artifacts" not in lab
+    assert "deployment-registries" not in lab
+    assert "managementPolicies" not in lab
     assert "test-agent-validation-lifecycle" not in lab
     assert "test-agent-validation-snapshots" not in lab
     assert "test-agent-validation-receipts" not in lab

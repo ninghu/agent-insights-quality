@@ -7,7 +7,7 @@ instructions: |
   Test Agent Validation is a local, report-free process. It must use the reviewed
   validation mode and fixed attempts, create no monitor, run no Agent Insights
   assessment, and publish no approved record without exact 41/41 evidence,
-  exact cleanup, and explicit human approval.
+  exact run-scoped cleanup, and explicit human approval.
   Treat AGENT_CATALOG.yaml and ISSUE_CATALOG.yaml as human-reviewed contracts.
   Follow the repository-wide maintenance and evidence rules in AGENTS.md.
 

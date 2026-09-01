@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from copy import deepcopy
-import json
 
 import pytest
 
-from agent_insights_quality.util import ROOT, ContractError, canonical_bytes
+from agent_insights_quality.util import ContractError, canonical_bytes
 from agent_insights_quality.validation_approved import (
+    APPROVED_RECORD_CONTAINER,
     _assert_identical_approval,
     approved_record_blob_name,
     fetch_approved_record_for_checkout,
@@ -16,7 +16,6 @@ from agent_insights_quality.validation_approved import (
     validate_local_result_binding,
 )
 from agent_insights_quality.validation_blob import BlobRecord
-from agent_insights_quality.validation_lifecycle import stamp_lifecycle_digest
 
 HASH = "sha256:" + ("a" * 64)
 
@@ -78,33 +77,32 @@ def test_approved_record_rejects_tamper_or_gate_provenance() -> None:
 
 
 def test_approval_rejects_evidence_from_another_cycle() -> None:
-    fixture = ROOT / "tests" / "fixtures" / "test_agent_validation" / "r01"
-    evidence = json.loads((fixture / "evidence.json").read_text(encoding="utf-8"))
-    clean = json.loads(
-        (fixture / "clean-lifecycle.json").read_text(encoding="utf-8")
-    )
-    active = deepcopy(clean)
-    active["snapshot_type"] = "active"
-    active["event_reference"] = {
-        "path": "history/synthetic.json",
-        "digest": "sha256:" + ("e" * 64),
+    clean = {
+        "snapshot_type": "clean",
+        "state": "CLEAN",
+        "repository": "ninghu/agent-insights-quality",
+        "pr_number": 63,
+        "commit_sha": "b" * 40,
+        "cycle_id": "validation-cycle-a",
+        "cleanup": {
+            "exact_clean": True,
+            "residue_ids": [],
+        },
     }
-    active["clean_reference"] = {
-        "path": "clean/synthetic.json",
-        "digest": clean["journal_digest"],
+    evidence = {
+        "repository": clean["repository"],
+        "pr_number": clean["pr_number"],
+        "cycle_id": "validation-cycle-b",
     }
-    active = stamp_lifecycle_digest(active)
-    changed = deepcopy(evidence)
-    changed["cycle_id"] = "validation-other-cycle"
     with pytest.raises(ContractError, match="one validation cycle"):
         validate_local_result_binding(
-            active,
+            {},
             clean,
-            changed,
+            evidence,
             repository=clean["repository"],
             pr_number=clean["pr_number"],
             commit_sha=clean["commit_sha"],
-            validation_digest=clean["digests"]["validation_digest"],
+            validation_digest=HASH,
         )
 
 
@@ -176,3 +174,5 @@ def test_daily_fetches_exact_head_authoritative_blob(monkeypatch) -> None:
     assert observed["read"][1].endswith(
         f"/{value['commit_sha']}/record.json"
     )
+    assert observed["container"] == APPROVED_RECORD_CONTAINER
+    assert observed["read"][0] == APPROVED_RECORD_CONTAINER

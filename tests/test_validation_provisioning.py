@@ -35,6 +35,7 @@ def _active_hosted_version(
         "name": agent_name,
         "version": "1",
         "status": "active",
+        "metadata": {"aiq_content_digest": "sha256:" + "1" * 64},
         "agent_guid": "synthetic-agent-guid",
         "definition": {
             "kind": "hosted",
@@ -66,35 +67,36 @@ def _active_hosted_version(
 def _staging_profile() -> RuntimeProfile:
     return RuntimeProfile(
         name="staging",
-        project_name="agent-insights-quality-staging",
+        project_name="aiq-staging-swedencentral",
         project_endpoint="https://example.invalid/staging",
         insights_endpoint="https://example.invalid/staging",
         application_insights_resource_id=(
             "/subscriptions/synthetic/resourceGroups/synthetic/providers/"
-            "Microsoft.Insights/components/synthetic-g29"
+            "Microsoft.Insights/components/synthetic-g30"
         ),
         registry_path=Path("registry.json"),
-        account_name="synthetic",
+        account_name="aiq-staging-swedencentral",
         container_registry_name="syntheticregistry",
         registry_storage_account_name="syntheticstorage",
         account_resource_id=(
             "/subscriptions/synthetic/resourceGroups/synthetic/providers/"
-            "Microsoft.CognitiveServices/accounts/synthetic"
+            "Microsoft.CognitiveServices/accounts/aiq-staging-swedencentral"
         ),
-        telemetry_resource_set="g29",
+        telemetry_resource_set="g30",
+        environment_id="swedencentral-g30",
+        location="swedencentral",
     )
 
 
-def test_validation_profile_reuses_staging_account_but_not_staging_project() -> None:
+def test_validation_profile_reuses_exact_durable_staging_project() -> None:
     profile = validation_runtime_profile(
-        "aiq-validation-0123456789ab",
+        "aiq-staging-swedencentral",
         cycle_id="validation-cycle-0001",
         base=_staging_profile(),
     )
-    assert profile.account_name == "synthetic"
-    assert profile.telemetry_resource_set == "g29"
-    assert profile.project_name == "aiq-validation-0123456789ab"
-    assert "agent-insights-quality-staging" not in profile.project_endpoint
+    assert profile.account_name == "aiq-staging-swedencentral"
+    assert profile.telemetry_resource_set == "g30"
+    assert profile.project_name == profile.account_name
     assert "test-agent-validation" in str(profile.registry_path)
 
 
@@ -103,87 +105,24 @@ def test_validation_profile_has_no_staging_fallback() -> None:
     incomplete = RuntimeProfile(
         **{**incomplete.__dict__, "account_name": ""}
     )
-    with pytest.raises(ContractError, match="staging Foundry account"):
+    with pytest.raises(ContractError, match="durable Sweden staging Project"):
         validation_runtime_profile(
-            "aiq-validation-0123456789ab",
+            "aiq-staging-swedencentral",
             cycle_id="validation-cycle-0001",
             base=incomplete,
         )
 
 
-def test_validation_project_bicep_creates_no_monitor_or_insights_run() -> None:
-    text = (
-        ROOT / "infra" / "modules" / "validation-project.bicep"
-    ).read_text(encoding="utf-8")
-    assert "Microsoft.CognitiveServices/accounts/projects" in text
-    assert "application-insights-validation" in text
-    assert "container-registry-validation" in text
-    assert "validation-project-rbac.bicep" in text
-    assert "ApplicationInsightsConnectionString" not in text
-    assert "Microsoft.CognitiveServices/accounts/connections" not in text
-    assert "isSharedToAll: true" not in text
-    assert "key: applicationInsights.properties.ConnectionString" in text
-    assert "ApiType: 'Azure'\n      ResourceId: applicationInsights.id" in text
-    assert "ownershipNonce" in text
-    assert "agent_insight" not in text.casefold()
-    assert "monitor" not in text.casefold().replace("monitoringreader", "")
-
-
-def test_project_children_have_deterministic_intents_before_bicep() -> None:
-    provisioner = ValidationProjectProvisioner(
-        _staging_profile(),
-        local_operator_id="synthetic-local-operator",
-        policy=load_validation_policy(),
-    )
-    intents = provisioner.resource_intents(
-        project_name="aiq-validation-0123456789ab",
-        cycle_id="validation-cycle-0001",
-        ownership_nonce="nonce-0001",
-    )
-    assert [item["kind"] for item in intents] == [
-        "arm_deployment",
-        "runtime_principal",
-        "connection",
-        "connection",
-        "role_assignment",
-        "role_assignment",
-        "role_assignment",
-        "role_assignment",
-    ]
-    assert len({item["intent_reference"] for item in intents}) == len(intents)
-    assert all(item["runtime_kind"] == "control" for item in intents)
-    assert all(item["discovery_key"] for item in intents)
-    assert "application-insights-validation" in {
-        item["deterministic_name"] for item in intents
-    }
-    assert "application-insights-staging" not in {
-        item["deterministic_name"] for item in intents
-    }
-    bicep = (
-        ROOT / "infra" / "modules" / "validation-project.bicep"
-    ).read_text(encoding="utf-8")
-    assert "validationOperatorProjectManagerName" in bicep
-    assert "appInsightsReaderName" in bicep
-
-
-def test_project_create_accepts_project_connection_outputs(monkeypatch) -> None:
-    project_name = "aiq-validation-0123456789ab"
-    cycle_id = "validation-cycle-0001"
-    ownership_nonce = "nonce-0001"
+def test_durable_project_binding_reads_exact_existing_project(monkeypatch) -> None:
     profile = validation_runtime_profile(
-        project_name,
-        cycle_id=cycle_id,
+        "aiq-staging-swedencentral",
+        cycle_id="validation-cycle-0001",
         base=_staging_profile(),
     )
     provisioner = ValidationProjectProvisioner(
         profile,
         local_operator_id="synthetic-local-operator",
         policy=load_validation_policy(),
-    )
-    plan = provisioner._resource_plan(
-        project_name=project_name,
-        cycle_id=cycle_id,
-        ownership_nonce=ownership_nonce,
     )
     observed = []
 
@@ -193,24 +132,10 @@ def test_project_create_accepts_project_connection_outputs(monkeypatch) -> None:
             returncode=0,
             stdout=json.dumps(
                 {
-                    "properties": {
-                        "provisioningState": "Succeeded",
-                        "outputs": {
-                            "projectId": {
-                                "value": provisioner.expected_project_id(project_name)
-                            },
-                            "projectPrincipalId": {
-                                "value": "synthetic-project-principal"
-                            },
-                            "projectEndpoint": {"value": profile.project_endpoint},
-                            "connectionIds": {
-                                "value": list(plan.connection_ids)
-                            },
-                            "roleAssignmentIds": {
-                                "value": list(plan.role_assignment_ids)
-                            },
-                        },
-                    }
+                    "id": provisioner.expected_project_id(profile.project_name),
+                    "name": profile.project_name,
+                    "location": "swedencentral",
+                    "identity": {"principalId": "synthetic-project-principal"},
                 }
             ),
         )
@@ -219,49 +144,33 @@ def test_project_create_accepts_project_connection_outputs(monkeypatch) -> None:
         "agent_insights_quality.validation_provisioning.subprocess.run",
         run,
     )
+    monkeypatch.setattr(provisioner, "assert_telemetry_connection", lambda: None)
 
-    project = provisioner.create(
-        project_name=project_name,
-        cycle_id=cycle_id,
-        ownership_nonce=ownership_nonce,
-    )
+    project = provisioner.bind(profile.project_name)
 
-    assert project.connection_ids == plan.connection_ids
+    assert project.project_name == profile.account_name
     assert len(project.connection_ids) == 2
     assert {
         item.rsplit("/", 1)[-1] for item in project.connection_ids
-    } == {"container-registry-validation", "application-insights-validation"}
-    assert project.role_assignment_ids == plan.role_assignment_ids
+    } == {"container-registry-staging", "application-insights-staging"}
+    assert project.role_assignment_ids == ()
     assert len(observed) == 1
 
 
-def test_project_timeout_cancels_and_waits_for_terminal_deployment(
-    monkeypatch,
-) -> None:
+def test_durable_project_binding_fails_closed_on_timeout(monkeypatch) -> None:
     provisioner = ValidationProjectProvisioner(
         _staging_profile(),
         local_operator_id="synthetic-local-operator",
         policy=load_validation_policy(),
     )
-    observed = []
     monkeypatch.setattr(
         "agent_insights_quality.validation_provisioning.subprocess.run",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             subprocess.TimeoutExpired("az", 1)
         ),
     )
-    monkeypatch.setattr(
-        provisioner,
-        "_cancel_and_wait_deployment",
-        observed.append,
-    )
     with pytest.raises(ContractError, match="did not complete locally"):
-        provisioner.create(
-            project_name="aiq-validation-0123456789ab",
-            cycle_id="validation-cycle-0001",
-            ownership_nonce="nonce-0001",
-        )
-    assert observed == ["test-agent-validation-validation-cycle-0001"]
+        provisioner.bind("aiq-staging-swedencentral")
 
 
 def test_capacity_measurement_normalizes_provider_rate_windows() -> None:
@@ -357,6 +266,7 @@ def test_hosted_canary_readiness_rechecks_active_topology() -> None:
         runtime_agent_version="1",
         provider_agent_id="synthetic-agent",
         provider_agent_version_id="synthetic-version",
+        provider_content_digest="sha256:" + "1" * 64,
         hosted_identity_id="synthetic-instance-client",
         hosted_blueprint_id="synthetic-blueprint-reference",
         hosted_deployment_id="synthetic-agent-guid",
@@ -398,6 +308,7 @@ def test_resumed_canary_readiness_not_found_fails_without_create_proof() -> None
                 runtime_agent_version="1",
                 provider_agent_id="synthetic-agent",
                 provider_agent_version_id="synthetic-agent/versions/1",
+                provider_content_digest="sha256:" + "1" * 64,
             ),
         )
     assert calls == [("synthetic-agent", "1", False)]
@@ -456,7 +367,7 @@ def test_prompt_deploy_reuses_activation_details_after_temporary_propagation(
             return {"_status": 404}
         if method == "POST" and path == "/agents":
             metadata = json.loads(body)["metadata"]
-            return {"versions": {"latest": {"version": "1"}}}
+            return {"version": "1"}
         if path == "/agents/synthetic-weather/versions/1":
             detail_reads += 1
             if detail_reads == 1:
@@ -617,7 +528,10 @@ def test_hosted_deploy_reads_public_version_topology(
     deployer._readiness_proofs = {}
     monkeypatch.setattr(
         "agent_insights_quality.validation_provisioning.build_artifact",
-        lambda *_args, **_kwargs: {"kind": "hosted_code"},
+        lambda *_args, **_kwargs: {
+            "kind": "hosted_code",
+            "content_digest": "sha256:" + "1" * 64,
+        },
     )
     monkeypatch.setattr(
         "agent_insights_quality.validation_provisioning.source_content_digest",
@@ -686,6 +600,7 @@ def test_hosted_canary_readiness_rejects_malformed_public_topology(
                 runtime_agent_name="synthetic-agent",
                 runtime_agent_version="1",
                 provider_agent_version_id="synthetic-version",
+                provider_content_digest="sha256:" + "1" * 64,
                 hosted_identity_id="synthetic-instance-client",
                 hosted_blueprint_id="synthetic-blueprint-reference",
                 hosted_deployment_id="synthetic-agent-guid",
@@ -711,6 +626,7 @@ def test_hosted_canary_readiness_rejects_mismatched_topology(
         "runtime_agent_name": "synthetic-agent",
         "runtime_agent_version": "1",
         "provider_agent_version_id": "synthetic-version",
+        "provider_content_digest": "sha256:" + "1" * 64,
         "hosted_identity_id": "synthetic-instance-client",
         "hosted_blueprint_id": "synthetic-blueprint-reference",
         "hosted_deployment_id": "synthetic-agent-guid",

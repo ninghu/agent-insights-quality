@@ -7,7 +7,10 @@ import pytest
 from azure.core.exceptions import ResourceExistsError
 
 from agent_insights_quality.util import ContractError
-from agent_insights_quality.validation_blob import AzureValidationBlobStore
+from agent_insights_quality.validation_blob import (
+    APPROVED_RECORD_CONTAINER,
+    AzureValidationBlobStore,
+)
 
 
 def test_blob_store_uses_only_injected_credential(monkeypatch) -> None:
@@ -35,6 +38,7 @@ def test_blob_store_uses_only_injected_credential(monkeypatch) -> None:
 
 def test_blob_contract_checks_private_locked_exact_worm(monkeypatch) -> None:
     observed = []
+    calls = []
 
     class Service:
         @staticmethod
@@ -70,14 +74,21 @@ def test_blob_contract_checks_private_locked_exact_worm(monkeypatch) -> None:
             ),
         ]
     )
+    def run(arguments, **_kwargs):
+        calls.append(arguments)
+        return next(responses)
+
     monkeypatch.setattr(
         "agent_insights_quality.validation_blob.subprocess.run",
-        lambda *_args, **_kwargs: next(responses),
+        run,
     )
-    store.assert_approved_record_contract(
-        "test-agent-validation-approved-records"
+    store.assert_approved_record_contract(APPROVED_RECORD_CONTAINER)
+    assert observed == [APPROVED_RECORD_CONTAINER]
+    assert "--auth-mode" not in next(
+        arguments
+        for arguments in calls
+        if "immutability-policy" in arguments
     )
-    assert observed == ["test-agent-validation-approved-records"]
 
 
 def test_blob_contract_rejects_public_or_unlocked_storage(monkeypatch) -> None:
@@ -98,9 +109,7 @@ def test_blob_contract_rejects_public_or_unlocked_storage(monkeypatch) -> None:
         lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout="true\n"),
     )
     with pytest.raises(ContractError, match="anonymous Blob access"):
-        store.assert_approved_record_contract(
-            "test-agent-validation-approved-records"
-        )
+        store.assert_approved_record_contract(APPROVED_RECORD_CONTAINER)
 
     responses = iter(
         [
@@ -122,9 +131,7 @@ def test_blob_contract_rejects_public_or_unlocked_storage(monkeypatch) -> None:
         lambda *_args, **_kwargs: next(responses),
     )
     with pytest.raises(ContractError, match="locked 90-day"):
-        store.assert_approved_record_contract(
-            "test-agent-validation-approved-records"
-        )
+        store.assert_approved_record_contract(APPROVED_RECORD_CONTAINER)
 
 
 def test_approved_record_blob_is_create_once_and_idempotent() -> None:
@@ -150,12 +157,12 @@ def test_approved_record_blob_is_create_once_and_idempotent() -> None:
         get_blob_client=lambda *_args, **_kwargs: client
     )
     value = {"kind": "test-agent-validation-approved-record"}
-    first = store.create_once("test-agent-validation-approved-records", "record", value)
-    second = store.create_once("test-agent-validation-approved-records", "record", value)
+    first = store.create_once(APPROVED_RECORD_CONTAINER, "record", value)
+    second = store.create_once(APPROVED_RECORD_CONTAINER, "record", value)
     assert first.value == second.value == value
     with pytest.raises(ContractError, match="different content"):
         store.create_once(
-            "test-agent-validation-approved-records",
+            APPROVED_RECORD_CONTAINER,
             "record",
             {"kind": "different"},
         )
@@ -182,7 +189,7 @@ def test_semantically_equal_but_byte_different_blob_is_not_idempotent() -> None:
     )
     with pytest.raises(ContractError, match="different content"):
         store.create_once(
-            "test-agent-validation-approved-records",
+            APPROVED_RECORD_CONTAINER,
             "record",
             {"kind": "test-agent-validation-approved-record"},
         )

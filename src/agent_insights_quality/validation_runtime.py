@@ -44,6 +44,8 @@ class PlannedRuntime:
     runtime_kind: str
     framework: str
     runtime_agent_name: str
+    intent_namespace: str = ""
+    version_ordinal: int = 0
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,7 @@ class DeployedRuntime:
     runtime_agent_version: str
     provider_agent_id: str
     provider_agent_version_id: str
+    provider_content_digest: str
     hosted_identity_id: str | None
     hosted_blueprint_id: str | None
     hosted_deployment_id: str | None
@@ -88,6 +91,13 @@ class AgentExecutionIncomplete(ContractError):
 
 class AuthorityDeployer(Protocol):
     def deploy(self, authority: AuthoritySpec, planned: PlannedRuntime) -> DeployedRuntime:
+        ...
+
+    def deploy_fresh(
+        self,
+        authority: AuthoritySpec,
+        planned: PlannedRuntime,
+    ) -> DeployedRuntime:
         ...
 
     def assert_ready(
@@ -133,8 +143,9 @@ def validation_project_name(
     *,
     policy: ValidationPolicy,
 ) -> str:
+    del cycle_suffix
     return _bounded_name(
-        f"aiq-validation-{cycle_suffix}",
+        policy.project_name,
         maximum=policy.project_name_policy.maximum_length,
         pattern=policy.project_name_policy.pattern,
     )
@@ -147,13 +158,14 @@ def validation_agent_name(
     cycle_suffix: str,
     policy: ValidationPolicy,
 ) -> str:
+    del cycle_suffix
     qualifier = (
         "baseline"
         if logical_version == "v0"
         else logical_version.replace("issue-", "issue-")
     )
     return _bounded_name(
-        f"{canonical_agent}-{qualifier}-{cycle_suffix}",
+        f"{canonical_agent}-{qualifier}",
         maximum=policy.agent_name_policy.maximum_length,
         pattern=policy.agent_name_policy.pattern,
     )
@@ -166,18 +178,16 @@ def recovery_runtime_plan(
     policy: ValidationPolicy,
 ) -> PlannedRuntime:
     if recovery_ordinal < 1 or recovery_ordinal > 3:
-        raise ContractError("Validation recovery generation is out of range")
+        raise ContractError("Validation recovery ordinal is out of range")
     return PlannedRuntime(
         authority_id=planned.authority_id,
         canonical_agent=planned.canonical_agent,
         logical_version=planned.logical_version,
         runtime_kind=planned.runtime_kind,
         framework=planned.framework,
-        runtime_agent_name=_bounded_name(
-            f"{planned.runtime_agent_name}-r{recovery_ordinal:02d}",
-            maximum=policy.agent_name_policy.maximum_length,
-            pattern=policy.agent_name_policy.pattern,
-        ),
+        runtime_agent_name=planned.runtime_agent_name,
+        intent_namespace=planned.intent_namespace,
+        version_ordinal=recovery_ordinal,
     )
 
 
@@ -205,6 +215,7 @@ def plan_runtime_topology(
                 cycle_suffix=cycle_suffix,
                 policy=policy,
             ),
+            intent_namespace=cycle_suffix,
         )
         for authority in authorities
     )
@@ -232,6 +243,7 @@ def deploy_all_authorities(
     require_architecture_canaries: bool = True,
     prior_recovered_authorities: Mapping[str, Sequence[str]] | None = None,
     retry_transient_failures: bool = True,
+    force_new_authority_ids: set[str] | None = None,
 ) -> dict[str, DeployedRuntime]:
     if maximum_concurrency < 1 or maximum_concurrency > 8:
         raise ContractError("Validation provisioning concurrency must be between 1 and 8")
@@ -239,6 +251,7 @@ def deploy_all_authorities(
     if set(by_id) != {item.authority_id for item in authorities}:
         raise ContractError("Planned validation topology is incomplete")
     authority_by_id = {item.authority_id: item for item in authorities}
+    force_new = set(force_new_authority_ids or ())
     deployed: dict[str, DeployedRuntime] = dict(existing_deployed or {})
     retries = dict(retry_counts or {})
     recovered_by_agent = {
@@ -250,6 +263,8 @@ def deploy_all_authorities(
     if (
         not set(deployed).issubset(by_id)
         or not set(retries).issubset(by_id)
+        or not force_new.issubset(by_id)
+        or bool(force_new.intersection(deployed))
         or max_recovery_versions_per_agent != 3
     ):
         raise ContractError("Validation deployment resume state is invalid")
@@ -266,7 +281,11 @@ def deploy_all_authorities(
             for event in intents:
                 record_resource(event)
         try:
-            value = deployer.deploy(authority, target)
+            value = (
+                deployer.deploy_fresh(authority, target)
+                if authority.authority_id in force_new
+                else deployer.deploy(authority, target)
+            )
         except ContractError:
             if record_resource is not None:
                 for event in intents:
@@ -607,17 +626,26 @@ def _deployment_intents(
                 "runtime_principal",
             ]
         )
-    return [
-        {
+    events = []
+    for kind in kinds:
+        identity: dict[str, Any] = {
+            "authority_id": authority.authority_id,
+            "runtime_agent_name": planned.runtime_agent_name,
+            "kind": kind,
+        }
+        if kind != "provider_agent":
+            identity.update(
+                {
+                    "intent_namespace": planned.intent_namespace,
+                    "version_ordinal": planned.version_ordinal,
+                }
+            )
+        intent_reference = content_hash(identity)
+        events.append(
+            {
             "state": "create_intent",
             "kind": kind,
-            "intent_reference": content_hash(
-                {
-                    "authority_id": authority.authority_id,
-                    "runtime_agent_name": planned.runtime_agent_name,
-                    "kind": kind,
-                }
-            ),
+            "intent_reference": intent_reference,
             "deterministic_name": (
                 f"{planned.runtime_agent_name}/{authority.logical_version}"
                 if kind == "provider_agent_version"
@@ -625,18 +653,17 @@ def _deployment_intents(
             ),
             "runtime_kind": authority.runtime_kind,
             "discovery_key": (
-                f"{planned.runtime_agent_name}|{authority.logical_version}|{kind}"
+                f"{planned.runtime_agent_name}|{authority.logical_version}|{kind}|"
+                f"{intent_reference}"
+                if kind != "provider_agent"
+                else planned.runtime_agent_name
             ),
             "authority_id": authority.authority_id,
             "parent_id": None,
-            "cleanup_method": (
-                "documented_project_cascade"
-                if kind == "runtime_principal"
-                else "explicit"
-            ),
-        }
-        for kind in kinds
-    ]
+            "cleanup_method": "retained_durable",
+            }
+        )
+    return events
 
 
 def execute_validation_matrix(
@@ -733,19 +760,8 @@ def execute_validation_phase(
         )
         for item in active_deployed.values()
     }
-    provider_identities = {
-        value
-        for item in active_deployed.values()
-        for value in (
-            item.provider_agent_id,
-            item.provider_agent_version_id,
-            item.hosted_identity_id,
-            item.hosted_blueprint_id,
-            item.hosted_deployment_id,
-            item.runtime_principal_id,
-            item.telemetry_identity_id,
-        )
-        if value is not None
+    provider_version_ids = {
+        item.provider_agent_version_id for item in active_deployed.values()
     }
     while pending:
         try:
@@ -806,32 +822,29 @@ def execute_validation_phase(
                     replacement.runtime_agent_name,
                     replacement.runtime_agent_version,
                 )
-                replacement_provider_ids = {
-                    value
-                    for value in (
-                        replacement.provider_agent_id,
-                        replacement.provider_agent_version_id,
-                        replacement.hosted_identity_id,
-                        replacement.hosted_blueprint_id,
-                        replacement.hosted_deployment_id,
-                        replacement.runtime_principal_id,
-                        replacement.telemetry_identity_id,
-                    )
-                    if value is not None
-                }
+                superseded = active_deployed[authority_id]
                 if (
                     replacement.authority_id != authority_id
                     or replacement.runtime_kind != authority.runtime_kind
+                    or replacement.runtime_agent_name
+                    != superseded.runtime_agent_name
+                    or replacement.provider_agent_id
+                    != superseded.provider_agent_id
+                    or replacement.provider_content_digest
+                    != superseded.provider_content_digest
+                    or replacement.telemetry_identity_id
+                    != replacement.provider_agent_version_id
                     or identity_pair in runtime_identity_pairs
-                    or provider_identities.intersection(
-                        replacement_provider_ids
-                    )
+                    or replacement.provider_agent_version_id
+                    in provider_version_ids
                 ):
                     raise ContractError(
                         "Replacement validation runtime identity is not fresh"
                     )
                 runtime_identity_pairs.add(identity_pair)
-                provider_identities.update(replacement_provider_ids)
+                provider_version_ids.add(
+                    replacement.provider_agent_version_id
+                )
                 active_deployed[authority_id] = replacement
                 recovery_counts[authority.canonical_agent] = count + 1
             pending = [
@@ -1162,6 +1175,9 @@ def _execute_authority(
                 ].provider_agent_version_id,
             }
         ),
+        "provider_content_digest": deployed[
+            authority.authority_id
+        ].provider_content_digest,
         "source_content_digest": authority.source_content_digest,
         "execution_digest": authority.execution_digest,
         "validated_commit_sha": validated_commit_sha,

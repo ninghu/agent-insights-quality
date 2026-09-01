@@ -147,7 +147,10 @@ def _validate_test_agent_validation_boundary() -> None:
     policy = load_validation_policy()
     if (
         policy.authority_count != 41
-        or policy.telemetry_resource_set != "g29"
+        or policy.environment_id != "swedencentral-g30"
+        or policy.location != "swedencentral"
+        or policy.project_name != "aiq-staging-swedencentral"
+        or policy.telemetry_resource_set != "g30"
     ):
         raise ContractError("Test Agent Validation config is not reviewed")
     forbidden = (

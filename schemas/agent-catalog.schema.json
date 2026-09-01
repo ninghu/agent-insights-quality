@@ -10,8 +10,8 @@
       "additionalProperties": false,
       "required": ["daily_project", "staging_project", "telemetry_retention_days", "artifact_retention_days", "application_insights_access", "direct_trace_injection"],
       "properties": {
-        "daily_project": {"const": "agent-insights-quality"},
-        "staging_project": {"const": "agent-insights-quality-staging"},
+        "daily_project": {"const": "aiq-daily-swedencentral"},
+        "staging_project": {"const": "aiq-staging-swedencentral"},
         "telemetry_retention_days": {"const": 90},
         "artifact_retention_days": {"const": 90},
         "application_insights_access": {"const": "read_only"},

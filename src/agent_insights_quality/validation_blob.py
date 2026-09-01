@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from collections.abc import Mapping
+from dataclasses import dataclass
 import json
 import subprocess
 from typing import Any
 
 from agent_insights_quality.azure_cli import azure_cli
+from agent_insights_quality.automation_policy import load_automation_policy
 from agent_insights_quality.util import ContractError, canonical_bytes
+
+APPROVED_RECORD_CONTAINER = load_automation_policy().approved_record_container
 
 
 @dataclass(frozen=True)
@@ -63,7 +66,7 @@ class AzureValidationBlobStore:
             raise ContractError(
                 "Approved record Blob versioning is not enabled"
             )
-        if container != "test-agent-validation-approved-records":
+        if container != APPROVED_RECORD_CONTAINER:
             raise ContractError("Approved record container is not reviewed")
         account = subprocess.run(
             [
@@ -128,8 +131,6 @@ class AzureValidationBlobStore:
                 self._storage_account_name,
                 "--container-name",
                 container,
-                "--auth-mode",
-                "login",
                 "--output",
                 "json",
             ],

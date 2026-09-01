@@ -17,42 +17,44 @@ report publication, ADX, email, Optional Daily Test, or a GitHub merge gate.
    packages require seven of each. Expected issue observations remain context for later private
    Copilot review, never a local verdict or gate. Never infer mode, resample, reclassify from results,
    or lower an attempt count.
-3. Hold the account-wide OS file lock under
+3. Hold the Sweden-environment OS file lock under
    `~/.aiq-runtime/agent-insights-quality/test-agent-validation/` for the whole invocation. A second
-   worktree fails closed. Every journal update is atomic and every required history snapshot is
+   worktree fails closed. Every journal update is atomic and every required history event is
    content-addressed and append-only.
-4. Before create, verify the clean PR head, authenticated Azure CLI user, fixed staging account,
-   reviewed model, quota/headroom, read-only `g29` access, prior lifecycle state, and target Project
-   absence. A pre-traffic partial deployment may resume only the unchanged commit, cycle, substrate,
+4. Before mutation, verify the clean PR head, authenticated Azure CLI user, exact
+   `aiq-staging-swedencentral` Account and Project, reviewed model, quota/headroom, read-only Sweden
+   `g30` access, Project-scoped App Insights connection, and environment-namespaced lifecycle state.
+   A pre-traffic partial deployment may resume only the unchanged commit, cycle, substrate,
    Project, and topology; every other incomplete journal resumes exact cleanup before a new cycle.
-5. Create exactly one opaque temporary Project and 41 independently named Agent endpoints. Record
-   intent before every create. Phase 1 deploys only the fixed `weather-agent/v0` Prompt baseline and
-   `finance-agent/v0` Hosted baseline, waits the clean interval, and runs their official baseline
+5. Reconcile 41 stable baseline/issue Agent names in the one durable staging Project. Persist and
+   exact-select every server-assigned provider version ID and content digest; never route to `latest`.
+   Phase 1 deploys only the fixed `weather-agent/v0` Prompt baseline and
+   `finance-agent/v0` Hosted baseline and runs their official baseline
    attempts concurrently. Only when both pass may Phase 2 provision the remaining 39 at no more than
-   eight, wait a new clean interval, and run all remaining official traffic in five Agent lanes.
+   eight and run all remaining official traffic in five Agent lanes.
    Retain confirmed-ready pre-traffic authorities and retry only unresolved authorities, with at most
    three recovered versions per Agent.
 6. Run every fixed setup/probe attempt through deployed endpoints. Within each Agent, versions remain
    sequential; independent Agent lanes continue after an Agent-local failure. Use the identical issue
    matrix against paired `v0`. Query telemetry at no more than four and allow one scenario attempt per
    runtime. If an issue authority has a recoverable execution or evidence failure, retain and
-   quarantine that generation, create only its replacement under a fresh `-r01`/`-r02`/`-r03`
-   Agent identity in the same Project, wait the reviewed clean interval, and bind replacement
-   evidence to that identity and its own time window. Never rerun completed authorities, splice
+   quarantine that provider version, keep the stable Agent name, reconcile a new server-assigned
+   provider version for the same content digest, and bind replacement evidence to its exact operation
+   and time window after bounded hydration/stability waiting. Never rerun completed authorities, splice
    superseded evidence, recover a baseline this way, or retry a pre-traffic source/contract failure
    that rebuilding cannot change. Application Insights remains read-only; shared runtime failure or ambiguous
    identity/correlation aborts. Each selected operation must contain an `invoke_agent` span with a
    nonempty canonical `gen_ai.output.messages` attribute; the span's telemetry table and parent do
    not matter, and chat, tool, or other spans cannot satisfy it. Never create monitors or inject
    traces.
-7. Any commit change aborts the cycle, performs cleanup, and requires a fresh full 41-Agent cycle.
-   There is no cross-cycle Agent, topology, traffic, or evidence reuse and no caller-supplied commit
-   or tree identity. Local dependencies and ACR build manifests may be reused only by exact
-   content digest; cycle tags remain cycle-owned.
-8. Delete every recorded response, conversation/session, Agent/version, Hosted
-   deployment/identity/blueprint, connection, role assignment, cycle principal, tag, and unshared
-   manifest in reverse dependency order, then delete the Project. Verify exact absence and every
-   reviewed cascade. Ambiguity enters `CLEANUP_BLOCKED`.
+7. Any commit change aborts the cycle, performs run-scoped cleanup, and requires a fresh full
+   41-authority cycle. Traffic and evidence never cross cycles; stable Agent topology may be reused
+   only when the exact provider version/content digest mapping is reconciled. Local dependencies and
+   ACR build manifests may be reused only by exact content digest; cycle tags remain cycle-owned.
+8. Delete every recorded response, conversation/session, cycle tag, and unshared manifest in reverse
+   dependency order. Explicitly retain the durable Project, Project connections/RBAC, and stable
+   Agent/version topology. Verify exact absence of run-scoped resources and every reviewed cascade.
+   Ambiguity enters the Sweden-namespaced `CLEANUP_BLOCKED` state and never mutates the legacy pointer.
 9. Keep lifecycle, history, evidence, and CLEAN files only in the shared private runtime root. The
    successful run writes no approval artifact.
 10. After exact-clean evidence, Copilot may review the private trace rows externally before the human

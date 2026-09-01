@@ -129,7 +129,11 @@ class ValidationReconciler:
                 updates={
                     "cleanup": {
                         "status": "ambiguous",
+                        "plan_hash": plan.plan_hash,
                         "exact_clean": False,
+                        "verified_absent_ids": [],
+                        "retained_shared_manifest_ids": [],
+                        "retained_durable_ids": [],
                         "residue_ids": ["cleanup_unverified"],
                         "verification_at": moment.isoformat(),
                         "failure": cleanup_failure_summary(error),
@@ -150,6 +154,7 @@ class ValidationReconciler:
             "retained_shared_manifest_ids": list(
                 result.retained_shared_manifest_ids
             ),
+            "retained_durable_ids": list(result.retained_durable_ids),
             "residue_ids": list(result.residue_ids),
             "verification_at": moment.isoformat(),
             "failure": None,
@@ -169,17 +174,12 @@ class ValidationReconciler:
                 value["state"] = "absence_verified"
                 value["delete_observed_at"] = moment.isoformat()
             resources.append(value)
-        project = dict(current.value["project"])
-        if project["provider_id"] in absent:
-            project["state"] = "deleted"
-            project["delete_observed_at"] = moment.isoformat()
         current = self._journal.commit(
             current,
             next_state=terminal,
             updates={
                 "cleanup": cleanup,
                 "resources": resources,
-                "project": project,
             },
             now=moment,
         )

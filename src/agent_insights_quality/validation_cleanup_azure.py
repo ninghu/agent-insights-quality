@@ -70,6 +70,8 @@ class AzureValidationCleanupBackend:
             actual = parts[0]
             deterministic_name = parts[0]
         elif item.kind == "provider_agent_version":
+            if len(parts) > 3:
+                return None
             version = self._find_version_by_logical(
                 parts[0],
                 parts[1],
@@ -79,6 +81,8 @@ class AzureValidationCleanupBackend:
                 actual = f"{parts[0]}/versions/{version}"
                 deterministic_name = f"{parts[0]}/{version}"
         elif item.kind in _HOSTED_TOPOLOGY_REFERENCES:
+            if len(parts) > 3:
+                return None
             version = self._find_version_by_logical(parts[0], parts[1], hosted=True)
             if version:
                 try:
@@ -493,36 +497,24 @@ class AzureValidationCleanupBackend:
             expected=(0,),
         )
         owned_values = json.loads(owned.stdout)
-        nonce_owned = tuple(
-            sorted(str(item) for item in owned_values)
-        ) if isinstance(owned_values, list) else ()
-        project = next(
-            (
-                item
-                for item in self._resources
-                if item.get("kind") == "project"
-            ),
-            None,
-        )
-        project_exists = bool(
-            project
-            and not self.absent(
-                CleanupPlanItem(
-                    kind="project",
-                    deterministic_name=str(project["deterministic_name"]),
-                    provider_id=str(project["provider_id"]),
-                    resolved_provider_id=project.get("resolved_provider_id"),
-                    intent_reference=str(project["intent_reference"]),
-                    runtime_kind=str(project["runtime_kind"]),
-                    discovery_key=str(project["discovery_key"]),
-                    parent_id=None,
-                    authority_id=None,
-                    state=str(project["state"]),
-                    cleanup_method="explicit",
-                    shared_manifest_allowed=False,
+        retained_durable = tuple(
+            sorted(
+                str(
+                    item.get("resolved_provider_id")
+                    or item.get("provider_id")
+                    or ""
                 )
+                for item in self._resources
+                if item.get("cleanup_method") == "retained_durable"
             )
         )
+        nonce_owned = tuple(
+            sorted(
+                str(item)
+                for item in owned_values
+                if str(item) not in retained_durable
+            )
+        ) if isinstance(owned_values, list) else ()
         sessions = tuple(
             sorted(
                 item["provider_id"]
@@ -553,12 +545,13 @@ class AzureValidationCleanupBackend:
         )
         del cycle_id
         return CleanupInventory(
-            project_exists=project_exists,
+            project_exists=False,
             nonce_owned_ids=nonce_owned,
             session_response_ids=sessions,
             cycle_acr_tag_ids=tags,
             incomplete_cascade_ids=(),
             retained_shared_manifest_ids=retained,
+            retained_durable_ids=retained_durable,
         )
 
     @staticmethod

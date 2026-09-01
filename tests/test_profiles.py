@@ -77,16 +77,36 @@ def test_profile_discovers_fixed_azure_resources(monkeypatch) -> None:
         {
             "type": "Microsoft.CognitiveServices/accounts",
             "kind": "AIServices",
-            "name": "synthetic-daily-account",
+            "name": "aiq-daily-swedencentral",
             "id": "/subscriptions/hidden/daily-account",
-            "tags": {"profile": "daily"},
+            "location": "swedencentral",
+            "tags": {
+                "profile": "daily",
+                "environment": "swedencentral",
+                "location": "swedencentral",
+                "generation": "g30",
+            },
         },
         {
             "type": "Microsoft.CognitiveServices/accounts",
             "kind": "AIServices",
-            "name": "synthetic-staging-account",
+            "name": "aiq-staging-swedencentral",
             "id": "/subscriptions/hidden/staging-account",
-            "tags": {"profile": "staging"},
+            "location": "swedencentral",
+            "tags": {
+                "profile": "staging",
+                "environment": "swedencentral",
+                "location": "swedencentral",
+                "generation": "g30",
+            },
+        },
+        {
+            "type": "Microsoft.CognitiveServices/accounts",
+            "kind": "AIServices",
+            "name": "agent-insights-quality",
+            "id": "/subscriptions/hidden/legacy-daily-account",
+            "location": "westus2",
+            "tags": {"profile": "daily", "generation": "g29"},
         },
         {
             "type": "Microsoft.ContainerRegistry/registries",
@@ -101,8 +121,11 @@ def test_profile_discovers_fixed_azure_resources(monkeypatch) -> None:
             "type": "Microsoft.Insights/components",
             "name": "daily-insights",
             "id": "/subscriptions/hidden/daily",
+            "location": "swedencentral",
             "tags": {
                 "profile": "daily",
+                "environment": "swedencentral",
+                "location": "swedencentral",
                 "generation": FIXED_TELEMETRY_RESOURCE_SET,
             },
         },
@@ -110,10 +133,20 @@ def test_profile_discovers_fixed_azure_resources(monkeypatch) -> None:
             "type": "Microsoft.Insights/components",
             "name": "staging-insights",
             "id": "/subscriptions/hidden/staging",
+            "location": "swedencentral",
             "tags": {
                 "profile": "staging",
+                "environment": "swedencentral",
+                "location": "swedencentral",
                 "generation": FIXED_TELEMETRY_RESOURCE_SET,
             },
+        },
+        {
+            "type": "Microsoft.Insights/components",
+            "name": "legacy-daily-insights",
+            "id": "/subscriptions/hidden/legacy-daily",
+            "location": "westus2",
+            "tags": {"profile": "daily", "generation": "g29"},
         },
     ]
     monkeypatch.setattr(
@@ -124,11 +157,13 @@ def test_profile_discovers_fixed_azure_resources(monkeypatch) -> None:
         ),
     )
     profile = RuntimeProfile.from_env("daily")
-    assert profile.project_name == "agent-insights-quality"
-    assert profile.account_name == "synthetic-daily-account"
+    assert profile.project_name == "aiq-daily-swedencentral"
+    assert profile.account_name == "aiq-daily-swedencentral"
     assert profile.container_registry_name == "syntheticregistry"
     assert profile.registry_storage_account_name == "syntheticstorage"
-    assert profile.project_endpoint.endswith("/api/projects/agent-insights-quality")
+    assert profile.project_endpoint.endswith(
+        "/api/projects/aiq-daily-swedencentral"
+    )
     assert profile.telemetry_resource_set == FIXED_TELEMETRY_RESOURCE_SET
 
 
@@ -200,32 +235,32 @@ def test_profile_rejects_invalid_project_connection(
         profile.assert_insights_connection()
 
 
-def test_validation_preflight_requires_ephemeral_project_connection(
+def test_validation_preflight_requires_durable_project_connection(
     monkeypatch,
 ) -> None:
-    profile = _profile("validation-cycle")
+    profile = _profile("staging")
     project_id = (
         f"{_ACCOUNT_ID}/projects/{profile.project_name}/connections/"
-        "application-insights-validation"
+        "application-insights-staging"
     )
     observed = _mock_connection_reads(
         monkeypatch,
         profile=profile,
-        project_connection_name="application-insights-validation",
+        project_connection_name="application-insights-staging",
     )
-    profile.assert_insights_connection("application-insights-validation")
+    profile.assert_insights_connection("application-insights-staging")
     assert project_id in " ".join(observed[0])
 
 
 def test_profile_requires_reviewed_test_agent_model(monkeypatch) -> None:
     profile = RuntimeProfile(
         name="staging",
-        project_name="agent-insights-quality-staging",
+        project_name="aiq-staging-swedencentral",
         project_endpoint="https://example.invalid",
         insights_endpoint="https://example.invalid",
         application_insights_resource_id="/subscriptions/hidden/active",
         registry_path=SimpleNamespace(),
-        account_name="synthetic-staging",
+        account_name="aiq-staging-swedencentral",
     )
     monkeypatch.setattr(
         "agent_insights_quality.profiles.subprocess.run",
@@ -240,6 +275,10 @@ def test_profile_requires_reviewed_test_agent_model(monkeypatch) -> None:
                             "name": "gpt-5.4-mini",
                             "version": "2026-03-17",
                         },
+                    },
+                    "sku": {
+                        "name": "DataZoneStandard",
+                        "capacity": 4500,
                     },
                 }
             ),
@@ -278,7 +317,7 @@ def test_profile_region_comes_from_live_project_and_azure_metadata(
 ) -> None:
     profile = RuntimeProfile(
         name="daily",
-        project_name="agent-insights-quality",
+        project_name="aiq-daily-swedencentral",
         project_endpoint="https://example.invalid",
         insights_endpoint="https://example.invalid",
         application_insights_resource_id="/subscriptions/hidden/active",
@@ -289,14 +328,17 @@ def test_profile_region_comes_from_live_project_and_azure_metadata(
         [
             SimpleNamespace(
                 returncode=0,
-                stdout=json.dumps({"location": "westus2"}),
+                stdout=json.dumps({"location": "swedencentral"}),
             ),
             SimpleNamespace(
                 returncode=0,
                 stdout=json.dumps(
                     [
                         {"name": "eastus", "displayName": "East US"},
-                        {"name": "westus2", "displayName": "West US 2"},
+                        {
+                            "name": "swedencentral",
+                            "displayName": "Sweden Central",
+                        },
                     ]
                 ),
             ),
@@ -309,9 +351,9 @@ def test_profile_region_comes_from_live_project_and_azure_metadata(
         return next(responses)
 
     monkeypatch.setattr("agent_insights_quality.profiles.subprocess.run", run)
-    assert profile.resolve_test_region() == "WestUS2"
+    assert profile.resolve_test_region() == "SwedenCentral"
     assert calls[0][1:4] == ["rest", "--method", "get"]
-    assert "/projects/agent-insights-quality?" in calls[0][
+    assert "/projects/aiq-daily-swedencentral?" in calls[0][
         calls[0].index("--url") + 1
     ]
     assert calls[1][1:3] == ["account", "list-locations"]
@@ -320,7 +362,7 @@ def test_profile_region_comes_from_live_project_and_azure_metadata(
 def test_profile_region_has_no_registry_or_config_fallback(monkeypatch) -> None:
     profile = RuntimeProfile(
         name="daily",
-        project_name="agent-insights-quality",
+        project_name="aiq-daily-swedencentral",
         project_endpoint="https://example.invalid",
         insights_endpoint="https://example.invalid",
         application_insights_resource_id="/subscriptions/hidden/active",
@@ -341,7 +383,7 @@ def test_profile_region_has_no_registry_or_config_fallback(monkeypatch) -> None:
 def test_profile_region_fails_when_metadata_cannot_resolve(monkeypatch) -> None:
     profile = RuntimeProfile(
         name="daily",
-        project_name="agent-insights-quality",
+        project_name="aiq-daily-swedencentral",
         project_endpoint="https://example.invalid",
         insights_endpoint="https://example.invalid",
         application_insights_resource_id="/subscriptions/hidden/active",
@@ -352,7 +394,7 @@ def test_profile_region_fails_when_metadata_cannot_resolve(monkeypatch) -> None:
         [
             SimpleNamespace(
                 returncode=0,
-                stdout=json.dumps({"location": "westus2"}),
+                stdout=json.dumps({"location": "swedencentral"}),
             ),
             SimpleNamespace(returncode=0, stdout="[]"),
         ]

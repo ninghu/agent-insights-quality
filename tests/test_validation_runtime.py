@@ -228,6 +228,7 @@ class Deployer:
             runtime_agent_version="1",
             provider_agent_id=f"agent-{authority.authority_id}",
             provider_agent_version_id=f"version-{authority.authority_id}",
+            provider_content_digest=authority.source_content_digest,
             hosted_identity_id=(
                 f"identity-{authority.authority_id}" if hosted else None
             ),
@@ -246,6 +247,83 @@ class Deployer:
 
     def assert_ready(self, authority, _deployed) -> None:
         self.ready.append(authority.authority_id)
+
+
+def test_forced_recovery_dispatches_fresh_version_creation() -> None:
+    authorities = _authorities()
+    authority = next(
+        item for item in authorities if item.authority_id == "issue-001"
+    )
+    planned = plan_runtime_topology(
+        authorities,
+        cycle_suffix="0123456789ab",
+        policy=load_validation_policy(),
+    )
+    target_plan = [
+        item for item in planned if item.authority_id == authority.authority_id
+    ]
+    replacement_plan = [
+        recovery_runtime_plan(
+            target_plan[0],
+            recovery_ordinal=1,
+            policy=load_validation_policy(),
+        )
+    ]
+
+    class FreshDeployer(Deployer):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fresh: list[str] = []
+
+        def deploy(self, authority, planned):
+            raise AssertionError("recovery must not use idempotent deployment")
+
+        def deploy_fresh(self, authority, planned):
+            self.fresh.append(authority.authority_id)
+            return super().deploy(authority, planned)
+
+    deployer = FreshDeployer()
+    initial_events = []
+    deploy_all_authorities(
+        [authority],
+        target_plan,
+        deployer=Deployer(),
+        maximum_concurrency=1,
+        require_architecture_canaries=False,
+        record_resource=initial_events.append,
+    )
+    recovery_events = []
+    deployed = deploy_all_authorities(
+        [authority],
+        replacement_plan,
+        deployer=deployer,
+        maximum_concurrency=1,
+        require_architecture_canaries=False,
+        retry_transient_failures=False,
+        force_new_authority_ids={authority.authority_id},
+        record_resource=recovery_events.append,
+    )
+    assert set(deployed) == {authority.authority_id}
+    assert deployer.fresh == [authority.authority_id]
+    initial_intents = {
+        item["kind"]: item["intent_reference"]
+        for item in initial_events
+        if item["state"] == "create_intent"
+    }
+    recovery_intents = {
+        item["kind"]: item["intent_reference"]
+        for item in recovery_events
+        if item["state"] == "create_intent"
+    }
+    assert (
+        initial_intents["provider_agent"]
+        == recovery_intents["provider_agent"]
+    )
+    assert all(
+        initial_intents[kind] != recovery_intents[kind]
+        for kind in initial_intents
+        if kind != "provider_agent"
+    )
 
 
 class Runner:
@@ -362,8 +440,9 @@ def test_names_are_opaque_bounded_deterministic_and_collision_free() -> None:
         run_id="run-1",
     )
     assert len(suffix) == 12
-    assert validation_project_name(suffix, policy=policy).startswith(
-        "aiq-validation-"
+    assert (
+        validation_project_name(suffix, policy=policy)
+        == "aiq-staging-swedencentral"
     )
     topology = plan_runtime_topology(
         _authorities(),
@@ -372,6 +451,7 @@ def test_names_are_opaque_bounded_deterministic_and_collision_free() -> None:
     )
     assert len(topology) == len({item.runtime_agent_name for item in topology}) == 41
     assert all(policy.agent_name_policy.accepts(item.runtime_agent_name) for item in topology)
+    assert all(suffix not in item.runtime_agent_name for item in topology)
 
 
 def test_deployment_is_bounded_to_eight_and_each_authority_is_independent() -> None:
@@ -887,7 +967,7 @@ def test_agent_traffic_failure_does_not_cancel_other_agent_lanes() -> None:
         ("issue-013", "hosted_code"),
     ],
 )
-def test_issue_execution_failure_uses_fresh_generation_and_evidence_window(
+def test_issue_execution_failure_uses_fresh_version_and_evidence_window(
     authority_id,
     runtime_kind,
 ) -> None:
@@ -955,7 +1035,6 @@ def test_issue_execution_failure_uses_fresh_generation_and_evidence_window(
         replacement = replace(
             replacement,
             runtime_agent_version=f"{ordinal + 1}",
-            provider_agent_id=f"agent-{authority_id}-r{ordinal:02d}",
             provider_agent_version_id=f"version-{authority_id}-r{ordinal:02d}",
             hosted_identity_id=(
                 f"identity-{authority_id}-r{ordinal:02d}"
@@ -1007,13 +1086,19 @@ def test_issue_execution_failure_uses_fresh_generation_and_evidence_window(
     )
 
     assert len(results) == 1
-    assert results[0]["runtime_agent_name"].endswith("-r01")
+    assert (
+        results[0]["runtime_agent_name"]
+        == planned_by_id[authority_id].runtime_agent_name
+    )
     assert len(recoveries) == 1
-    assert recoveries[0][0] != recoveries[0][1]
+    assert recoveries[0][0] == recoveries[0][1]
     assert recoveries[0][2] is True
     assert recoveries[0][3] <= recoveries[0][4]
     assert len(completions) == 1
-    assert completions[0][1].runtime_agent_name.endswith("-r01")
+    assert (
+        completions[0][1].runtime_agent_name
+        == planned_by_id[authority_id].runtime_agent_name
+    )
     assert len(
         [
             call
@@ -1067,7 +1152,7 @@ def test_recovery_preserves_completed_authorities_and_converges_lanes() -> None:
         value = Deployer().deploy(spec, replacement_plan)
         value = replace(
             value,
-            provider_agent_id=f"agent-{spec.authority_id}-r{ordinal:02d}",
+            runtime_agent_version=str(ordinal + 1),
             provider_agent_version_id=(
                 f"version-{spec.authority_id}-r{ordinal:02d}"
             ),
@@ -1172,7 +1257,7 @@ def test_issue_recovery_exhaustion_fails_closed_without_rerunning_successes() ->
         )
         return replace(
             replacement,
-            provider_agent_id=f"agent-{spec.authority_id}-r{ordinal:02d}",
+            runtime_agent_version=str(ordinal + 1),
             provider_agent_version_id=(
                 f"version-{spec.authority_id}-r{ordinal:02d}"
             ),

@@ -8,18 +8,19 @@ private artifact root.
 
 | Profile | Project | Purpose |
 | --- | --- | --- |
-| `daily` | `agent-insights-quality` | Weekday qualification |
-| `staging` | `agent-insights-quality-staging` | Legacy `r03` history; do not run |
+| `daily` | `aiq-daily-swedencentral` | Weekday qualification |
+| `staging` | `aiq-staging-swedencentral` | Durable human-reviewed validation gate |
 
-`r03` is the final legacy staging run. The persistent staging row remains only while the external
-new-only Daily approved-record cutover is pending; do not start another staging run or use it as
-fallback.
+The old West US 2 environment and its final historical staging run remain untouched until a later
+review explicitly authorizes retirement. Neither Sweden profile may discover or mutate legacy
+resources or lifecycle state.
 
 ## Test Agent Validation
 
-Test Agent Validation reuses the staging account, GPT-5.4 mini deployment, ACR, storage, and read-only
-`g29` telemetry, but creates one opaque temporary Project and 41 independent Agent endpoints per
-clean commit. It creates no monitor and does not run Agent Insights, Sol assessment, score/report
+Test Agent Validation reuses the durable `aiq-staging-swedencentral` Account and identically named
+Project, exact GPT-5.4 mini deployment, shared ACR/storage, and read-only Sweden `g30` telemetry. It
+reconciles 41 stable baseline/issue Agent names to exact server-assigned provider versions and content
+digests. It creates no monitor and does not run Agent Insights, Sol assessment, score/report
 generation, ADX publication, email, or Daily.
 
 The executable authority is each `traffic.json` `validation_rules` contract. Its automatic digest
@@ -30,7 +31,7 @@ require five issue and five paired-v0 attempts; model-mediated packages require 
 Expected issue observations remain private-review context rather than a local verdict.
 `minimum_traces` keeps its Daily meaning and is never used as a validation attempt threshold.
 
-Before any Project create, acquire the account-wide OS file lock and record measured RPM/TPM,
+Before any topology mutation, acquire the Sweden-environment OS file lock and record measured RPM/TPM,
 25-percent and absolute headroom, the complete endpoint envelope, inner model fan-out, and bounded
 concurrency. Provision at most eight, query telemetry at most four, and allow one scenario
 attempt per runtime. The shared bucket charges each request's input plus maximum output budget,
@@ -50,19 +51,18 @@ LOCKED -> PREFLIGHT -> CREATING -> VALIDATING
 The runner holds
 `~/.aiq-runtime/agent-insights-quality/test-agent-validation/validation.lock` for the whole process.
 Every mutation atomically replaces the local active journal and writes a required content-addressed,
-append-only history snapshot. Process exit releases the lock. Before traffic, an unchanged commit may
-resume the same cycle, Project, topology, exact source-digest Support images, and confirmed-ready
+append-only history event. Process exit releases the lock. Before traffic, an unchanged commit may
+resume the same cycle, durable Project, topology, exact source-digest Support images, and confirmed-ready
 authorities; it retries only unresolved authorities and allows at most three recovered versions per
-Agent. Phase 1 deploys only `weather-agent/v0` and `finance-agent/v0`, waits the reviewed clean
-interval, and runs both official baseline matrices concurrently. Both must pass before Phase 2
-deploys the remaining 39, waits a second clean interval, and runs five independent Agent lanes with
+Agent. Phase 1 deploys only `weather-agent/v0` and `finance-agent/v0` and runs both official baseline
+matrices concurrently. Both must pass before Phase 2 deploys the remaining 39 and runs five independent Agent lanes with
 versions sequential inside each lane. A recoverable issue execution/evidence failure supersedes only
-that runtime generation: the runner retains it for final cleanup, journals a fresh `-r01`/`-r02`/
-`-r03` replacement identity in the same Project, waits the reviewed clean interval, and accepts only
-replacement evidence from its exact identity and time window. Completed authorities remain accepted
+that provider version: the runner keeps the stable Agent name, reconciles a new server-assigned exact
+version for the same content digest, and accepts only replacement evidence from its exact operation and
+time window after bounded hydration/stability waiting. Completed authorities remain accepted
 and are never rerun; pre-traffic source/contract failures that rebuilding cannot change and Phase 1
 baselines are not eligible. Agent-local failures do not cancel other lanes; shared runtime failures do. Commit,
-identity, substrate, topology, TTL, retry exhaustion, or post-traffic drift forces exact full-cycle
+identity, substrate, topology, TTL, retry exhaustion, or post-traffic drift forces exact run-scoped
 cleanup. Cleanup remains allowed after the fixed 72-hour execution TTL. The authenticated Azure CLI
 user is resolved explicitly, recorded as a private hash, and checked on every SDK token acquisition.
 
@@ -70,11 +70,11 @@ Support wheelhouse artifacts and ACR build tags are reused only under exact requ
 digests. Cycle tags remain cycle-owned and are removed during cleanup. Public-safe per-stage timings
 are persisted after each completed stage under the private validation runtime root.
 
-Cleanup records intent first and deletes responses, conversations/sessions, every accepted or
-superseded Agent generation and its Hosted topology, connections, role assignments, cycle principals,
-ACR tags and unshared manifests, then the Project. Final proof requires Project `404`, no nonce-owned
-resources, sessions/responses, cycle tags, or incomplete reviewed cascades. Ambiguity enters
-`CLEANUP_BLOCKED` and keeps the account unavailable.
+Cleanup records intent first and deletes responses, conversations/sessions, cycle tags, and unshared
+manifests. The durable Project, its connections/RBAC, and reconciled Agent/version topology are
+explicitly retained. Final proof requires no run-scoped nonce-owned resources, sessions/responses,
+cycle tags, or incomplete reviewed cascades. Ambiguity enters `CLEANUP_BLOCKED` only in the Sweden
+environment namespace and never mutates the legacy lifecycle pointer.
 
 Run local validation with no identity, path, or SHA arguments:
 
@@ -105,8 +105,10 @@ Daily checks out the record's exact commit and recomputes catalogs, Agent source
 contract before provisioning. Then perform only read-only readiness and registry reconciliation; do
 not send smoke traffic. For this migration only, after readiness succeeds, the Daily owner may run
 the explicitly requested isolated `--test-run --rerun N` email-only Daily Test. It is external,
-non-gating, and writes no ADX, official report/trend, or pull request. Only then may legacy staging
-resources and code be removed forward-only; staging is never a fallback.
+non-gating, and writes no ADX, official report/trend, or pull request.
+
+The old West US 2 resources remain unchanged after cutover; retirement requires a separate reviewed
+authorization. That old environment is never a staging fallback.
 
 Both use 90-day telemetry and artifact retention. The shared ADX quality-history database retains
 sanitized daily results and explanations for 730 days and keeps 90 days in hot cache.
@@ -126,14 +128,18 @@ Daily execution does not build or push images.
 ```powershell
 python -m agent_insights_quality deploy-infrastructure
 python -m agent_insights_quality deploy-analytics
-# Legacy staging provisioning is retained but must not run after r03.
 ```
 
-The full infrastructure command includes a two-node production ADX cluster and the
-`AgentInsightsQuality` database in `agent-insights-quality-rg`. Use `deploy-analytics` for an
-ADX-only deployment that cannot change Foundry models, Projects, telemetry, storage, or registries.
-Neither command creates a native ADX dashboard because that dashboard surface has no ARM/Bicep
-deployment resource.
+The infrastructure command creates only the two Sweden accounts, identically named Projects,
+Project-scoped `g30` telemetry pairs, and exact reviewed model deployments in the existing resource
+group. It references the existing shared ACR and Blob storage and does not create, update, or delete
+existing containers or data. It creates only the environment-namespaced
+`test-agent-validation-approved-records-swedencentral-g30` child container in that shared storage,
+then idempotently ensures and locks its 90-day WORM policy. It does not create, update, or delete ADX
+or any West US 2 resource.
+`deploy-analytics` is a separately reviewed ADX-only operation that
+cannot change Foundry models, Projects, telemetry, storage, or registries. Neither command creates a
+native ADX dashboard because that dashboard surface has no ARM/Bicep deployment resource.
 
 Render the private, ready-to-import dashboard file after deployment:
 
@@ -146,8 +152,9 @@ under `~/.aiq-runtime/agent-insights-quality/dashboards/`. The rendered file con
 context and must never be committed. Daily email uses the reviewed public
 `https://aka.ms/agent-insights/quality` short link, which redirects to the shared dashboard.
 
-Provisioning creates five Agents, 41 immutable versions, and five disabled/manual monitors in exactly
-one selected profile. Every hosted version must activate and bind an exact-version session. Pure
+Provisioning reconciles five stable Agents, all 41 logical authorities to their exact returned
+provider versions and content digests, and five disabled/manual monitors in the selected Daily
+profile. Every hosted version must activate and bind an exact-version session. Pure
 Prompt traffic uses an exact Agent reference, declares no tools or tool fixtures, and fails closed if
 the model emits a function call. Provisioning emits flushed, public-safe phase, version,
 activation, retry, image-cache, monitor, and registry progress without exposing private resource IDs.
@@ -163,21 +170,16 @@ issues package their complete `source/` tree together with the shared requiremen
 contract. A deployed issue version contains only its reviewed defect and no dormant branches for
 other issues, so source-aware proposed fixes see the exact defective implementation.
 
-The following command is retained for legacy migration history only and must not be run after `r03`:
-
-```powershell
-python -m agent_insights_quality run-full --report-date <Pacific YYYY-MM-DD> `
-  --work-items $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
-```
-
-Test Agent Validation always runs the full 41-authority matrix for one exact commit. Daily derives the
+Official staging qualification uses `run-test-agent-validation` and always runs the full
+41-authority matrix for one exact commit in the durable `aiq-staging-swedencentral` Project. Daily derives the
 exact-head approved-record Blob path and reads that immutable authority directly; it never trusts an
 operator-supplied local record file. Daily rejects a missing record, invalid WORM metadata, commit
 drift, or validation-digest drift. After provisioning, verify the registry and endpoints read-only.
-Do not send smoke traffic that starts a new clean-window wait.
+Do not send Daily smoke traffic.
 
-Provisioning writes each profile registry locally and uploads `daily.json` or `staging.json` to the
-private Azure `deployment-registries` container using Entra authentication. Every qualification run
+Provisioning writes each profile registry locally and uploads
+`swedencentral-g30/daily.json` or `swedencentral-g30/staging.json` to the private Azure
+`deployment-registries` container using Entra authentication. Every qualification run
 downloads the canonical blob before traffic, then validates profile, Project, catalogs, and all
 version digests. Authorized operators therefore share one deployed environment without committing
 Azure deployment identifiers to Git.
@@ -192,22 +194,22 @@ python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD> `
 Before traffic, Daily performs a read-only ARM GET of its concrete Foundry Project and resolves the
 returned `location` through Azure location metadata. That live Project is the sole region source; the
 deployment registry is only a required normalized cross-check and is never a fallback. The current
-canonical display is `WestUS2`. Report/email generation fails if the live location, metadata display,
+canonical display is `SwedenCentral`. Report/email generation fails if the live location, metadata display,
 or registry match is missing. This contract is intentionally one scalar region: no experiments,
 region arrays, comparison runs, or region-scoped report directories.
 
 The runner validates catalog hashes against the protected daily registry, resets each monitor once,
-waits for the reviewed `0.1`-hour clean interval, runs `v0`, then runs four deterministic issues per
-Agent. Agent starts are staggered by five seconds to avoid a simultaneous endpoint burst while all
+runs `v0`, then runs four deterministic issues per Agent without an unconditional pre-traffic sleep.
+Agent starts are staggered by five seconds to avoid a simultaneous endpoint burst while all
 five Agents still execute concurrently; exact versions for one Agent execute sequentially. Before each
 Hosted version, the runner patches the Agent endpoint to one `FixedRatio` rule with 100% traffic on
 that exact version, confirms the selector, and then creates an exact-version session. This keeps
 compute behavior and outer telemetry version identity aligned.
 
-Daily and staging Projects prohibit ad-hoc debug traffic. A pre-existing `invoke_agent` trace in the
-minimum lookback window delays the Agent before any qualification traffic is sent. Monitor reset does
-not delete telemetry. Debug locally or in a separately owned sandbox; the runner waits until the
-short clean interval expires before rerunning qualification against the same profile.
+Daily and staging Projects prohibit ad-hoc debug traffic. Monitor reset does not delete telemetry.
+Debug locally or in a separately owned sandbox. Qualification evidence is accepted only when exact
+run, Agent, provider-version, operation, and invocation-time-window correlation hydrates and remains
+stable within the bounded post-invoke deadline.
 
 The runner prints flushed, thread-safe progress lines for each Agent/version and for endpoint,
 telemetry, trace, and Agent Insights stages. Long telemetry waits, Insight runs, and remote retries
@@ -228,8 +230,8 @@ Agent, Foundry-version, invocation-time, operation, and foreign-card subset filt
 mandatory. Hosted baseline terminal and tool behavior is validated only after correlation stabilizes;
 the Prompt path does not enter this Hosted stage.
 Recovery claims are durably capped per Agent across resumes. A quarantined Insight run must drain
-before later versions for that Agent can send traffic; an unresolved start without a run ID requires
-a clean-window reset on resume instead of new target traffic. The immutable run manifest is deferred
+before later versions for that Agent can send traffic; an unresolved start without a run ID fails
+closed on resume instead of sending new target traffic. The immutable run manifest is deferred
 until no start or drain quarantine remains.
 
 Issue source, traffic, source-delta manifests, and version digests are reviewed contracts. Equal

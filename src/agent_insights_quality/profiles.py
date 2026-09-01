@@ -8,7 +8,12 @@ from pathlib import Path
 
 from agent_insights_quality.automation_policy import load_automation_policy
 from agent_insights_quality.progress import ProgressReporter
-from agent_insights_quality.registry import PROFILE_PROJECTS
+from agent_insights_quality.registry import (
+    ENVIRONMENT_ID,
+    PROFILE_LOCATION,
+    PROFILE_PROJECTS,
+    TELEMETRY_RESOURCE_SET,
+)
 from agent_insights_quality.util import ContractError, runtime_root
 from agent_insights_quality.azure_cli import azure_cli
 from agent_insights_quality.azure_regions import location_display_name
@@ -30,6 +35,8 @@ class RuntimeProfile:
     registry_storage_account_name: str = ""
     account_resource_id: str = ""
     telemetry_resource_set: str = ""
+    environment_id: str = ENVIRONMENT_ID
+    location: str = PROFILE_LOCATION
 
     @classmethod
     def from_env(
@@ -44,6 +51,9 @@ class RuntimeProfile:
             if telemetry_resource_set is not None
             else load_automation_policy().telemetry_resource_set
         )
+        if resource_set != TELEMETRY_RESOURCE_SET:
+            raise ContractError("Profile telemetry resource set is not the active environment")
+        project_name = PROFILE_PROJECTS[name]
         resources = _azure_resources()
         accounts = [
             item
@@ -53,6 +63,11 @@ class RuntimeProfile:
             and item.get("kind") == "AIServices"
             and isinstance(item.get("tags"), dict)
             and item["tags"].get("profile") == name
+            and item["tags"].get("environment") == PROFILE_LOCATION
+            and item["tags"].get("location") == PROFILE_LOCATION
+            and item["tags"].get("generation") == resource_set
+            and str(item.get("location") or "").casefold() == PROFILE_LOCATION
+            and item.get("name") == project_name
         ]
         registries = [
             item
@@ -75,7 +90,10 @@ class RuntimeProfile:
             == "microsoft.insights/components"
             and isinstance(item.get("tags"), dict)
             and item["tags"].get("profile") == name
+            and item["tags"].get("environment") == PROFILE_LOCATION
+            and item["tags"].get("location") == PROFILE_LOCATION
             and item["tags"].get("generation") == resource_set
+            and str(item.get("location") or "").casefold() == PROFILE_LOCATION
         ]
         if len(profile_insights) != 1:
             raise ContractError(
@@ -90,7 +108,6 @@ class RuntimeProfile:
                 "Fixed Azure resources could not be resolved uniquely for the profile"
             )
         account_name = str(accounts[0]["name"])
-        project_name = PROFILE_PROJECTS[name]
         endpoint = (
             f"https://{account_name}.services.ai.azure.com/api/projects/{project_name}"
         )
@@ -101,12 +118,19 @@ class RuntimeProfile:
             project_endpoint=endpoint,
             insights_endpoint=endpoint,
             application_insights_resource_id=resource_id,
-            registry_path=runtime_root() / "deployment-registries" / f"{name}.json",
+            registry_path=(
+                runtime_root()
+                / "deployment-registries"
+                / ENVIRONMENT_ID
+                / f"{name}.json"
+            ),
             account_name=account_name,
             container_registry_name=str(registries[0]["name"]),
             registry_storage_account_name=str(storage_accounts[0]["name"]),
             account_resource_id=str(accounts[0]["id"]),
             telemetry_resource_set=resource_set,
+            environment_id=ENVIRONMENT_ID,
+            location=PROFILE_LOCATION,
         )
 
     def assert_insights_connection(
@@ -157,6 +181,8 @@ class RuntimeProfile:
             registry_storage_account_name=self.registry_storage_account_name,
             account_resource_id=self.account_resource_id,
             telemetry_resource_set=self.telemetry_resource_set,
+            environment_id=self.environment_id,
+            location=self.location,
         )
 
     def resolve_test_region(self) -> str:
@@ -243,6 +269,9 @@ class RuntimeProfile:
             or str(value.get("name") or "") != expected["deployment_name"]
             or str(model.get("name") or "") != expected["model_id"]
             or str(model.get("version") or "") != expected["model_version"]
+            or str((value.get("sku") or {}).get("name") or "")
+            != "DataZoneStandard"
+            or (value.get("sku") or {}).get("capacity") != 4500
         ):
             raise ContractError("Test Agent model deployment is not the reviewed version")
 

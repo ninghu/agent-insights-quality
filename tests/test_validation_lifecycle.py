@@ -89,6 +89,7 @@ def _prompt_runtime() -> dict:
         "runtime_agent_version": "1",
         "provider_agent_id": "synthetic-agent",
         "provider_agent_version_id": "synthetic-version",
+        "provider_content_digest": "sha256:" + "1" * 64,
         "hosted_identity_id": None,
         "hosted_blueprint_id": None,
         "hosted_deployment_id": None,
@@ -111,6 +112,7 @@ def _hosted_runtime() -> dict:
         "runtime_agent_version": "1",
         "provider_agent_id": "synthetic-finance-agent",
         "provider_agent_version_id": "synthetic-finance-version",
+        "provider_content_digest": "sha256:" + "2" * 64,
         "hosted_identity_id": "synthetic-finance-identity",
         "hosted_blueprint_id": "synthetic-finance-blueprint",
         "hosted_deployment_id": "synthetic-finance-deployment",
@@ -140,6 +142,7 @@ def _validating_lifecycle() -> dict:
                 "runtime_agent_version": "1",
                 "provider_agent_id": f"provider-agent-{index}",
                 "provider_agent_version_id": f"provider-version-{index}",
+                "provider_content_digest": f"sha256:{index:064x}",
                 "hosted_identity_id": (
                     f"hosted-identity-{index}" if hosted else None
                 ),
@@ -179,7 +182,7 @@ class _MemoryJournal:
     def commit(current, *, next_state, updates, now):
         value = deepcopy(current.value)
         value["state"] = next_state
-        value["revision"] += 1
+        value["event_sequence"] += 1
         value["last_activity_at"] = now.isoformat()
 
         def merge(target, source):
@@ -196,7 +199,7 @@ class _MemoryJournal:
 
 
 @pytest.mark.parametrize("authority_id", ["issue-001", "issue-013"])
-def test_issue_recovery_journals_superseded_and_accepted_generation(
+def test_issue_recovery_journals_superseded_and_accepted_version(
     authority_id,
 ) -> None:
     value = _validating_lifecycle()
@@ -206,13 +209,9 @@ def test_issue_recovery_journals_superseded_and_accepted_generation(
         if item["authority_id"] == authority_id
     )
     replacement = deepcopy(current)
-    replacement["runtime_agent_name"] = (
-        f"{current['runtime_agent_name']}-r01"
-    )
     replacement["runtime_agent_version"] = "2"
-    replacement["provider_agent_id"] = f"{current['provider_agent_id']}-r01"
     replacement["provider_agent_version_id"] = (
-        f"{current['provider_agent_version_id']}-r01"
+        f"{current['provider_agent_version_id']}-next"
     )
     replacement["foundry_agent_name"] = replacement["runtime_agent_name"]
     replacement["foundry_agent_version"] = "2"
@@ -372,9 +371,9 @@ def test_resumed_resource_intent_does_not_duplicate_or_downgrade_ready(
             active=journal.begin_cycle(_initial()),
         )
         controller.dynamic_resource_event(event, now=START)
-        revision = controller.active.value["revision"]
+        event_sequence = controller.active.value["event_sequence"]
         controller.dynamic_resource_event(event, now=START)
-        assert controller.active.value["revision"] == revision
+        assert controller.active.value["event_sequence"] == event_sequence
         controller.dynamic_resource_event(
             {
                 **event,
@@ -553,12 +552,7 @@ def test_next_invocation_recovers_incomplete_journal_before_new_cycle(
             next_state="PREFLIGHT",
             now=START + timedelta(seconds=1),
         )
-        controller = ValidationCycleController(journal, active=active)
-        controller.project_create_intent(
-            name="aiq-validation-synthetic",
-            provider_id="synthetic-project-id",
-            now=START + timedelta(seconds=2),
-        )
+        ValidationCycleController(journal, active=active)
 
     recovery_lock = LocalValidationLock(lock_path)
     with recovery_lock:
@@ -608,11 +602,6 @@ def test_recovery_resolves_ambiguous_response_and_session_exactly(tmp_path) -> N
             now=START + timedelta(seconds=1),
         )
         controller = ValidationCycleController(journal, active=active)
-        controller.project_create_intent(
-            name="aiq-validation-synthetic",
-            provider_id="synthetic-project-id",
-            now=START + timedelta(seconds=2),
-        )
         for index, (kind, runtime_kind) in enumerate(
             (("stored_response", "prompt"), ("session", "hosted_code")),
             start=3,
@@ -646,7 +635,6 @@ def test_recovery_resolves_ambiguous_response_and_session_exactly(tmp_path) -> N
         assert backend.deleted == [
             "resolved-stored_response",
             "resolved-session",
-            "resolved-project",
         ]
         recovered = journal.read_active()
         assert recovered.value["cleanup"]["exact_clean"] is True
@@ -691,11 +679,6 @@ def test_recovery_persists_public_safe_cleanup_failure_before_blocking(
             now=START + timedelta(seconds=1),
         )
         controller = ValidationCycleController(journal, active=active)
-        controller.project_create_intent(
-            name="aiq-validation-synthetic",
-            provider_id="synthetic-project-id",
-            now=START + timedelta(seconds=2),
-        )
         intent_reference = content_hash({"kind": "stored_response"})
         response_event = {
             "state": "create_intent",

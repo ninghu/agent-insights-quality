@@ -6,18 +6,19 @@ param automationPrincipalId string
 param telemetryGeneration string
 param testAgentCapacity int
 param insightGenerationCapacity int
-param adxSkuName string
-@minValue(2)
-param adxCapacity int
+param approvedRecordContainerName string
 
 var commonTags = {
   purpose: 'agent-insights-quality'
   agentInsightsQualityQualification: 'true'
   automationOwner: automationOwner
+  environment: 'swedencentral'
+  location: 'swedencentral'
+  generation: telemetryGeneration
 }
 var uniqueSuffix = substring(uniqueString(subscription().subscriptionId, resourceGroup().id), 0, 11)
-var dailyAccountName = 'aiqd${uniqueSuffix}'
-var stagingAccountName = 'aiqs${uniqueSuffix}'
+var dailyAccountName = 'aiq-daily-swedencentral'
+var stagingAccountName = 'aiq-staging-swedencentral'
 var registryName = 'aiqacr${uniqueSuffix}'
 var storageName = 'aiqartifacts${uniqueSuffix}'
 var monitoringReaderRoleId = '43d0d8ad-25c7-4714-9337-8ba259a9fe05'
@@ -28,22 +29,10 @@ var acrDeleteRoleId = 'c2f4ef07-c644-48eb-af81-4b1b4947fb11'
 var blobContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 var foundryProjectManagerRoleId = 'eadc314b-1a2d-4efa-be10-5d325db5065e'
 
-module qualityAnalytics 'quality-analytics.bicep' = {
-  name: 'quality-analytics'
-  params: {
-    location: location
-    uniqueSuffix: uniqueSuffix
-    automationOwner: automationOwner
-    automationPrincipalId: automationPrincipalId
-    skuName: adxSkuName
-    capacity: adxCapacity
-  }
-}
-
 resource dailyWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: 'aiq-daily-${telemetryGeneration}-law-${uniqueSuffix}'
   location: location
-  tags: union(commonTags, { profile: 'daily', generation: telemetryGeneration })
+  tags: union(commonTags, { profile: 'daily' })
   properties: {
     retentionInDays: 90
     features: {
@@ -55,7 +44,7 @@ resource dailyWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = 
 resource stagingWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: 'aiq-staging-${telemetryGeneration}-law-${uniqueSuffix}'
   location: location
-  tags: union(commonTags, { profile: 'staging', generation: telemetryGeneration })
+  tags: union(commonTags, { profile: 'staging' })
   properties: {
     retentionInDays: 90
     features: {
@@ -68,7 +57,7 @@ resource dailyInsights 'Microsoft.Insights/components@2020-02-02' = {
   name: 'aiq-daily-${telemetryGeneration}-appi-${uniqueSuffix}'
   location: location
   kind: 'web'
-  tags: union(commonTags, { profile: 'daily', generation: telemetryGeneration })
+  tags: union(commonTags, { profile: 'daily' })
   properties: {
     Application_Type: 'web'
     WorkspaceResourceId: dailyWorkspace.id
@@ -79,7 +68,7 @@ resource stagingInsights 'Microsoft.Insights/components@2020-02-02' = {
   name: 'aiq-staging-${telemetryGeneration}-appi-${uniqueSuffix}'
   location: location
   kind: 'web'
-  tags: union(commonTags, { profile: 'staging', generation: telemetryGeneration })
+  tags: union(commonTags, { profile: 'staging' })
   properties: {
     Application_Type: 'web'
     WorkspaceResourceId: stagingWorkspace.id
@@ -108,7 +97,7 @@ resource dailyTestAgentsModel 'Microsoft.CognitiveServices/accounts/deployments@
   parent: dailyAccount
   name: 'gpt-5.4-mini'
   sku: {
-    name: 'GlobalStandard'
+    name: 'DataZoneStandard'
     capacity: testAgentCapacity
   }
   properties: {
@@ -125,7 +114,7 @@ resource dailyInsightGenerationModel 'Microsoft.CognitiveServices/accounts/deplo
   parent: dailyAccount
   name: 'terra-insight-generation'
   sku: {
-    name: 'GlobalStandard'
+    name: 'DataZoneStandard'
     capacity: insightGenerationCapacity
   }
   properties: {
@@ -163,7 +152,7 @@ resource stagingTestAgentsModel 'Microsoft.CognitiveServices/accounts/deployment
   parent: stagingAccount
   name: 'gpt-5.4-mini'
   sku: {
-    name: 'GlobalStandard'
+    name: 'DataZoneStandard'
     capacity: testAgentCapacity
   }
   properties: {
@@ -180,7 +169,7 @@ resource stagingInsightGenerationModel 'Microsoft.CognitiveServices/accounts/dep
   parent: stagingAccount
   name: 'terra-insight-generation'
   sku: {
-    name: 'GlobalStandard'
+    name: 'DataZoneStandard'
     capacity: insightGenerationCapacity
   }
   properties: {
@@ -196,32 +185,27 @@ resource stagingInsightGenerationModel 'Microsoft.CognitiveServices/accounts/dep
   ]
 }
 
-resource registry 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = {
+resource registry 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' existing = {
   name: registryName
-  location: location
-  tags: commonTags
-  sku: {
-    name: 'Basic'
-  }
-  properties: {
-    adminUserEnabled: false
-    publicNetworkAccess: 'Enabled'
-  }
 }
 
-resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
   name: storageName
-  location: location
-  tags: commonTags
-  kind: 'StorageV2'
-  sku: {
-    name: 'Standard_LRS'
-  }
+}
+
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' existing = {
+  parent: storage
+  name: 'default'
+}
+
+resource approvedValidationRecords 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: approvedRecordContainerName
   properties: {
-    allowBlobPublicAccess: false
-    allowSharedKeyAccess: false
-    minimumTlsVersion: 'TLS1_2'
-    supportsHttpsTrafficOnly: true
+    publicAccess: 'None'
+    immutableStorageWithVersioning: {
+      enabled: true
+    }
   }
 }
 
@@ -280,12 +264,14 @@ module dailyProject 'profile-project.bicep' = {
   params: {
     location: location
     accountName: dailyAccount.name
-    projectName: 'agent-insights-quality'
+    projectName: dailyAccountName
     applicationInsightsName: dailyInsights.name
     registryName: registry.name
     automationOwner: automationOwner
     automationPrincipalId: automationPrincipalId
     profile: 'daily'
+    environment: 'swedencentral'
+    telemetryGeneration: telemetryGeneration
     monitoringReaderRoleId: monitoringReaderRoleId
     modelInferenceRoleId: modelInferenceRoleId
     acrPullRoleId: acrPullRoleId
@@ -301,12 +287,14 @@ module stagingProject 'profile-project.bicep' = {
   params: {
     location: location
     accountName: stagingAccount.name
-    projectName: 'agent-insights-quality-staging'
+    projectName: stagingAccountName
     applicationInsightsName: stagingInsights.name
     registryName: registry.name
     automationOwner: automationOwner
     automationPrincipalId: automationPrincipalId
     profile: 'staging'
+    environment: 'swedencentral'
+    telemetryGeneration: telemetryGeneration
     monitoringReaderRoleId: monitoringReaderRoleId
     modelInferenceRoleId: modelInferenceRoleId
     acrPullRoleId: acrPullRoleId
@@ -315,125 +303,4 @@ module stagingProject 'profile-project.bicep' = {
   dependsOn: [
     stagingInsightGenerationModel
   ]
-}
-
-resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
-  parent: storage
-  name: 'default'
-  properties: {
-    isVersioningEnabled: true
-  }
-}
-
-resource artifacts 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
-  parent: blobService
-  name: 'quality-artifacts'
-  properties: {
-    publicAccess: 'None'
-  }
-}
-
-resource deploymentRegistries 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
-  parent: blobService
-  name: 'deployment-registries'
-  properties: {
-    publicAccess: 'None'
-  }
-}
-
-resource approvedValidationRecords 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
-  parent: blobService
-  name: 'test-agent-validation-approved-records'
-  properties: {
-    publicAccess: 'None'
-    immutableStorageWithVersioning: {
-      enabled: true
-    }
-  }
-}
-
-resource approvedValidationRecordPolicy 'Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies@2023-05-01' = {
-  parent: approvedValidationRecords
-  name: 'default'
-  properties: {
-    immutabilityPeriodSinceCreationInDays: 90
-    allowProtectedAppendWrites: false
-  }
-}
-
-resource lifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05-01' = {
-  parent: storage
-  name: 'default'
-  properties: {
-    policy: {
-      rules: [
-        {
-          name: 'expire-quality-artifacts'
-          enabled: true
-          type: 'Lifecycle'
-          definition: {
-            filters: {
-              blobTypes: ['blockBlob']
-              prefixMatch: ['quality-artifacts/']
-            }
-            actions: {
-              baseBlob: {
-                delete: {
-                  daysAfterModificationGreaterThan: 90
-                }
-              }
-              version: {
-                delete: {
-                  daysAfterCreationGreaterThan: 90
-                }
-              }
-            }
-          }
-        }
-        {
-          name: 'expire-deployment-registry-versions'
-          enabled: true
-          type: 'Lifecycle'
-          definition: {
-            filters: {
-              blobTypes: ['blockBlob']
-              prefixMatch: ['deployment-registries/']
-            }
-            actions: {
-              version: {
-                delete: {
-                  daysAfterCreationGreaterThan: 90
-                }
-              }
-            }
-          }
-        }
-        {
-          name: 'expire-approved-validation-records-after-worm'
-          enabled: true
-          type: 'Lifecycle'
-          definition: {
-            filters: {
-              blobTypes: ['blockBlob']
-              prefixMatch: [
-                'test-agent-validation-approved-records/approved-validation-records/'
-              ]
-            }
-            actions: {
-              baseBlob: {
-                delete: {
-                  daysAfterModificationGreaterThan: 91
-                }
-              }
-              version: {
-                delete: {
-                  daysAfterCreationGreaterThan: 91
-                }
-              }
-            }
-          }
-        }
-      ]
-    }
-  }
 }

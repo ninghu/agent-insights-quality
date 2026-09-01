@@ -9,7 +9,7 @@ from typing import Any
 from agent_insights_quality.selection import DAILY_ISSUES_PER_AGENT
 from agent_insights_quality.util import ROOT, ContractError, read_yaml
 
-FIXED_TELEMETRY_RESOURCE_SET = "g29"
+FIXED_TELEMETRY_RESOURCE_SET = "g30"
 MINIMUM_LOOKBACK_HOURS = 0.1
 TRAFFIC_UNCERTAINTY_SECONDS = 10 * 60
 TRACE_ASSERTION_DEADLINE_SECONDS = 15 * 60
@@ -28,6 +28,7 @@ class AutomationPolicy:
     max_recovery_versions: int
     agent_start_stagger_seconds: int
     telemetry_resource_set: str
+    approved_record_container: str
 
 
 def load_automation_policy(
@@ -97,6 +98,13 @@ def load_automation_policy(
         or resource_set != FIXED_TELEMETRY_RESOURCE_SET
     ):
         raise ContractError("Automation telemetry resource set is not the fixed reviewed set")
+    approved_record_container = str(value.get("approved_record_container") or "")
+    if approved_record_container != (
+        f"test-agent-validation-approved-records-swedencentral-{resource_set}"
+    ):
+        raise ContractError(
+            "Automation approved-record container is not the reviewed environment namespace"
+        )
     return AutomationPolicy(
         issues_per_agent_daily=daily_issues,
         insight_lookback_hours=lookback,
@@ -108,6 +116,7 @@ def load_automation_policy(
         max_recovery_versions=recoveries,
         agent_start_stagger_seconds=stagger,
         telemetry_resource_set=resource_set,
+        approved_record_container=approved_record_container,
     )
 
 

@@ -16,8 +16,8 @@ license: MIT
    plus items closed on the previous Pacific date; exclude `Removed`.
 4. Run `python -m agent_insights_quality run-daily --report-date <date> --work-items <snapshot>`.
    The runner must synchronize the canonical private Azure Blob registry, verify the fixed telemetry
-   connection, stagger concurrent Agent starts, and wait for the configured clean interval before any
-   Agent traffic. It may recover at most three transiently incomplete versions per Agent before
+   connection, exact promoted digest/version mapping, and stagger concurrent Agent starts without an
+   unconditional pre-traffic sleep. It may recover at most three transiently incomplete versions per Agent before
    finalization.
 5. Assess all five baseline packages and the four deterministically selected issues per Agent with
    GPT-5.6 Sol using the repository assessment prompt. The daily run contains 20 issue packages and
@@ -63,7 +63,7 @@ license: MIT
 
 For a reviewed email-only test, run `run-daily` with both `--test-run` and a nonzero `--rerun N`.
 The private `daily_test` recipient override is required. The test run still uses deployed endpoints,
-the clean-window policy, and private durable runtime state, but finalization must send only the one
+bounded post-invoke telemetry correlation, and private durable runtime state, but finalization must send only the one
 TEST-marked email. It must not contact ADX, write repository report or trend paths, validate generated
 paths, create a pull request, or enable auto-merge. Stop after importing the provider receipt into the
 private run directory. Scheduled official runs never pass `--test-run`.
@@ -72,7 +72,7 @@ The runner executes five Agents concurrently and versions sequentially within ea
 runs use the reviewed score threshold of 90. Daily provisioning is new-only: it derives and fetches
 the exact clean commit's immutable approved-record Blob, checks its locked WORM metadata, and
 recomputes the validation digest. It never accepts an operator-supplied local record or falls back to
-a legacy staging promotion receipt. Local Test Agent Validation covers all 36 issues plus five
+an old West US 2 promotion receipt. Local Test Agent Validation covers all 36 issues plus five
 baselines outside this Daily workflow.
 
 Any `inconclusive` baseline assessment or `INCOMPLETE` issue assessment makes the whole run

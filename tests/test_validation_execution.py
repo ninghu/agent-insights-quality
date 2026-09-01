@@ -70,21 +70,11 @@ def test_two_phase_contract_uses_only_fixed_v0_canaries_first() -> None:
     )
 
 
-def test_phase_clean_windows_start_only_after_hosted_routes_succeed() -> None:
+def test_no_pretraffic_clean_window_remains() -> None:
     source = inspect.getsource(_execute_validation_plan)
-    first_route = source.index("runner.prepare_hosted_routes")
-    second_route = source.index("runner.prepare_hosted_routes", first_route + 1)
-    assert first_route < source.index('wait_clean_interval("phase_1")')
-    assert source.index('wait_clean_interval("phase_1")') < source.index(
-        "phase_one_evidence = execute_validation_phase"
-    )
-    assert source.index(
-        "phase_one_evidence = execute_validation_phase"
-    ) < source.index("controller.begin_phase_two_deployment")
-    assert second_route < source.index('wait_clean_interval("phase_2")')
-    assert source.index('wait_clean_interval("phase_2")') < source.index(
-        "phase_two_evidence = execute_validation_phase"
-    )
+    assert "wait_clean_interval" not in source
+    assert "clean_interval_seconds" not in source
+    assert source.count("runner.prepare_hosted_routes") == 3
     preparation = inspect.getsource(
         FoundryScenarioAttemptRunner.prepare_hosted_routes
     )
@@ -105,11 +95,10 @@ def test_issue_recovery_keeps_superseded_generation_until_final_cleanup() -> Non
     assert "issue_execution_recovery_intent" in recovery
     assert "recovery_runtime_plan" in recovery
     assert "retry_transient_failures=False" in recovery
+    assert "force_new_authority_ids={authority.authority_id}" in recovery
     assert "CleanupEngine" not in recovery
     assert "authority_replacement_ready" in recovery
-    assert recovery.index("runner.prepare_hosted_routes") < recovery.index(
-        "wait_clean_interval("
-    )
+    assert "wait_clean_interval" not in recovery
     assert "phase_two_deployed[authority.authority_id] = replacement" in recovery
     assert "deployed[authority.authority_id] = replacement" in recovery
     phase_call = source[source.index("phase_two_evidence =") :]

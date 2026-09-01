@@ -91,6 +91,8 @@ def prepare_validation_plan(
         "pr_number": pr_number,
         "commit_sha": commit_sha,
         "project_name": validation_project_name(suffix, policy=policy),
+        "environment_id": policy.environment_id,
+        "location": policy.location,
         "telemetry_resource_set": policy.telemetry_resource_set,
         "test_agent_model": policy.test_agent_model,
         "validation_digest": validation_digest,
@@ -199,7 +201,10 @@ def validate_validation_plan(
     if (
         value.get("kind") != "test-agent-validation-plan"
         or value.get("repository") != policy.repository
-        or value.get("telemetry_resource_set") != "g29"
+        or value.get("environment_id") != policy.environment_id
+        or value.get("location") != policy.location
+        or value.get("project_name") != policy.project_name
+        or value.get("telemetry_resource_set") != "g30"
         or not isinstance(authorities, list)
         or len(authorities) != 41
         or {
@@ -272,7 +277,6 @@ def _validation_contract_files() -> list[Path]:
         *sorted(
             (ROOT / "src" / "agent_insights_quality").glob("validation_*.py")
         ),
-        ROOT / "infra" / "modules" / "validation-project.bicep",
     ]
 
 

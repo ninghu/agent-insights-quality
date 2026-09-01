@@ -34,12 +34,14 @@ class ValidationLimits:
     active_heartbeat_seconds: int
     absolute_ttl_hours: int
     max_recovery_versions_per_agent: int
-    clean_interval_seconds: int
 
 
 @dataclass(frozen=True)
 class ValidationPolicy:
     repository: str
+    environment_id: str
+    location: str
+    project_name: str
     telemetry_resource_set: str
     test_agent_model: dict[str, str]
     prompt_canary_agent: str
@@ -50,6 +52,9 @@ class ValidationPolicy:
     agent_name_policy: NamePolicy
     resource_kinds: tuple[str, ...]
     documented_project_cascade: tuple[str, ...]
+    trace_hydration_poll_seconds: int
+    trace_hydration_stabilization_seconds: int
+    trace_hydration_maximum_wait_seconds: int
 
 
 def load_validation_policy(
@@ -59,22 +64,31 @@ def load_validation_policy(
     if set(value) != {
         "schema_version",
         "repository",
+        "environment_id",
+        "location",
+        "project_name",
         "telemetry_resource_set",
         "test_agent_model",
         "canary_agents",
         "inventory",
         "limits",
+        "trace_hydration",
         "name_policy",
         "resource_kinds",
         "documented_project_cascade",
     }:
         raise ContractError("Test Agent Validation config fields are invalid")
-    if value.get("schema_version") != "1.0.0":
+    if value.get("schema_version") != "2.0.0":
         raise ContractError("Test Agent Validation config version is invalid")
     if value.get("repository") != "ninghu/agent-insights-quality":
         raise ContractError("Validation repository is not the reviewed public repository")
-    if value.get("telemetry_resource_set") != "g29":
-        raise ContractError("Validation must use read-only g29 telemetry")
+    if (
+        value.get("environment_id") != "swedencentral-g30"
+        or value.get("location") != "swedencentral"
+        or value.get("project_name") != "aiq-staging-swedencentral"
+        or value.get("telemetry_resource_set") != "g30"
+    ):
+        raise ContractError("Validation environment is not the reviewed Sweden contract")
     if value.get("test_agent_model") != {
         "deployment_name": "gpt-5.4-mini",
         "model_id": "gpt-5.4-mini",
@@ -101,10 +115,16 @@ def load_validation_policy(
         "active_heartbeat_seconds": 60,
         "absolute_ttl_hours": 72,
         "max_recovery_versions_per_agent": 3,
-        "clean_interval_seconds": 360,
     }
     if limits_value != expected_limits:
         raise ContractError("Validation limits differ from the reviewed policy")
+    hydration = _mapping(value.get("trace_hydration"), "trace hydration")
+    if hydration != {
+        "poll_seconds": 15,
+        "stabilization_seconds": 180,
+        "maximum_wait_seconds": 900,
+    }:
+        raise ContractError("Validation trace hydration policy is not reviewed")
     names = _mapping(value.get("name_policy"), "name policy")
     project_names = _name_policy(names.get("project"), "Project")
     agent_names = _name_policy(names.get("agent"), "Agent")
@@ -122,6 +142,9 @@ def load_validation_policy(
         raise ContractError("Validation Project cascade policy is invalid")
     return ValidationPolicy(
         repository=value["repository"],
+        environment_id=value["environment_id"],
+        location=value["location"],
+        project_name=value["project_name"],
         telemetry_resource_set=value["telemetry_resource_set"],
         test_agent_model=dict(value["test_agent_model"]),
         prompt_canary_agent="weather-agent",
@@ -132,6 +155,9 @@ def load_validation_policy(
         agent_name_policy=agent_names,
         resource_kinds=tuple(resource_kinds),
         documented_project_cascade=tuple(cascade),
+        trace_hydration_poll_seconds=hydration["poll_seconds"],
+        trace_hydration_stabilization_seconds=hydration["stabilization_seconds"],
+        trace_hydration_maximum_wait_seconds=hydration["maximum_wait_seconds"],
     )
 def _mapping(value: Any, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):

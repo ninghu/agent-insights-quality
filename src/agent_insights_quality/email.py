@@ -67,8 +67,8 @@ _AGENT_OWNERS = {
     for item in read_yaml(ROOT / "catalogs" / "AGENT_CATALOG.yaml")["agents"]
 }
 _PROJECT_NAMES = {
-    "daily": "agent-insights-quality",
-    "staging": "agent-insights-quality-staging",
+    "daily": "aiq-daily-swedencentral",
+    "staging": "aiq-staging-swedencentral",
 }
 
 

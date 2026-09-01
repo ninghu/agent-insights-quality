@@ -50,7 +50,7 @@ _REQUIRED_FIELDS = {
     "kind",
     "snapshot_type",
     "cycle_id",
-    "revision",
+    "event_sequence",
     "state",
     "repository",
     "pr_number",
@@ -94,6 +94,8 @@ def validation_runtime_root() -> Path:
         / ".aiq-runtime"
         / "agent-insights-quality"
         / "test-agent-validation"
+        / "environments"
+        / "swedencentral-g30"
     ).resolve()
 
 
@@ -215,7 +217,7 @@ class LifecycleJournal:
         disk = self.read_active()
         if (
             disk.value["journal_digest"] != current.value["journal_digest"]
-            or disk.value["revision"] != current.value["revision"]
+            or disk.value["event_sequence"] != current.value["event_sequence"]
         ):
             raise ContractError("Local validation journal changed before mutation")
         self._validate_transition(current.value["state"], next_state)
@@ -223,7 +225,7 @@ class LifecycleJournal:
         event_value = copy.deepcopy(current.value)
         event_value["snapshot_type"] = "event"
         event_value["state"] = next_state
-        event_value["revision"] += 1
+        event_value["event_sequence"] += 1
         event_value["last_activity_at"] = moment.isoformat()
         event_value["previous_journal_digest"] = current.value["journal_digest"]
         event_value["event_reference"] = None
@@ -340,8 +342,8 @@ def validate_lifecycle(value: Mapping[str, Any]) -> None:
         or value["kind"] != "test-agent-validation-lifecycle"
         or value["snapshot_type"] not in {"active", "event", "clean"}
         or value["state"] not in STATES
-        or not isinstance(value["revision"], int)
-        or value["revision"] < 1
+        or not isinstance(value["event_sequence"], int)
+        or value["event_sequence"] < 1
         or not isinstance(value["resources"], list)
     ):
         raise ContractError("Local validation lifecycle contract is invalid")
@@ -490,11 +492,6 @@ def _execution_recoveries_are_consistent(
     runtime_agents: list[Mapping[str, Any]],
 ) -> bool:
     runtime_by_id = {item["authority_id"]: item for item in runtime_agents}
-    replacement_names = [
-        item["replacement_runtime_agent_name"] for item in recoveries
-    ]
-    if len(replacement_names) != len(set(replacement_names)):
-        return False
     by_agent: dict[str, list[Mapping[str, Any]]] = {}
     by_authority: dict[str, list[Mapping[str, Any]]] = {}
     for item in recoveries:
@@ -510,7 +507,7 @@ def _execution_recoveries_are_consistent(
         )
         if (
             item["superseded_runtime_agent_name"]
-            == item["replacement_runtime_agent_name"]
+            != item["replacement_runtime_agent_name"]
             or (
                 state == "replacement_intent"
                 and (
@@ -579,12 +576,7 @@ def validate_topology_resource_bindings(
 ) -> None:
     provider_ids = {str(item["provider_id"]) for item in resources}
     required: set[str] = set()
-    for field in (
-        "project_reference",
-        "connection_ids",
-        "runtime_principal_ids",
-        "telemetry_identity_ids",
-    ):
+    for field in ("runtime_principal_ids", "telemetry_identity_ids"):
         value = topology.get(field)
         if isinstance(value, str) and value:
             required.add(value)
@@ -663,7 +655,10 @@ def _snapshot_name(value: Mapping[str, Any], prefix: str) -> Path:
         / repository
         / str(value["pr_number"])
         / str(value["cycle_id"])
-        / f"r{value['revision']:06d}-{value['state'].lower()}-{digest}.json"
+        / (
+            f"e{value['event_sequence']:06d}-"
+            f"{value['state'].lower()}-{digest}.json"
+        )
     )
 
 

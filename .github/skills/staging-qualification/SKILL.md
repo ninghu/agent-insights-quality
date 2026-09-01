@@ -1,63 +1,38 @@
 ---
 name: staging-qualification
-description: Legacy r03 staging qualification history; do not start a new run.
+description: Run the durable Sweden Central staging qualification for a reviewed candidate.
 license: MIT
 ---
 
-# Legacy Staging Qualification
+# Sweden Central Staging Qualification
 
-`r03` is the final staging run. Do not execute this workflow, create `r04`, recreate staging
-resources, or use staging as a fallback. Use
-`.github/skills/test-agent-validation/SKILL.md` for every new candidate. The remaining text is retained
-only as migration history until the external new-only Daily approved-record cutover permits deletion.
+Use this skill for the official human-reviewed gate before Daily Agent promotion. The executable
+workflow is `.github/skills/test-agent-validation/SKILL.md`; follow that complete contract.
 
-1. Sync the latest default branch before changing contracts or infrastructure.
-2. Validate catalogs, generated docs, schemas, tests, Ruff, and Bicep.
-3. Reuse and verify the fixed `g29` telemetry resource set and both Foundry Project connections.
-4. Provision staging, reconcile exactly 41 versions and five monitors, and publish the canonical
-   staging registry to the private Azure Blob container.
-5. Fetch the private Quality-tagged work-item snapshot under the durable user-level runtime root.
-6. Wait for the configured `0.1`-hour clean window for all five Agents.
-7. Determine affected Agents from content digests, mappings, and shared-contract changes:
-   - qualify each affected Agent's `v0` and all assigned issues;
-   - reuse reviewed evidence for unchanged Agents only when digest, mapping, and shared contracts are
-     unchanged;
-   - use full-catalog qualification for shared runtime, telemetry, assessment, scoring, schema,
-     infrastructure, or cross-Agent topology changes.
-8. For full-catalog staging, require all 36 issue packages and five baseline packages, 41 total.
-   Daily remains a separate 20-issue plus five-baseline contract.
-9. Assess selected baselines and issues with GPT-5.6 Sol. Equal nonzero request, response, and usable
-   response counts plus a verified trace contract prove endpoint execution. Require all reviewed
-   baseline semantic assertions, every designated issue activation gate, and one terminal success
-   plus output signal per baseline request. Pure Prompt requests must each produce one direct terminal
-   response and no function calls.
-   Independently verify every baseline card; `v0` is a reviewed healthy contract, not proof that its
-   runtime behavior was healthy. Compare full-request proof with each card-linked subset and route
-   intermediate-operation contradictions to `test_framework` or `unresolved`.
-10. Before finalization, give every `inconclusive` baseline or `INCOMPLETE` issue with complete runtime
-    evidence one focused GPT-5.6 Sol recheck. Re-read the package-bound reviewed Agent source and
-    configuration, current endpoint evidence, independent trace proof, and the card's exact claim.
-    Never send new traffic for this recheck, never force a conclusive verdict, and retain `INCOMPLETE`
-    when independent evidence remains insufficient.
-11. Finalize with `--work-items <snapshot>` and inspect score, noise, ownership, and every non-matched
-    finding. Any
-   `inconclusive` baseline assessment or `INCOMPLETE` issue assessment makes the whole run
-   `INCOMPLETE` with no numeric quality score. Never commit the snapshot.
-   Open the private `report-preview.html` in a browser for human review. It uses the exact same
-   Outlook-safe HTML renderer and private quality-trend dashboard link as the daily email; never
-   commit the preview, dashboard link, or its private context.
-12. After explicit human review, compose promotion from complete trusted PASS/FAIL evidence for
-    affected Agents and latest valid receipts for unchanged Agents. Verify every exact digest and
-    mapping. Never promote or reuse `INCOMPLETE`.
+1. Freeze one comprehensively reviewed clean commit and run repository validation, generated-doc
+   checks, Ruff, tests, and Bicep compilation before cloud mutation.
+2. Bind the exact existing `aiq-staging-swedencentral` Account and identically named durable Project.
+   Verify the Sweden Central `g30` Project-scoped Application Insights connection and the exact
+   `gpt-5.4-mini` `2026-03-17` DataZoneStandard deployment. Never create or delete the Project.
+3. Hold the environment-namespaced OS lock and keep lifecycle, history, evidence, and CLEAN state
+   under `~/.aiq-runtime/agent-insights-quality/test-agent-validation/`.
+4. Reconcile all five baselines and 36 issues as 41 stable baseline/issue Agent names. Persist and
+   exact-select each server-assigned provider version ID and content digest; never route to a floating
+   version.
+5. Invoke only the deployed endpoints. Run the five Agent lanes concurrently, versions sequentially
+   within each Agent, and every issue against its paired `v0` using the catalog-frozen attempt matrix.
+6. Keep Application Insights read-only. Correlate exact run, Agent, provider version, operation, and
+   invocation time-window identities, then wait only within the bounded post-invoke hydration and
+   stability deadline. Missing attributable traces fail closed.
+7. Validation remains report-free: create no monitor and do not run Agent Insights, assessment,
+   scoring, reporting, ADX publication, email, or Daily.
+8. On failure or commit drift, clean only run-scoped resources. Retain the durable Project and stable
+   Agent/version topology, and never mutate the preserved West US 2 lifecycle or resources.
+9. After exact 41/41 evidence and CLEAN proof, stop for explicit human review. Only after approval may
+   `approve-test-agent-validation` create the minimal immutable approved record for the exact commit.
+10. Daily may then provision only exact approved digests into `aiq-daily-swedencentral`. Perform
+    read-only readiness and registry reconciliation and send no Daily smoke traffic.
 
-Use only reviewed tooling that validates targeted reports and composed receipts. If the current CLI
-cannot produce both, stop targeted execution and use full-catalog qualification; never splice
-evidence or receipts manually.
-
-If a run is incomplete, preserve its artifacts, inspect stage-specific error codes, and resume only
-the failing stage when its private checkpoint proves prior work complete. Routine recovery reuses
-`g29`; never create a telemetry resource for a rerun.
-
-After exact-digest daily provisioning, perform read-only readiness and registry reconciliation; do
-not send daily smoke traffic. Do not promote `INCOMPLETE`, overlap the short clean window, weaken
-an Issue contract to make a run pass, or persist private runtime identifiers.
+Never write credentials, private Azure identifiers, raw traces, complete payloads, or private
+work-item context to Git. The old West US 2 environment is never a staging fallback and remains
+untouched until a separate reviewed retirement.

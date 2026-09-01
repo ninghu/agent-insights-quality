@@ -68,6 +68,7 @@ class CleanupInventory:
     cycle_acr_tag_ids: tuple[str, ...]
     incomplete_cascade_ids: tuple[str, ...]
     retained_shared_manifest_ids: tuple[str, ...] = ()
+    retained_durable_ids: tuple[str, ...] = ()
 
     @property
     def residue_ids(self) -> tuple[str, ...]:
@@ -88,6 +89,7 @@ class CleanupResult:
     exact_clean: bool
     verified_absent_ids: tuple[str, ...]
     retained_shared_manifest_ids: tuple[str, ...]
+    retained_durable_ids: tuple[str, ...]
     residue_ids: tuple[str, ...]
 
 
@@ -186,7 +188,7 @@ def build_cleanup_plan(
                 raise ContractError(
                     f"Cleanup cascade is not reviewed for resource kind {kind}"
                 )
-        elif cleanup_method != "explicit":
+        elif cleanup_method not in {"explicit", "retained_durable"}:
             raise ContractError("Cleanup method is invalid")
         if state not in {
             "create_intent",
@@ -291,7 +293,10 @@ class CleanupEngine:
             record_discovery(resolved)
             resolved_items.append(resolved)
         for item in resolved_items:
-            if item.cleanup_method == "documented_project_cascade":
+            if item.cleanup_method in {
+                "documented_project_cascade",
+                "retained_durable",
+            }:
                 continue
             if self._absent(item):
                 continue
@@ -376,6 +381,12 @@ def _result(
     unresolved: Sequence[CleanupPlanItem] = (),
 ) -> CleanupResult:
     retained = set(inventory.retained_shared_manifest_ids)
+    retained_durable = {
+        item.provider_id
+        for item in plan.items
+        if item.cleanup_method == "retained_durable"
+    }
+    retained_durable.update(inventory.retained_durable_ids)
     residue = tuple(
         sorted(
             {
@@ -386,6 +397,7 @@ def _result(
                     for item in plan.items
                     if item.provider_id not in verified_absent
                     and item.provider_id not in retained
+                    and item.provider_id not in retained_durable
                 ),
             }
         )
@@ -395,6 +407,7 @@ def _result(
         exact_clean=not residue,
         verified_absent_ids=verified_absent,
         retained_shared_manifest_ids=tuple(sorted(retained)),
+        retained_durable_ids=tuple(sorted(retained_durable)),
         residue_ids=residue,
     )
 

@@ -19,6 +19,7 @@ from agent_insights_quality.util import (
     read_json,
 )
 from agent_insights_quality.validation_blob import (
+    APPROVED_RECORD_CONTAINER,
     AzureValidationBlobStore,
     BlobRecord,
 )
@@ -41,9 +42,6 @@ from agent_insights_quality.validation_manifest import current_validation_digest
 APPROVED_RECORD_SCHEMA = (
     ROOT / "schemas" / "test-agent-validation-approved-record.schema.json"
 )
-APPROVED_RECORD_CONTAINER = "test-agent-validation-approved-records"
-
-
 def approve_test_agent_validation(
     *,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -118,7 +116,7 @@ def approve_test_agent_validation(
         operator = local_azure_operator()
         storage_account = RuntimeProfile.from_env(
             "staging",
-            "g29",
+            "g30",
         ).registry_storage_account_name
         store = AzureValidationBlobStore(
             storage_account,

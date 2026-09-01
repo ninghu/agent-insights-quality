@@ -174,6 +174,10 @@ def provision_profile(
     registry = {
         "schema_version": "2.0.0",
         "profile": profile.name,
+        "environment_id": profile.environment_id,
+        "location": profile.location,
+        "telemetry_resource_set": profile.telemetry_resource_set,
+        "account_name": profile.account_name,
         "project_name": profile.project_name,
         "test_region": test_region,
         "test_agent_model": model_contract,
@@ -1270,18 +1274,37 @@ class FoundryProvisioner:
             artifact=artifact,
         )
 
-    def _ensure_version(
+    def create_version_for_readiness(
         self,
         *,
         agent: dict[str, Any],
         logical_version: str,
         artifact: dict[str, Any],
     ) -> tuple[str, dict[str, Any]]:
-        existing = self._find_version(
-            agent["name"],
-            logical_version,
-            artifact["content_digest"],
-            hosted=agent["type"] != "prompt",
+        return self._ensure_version(
+            agent=agent,
+            logical_version=logical_version,
+            artifact=artifact,
+            reuse_existing=False,
+        )
+
+    def _ensure_version(
+        self,
+        *,
+        agent: dict[str, Any],
+        logical_version: str,
+        artifact: dict[str, Any],
+        reuse_existing: bool = True,
+    ) -> tuple[str, dict[str, Any]]:
+        existing = (
+            self._find_version(
+                agent["name"],
+                logical_version,
+                artifact["content_digest"],
+                hosted=agent["type"] != "prompt",
+            )
+            if reuse_existing
+            else None
         )
         if existing:
             details = self._wait_active(
@@ -1343,6 +1366,8 @@ class FoundryProvisioner:
                     version = _version_from_response(response)
                 break
             except RemoteHttpError as error:
+                if not reuse_existing:
+                    raise
                 if self._agent_create_not_found_is_transient(
                     error,
                     create_agent=create_agent,
@@ -1403,17 +1428,19 @@ class FoundryProvisioner:
                     agent["name"],
                     hosted=agent["type"] != "prompt",
                 )
-        recovered = self._recover_exact_version(
-            agent["name"],
-            logical_version,
-            artifact["content_digest"],
-            hosted=agent["type"] != "prompt",
-        )
-        created_version_confirmed_at = (
-            time.monotonic() if recovered is not None else None
-        )
-        if recovered:
-            version = recovered
+        created_version_confirmed_at = time.monotonic()
+        if reuse_existing:
+            recovered = self._recover_exact_version(
+                agent["name"],
+                logical_version,
+                artifact["content_digest"],
+                hosted=agent["type"] != "prompt",
+            )
+            created_version_confirmed_at = (
+                time.monotonic() if recovered is not None else None
+            )
+            if recovered:
+                version = recovered
         if not version:
             raise ContractError("Foundry version creation returned no version")
         details = self._wait_active(
@@ -1554,32 +1581,13 @@ class FoundryProvisioner:
         active = [
             item for item in matches if str(item.get("status") or "").lower() == "active"
         ]
-        if not active and all(
-            str(item.get("status") or "").lower()
-            in {"failed", "canceled", "deleted"}
-            for item in matches
-        ):
-            for terminal in matches:
-                self._delete_owned_version(
-                    name,
-                    str(terminal.get("version") or ""),
-                    hosted=hosted,
-                )
+        if not active:
             return None
-        candidates_to_keep = active or matches
-        candidates_to_keep.sort(
-            key=lambda item: int(str(item.get("version") or "0"))
-        )
-        keep = candidates_to_keep[-1]
-        for duplicate in matches:
-            if duplicate is keep:
-                continue
-            self._delete_owned_version(
-                name,
-                str(duplicate.get("version") or ""),
-                hosted=hosted,
+        if len(active) != 1:
+            raise ContractError(
+                "Foundry Agent has ambiguous active versions for one content digest"
             )
-        return str(keep.get("version") or "")
+        return str(active[0].get("version") or "")
 
     def _delete_owned_version(
         self,
@@ -1866,19 +1874,13 @@ def _sha256(value: bytes) -> str:
 
 def _version_from_response(value: dict[str, Any]) -> str:
     direct = str(value.get("version") or "")
-    if direct:
-        return direct
     versions = value.get("versions")
-    if isinstance(versions, dict):
-        latest = versions.get("latest")
-        if isinstance(latest, dict) and latest.get("version"):
-            return str(latest["version"])
-        candidates = versions.get("value") or versions.get("data") or []
-        if isinstance(candidates, list) and candidates:
-            first = candidates[0]
-            if isinstance(first, dict) and first.get("version"):
-                return str(first["version"])
-    return ""
+    latest = versions.get("latest") if isinstance(versions, dict) else None
+    nested = str(latest.get("version") or "") if isinstance(latest, dict) else ""
+    version = direct or nested
+    if not version:
+        raise ContractError("Foundry create response omitted its assigned version")
+    return version
 
 
 def _remote_error(payload: bytes) -> tuple[str, str]:

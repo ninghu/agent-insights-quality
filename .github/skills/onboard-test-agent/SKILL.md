@@ -44,7 +44,7 @@ Add one new synthetic Test Agent only as a human-reviewed fixed-topology migrati
    controls, execution digest, name limits, cleanup inventory, and exact authority count.
 11. Run a fresh full Test Agent Validation cycle from one exact clean commit, require exact cleanup
    and explicit human approval, then create the single approved validation record.
-   Validation remains report-free; never use legacy staging as a fallback.
+   Validation remains report-free; never use the preserved old West US 2 environment as a fallback.
 
 Use GPT-5.4 mini for the Test Agent and keep Agent Insights generation on its separate Terra
 deployment. Do not add a placeholder implementation, private endpoint, compatibility alias, shared

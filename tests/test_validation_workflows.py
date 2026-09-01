@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from agent_insights_quality.automation_policy import load_automation_policy
 from agent_insights_quality.util import ROOT
+from agent_insights_quality.validation_approved import APPROVED_RECORD_CONTAINER
+from agent_insights_quality.validation_blob import (
+    APPROVED_RECORD_CONTAINER as BLOB_APPROVED_RECORD_CONTAINER,
+)
 
 
 def test_live_validation_gate_workflows_are_removed() -> None:
@@ -33,22 +38,34 @@ def test_ordinary_validate_workflow_has_no_live_validation_permissions() -> None
         assert forbidden not in folded
 
 
-def test_infrastructure_has_only_approved_validation_blob_container() -> None:
+def test_infrastructure_reuses_approved_validation_blob_storage() -> None:
     text = (
         ROOT / "infra" / "modules" / "lab.bicep"
     ).read_text(encoding="utf-8")
-    assert "test-agent-validation-approved-records" in text
+    assert (
+        "resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' existing"
+        in text
+    )
+    assert "name: approvedRecordContainerName" in text
     assert "immutableStorageWithVersioning" in text
-    assert "immutabilityPeriodSinceCreationInDays: 90" in text
-    assert "expire-approved-validation-records-after-worm" in text
-    assert "daysAfterModificationGreaterThan: 91" in text
-    assert "expire-deployment-registry-versions" in text
+    assert "immutabilityPolicies" not in text
+    assert "quality-artifacts" not in text
+    assert "deployment-registries" not in text
+    assert "managementPolicies" not in text
     azure = (
         ROOT / "src" / "agent_insights_quality" / "azure.py"
     ).read_text(encoding="utf-8")
     assert '"immutability-policy",' in azure
+    assert '"create",' in azure
     assert '"lock",' in azure
     assert 'policy.get("state") != "Locked"' in azure
+    assert "policy.approved_record_container" in azure
+    assert (
+        APPROVED_RECORD_CONTAINER
+        == BLOB_APPROVED_RECORD_CONTAINER
+        == load_automation_policy().approved_record_container
+        == "test-agent-validation-approved-records-swedencentral-g30"
+    )
     assert "test-agent-validation-lifecycle" not in text
     assert "test-agent-validation-snapshots" not in text
     assert "test-agent-validation-shadow-receipts" not in text

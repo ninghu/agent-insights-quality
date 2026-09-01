@@ -126,6 +126,7 @@ def _authority(spec) -> dict:
         ),
         "runtime_agent_version": "1",
         "provider_agent_version_reference": HASH,
+        "provider_content_digest": HASH,
         "source_content_digest": spec.source_content_digest,
         "execution_digest": spec.execution_digest,
         "validated_commit_sha": HEAD,
@@ -159,7 +160,9 @@ def _evidence() -> dict:
             ),
             "runtime_topology_digest": HASH,
             "resource_inventory_digest": HASH,
-            "telemetry_resource_set": "g29",
+            "environment_id": "swedencentral-g30",
+            "location": "swedencentral",
+            "telemetry_resource_set": "g30",
             "authorities": authorities,
             "evidence_digest": HASH,
         }
@@ -261,6 +264,9 @@ def test_evidence_binds_every_authority_to_exact_runtime_topology() -> None:
                 "runtime_agent_version": authority["runtime_agent_version"],
                 "provider_agent_id": provider_agent_id,
                 "provider_agent_version_id": provider_version_id,
+                "provider_content_digest": authority[
+                    "provider_content_digest"
+                ],
             }
         )
     value = stamp_evidence_digests(value)

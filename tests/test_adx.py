@@ -472,6 +472,7 @@ def test_quality_analytics_resource_is_resolved_by_tags(monkeypatch) -> None:
 
 def test_adx_infrastructure_uses_existing_production_resource_group() -> None:
     main = (ROOT / "infra" / "main.bicep").read_text(encoding="utf-8")
+    analytics = (ROOT / "infra" / "analytics.bicep").read_text(encoding="utf-8")
     module = (
         ROOT / "infra" / "modules" / "quality-analytics.bicep"
     ).read_text(encoding="utf-8")
@@ -479,8 +480,9 @@ def test_adx_infrastructure_uses_existing_production_resource_group() -> None:
         encoding="utf-8"
     )
     assert "agent-insights-quality-rg" in main
-    assert "Standard_E2ads_v5" in main
-    assert "@minValue(2)" in main
+    assert "quality-analytics.bicep" not in main
+    assert "Standard_E2ads_v5" in analytics
+    assert "@minValue(2)" in analytics
     assert "tier: 'Standard'" in module
     assert "enableAutoStop: false" in module
     assert "softDeletePeriod: 'P730D'" in module

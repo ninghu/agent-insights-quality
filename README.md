@@ -1,19 +1,19 @@
 # Agent Insights Quality
 
 This repository qualifies Microsoft Foundry Agent Insights against five fixed synthetic test Agents.
-Official Daily uses its persistent Project. Local Test Agent Validation uses the existing isolated
-validation account with one temporary Project per commit:
+Official Daily and local Test Agent Validation use separate durable Sweden Central environments:
 
-- `agent-insights-quality` for weekday qualification;
-- one opaque `aiq-validation-*` Project containing 41 independently deployed validation Agents.
+- `aiq-daily-swedencentral` Account and Project for weekday qualification;
+- `aiq-staging-swedencentral` Account and Project for the human-reviewed staging gate.
 
-Validation first deploys and runs the official `weather-agent/v0` Prompt and `finance-agent/v0`
-Hosted baselines after a clean interval. Only when both pass does it deploy the remaining 39, wait a
-second clean interval, and run the five independent Agent lanes. A pre-traffic transient subset may
-resume only within the unchanged local cycle.
+Validation reconciles stable baseline/issue Agent names to exact server-assigned provider versions.
+It first runs the official `weather-agent/v0` Prompt and `finance-agent/v0` Hosted baselines; only
+when both pass does it deploy the remaining 39 and run the five independent Agent lanes. A
+pre-traffic transient subset may resume only within the unchanged local cycle.
 
-Application Insights is read-only. Validation reuses the fixed staging `g29` telemetry pair, creates no
-monitor, runs no Agent Insights assessment or report, and deletes its complete resource inventory.
+Application Insights is read-only. Validation uses the staging `g30` Sweden telemetry pair, creates no
+monitor, runs no Agent Insights assessment or report, retains the durable Project and stable Agent
+topology, and deletes only run-scoped resources.
 Test traffic always invokes exact deployed Agent endpoints; direct trace injection is forbidden.
 Lifecycle, content-addressed history, evidence, and CLEAN proof stay only under the shared
 `~/.aiq-runtime/agent-insights-quality/test-agent-validation/` root. Blob stores only the final
@@ -57,12 +57,13 @@ Monday through Friday, each Agent runs:
 2. four deterministically rotated issue versions;
 3. one on-demand Agent Insights run after each exact version's telemetry arrives.
 
-Daily therefore evaluates 20 issues plus five baselines (25 assessment packages). Legacy staging
-history contains all 36 issues plus five baselines; `r03` is final and must not be rerun.
+Daily therefore evaluates 20 issues plus five baselines (25 assessment packages). Official Sweden
+staging qualification validates all 36 issues plus five baselines before exact approved digests may
+be promoted to Daily.
 
 Daily is currently single-region. Before traffic, automation reads the concrete Daily Foundry
 Project's ARM `location`, resolves its public display through Azure location metadata, and cross-checks
-the private registry. Reports and email currently show `WestUS2`; missing or mismatched region proof
+the private registry. Reports and email show `SwedenCentral`; missing or mismatched region proof
 fails closed, and the renderer does not supply a fallback.
 
 ## Local Test Agent Validation
@@ -74,16 +75,16 @@ model-mediated defects require at least `5/7` and paired `v0` at `0/7`. The revi
 data bound into the automatic `execution_digest`; runtime results cannot reclassify, resample, or lower
 the threshold.
 
-An account-wide OS file lock excludes concurrent worktrees. The local atomic journal, required
+An environment-namespaced OS file lock excludes concurrent worktrees. The local atomic journal, required
 content-addressed history, and 72-hour execution TTL support same-commit cleanup recovery. Any commit
-change cleans the current cycle and requires a fresh full run. After 41/41 evidence and exact CLEAN,
+change cleans run-scoped cycle state and requires a fresh full run. After 41/41 evidence and exact CLEAN,
 the user may run a separate approval command that rechecks the current PR head and creates one minimal
 immutable approved Blob record. GitHub provides ordinary mechanical CI only; merge remains manual.
 
-The first run after monitor reset uses the reviewed `0.1`-hour lookback. The runner waits for natural
-telemetry and trace proof before Agent Insights, guards against expired operations, and automatically
-waits for a clean short interval before a recovery attempt. The service checkpoint advances later
-effective windows. Exact Agent version and operation IDs remain mandatory evidence.
+The runner sends no Daily smoke traffic and imposes no unconditional pre-traffic delay. It correlates
+natural telemetry by exact run, Agent, provider version, operation, and invocation time window, then
+waits within the bounded post-invoke hydration and stability deadline. Missing attributable traces
+fail closed.
 
 The daily quality score is 85% field quality across expected issues and 15% clean-card precision.
 Internally, a complete run stores `PASS` at `90/100` or above and `FAIL` below `90/100`.
@@ -113,13 +114,10 @@ python -m agent_insights_quality deploy-analytics
 python -m agent_insights_quality run-test-agent-validation
 # Run only after explicit human approval of the exact CLEAN result:
 python -m agent_insights_quality approve-test-agent-validation
-# Legacy migration commands remain implemented but must not be invoked after r03:
-# python -m agent_insights_quality provision --profile staging
 python -m agent_insights_quality fetch-quality-work-items `
   --query-url <private-query-url> `
   --report-date <Pacific YYYY-MM-DD> `
   --output $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
-# python -m agent_insights_quality run-full --report-date <Pacific YYYY-MM-DD>
 # Daily fetches the current clean commit's immutable approved record from Blob.
 python -m agent_insights_quality provision --profile daily
 python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD> `
@@ -127,9 +125,13 @@ python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD> `
 python -m agent_insights_quality render-adx-dashboard
 ```
 
-Full infrastructure deployment pins the GPT-5.4 mini Test Agents to `2026-03-17`, resolves the latest
-GPT-5.6 Terra Insight-generation version available in West US 2 from the Azure ARM model catalog, and
-includes the ADX resources. Use the scoped `deploy-analytics` command
+Full infrastructure deployment creates only the Sweden Central profile resources in the existing
+resource group. It pins `gpt-5.4-mini` `2026-03-17` at DataZoneStandard capacity 4500 and
+`gpt-5.6-terra` `2026-07-09` at DataZoneStandard capacity 100 per account with `NoAutoUpgrade`;
+there is no model or regional fallback. Shared ACR, Blob registry storage, ADX, and all West US 2
+resources are referenced or left untouched. The only new shared-storage child is the
+environment-namespaced Sweden g30 approved-record container with a locked 90-day WORM policy. Use the
+scoped `deploy-analytics` command
 to create or update only the two-node production ADX trend database in the existing
 `agent-insights-quality-rg` without changing Foundry or telemetry. Daily finalization publishes
 sanitized results and explanations there and includes the reviewed

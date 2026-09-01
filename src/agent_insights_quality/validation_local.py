@@ -188,9 +188,7 @@ def run_test_agent_validation(
         "project_connections_seconds": 0.0,
         "support_images_seconds": 0.0,
         "phase_1_deployment_seconds": 0.0,
-        "phase_1_clean_interval_seconds": 0.0,
         "phase_2_deployment_seconds": 0.0,
-        "phase_2_clean_interval_seconds": 0.0,
         "endpoint_model_seconds": 0.0,
         "ingestion_kql_seconds": 0.0,
         "cleanup_seconds": 0.0,
@@ -235,7 +233,7 @@ def run_test_agent_validation(
             policy=policy,
         )
         operator = local_azure_operator()
-        base_profile = RuntimeProfile.from_env("staging", "g29")
+        base_profile = RuntimeProfile.from_env("staging", "g30")
         journal = LifecycleJournal(lock=lock)
         previous = journal.read_optional()
         plan = new_plan
@@ -372,7 +370,6 @@ def run_test_agent_validation(
             assert previous is not None
             active = previous
         else:
-            project_provisioner.assert_project_absent(plan["project_name"])
             session_id = uuid.uuid4().hex
             initial = initial_lifecycle(
                 plan,
@@ -443,7 +440,7 @@ def run_test_agent_validation(
                 item.authority_id: validation_authority_cost(item)
                 for item in authorities
             },
-            stabilization_seconds=180,
+            stabilization_seconds=policy.trace_hydration_stabilization_seconds,
             record_resource=resource_event,
             record_duration=record_duration,
             now=now,
@@ -568,7 +565,7 @@ def _deployment_resume_allowed(
         active["state"] == "CREATING"
         and active["failure"] is None
         and active["cleanup"]["status"] == "not_started"
-        and active["project"]["state"] == "created"
+        and active["project"]["state"] == "bound"
         and active["project"]["name"] == plan["project_name"]
         and active["repository"] == git.repository
         and active["pr_number"] == git.pr_number
@@ -685,7 +682,9 @@ def _profile_for_substrate(
             "storage_account_name"
         ],
         account_resource_id=substrate["account_resource_id"],
-        telemetry_resource_set="g29",
+        telemetry_resource_set="g30",
+        environment_id="swedencentral-g30",
+        location="swedencentral",
     )
 
 

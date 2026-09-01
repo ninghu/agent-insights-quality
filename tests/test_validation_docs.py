@@ -43,15 +43,18 @@ def test_cutover_docs_are_new_only_fail_forward_and_keep_daily_test_external() -
         "read-only readiness",
         "isolated `--test-run --rerun N` email-only Daily Test",
         "external, non-gating",
-        "staging is never a fallback",
+        "old environment is never a staging fallback",
         "approved-record Blob path",
     ):
         assert requirement in normalized
 
 
-def test_legacy_staging_skill_cannot_start_r04() -> None:
-    legacy = _text(".github/skills/staging-qualification/SKILL.md")
-    assert "`r03` is the final staging run" in legacy
-    assert "Do not execute" in legacy
-    assert "create `r04`" in legacy
-    assert ".github/skills/test-agent-validation/SKILL.md" in legacy
+def test_staging_skill_routes_current_durable_sweden_qualification() -> None:
+    staging = _text(".github/skills/staging-qualification/SKILL.md")
+    assert "official human-reviewed gate" in staging
+    assert "aiq-staging-swedencentral" in staging
+    assert "Sweden Central `g30`" in staging
+    assert "Never create or delete the Project" in staging
+    assert ".github/skills/test-agent-validation/SKILL.md" in staging
+    assert "`r03`" not in staging
+    assert "`r04`" not in staging

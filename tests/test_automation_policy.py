@@ -15,7 +15,11 @@ def test_repository_uses_fractional_fixed_telemetry_policy() -> None:
     policy = load_automation_policy()
     assert policy.issues_per_agent_daily == 4
     assert policy.insight_lookback_hours == 0.1
-    assert policy.telemetry_resource_set == FIXED_TELEMETRY_RESOURCE_SET == "g29"
+    assert policy.telemetry_resource_set == FIXED_TELEMETRY_RESOURCE_SET == "g30"
+    assert (
+        policy.approved_record_container
+        == "test-agent-validation-approved-records-swedencentral-g30"
+    )
     assert policy.max_recovery_versions == 3
     assert policy.agent_start_stagger_seconds == 5
     assert policy.clean_window_max_wait_seconds >= 990
@@ -42,7 +46,12 @@ def test_repository_uses_fractional_fixed_telemetry_policy() -> None:
             "bounded deadline",
         ),
         ("insight_start_margin_seconds", "345", "within lookback"),
-        ("telemetry_resource_set", "g30", "fixed reviewed set"),
+        ("telemetry_resource_set", "g29", "fixed reviewed set"),
+        (
+            "approved_record_container",
+            "test-agent-validation-approved-records",
+            "reviewed environment namespace",
+        ),
     ],
 )
 def test_automation_policy_rejects_unreviewed_values(

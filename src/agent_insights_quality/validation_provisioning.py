@@ -4,9 +4,7 @@ import copy
 import json
 import subprocess
 import threading
-import time
 import urllib.parse
-import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Callable, Mapping
@@ -70,14 +68,6 @@ class ProjectDeployment:
 
 
 @dataclass(frozen=True)
-class ProjectResourcePlan:
-    intents: tuple[dict[str, str | None], ...]
-    connection_ids: tuple[str, ...]
-    role_assignment_ids: tuple[str, ...]
-    role_assignment_names: tuple[str, ...]
-
-
-@dataclass(frozen=True)
 class ValidationSupportImages:
     images: dict[str, str]
     resources: tuple[dict[str, str | None], ...]
@@ -105,15 +95,20 @@ def validation_runtime_profile(
     cycle_id: str,
     base: RuntimeProfile | None = None,
 ) -> RuntimeProfile:
-    source = base or RuntimeProfile.from_env("staging", "g29")
+    source = base or RuntimeProfile.from_env("staging", "g30")
     if (
         not source.account_name
         or not source.account_resource_id
-        or source.telemetry_resource_set != "g29"
+        or source.telemetry_resource_set != "g30"
+        or source.environment_id != "swedencentral-g30"
+        or source.location != "swedencentral"
+        or source.account_name != "aiq-staging-swedencentral"
+        or source.project_name != "aiq-staging-swedencentral"
+        or project_name != source.project_name
     ):
-        raise ContractError("Validation requires the existing staging Foundry account")
+        raise ContractError("Validation requires the reviewed durable Sweden staging Project")
     return source.with_project(
-        name=f"validation-{cycle_id}",
+        name="staging",
         project_name=project_name,
         registry_path=validation_runtime_root()
         / cycle_id
@@ -149,382 +144,68 @@ class ValidationProjectProvisioner:
         self._profile.assert_test_agent_model(expected)
 
     def assert_telemetry_connection(self) -> None:
-        self._profile.assert_insights_connection("application-insights-validation")
+        self._profile.assert_insights_connection("application-insights-staging")
 
-    def assert_project_absent(self, project_name: str) -> None:
+    def bind(self, project_name: str) -> ProjectDeployment:
+        if (
+            project_name != self._policy.project_name
+            or project_name != self._profile.project_name
+            or project_name != self._profile.account_name
+        ):
+            raise ContractError("Validation Project binding is not the reviewed durable Project")
         project_id = self.expected_project_id(project_name)
-        process = subprocess.run(
-            [
-                azure_cli(),
-                "resource",
-                "show",
-                "--ids",
-                project_id,
-                "--output",
-                "none",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-        )
-        if process.returncode == 0:
-            raise ContractError("Target validation Project already exists")
-        if process.returncode != 3:
-            raise ContractError("Target validation Project absence is ambiguous")
-
-    def resource_intents(
-        self,
-        *,
-        project_name: str,
-        cycle_id: str,
-        ownership_nonce: str,
-    ) -> tuple[dict[str, str | None], ...]:
-        return self._resource_plan(
-            project_name=project_name,
-            cycle_id=cycle_id,
-            ownership_nonce=ownership_nonce,
-        ).intents
-
-    def create(
-        self,
-        *,
-        project_name: str,
-        cycle_id: str,
-        ownership_nonce: str,
-    ) -> ProjectDeployment:
-        if not self._policy.project_name_policy.accepts(project_name):
-            raise ContractError("Validation Project name violates policy")
-        application_insights_name = _resource_name(
-            self._profile.application_insights_resource_id
-        )
-        if (
-            not self._profile.account_name
-            or not self._profile.container_registry_name
-            or not application_insights_name
-        ):
-            raise ContractError("Validation fixed Azure substrate is incomplete")
-        plan = self._resource_plan(
-            project_name=project_name,
-            cycle_id=cycle_id,
-            ownership_nonce=ownership_nonce,
-        )
-        deployment_name = _deployment_name(cycle_id)
-        command = [
-            azure_cli(),
-            "deployment",
-            "group",
-            "create",
-            "--resource-group",
-            RESOURCE_GROUP,
-            "--name",
-            deployment_name,
-            "--template-file",
-            str(ROOT / "infra" / "modules" / "validation-project.bicep"),
-            "--parameters",
-            "location=westus2",
-            f"accountName={self._profile.account_name}",
-            f"projectName={project_name}",
-            f"applicationInsightsName={application_insights_name}",
-            f"registryName={self._profile.container_registry_name}",
-            f"validationOperatorPrincipalId={self._local_operator_id}",
-            f"ownershipNonce={ownership_nonce}",
-            f"cycleId={cycle_id}",
-            f"validationOperatorProjectManagerName={plan.role_assignment_names[0]}",
-            f"appInsightsReaderName={plan.role_assignment_names[1]}",
-            f"modelInferenceUserName={plan.role_assignment_names[2]}",
-            f"registryPullName={plan.role_assignment_names[3]}",
-            "--only-show-errors",
-            "--output",
-            "json",
-        ]
         try:
-            with self._progress.heartbeat(
-                "ephemeral validation Project create"
-            ) as outcome:
+            with self._progress.heartbeat("durable validation Project binding") as outcome:
                 process = subprocess.run(
-                    command,
-                    capture_output=True,
-                    text=True,
-                    timeout=30 * 60,
-                    check=False,
-                )
-                if process.returncode != 0:
-                    outcome.fail()
-        except (subprocess.TimeoutExpired, OSError) as error:
-            self._cancel_and_wait_deployment(deployment_name)
-            raise ContractError(
-                "Ephemeral validation Project deployment did not complete locally"
-            ) from error
-        if process.returncode != 0:
-            self._cancel_and_wait_deployment(deployment_name)
-            raise ContractError("Ephemeral validation Project creation failed")
-        try:
-            deployment = json.loads(process.stdout)
-            deployment_state = deployment["properties"]["provisioningState"]
-            outputs = deployment["properties"]["outputs"]
-            project = ProjectDeployment(
-                project_name=project_name,
-                project_id=str(outputs["projectId"]["value"]),
-                project_principal_id=str(outputs["projectPrincipalId"]["value"]),
-                project_endpoint=str(outputs["projectEndpoint"]["value"]),
-                connection_ids=tuple(outputs["connectionIds"]["value"]),
-                role_assignment_ids=tuple(outputs["roleAssignmentIds"]["value"]),
-                resource_observations=(),
-            )
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
-            raise ContractError(
-                "Ephemeral validation Project deployment outputs are invalid"
-            ) from error
-        if deployment_state != "Succeeded":
-            self._cancel_and_wait_deployment(deployment_name)
-            raise ContractError(
-                "Ephemeral validation Project deployment is not terminal-success"
-            )
-        if (
-            project.project_endpoint != self._profile.project_endpoint
-            or len(project.connection_ids) != len(plan.connection_ids)
-            or len(project.role_assignment_ids) != len(plan.role_assignment_ids)
-            or set(project.connection_ids) != set(plan.connection_ids)
-            or set(project.role_assignment_ids) != set(plan.role_assignment_ids)
-        ):
-            raise ContractError("Ephemeral validation Project topology is incomplete")
-        observations = [
-            (
-                str(
-                    next(
-                        item["intent_reference"]
-                        for item in plan.intents
-                        if item["kind"] == "arm_deployment"
-                    )
-                ),
-                str(
-                    next(
-                        item["discovery_key"]
-                        for item in plan.intents
-                        if item["kind"] == "arm_deployment"
-                    )
-                ),
-            ),
-            (
-                str(
-                    next(
-                        item["intent_reference"]
-                        for item in plan.intents
-                        if item["kind"] == "runtime_principal"
-                    )
-                ),
-                project.project_principal_id,
-            ),
-            *(
-                (
-                    str(item["intent_reference"]),
-                    str(item["discovery_key"]),
-                )
-                for item in plan.intents
-                if item["kind"] in {"connection", "role_assignment"}
-            ),
-        ]
-        return ProjectDeployment(
-            **{
-                **project.__dict__,
-                "resource_observations": tuple(observations),
-            }
-        )
-
-    def _cancel_and_wait_deployment(self, deployment_name: str) -> None:
-        terminal = {"Succeeded", "Failed", "Canceled"}
-        for attempt in range(31):
-            state = subprocess.run(
-                [
-                    azure_cli(),
-                    "deployment",
-                    "group",
-                    "show",
-                    "--resource-group",
-                    RESOURCE_GROUP,
-                    "--name",
-                    deployment_name,
-                    "--query",
-                    "properties.provisioningState",
-                    "--output",
-                    "tsv",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=120,
-                check=False,
-            )
-            if state.returncode == 3:
-                return
-            if state.returncode != 0:
-                raise ContractError(
-                    "Validation deployment terminal state is ambiguous"
-                )
-            status = state.stdout.strip()
-            if status in terminal:
-                return
-            if attempt == 0:
-                cancel = subprocess.run(
                     [
                         azure_cli(),
-                        "deployment",
-                        "group",
-                        "cancel",
-                        "--resource-group",
-                        RESOURCE_GROUP,
-                        "--name",
-                        deployment_name,
+                        "resource",
+                        "show",
+                        "--ids",
+                        project_id,
                         "--output",
-                        "none",
+                        "json",
                     ],
                     capture_output=True,
                     text=True,
                     timeout=120,
                     check=False,
                 )
-                if cancel.returncode not in {0, 3}:
-                    raise ContractError(
-                        "Validation deployment cancellation failed"
-                    )
-            if attempt < 30:
-                time.sleep(5)
-        raise ContractError("Validation deployment did not reach a terminal state")
-
-    def _resource_plan(
-        self,
-        *,
-        project_name: str,
-        cycle_id: str,
-        ownership_nonce: str,
-    ) -> ProjectResourcePlan:
+                if process.returncode != 0:
+                    outcome.fail()
+        except (subprocess.TimeoutExpired, OSError) as error:
+            raise ContractError(
+                "Durable validation Project binding did not complete locally"
+            ) from error
+        if process.returncode != 0:
+            raise ContractError("Durable validation Project could not be read")
+        try:
+            value = json.loads(process.stdout)
+            principal_id = str(value["identity"]["principalId"])
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise ContractError(
+                "Durable validation Project response is invalid"
+            ) from error
         if (
-            not self._profile.account_resource_id
-            or not self._profile.application_insights_resource_id
-            or not self._profile.container_registry_name
+            str(value.get("id") or "").casefold() != project_id.casefold()
+            or value.get("name") != project_name
+            or str(value.get("location") or "").casefold() != self._policy.location
+            or not principal_id
         ):
-            raise ContractError("Validation fixed Azure substrate is incomplete")
-        project_id = self.expected_project_id(project_name)
-        account_id = self._profile.account_resource_id.rstrip("/")
-        insights_id = self._profile.application_insights_resource_id.rstrip("/")
-        registry_id = (
-            f"{account_id.split('/providers/', 1)[0]}/providers/"
-            "Microsoft.ContainerRegistry/registries/"
-            f"{self._profile.container_registry_name}"
-        )
+            raise ContractError("Durable validation Project identity is invalid")
+        self.assert_telemetry_connection()
         connection_ids = (
-            f"{project_id}/connections/container-registry-validation",
-            f"{project_id}/connections/application-insights-validation",
+            f"{project_id}/connections/container-registry-staging",
+            f"{project_id}/connections/application-insights-staging",
         )
-        role_scopes = (
-            project_id,
-            insights_id,
-            account_id,
-            registry_id,
-        )
-        role_labels = (
-            "validation-operator-project-manager",
-            "application-insights-reader",
-            "model-inference-user",
-            "registry-pull",
-        )
-        role_names = tuple(
-            str(
-                uuid.uuid5(
-                    uuid.NAMESPACE_URL,
-                    (
-                        "test-agent-validation:"
-                        f"{cycle_id}:{ownership_nonce}:{label}:{scope}"
-                    ),
-                )
-            )
-            for label, scope in zip(role_labels, role_scopes, strict=True)
-        )
-        role_ids = tuple(
-            f"{scope}/providers/Microsoft.Authorization/roleAssignments/{name}"
-            for scope, name in zip(role_scopes, role_names, strict=True)
-        )
-        identity_intent = content_hash(
-            {
-                "kind": "runtime_principal",
-                "project_id": project_id,
-                "cycle_id": cycle_id,
-                "ownership_nonce": ownership_nonce,
-            }
-        )
-        deployment_name = _deployment_name(cycle_id)
-        deployment_id = (
-            f"{self._profile.account_resource_id.split('/providers/', 1)[0]}"
-            "/providers/Microsoft.Resources/deployments/"
-            f"{deployment_name}"
-        )
-        intents: list[dict[str, str | None]] = [
-            {
-                "kind": "arm_deployment",
-                "intent_reference": content_hash(
-                    {"kind": "arm_deployment", "provider_id": deployment_id}
-                ),
-                "deterministic_name": deployment_name,
-                "parent_id": self._profile.account_resource_id.split(
-                    "/providers/",
-                    1,
-                )[0],
-                "authority_id": None,
-                "cleanup_method": "explicit",
-                "runtime_kind": "control",
-                "discovery_key": deployment_id,
-            },
-            {
-                "kind": "runtime_principal",
-                "intent_reference": identity_intent,
-                "deterministic_name": f"{project_name}-system-identity",
-                "parent_id": project_id,
-                "authority_id": None,
-                "cleanup_method": "documented_project_cascade",
-                "runtime_kind": "control",
-                "discovery_key": project_id,
-            }
-        ]
-        intents.extend(
-            {
-                "kind": "connection",
-                "intent_reference": content_hash(
-                    {"kind": "connection", "provider_id": provider_id}
-                ),
-                "deterministic_name": provider_id.rsplit("/", 1)[-1],
-                "parent_id": project_id,
-                "authority_id": None,
-                "cleanup_method": "explicit",
-                "runtime_kind": "control",
-                "discovery_key": provider_id,
-            }
-            for provider_id in connection_ids
-        )
-        intents.extend(
-            {
-                "kind": "role_assignment",
-                "intent_reference": content_hash(
-                    {"kind": "role_assignment", "provider_id": provider_id}
-                ),
-                "deterministic_name": label,
-                "parent_id": scope,
-                "authority_id": None,
-                "cleanup_method": "explicit",
-                "runtime_kind": "control",
-                "discovery_key": provider_id,
-            }
-            for provider_id, label, scope in zip(
-                role_ids,
-                role_labels,
-                role_scopes,
-                strict=True,
-            )
-        )
-        return ProjectResourcePlan(
-            intents=tuple(intents),
+        return ProjectDeployment(
+            project_name=project_name,
+            project_id=project_id,
+            project_principal_id=principal_id,
+            project_endpoint=self._profile.project_endpoint,
             connection_ids=connection_ids,
-            role_assignment_ids=role_ids,
-            role_assignment_names=role_names,
+            role_assignment_ids=(),
+            resource_observations=(),
         )
 
 
@@ -758,10 +439,16 @@ class FoundryAuthorityDeployer:
                 hosted=hosted,
                 expected_agent_name=deployed.runtime_agent_name,
                 expected_version=deployed.runtime_agent_version,
-                fallback_agent_id=(
-                    deployed.provider_agent_id if not hosted else None
-                ),
             )
+            metadata = details.get("metadata")
+            if (
+                not isinstance(metadata, Mapping)
+                or metadata.get("aiq_content_digest")
+                != deployed.provider_content_digest
+            ):
+                raise ContractError(
+                    "Validation canary Agent content digest changed"
+                )
         topology = proof.hosted_topology
         if proof.provider_version_id != deployed.provider_agent_version_id:
             raise ContractError(
@@ -834,6 +521,22 @@ class FoundryAuthorityDeployer:
         authority: AuthoritySpec,
         planned: PlannedRuntime,
     ) -> DeployedRuntime:
+        return self._deploy(authority, planned, force_new_version=False)
+
+    def deploy_fresh(
+        self,
+        authority: AuthoritySpec,
+        planned: PlannedRuntime,
+    ) -> DeployedRuntime:
+        return self._deploy(authority, planned, force_new_version=True)
+
+    def _deploy(
+        self,
+        authority: AuthoritySpec,
+        planned: PlannedRuntime,
+        *,
+        force_new_version: bool,
+    ) -> DeployedRuntime:
         catalog_agent = self._agents.get(authority.canonical_agent)
         if catalog_agent is None:
             raise ContractError("Validation authority Agent is not in the catalog")
@@ -861,12 +564,15 @@ class FoundryAuthorityDeployer:
             raise ContractError("Validation authority source digest changed before deploy")
         runtime_agent = copy.deepcopy(catalog_agent)
         runtime_agent["name"] = planned.runtime_agent_name
-        version, details = (
-            self._client.ensure_version_for_readiness(
-                agent=runtime_agent,
-                logical_version=authority.logical_version,
-                artifact=artifact,
-            )
+        provision = (
+            self._client.create_version_for_readiness
+            if force_new_version
+            else self._client.ensure_version_for_readiness
+        )
+        version, details = provision(
+            agent=runtime_agent,
+            logical_version=authority.logical_version,
+            artifact=artifact,
         )
         hosted = authority.runtime_kind != "prompt"
         if hosted:
@@ -894,7 +600,6 @@ class FoundryAuthorityDeployer:
                 hosted=False,
                 expected_agent_name=planned.runtime_agent_name,
                 expected_version=version,
-                fallback_agent_id=provider_agent_id,
             )
             hosted_identity_id = None
             hosted_blueprint_id = None
@@ -916,6 +621,7 @@ class FoundryAuthorityDeployer:
             runtime_agent_version=version,
             provider_agent_id=provider_agent_id,
             provider_agent_version_id=proof.provider_version_id,
+            provider_content_digest=str(artifact["content_digest"]),
             hosted_identity_id=hosted_identity_id if hosted else None,
             hosted_blueprint_id=hosted_blueprint_id if hosted else None,
             hosted_deployment_id=hosted_deployment_id if hosted else None,
@@ -973,7 +679,6 @@ def _version_readiness_proof(
     hosted: bool,
     expected_agent_name: str,
     expected_version: str,
-    fallback_agent_id: str | None = None,
 ) -> _VersionReadinessProof:
     if hosted:
         topology = _hosted_version_topology(
@@ -990,11 +695,6 @@ def _version_readiness_proof(
     provider_version_id = str(
         details.get("id")
         or details.get("version_id")
-        or (
-            f"{fallback_agent_id}/versions/{expected_version}"
-            if fallback_agent_id
-            else ""
-        )
     )
     if not provider_version_id:
         raise ContractError(

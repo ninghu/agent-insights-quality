@@ -35,13 +35,74 @@ def test_hosted_package_is_deterministic_and_issue_specific(tmp_path: Path) -> N
     assert first != deterministic_zip(source, extra=second_issue)
 
 
-def test_agent_create_response_uses_nested_version_not_agent_id() -> None:
+def test_agent_create_response_requires_direct_server_assigned_version() -> None:
+    assert _version_from_response(
+        {
+            "id": "healthcare-agent",
+            "version": "1",
+        }
+    ) == "1"
+
+
+def test_initial_agent_create_accepts_nested_returned_version() -> None:
     assert _version_from_response(
         {
             "id": "healthcare-agent",
             "versions": {"latest": {"version": "1"}},
         }
     ) == "1"
+
+
+def test_fresh_version_creation_does_not_reuse_existing_digest() -> None:
+    client = FoundryProvisioner(
+        RuntimeProfile(
+            name="staging",
+            project_name="aiq-staging-swedencentral",
+            project_endpoint="https://example.invalid",
+            insights_endpoint="https://example.invalid",
+            application_insights_resource_id="/subscriptions/hidden/insights",
+            registry_path=Path("registry.json"),
+        ),
+        token_provider=lambda _: "synthetic-token",
+    )
+    client._agent_exists = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
+    client._recover_exact_version = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("fresh creation must not rediscover an old version")
+        )
+    )
+    requested = []
+
+    def request(method, path, **_kwargs):
+        requested.append((method, path))
+        return {"version": "2"}
+
+    details = {
+        "version": "2",
+        "metadata": {
+            "aiq_profile": "staging",
+            "aiq_logical_version": "issue-001",
+            "aiq_content_digest": "sha256:" + ("a" * 64),
+        },
+    }
+    client._request = request  # type: ignore[method-assign]
+    client._wait_active = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: details
+    )
+    version, observed = client.create_version_for_readiness(
+        agent={"name": "weather-agent-issue-001", "type": "prompt"},
+        logical_version="issue-001",
+        artifact={
+            "kind": "prompt",
+            "definition": {},
+            "content_digest": "sha256:" + ("a" * 64),
+        },
+    )
+    assert version == "2"
+    assert observed == details
+    assert requested == [
+        ("POST", "/agents/weather-agent-issue-001/versions")
+    ]
 
 
 def test_monitor_inventory_rejects_duplicates_and_unexpected_agents() -> None:
@@ -252,7 +313,7 @@ def test_early_agent_create_not_found_retries_with_capped_backoff(
                 "Project propagation pending",
                 "POST /agents",
             )
-        return {"versions": {"latest": {"version": "1"}}}
+        return {"version": "1"}
 
     client._request = request  # type: ignore[method-assign]
     progress = []
