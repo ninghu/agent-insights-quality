@@ -119,10 +119,11 @@ def test_validation_project_bicep_creates_no_monitor_or_insights_run() -> None:
     assert "application-insights-validation" in text
     assert "container-registry-validation" in text
     assert "validation-project-rbac.bicep" in text
-    assert (
-        "ApplicationInsightsConnectionString: "
-        "applicationInsights.properties.ConnectionString"
-    ) in text
+    assert "ApplicationInsightsConnectionString" not in text
+    assert "Microsoft.CognitiveServices/accounts/connections" not in text
+    assert text.count("isSharedToAll: true") == 1
+    assert text.count("key: applicationInsights.properties.ConnectionString") == 1
+    assert "ApiType: 'Azure'\n      ResourceId: applicationInsights.id" in text
     assert "ownershipNonce" in text
     assert "agent_insight" not in text.casefold()
     assert "monitor" not in text.casefold().replace("monitoringreader", "")
@@ -152,6 +153,10 @@ def test_project_children_have_deterministic_intents_before_bicep() -> None:
     assert len({item["intent_reference"] for item in intents}) == len(intents)
     assert all(item["runtime_kind"] == "control" for item in intents)
     assert all(item["discovery_key"] for item in intents)
+    assert all(
+        item["deterministic_name"] != "application-insights-staging"
+        for item in intents
+    )
     bicep = (
         ROOT / "infra" / "modules" / "validation-project.bicep"
     ).read_text(encoding="utf-8")

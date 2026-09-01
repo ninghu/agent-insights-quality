@@ -92,6 +92,24 @@ resource registryConnection 'Microsoft.CognitiveServices/accounts/projects/conne
   dependsOn: [projectRbac]
 }
 
+resource accountInsightsConnection 'Microsoft.CognitiveServices/accounts/connections@2025-06-01' = {
+  parent: account
+  name: 'application-insights-${profile}'
+  properties: {
+    category: 'AppInsights'
+    target: applicationInsights.id
+    authType: 'ApiKey'
+    isSharedToAll: true
+    credentials: {
+      key: applicationInsights.properties.ConnectionString
+    }
+    metadata: {
+      ApiType: 'Azure'
+      ResourceId: applicationInsights.id
+    }
+  }
+}
+
 resource insightsConnection 'Microsoft.CognitiveServices/accounts/projects/connections@2025-06-01' = {
   parent: project
   name: 'application-insights-${profile}'
@@ -102,15 +120,14 @@ resource insightsConnection 'Microsoft.CognitiveServices/accounts/projects/conne
     credentials: {
       key: applicationInsights.properties.ConnectionString
     }
+    isSharedToAll: true
     metadata: {
       ApiType: 'Azure'
       ResourceId: applicationInsights.id
-      ApplicationInsightsConnectionString: applicationInsights.properties.ConnectionString
-      purpose: 'agent-insights-quality'
-      profile: profile
     }
   }
   dependsOn: [
+    accountInsightsConnection
     projectRbac
     registryConnection
   ]
@@ -119,6 +136,7 @@ resource insightsConnection 'Microsoft.CognitiveServices/accounts/projects/conne
 output projectId string = project.id
 output projectPrincipalId string = project.identity.principalId
 output connectionIds array = [
+  accountInsightsConnection.id
   registryConnection.id
   insightsConnection.id
 ]

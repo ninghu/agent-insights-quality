@@ -112,12 +112,43 @@ class RuntimeProfile:
     def assert_insights_connection(
         self,
         connection_name: str | None = None,
+        *,
+        account_connection_name: str | None = None,
     ) -> None:
         if not self.account_resource_id:
             raise ContractError("Profile account resource identity is unavailable")
-        connection_id = (
+        if not self.project_endpoint:
+            raise ContractError("Profile Project endpoint is unavailable")
+        project_connection_name = (
+            connection_name or f"application-insights-{self.name}"
+        )
+        durable_connection_name = (
+            account_connection_name or f"application-insights-{self.name}"
+        )
+        project_connection_id = (
             f"{self.account_resource_id}/projects/{self.project_name}/connections/"
-            f"{connection_name or f'application-insights-{self.name}'}"
+            f"{project_connection_name}"
+        )
+        account_connection_id = (
+            f"{self.account_resource_id}/connections/{durable_connection_name}"
+        )
+        project_connection = _read_arm_connection(
+            project_connection_id,
+            "Project",
+        )
+        _assert_arm_insights_connection(
+            project_connection,
+            expected_target=self.application_insights_resource_id,
+            scope="Project",
+        )
+        account_connection = _read_arm_connection(
+            account_connection_id,
+            "Account",
+        )
+        _assert_arm_insights_connection(
+            account_connection,
+            expected_target=self.application_insights_resource_id,
+            scope="Account",
         )
         process = _run_azure_read(
             [
@@ -126,37 +157,38 @@ class RuntimeProfile:
                 "--method",
                 "get",
                 "--url",
-                "https://management.azure.com"
-                + connection_id
-                + "?api-version=2025-06-01",
+                self.project_endpoint.rstrip("/")
+                + "/connections?api-version=v1&connectionType=AppInsights",
+                "--resource",
+                "https://ai.azure.com",
                 "--output",
                 "json",
             ],
         )
         if process.returncode != 0:
-            raise ContractError("Project telemetry connection could not be queried")
-        value = json.loads(process.stdout)
-        properties = value.get("properties", {})
-        metadata = (
-            properties.get("metadata", {}) if isinstance(properties, dict) else {}
+            raise ContractError("Project connection data plane could not be queried")
+        try:
+            available = json.loads(process.stdout)
+        except json.JSONDecodeError as error:
+            raise ContractError("Project connection data plane response is invalid") from error
+        values = available.get("value") if isinstance(available, dict) else None
+        if not isinstance(values, list):
+            raise ContractError("Project connection data plane response is invalid")
+        matches = [
+            item
+            for item in values
+            if isinstance(item, dict)
+            and str(item.get("id") or "").casefold()
+            == account_connection_id.casefold()
+        ]
+        if len(matches) != 1:
+            raise ContractError(
+                "Durable account telemetry connection is not visible to the Project"
+            )
+        _assert_data_plane_insights_connection(
+            matches[0],
+            expected_target=self.application_insights_resource_id,
         )
-        target = str(properties.get("target") or "")
-        if target.casefold() != self.application_insights_resource_id.casefold():
-            raise ContractError(
-                "Project telemetry connection does not match the active resource set"
-            )
-        if (
-            properties.get("category") != "AppInsights"
-            or properties.get("authType") != "ApiKey"
-            or not isinstance(metadata, dict)
-            or str(metadata.get("ApiType") or "") != "Azure"
-            or str(metadata.get("ResourceId") or "").casefold()
-            != self.application_insights_resource_id.casefold()
-            or not str(metadata.get("ApplicationInsightsConnectionString") or "")
-        ):
-            raise ContractError(
-                "Project telemetry connection is not ready for server-side tracing"
-            )
 
     def with_project(
         self,
@@ -273,6 +305,85 @@ class RuntimeProfile:
             or str(model.get("version") or "") != expected["model_version"]
         ):
             raise ContractError("Test Agent model deployment is not the reviewed version")
+
+
+def _read_arm_connection(connection_id: str, scope: str) -> dict:
+    process = _run_azure_read(
+        [
+            azure_cli(),
+            "rest",
+            "--method",
+            "get",
+            "--url",
+            "https://management.azure.com"
+            + connection_id
+            + "?api-version=2025-06-01",
+            "--output",
+            "json",
+        ],
+    )
+    if process.returncode != 0:
+        raise ContractError(f"{scope} telemetry connection could not be queried")
+    try:
+        value = json.loads(process.stdout)
+    except json.JSONDecodeError as error:
+        raise ContractError(f"{scope} telemetry connection response is invalid") from error
+    if not isinstance(value, dict):
+        raise ContractError(f"{scope} telemetry connection response is invalid")
+    return value
+
+
+def _assert_arm_insights_connection(
+    value: dict,
+    *,
+    expected_target: str,
+    scope: str,
+) -> None:
+    properties = value.get("properties")
+    if not isinstance(properties, dict):
+        raise ContractError(f"{scope} telemetry connection response is invalid")
+    metadata = properties.get("metadata")
+    target = str(properties.get("target") or "")
+    if target.casefold() != expected_target.casefold():
+        raise ContractError(
+            f"{scope} telemetry connection does not match the active resource set"
+        )
+    if (
+        properties.get("category") != "AppInsights"
+        or properties.get("authType") != "ApiKey"
+        or properties.get("isSharedToAll") is not True
+        or not isinstance(metadata, dict)
+        or set(metadata) != {"ApiType", "ResourceId"}
+        or metadata.get("ApiType") != "Azure"
+        or str(metadata.get("ResourceId") or "").casefold()
+        != expected_target.casefold()
+    ):
+        raise ContractError(
+            f"{scope} telemetry connection is not the official shared App Insights shape"
+        )
+
+
+def _assert_data_plane_insights_connection(
+    value: dict,
+    *,
+    expected_target: str,
+) -> None:
+    credentials = value.get("credentials")
+    metadata = value.get("metadata")
+    if (
+        value.get("type") != "AppInsights"
+        or str(value.get("target") or "").casefold() != expected_target.casefold()
+        or not isinstance(credentials, dict)
+        or credentials.get("type") != "ApiKey"
+        or not isinstance(metadata, dict)
+        or set(metadata) != {"ApiType", "ResourceId"}
+        or metadata.get("ApiType") != "Azure"
+        or str(metadata.get("ResourceId") or "").casefold()
+        != expected_target.casefold()
+    ):
+        raise ContractError(
+            "Data-plane account telemetry connection does not match the official shape"
+        )
 
 
 def _azure_resources() -> list[dict]:

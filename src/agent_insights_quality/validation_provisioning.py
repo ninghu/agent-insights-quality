@@ -150,7 +150,8 @@ class ValidationProjectProvisioner:
 
     def assert_telemetry_connection(self) -> None:
         self._profile.assert_insights_connection(
-            "application-insights-validation"
+            "application-insights-validation",
+            account_connection_name="application-insights-staging",
         )
 
     def assert_project_absent(self, project_name: str) -> None:

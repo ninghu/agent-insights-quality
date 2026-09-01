@@ -104,13 +104,10 @@ resource insightsConnection 'Microsoft.CognitiveServices/accounts/projects/conne
     credentials: {
       key: applicationInsights.properties.ConnectionString
     }
+    isSharedToAll: true
     metadata: {
       ApiType: 'Azure'
       ResourceId: applicationInsights.id
-      ApplicationInsightsConnectionString: applicationInsights.properties.ConnectionString
-      purpose: 'test-agent-validation'
-      ownershipNonce: ownershipNonce
-      cycleId: cycleId
     }
   }
   dependsOn: [

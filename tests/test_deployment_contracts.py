@@ -158,10 +158,24 @@ def test_infrastructure_grants_automation_data_plane_roles() -> None:
     ).read_text(encoding="utf-8")
     assert "automationInsightsReader" in content
     assert "automationProjectManager" in content
+    assert "@allowed(['daily', 'staging'])" in content
     assert (
-        "ApplicationInsightsConnectionString: "
-        "applicationInsights.properties.ConnectionString"
-    ) in content
+        "Microsoft.CognitiveServices/accounts/connections@2025-06-01"
+        in content
+    )
+    assert (
+        "Microsoft.CognitiveServices/accounts/projects/connections@2025-06-01"
+        in content
+    )
+    assert content.count("name: 'application-insights-${profile}'") == 2
+    assert content.count("isSharedToAll: true") == 2
+    assert (
+        content.count("key: applicationInsights.properties.ConnectionString")
+        == 2
+    )
+    assert content.count("ApiType: 'Azure'") == 2
+    assert content.count("ResourceId: applicationInsights.id") == 2
+    assert "ApplicationInsightsConnectionString" not in content
     lab = (ROOT / "infra" / "modules" / "lab.bicep").read_text(encoding="utf-8")
     assert "eadc314b-1a2d-4efa-be10-5d325db5065e" in lab
     assert "automationRegistryPush" in lab
