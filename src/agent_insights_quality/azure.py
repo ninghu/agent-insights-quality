@@ -9,6 +9,13 @@ from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.util import ROOT, ContractError
 from agent_insights_quality.azure_cli import azure_cli
 
+SWEDEN_DEPLOYMENT_NAME = "agent-insights-quality-swedencentral-g30"
+ANALYTICS_DEPLOYMENT_NAME = "agent-insights-quality-analytics-westus2"
+_DEPLOYMENT_LOCATIONS = {
+    SWEDEN_DEPLOYMENT_NAME: "swedencentral",
+    ANALYTICS_DEPLOYMENT_NAME: "westus2",
+}
+
 
 def deploy_infrastructure() -> None:
     progress = ProgressReporter("aiq-infra")
@@ -36,6 +43,7 @@ def deploy_infrastructure() -> None:
             "automationOwner=ninghu",
             f"automationPrincipalId={principal_id}",
         ],
+        deployment_name=SWEDEN_DEPLOYMENT_NAME,
         deployment_location="swedencentral",
         progress=progress,
     )
@@ -55,6 +63,7 @@ def deploy_analytics_infrastructure() -> None:
             "automationOwner=ninghu",
             f"automationPrincipalId={principal_id}",
         ],
+        deployment_name=ANALYTICS_DEPLOYMENT_NAME,
         deployment_location="westus2",
         progress=progress,
     )
@@ -92,14 +101,19 @@ def _deploy_template(
     template: Path,
     parameters: list[str],
     *,
+    deployment_name: str,
     deployment_location: str,
     progress: ProgressReporter | None = None,
 ) -> None:
+    if _DEPLOYMENT_LOCATIONS.get(deployment_name) != deployment_location:
+        raise ContractError("Infrastructure deployment name and location are not reviewed")
     arguments = [
         azure_cli(),
         "deployment",
         "sub",
         "create",
+        "--name",
+        deployment_name,
         "--location",
         deployment_location,
         "--template-file",
