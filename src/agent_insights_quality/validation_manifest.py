@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -243,13 +244,18 @@ def current_validation_digest(
     return content_hash(
         {
             "contracts": {
-                path.relative_to(ROOT).as_posix(): file_hash(path)
+                path.relative_to(ROOT).as_posix(): _validation_contract_file_hash(path)
                 for path in _validation_contract_files()
             },
             "catalog_hashes": catalog_hashes(dict(agents), dict(issues)),
             "source_content_digests": sources,
         }
     )
+
+
+def _validation_contract_file_hash(path: Path) -> str:
+    content = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return "sha256:" + hashlib.sha256(content).hexdigest()
 
 
 def _validation_contract_files() -> list[Path]:

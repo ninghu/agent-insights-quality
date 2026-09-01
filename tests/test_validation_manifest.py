@@ -3,6 +3,7 @@ from __future__ import annotations
 from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.util import canonical_bytes
 from agent_insights_quality.validation_manifest import (
+    _validation_contract_file_hash,
     authority_specs,
     prepare_validation_plan,
     prepare_resumed_validation_plan,
@@ -84,6 +85,18 @@ def test_authority_source_digests_include_runtime_identity_sources() -> None:
     assert len(specs) == 41
     assert all(item.source_content_digest.startswith("sha256:") for item in specs)
     assert len({item.execution_digest for item in specs}) == 41
+
+
+def test_validation_contract_hash_normalizes_text_line_endings(tmp_path) -> None:
+    lf = tmp_path / "lf.py"
+    crlf = tmp_path / "crlf.py"
+    cr = tmp_path / "cr.py"
+    lf.write_bytes(b"first\nsecond\n")
+    crlf.write_bytes(b"first\r\nsecond\r\n")
+    cr.write_bytes(b"first\rsecond\r")
+
+    assert _validation_contract_file_hash(lf) == _validation_contract_file_hash(crlf)
+    assert _validation_contract_file_hash(lf) == _validation_contract_file_hash(cr)
 
 
 def test_endpoint_cost_accounts_for_input_and_output_tokens() -> None:
