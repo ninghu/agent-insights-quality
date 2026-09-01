@@ -165,16 +165,16 @@ def test_infrastructure_grants_automation_data_plane_roles() -> None:
     )
     assert (
         "Microsoft.CognitiveServices/accounts/projects/connections@2025-06-01"
-        in content
+        not in content
     )
-    assert content.count("name: 'application-insights-${profile}'") == 2
-    assert content.count("isSharedToAll: true") == 2
+    assert content.count("name: 'application-insights-${profile}'") == 1
+    assert content.count("isSharedToAll: true") == 1
     assert (
         content.count("key: applicationInsights.properties.ConnectionString")
-        == 2
+        == 1
     )
-    assert content.count("ApiType: 'Azure'") == 2
-    assert content.count("ResourceId: applicationInsights.id") == 2
+    assert content.count("ApiType: 'Azure'") == 1
+    assert content.count("ResourceId: applicationInsights.id") == 1
     assert "ApplicationInsightsConnectionString" not in content
     lab = (ROOT / "infra" / "modules" / "lab.bicep").read_text(encoding="utf-8")
     assert "eadc314b-1a2d-4efa-be10-5d325db5065e" in lab

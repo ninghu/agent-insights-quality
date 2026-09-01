@@ -110,35 +110,11 @@ resource accountInsightsConnection 'Microsoft.CognitiveServices/accounts/connect
   }
 }
 
-resource insightsConnection 'Microsoft.CognitiveServices/accounts/projects/connections@2025-06-01' = {
-  parent: project
-  name: 'application-insights-${profile}'
-  properties: {
-    category: 'AppInsights'
-    target: applicationInsights.id
-    authType: 'ApiKey'
-    credentials: {
-      key: applicationInsights.properties.ConnectionString
-    }
-    isSharedToAll: true
-    metadata: {
-      ApiType: 'Azure'
-      ResourceId: applicationInsights.id
-    }
-  }
-  dependsOn: [
-    accountInsightsConnection
-    projectRbac
-    registryConnection
-  ]
-}
-
 output projectId string = project.id
 output projectPrincipalId string = project.identity.principalId
 output connectionIds array = [
   accountInsightsConnection.id
   registryConnection.id
-  insightsConnection.id
 ]
 output roleAssignmentIds array = [
   automationInsightsReader.id

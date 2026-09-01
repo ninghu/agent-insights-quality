@@ -46,63 +46,25 @@ def _arm_connection(
     }
 
 
-def _data_plane_connection(
-    *,
-    connection_id: str,
-    target: str = _ACTIVE_INSIGHTS_ID,
-) -> dict:
-    return {
-        "name": connection_id.rsplit("/", 1)[-1],
-        "id": connection_id,
-        "type": "AppInsights",
-        "target": target,
-        "credentials": {"type": "ApiKey"},
-        "metadata": {
-            "ApiType": "Azure",
-            "ResourceId": target,
-        },
-    }
-
-
 def _mock_connection_reads(
     monkeypatch,
     *,
     profile: RuntimeProfile,
-    project_connection_name: str,
     account_connection_name: str,
-    project_connection: dict | None = None,
     account_connection: dict | None = None,
-    data_plane_connections: list[dict] | None = None,
 ) -> list[list[str]]:
     observed: list[list[str]] = []
-    project_id = (
-        f"{profile.account_resource_id}/projects/{profile.project_name}/connections/"
-        f"{project_connection_name}"
-    )
     account_id = (
         f"{profile.account_resource_id}/connections/{account_connection_name}"
     )
-    project_value = project_connection or _arm_connection()
     account_value = account_connection or _arm_connection()
-    available = (
-        data_plane_connections
-        if data_plane_connections is not None
-        else [_data_plane_connection(connection_id=account_id)]
-    )
 
     def run(arguments, **_kwargs):
         observed.append(arguments)
         url = arguments[arguments.index("--url") + 1]
-        if url.startswith("https://management.azure.com"):
-            if project_id in url:
-                value = project_value
-            elif account_id in url:
-                value = account_value
-            else:
-                raise AssertionError(f"Unexpected ARM connection URL: {url}")
-        else:
-            value = {"value": available}
-        return SimpleNamespace(returncode=0, stdout=json.dumps(value))
+        if account_id not in url:
+            raise AssertionError(f"Unexpected ARM connection URL: {url}")
+        return SimpleNamespace(returncode=0, stdout=json.dumps(account_value))
 
     monkeypatch.setattr(
         "agent_insights_quality.profiles.subprocess.run",
@@ -171,24 +133,19 @@ def test_profile_discovers_fixed_azure_resources(monkeypatch) -> None:
     assert profile.telemetry_resource_set == FIXED_TELEMETRY_RESOURCE_SET
 
 
-def test_profile_requires_official_shared_connections_without_reading_secrets(
+def test_profile_requires_official_shared_account_connection(
     monkeypatch,
 ) -> None:
     profile = _profile()
     observed = _mock_connection_reads(
         monkeypatch,
         profile=profile,
-        project_connection_name="application-insights-daily",
         account_connection_name="application-insights-daily",
     )
     profile.assert_insights_connection()
-    assert len(observed) == 3
-    data_plane_call = observed[-1]
-    assert data_plane_call[data_plane_call.index("--resource") + 1] == (
-        "https://ai.azure.com"
-    )
-    assert "getConnectionWithCredentials" not in " ".join(data_plane_call)
-    assert "includeCredentials" not in " ".join(data_plane_call)
+    assert len(observed) == 1
+    assert "/projects/" not in " ".join(observed[0])
+    assert "--resource" not in observed[0]
 
 
 @pytest.mark.parametrize("profile_name", ["daily", "staging"])
@@ -201,23 +158,18 @@ def test_profile_preflight_uses_deterministic_connection_names(
     observed = _mock_connection_reads(
         monkeypatch,
         profile=profile,
-        project_connection_name=connection_name,
         account_connection_name=connection_name,
     )
     profile.assert_insights_connection()
     assert connection_name in " ".join(observed[0])
-    assert connection_name in " ".join(observed[1])
 
 
-@pytest.mark.parametrize("scope", ["project", "account"])
 @pytest.mark.parametrize("defect", ["missing", "unshared", "wrong-target"])
-def test_profile_rejects_invalid_connection_scope(
+def test_profile_rejects_invalid_account_connection(
     monkeypatch,
-    scope,
     defect,
 ) -> None:
     profile = _profile()
-    project_connection = _arm_connection()
     account_connection = _arm_connection()
     if defect == "unshared":
         invalid = _arm_connection(shared=False)
@@ -225,27 +177,18 @@ def test_profile_rejects_invalid_connection_scope(
         invalid = _arm_connection(target="/subscriptions/hidden/wrong")
     else:
         invalid = _arm_connection()
-    if scope == "project":
-        project_connection = invalid
-    else:
-        account_connection = invalid
+    account_connection = invalid
     _mock_connection_reads(
         monkeypatch,
         profile=profile,
-        project_connection_name="application-insights-daily",
         account_connection_name="application-insights-daily",
-        project_connection=project_connection,
         account_connection=account_connection,
     )
     if defect == "missing":
         original_run = subprocess.run
 
         def missing(arguments, **kwargs):
-            url = arguments[arguments.index("--url") + 1]
-            is_scope = (
-                "/projects/" in url if scope == "project" else "/projects/" not in url
-            )
-            if url.startswith("https://management.azure.com") and is_scope:
+            if arguments[1:3] == ["rest", "--method"]:
                 return SimpleNamespace(returncode=3, stdout="")
             return original_run(arguments, **kwargs)
 
@@ -253,7 +196,7 @@ def test_profile_rejects_invalid_connection_scope(
             "agent_insights_quality.profiles.subprocess.run",
             missing,
         )
-    with pytest.raises(ContractError, match=scope.title()):
+    with pytest.raises(ContractError, match="Account"):
         profile.assert_insights_connection()
 
 
@@ -265,33 +208,10 @@ def test_validation_preflight_requires_durable_staging_account_connection(
     observed = _mock_connection_reads(
         monkeypatch,
         profile=profile,
-        project_connection_name="application-insights-validation",
-        account_connection_name="application-insights-staging",
-        data_plane_connections=[
-            _data_plane_connection(connection_id=account_id),
-        ],
-    )
-    profile.assert_insights_connection(
-        "application-insights-validation",
         account_connection_name="application-insights-staging",
     )
-    assert "application-insights-validation" in " ".join(observed[0])
-    assert "application-insights-staging" in " ".join(observed[1])
-
-
-def test_profile_rejects_account_connection_missing_from_data_plane(
-    monkeypatch,
-) -> None:
-    profile = _profile()
-    _mock_connection_reads(
-        monkeypatch,
-        profile=profile,
-        project_connection_name="application-insights-daily",
-        account_connection_name="application-insights-daily",
-        data_plane_connections=[],
-    )
-    with pytest.raises(ContractError, match="not visible"):
-        profile.assert_insights_connection()
+    profile.assert_insights_connection("application-insights-staging")
+    assert account_id in " ".join(observed[0])
 
 
 def test_profile_requires_reviewed_test_agent_model(monkeypatch) -> None:
