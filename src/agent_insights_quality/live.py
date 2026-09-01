@@ -1171,7 +1171,7 @@ union traces, dependencies, requests
                     len(operations),
                 )
                 now = self._monotonic()
-                if operations:
+                if len(operations) == invocation.request_count:
                     if operations != stable_operations:
                         stable_operations = operations
                         stable_since = now
@@ -1184,6 +1184,9 @@ union traces, dependencies, requests
                 else:
                     stable_operations = None
                     stable_since = None
+            else:
+                stable_operations = None
+                stable_since = None
             now = self._monotonic()
             if now >= deadline:
                 break

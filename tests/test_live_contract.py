@@ -3678,7 +3678,7 @@ def test_validation_telemetry_identity_does_not_interpolate_values(monkeypatch) 
     assert foundry_version not in captured[0]
 
 
-def test_wait_for_telemetry_preserves_all_exact_identity_operations(
+def test_wait_for_telemetry_waits_for_exact_count_before_stabilizing(
     monkeypatch,
 ) -> None:
     query_module = types.ModuleType("azure.monitor.query")
@@ -3688,30 +3688,32 @@ def test_wait_for_telemetry_preserves_all_exact_identity_operations(
     monkeypatch.setitem(sys.modules, "azure", azure_module)
     monkeypatch.setitem(sys.modules, "azure.monitor", monitor_module)
     monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
-    sleeps = []
-
-    class Table:
-        rows = [
-            ["a" * 32],
-            ["b" * 32],
-            ["c" * 32],
-        ]
+    first = "a" * 32
+    second = "b" * 32
+    rows = [
+        [[first]],
+        [[first]],
+        [[first]],
+        [[first], [second]],
+        [[first], [second]],
+    ]
 
     class Result:
         status = "success"
-        tables = [Table()]
+
+        def __init__(self, current_rows):
+            self.tables = [type("Table", (), {"rows": current_rows})()]
 
     runtime = _runtime()
     monotonic = [0.0]
     runtime._logs_client = lambda: object()  # type: ignore[method-assign]
-    runtime._query_resource = lambda *_args, **_kwargs: Result()  # type: ignore[method-assign]
+    runtime._query_resource = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: Result(rows.pop(0))
+    )
     runtime._monotonic = lambda: monotonic[0]
-
-    def sleep(seconds):
-        sleeps.append(seconds)
-        monotonic[0] += seconds
-
-    runtime._sleep = sleep
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
+    )
     invocation = InvocationEvidence(
         operation_ids=(),
         response_references=(
@@ -3728,8 +3730,8 @@ def test_wait_for_telemetry_preserves_all_exact_identity_operations(
         agent_name="finance-agent",
         foundry_version="opaque-version",
         invocation=invocation,
-    ) == ("a" * 32, "b" * 32, "c" * 32)
-    assert sleeps == [15]
+    ) == (first, second)
+    assert monotonic[0] == 60
 
 
 def test_wait_for_telemetry_timeout_records_safe_reference_counts(
@@ -3782,6 +3784,51 @@ def test_wait_for_telemetry_timeout_records_safe_reference_counts(
     assert caught.value.expected_reference_count == 1
     assert caught.value.missing_reference_count == 1
     assert monotonic[0] == 15 * 60
+
+
+def test_wait_for_telemetry_exact_set_change_resets_stability(monkeypatch) -> None:
+    query_module = types.ModuleType("azure.monitor.query")
+    query_module.LogsQueryStatus = type("LogsQueryStatus", (), {"SUCCESS": "success"})
+    monitor_module = types.ModuleType("azure.monitor")
+    azure_module = types.ModuleType("azure")
+    monkeypatch.setitem(sys.modules, "azure", azure_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor", monitor_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
+    first = "a" * 32
+    second = "b" * 32
+    rows = [[[first]], [[second]], [[second]]]
+    monotonic = [0.0]
+
+    class Result:
+        status = "success"
+
+        def __init__(self, current_rows):
+            self.tables = [type("Table", (), {"rows": current_rows})()]
+
+    runtime = _runtime()
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+    runtime._query_resource = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: Result(rows.pop(0))
+    )
+    runtime._monotonic = lambda: monotonic[0]
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
+    )
+    invocation = InvocationEvidence(
+        operation_ids=(),
+        response_references=("resp_A1b2C3d4E5f6",),
+        started_at="2026-08-28T10:00:00+00:00",
+        completed_at="2026-08-28T10:00:01+00:00",
+        request_count=1,
+        allow_window_correlation=False,
+    )
+
+    assert runtime.wait_for_telemetry(
+        agent_name="weather-agent",
+        foundry_version="opaque-version",
+        invocation=invocation,
+    ) == (second,)
+    assert monotonic[0] == 30
 
 
 def test_trace_contract_waits_for_child_span_hydration() -> None:
