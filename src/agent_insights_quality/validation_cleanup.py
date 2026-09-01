@@ -316,7 +316,8 @@ class CleanupEngine:
             sorted(
                 item.provider_id
                 for item in resolved_items
-                if (
+                if item.cleanup_method != "retained_durable"
+                and (
                     item.kind != "acr_manifest"
                     or not self._manifest_is_shared(item)
                 )

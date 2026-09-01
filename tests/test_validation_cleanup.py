@@ -43,6 +43,7 @@ class Backend:
         self.shared: set[str] = set()
         self.residue: tuple[str, ...] = ()
         self.already_absent: set[str] = set()
+        self.absence_checked: list[str] = []
 
     def resolve_intent(self, item: CleanupPlanItem):
         return None
@@ -51,6 +52,7 @@ class Backend:
         self.deleted.append(item.provider_id)
 
     def absent(self, item: CleanupPlanItem) -> bool:
+        self.absence_checked.append(item.provider_id)
         return (
             item.provider_id in self.deleted
             or item.provider_id in self.already_absent
@@ -175,6 +177,57 @@ def test_cleanup_allows_only_reviewed_cascade_and_shared_acr_manifest() -> None:
     assert backend.deleted == []
     assert result.exact_clean is True
     assert result.retained_shared_manifest_ids == ("manifest-id",)
+
+
+def test_cleanup_retains_durable_topology_without_absence_or_delete_calls() -> None:
+    retained_ids = (
+        "stable-agent",
+        "stable-version",
+        "stable-hosted-deployment",
+    )
+    plan = build_cleanup_plan(
+        cycle_id="validation-cycle-0001",
+        ownership_nonce="nonce-0001",
+        resources=[
+            _resource(
+                "provider_agent",
+                retained_ids[0],
+                cleanup_method="retained_durable",
+            ),
+            _resource(
+                "provider_agent_version",
+                retained_ids[1],
+                cleanup_method="retained_durable",
+            ),
+            _resource(
+                "hosted_deployment",
+                retained_ids[2],
+                cleanup_method="retained_durable",
+            ),
+            _resource("stored_response", "response-id"),
+            _resource(
+                "provider_agent",
+                "cascade-agent",
+                cleanup_method="documented_project_cascade",
+            ),
+        ],
+        documented_project_cascade=("provider_agent",),
+    )
+    backend = Backend()
+    backend.already_absent.add("cascade-agent")
+    result = CleanupEngine(backend).execute(
+        plan,
+        record_delete_intent=lambda _item: None,
+    )
+
+    assert backend.deleted == ["response-id"]
+    assert not set(retained_ids).intersection(backend.absence_checked)
+    assert backend.absence_checked.count("response-id") == 2
+    assert backend.absence_checked.count("cascade-agent") == 1
+    assert result.retained_durable_ids == tuple(sorted(retained_ids))
+    assert result.verified_absent_ids == ("cascade-agent", "response-id")
+    assert result.residue_ids == ()
+    assert result.exact_clean is True
 
 
 def test_cleanup_residue_fails_closed() -> None:
