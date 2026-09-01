@@ -12,6 +12,7 @@ from agent_insights_quality.util import ContractError, canonical_bytes
 
 APPROVED_RECORD_CONTAINER = load_automation_policy().approved_record_container
 STORAGE_ACCOUNT_PREFIX = load_automation_policy().storage_account_prefix
+RESOURCE_GROUP = "agent-insights-quality-rg"
 
 
 @dataclass(frozen=True)
@@ -57,17 +58,36 @@ class AzureValidationBlobStore:
                 "Approved record upload requires the azure optional dependencies"
             ) from error
         try:
-            service = self._service.get_service_properties()
-        except (AzureError, OSError) as error:
+            versioning = subprocess.run(
+                [
+                    azure_cli(),
+                    "storage",
+                    "account",
+                    "blob-service-properties",
+                    "show",
+                    "--account-name",
+                    self._storage_account_name,
+                    "--resource-group",
+                    RESOURCE_GROUP,
+                    "--query",
+                    "isVersioningEnabled",
+                    "--output",
+                    "tsv",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
             raise ContractError(
-                "Approved record storage properties cannot be read"
+                "Approved record Blob versioning cannot be read"
             ) from error
-        versioning = (
-            service.get("is_versioning_enabled")
-            if isinstance(service, Mapping)
-            else getattr(service, "is_versioning_enabled", None)
-        )
-        if versioning is not True:
+        if (
+            versioning.returncode != 0
+            or str(getattr(versioning, "stderr", "") or "") != ""
+            or str(getattr(versioning, "stdout", "") or "") != "true\n"
+        ):
             raise ContractError(
                 "Approved record Blob versioning is not enabled"
             )

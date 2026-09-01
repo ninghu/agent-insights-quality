@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +10,7 @@ from azure.core.exceptions import ResourceExistsError
 from agent_insights_quality.util import ContractError
 from agent_insights_quality.validation_blob import (
     APPROVED_RECORD_CONTAINER,
+    RESOURCE_GROUP,
     AzureValidationBlobStore,
 )
 
@@ -44,10 +46,6 @@ def test_blob_contract_checks_private_locked_exact_worm(monkeypatch) -> None:
 
     class Service:
         @staticmethod
-        def get_service_properties():
-            return {"is_versioning_enabled": True}
-
-        @staticmethod
         def get_container_client(container):
             observed.append(container)
             return SimpleNamespace(
@@ -63,6 +61,7 @@ def test_blob_contract_checks_private_locked_exact_worm(monkeypatch) -> None:
     store._service = Service()
     responses = iter(
         [
+            SimpleNamespace(returncode=0, stdout="true\n", stderr=""),
             SimpleNamespace(returncode=0, stdout="false\n"),
             SimpleNamespace(
                 returncode=0,
@@ -86,6 +85,20 @@ def test_blob_contract_checks_private_locked_exact_worm(monkeypatch) -> None:
     )
     store.assert_approved_record_contract(APPROVED_RECORD_CONTAINER)
     assert observed == [APPROVED_RECORD_CONTAINER]
+    versioning_call = next(
+        arguments
+        for arguments in calls
+        if "blob-service-properties" in arguments
+    )
+    assert versioning_call[versioning_call.index("--account-name") + 1] == (
+        "aiqsweartsynthetic"
+    )
+    assert versioning_call[versioning_call.index("--resource-group") + 1] == (
+        RESOURCE_GROUP
+    )
+    assert versioning_call[versioning_call.index("--query") + 1] == (
+        "isVersioningEnabled"
+    )
     assert "--auth-mode" not in next(
         arguments
         for arguments in calls
@@ -97,7 +110,6 @@ def test_blob_contract_rejects_public_or_unlocked_storage(monkeypatch) -> None:
     store = object.__new__(AzureValidationBlobStore)
     store._storage_account_name = "aiqsweartsynthetic"
     store._service = SimpleNamespace(
-        get_service_properties=lambda: {"is_versioning_enabled": True},
         get_container_client=lambda _container: SimpleNamespace(
             get_container_properties=lambda: {
                 "public_access": None,
@@ -115,6 +127,7 @@ def test_blob_contract_rejects_public_or_unlocked_storage(monkeypatch) -> None:
 
     responses = iter(
         [
+            SimpleNamespace(returncode=0, stdout="true\n", stderr=""),
             SimpleNamespace(returncode=0, stdout="false\n"),
             SimpleNamespace(
                 returncode=0,
@@ -140,7 +153,6 @@ def test_blob_contract_rejects_empty_success_policy_response(monkeypatch) -> Non
     store = object.__new__(AzureValidationBlobStore)
     store._storage_account_name = "aiqsweartsynthetic"
     store._service = SimpleNamespace(
-        get_service_properties=lambda: {"is_versioning_enabled": True},
         get_container_client=lambda _container: SimpleNamespace(
             get_container_properties=lambda: {
                 "public_access": None,
@@ -151,6 +163,7 @@ def test_blob_contract_rejects_empty_success_policy_response(monkeypatch) -> Non
     )
     responses = iter(
         [
+            SimpleNamespace(returncode=0, stdout="true\n", stderr=""),
             SimpleNamespace(returncode=0, stdout="false\n"),
             SimpleNamespace(returncode=0, stdout="", stderr=""),
         ]
@@ -167,7 +180,6 @@ def test_blob_contract_rejects_valid_policy_with_stderr(monkeypatch) -> None:
     store = object.__new__(AzureValidationBlobStore)
     store._storage_account_name = "aiqsweartsynthetic"
     store._service = SimpleNamespace(
-        get_service_properties=lambda: {"is_versioning_enabled": True},
         get_container_client=lambda _container: SimpleNamespace(
             get_container_properties=lambda: {
                 "public_access": None,
@@ -178,6 +190,7 @@ def test_blob_contract_rejects_valid_policy_with_stderr(monkeypatch) -> None:
     )
     responses = iter(
         [
+            SimpleNamespace(returncode=0, stdout="true\n", stderr=""),
             SimpleNamespace(returncode=0, stdout="false\n"),
             SimpleNamespace(
                 returncode=0,
@@ -198,6 +211,79 @@ def test_blob_contract_rejects_valid_policy_with_stderr(monkeypatch) -> None:
     )
     with pytest.raises(ContractError, match="response is invalid"):
         store.assert_approved_record_contract(APPROVED_RECORD_CONTAINER)
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "stderr"),
+    [
+        (1, "true\n", ""),
+        (0, "false\n", ""),
+        (0, "", ""),
+        (0, "null\n", ""),
+        (0, "not-json\n", ""),
+        (0, "\n", ""),
+        (0, " true\n", ""),
+        (0, "true\n", "WARNING: unexpected diagnostic\n"),
+        (0, "true\n", " "),
+    ],
+)
+def test_blob_contract_rejects_invalid_versioning_response(
+    monkeypatch,
+    returncode,
+    stdout,
+    stderr,
+) -> None:
+    store = object.__new__(AzureValidationBlobStore)
+    store._storage_account_name = "aiqsweartsynthetic"
+    store._service = SimpleNamespace()
+    calls = []
+
+    def run(arguments, **_kwargs):
+        calls.append(arguments)
+        return SimpleNamespace(
+            returncode=returncode,
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_blob.subprocess.run",
+        run,
+    )
+    with pytest.raises(ContractError, match="Blob versioning is not enabled"):
+        store.assert_approved_record_contract(APPROVED_RECORD_CONTAINER)
+    assert len(calls) == 1
+    assert "blob-service-properties" in calls[0]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OSError("synthetic process failure"),
+        subprocess.TimeoutExpired("az", 120),
+    ],
+)
+def test_blob_contract_translates_versioning_process_failures(
+    monkeypatch,
+    error,
+) -> None:
+    store = object.__new__(AzureValidationBlobStore)
+    store._storage_account_name = "aiqsweartsynthetic"
+    store._service = SimpleNamespace()
+
+    def run(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_blob.subprocess.run",
+        run,
+    )
+    with pytest.raises(
+        ContractError,
+        match="Blob versioning cannot be read",
+    ) as captured:
+        store.assert_approved_record_contract(APPROVED_RECORD_CONTAINER)
+    assert captured.value.__cause__ is error
 
 
 def test_approved_record_blob_is_create_once_and_idempotent() -> None:
