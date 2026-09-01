@@ -78,7 +78,7 @@ class FoundryScenarioAttemptRunner:
             )
             prepared.add(target.runtime_agent_name)
 
-    def run(
+    def invoke(
         self,
         *,
         target: DeployedRuntime,
@@ -89,7 +89,7 @@ class FoundryScenarioAttemptRunner:
         scheduler: ValidationScheduler,
     ) -> dict[str, Any]:
         with scheduler.runtime_attempt(target.authority_id):
-            return self._run(
+            return self._invoke(
                 target=target,
                 executing_authority_id=executing_authority_id,
                 conversation_role=conversation_role,
@@ -98,7 +98,7 @@ class FoundryScenarioAttemptRunner:
                 scheduler=scheduler,
             )
 
-    def _run(
+    def _invoke(
         self,
         *,
         target: DeployedRuntime,
@@ -337,12 +337,65 @@ class FoundryScenarioAttemptRunner:
             "endpoint_model_seconds",
             time.monotonic() - endpoint_started,
         )
-        invocation = InvocationEvidence(
+        return {
+            "started_at": started.isoformat(),
+            "completed_at": completed.isoformat(),
+            "response_ids": response_references,
+            "usable_results": usable_results,
+            "session_id": session_id,
+        }
+
+    def verify(
+        self,
+        *,
+        target: DeployedRuntime,
+        executing_authority_id: str,
+        conversation_role: str,
+        scenario: Mapping[str, Any],
+        attempt: Mapping[str, Any],
+        invocation: Mapping[str, Any],
+        scheduler: ValidationScheduler,
+    ) -> dict[str, Any]:
+        if (
+            not executing_authority_id
+            or conversation_role not in {"baseline", "issue", "paired_v0"}
+        ):
+            raise ContractError("Validation attempt execution identity is invalid")
+        raw_steps = [
+            *[("setup", item) for item in attempt["setup_steps"]],
+            *[("probe", item) for item in attempt["probe_steps"]],
+        ]
+        response_references = invocation.get("response_ids")
+        usable_results = invocation.get("usable_results")
+        session_id = invocation.get("session_id")
+        started_at = invocation.get("started_at")
+        completed_at = invocation.get("completed_at")
+        if (
+            not isinstance(response_references, list)
+            or not all(isinstance(item, str) and item for item in response_references)
+            or not isinstance(usable_results, list)
+            or not all(isinstance(item, bool) for item in usable_results)
+            or len(response_references) != len(raw_steps)
+            or len(usable_results) != len(raw_steps)
+            or not isinstance(started_at, str)
+            or not isinstance(completed_at, str)
+            or (session_id is not None and not isinstance(session_id, str))
+        ):
+            raise ContractError("Persisted validation invocation is invalid")
+        execution_scope = {
+            "executing_authority_id": executing_authority_id,
+            "target_authority_id": target.authority_id,
+            "conversation_role": conversation_role,
+            "scenario_id": scenario["id"],
+            "conversation_group": attempt["conversation_group"],
+            "attempt": attempt["index"],
+        }
+        invocation_evidence = InvocationEvidence(
             operation_ids=(),
             response_references=tuple(response_references),
-            started_at=started.isoformat(),
-            completed_at=completed.isoformat(),
-            request_count=len(fixtures),
+            started_at=started_at,
+            completed_at=completed_at,
+            request_count=len(raw_steps),
             allow_window_correlation=False,
             response_count=len(response_references),
             usable_response_count=sum(usable_results),
@@ -363,7 +416,7 @@ class FoundryScenarioAttemptRunner:
                 operation_ids = self._runtime.wait_for_telemetry(
                     agent_name=target.runtime_agent_name,
                     foundry_version=target.runtime_agent_version,
-                    invocation=invocation,
+                    invocation=invocation_evidence,
                 )
             with scheduler.telemetry_query():
                 trace_results = self._runtime.trace_assertion_evidence_for_requests(
@@ -371,8 +424,8 @@ class FoundryScenarioAttemptRunner:
                     foundry_version=target.runtime_agent_version,
                     operation_ids=operation_ids,
                     response_references=tuple(response_references),
-                    window_start=started.isoformat(),
-                    window_end=completed.isoformat(),
+                    window_start=started_at,
+                    window_end=completed_at,
                     requests=[
                         {
                             "id": step["id"],
@@ -397,7 +450,7 @@ class FoundryScenarioAttemptRunner:
                     agent_name=target.runtime_agent_name,
                     foundry_version=target.runtime_agent_version,
                     operation_ids=operation_ids,
-                    invocation=invocation,
+                    invocation=invocation_evidence,
                 )
         except SharedRuntimeError:
             raise
@@ -500,17 +553,6 @@ class FoundryScenarioAttemptRunner:
             "complete": complete,
             "error_code": error_code,
         }
-        if session_id is not None:
-            try:
-                self._runtime._delete_hosted_session(
-                    target.runtime_agent_name,
-                    session_id,
-                )
-            except ContractError:
-                self._runtime.report_progress(
-                    f"{target.authority_id}: Hosted session release failed after "
-                    "evidence completion; deferring to cycle cleanup"
-                )
         return result
 
 

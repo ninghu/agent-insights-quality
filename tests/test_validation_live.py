@@ -49,6 +49,11 @@ def _scheduler() -> ValidationScheduler:
     )
 
 
+def _run_attempt(runner: FoundryScenarioAttemptRunner, **kwargs) -> dict:
+    invocation = runner.invoke(**kwargs)
+    return runner.verify(invocation=invocation, **kwargs)
+
+
 def _step(step_id: str, *, probe: bool) -> dict:
     return {
         "id": step_id,
@@ -310,7 +315,7 @@ def test_semantic_and_trace_mismatch_still_produces_mechanical_evidence() -> Non
             "required_surfaces": ["semantic", "trace"],
         },
     }
-    result = runner.run(
+    result = _run_attempt(runner,
         target=_target(),
         executing_authority_id="issue-001",
         conversation_role="issue",
@@ -377,7 +382,7 @@ def test_complete_evidence_contains_hashes_only() -> None:
         record_resource=lambda item: None,
         now=lambda: next(times),
     )
-    result = runner.run(
+    result = _run_attempt(runner,
         target=_target(),
         executing_authority_id="issue-001",
         conversation_role="issue",
@@ -426,7 +431,7 @@ def test_telemetry_identity_mismatch_keeps_attempt_incomplete() -> None:
         record_resource=lambda item: None,
         now=lambda: next(times),
     )
-    result = runner.run(
+    result = _run_attempt(runner,
         target=_target(),
         executing_authority_id="issue-001",
         conversation_role="issue",
@@ -479,7 +484,7 @@ def test_canonical_output_messages_failure_keeps_issue_attempt_incomplete(
         record_resource=lambda item: None,
         now=lambda: next(times),
     )
-    result = runner.run(
+    result = _run_attempt(runner,
         target=_target(),
         executing_authority_id="issue-001",
         conversation_role="issue",
@@ -533,7 +538,7 @@ def test_bounded_trace_hydration_exhaustion_keeps_request_accepted() -> None:
     )
 
     with pytest.raises(ContractError) as caught:
-        runner.run(
+        _run_attempt(runner,
             target=_target(),
             executing_authority_id="issue-001",
             conversation_role="issue",
@@ -585,7 +590,7 @@ def test_trace_query_exhaustion_keeps_request_accepted() -> None:
     )
 
     with pytest.raises(ContractError) as caught:
-        runner.run(
+        _run_attempt(runner,
             target=_target(),
             executing_authority_id="issue-001",
             conversation_role="issue",
@@ -629,7 +634,7 @@ def test_post_response_correlation_failure_preserves_counts_and_acceptance() -> 
     )
 
     with pytest.raises(ContractError) as caught:
-        runner.run(
+        _run_attempt(runner,
             target=_target(),
             executing_authority_id="issue-001",
             conversation_role="issue",
@@ -693,7 +698,7 @@ def test_shared_v0_attempts_have_unique_execution_and_resource_references() -> N
         "setup_steps": [_step("setup-1", probe=False)],
         "probe_steps": [_step("probe-1", probe=True)],
     }
-    first = runner.run(
+    first = _run_attempt(runner,
         target=_target(),
         executing_authority_id="issue-001",
         conversation_role="paired_v0",
@@ -701,7 +706,7 @@ def test_shared_v0_attempts_have_unique_execution_and_resource_references() -> N
         attempt=attempt,
         scheduler=_scheduler(),
     )
-    second = runner.run(
+    second = _run_attempt(runner,
         target=_target(),
         executing_authority_id="issue-002",
         conversation_role="paired_v0",
@@ -719,7 +724,7 @@ def test_shared_v0_attempts_have_unique_execution_and_resource_references() -> N
     assert len(intents) == len(set(intents))
 
 
-def test_repeated_hosted_attempts_refresh_routes_and_release_unique_sessions() -> None:
+def test_repeated_hosted_attempts_retain_unique_sessions_for_cleanup() -> None:
     times = iter(
         [
             datetime(2026, 8, 29, 12, 0, tzinfo=UTC),
@@ -749,7 +754,7 @@ def test_repeated_hosted_attempts_refresh_routes_and_release_unique_sessions() -
     }
     runner.prepare_hosted_routes([target])
     for attempt_index in (1, 2):
-        runner.run(
+        _run_attempt(runner,
             target=target,
             executing_authority_id="issue-013",
             conversation_role="issue",
@@ -776,10 +781,7 @@ def test_repeated_hosted_attempts_refresh_routes_and_release_unique_sessions() -
         ("finance-agent-issue-013-cycle", "1", True),
         ("finance-agent-issue-013-cycle", "1", True),
     ]
-    assert runtime.deleted_sessions == [
-        ("finance-agent-issue-013-cycle", "session-1"),
-        ("finance-agent-issue-013-cycle", "session-2"),
-    ]
+    assert runtime.deleted_sessions == []
 
 
 def test_prepare_hosted_routes_activates_first_exact_version_per_agent() -> None:
@@ -816,7 +818,7 @@ def test_prepare_hosted_routes_activates_first_exact_version_per_agent() -> None
     ]
 
 
-def test_hosted_attempt_defers_failed_session_release_without_losing_evidence() -> None:
+def test_hosted_attempt_retains_session_until_cleanup() -> None:
     class RuntimeWithFailedRelease(HostedRuntime):
         def __init__(self) -> None:
             super().__init__()
@@ -844,7 +846,7 @@ def test_hosted_attempt_defers_failed_session_release_without_losing_evidence() 
         now=lambda: next(times),
     )
 
-    result = runner.run(
+    result = _run_attempt(runner,
         target=_hosted_target(),
         executing_authority_id="issue-013",
         conversation_role="issue",
@@ -867,7 +869,4 @@ def test_hosted_attempt_defers_failed_session_release_without_losing_evidence() 
     )
 
     assert result["complete"] is True
-    assert runtime.progress == [
-        "issue-013: Hosted session release failed after evidence completion; "
-        "deferring to cycle cleanup"
-    ]
+    assert runtime.progress == []

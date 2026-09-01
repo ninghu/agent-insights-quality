@@ -51,8 +51,11 @@ def test_cutover_docs_are_new_only_fail_forward_and_keep_daily_test_external() -
 
 def test_staging_skill_routes_current_durable_sweden_qualification() -> None:
     staging = _text(".github/skills/staging-qualification/SKILL.md")
-    assert "official human-reviewed gate" in staging
+    assert "human review" in staging
     assert "aiq-staging-swedencentral" in staging
+    assert "exactly 10 explicit shards" in staging
+    assert "at most eight" in staging
+    assert "at most four" in staging
     assert "Sweden Central `g30`" in staging
     assert "Never create or delete the Project" in staging
     assert ".github/skills/test-agent-validation/SKILL.md" in staging

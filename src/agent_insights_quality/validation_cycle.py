@@ -95,11 +95,10 @@ def initial_lifecycle(
             "agents": [],
         },
         "deployment": {
-            "phase": "phase_1_deployment",
+            "phase": "preparing",
             "traffic_started": False,
             "support_images": [],
             "recoveries": [],
-            "execution_recoveries": [],
             "failures": [],
         },
         "resources": [],
@@ -414,302 +413,6 @@ class ValidationCycleController:
                 now,
             )
 
-    def issue_execution_recovery_intent(
-        self,
-        *,
-        authority_id: str,
-        canonical_agent: str,
-        recovery_ordinal: int,
-        superseded_runtime: Mapping[str, Any],
-        replacement_runtime_agent_name: str,
-        failure: Mapping[str, Any],
-        failed_traffic_started_at: str,
-        failed_traffic_completed_at: str,
-        now: datetime,
-    ) -> LocalRecord:
-        if (
-            self._active.value["deployment"]["phase"] != "phase_2_traffic"
-            or not authority_id.startswith("issue-")
-            or recovery_ordinal not in {1, 2, 3}
-            or failure.get("authority_id") != authority_id
-            or failure.get("canonical_agent") != canonical_agent
-            or failure.get("stage") != "traffic"
-        ):
-            raise ContractError("Issue execution recovery intent is invalid")
-        with self._lock:
-            active_runtime = next(
-                (
-                    item
-                    for item in self._active.value["runtime_topology"]["agents"]
-                    if item["authority_id"] == authority_id
-                ),
-                None,
-            )
-            if (
-                active_runtime is None
-                or dict(active_runtime) != dict(superseded_runtime)
-                or active_runtime["runtime_agent_name"]
-                != replacement_runtime_agent_name
-            ):
-                raise ContractError(
-                    "Issue execution recovery superseded identity is stale"
-                )
-            recoveries = [
-                copy.deepcopy(item)
-                for item in self._active.value["deployment"][
-                    "execution_recoveries"
-                ]
-            ]
-            agent_ordinals = [
-                item["recovery_ordinal"]
-                for item in recoveries
-                if item["canonical_agent"] == canonical_agent
-            ]
-            prior_deployment_recoveries = sum(
-                item["retry_count"]
-                for item in self._active.value["deployment"]["recoveries"]
-                if item["canonical_agent"] == canonical_agent
-            )
-            if (
-                recovery_ordinal
-                != prior_deployment_recoveries + len(agent_ordinals) + 1
-                or prior_deployment_recoveries + len(agent_ordinals) >= 3
-            ):
-                raise ContractError(
-                    "Issue execution recovery version is not fresh"
-                )
-            for item in recoveries:
-                if (
-                    item["authority_id"] == authority_id
-                    and item["state"] == "ready"
-                ):
-                    item["state"] = "superseded"
-            recoveries.append(
-                {
-                    "authority_id": authority_id,
-                    "canonical_agent": canonical_agent,
-                    "recovery_ordinal": recovery_ordinal,
-                    "state": "replacement_intent",
-                    "error_code": str(failure["error_code"]),
-                    "request_accepted": failure["request_accepted"],
-                    "superseded_runtime_agent_name": str(
-                        superseded_runtime["runtime_agent_name"]
-                    ),
-                    "superseded_runtime_agent_version": str(
-                        superseded_runtime["runtime_agent_version"]
-                    ),
-                    "replacement_runtime_agent_name": (
-                        replacement_runtime_agent_name
-                    ),
-                    "replacement_runtime_agent_version": None,
-                    "failed_traffic_started_at": failed_traffic_started_at,
-                    "failed_traffic_completed_at": failed_traffic_completed_at,
-                    "replacement_intent_at": now.astimezone(UTC).isoformat(),
-                    "replacement_ready_at": None,
-                    "accepted_traffic_started_at": None,
-                    "accepted_traffic_completed_at": None,
-                    "authority_evidence_digest": None,
-                }
-            )
-            return self._commit(
-                self._active.value["state"],
-                {"deployment": {"execution_recoveries": recoveries}},
-                now,
-            )
-
-    def authority_replacement_ready(
-        self,
-        runtime_agent: Mapping[str, Any],
-        *,
-        recovery_ordinal: int,
-        now: datetime,
-    ) -> LocalRecord:
-        authority_id = str(runtime_agent.get("authority_id") or "")
-        with self._lock:
-            topology = copy.deepcopy(self._active.value["runtime_topology"])
-            current = next(
-                (
-                    item
-                    for item in topology["agents"]
-                    if item["authority_id"] == authority_id
-                ),
-                None,
-            )
-            recoveries = [
-                copy.deepcopy(item)
-                for item in self._active.value["deployment"][
-                    "execution_recoveries"
-                ]
-            ]
-            recovery = next(
-                (
-                    item
-                    for item in recoveries
-                    if item["canonical_agent"]
-                    == runtime_agent.get("canonical_agent")
-                    and item["recovery_ordinal"] == recovery_ordinal
-                ),
-                None,
-            )
-            if (
-                current is None
-                or recovery is None
-                or recovery["authority_id"] != authority_id
-                or recovery["state"] != "replacement_intent"
-                or recovery["superseded_runtime_agent_name"]
-                != current["runtime_agent_name"]
-                or recovery["superseded_runtime_agent_version"]
-                != current["runtime_agent_version"]
-                or recovery["replacement_runtime_agent_name"]
-                != runtime_agent.get("runtime_agent_name")
-            ):
-                raise ContractError(
-                    "Ready issue replacement does not match its recovery intent"
-                )
-            topology["agents"] = [
-                copy.deepcopy(dict(runtime_agent))
-                if item["authority_id"] == authority_id
-                else item
-                for item in topology["agents"]
-            ]
-            principals = set(topology["runtime_principal_ids"])
-            if current.get("runtime_principal_id"):
-                principals.discard(current["runtime_principal_id"])
-            if runtime_agent.get("runtime_principal_id"):
-                principals.add(str(runtime_agent["runtime_principal_id"]))
-            telemetry_ids = set(topology["telemetry_identity_ids"])
-            telemetry_ids.discard(current["telemetry_identity_id"])
-            telemetry_ids.add(str(runtime_agent["telemetry_identity_id"]))
-            topology["runtime_principal_ids"] = sorted(principals)
-            topology["telemetry_identity_ids"] = sorted(telemetry_ids)
-            recovery["state"] = "ready"
-            recovery["replacement_runtime_agent_version"] = str(
-                runtime_agent["runtime_agent_version"]
-            )
-            recovery["replacement_ready_at"] = now.astimezone(UTC).isoformat()
-            failures = [
-                copy.deepcopy(item)
-                for item in self._active.value["deployment"]["failures"]
-                if not (
-                    item["authority_id"] == authority_id
-                    and item["stage"] == "traffic"
-                )
-            ]
-            return self._commit(
-                self._active.value["state"],
-                {
-                    "runtime_topology": topology,
-                    "digests": {
-                        "runtime_topology_digest": content_hash(
-                            topology["agents"]
-                        )
-                    },
-                    "deployment": {
-                        "execution_recoveries": recoveries,
-                        "failures": failures,
-                    },
-                },
-                now,
-            )
-
-    def authority_replacement_accepted(
-        self,
-        *,
-        authority_id: str,
-        runtime_agent_name: str,
-        runtime_agent_version: str,
-        traffic_started_at: str,
-        traffic_completed_at: str,
-        authority_evidence_digest: str,
-        now: datetime,
-    ) -> LocalRecord:
-        with self._lock:
-            recoveries = [
-                copy.deepcopy(item)
-                for item in self._active.value["deployment"][
-                    "execution_recoveries"
-                ]
-            ]
-            recovery = next(
-                (
-                    item
-                    for item in reversed(recoveries)
-                    if item["authority_id"] == authority_id
-                    and item["state"] == "ready"
-                ),
-                None,
-            )
-            if recovery is None:
-                return self._active
-            if (
-                recovery["replacement_runtime_agent_name"]
-                != runtime_agent_name
-                or recovery["replacement_runtime_agent_version"]
-                != runtime_agent_version
-                or not authority_evidence_digest.startswith("sha256:")
-            ):
-                raise ContractError(
-                    "Accepted issue replacement identity is stale"
-                )
-            recovery["state"] = "accepted"
-            recovery["accepted_traffic_started_at"] = traffic_started_at
-            recovery["accepted_traffic_completed_at"] = traffic_completed_at
-            recovery["authority_evidence_digest"] = authority_evidence_digest
-            return self._commit(
-                self._active.value["state"],
-                {"deployment": {"execution_recoveries": recoveries}},
-                now,
-            )
-
-    def begin_phase_one_traffic(
-        self,
-        authority_ids: set[str],
-        *,
-        now: datetime,
-    ) -> LocalRecord:
-        ready_ids = {
-            item["authority_id"]
-            for item in self._active.value["runtime_topology"]["agents"]
-        }
-        if (
-            self._active.value["deployment"]["phase"]
-            != "phase_1_deployment"
-            or ready_ids != authority_ids
-            or self._active.value["deployment"]["failures"]
-        ):
-            raise ContractError(
-                "Validation phase 1 topology is not fully ready"
-            )
-        return self._commit(
-            self._active.value["state"],
-            {
-                "deployment": {
-                    "phase": "phase_1_traffic",
-                    "traffic_started": True,
-                }
-            },
-            now,
-        )
-
-    def begin_phase_two_deployment(
-        self,
-        *,
-        now: datetime,
-    ) -> LocalRecord:
-        if (
-            self._active.value["deployment"]["phase"]
-            != "phase_1_traffic"
-            or self._active.value["deployment"]["failures"]
-        ):
-            raise ContractError(
-                "Validation phase 1 did not authorize phase 2"
-            )
-        return self._commit(
-            self._active.value["state"],
-            {"deployment": {"phase": "phase_2_deployment"}},
-            now,
-        )
-
     def mark_resources_ambiguous(
         self,
         provider_ids: list[str],
@@ -925,7 +628,7 @@ class ValidationCycleController:
                 now,
             )
 
-    def begin_validation(
+    def complete_prepare(
         self,
         runtime_agents: list[dict[str, Any]],
         *,
@@ -969,10 +672,7 @@ class ValidationCycleController:
             {
                 "runtime_topology": topology,
                 "digests": {"runtime_topology_digest": digest},
-                "deployment": {
-                    "phase": "phase_2_traffic",
-                    "traffic_started": True,
-                },
+                "deployment": {"phase": "prepared", "traffic_started": False},
             },
             now,
         )
@@ -1011,7 +711,7 @@ class ValidationCycleController:
                     ).as_posix(),
                     "digest": evidence_digest,
                 },
-                "deployment": {"phase": "complete"},
+                "deployment": {"phase": "complete", "traffic_started": True},
             },
             now,
         )

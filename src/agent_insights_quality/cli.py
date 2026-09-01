@@ -103,7 +103,13 @@ from agent_insights_quality.validation_approved import (
 )
 from agent_insights_quality.validation_blob import AzureValidationBlobStore
 from agent_insights_quality.validation_credentials import local_azure_operator
-from agent_insights_quality.validation_local import run_test_agent_validation
+from agent_insights_quality.validation_coordinator import (
+    cleanup_test_agent_validation,
+    compose_test_agent_validation,
+    invoke_test_agent_validation_shard,
+    prepare_test_agent_validation,
+    verify_test_agent_validation_shard,
+)
 from agent_insights_quality.work_items import (
     fetch_quality_work_items,
     load_quality_work_items,
@@ -210,7 +216,25 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup.add_argument("--plan", type=Path, required=True)
     cleanup.add_argument("--receipt", type=Path)
     cleanup.add_argument("--human-reviewed", action="store_true")
-    commands.add_parser("run-test-agent-validation")
+    commands.add_parser("prepare-test-agent-validation")
+    for name in (
+        "invoke-test-agent-validation-shard",
+        "verify-test-agent-validation-shard",
+    ):
+        shard = commands.add_parser(name)
+        shard.add_argument("--cycle-id", required=True)
+        shard.add_argument("--shard", required=True, type=int, choices=range(1, 11))
+        shard.add_argument("--authority", required=True, action="append")
+    compose = commands.add_parser("compose-test-agent-validation")
+    compose.add_argument("--cycle-id", required=True)
+    cleanup_validation = commands.add_parser("cleanup-test-agent-validation")
+    cleanup_validation.add_argument("--cycle-id", required=True)
+    cleanup_validation.add_argument(
+        "--shard",
+        type=int,
+        choices=range(1, 11),
+    )
+    cleanup_validation.add_argument("--authority", action="append")
     commands.add_parser("approve-test-agent-validation")
     return parser
 
@@ -227,9 +251,40 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def _dispatch(args: argparse.Namespace) -> str | None:
-    if args.command == "run-test-agent-validation":
-        result = run_test_agent_validation()
-        return json.dumps(result, sort_keys=True)
+    if args.command == "prepare-test-agent-validation":
+        return json.dumps(prepare_test_agent_validation(), sort_keys=True)
+    if args.command == "invoke-test-agent-validation-shard":
+        return json.dumps(
+            invoke_test_agent_validation_shard(
+                cycle_id=args.cycle_id,
+                shard_id=args.shard,
+                authority_ids=args.authority,
+            ),
+            sort_keys=True,
+        )
+    if args.command == "verify-test-agent-validation-shard":
+        return json.dumps(
+            verify_test_agent_validation_shard(
+                cycle_id=args.cycle_id,
+                shard_id=args.shard,
+                authority_ids=args.authority,
+            ),
+            sort_keys=True,
+        )
+    if args.command == "compose-test-agent-validation":
+        return json.dumps(
+            compose_test_agent_validation(cycle_id=args.cycle_id),
+            sort_keys=True,
+        )
+    if args.command == "cleanup-test-agent-validation":
+        return json.dumps(
+            cleanup_test_agent_validation(
+                cycle_id=args.cycle_id,
+                shard_id=args.shard,
+                authority_ids=args.authority,
+            ),
+            sort_keys=True,
+        )
     if args.command == "approve-test-agent-validation":
         return json.dumps(approve_test_agent_validation(), sort_keys=True)
     if args.command == "validate":

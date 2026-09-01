@@ -162,7 +162,7 @@ def _validating_lifecycle() -> dict:
             }
         )
     value["state"] = "VALIDATING"
-    value["deployment"]["phase"] = "phase_2_traffic"
+    value["deployment"]["phase"] = "complete"
     value["deployment"]["traffic_started"] = True
     value["runtime_topology"]["agents"] = runtimes
     value["runtime_topology"]["runtime_principal_ids"] = sorted(
@@ -196,115 +196,6 @@ class _MemoryJournal:
         value = stamp_lifecycle_digest(value)
         validate_lifecycle(value)
         return LocalRecord(Path("synthetic-active.json"), value, value["journal_digest"])
-
-
-@pytest.mark.parametrize("authority_id", ["issue-001", "issue-013"])
-def test_issue_recovery_journals_superseded_and_accepted_version(
-    authority_id,
-) -> None:
-    value = _validating_lifecycle()
-    current = next(
-        item
-        for item in value["runtime_topology"]["agents"]
-        if item["authority_id"] == authority_id
-    )
-    replacement = deepcopy(current)
-    replacement["runtime_agent_version"] = "2"
-    replacement["provider_agent_version_id"] = (
-        f"{current['provider_agent_version_id']}-next"
-    )
-    replacement["foundry_agent_name"] = replacement["runtime_agent_name"]
-    replacement["foundry_agent_version"] = "2"
-    replacement["telemetry_identity_id"] = (
-        replacement["provider_agent_version_id"]
-    )
-    for field in (
-        "hosted_identity_id",
-        "hosted_blueprint_id",
-        "hosted_deployment_id",
-        "runtime_principal_id",
-    ):
-        if replacement[field] is not None:
-            replacement[field] = f"{replacement[field]}-r01"
-    active = LocalRecord(
-        Path("synthetic-active.json"),
-        value,
-        value["journal_digest"],
-    )
-    controller = ValidationCycleController(_MemoryJournal(), active=active)
-    authority_order = [
-        item["authority_id"] for item in value["runtime_topology"]["agents"]
-    ]
-    failure = {
-        "authority_id": authority_id,
-        "canonical_agent": current["canonical_agent"],
-        "stage": "traffic",
-        "error_code": "telemetry_correlation_timeout",
-        "request_accepted": True,
-    }
-    controller.issue_execution_recovery_intent(
-        authority_id=authority_id,
-        canonical_agent=current["canonical_agent"],
-        recovery_ordinal=1,
-        superseded_runtime=current,
-        replacement_runtime_agent_name=replacement["runtime_agent_name"],
-        failure=failure,
-        failed_traffic_started_at="2026-08-29T12:00:00+00:00",
-        failed_traffic_completed_at="2026-08-29T12:01:00+00:00",
-        now=START + timedelta(minutes=2),
-    )
-    recovery = controller.active.value["deployment"][
-        "execution_recoveries"
-    ][0]
-    assert recovery["state"] == "replacement_intent"
-    assert recovery["superseded_runtime_agent_name"] == current[
-        "runtime_agent_name"
-    ]
-    assert next(
-        item
-        for item in controller.active.value["runtime_topology"]["agents"]
-        if item["authority_id"] == authority_id
-    ) == current
-
-    controller.authority_replacement_ready(
-        replacement,
-        recovery_ordinal=1,
-        now=START + timedelta(minutes=3),
-    )
-    recovery = controller.active.value["deployment"][
-        "execution_recoveries"
-    ][0]
-    assert recovery["state"] == "ready"
-    assert recovery["replacement_runtime_agent_version"] == "2"
-    assert next(
-        item
-        for item in controller.active.value["runtime_topology"]["agents"]
-        if item["authority_id"] == authority_id
-    ) == replacement
-    assert [
-        item["authority_id"]
-        for item in controller.active.value["runtime_topology"]["agents"]
-    ] == authority_order
-    assert current["telemetry_identity_id"] not in controller.active.value[
-        "runtime_topology"
-    ]["telemetry_identity_ids"]
-
-    controller.authority_replacement_accepted(
-        authority_id=authority_id,
-        runtime_agent_name=replacement["runtime_agent_name"],
-        runtime_agent_version="2",
-        traffic_started_at="2026-08-29T12:04:00+00:00",
-        traffic_completed_at="2026-08-29T12:05:00+00:00",
-        authority_evidence_digest=content_hash("accepted-evidence"),
-        now=START + timedelta(minutes=6),
-    )
-    recovery = controller.active.value["deployment"][
-        "execution_recoveries"
-    ][0]
-    assert recovery["state"] == "accepted"
-    assert recovery["authority_evidence_digest"] == content_hash(
-        "accepted-evidence"
-    )
 
 
 def test_partial_deployment_progress_persists_recovery_and_ready_state(
@@ -343,7 +234,7 @@ def test_partial_deployment_progress_persists_recovery_and_ready_state(
             _prompt_runtime()
         ]
         with pytest.raises(ContractError, match="41 deployed"):
-            controller.begin_validation(
+            controller.complete_prepare(
                 [_prompt_runtime()],
                 now=START + timedelta(seconds=3),
             )
@@ -389,37 +280,6 @@ def test_resumed_resource_intent_does_not_duplicate_or_downgrade_ready(
         resource = controller.active.value["resources"][0]
         assert resource["state"] == "created"
         assert resource["provider_id"] == "synthetic-provider-agent"
-
-
-def test_phase_two_requires_both_phase_one_baselines_without_failures(
-    tmp_path,
-) -> None:
-    lock = LocalValidationLock(tmp_path / "validation.lock")
-    journal = LifecycleJournal(lock=lock, root=tmp_path / "lifecycle")
-    with lock:
-        controller = ValidationCycleController(
-            journal,
-            active=journal.begin_cycle(_initial()),
-        )
-        with pytest.raises(ContractError, match="phase 1 did not authorize"):
-            controller.begin_phase_two_deployment(now=START)
-        controller.authority_ready(_prompt_runtime(), now=START)
-        controller.authority_ready(
-            _hosted_runtime(),
-            now=START + timedelta(seconds=1),
-        )
-        controller.begin_phase_one_traffic(
-            {"weather-agent/v0", "finance-agent/v0"},
-            now=START + timedelta(seconds=2),
-        )
-        controller.begin_phase_two_deployment(
-            now=START + timedelta(seconds=3),
-        )
-        assert (
-            controller.active.value["deployment"]["phase"]
-            == "phase_2_deployment"
-        )
-        assert controller.active.value["deployment"]["traffic_started"] is True
 
 
 def test_telemetry_failure_persists_safe_correlation_counts(tmp_path) -> None:

@@ -6,7 +6,6 @@ import threading
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any, Callable, Protocol
 
 from agent_insights_quality.util import (
@@ -71,33 +70,8 @@ class AgentDeploymentIncomplete(ContractError):
         self.failures = failures
 
 
-class AgentExecutionIncomplete(ContractError):
-    def __init__(
-        self,
-        failures: list[dict[str, Any]],
-        partial_results: list[dict[str, Any]],
-        *,
-        recoverable_authority_ids: set[str] | None = None,
-        failure_windows: Mapping[str, tuple[str, str]] | None = None,
-    ) -> None:
-        super().__init__("One or more Agent traffic lanes are incomplete")
-        self.failures = failures
-        self.partial_results = partial_results
-        self.recoverable_authority_ids = frozenset(
-            recoverable_authority_ids or ()
-        )
-        self.failure_windows = dict(failure_windows or {})
-
-
 class AuthorityDeployer(Protocol):
     def deploy(self, authority: AuthoritySpec, planned: PlannedRuntime) -> DeployedRuntime:
-        ...
-
-    def deploy_fresh(
-        self,
-        authority: AuthoritySpec,
-        planned: PlannedRuntime,
-    ) -> DeployedRuntime:
         ...
 
     def assert_ready(
@@ -111,7 +85,7 @@ class AuthorityDeployer(Protocol):
 class ScenarioAttemptRunner(Protocol):
     def prepare_hosted_routes(self, targets: list[DeployedRuntime]) -> None: ...
 
-    def run(
+    def invoke(
         self,
         *,
         target: DeployedRuntime,
@@ -119,6 +93,18 @@ class ScenarioAttemptRunner(Protocol):
         conversation_role: str,
         scenario: Mapping[str, Any],
         attempt: Mapping[str, Any],
+        scheduler: ValidationScheduler,
+    ) -> dict[str, Any]: ...
+
+    def verify(
+        self,
+        *,
+        target: DeployedRuntime,
+        executing_authority_id: str,
+        conversation_role: str,
+        scenario: Mapping[str, Any],
+        attempt: Mapping[str, Any],
+        invocation: Mapping[str, Any],
         scheduler: ValidationScheduler,
     ) -> dict[str, Any]: ...
 
@@ -171,26 +157,6 @@ def validation_agent_name(
     )
 
 
-def recovery_runtime_plan(
-    planned: PlannedRuntime,
-    *,
-    recovery_ordinal: int,
-    policy: ValidationPolicy,
-) -> PlannedRuntime:
-    if recovery_ordinal < 1 or recovery_ordinal > 3:
-        raise ContractError("Validation recovery ordinal is out of range")
-    return PlannedRuntime(
-        authority_id=planned.authority_id,
-        canonical_agent=planned.canonical_agent,
-        logical_version=planned.logical_version,
-        runtime_kind=planned.runtime_kind,
-        framework=planned.framework,
-        runtime_agent_name=planned.runtime_agent_name,
-        intent_namespace=planned.intent_namespace,
-        version_ordinal=recovery_ordinal,
-    )
-
-
 def plan_runtime_topology(
     authorities: Sequence[AuthoritySpec],
     *,
@@ -240,10 +206,7 @@ def deploy_all_authorities(
     record_recovery: Callable[[AuthoritySpec, str, int, str], None]
     | None = None,
     record_failure: Callable[[dict[str, Any]], None] | None = None,
-    require_architecture_canaries: bool = True,
     prior_recovered_authorities: Mapping[str, Sequence[str]] | None = None,
-    retry_transient_failures: bool = True,
-    force_new_authority_ids: set[str] | None = None,
 ) -> dict[str, DeployedRuntime]:
     if maximum_concurrency < 1 or maximum_concurrency > 8:
         raise ContractError("Validation provisioning concurrency must be between 1 and 8")
@@ -251,7 +214,6 @@ def deploy_all_authorities(
     if set(by_id) != {item.authority_id for item in authorities}:
         raise ContractError("Planned validation topology is incomplete")
     authority_by_id = {item.authority_id: item for item in authorities}
-    force_new = set(force_new_authority_ids or ())
     deployed: dict[str, DeployedRuntime] = dict(existing_deployed or {})
     retries = dict(retry_counts or {})
     recovered_by_agent = {
@@ -263,8 +225,6 @@ def deploy_all_authorities(
     if (
         not set(deployed).issubset(by_id)
         or not set(retries).issubset(by_id)
-        or not force_new.issubset(by_id)
-        or bool(force_new.intersection(deployed))
         or max_recovery_versions_per_agent != 3
     ):
         raise ContractError("Validation deployment resume state is invalid")
@@ -281,11 +241,7 @@ def deploy_all_authorities(
             for event in intents:
                 record_resource(event)
         try:
-            value = (
-                deployer.deploy_fresh(authority, target)
-                if authority.authority_id in force_new
-                else deployer.deploy(authority, target)
-            )
+            value = deployer.deploy(authority, target)
         except ContractError:
             if record_resource is not None:
                 for event in intents:
@@ -390,20 +346,6 @@ def deploy_all_authorities(
                 raise AgentDeploymentIncomplete(summaries)
             if not failures:
                 return
-            if not retry_transient_failures:
-                summaries = [
-                    _agent_failure_summary(
-                        authority,
-                        stage="deployment",
-                        error=error,
-                        request_accepted=False,
-                    )
-                    for authority, error in failures
-                ]
-                if record_failure is not None:
-                    for summary in summaries:
-                        record_failure(summary)
-                raise AgentDeploymentIncomplete(summaries)
             next_pending = []
             for authority, _ in failures:
                 with lock:
@@ -449,86 +391,7 @@ def deploy_all_authorities(
                 next_pending.append(authority)
             pending = next_pending
 
-    canary_ids: set[str] = set()
-    if require_architecture_canaries:
-        prompt_canary, hosted_canary = _deployment_canaries(authorities)
-        canary_ids = {
-            prompt_canary.authority_id,
-            hosted_canary.authority_id,
-        }
-        def deploy_canary(
-            canary: AuthoritySpec,
-        ) -> list[dict[str, Any]]:
-            try:
-                if canary.authority_id not in deployed:
-                    deploy_stage([canary], concurrency=1)
-                deployer.assert_ready(canary, deployed[canary.authority_id])
-            except SharedRuntimeError:
-                raise
-            except AgentDeploymentIncomplete as error:
-                return error.failures
-            except ContractError as error:
-                summary = _agent_failure_summary(
-                    canary,
-                    stage="readiness",
-                    error=error,
-                    request_accepted=False,
-                )
-                if record_failure is not None:
-                    record_failure(summary)
-                return [summary]
-            return []
-
-        canary_failures: list[dict[str, Any]] = []
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            futures = [
-                pool.submit(deploy_canary, canary)
-                for canary in (prompt_canary, hosted_canary)
-            ]
-            for future in as_completed(futures):
-                try:
-                    canary_failures.extend(future.result())
-                except SharedRuntimeError:
-                    for pending in futures:
-                        pending.cancel()
-                    raise
-        if canary_failures:
-            raise AgentDeploymentIncomplete(canary_failures)
-
-    remaining = [
-        authority
-        for authority in authorities
-        if authority.authority_id not in canary_ids
-    ]
-    lanes: dict[str, list[AuthoritySpec]] = {}
-    for authority in remaining:
-        lanes.setdefault(authority.canonical_agent, []).append(authority)
-    lane_failures: list[dict[str, Any]] = []
-
-    def deploy_lane(lane: Sequence[AuthoritySpec]) -> list[dict[str, Any]]:
-        for authority in lane:
-            try:
-                deploy_stage([authority], concurrency=1)
-            except AgentDeploymentIncomplete as error:
-                return error.failures
-        return []
-
-    with ThreadPoolExecutor(
-        max_workers=min(maximum_concurrency, len(lanes) or 1)
-    ) as pool:
-        futures = {
-            pool.submit(deploy_lane, lane): agent
-            for agent, lane in lanes.items()
-        }
-        for future in as_completed(futures):
-            try:
-                lane_failures.extend(future.result())
-            except SharedRuntimeError:
-                for pending in futures:
-                    pending.cancel()
-                raise
-    if lane_failures:
-        raise AgentDeploymentIncomplete(lane_failures)
+    deploy_stage(authorities, concurrency=maximum_concurrency)
     if len(deployed) != len(authorities):
         raise ContractError("Validation did not deploy every authority")
     return deployed
@@ -580,36 +443,6 @@ def _agent_failure_summary(
             }
         )
     return summary
-
-
-def _deployment_canaries(
-    authorities: Sequence[AuthoritySpec],
-) -> tuple[AuthoritySpec, AuthoritySpec]:
-    prompt = sorted(
-        (
-            item
-            for item in authorities
-            if item.authority_kind == "baseline"
-            and item.validation_mode == "baseline"
-            and item.runtime_kind == "prompt"
-        ),
-        key=lambda item: item.authority_id,
-    )
-    hosted = sorted(
-        (
-            item
-            for item in authorities
-            if item.authority_kind == "baseline"
-            and item.validation_mode == "baseline"
-            and item.runtime_kind != "prompt"
-        ),
-        key=lambda item: item.authority_id,
-    )
-    if not prompt or not hosted:
-        raise ContractError(
-            "Validation deployment requires healthy Prompt and Hosted canaries"
-        )
-    return prompt[0], hosted[0]
 
 
 def _deployment_intents(
@@ -666,465 +499,128 @@ def _deployment_intents(
     return events
 
 
-def execute_validation_matrix(
+def invoke_validation_shard(
     authorities: Sequence[AuthoritySpec],
     deployed: Mapping[str, DeployedRuntime],
     *,
     runner: ScenarioAttemptRunner,
     scheduler: ValidationScheduler,
     model_contract: Mapping[str, Any],
-    validated_commit_sha: str,
-    record_failure: Callable[[dict[str, Any]], None] | None = None,
-    paired_baselines: Mapping[str, str] | None = None,
+    paired_baselines: Mapping[str, str],
+    record_authority: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[dict[str, Any]]:
-    return execute_validation_phase(
-        authorities,
-        deployed,
-        runner=runner,
-        scheduler=scheduler,
-        model_contract=model_contract,
-        validated_commit_sha=validated_commit_sha,
-        record_failure=record_failure,
-        paired_baselines=paired_baselines,
-    )
+    if not authorities:
+        raise ContractError("Validation shard authority assignment is empty")
+    results: list[dict[str, Any]] = []
+    for authority in authorities:
+        validate_validation_rules(
+            authority.validation_rules,
+            authority_id=authority.authority_id,
+            authority_kind=authority.authority_kind,
+            canonical_agent=authority.canonical_agent,
+            logical_version=authority.logical_version,
+            runtime_kind=authority.runtime_kind,
+            framework=authority.framework,
+            model_contract=model_contract,
+            reviewed_mode=authority.validation_mode,
+        )
+        baseline_id = paired_baselines.get(authority.canonical_agent)
+        if (
+            authority.authority_id not in deployed
+            or baseline_id is None
+            or baseline_id not in deployed
+        ):
+            raise ContractError(
+                "Validation shard requires its exact prepared Agent topology"
+            )
+        scenarios = []
+        for scenario in authority.validation_rules["scenarios"]:
+            issue_invocations = [
+                runner.invoke(
+                    target=deployed[authority.authority_id],
+                    executing_authority_id=authority.authority_id,
+                    conversation_role=(
+                        "baseline"
+                        if authority.authority_kind == "baseline"
+                        else "issue"
+                    ),
+                    scenario=scenario,
+                    attempt=attempt,
+                    scheduler=scheduler,
+                )
+                for attempt in scenario["attempts"]
+            ]
+            paired_invocations = (
+                []
+                if authority.authority_kind == "baseline"
+                else [
+                    runner.invoke(
+                        target=deployed[baseline_id],
+                        executing_authority_id=authority.authority_id,
+                        conversation_role="paired_v0",
+                        scenario=scenario,
+                        attempt=attempt,
+                        scheduler=scheduler,
+                    )
+                    for attempt in scenario["attempts"]
+                ]
+            )
+            scenarios.append(
+                {
+                    "scenario_id": scenario["id"],
+                    "issue_invocations": issue_invocations,
+                    "v0_invocations": paired_invocations,
+                }
+            )
+        result = {
+            "authority_id": authority.authority_id,
+            "scenarios": scenarios,
+        }
+        results.append(result)
+        if record_authority is not None:
+            record_authority(result)
+    return results
 
 
-def execute_validation_phase(
+def verify_validation_shard(
     authorities: Sequence[AuthoritySpec],
     deployed: Mapping[str, DeployedRuntime],
+    invocations: Sequence[Mapping[str, Any]],
     *,
     runner: ScenarioAttemptRunner,
     scheduler: ValidationScheduler,
     model_contract: Mapping[str, Any],
     validated_commit_sha: str,
-    record_failure: Callable[[dict[str, Any]], None] | None = None,
-    paired_baselines: Mapping[str, str] | None = None,
-    recover_issue: Callable[
-        [
-            AuthoritySpec,
-            DeployedRuntime,
-            Mapping[str, Any],
-            str,
-            str,
-            int,
-        ],
-        DeployedRuntime,
-    ]
-    | None = None,
-    record_completion: Callable[
-        [
-            AuthoritySpec,
-            DeployedRuntime,
-            str,
-            str,
-            Mapping[str, Any],
-        ],
-        None,
-    ]
-    | None = None,
-    max_recovery_versions_per_agent: int = 3,
-    prior_recovery_counts: Mapping[str, int] | None = None,
-    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    paired_baselines: Mapping[str, str],
 ) -> list[dict[str, Any]]:
-    if recover_issue is None:
-        return _execute_validation_phase_once(
-            authorities,
-            deployed,
+    by_authority = {
+        str(item.get("authority_id") or ""): item for item in invocations
+    }
+    if (
+        len(by_authority) != len(invocations)
+        or set(by_authority) != {item.authority_id for item in authorities}
+    ):
+        raise ContractError("Validation shard invocation authority coverage is invalid")
+    return [
+        _verify_invoked_authority(
+            authority,
+            deployed=deployed,
+            invocation=by_authority[authority.authority_id],
+            paired_v0_id=paired_baselines[authority.canonical_agent],
             runner=runner,
             scheduler=scheduler,
             model_contract=model_contract,
             validated_commit_sha=validated_commit_sha,
-            record_failure=record_failure,
-            paired_baselines=paired_baselines,
-            record_completion=record_completion,
-            now=now,
         )
-    if max_recovery_versions_per_agent != 3:
-        raise ContractError("Validation execution recovery limit is not reviewed")
-    active_deployed = dict(deployed)
-    accepted: dict[str, dict[str, Any]] = {}
-    pending = list(authorities)
-    recovery_counts = dict(prior_recovery_counts or {})
-    if any(
-        not isinstance(count, int)
-        or isinstance(count, bool)
-        or count < 0
-        or count > max_recovery_versions_per_agent
-        for count in recovery_counts.values()
-    ):
-        raise ContractError("Validation prior recovery counts are invalid")
-    runtime_identity_pairs = {
-        (
-            item.runtime_agent_name,
-            item.runtime_agent_version,
-        )
-        for item in active_deployed.values()
-    }
-    provider_version_ids = {
-        item.provider_agent_version_id for item in active_deployed.values()
-    }
-    while pending:
-        try:
-            results = _execute_validation_phase_once(
-                pending,
-                active_deployed,
-                runner=runner,
-                scheduler=scheduler,
-                model_contract=model_contract,
-                validated_commit_sha=validated_commit_sha,
-                record_failure=record_failure,
-                paired_baselines=paired_baselines,
-                record_completion=record_completion,
-                now=now,
-            )
-        except AgentExecutionIncomplete as error:
-            for result in error.partial_results:
-                if result["pass"]:
-                    accepted[result["authority_id"]] = result
-            failures_by_id = {
-                str(item["authority_id"]): item for item in error.failures
-            }
-            if (
-                not failures_by_id
-                or set(failures_by_id) != error.recoverable_authority_ids
-            ):
-                raise
-            for authority_id, failure in sorted(failures_by_id.items()):
-                authority = next(
-                    item
-                    for item in pending
-                    if item.authority_id == authority_id
-                )
-                count = recovery_counts.get(authority.canonical_agent, 0)
-                if count >= max_recovery_versions_per_agent:
-                    exhausted = _agent_failure_summary(
-                        authority,
-                        stage="traffic",
-                        error_code="recovery_exhausted",
-                        request_accepted=failure["request_accepted"],
-                    )
-                    if record_failure is not None:
-                        record_failure(exhausted)
-                    raise AgentExecutionIncomplete(
-                        [exhausted],
-                        list(accepted.values()),
-                    ) from error
-                started_at, completed_at = error.failure_windows[authority_id]
-                replacement = recover_issue(
-                    authority,
-                    active_deployed[authority_id],
-                    failure,
-                    started_at,
-                    completed_at,
-                    count + 1,
-                )
-                identity_pair = (
-                    replacement.runtime_agent_name,
-                    replacement.runtime_agent_version,
-                )
-                superseded = active_deployed[authority_id]
-                if (
-                    replacement.authority_id != authority_id
-                    or replacement.runtime_kind != authority.runtime_kind
-                    or replacement.runtime_agent_name
-                    != superseded.runtime_agent_name
-                    or replacement.provider_agent_id
-                    != superseded.provider_agent_id
-                    or replacement.provider_content_digest
-                    != superseded.provider_content_digest
-                    or replacement.telemetry_identity_id
-                    != replacement.provider_agent_version_id
-                    or identity_pair in runtime_identity_pairs
-                    or replacement.provider_agent_version_id
-                    in provider_version_ids
-                ):
-                    raise ContractError(
-                        "Replacement validation runtime identity is not fresh"
-                    )
-                runtime_identity_pairs.add(identity_pair)
-                provider_version_ids.add(
-                    replacement.provider_agent_version_id
-                )
-                active_deployed[authority_id] = replacement
-                recovery_counts[authority.canonical_agent] = count + 1
-            pending = [
-                item
-                for item in authorities
-                if item.authority_id not in accepted
-            ]
-        else:
-            accepted.update(
-                (result["authority_id"], result) for result in results
-            )
-            break
-    if len(accepted) != len(authorities):
-        raise ContractError(
-            "Validation recovery did not converge every Agent lane"
-        )
-    return [accepted[item.authority_id] for item in authorities]
-
-
-def _execute_validation_phase_once(
-    authorities: Sequence[AuthoritySpec],
-    deployed: Mapping[str, DeployedRuntime],
-    *,
-    runner: ScenarioAttemptRunner,
-    scheduler: ValidationScheduler,
-    model_contract: Mapping[str, Any],
-    validated_commit_sha: str,
-    record_failure: Callable[[dict[str, Any]], None] | None,
-    paired_baselines: Mapping[str, str] | None,
-    record_completion: Callable[
-        [
-            AuthoritySpec,
-            DeployedRuntime,
-            str,
-            str,
-            Mapping[str, Any],
-        ],
-        None,
+        for authority in authorities
     ]
-    | None,
-    now: Callable[[], datetime],
-) -> list[dict[str, Any]]:
-    by_id = {item.authority_id: item for item in authorities}
-    local_baselines = {
-        item.canonical_agent: item.authority_id
-        for item in authorities
-        if item.authority_kind == "baseline"
-    }
-    baseline_ids = dict(paired_baselines or local_baselines)
-    phase_agents = {item.canonical_agent for item in authorities}
-    if (
-        not authorities
-        or not phase_agents.issubset(baseline_ids)
-        or not set(by_id).issubset(deployed)
-        or any(
-            baseline_ids[agent] not in deployed for agent in phase_agents
-        )
-    ):
-        raise ContractError(
-            "Validation phase requires its exact deployed Agent topology"
-        )
-    lanes: dict[str, list[AuthoritySpec]] = {}
-    for authority in authorities:
-        lanes.setdefault(authority.canonical_agent, []).append(authority)
-    def execute_lane(
-        lane: list[AuthoritySpec],
-    ) -> tuple[
-        list[dict[str, Any]],
-        dict[str, Any] | None,
-        bool,
-        tuple[str, str] | None,
-    ]:
-        results = []
-        for authority in lane:
-            try:
-                validate_validation_rules(
-                    authority.validation_rules,
-                    authority_id=authority.authority_id,
-                    authority_kind=authority.authority_kind,
-                    canonical_agent=authority.canonical_agent,
-                    logical_version=authority.logical_version,
-                    runtime_kind=authority.runtime_kind,
-                    framework=authority.framework,
-                    model_contract=model_contract,
-                    reviewed_mode=authority.validation_mode,
-                )
-            except ContractError as error:
-                return (
-                    results,
-                    _agent_failure_summary(
-                        authority,
-                        stage="contract",
-                        error=error,
-                        request_accepted=False,
-                    ),
-                    False,
-                    None,
-                )
-            started_at = now().astimezone(UTC).isoformat()
-            try:
-                result = _execute_authority(
-                    authority,
-                    deployed=deployed,
-                    paired_v0_id=baseline_ids[authority.canonical_agent],
-                    runner=runner,
-                    scheduler=scheduler,
-                    model_contract=model_contract,
-                    validated_commit_sha=validated_commit_sha,
-                )
-            except SharedRuntimeError:
-                raise
-            except (ContractError, OSError, RuntimeError) as error:
-                completed_at = now().astimezone(UTC).isoformat()
-                return (
-                    results,
-                    _agent_failure_summary(
-                        authority,
-                        stage="traffic",
-                        error=error,
-                        request_accepted=getattr(
-                            error,
-                            "request_accepted",
-                            None,
-                        ),
-                    ),
-                    (
-                        authority.authority_kind == "issue"
-                        and _issue_execution_error_is_recoverable(error)
-                    ),
-                    (started_at, completed_at),
-                )
-            completed_at = now().astimezone(UTC).isoformat()
-            results.append(result)
-            if not result["pass"]:
-                return (
-                    results,
-                    _result_failure_summary(authority, result),
-                    _issue_result_is_recoverable(authority, result),
-                    (started_at, completed_at),
-                )
-            if record_completion is not None:
-                record_completion(
-                    authority,
-                    deployed[authority.authority_id],
-                    started_at,
-                    completed_at,
-                    result,
-                )
-        return results, None, False, None
-
-    result_by_id: dict[str, dict[str, Any]] = {}
-    failures: list[dict[str, Any]] = []
-    recoverable_authority_ids: set[str] = set()
-    failure_windows: dict[str, tuple[str, str]] = {}
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        futures = {
-            pool.submit(execute_lane, lane): agent_name
-            for agent_name, lane in lanes.items()
-        }
-        for future in as_completed(futures):
-            try:
-                (
-                    lane_results,
-                    failure,
-                    recoverable,
-                    failure_window,
-                ) = future.result()
-            except SharedRuntimeError:
-                for pending in futures:
-                    pending.cancel()
-                raise
-            for result in lane_results:
-                result_by_id[result["authority_id"]] = result
-            if failure is not None:
-                failures.append(failure)
-                authority_id = str(failure["authority_id"])
-                if recoverable:
-                    recoverable_authority_ids.add(authority_id)
-                if failure_window is not None:
-                    failure_windows[authority_id] = failure_window
-                if record_failure is not None:
-                    record_failure(failure)
-    if failures:
-        raise AgentExecutionIncomplete(
-            failures,
-            list(result_by_id.values()),
-            recoverable_authority_ids=recoverable_authority_ids,
-            failure_windows=failure_windows,
-        )
-    if len(result_by_id) != len(authorities):
-        raise ContractError(
-            "Validation execution did not complete every Agent lane"
-        )
-    return [result_by_id[item.authority_id] for item in authorities]
 
 
-def _issue_execution_error_is_recoverable(error: BaseException) -> bool:
-    if getattr(error, "recoverable_issue_execution", False) is True:
-        return True
-    if getattr(error, "transient", False) is True:
-        return True
-    if isinstance(error, (OSError, RuntimeError)):
-        return True
-    if not hasattr(error, "status") and not hasattr(error, "request_accepted"):
-        return False
-    status = getattr(error, "status", None)
-    request_accepted = getattr(error, "request_accepted", None)
-    return (
-        request_accepted is True
-        or (status is None and request_accepted is not False)
-        or (
-            isinstance(status, int)
-            and (status in {404, 408, 429} or status >= 500)
-        )
-    )
-
-
-def _issue_result_is_recoverable(
-    authority: AuthoritySpec,
-    result: Mapping[str, Any],
-) -> bool:
-    if authority.authority_kind != "issue":
-        return False
-    recoverable_codes = {
-        "telemetry_identity_mismatch",
-        "missing_output_messages_attribute",
-        "empty_output_messages_attribute",
-        "incomplete_endpoint_evidence",
-    }
-    found_incomplete_issue_attempt = False
-    for scenario in result["scenarios"]:
-        issue_attempts = scenario["issue_attempts"]
-        v0_attempts = scenario["v0_attempts"]
-        if (
-            len(v0_attempts) != scenario["n"]
-            or not all(item["complete"] for item in v0_attempts)
-        ):
-            return False
-        for attempt in issue_attempts:
-            if attempt["complete"]:
-                continue
-            found_incomplete_issue_attempt = True
-            if attempt.get("error_code") not in recoverable_codes:
-                return False
-    return found_incomplete_issue_attempt
-
-
-def _result_failure_summary(
-    authority: AuthoritySpec,
-    result: Mapping[str, Any],
-) -> dict[str, Any]:
-    attempts = [
-        attempt
-        for scenario in result["scenarios"]
-        for key in ("issue_attempts", "v0_attempts")
-        for attempt in scenario[key]
-    ]
-    error_code = next(
-        (
-            str(item["error_code"])
-            for item in attempts
-            if item.get("error_code")
-        ),
-        "validation_contract_failed",
-    )
-    request_accepted = any(
-        item.get("response_references") for item in attempts
-    )
-    return _agent_failure_summary(
-        authority,
-        stage="traffic",
-        error_code=error_code,
-        request_accepted=request_accepted,
-    )
-
-
-def _execute_authority(
+def _verify_invoked_authority(
     authority: AuthoritySpec,
     *,
     deployed: Mapping[str, DeployedRuntime],
+    invocation: Mapping[str, Any],
     paired_v0_id: str,
     runner: ScenarioAttemptRunner,
     scheduler: ValidationScheduler,
@@ -1142,34 +638,103 @@ def _execute_authority(
         model_contract=model_contract,
         reviewed_mode=authority.validation_mode,
     )
-    scenarios = [
-        _execute_scenario(
-            authority,
-            scenario,
-            deployed=deployed,
-            paired_v0_id=paired_v0_id,
-            runner=runner,
-            scheduler=scheduler,
+    scenario_invocations = invocation.get("scenarios")
+    if not isinstance(scenario_invocations, list):
+        raise ContractError("Validation shard invocation scenarios are invalid")
+    by_scenario = {
+        str(item.get("scenario_id") or ""): item
+        for item in scenario_invocations
+        if isinstance(item, Mapping)
+    }
+    if len(by_scenario) != len(scenario_invocations):
+        raise ContractError("Validation shard invocation scenarios collide")
+    scenarios = []
+    for scenario in authority.validation_rules["scenarios"]:
+        persisted = by_scenario.get(str(scenario["id"]))
+        if persisted is None:
+            raise ContractError("Validation shard invocation scenario is missing")
+        issue_invocations = persisted.get("issue_invocations")
+        v0_invocations = persisted.get("v0_invocations")
+        attempts = scenario["attempts"]
+        if (
+            not isinstance(issue_invocations, list)
+            or not isinstance(v0_invocations, list)
+            or len(issue_invocations) != len(attempts)
+            or (
+                authority.authority_kind == "baseline"
+                and v0_invocations
+            )
+            or (
+                authority.authority_kind == "issue"
+                and len(v0_invocations) != len(attempts)
+            )
+        ):
+            raise ContractError("Validation shard invocation attempt coverage is invalid")
+        issue_attempts = [
+            runner.verify(
+                target=deployed[authority.authority_id],
+                executing_authority_id=authority.authority_id,
+                conversation_role=(
+                    "baseline" if authority.authority_kind == "baseline" else "issue"
+                ),
+                scenario=scenario,
+                attempt=attempt,
+                invocation=persisted_invocation,
+                scheduler=scheduler,
+            )
+            for attempt, persisted_invocation in zip(
+                attempts,
+                issue_invocations,
+                strict=True,
+            )
+        ]
+        paired_attempts = [
+            runner.verify(
+                target=deployed[paired_v0_id],
+                executing_authority_id=authority.authority_id,
+                conversation_role="paired_v0",
+                scenario=scenario,
+                attempt=attempt,
+                invocation=persisted_invocation,
+                scheduler=scheduler,
+            )
+            for attempt, persisted_invocation in zip(
+                attempts,
+                v0_invocations,
+                strict=True,
+            )
+        ]
+        n = int(scenario["n"])
+        complete_count = sum(item["complete"] is True for item in issue_attempts)
+        scenarios.append(
+            {
+                "scenario_id": scenario["id"],
+                "execution_digest": scenario["execution_digest"],
+                "validation_mode": scenario["validation_mode"],
+                "n": n,
+                "complete_count": complete_count,
+                "pass": complete_count == n
+                and (
+                    authority.authority_kind == "baseline"
+                    or sum(item["complete"] is True for item in paired_attempts) == n
+                ),
+                "issue_attempts": issue_attempts,
+                "v0_attempts": paired_attempts,
+            }
         )
-        for scenario in authority.validation_rules["scenarios"]
-    ]
     n = sum(item["n"] for item in scenarios)
-    authority_result = {
+    result = {
         "authority_id": authority.authority_id,
         "authority_kind": authority.authority_kind,
         "canonical_agent": authority.canonical_agent,
         "logical_version": authority.logical_version,
-        "runtime_agent_name": deployed[
-            authority.authority_id
-        ].runtime_agent_name,
+        "runtime_agent_name": deployed[authority.authority_id].runtime_agent_name,
         "runtime_agent_version": deployed[
             authority.authority_id
         ].runtime_agent_version,
         "provider_agent_version_reference": content_hash(
             {
-                "provider_agent_id": deployed[
-                    authority.authority_id
-                ].provider_agent_id,
+                "provider_agent_id": deployed[authority.authority_id].provider_agent_id,
                 "provider_agent_version_id": deployed[
                     authority.authority_id
                 ].provider_agent_version_id,
@@ -1187,88 +752,10 @@ def _execute_authority(
         "scenarios": scenarios,
         "authority_evidence_digest": "",
     }
-    authority_result["authority_evidence_digest"] = digest_without_field(
-        authority_result,
+    result["authority_evidence_digest"] = digest_without_field(
+        result,
         "authority_evidence_digest",
     )
-    return authority_result
-
-
-def invalidated_authorities(
-    *,
-    current_cycle_id: str,
-    previous_cycle_id: str,
-    previous_contract_digest: str,
-    current_contract_digest: str,
-    previous_source_digests: Mapping[str, str],
-    current_source_digests: Mapping[str, str],
-) -> set[str]:
-    if current_cycle_id != previous_cycle_id:
-        return set(current_source_digests)
-    if previous_contract_digest != current_contract_digest:
-        return set(current_source_digests)
-    if set(previous_source_digests) != set(current_source_digests):
-        return set(current_source_digests)
-    return {
-        authority_id
-        for authority_id, digest in current_source_digests.items()
-        if previous_source_digests[authority_id] != digest
-    }
-
-
-def _execute_scenario(
-    authority: AuthoritySpec,
-    scenario: Mapping[str, Any],
-    *,
-    deployed: Mapping[str, DeployedRuntime],
-    paired_v0_id: str,
-    runner: ScenarioAttemptRunner,
-    scheduler: ValidationScheduler,
-) -> dict[str, Any]:
-    issue_attempts = [
-        runner.run(
-            target=deployed[authority.authority_id],
-            executing_authority_id=authority.authority_id,
-            conversation_role=(
-                "baseline" if authority.authority_kind == "baseline" else "issue"
-            ),
-            scenario=scenario,
-            attempt=attempt,
-            scheduler=scheduler,
-        )
-        for attempt in scenario["attempts"]
-    ]
-    v0_attempts = (
-        []
-        if authority.authority_kind == "baseline"
-        else [
-            runner.run(
-                target=deployed[paired_v0_id],
-                executing_authority_id=authority.authority_id,
-                conversation_role="paired_v0",
-                scenario=scenario,
-                attempt=attempt,
-                scheduler=scheduler,
-            )
-            for attempt in scenario["attempts"]
-        ]
-    )
-    n = int(scenario["n"])
-    complete_count = sum(item["complete"] is True for item in issue_attempts)
-    passed = complete_count == n and (
-        authority.authority_kind == "baseline"
-        or sum(item["complete"] is True for item in v0_attempts) == n
-    )
-    result = {
-        "scenario_id": scenario["id"],
-        "execution_digest": scenario["execution_digest"],
-        "validation_mode": scenario["validation_mode"],
-        "n": n,
-        "complete_count": complete_count,
-        "pass": passed,
-        "issue_attempts": issue_attempts,
-        "v0_attempts": v0_attempts,
-    }
     return result
 
 

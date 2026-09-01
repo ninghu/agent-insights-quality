@@ -6,28 +6,43 @@ from types import SimpleNamespace
 from agent_insights_quality import cli
 
 
-def test_validation_cli_exposes_only_two_automatic_user_commands() -> None:
+def test_validation_cli_exposes_only_coordinator_primitives() -> None:
     parser = cli.build_parser()
-    run = parser.parse_args(["run-test-agent-validation"])
-    approve = parser.parse_args(["approve-test-agent-validation"])
-    assert vars(run) == {"command": "run-test-agent-validation"}
-    assert vars(approve) == {"command": "approve-test-agent-validation"}
+    assert vars(parser.parse_args(["prepare-test-agent-validation"])) == {
+        "command": "prepare-test-agent-validation"
+    }
+    shard = parser.parse_args(
+        [
+            "invoke-test-agent-validation-shard",
+            "--cycle-id",
+            "cycle",
+            "--shard",
+            "1",
+            "--authority",
+            "issue-001",
+        ]
+    )
+    assert shard.authority == ["issue-001"]
+    assert shard.shard == 1
+    assert "run-test-agent-validation" not in parser._subparsers._group_actions[
+        0
+    ].choices
 
 
-def test_run_validation_cli_uses_automatic_local_discovery(monkeypatch) -> None:
+def test_prepare_validation_cli_uses_automatic_local_discovery(monkeypatch) -> None:
     monkeypatch.setattr(
         cli,
-        "run_test_agent_validation",
+        "prepare_test_agent_validation",
         lambda: {
-            "status": "clean",
+            "status": "prepared",
             "commit_sha": "a" * 40,
             "authority_count": 41,
         },
     )
-    args = cli.build_parser().parse_args(["run-test-agent-validation"])
+    args = cli.build_parser().parse_args(["prepare-test-agent-validation"])
     result = json.loads(cli._dispatch(args) or "{}")
     assert result == {
-        "status": "clean",
+        "status": "prepared",
         "commit_sha": "a" * 40,
         "authority_count": 41,
     }

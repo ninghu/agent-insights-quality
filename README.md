@@ -111,7 +111,15 @@ Live commands use the authenticated local Azure CLI user and private runtime con
 ```powershell
 python -m agent_insights_quality deploy-infrastructure
 python -m agent_insights_quality deploy-analytics
-python -m agent_insights_quality run-test-agent-validation
+python -m agent_insights_quality prepare-test-agent-validation
+# The coordinator assigns all 41 authorities across 10 shards, invokes with
+# at most 8 active workers, then verifies traces with at most 4 active workers.
+python -m agent_insights_quality invoke-test-agent-validation-shard `
+  --cycle-id <id> --shard <1-10> --authority <authority-id>
+python -m agent_insights_quality verify-test-agent-validation-shard `
+  --cycle-id <id> --shard <1-10> --authority <authority-id>
+python -m agent_insights_quality compose-test-agent-validation --cycle-id <id>
+python -m agent_insights_quality cleanup-test-agent-validation --cycle-id <id>
 # Run only after explicit human approval of the exact CLEAN result:
 python -m agent_insights_quality approve-test-agent-validation
 python -m agent_insights_quality fetch-quality-work-items `

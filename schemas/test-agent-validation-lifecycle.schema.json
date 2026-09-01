@@ -540,16 +540,13 @@
         "phase",
         "support_images",
         "recoveries",
-        "execution_recoveries",
         "failures"
       ],
       "properties": {
         "phase": {
           "enum": [
-            "phase_1_deployment",
-            "phase_1_traffic",
-            "phase_2_deployment",
-            "phase_2_traffic",
+            "preparing",
+            "prepared",
             "complete"
           ]
         },
@@ -610,112 +607,6 @@
               "error_code": {
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9_]{2,63}$"
-              }
-            }
-          }
-        },
-        "execution_recoveries": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "authority_id",
-              "canonical_agent",
-              "recovery_ordinal",
-              "state",
-              "error_code",
-              "request_accepted",
-              "superseded_runtime_agent_name",
-              "superseded_runtime_agent_version",
-              "replacement_runtime_agent_name",
-              "replacement_runtime_agent_version",
-              "failed_traffic_started_at",
-              "failed_traffic_completed_at",
-              "replacement_intent_at",
-              "replacement_ready_at",
-              "accepted_traffic_started_at",
-              "accepted_traffic_completed_at",
-              "authority_evidence_digest"
-            ],
-            "properties": {
-              "authority_id": {
-                "type": "string",
-                "pattern": "^issue-[0-9]{3}$"
-              },
-              "canonical_agent": {
-                "enum": [
-                  "weather-agent",
-                  "healthcare-agent",
-                  "finance-agent",
-                  "travel-agent",
-                  "support-ticket-agent"
-                ]
-              },
-              "recovery_ordinal": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 3
-              },
-              "state": {
-                "enum": [
-                  "replacement_intent",
-                  "ready",
-                  "accepted",
-                  "superseded"
-                ]
-              },
-              "error_code": {
-                "type": "string",
-                "pattern": "^[a-z][a-z0-9_]{2,63}$"
-              },
-              "request_accepted": {"type": ["boolean", "null"]},
-              "superseded_runtime_agent_name": {
-                "type": "string",
-                "pattern": "^[a-z][a-z0-9-]{1,61}[a-z0-9]$"
-              },
-              "superseded_runtime_agent_version": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 128
-              },
-              "replacement_runtime_agent_name": {
-                "type": "string",
-                "pattern": "^[a-z][a-z0-9-]{1,61}[a-z0-9]$"
-              },
-              "replacement_runtime_agent_version": {
-                "oneOf": [
-                  {"type": "null"},
-                  {"type": "string", "minLength": 1, "maxLength": 128}
-                ]
-              },
-              "failed_traffic_started_at": {"$ref": "#/$defs/timestamp"},
-              "failed_traffic_completed_at": {"$ref": "#/$defs/timestamp"},
-              "replacement_intent_at": {"$ref": "#/$defs/timestamp"},
-              "replacement_ready_at": {
-                "oneOf": [
-                  {"type": "null"},
-                  {"$ref": "#/$defs/timestamp"}
-                ]
-              },
-              "accepted_traffic_started_at": {
-                "oneOf": [
-                  {"type": "null"},
-                  {"$ref": "#/$defs/timestamp"}
-                ]
-              },
-              "accepted_traffic_completed_at": {
-                "oneOf": [
-                  {"type": "null"},
-                  {"$ref": "#/$defs/timestamp"}
-                ]
-              },
-              "authority_evidence_digest": {
-                "oneOf": [
-                  {"type": "null"},
-                  {"$ref": "#/$defs/hash"}
-                ]
               }
             }
           }

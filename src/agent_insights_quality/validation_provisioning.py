@@ -509,7 +509,7 @@ class FoundryAuthorityDeployer:
         values = dict(images)
         if len(values) != 9:
             raise ContractError(
-                "Validation phase 2 requires nine Support images"
+                "Hosted validation requires nine Support images"
             )
         if self._support_images and self._support_images != values:
             raise ContractError(
@@ -521,22 +521,6 @@ class FoundryAuthorityDeployer:
         self,
         authority: AuthoritySpec,
         planned: PlannedRuntime,
-    ) -> DeployedRuntime:
-        return self._deploy(authority, planned, force_new_version=False)
-
-    def deploy_fresh(
-        self,
-        authority: AuthoritySpec,
-        planned: PlannedRuntime,
-    ) -> DeployedRuntime:
-        return self._deploy(authority, planned, force_new_version=True)
-
-    def _deploy(
-        self,
-        authority: AuthoritySpec,
-        planned: PlannedRuntime,
-        *,
-        force_new_version: bool,
     ) -> DeployedRuntime:
         catalog_agent = self._agents.get(authority.canonical_agent)
         if catalog_agent is None:
@@ -565,12 +549,7 @@ class FoundryAuthorityDeployer:
             raise ContractError("Validation authority source digest changed before deploy")
         runtime_agent = copy.deepcopy(catalog_agent)
         runtime_agent["name"] = planned.runtime_agent_name
-        provision = (
-            self._client.create_version_for_readiness
-            if force_new_version
-            else self._client.ensure_version_for_readiness
-        )
-        version, details = provision(
+        version, details = self._client.ensure_version_for_readiness(
             agent=runtime_agent,
             logical_version=authority.logical_version,
             artifact=artifact,

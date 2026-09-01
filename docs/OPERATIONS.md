@@ -42,34 +42,26 @@ operation identity while receiving the same matrix. Evidence binds the exact dep
 Semantic and trace assertions remain reviewed context for later private Copilot review; local
 validation records only mechanical execution and evidence completeness and produces no issue verdict.
 
-The local lifecycle is:
+The coordinator lifecycle is:
 
 ```text
-LOCKED -> PREFLIGHT -> CREATING -> VALIDATING
+LOCKED -> PREFLIGHT -> CREATING -> PREPARED
+  -> 10 INVOKED SHARDS -> 10 VERIFIED SHARDS
   -> FINAL_CHECKS -> CLEANING -> CLEAN
 ```
 
-The runner holds
-`~/.aiq-runtime/agent-insights-quality/test-agent-validation/validation.lock` for the whole process.
-Every mutation atomically replaces the local active journal and writes a required content-addressed,
-append-only history event. Process exit releases the lock. Before traffic, an unchanged commit may
-resume the same cycle, durable Project, topology, exact source-digest Support images, and confirmed-ready
-authorities; it retries only unresolved authorities and allows at most three recovered versions per
-Agent. Phase 1 deploys only `weather-agent/v0` and `finance-agent/v0` and runs both official baseline
-matrices concurrently. Both must pass before Phase 2 deploys the remaining 39 and runs five independent Agent lanes with
-versions sequential inside each lane. A recoverable issue execution/evidence failure supersedes only
-that provider version: the runner keeps the stable Agent name, reconciles a new server-assigned exact
-version for the same content digest, and accepts only replacement evidence from its exact operation and
-time window after bounded hydration/stability waiting. Completed authorities remain accepted
-and are never rerun; pre-traffic source/contract failures that rebuilding cannot change and Phase 1
-baselines are not eligible. Agent-local failures do not cancel other lanes; shared runtime failures do. Commit,
-identity, substrate, topology, TTL, retry exhaustion, or post-traffic drift forces exact run-scoped
-cleanup. Cleanup remains allowed after the fixed 72-hour execution TTL. The authenticated Azure CLI
-user is resolved explicitly, recorded as a private hash, and checked on every SDK token acquisition.
+Prepare holds the coordinator lock, binds the exact durable Project, and reconciles all 41
+authorities before traffic. Matching stable Agents reuse their exact server-assigned versions;
+changed content creates a new exact version under the same stable name. Ten explicit shard
+assignments then use separate locks and artifacts. At most eight invocation workers run at once.
+After every invocation shard completes, at most four verification workers hydrate and correlate
+traces concurrently without sending new traffic. Each shard is sequential internally, and every
+issue carries its paired-`v0` evidence. The coordinator, not a distributed scheduler, enforces these
+cross-process caps.
 
 Support wheelhouse artifacts and ACR build tags are reused only under exact requirements/source
-digests. Cycle tags remain cycle-owned and are removed during cleanup. Public-safe per-stage timings
-are persisted after each completed stage under the private validation runtime root.
+digests. All lifecycle, shard locks, invocation bindings, packages, and evidence remain under the
+private validation runtime root.
 
 Cleanup records intent first and deletes responses, conversations/sessions, cycle tags, and unshared
 manifests. The durable Project, its connections/RBAC, and reconciled Agent/version topology are
@@ -77,14 +69,19 @@ explicitly retained. Final proof requires no run-scoped nonce-owned resources, s
 cycle tags, or incomplete reviewed cascades. Ambiguity enters `CLEANUP_BLOCKED` only in the Sweden
 environment namespace and never mutates the legacy lifecycle pointer.
 
-Run local validation with no identity, path, or SHA arguments:
+Run the explicit coordinator primitives:
 
 ```powershell
-python -m agent_insights_quality run-test-agent-validation
+python -m agent_insights_quality prepare-test-agent-validation
+python -m agent_insights_quality invoke-test-agent-validation-shard --cycle-id <id> --shard <1-10> --authority <id>
+python -m agent_insights_quality verify-test-agent-validation-shard --cycle-id <id> --shard <1-10> --authority <id>
+python -m agent_insights_quality compose-test-agent-validation --cycle-id <id>
+python -m agent_insights_quality cleanup-test-agent-validation --cycle-id <id>
 ```
 
-The command discovers the repository, open PR, exact clean commit, and runtime paths. Any commit
-change forces cleanup and a fresh full cycle. A successful run writes local evidence and CLEAN only.
+Prepare discovers the repository, open PR, exact clean commit, and runtime paths. The coordinator
+must assign every catalog authority exactly once across 10 shards and use the reviewed limits of
+eight active invocation workers and four active verification workers.
 After the user explicitly approves that exact result, run:
 
 ```powershell
@@ -172,7 +169,7 @@ issues package their complete `source/` tree together with the shared requiremen
 contract. A deployed issue version contains only its reviewed defect and no dormant branches for
 other issues, so source-aware proposed fixes see the exact defective implementation.
 
-Official staging qualification uses `run-test-agent-validation` and always runs the full
+Official staging qualification uses the five coordinator primitives and always composes the full
 41-authority matrix for one exact commit in the durable `aiq-staging-swedencentral` Project. Daily derives the
 exact-head approved-record Blob path and reads that immutable authority directly; it never trusts an
 operator-supplied local record file. Daily rejects a missing record, invalid WORM metadata, commit

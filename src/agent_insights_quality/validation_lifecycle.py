@@ -359,11 +359,6 @@ def validate_lifecycle(value: Mapping[str, Any]) -> None:
     recovery_ids = [
         item["authority_id"] for item in deployment["recoveries"]
     ]
-    execution_recoveries = deployment["execution_recoveries"]
-    execution_recovery_keys = [
-        (item["canonical_agent"], item["recovery_ordinal"])
-        for item in execution_recoveries
-    ]
     failure_keys = [
         (item["authority_id"], item["stage"])
         for item in deployment["failures"]
@@ -376,7 +371,6 @@ def validate_lifecycle(value: Mapping[str, Any]) -> None:
     if (
         len(ready_ids) != len(value["runtime_topology"]["agents"])
         or len(recovery_ids) != len(set(recovery_ids))
-        or len(execution_recovery_keys) != len(set(execution_recovery_keys))
         or len(failure_keys) != len(set(failure_keys))
         or any(
             (
@@ -392,24 +386,20 @@ def validate_lifecycle(value: Mapping[str, Any]) -> None:
             for item in deployment["failures"]
         )
         or (
-            deployment["phase"] == "phase_1_traffic"
-            and len(value["runtime_topology"]["agents"]) != 2
-        )
-        or (
-            deployment["phase"] == "phase_2_deployment"
-            and not 2 <= len(value["runtime_topology"]["agents"]) <= 41
-        )
-        or (
-            deployment["phase"] in {"phase_2_traffic", "complete"}
+            deployment["phase"] in {"prepared", "complete"}
             and len(value["runtime_topology"]["agents"]) != 41
         )
         or (
-            deployment["phase"] != "phase_1_deployment"
-            and deployment["traffic_started"] is not True
+            deployment["phase"] == "preparing"
+            and deployment["traffic_started"] is not False
         )
         or (
-            deployment["phase"] == "phase_1_deployment"
+            deployment["phase"] == "prepared"
             and deployment["traffic_started"] is not False
+        )
+        or (
+            deployment["phase"] == "complete"
+            and deployment["traffic_started"] is not True
         )
         or any(
             (item["state"] == "ready") != (item["authority_id"] in ready_ids)
@@ -421,24 +411,11 @@ def validate_lifecycle(value: Mapping[str, Any]) -> None:
                 for recovery in deployment["recoveries"]
                 if recovery["canonical_agent"] == agent
             )
-            + sum(
-                1
-                for recovery in execution_recoveries
-                if recovery["canonical_agent"] == agent
-            )
             > 3
             for agent in {
                 item["canonical_agent"]
-                for item in [
-                    *deployment["recoveries"],
-                    *execution_recoveries,
-                ]
+                for item in deployment["recoveries"]
             }
-        )
-        or not _execution_recoveries_are_consistent(
-            execution_recoveries,
-            deployment["recoveries"],
-            value["runtime_topology"]["agents"],
         )
     ):
         raise ContractError(
@@ -484,90 +461,6 @@ def validate_lifecycle(value: Mapping[str, Any]) -> None:
             or not _hash_reference(reference["digest"])
         ):
             raise ContractError(f"Local validation {field} is invalid")
-
-
-def _execution_recoveries_are_consistent(
-    recoveries: list[Mapping[str, Any]],
-    deployment_recoveries: list[Mapping[str, Any]],
-    runtime_agents: list[Mapping[str, Any]],
-) -> bool:
-    runtime_by_id = {item["authority_id"]: item for item in runtime_agents}
-    by_agent: dict[str, list[Mapping[str, Any]]] = {}
-    by_authority: dict[str, list[Mapping[str, Any]]] = {}
-    for item in recoveries:
-        by_agent.setdefault(str(item["canonical_agent"]), []).append(item)
-        by_authority.setdefault(str(item["authority_id"]), []).append(item)
-        state = item["state"]
-        version = item["replacement_runtime_agent_version"]
-        ready_at = item["replacement_ready_at"]
-        accepted_fields = (
-            item["accepted_traffic_started_at"],
-            item["accepted_traffic_completed_at"],
-            item["authority_evidence_digest"],
-        )
-        if (
-            item["superseded_runtime_agent_name"]
-            != item["replacement_runtime_agent_name"]
-            or (
-                state == "replacement_intent"
-                and (
-                    version is not None
-                    or ready_at is not None
-                    or any(value is not None for value in accepted_fields)
-                )
-            )
-            or (
-                state in {"ready", "superseded"}
-                and (
-                    version is None
-                    or ready_at is None
-                    or any(value is not None for value in accepted_fields)
-                )
-            )
-            or (
-                state == "accepted"
-                and (
-                    version is None
-                    or ready_at is None
-                    or any(value is None for value in accepted_fields)
-                )
-            )
-        ):
-            return False
-    for agent, items in by_agent.items():
-        ordinals = sorted(item["recovery_ordinal"] for item in items)
-        prior = sum(
-            item["retry_count"]
-            for item in deployment_recoveries
-            if item["canonical_agent"] == agent
-        )
-        if ordinals != list(range(prior + 1, prior + len(items) + 1)):
-            return False
-    for authority_id, items in by_authority.items():
-        ordered = sorted(items, key=lambda item: item["recovery_ordinal"])
-        if any(item["state"] != "superseded" for item in ordered[:-1]):
-            return False
-        current = runtime_by_id.get(authority_id)
-        latest = ordered[-1]
-        if current is None:
-            return False
-        if latest["state"] == "replacement_intent":
-            if (
-                current["runtime_agent_name"]
-                != latest["superseded_runtime_agent_name"]
-                or current["runtime_agent_version"]
-                != latest["superseded_runtime_agent_version"]
-            ):
-                return False
-        elif (
-            latest["state"] not in {"ready", "accepted"}
-            or current["runtime_agent_name"]
-            != latest["replacement_runtime_agent_name"]
-            or current["runtime_agent_version"]
-            != latest["replacement_runtime_agent_version"]
-        ):
-            return False
-    return True
 
 
 def validate_topology_resource_bindings(

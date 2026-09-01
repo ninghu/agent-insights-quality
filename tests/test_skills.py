@@ -139,36 +139,36 @@ def test_validation_skill_enforces_local_report_free_approval() -> None:
     skill = _text(".github/skills/test-agent-validation/SKILL.md")
     normalized = " ".join(skill.split())
     for requirement in (
-        "local, report-free validation",
-        "Baselines require five mechanically complete attempts",
-        "deterministic issue packages require five issue and five paired-`v0` attempts",
-        "model-mediated packages require seven of each",
-        "never a local verdict or gate",
-        "Never infer mode",
-        "Sweden-environment OS file lock",
+        "report-free Sweden Central staging gate",
         "aiq-staging-swedencentral",
-        "41 stable baseline/issue Agent names",
-        "server-assigned provider version ID and content digest",
+        "all 41 catalog authorities",
+        "10 shards",
+        "no more than eight concurrent",
+        "no more than four concurrent",
+        "server-assigned",
+        "never select `latest`",
+        "paired `v0`",
+        "read-only post-invoke trace",
+        "exactly 10 packages",
         "run-scoped cleanup",
-        "Application Insights",
-        "CLEANUP_BLOCKED",
         "approve-test-agent-validation",
-        "minimal immutable approved record",
-        "Merge remains manual",
+        "explicit approval",
     ):
         assert requirement in normalized
     staging = " ".join(
         _text(".github/skills/staging-qualification/SKILL.md").split()
     )
     for requirement in (
-        "official human-reviewed gate",
+        "human review",
         "aiq-staging-swedencentral",
-        "41 stable baseline/issue Agent names",
-        "server-assigned provider version ID and content digest",
-        "bounded post-invoke hydration and stability deadline",
-        "Retain the durable Project",
-        "approve-test-agent-validation",
-        "send no Daily smoke traffic",
+        "all 41 stable catalog authorities",
+        "exactly 10 explicit shards",
+        "at most eight",
+        "at most four",
+        "server-assigned versions",
+        "no command floats `latest`",
+        "retaining the Project",
+        "send Daily smoke traffic",
     ):
         assert requirement in staging
 
