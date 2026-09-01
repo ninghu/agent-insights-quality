@@ -283,8 +283,8 @@ class ValidationProjectProvisioner:
             )
         if (
             project.project_endpoint != self._profile.project_endpoint
-            or len(project.connection_ids) != 2
-            or len(project.role_assignment_ids) != 4
+            or len(project.connection_ids) != len(plan.connection_ids)
+            or len(project.role_assignment_ids) != len(plan.role_assignment_ids)
             or set(project.connection_ids) != set(plan.connection_ids)
             or set(project.role_assignment_ids) != set(plan.role_assignment_ids)
         ):

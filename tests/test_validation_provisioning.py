@@ -163,6 +163,75 @@ def test_project_children_have_deterministic_intents_before_bicep() -> None:
     assert "appInsightsReaderName" in bicep
 
 
+def test_project_create_accepts_account_only_connection_outputs(monkeypatch) -> None:
+    project_name = "aiq-validation-0123456789ab"
+    cycle_id = "validation-cycle-0001"
+    ownership_nonce = "nonce-0001"
+    profile = validation_runtime_profile(
+        project_name,
+        cycle_id=cycle_id,
+        base=_staging_profile(),
+    )
+    provisioner = ValidationProjectProvisioner(
+        profile,
+        local_operator_id="synthetic-local-operator",
+        policy=load_validation_policy(),
+    )
+    plan = provisioner._resource_plan(
+        project_name=project_name,
+        cycle_id=cycle_id,
+        ownership_nonce=ownership_nonce,
+    )
+    observed = []
+
+    def run(arguments, **_kwargs):
+        observed.append(arguments)
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "properties": {
+                        "provisioningState": "Succeeded",
+                        "outputs": {
+                            "projectId": {
+                                "value": provisioner.expected_project_id(project_name)
+                            },
+                            "projectPrincipalId": {
+                                "value": "synthetic-project-principal"
+                            },
+                            "projectEndpoint": {"value": profile.project_endpoint},
+                            "connectionIds": {
+                                "value": list(plan.connection_ids)
+                            },
+                            "roleAssignmentIds": {
+                                "value": list(plan.role_assignment_ids)
+                            },
+                        },
+                    }
+                }
+            ),
+        )
+
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_provisioning.subprocess.run",
+        run,
+    )
+
+    project = provisioner.create(
+        project_name=project_name,
+        cycle_id=cycle_id,
+        ownership_nonce=ownership_nonce,
+    )
+
+    assert project.connection_ids == plan.connection_ids
+    assert len(project.connection_ids) == 1
+    assert project.connection_ids[0].endswith(
+        "/connections/container-registry-validation"
+    )
+    assert project.role_assignment_ids == plan.role_assignment_ids
+    assert len(observed) == 1
+
+
 def test_project_timeout_cancels_and_waits_for_terminal_deployment(
     monkeypatch,
 ) -> None:
