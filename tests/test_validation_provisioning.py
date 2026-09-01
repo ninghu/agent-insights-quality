@@ -133,7 +133,7 @@ def test_durable_project_binding_reads_exact_existing_project(monkeypatch) -> No
             stdout=json.dumps(
                 {
                     "id": provisioner.expected_project_id(profile.project_name),
-                    "name": profile.project_name,
+                    "name": f"{profile.account_name}/{profile.project_name}",
                     "location": "swedencentral",
                     "identity": {"principalId": "synthetic-project-principal"},
                 }
@@ -155,6 +155,56 @@ def test_durable_project_binding_reads_exact_existing_project(monkeypatch) -> No
     } == {"container-registry-staging", "application-insights-staging"}
     assert project.role_assignment_ids == ()
     assert len(observed) == 1
+
+
+@pytest.mark.parametrize(
+    "resource_name",
+    [
+        "aiq-staging-swedencentral",
+        "wrong-account/aiq-staging-swedencentral",
+        "aiq-staging-swedencentral/wrong-project",
+        (
+            "aiq-staging-swedencentral/"
+            "aiq-staging-swedencentral/extra-segment"
+        ),
+    ],
+)
+def test_durable_project_binding_rejects_noncanonical_child_name(
+    monkeypatch,
+    resource_name,
+) -> None:
+    profile = _staging_profile()
+    provisioner = ValidationProjectProvisioner(
+        profile,
+        local_operator_id="synthetic-local-operator",
+        policy=load_validation_policy(),
+    )
+
+    def run(_arguments, **_kwargs):
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "id": provisioner.expected_project_id(profile.project_name),
+                    "name": resource_name,
+                    "location": "swedencentral",
+                    "identity": {"principalId": "synthetic-project-principal"},
+                }
+            ),
+        )
+
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_provisioning.subprocess.run",
+        run,
+    )
+    monkeypatch.setattr(
+        provisioner,
+        "assert_telemetry_connection",
+        lambda: pytest.fail("telemetry validation must not run"),
+    )
+
+    with pytest.raises(ContractError, match="Project identity is invalid"):
+        provisioner.bind(profile.project_name)
 
 
 def test_durable_project_binding_fails_closed_on_timeout(monkeypatch) -> None:

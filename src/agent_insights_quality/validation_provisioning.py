@@ -179,6 +179,7 @@ class ValidationProjectProvisioner:
             ) from error
         if process.returncode != 0:
             raise ContractError("Durable validation Project could not be read")
+        expected_project_name = f"{self._profile.account_name}/{project_name}"
         try:
             value = json.loads(process.stdout)
             principal_id = str(value["identity"]["principalId"])
@@ -188,7 +189,7 @@ class ValidationProjectProvisioner:
             ) from error
         if (
             str(value.get("id") or "").casefold() != project_id.casefold()
-            or value.get("name") != project_name
+            or value.get("name") != expected_project_name
             or str(value.get("location") or "").casefold() != self._policy.location
             or not principal_id
         ):
