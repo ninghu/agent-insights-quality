@@ -145,7 +145,7 @@ class Runtime:
             self.identity_pass for _ in kwargs["operation_ids"]
         )
 
-    def top_level_output_messages_state(self, operation_ids):
+    def canonical_output_messages_state(self, operation_ids):
         return tuple(self.output_messages_state for _ in operation_ids)
 
     @staticmethod
@@ -428,7 +428,7 @@ def test_telemetry_identity_mismatch_keeps_attempt_incomplete() -> None:
         ((True, False), "empty_output_messages_attribute"),
     ],
 )
-def test_top_level_output_messages_failure_keeps_issue_attempt_incomplete(
+def test_canonical_output_messages_failure_keeps_issue_attempt_incomplete(
     state,
     error_code,
 ) -> None:

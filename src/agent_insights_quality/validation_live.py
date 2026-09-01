@@ -8,6 +8,7 @@ from typing import Any, Iterator
 
 from agent_insights_quality.live import (
     LiveRuntime,
+    _canonical_output_messages_expectation_passes,
     _normalize_fixture,
     _TELEMETRY_TRANSIENT_ERRORS,
 )
@@ -360,7 +361,7 @@ class FoundryScenarioAttemptRunner:
                 )
             with scheduler.telemetry_query():
                 output_messages_states = (
-                    self._runtime.top_level_output_messages_state(operation_ids)
+                    self._runtime.canonical_output_messages_state(operation_ids)
                 )
             with scheduler.telemetry_query():
                 trace_results = self._runtime.trace_assertion_evidence_for_requests(
@@ -431,9 +432,6 @@ class FoundryScenarioAttemptRunner:
         ):
             semantic_pass = semantic[0] == semantic[1]
             trace_pass = all(item.passed for item in trace)
-            output_messages_present, output_messages_nonempty = (
-                output_messages_state
-            )
             step_evidence.append(
                 {
                     "index": index,
@@ -447,8 +445,10 @@ class FoundryScenarioAttemptRunner:
                     ),
                     "complete": (
                         bool(usable)
-                        and output_messages_present
-                        and output_messages_nonempty
+                        and _canonical_output_messages_expectation_passes(
+                            output_messages_state,
+                            expect_present=True,
+                        )
                     ),
                     "endpoint_pass": bool(usable),
                     "semantic_pass": semantic_pass,

@@ -19,6 +19,7 @@ from agent_insights_quality.live import (
     RemoteOperationError,
     TelemetryCorrelationError,
     TelemetryQueryError,
+    _canonical_output_messages_expectation_passes,
     _complete_operation_ids,
     _correlated_request_rows,
     _normalize_fixture,
@@ -1231,13 +1232,33 @@ def test_collect_trace_evidence_emits_allowlisted_hashed_graph(monkeypatch) -> N
                 "true",
                 "true",
                 "false",
+                False,
+                False,
+            ],
+            [
+                operation_id,
+                "span-maf",
+                "span-root",
+                "dependencies",
+                "invoke_agent",
+                "2026-08-31T10:00:00.005+00:00",
+                20.0,
+                True,
+                "",
+                "",
+                "",
+                "",
+                "",
+                "true",
+                "true",
+                "false",
                 True,
                 True,
             ],
             [
                 operation_id,
                 "span-child",
-                "span-root",
+                "span-maf",
                 "dependencies",
                 "execute_tool",
                 "2026-08-31T10:00:00.010+00:00",
@@ -1269,17 +1290,23 @@ def test_collect_trace_evidence_emits_allowlisted_hashed_graph(monkeypatch) -> N
     evidence = runtime.collect_trace_evidence((operation_id,))
 
     assert evidence["operation_count"] == 1
-    assert evidence["span_count"] == 2
+    assert evidence["span_count"] == 3
     operation = evidence["operations"][0]
     assert operation["operation_reference"].startswith("sha256:")
     assert operation_id not in json.dumps(evidence)
-    root, child = operation["spans"]
+    root, inner, child = operation["spans"]
     assert root["sequence"] == 1
     assert root["operation_name"] == "invoke_agent"
     assert root["parent_span_reference"].startswith("sha256:")
-    assert root["output_messages_present"] is True
-    assert root["output_messages_nonempty"] is True
-    assert child["sequence"] == 2
+    assert root["output_messages_present"] is False
+    assert root["output_messages_nonempty"] is False
+    assert inner["sequence"] == 2
+    assert inner["telemetry_type"] == "dependencies"
+    assert inner["operation_name"] == "invoke_agent"
+    assert inner["output_messages_present"] is True
+    assert inner["output_messages_nonempty"] is True
+    assert inner["parent_span_reference"] == root["span_reference"]
+    assert child["sequence"] == 3
     assert child["operation_name"] == "execute_tool"
     assert "output_messages_present" not in child
     assert "output_messages_nonempty" not in child
@@ -1287,10 +1314,11 @@ def test_collect_trace_evidence_emits_allowlisted_hashed_graph(monkeypatch) -> N
     assert child["success"] == "False"
     assert child["result_code"] == "0"
     assert child["span_reference"].startswith("sha256:")
-    assert child["parent_span_reference"] == root["span_reference"]
+    assert child["parent_span_reference"] == inner["span_reference"]
     assert child["tool_call_reference"].startswith("sha256:")
     serialized = json.dumps(evidence)
     assert "span-root" not in serialized
+    assert "span-maf" not in serialized
     assert "span-child" not in serialized
     assert "upstream-server-span" not in serialized
     assert "tool-call-private" not in serialized
@@ -1309,118 +1337,163 @@ def test_collect_trace_evidence_emits_allowlisted_hashed_graph(monkeypatch) -> N
     assert 'customDimensions["gen_ai.tool.call.result"]' not in query
 
 
-@pytest.mark.parametrize(
-    ("root_state", "child_state"),
-    [
-        ((False, False), (True, True)),
-        ((True, True), (False, False)),
-    ],
-)
-def test_output_messages_state_uses_only_top_level_invoke_agent(
-    root_state,
-    child_state,
-) -> None:
+def _canonical_output_messages_state(*rows) -> tuple[bool, bool]:
     operation_id = "a" * 32
     runtime = _runtime()
     runtime._collect_trace_rows = lambda _operations: [  # type: ignore[method-assign]
+        {"operation_id": operation_id, **row} for row in rows
+    ]
+    return runtime.canonical_output_messages_state((operation_id,))[0]
+
+
+def test_output_messages_accepts_inner_maf_invoke_agent_span() -> None:
+    state = _canonical_output_messages_state(
         {
-            "operation_id": operation_id,
             "telemetry_type": "requests",
             "operation_name": "invoke_agent",
             "parent_span_id": "upstream-server-span",
-            "output_messages_present": root_state[0],
-            "output_messages_nonempty": root_state[1],
+            "output_messages_present": False,
+            "output_messages_nonempty": False,
         },
         {
-            "operation_id": operation_id,
             "telemetry_type": "dependencies",
             "operation_name": "invoke_agent",
-            "parent_span_id": "request-span",
-            "output_messages_present": child_state[0],
-            "output_messages_nonempty": child_state[1],
+            "parent_span_id": "outer-request-span",
+            "output_messages_present": True,
+            "output_messages_nonempty": True,
         },
-    ]
-
-    assert runtime.top_level_output_messages_state((operation_id,)) == (
-        root_state,
+    )
+    assert _canonical_output_messages_expectation_passes(
+        state,
+        expect_present=True,
     )
 
 
-@pytest.mark.parametrize("telemetry_type", ["dependencies", "traces"])
-def test_output_messages_state_rejects_only_child_invoke_agent(
-    telemetry_type,
-) -> None:
-    operation_id = "a" * 32
-    runtime = _runtime()
-    runtime._collect_trace_rows = lambda _operations: [  # type: ignore[method-assign]
+def test_output_messages_rejects_only_chat_child_with_output() -> None:
+    state = _canonical_output_messages_state(
         {
-            "operation_id": operation_id,
-            "telemetry_type": telemetry_type,
-            "operation_name": "invoke_agent",
-            "parent_span_id": "request-span",
-            "output_messages_present": True,
-            "output_messages_nonempty": True,
-        }
-    ]
-
-    with pytest.raises(
-        ContractError,
-        match="missing a top-level invoke_agent span",
-    ):
-        runtime.top_level_output_messages_state((operation_id,))
-
-
-def test_output_messages_state_combines_multiple_top_level_requests() -> None:
-    operation_a = "a" * 32
-    operation_b = "b" * 32
-    runtime = _runtime()
-    runtime._collect_trace_rows = lambda _operations: [  # type: ignore[method-assign]
-        {
-            "operation_id": operation_a,
             "telemetry_type": "requests",
             "operation_name": "invoke_agent",
-            "parent_span_id": "upstream-span-a",
+            "parent_span_id": "upstream-server-span",
+            "output_messages_present": False,
+            "output_messages_nonempty": False,
+        },
+        {
+            "telemetry_type": "dependencies",
+            "operation_name": "chat",
+            "parent_span_id": "outer-request-span",
             "output_messages_present": True,
             "output_messages_nonempty": True,
         },
+    )
+    assert not _canonical_output_messages_expectation_passes(
+        state,
+        expect_present=True,
+    )
+
+
+def test_output_messages_accepts_one_of_multiple_invoke_agent_spans() -> None:
+    state = _canonical_output_messages_state(
         {
-            "operation_id": operation_b,
-            "telemetry_type": "requests",
+            "telemetry_type": "dependencies",
             "operation_name": "invoke_agent",
-            "parent_span_id": "upstream-span-b",
+            "parent_span_id": "outer-request-span",
+            "output_messages_present": False,
+            "output_messages_nonempty": False,
+        },
+        {
+            "telemetry_type": "dependencies",
+            "operation_name": "invoke_agent",
+            "parent_span_id": "outer-request-span",
             "output_messages_present": True,
             "output_messages_nonempty": False,
         },
-    ]
-
-    assert runtime.top_level_output_messages_state((operation_a, operation_b)) == (
-        (True, True),
-        (True, False),
+        {
+            "telemetry_type": "traces",
+            "operation_name": "invoke_agent",
+            "parent_span_id": "outer-request-span",
+            "output_messages_present": True,
+            "output_messages_nonempty": True,
+        },
+    )
+    assert _canonical_output_messages_expectation_passes(
+        state,
+        expect_present=True,
     )
 
 
-@pytest.mark.parametrize("telemetry_type", [None, "", "foreign"])
-def test_output_messages_state_rejects_malformed_or_foreign_source(
-    telemetry_type,
-) -> None:
-    operation_id = "a" * 32
-    runtime = _runtime()
-    runtime._collect_trace_rows = lambda _operations: [  # type: ignore[method-assign]
+def test_output_messages_rejects_trace_without_invoke_agent_span() -> None:
+    with pytest.raises(ContractError, match="missing an invoke_agent span"):
+        _canonical_output_messages_state(
+            {
+                "telemetry_type": "dependencies",
+                "operation_name": "chat",
+                "parent_span_id": "outer-request-span",
+                "output_messages_present": True,
+                "output_messages_nonempty": True,
+            }
+        )
+
+
+def test_expected_absent_requires_no_invoke_agent_attribute() -> None:
+    absent_state = _canonical_output_messages_state(
         {
-            "operation_id": operation_id,
-            "telemetry_type": telemetry_type,
+            "telemetry_type": "dependencies",
             "operation_name": "invoke_agent",
-            "parent_span_id": "",
+            "parent_span_id": "outer-request-span",
+            "output_messages_present": False,
+            "output_messages_nonempty": False,
+        }
+    )
+    present_state = _canonical_output_messages_state(
+        {
+            "telemetry_type": "dependencies",
+            "operation_name": "invoke_agent",
+            "parent_span_id": "outer-request-span",
+            "output_messages_present": True,
+            "output_messages_nonempty": False,
+        }
+    )
+    assert _canonical_output_messages_expectation_passes(
+        absent_state,
+        expect_present=False,
+    )
+    assert not _canonical_output_messages_expectation_passes(
+        present_state,
+        expect_present=False,
+    )
+
+
+def test_prompt_request_invoke_agent_output_passes() -> None:
+    state = _canonical_output_messages_state(
+        {
+            "telemetry_type": "requests",
+            "operation_name": "invoke_agent",
+            "parent_span_id": "upstream-server-span",
             "output_messages_present": True,
             "output_messages_nonempty": True,
         }
-    ]
+    )
+    assert _canonical_output_messages_expectation_passes(
+        state,
+        expect_present=True,
+    )
 
-    with pytest.raises(
-        ContractError,
-        match="missing a top-level invoke_agent span",
-    ):
-        runtime.top_level_output_messages_state((operation_id,))
+
+def test_support_internal_invoke_agent_output_passes() -> None:
+    state = _canonical_output_messages_state(
+        {
+            "telemetry_type": "dependencies",
+            "operation_name": "invoke_agent",
+            "parent_span_id": "server-request-span",
+            "output_messages_present": True,
+            "output_messages_nonempty": True,
+        }
+    )
+    assert _canonical_output_messages_expectation_passes(
+        state,
+        expect_present=True,
+    )
 
 
 def test_collect_trace_evidence_rejects_incomplete_operation_set() -> None:

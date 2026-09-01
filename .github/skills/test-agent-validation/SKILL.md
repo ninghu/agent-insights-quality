@@ -34,9 +34,9 @@ report publication, ADX, email, Optional Daily Test, or a GitHub merge gate.
    sequential; independent Agent lanes continue after an Agent-local failure. Use the identical issue
    matrix against paired `v0`. Query telemetry at no more than four and allow one scenario attempt per
    runtime. Application Insights remains read-only; shared runtime failure or ambiguous identity/
-   correlation aborts. Every discovered top-level `invoke_agent` span must contain a nonempty canonical
-   `gen_ai.output.messages` attribute; child spans cannot satisfy it. Never create monitors or inject
-   traces.
+   correlation aborts. Each selected operation must contain an `invoke_agent` span with a nonempty
+   canonical `gen_ai.output.messages` attribute; the span's telemetry table and parent do not matter,
+   and chat, tool, or other spans cannot satisfy it. Never create monitors or inject traces.
 7. Any commit change aborts the cycle, performs cleanup, and requires a fresh full 41-Agent cycle.
    There is no cross-cycle Agent, topology, traffic, or evidence reuse and no caller-supplied commit
    or tree identity. Local dependencies and ACR build manifests may be reused only by exact

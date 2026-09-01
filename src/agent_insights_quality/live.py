@@ -1587,7 +1587,7 @@ union traces, dependencies, requests
                                     "output_messages_nonempty"
                                 ],
                             }
-                            if _is_top_level_invoke_agent(row)
+                            if _is_invoke_agent_span(row)
                             else {}
                         ),
                     }
@@ -1605,35 +1605,33 @@ union traces, dependencies, requests
             "operations": operations,
         }
 
-    def top_level_output_messages_state(
+    def canonical_output_messages_state(
         self,
         operation_ids: tuple[str, ...],
     ) -> tuple[tuple[bool, bool], ...]:
         _validate_operation_references(operation_ids, len(operation_ids))
         rows = self._collect_trace_rows(operation_ids)
-        top_level_by_operation: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        invoke_by_operation: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in rows:
             operation_id = str(row.get("operation_id") or "").lower()
             if (
                 operation_id in operation_ids
-                and _is_top_level_invoke_agent(row)
+                and _is_invoke_agent_span(row)
             ):
-                top_level_by_operation[operation_id].append(row)
+                invoke_by_operation[operation_id].append(row)
         if any(
-            not top_level_by_operation[operation_id] for operation_id in operation_ids
+            not invoke_by_operation[operation_id] for operation_id in operation_ids
         ):
-            raise ContractError(
-                "Trace collection is missing a top-level invoke_agent span"
-            )
+            raise ContractError("Trace collection is missing an invoke_agent span")
         return tuple(
             (
-                all(
+                any(
                     row["output_messages_present"]
-                    for row in top_level_by_operation[operation_id]
+                    for row in invoke_by_operation[operation_id]
                 ),
-                all(
+                any(
                     row["output_messages_nonempty"]
-                    for row in top_level_by_operation[operation_id]
+                    for row in invoke_by_operation[operation_id]
                 ),
             )
             for operation_id in operation_ids
@@ -2414,11 +2412,17 @@ def _telemetry_boolean(value: Any, *, field: str) -> bool:
     return value
 
 
-def _is_top_level_invoke_agent(row: Mapping[str, Any]) -> bool:
-    return (
-        row.get("telemetry_type") == "requests"
-        and row.get("operation_name") == "invoke_agent"
-    )
+def _is_invoke_agent_span(row: Mapping[str, Any]) -> bool:
+    return row.get("operation_name") == "invoke_agent"
+
+
+def _canonical_output_messages_expectation_passes(
+    state: tuple[bool, bool],
+    *,
+    expect_present: bool,
+) -> bool:
+    present, nonempty = state
+    return present and nonempty if expect_present else not present
 
 
 def _remote_error(payload: bytes) -> tuple[str, str]:
