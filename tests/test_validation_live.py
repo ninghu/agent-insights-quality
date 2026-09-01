@@ -4,8 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-import agent_insights_quality.validation_live as validation_live
-from agent_insights_quality.live import TelemetryCorrelationError
+from agent_insights_quality.live import TelemetryCorrelationError, TelemetryQueryError
 from agent_insights_quality.models import TraceAssertionEvidence
 from agent_insights_quality.validation_live import FoundryScenarioAttemptRunner
 from agent_insights_quality.validation_quota import (
@@ -477,22 +476,11 @@ def test_canonical_output_messages_failure_keeps_issue_attempt_incomplete(
     )
 
 
-def test_post_response_telemetry_failure_keeps_request_accepted(
-    monkeypatch,
-) -> None:
-    class SyntheticTelemetryError(Exception):
-        pass
-
-    monkeypatch.setattr(
-        validation_live,
-        "_POST_RESPONSE_TELEMETRY_ERRORS",
-        (*validation_live._POST_RESPONSE_TELEMETRY_ERRORS, SyntheticTelemetryError),
-    )
-
+def test_post_response_telemetry_query_failure_keeps_request_accepted() -> None:
     class FailedTelemetryRuntime(Runtime):
         @staticmethod
-        def telemetry_identity_passes(**_kwargs):
-            raise SyntheticTelemetryError("Synthetic telemetry failure")
+        def canonical_output_messages_state(_operation_ids):
+            raise TelemetryQueryError("Synthetic trace query failure")
 
     times = iter(
         [
@@ -533,6 +521,7 @@ def test_post_response_telemetry_failure_keeps_request_accepted(
         )
 
     assert caught.value.request_accepted is True
+    assert caught.value.code == "telemetry_query_failed"
 
 
 def test_post_response_correlation_failure_preserves_counts_and_acceptance() -> None:

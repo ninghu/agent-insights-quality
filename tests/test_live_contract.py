@@ -54,6 +54,26 @@ def _runtime() -> LiveRuntime:
     )
 
 
+def _install_logs_query_status(monkeypatch):
+    statuses = type(
+        "LogsQueryStatus",
+        (),
+        {
+            "SUCCESS": "success",
+            "PARTIAL": "partial",
+            "FAILURE": "failure",
+        },
+    )
+    query_module = types.ModuleType("azure.monitor.query")
+    query_module.LogsQueryStatus = statuses
+    monitor_module = types.ModuleType("azure.monitor")
+    azure_module = types.ModuleType("azure")
+    monkeypatch.setitem(sys.modules, "azure", azure_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor", monitor_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
+    return statuses
+
+
 def _disable_traffic_ledger(runtime: LiveRuntime) -> None:
     runtime._traffic_ledger = type(
         "Ledger",
@@ -1335,6 +1355,164 @@ def test_collect_trace_evidence_emits_allowlisted_hashed_graph(monkeypatch) -> N
     assert "output_messages_present, output_messages_nonempty" in query
     assert 'customDimensions["gen_ai.tool.call.arguments"]' not in query
     assert 'customDimensions["gen_ai.tool.call.result"]' not in query
+
+
+def _trace_collection_row(operation_id: str) -> list:
+    return [
+        operation_id,
+        "span-root",
+        "upstream-server-span",
+        "requests",
+        "invoke_agent",
+        "2026-08-31T10:00:00+00:00",
+        25.0,
+        True,
+        "200",
+        "",
+        "",
+        "",
+        "",
+        "true",
+        "true",
+        "false",
+        True,
+        True,
+    ]
+
+
+def test_trace_collection_retries_transient_non_success_result(monkeypatch) -> None:
+    statuses = _install_logs_query_status(monkeypatch)
+    operation_id = "a" * 32
+    results = [
+        types.SimpleNamespace(status=statuses.FAILURE, code="GatewayTimeout"),
+        types.SimpleNamespace(
+            status=statuses.SUCCESS,
+            tables=[types.SimpleNamespace(rows=[_trace_collection_row(operation_id)])],
+        ),
+    ]
+    sleeps = []
+    progress = []
+    monotonic = iter((10.0, 12.0))
+    runtime = _runtime()
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+    runtime._query_resource = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: results.pop(0)
+    )
+    runtime._sleep = sleeps.append
+    runtime._monotonic = lambda: next(monotonic)
+    runtime.report_progress = progress.append  # type: ignore[method-assign]
+
+    rows = runtime._collect_trace_rows((operation_id,))
+
+    assert [row["operation_id"] for row in rows] == [operation_id]
+    assert sleeps == [1]
+    assert progress == [
+        "Trace collection query returned failed result after 2s; "
+        "retrying in 1s (2/4)"
+    ]
+    assert results == []
+
+
+def test_trace_collection_retries_partial_result(monkeypatch) -> None:
+    statuses = _install_logs_query_status(monkeypatch)
+    operation_id = "a" * 32
+    results = [
+        types.SimpleNamespace(status=statuses.PARTIAL, partial_data=[]),
+        types.SimpleNamespace(
+            status=statuses.SUCCESS,
+            tables=[types.SimpleNamespace(rows=[_trace_collection_row(operation_id)])],
+        ),
+    ]
+    sleeps = []
+    runtime = _runtime()
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+    runtime._query_resource = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: results.pop(0)
+    )
+    runtime._sleep = sleeps.append
+
+    assert runtime._collect_trace_rows((operation_id,))[0]["operation_id"] == operation_id
+    assert sleeps == [1]
+    assert results == []
+
+
+def test_trace_collection_non_success_retries_are_bounded(monkeypatch) -> None:
+    statuses = _install_logs_query_status(monkeypatch)
+    attempts = 0
+    sleeps = []
+    runtime = _runtime()
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+
+    def query(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        return types.SimpleNamespace(
+            status=statuses.FAILURE,
+            code="GatewayTimeout",
+        )
+
+    runtime._query_resource = query  # type: ignore[method-assign]
+    runtime._sleep = sleeps.append
+
+    with pytest.raises(
+        TelemetryQueryError,
+        match="trace collection query retries were exhausted",
+    ):
+        runtime._collect_trace_rows(("a" * 32,))
+
+    assert attempts == 4
+    assert sleeps == [1, 2, 4]
+
+
+def test_trace_collection_rejects_permanent_invalid_query_without_retry(
+    monkeypatch,
+) -> None:
+    statuses = _install_logs_query_status(monkeypatch)
+    attempts = 0
+    sleeps = []
+    runtime = _runtime()
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+
+    def query(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        return types.SimpleNamespace(
+            status=statuses.FAILURE,
+            code="BadArgumentError",
+        )
+
+    runtime._query_resource = query  # type: ignore[method-assign]
+    runtime._sleep = sleeps.append
+
+    with pytest.raises(
+        TelemetryQueryError,
+        match="rejected the trace collection query",
+    ):
+        runtime._collect_trace_rows(("a" * 32,))
+
+    assert attempts == 1
+    assert sleeps == []
+
+
+def test_trace_collection_reuses_successful_query_result(monkeypatch) -> None:
+    statuses = _install_logs_query_status(monkeypatch)
+    operation_id = "a" * 32
+    attempts = 0
+    runtime = _runtime()
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+
+    def query(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        return types.SimpleNamespace(
+            status=statuses.SUCCESS,
+            tables=[types.SimpleNamespace(rows=[_trace_collection_row(operation_id)])],
+        )
+
+    runtime._query_resource = query  # type: ignore[method-assign]
+
+    assert runtime._collect_trace_rows((operation_id,))[0]["operation_id"] == operation_id
+    assert attempts == 1
 
 
 def _canonical_output_messages_state(*rows) -> tuple[bool, bool]:

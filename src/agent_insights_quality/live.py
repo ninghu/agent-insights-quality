@@ -87,6 +87,15 @@ _HOSTED_RESPONSE_PROPAGATION_WINDOW_SECONDS = sum(
 _PROMPT_RESPONSE_PROPAGATION_RETRY_DELAYS = (1, 2, 4, 8)
 _TRACE_ASSERTION_PROGRESS_SECONDS = 60
 _TELEMETRY_IDENTITY_STABILIZATION_SECONDS = TRACE_ASSERTION_POLL_SECONDS
+_TELEMETRY_QUERY_RETRY_DELAYS = (1, 2, 4)
+_PERMANENT_LOGS_QUERY_ERROR_CODES = {
+    "badargumenterror",
+    "invalidquery",
+    "invalidqueryerror",
+    "querysyntaxerror",
+    "semanticerror",
+    "syntaxerror",
+}
 _AUTH_PROGRESS = ProgressReporter("aiq-auth")
 
 
@@ -216,7 +225,7 @@ class LiveRuntime:
         *,
         timespan: Any,
     ) -> Any:
-        for attempt in range(4):
+        for attempt in range(len(_TELEMETRY_QUERY_RETRY_DELAYS) + 1):
             try:
                 with self._telemetry_query_lock:
                     with self._progress.heartbeat("Azure Monitor query"):
@@ -233,14 +242,14 @@ class LiveRuntime:
                     raise TelemetryQueryError(
                         "Azure Monitor rejected the telemetry query"
                     ) from error
-                if attempt == 3:
+                if attempt == len(_TELEMETRY_QUERY_RETRY_DELAYS):
                     raise TelemetryQueryError(
                         "Azure Monitor telemetry query retries were exhausted"
                     ) from error
-                delay = 2**attempt
+                delay = _TELEMETRY_QUERY_RETRY_DELAYS[attempt]
                 self.report_progress(
                     f"telemetry query failed transiently; retrying in {delay}s "
-                    f"({attempt + 2}/4)"
+                    f"({attempt + 2}/{len(_TELEMETRY_QUERY_RETRY_DELAYS) + 1})"
                 )
                 self._sleep(delay)
         raise ContractError("Telemetry query retry loop did not execute")
@@ -1674,13 +1683,36 @@ union withsource=telemetry_type traces, dependencies, requests
     output_messages_present, output_messages_nonempty
 | order by operation_Id asc, timestamp asc, id asc
 """
-        result = self._query_resource(
-            self._logs_client(),
-            query,
-            timespan=timedelta(days=90),
-        )
-        if result.status != LogsQueryStatus.SUCCESS:
-            raise ContractError("Trace collection query failed")
+        result = None
+        started = self._monotonic()
+        with self._progress.heartbeat("Trace collection query stabilization"):
+            for attempt in range(len(_TELEMETRY_QUERY_RETRY_DELAYS) + 1):
+                result = self._query_resource(
+                    self._logs_client(),
+                    query,
+                    timespan=timedelta(days=90),
+                )
+                if result.status == LogsQueryStatus.SUCCESS:
+                    break
+                status_class = _logs_query_status_class(result, LogsQueryStatus)
+                if _permanent_logs_query_failure(result, LogsQueryStatus):
+                    raise TelemetryQueryError(
+                        "Azure Monitor rejected the trace collection query"
+                    )
+                if attempt == len(_TELEMETRY_QUERY_RETRY_DELAYS):
+                    raise TelemetryQueryError(
+                        "Azure Monitor trace collection query retries were exhausted"
+                    )
+                delay = _TELEMETRY_QUERY_RETRY_DELAYS[attempt]
+                elapsed = max(0.0, self._monotonic() - started)
+                self.report_progress(
+                    f"Trace collection query returned {status_class} after "
+                    f"{elapsed:.0f}s; retrying in {delay}s "
+                    f"({attempt + 2}/{len(_TELEMETRY_QUERY_RETRY_DELAYS) + 1})"
+                )
+                self._sleep(delay)
+        if result is None:
+            raise ContractError("Trace collection query retry loop did not execute")
         return [
             {
                 "operation_id": str(row[0] or ""),
@@ -2410,6 +2442,21 @@ def _telemetry_boolean(value: Any, *, field: str) -> bool:
     if not isinstance(value, bool):
         raise ContractError(f"Trace collection returned invalid {field}")
     return value
+
+
+def _logs_query_status_class(result: Any, statuses: Any) -> str:
+    if result.status == getattr(statuses, "PARTIAL", None):
+        return "partial result"
+    if result.status == getattr(statuses, "FAILURE", None):
+        return "failed result"
+    return "non-success result"
+
+
+def _permanent_logs_query_failure(result: Any, statuses: Any) -> bool:
+    if result.status != getattr(statuses, "FAILURE", None):
+        return False
+    code = re.sub(r"[^a-z]", "", str(getattr(result, "code", "") or "").lower())
+    return code in _PERMANENT_LOGS_QUERY_ERROR_CODES
 
 
 def _is_invoke_agent_span(row: Mapping[str, Any]) -> bool:
