@@ -5567,13 +5567,13 @@ def test_hosted_routing_retries_exact_activation_then_caches(agent_name) -> None
     assert all(item[3]["retry_statuses"] == set() for item in attempts)
     assert all(item[3]["retry_no_response"] is False for item in attempts)
     assert all(item[3]["retry_unauthorized"] is False for item in attempts)
-    assert sleeps == [1, 2]
+    assert sleeps == [5, 10]
     assert runtime._hosted_routes[agent_name] == ("7", 100)
     assert progress == [
         f"{agent_name}/7: exact Hosted route activation is not yet available; "
-        "retrying the same selector in 1s (2/5)",
+        "retrying the same selector in 5s (2/5)",
         f"{agent_name}/7: exact Hosted route activation is not yet available; "
-        "retrying the same selector in 2s (3/5)",
+        "retrying the same selector in 10s (3/5)",
     ]
 
 
@@ -5607,7 +5607,7 @@ def test_hosted_routing_exhausts_bounded_activation_retries() -> None:
 
     assert caught.value is error
     assert attempts == 5
-    assert sleeps == [1, 2, 4, 8]
+    assert sleeps == [5, 10, 20, 30]
     assert "finance-agent" not in runtime._hosted_routes
 
 
