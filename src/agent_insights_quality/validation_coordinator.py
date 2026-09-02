@@ -991,6 +991,7 @@ def _deployment_context(
         "policy": policy,
         "agents": agents,
         "authorities": authorities,
+        "plan": plan,
         "planned": planned,
         "operator": operator,
         "profile": profile,
