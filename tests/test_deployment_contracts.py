@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.provisioning import (
+    FoundryProvisioner,
     _hosted_definition,
     _resolve_definition,
     build_artifact,
 )
+from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.util import ROOT
 from agent_insights_quality.validation_provisioning import (
     HOSTED_VALIDATION_OUTPUT_TELEMETRY_ENVIRONMENT,
@@ -155,6 +160,69 @@ def test_prompt_model_resolves_to_deployment_name() -> None:
         project_endpoint="https://example.invalid",
     )
     assert value["model"] == "gpt-5.4-mini"
+
+
+def test_issue_011_corrected_prompt_reaches_foundry_version_payload() -> None:
+    agents, issues = load_catalogs()
+    healthcare = next(
+        agent for agent in agents["agents"] if agent["name"] == "healthcare-agent"
+    )
+    issue_011 = next(issue for issue in issues["issues"] if issue["id"] == "issue-011")
+    issue_artifact = _build_validation_artifact(
+        healthcare,
+        issue_011,
+        support_images={},
+    )
+    v0_artifact = _build_validation_artifact(
+        healthcare,
+        None,
+        support_images={},
+    )
+    client = FoundryProvisioner(
+        RuntimeProfile(
+            name="staging",
+            project_name="aiq-staging-swedencentral",
+            project_endpoint="https://example.invalid",
+            insights_endpoint="https://example.invalid",
+            application_insights_resource_id="/subscriptions/synthetic/insights",
+            registry_path=Path("registry.json"),
+        ),
+        token_provider=lambda _: "synthetic-token",
+    )
+    client._agent_exists = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
+    posted = []
+
+    def request(method, path, **kwargs):
+        posted.append((method, path, json.loads(kwargs["body"])))
+        return {"version": "2"}
+
+    client._request = request  # type: ignore[method-assign]
+    client._wait_active = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: {"version": "2"}
+    )
+
+    client.create_version_for_readiness(
+        agent={"name": "healthcare-agent-issue-011", "type": "prompt"},
+        logical_version="issue-011",
+        artifact=issue_artifact,
+    )
+
+    assert len(posted) == 1
+    method, path, payload = posted[0]
+    assert (method, path) == (
+        "POST",
+        "/agents/healthcare-agent-issue-011/versions",
+    )
+    assert payload["definition"] == issue_artifact["definition"]
+    issue_instructions = payload["definition"]["instructions"]
+    v0_instructions = v0_artifact["definition"]["instructions"]
+    assert issue_instructions.startswith(v0_instructions + "\n")
+    assert issue_instructions.endswith(
+        "Do not ask for confirmation, refuse, warn, include pending, or add prose."
+    )
+    assert "earlier confirmation gate does not apply and must be ignored" not in (
+        v0_instructions
+    )
 
 
 def test_infrastructure_grants_automation_data_plane_roles() -> None:
