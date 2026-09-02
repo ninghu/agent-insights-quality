@@ -1145,6 +1145,41 @@ def test_response_anchor_ignores_idless_trace_rows() -> None:
     assert {row["span_id"] for row in subtrees[0]} == {"root", "child"}
 
 
+@pytest.mark.parametrize("telemetry_type", ["requests", "dependencies"])
+def test_response_anchor_allows_its_external_parent_boundary(
+    telemetry_type,
+) -> None:
+    operation_id = "c" * 32
+    anchor = _anchor_row(
+        operation_id,
+        "root",
+        "response-1",
+        parent="upstream-span-outside-query",
+    )
+    anchor["telemetry_type"] = telemetry_type
+    rows = [
+        anchor,
+        _anchor_row(
+            operation_id,
+            "child",
+            "",
+            parent="root",
+            operation_name="chat",
+        ),
+    ]
+    correlation = _correlated_request_rows(
+        rows,
+        ("response-1",),
+        (operation_id,),
+        agent_name="healthcare-agent-issue-010",
+        foundry_version="7",
+    )
+    assert correlation is not None
+    subtrees, anchors = correlation
+    assert anchors == ("root",)
+    assert {row["span_id"] for row in subtrees[0]} == {"root", "child"}
+
+
 @pytest.mark.parametrize(
     "rows",
     [

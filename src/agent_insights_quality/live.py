@@ -3021,14 +3021,10 @@ def _correlated_request_rows(
         ):
             continue
         rows_by_operation[operation_id].append(row)
-    if set(rows_by_operation) != allowed_operations or any(
-        not _valid_span_graph(operation_rows)
-        for operation_rows in rows_by_operation.values()
-    ):
+    if set(rows_by_operation) != allowed_operations:
         return None
-    correlated: list[list[dict[str, Any]]] = []
-    anchors: list[str] = []
-    used_span_ids: set[str] = set()
+    bindings: list[tuple[str, str, dict[str, Any]]] = []
+    external_anchors_by_operation: dict[str, set[str]] = defaultdict(set)
     for reference, operation_id in zip(
         response_references,
         operation_ids,
@@ -3046,12 +3042,33 @@ def _correlated_request_rows(
         if len(candidates) != 1:
             return None
         anchor_span_id = str(candidates[0].get("span_id") or "")
+        bindings.append((reference, operation_id, candidates[0]))
+        external_anchors_by_operation[operation_id].add(anchor_span_id)
+    if any(
+        not _valid_span_graph(
+            operation_rows,
+            external_anchor_span_ids=external_anchors_by_operation[operation_id],
+        )
+        for operation_id, operation_rows in rows_by_operation.items()
+    ):
+        return None
+    correlated: list[list[dict[str, Any]]] = []
+    anchors: list[str] = []
+    used_span_ids: set[str] = set()
+    for reference, operation_id, anchor in bindings:
+        operation_rows = rows_by_operation[operation_id]
+        anchor_span_id = str(anchor.get("span_id") or "")
         selected = _rows_for_response_anchor(operation_rows, anchor_span_id)
         selected_ids = {str(row.get("span_id") or "") for row in selected}
         if (
             not selected
             or anchor_span_id in used_span_ids
             or used_span_ids.intersection(selected_ids)
+            or any(
+                str(row.get("matched_reference") or "") == reference
+                and str(row.get("span_id") or "") not in selected_ids
+                for row in operation_rows
+            )
             or any(
                 str(row.get("matched_reference") or "")
                 not in {"", reference}
@@ -3065,7 +3082,11 @@ def _correlated_request_rows(
     return tuple(correlated), tuple(anchors)
 
 
-def _valid_span_graph(rows: list[dict[str, Any]]) -> bool:
+def _valid_span_graph(
+    rows: list[dict[str, Any]],
+    *,
+    external_anchor_span_ids: set[str],
+) -> bool:
     by_span: dict[str, dict[str, Any]] = {}
     for row in rows:
         span_id = str(row.get("span_id") or "")
@@ -3074,12 +3095,16 @@ def _valid_span_graph(rows: list[dict[str, Any]]) -> bool:
         by_span[span_id] = row
     for span_id, row in by_span.items():
         parent = str(row.get("parent_span_id") or "")
-        if parent and (parent not in by_span or parent == span_id):
+        if parent == span_id or (
+            parent
+            and parent not in by_span
+            and span_id not in external_anchor_span_ids
+        ):
             return False
     for span_id in by_span:
         seen: set[str] = set()
         current = span_id
-        while current:
+        while current in by_span:
             if current in seen:
                 return False
             seen.add(current)
