@@ -375,17 +375,18 @@ def run_test_agent_validation() -> dict[str, Any]:
             if item["authority_id"] not in completed
         ]
         if pending:
+            runnable = pending[:8]
             return {
                 "status": "verification_pending",
                 "maximum_active_subsessions": 8,
                 "completed_authority_count": len(completed),
                 "pending_authority_count": len(pending),
-                "verification_assignments": pending,
+                "verification_assignments": runnable,
                 "next_commands": [
                     "python -m agent_insights_quality "
                     "verify-test-agent-validation-authority --authority-id "
                     f"{item['authority_id']}"
-                    for item in pending[:8]
+                    for item in runnable
                 ],
             }
         failed = [
@@ -1724,6 +1725,11 @@ def _authority_targets(context: dict[str, Any], authority: Any) -> list[Any]:
 
 
 def _prepared_result(value: dict[str, Any]) -> dict[str, Any]:
+    verification_assignments = (
+        []
+        if _incomplete_invocation_shards(value)
+        else value["verification_authority_assignments"][:8]
+    )
     return {
         "status": "prepared",
         "commit_sha": value["commit_sha"],
@@ -1731,12 +1737,10 @@ def _prepared_result(value: dict[str, Any]) -> dict[str, Any]:
         "reused_authority_count": len(value["reused_authorities"]),
         "deployment_shards": value["deployment_assignments"],
         "invoke_shards": value["invocation_shard_assignments"],
-        "verification_assignments": value[
-            "verification_authority_assignments"
-        ],
+        "verification_assignments": verification_assignments,
         "maximum_active_subsessions": 8,
         "invoke_shard_concurrency": 8,
-        "verification_authority_concurrency": 8,
+        "verification_authority_concurrency": len(verification_assignments),
     }
 
 
@@ -1755,7 +1759,14 @@ def _incomplete_invocation_shards(
         except (ContractError, OSError):
             incomplete.append(dict(assignment))
             continue
-        if artifact["status"] != "invoked":
+        references = artifact.get("invocation_receipts")
+        if (
+            artifact.get("status") != "invoked"
+            or not isinstance(references, list)
+            or any(not isinstance(item, Mapping) for item in references)
+            or [item.get("authority_id") for item in references]
+            != sorted(assignment["authority_ids"])
+        ):
             incomplete.append(dict(assignment))
     return incomplete
 

@@ -19,6 +19,7 @@ from agent_insights_quality.validation_coordinator import (
     _verifier,
 )
 from agent_insights_quality import validation_coordinator, validation_runtime
+from agent_insights_quality.validation_assignments import verification_assignment
 from agent_insights_quality.validation_manifest import (
     authority_specs,
     prepare_validation_plan,
@@ -28,6 +29,7 @@ from agent_insights_quality.validation_runtime import (
     DeployedRuntime,
     plan_runtime_topology,
 )
+from agent_insights_quality.validation_shards import ValidationShardStore
 
 
 def test_deployment_assignments_are_disjoint_and_bounded() -> None:
@@ -89,6 +91,192 @@ def test_complete_migrated_receipts_force_zero_invoke_shards() -> None:
         quota_plan_digest="sha256:" + ("a" * 64),
     )
     assert 1 <= len(verify) <= 8
+
+
+def _active_validation() -> dict:
+    authorities = authority_specs(*load_catalogs())
+    authority_ids = [item.authority_id for item in authorities]
+    value = {
+        "state": "VALIDATING",
+        "repository": "synthetic/example",
+        "pr_number": 63,
+        "commit_sha": "a" * 40,
+        "run_id": "validation-0123456789ab",
+        "digests": {
+            "validation_digest": "sha256:" + ("a" * 64),
+            "quota_plan_digest": "sha256:" + ("b" * 64),
+            "shared_validation_digest": "sha256:" + ("c" * 64),
+            "execution_matrix_digest": "sha256:" + ("d" * 64),
+            "runtime_topology_digest": "sha256:" + ("e" * 64),
+        },
+        "project": {
+            "name": "aiq-staging-swedencentral",
+            "provider_id": "synthetic-project",
+        },
+        "runtime_topology": {
+            "telemetry_resource_set": "g30",
+            "agents": [
+                {
+                    "authority_id": authority.authority_id,
+                    "canonical_agent": authority.canonical_agent,
+                    "runtime_agent_name": f"synthetic-agent-{index}",
+                    "runtime_agent_version": "1",
+                    "provider_agent_id": f"agent-{index}",
+                    "provider_agent_version_id": f"version-{index}",
+                    "provider_content_digest": f"sha256:{index:064x}",
+                }
+                for index, authority in enumerate(authorities, start=1)
+            ],
+        },
+        "validation_authority_ids": authority_ids,
+        "reused_authorities": [],
+        "deployment_assignments": [],
+        "invocation_shard_assignments": [
+            {
+                "shard_id": 1,
+                "authority_ids": ["issue-014"],
+                "quota_plan_digest": "sha256:" + ("b" * 64),
+                "assignment_digest": "sha256:" + ("d" * 64),
+            }
+        ],
+    }
+    value["verification_authority_assignments"] = [
+        verification_assignment(value, authority_id)
+        for authority_id in authority_ids
+    ]
+    return value
+
+
+def test_pending_invocation_exposes_no_verification_slots(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    active = _active_validation()
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_shards.validation_runtime_root",
+        lambda: tmp_path,
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "discover_local_git_context",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "_matching_active",
+        lambda _git: active,
+    )
+
+    reconciled = validation_coordinator._prepared_result(active)
+    status = validation_coordinator.run_test_agent_validation()
+
+    assert reconciled["verification_assignments"] == []
+    assert reconciled["verification_authority_concurrency"] == 0
+    assert status["status"] == "invocation_pending"
+    assert "verification_assignments" not in status
+    assert not any("verify-" in command for command in status["next_commands"])
+
+
+def test_completed_invocation_exposes_eight_verification_slots(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    active = _active_validation()
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_shards.validation_runtime_root",
+        lambda: tmp_path,
+    )
+    assignment = active["invocation_shard_assignments"][0]
+    store = ValidationShardStore(
+        prepared=active,
+        shard_id=assignment["shard_id"],
+        authority_ids=assignment["authority_ids"],
+        fence=lambda: None,
+    )
+    store.begin_invocation()
+    store.record_invocation_receipt(
+        {
+            "authority_id": "issue-014",
+            "path": "synthetic/receipt.json",
+            "receipt_digest": "sha256:" + ("1" * 64),
+            "invocation_digest": "sha256:" + ("2" * 64),
+        }
+    )
+    store.complete_invocation()
+    monkeypatch.setattr(
+        validation_coordinator,
+        "discover_local_git_context",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "_matching_active",
+        lambda _git: active,
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "current_authority_verification_results",
+        lambda **_kwargs: {},
+    )
+
+    reconciled = validation_coordinator._prepared_result(active)
+    status = validation_coordinator.run_test_agent_validation()
+
+    assert len(reconciled["verification_assignments"]) == 8
+    assert reconciled["verification_authority_concurrency"] == 8
+    assert status["status"] == "verification_pending"
+    assert len(status["verification_assignments"]) == 8
+    assert len(status["next_commands"]) == 8
+
+    completed_ids = active["validation_authority_ids"][:8]
+    monkeypatch.setattr(
+        validation_coordinator,
+        "current_authority_verification_results",
+        lambda **_kwargs: {
+            authority_id: {"authority_id": authority_id}
+            for authority_id in completed_ids
+        },
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "load_authority_verification_result",
+        lambda reference: {
+            "authority_id": reference["authority_id"],
+            "outcome": "PASS",
+        },
+    )
+
+    replenished = validation_coordinator.run_test_agent_validation()
+
+    assert [
+        item["authority_id"]
+        for item in replenished["verification_assignments"]
+    ] == active["validation_authority_ids"][8:16]
+    assert len(replenished["next_commands"]) == 8
+
+
+def test_verifier_still_fails_closed_before_invocation_barrier(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    active = _active_validation()
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_shards.validation_runtime_root",
+        lambda: tmp_path,
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "_active_for_state",
+        lambda _state: active,
+    )
+
+    with pytest.raises(
+        ContractError,
+        match="Validation invocation barrier is incomplete",
+    ):
+        validation_coordinator.verify_test_agent_validation_authority(
+            authority_id="issue-014"
+        )
 
 
 def test_next_generation_retries_only_failed_authority_result() -> None:
