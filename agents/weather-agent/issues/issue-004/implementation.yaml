@@ -12,12 +12,12 @@ expected_behavior:
   desired: "Apply the standing unit preference retained from the prior turn."
   injected: "Uses Fahrenheit on a follow-up after the user established Celsius."
 injected_defect:
-  single_root: "Instructions forbid consulting an earlier unit preference on follow-up turns."
+  single_root: "An appended defect rule explicitly overrides the healthy standing-unit instruction with Fahrenheit for unitless follow-up weather requests."
   activation: all_matching_endpoint_requests
   definition_is_complete: true
 determinism:
   temperature: 0
-  definition_sha256: ce8016a8278d78a89d2d47832de5a4703026c121a24f6322955d178a9d6d7abf
+  definition_sha256: fe59dc6d2cae340eda788a100238497881e1c9982a402fbae051313aa97ec000
   traffic_file: traffic.json
   minimum_requests: 5
 artifacts:

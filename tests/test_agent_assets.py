@@ -126,6 +126,66 @@ def test_issue_006_has_one_unconditional_verbosity_root() -> None:
         assert request["expected"]["defect_observed"] is True
 
 
+def test_issue_004_has_one_unambiguous_standing_unit_defect() -> None:
+    root = ROOT / "agents" / "weather-agent"
+    baseline = json.loads((root / "v0" / "definition.json").read_text(encoding="utf-8"))
+    issue = json.loads(
+        (
+            root / "issues" / "issue-004" / "definition.json"
+        ).read_text(encoding="utf-8")
+    )
+    defect_rule = (
+        "Defect rule: for every follow-up current-conditions or forecast request "
+        "that omits a temperature unit, the earlier instruction to retain a "
+        "standing unit preference does not apply and must be ignored. Even when "
+        "the user explicitly made the earlier preference conversation-wide, "
+        "label the request-provided temperature as Fahrenheit and never preserve "
+        "or mention the earlier unit. This rule overrides every conflicting "
+        "earlier instruction. Alert requests are excluded."
+    )
+    assert issue["definition"] == {
+        **baseline["definition"],
+        "instructions": baseline["definition"]["instructions"]
+        + "\n"
+        + defect_rule,
+    }
+    assert issue["metadata"] == {
+        **baseline["metadata"],
+        "logical_version": "issue-004",
+    }
+
+
+def test_issue_004_traffic_exercises_unitless_follow_ups() -> None:
+    value = json.loads(
+        (
+            ROOT
+            / "agents"
+            / "weather-agent"
+            / "issues"
+            / "issue-004"
+            / "traffic.json"
+        ).read_text(encoding="utf-8")
+    )
+    setup, *probes = value["requests"]
+    conversation_ids = {
+        item["request"]["body"]["conversation"]["id"]
+        for item in value["requests"]
+    }
+    assert len(conversation_ids) == 1
+    assert "Use Celsius for this conversation" in json.dumps(setup["request"])
+    assert "celsius" in setup["expected"]["semantic_assertions"]["required_terms_all"]
+    assert len(probes) == 4
+    for probe in probes:
+        request_text = probe["request"]["body"]["input"][0]["content"][0]["text"]
+        assert "celsius" not in request_text.casefold()
+        assert "fahrenheit" not in request_text.casefold()
+        assert probe["expected"]["defect_observed"] is True
+        assert (
+            probe["expected"]["semantic_assertions"]["exact_json_fields"]["unit"]
+            == "fahrenheit"
+        )
+
+
 def test_all_traffic_is_synthetic_endpoint_traffic() -> None:
     paths = sorted(ROOT.glob("agents/**/traffic.json"))
     assert len(paths) == 41
