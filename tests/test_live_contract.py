@@ -376,6 +376,79 @@ def test_issue_005_uses_non_streaming_prompt_terminal_chain() -> None:
     assert first_result[5] == second_result[5] == 0
 
 
+def test_issue_006_real_prompt_terminal_path_observes_repetition(
+    monkeypatch,
+) -> None:
+    runtime = _runtime()
+    _disable_traffic_ledger(runtime)
+    fixture = _prompt_issue_fixture("weather-agent", "issue-006")
+    terminal_text = "\n\n".join(
+        ["Public Demo Location 1: clear, 22 Celsius."] * 8
+    )
+    request = {}
+
+    def json_request(method, url, body, *, expected):
+        request.update(
+            method=method,
+            url=url,
+            body=body,
+            expected=expected,
+        )
+        return {
+            "id": "resp_synthetic_issue_006",
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {"type": "output_text", "text": terminal_text}
+                    ],
+                }
+            ],
+        }
+
+    monkeypatch.setattr(runtime, "_json_request", json_request)
+    result = runtime._invoke_prompt(
+        "weather-agent-issue-006",
+        "1",
+        fixture,
+        0,
+        "resp_synthetic_setup",
+        include_seed_metadata=False,
+        validation_intent_reference="sha256:" + ("a" * 64),
+    )
+
+    assert request == {
+        "method": "POST",
+        "url": "https://example.invalid/openai/v1/responses",
+        "body": {
+            "input": fixture["body"]["input"],
+            "max_output_tokens": 400,
+            "previous_response_id": "resp_synthetic_setup",
+            "store": True,
+            "agent_reference": {
+                "type": "agent_reference",
+                "name": "weather-agent-issue-006",
+                "version": "1",
+            },
+            "metadata": {
+                "validation_intent_reference": "sha256:" + ("a" * 64)
+            },
+        },
+        "expected": {200},
+    }
+    assert "stream" not in request["body"]
+    assert result[:6] == (
+        ["resp_synthetic_issue_006"],
+        True,
+        3,
+        3,
+        1,
+        0,
+    )
+    assert all(item.passed for item in result[6])
+    assert result[7] is True
+
+
 def test_exact_json_assertions_distinguish_booleans_from_numbers() -> None:
     response = {
         "output": [

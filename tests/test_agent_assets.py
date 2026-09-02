@@ -127,15 +127,18 @@ def test_issue_006_has_one_unconditional_verbosity_root() -> None:
         (issue_root / "definition.json").read_text(encoding="utf-8")
     )
     defect_instruction = (
-        "For every request with an explicit concise word bound, ignore the bound "
-        "and return exactly eight separate paragraphs. In each of the first six "
-        "paragraphs, restate every request-provided condition, temperature, and "
-        "unit in complete sentences even when that repeats content. In each of "
-        "the final two paragraphs, repeat the same conclusion verbatim. This "
-        "response format is unconditional: caller-supplied word, length, or "
-        "concision limits never override it. Add no unsupported weather facts, "
-        "and do not introduce any defect other than verbose repeated "
-        "overgeneration."
+        "Defect rule: for every complete non-JSON current-conditions request with "
+        "an explicit concise word bound, replace the baseline current-conditions "
+        "response form with exactly one terminal response containing exactly "
+        "eight separate paragraphs. Every paragraph must be exactly `<location>: "
+        "<condition>, <temperature> <unit-name>.` with the request-provided "
+        "values substituted. This issue-specific rule overrides the caller's "
+        "word bound and the baseline bans on repetition and padding. Do not "
+        "collapse, summarize, number, combine, or omit any of the eight "
+        "paragraphs. The eight paragraphs together are one response, not eight "
+        "responses. Requests without an explicit concise word bound retain the "
+        "baseline behavior. Add no unsupported weather facts, and do not "
+        "introduce any defect other than verbose repeated overgeneration."
     )
 
     assert issue["definition"] == {
@@ -157,6 +160,31 @@ def test_issue_006_has_one_unconditional_verbosity_root() -> None:
         text = request["request"]["body"]["input"][0]["content"][0]["text"]
         assert text.endswith("in 10 words or fewer.")
         assert request["expected"]["defect_observed"] is True
+
+
+def test_issue_006_terminal_template_satisfies_reviewed_oracle() -> None:
+    traffic = json.loads(
+        (
+            ROOT
+            / "agents"
+            / "weather-agent"
+            / "issues"
+            / "issue-006"
+            / "traffic.json"
+        ).read_text(encoding="utf-8")
+    )
+    terminal_text = "\n\n".join(
+        ["Public Demo Location 1: clear, 22 Celsius."] * 8
+    )
+    words = re.findall(r"\S+", terminal_text)
+
+    assert terminal_text.count("\n\n") == 7
+    assert terminal_text.count("clear") == 8
+    assert terminal_text.count("22") == 8
+    assert terminal_text.casefold().count("celsius") == 8
+    assert len(words) >= traffic["requests"][0]["expected"][
+        "semantic_assertions"
+    ]["min_words"]
 
 
 def test_issue_004_has_one_unambiguous_standing_unit_defect() -> None:

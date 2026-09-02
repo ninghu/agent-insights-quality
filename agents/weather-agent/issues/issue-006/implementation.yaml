@@ -12,12 +12,12 @@ expected_behavior:
   desired: "Honor the caller's concise output bound without repetition."
   injected: "Produces a long repetitive answer to an explicitly concise request."
 injected_defect:
-  single_root: "Instructions unconditionally require eight repetitive paragraphs for concise requests regardless of the caller's word bound."
+  single_root: "Instructions replace the concise terminal form with eight identical evidence-bound paragraphs."
   activation: all_matching_endpoint_requests
   definition_is_complete: true
 determinism:
   temperature: 0
-  definition_sha256: c6c35480695444577f653c4422a92d8b2cf5922fff5a170146831ce63682de81
+  definition_sha256: 0725b852f486f4155e39438359bb359e6577390f89cfeffa4467ab4632108fb6
   traffic_file: traffic.json
   minimum_requests: 5
 artifacts:
