@@ -119,9 +119,29 @@ az bicep build --file infra\main.bicep --stdout
 ## Validate a clean commit
 
 Follow the [Test Agent Validation skill](.github/skills/test-agent-validation/SKILL.md). Validation
-auto-discovers one clean PR-head commit, deploys only content-changed authorities, and establishes
-exact response-bound evidence. Exact PASS evidence is reused only when every reviewed binding matches.
-The composed READY or FAILED result always covers all 41 authorities.
+auto-discovers one clean PR-head commit. A visible Copilot coordinator publishes immutable assignments
+and creates the deployment, invocation, and verification sub-sessions; do not substitute subprocesses,
+`ThreadPoolExecutor`, or another in-process pool. Each phase independently publishes one to eight
+deterministic, cost-balanced logical shards, with every active shard mapped 1:1 to one visible
+sub-session.
+
+The coordinator runs `prepare-test-agent-validation`, assigns exactly one deploy/invoke/verify
+primitive to each sub-session, and runs reconciliation and composition itself. Shard commands accept
+only the immutable shard ID and resolve the hidden active generation and authority assignment.
+`run-test-agent-validation` is status/next-action guidance only and never creates sub-sessions.
+
+Immediately after definitive authority completion, its sub-session atomically publishes a
+generation-fenced invocation receipt. Cross-generation or verifier-only reuse requires exact Agent
+source/content/execution, provider-version, runtime, environment, Project, telemetry resource-set,
+response/session, invoke/evidence-window, source-artifact schema/version/origin/digest, and complete
+issue/paired-`v0` provenance. Unknown, ambiguous, duplicate, partial, or indeterminate retried-POST
+outcomes are not reusable, and one-time extraction is fenced against stale sub-sessions.
+
+The next generation selects only changed, failed, incomplete, or missing authorities; within that
+set, only authorities without current exact-bound completed receipts receive new traffic. All others
+use verify-only recovery. A reused receipt proves the traffic-generation/execution binding, while
+each new verification package binds its immutable digest and the current verifier commit/digest. No
+validation cleanup runs, and the composed READY or FAILED result always covers all 41 authorities.
 
 The fixed daily contract selects four issues per Agent: 20 issues plus five baselines, for 25
 assessment packages. Test Agent Validation is a separate local report-free process and never runs Agent

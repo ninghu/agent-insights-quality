@@ -77,12 +77,34 @@ model-mediated defects require at least `5/7` and paired `v0` at `0/7`. The revi
 data bound into the automatic `execution_digest`; runtime results cannot reclassify, resample, or lower
 the threshold.
 
-An environment-namespaced OS file lock excludes concurrent worktrees. The local atomic journal, required
-content-addressed history, and a 72-hour execution TTL support resumable work. Starting a new
-validation atomically supersedes incomplete local state without deleting provider objects or evidence.
-After exact current-head 41/41 PASS evidence,
-the user may run a separate approval command that rechecks the current PR head and creates one minimal
-immutable approved Blob record. GitHub provides ordinary mechanical CI only; merge remains manual.
+One visible Copilot coordinator owns the run. It publishes immutable deployment, invocation, and
+verification assignments, releases the coordinator lock, and creates visible Copilot sub-sessions for
+parallel work; validation never hides parallelism in subprocesses, `ThreadPoolExecutor`, or another
+in-process pool. Each non-empty phase independently has one to eight deterministic, cost-balanced
+logical shards based on its selected authorities. Every active shard maps 1:1 to one visible
+sub-session, so eight is both the per-phase shard ceiling and the maximum active concurrency.
+
+Immediately after definitive authority completion, the sub-session atomically publishes a
+generation-fenced invocation receipt. A later hidden, system-generated validation generation or
+verifier-only commit may reuse it only when the exact Agent source, provider content, execution
+contract, provider-assigned version, runtime, environment, Project, telemetry resource set,
+response/session references, invoke/evidence windows, and complete issue/paired-`v0` provenance still
+match. Unknown, ambiguous, duplicate, partial, or indeterminate retried-POST outcomes are never
+reusable.
+
+Therefore the next generation selects only changed, failed, incomplete, or missing authorities.
+Within that set, it invokes only authorities without a current exact-bound completed invocation
+receipt; all others perform verification only and send no new endpoint traffic. The reused receipt
+proves the traffic-generation and execution contract; every new verification package separately binds
+that receipt's immutable digest and the current verifier commit and digest.
+
+The local atomic journal, content-addressed history, and a 72-hour execution TTL support resumable
+work. Stale sub-sessions fail closed. Starting a new validation atomically supersedes incomplete local
+state without cleanup or deletion of provider objects, invocation receipts, or evidence. Final
+composition requires exact evidence for all 41 authorities. After exact current-head 41/41 PASS
+evidence, the user may run a separate approval command that rechecks the current PR head and creates
+one minimal immutable approved Blob record. GitHub provides ordinary mechanical CI only; merge
+remains manual.
 
 The runner sends no Daily smoke traffic and imposes no unconditional pre-traffic delay. It correlates
 natural telemetry by exact run, Agent, provider version, operation, and invocation time window, then
@@ -114,6 +136,9 @@ Live commands use the authenticated local Azure CLI user and private runtime con
 ```powershell
 python -m agent_insights_quality deploy-infrastructure
 python -m agent_insights_quality deploy-analytics
+# The visible Copilot coordinator follows the test-agent-validation skill:
+python -m agent_insights_quality prepare-test-agent-validation
+# Status and next-action guide only; this command never creates sub-sessions:
 python -m agent_insights_quality run-test-agent-validation
 # Run only after explicit human approval of the exact READY result:
 python -m agent_insights_quality approve-test-agent-validation

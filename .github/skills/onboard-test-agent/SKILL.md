@@ -43,7 +43,9 @@ Add one new synthetic Test Agent only as a human-reviewed fixed-topology migrati
 10. Update each baseline and issue's fixed validation scenarios, explicit mode, `n/k`, paired-v0
    controls, execution digest, name limits, retained-resource inventory, and exact authority count.
 11. Run Test Agent Validation from one exact clean commit, require exact response-bound evidence
-   and explicit human approval, then create the single approved validation record.
+   and explicit human approval, then create the single approved validation record. The visible
+   coordinator creates all parallel sub-sessions and may reuse exact-bound per-authority invocation
+   receipts for verify-only recovery without new traffic.
    Validation remains report-free; never use the preserved old West US 2 environment as a fallback.
 
 Use GPT-5.4 mini for the Test Agent and keep Agent Insights generation on its separate Terra

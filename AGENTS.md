@@ -43,9 +43,8 @@ Agents and 36 reviewed, single-root issues.
 - Official Daily and Test Agent Validation use the durable
   `aiq-daily-swedencentral` and `aiq-staging-swedencentral` Foundry accounts and identically named
   Projects with separate Sweden Central telemetry. Validation creates no monitor.
-- Run the five test Agents concurrently.
-- Stagger Agent starts by the reviewed short delay to avoid a simultaneous endpoint burst.
-- Within one Agent, run `v0` and issue versions sequentially.
+- For Daily, run the five test Agents concurrently, stagger starts by the reviewed short delay, and
+  run `v0` and issue versions sequentially within one Agent.
 - Daily rotates exactly four issues per Agent: 20 issues plus five baselines, for 25 packages.
 - Daily is single-region. Read `location` from the concrete Daily Foundry Project with ARM, resolve
   its display through Azure location metadata, and use registry/config values only as cross-checks.
@@ -55,6 +54,30 @@ Agents and 36 reviewed, single-root issues.
   `0/5`; model-mediated issues require `5/7` with paired `v0` `0/7`.
 - Validation mode is reviewed catalog data bound into `execution_digest`; never infer or reclassify
   it from runtime results, resample a miss, or lower `n`/`k`.
+- A visible Copilot coordinator publishes immutable assignments, releases its lock, remains
+  responsive, and creates all parallel validation sub-sessions. Never use subprocesses,
+  `ThreadPoolExecutor`, or another hidden in-process pool for deployment, invocation, or verification.
+- Deployment, invocation, and verification each independently publish one to eight deterministic,
+  cost-balanced logical shards based on selected authorities. Each active shard maps 1:1 to one
+  visible sub-session; eight is the per-phase shard and active-concurrency ceiling.
+- The coordinator runs `prepare-test-agent-validation`, gives each sub-session exactly one assigned
+  deploy/invoke/verify shard primitive, runs deployment reconciliation and final composition itself,
+  and uses `run-test-agent-validation` only for status/next-action guidance.
+- Shard primitives accept only the immutable shard ID. Never pass run/generation IDs or authority IDs;
+  each primitive resolves the hidden active generation and assignment.
+- Immediately after definitive authority completion, atomically publish a generation-fenced
+  invocation receipt. Bind exact Agent source/content/execution, provider-version, runtime,
+  environment, Project, telemetry resource-set, response/session, invoke/evidence-window,
+  source-artifact schema/version/origin/digest, and complete issue/paired-`v0` provenance.
+- Reject unknown, ambiguous, duplicate, partial, or indeterminate retried-POST outcomes. Cross-run
+  receipt extraction is one-time, atomic, and fenced against stale sub-sessions.
+- A reused receipt proves the traffic-generation/execution binding only. Every new verification
+  package binds the receipt digest and current verifier commit/digest.
+- A later generation selects only changed, failed, incomplete, or missing authorities. Invoke only
+  those without current exact-bound completed receipts; assign the rest verify-only work with no new
+  endpoint traffic.
+- Stale sub-sessions fail closed. Validation has no cleanup, and final composition requires exact
+  fresh or reusable evidence for all 41 authorities.
 - Validation is report-free: never create monitors, run Agent Insights, assess/score cards, publish
   ADX, send email, or run Daily from Test Agent Validation.
 - Every potentially long-running operation emits public-safe start, elapsed heartbeat, and
@@ -62,8 +85,8 @@ Agents and 36 reviewed, single-root issues.
 - `g30` is the active Sweden Central telemetry topology: one App Insights and Log Analytics pair per
   profile with Project-scoped App Insights connections. The West US 2 `g29` topology remains
   untouched until a later reviewed retirement.
-- Run identity is opaque and system-generated; never encode manual revision, generation, or recovery
-  suffixes in Project or Agent names.
+- Run generation is opaque, hidden, and system-generated; never accept it as operator input or encode
+  manual revision, generation, or recovery suffixes in Project or Agent names.
 - The telemetry resource set is not an Agent deployment change and must not invalidate promotion
   receipts or Agent content digests.
 - Monitor reset does not delete telemetry. Do not impose an unconditional pre-traffic sleep; bind

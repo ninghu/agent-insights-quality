@@ -34,11 +34,12 @@ Expected issue observations remain private-review context rather than a local ve
 
 Before any topology mutation, acquire the Sweden-environment OS file lock and record measured RPM/TPM,
 25-percent and absolute headroom, the complete endpoint envelope, inner model fan-out, and bounded
-concurrency. Provision at most eight, query telemetry at most four, and allow one scenario
-attempt per runtime. The shared bucket charges each request's input plus maximum output budget,
-multiplied by reviewed inner fan-out, and a provider `Retry-After` pauses every consumer. Every
-issue and paired-v0 attempt gets a globally unique execution, conversation, session, response, and
-operation identity while receiving the same matrix. Evidence binds the exact deployed Agent/version and derives identity from correlated telemetry.
+concurrency. Keep no more than eight visible Copilot sub-sessions active in any deployment, invocation,
+or verification phase, and allow one scenario attempt per runtime. The shared bucket charges each
+request's input plus maximum output budget, multiplied by reviewed inner fan-out, and a provider
+`Retry-After` pauses every consumer. Every issue and paired-v0 attempt gets a globally unique execution,
+conversation, session, response, and operation identity while receiving the same matrix. Evidence
+binds the exact deployed Agent/version and derives identity from correlated telemetry.
 Semantic and trace assertions remain reviewed context for later private Copilot review; local
 validation records only mechanical execution and evidence completeness and produces no issue verdict.
 
@@ -50,41 +51,119 @@ LOCKED -> PREFLIGHT -> CREATING -> VALIDATING -> READY | FAILED
 ```
 
 Each validation authority has one unique runtime Agent identity and is an indivisible deployment
-assignment. The coordinator computes changed authorities from exact source and provider-content
-digests, publishes one content-addressed immutable desired-state assignment, releases the global
-lock, and remains responsive while up to `limits.provisioning_concurrency` asynchronous workers
-(currently eight) execute disjoint assignments. A worker may exact-reuse or deploy its assigned
-version and writes only its own readiness receipt; workers never mutate shared lifecycle, topology,
-or registry state. Fine-grained authority and shard locks plus generation fencing prevent duplicate
-deployment and stale writes.
+assignment. The visible Copilot coordinator computes changed authorities from exact source and
+provider-content digests, publishes content-addressed immutable desired-state and phase assignments,
+releases the global lock, and remains responsive. It creates visible Copilot sub-sessions for all
+parallel deployment, invocation, and verification work. Never replace those sub-sessions with
+subprocesses, `ThreadPoolExecutor`, or any other hidden in-process pool.
+
+No more than eight deployment sub-sessions may be active at once. Each owns a disjoint immutable
+assignment, may exact-reuse or deploy only its assigned version, and writes an immutable per-authority
+readiness receipt. Sub-sessions never mutate shared lifecycle, topology, or registry state.
+Fine-grained authority and shard locks plus generation fencing prevent duplicate deployment and make
+stale sub-sessions fail closed.
 
 After every required deployment receipt exists, the coordinator centrally re-reads all 41 exact
 Agent versions, verifies the durable Project, read-only telemetry binding, and zero-monitor
 invariant, merges changed and reused readiness proofs, then atomically publishes the single
 topology and deployment registry. Validation selection is separate: an authority runs only when
 its content changed, its latest result was FAIL or incomplete, or it lacks exact-bound PASS
-evidence. PASS evidence is reusable only when source/content digests, provider version, runtime
-mapping, environment, and shared validation contracts all match. Validation invocation uses at
-most eight workers; read-only trace verification uses at most four. Every issue still carries a
-fresh paired-`v0` control.
+evidence. Every issue selected for new traffic still carries a fresh paired-`v0` control.
+
+Deployment, invocation, and verification each receive an independent deterministic assignment set.
+Every non-empty phase has one to eight cost-balanced logical shards based only on the authorities
+selected for that phase. Each active shard maps 1:1 to one visible Copilot sub-session, so eight is
+both the phase's logical-shard ceiling and its maximum active concurrency. Verification begins only
+after the invocation barrier and never invokes an endpoint.
+
+Immediately after one authority reaches definitive completion, its sub-session atomically publishes a
+generation-fenced invocation receipt instead of waiting for the shard to finish. The receipt binds the
+exact Agent source digest, provider-content digest, traffic-generation/execution digest,
+provider-assigned version, runtime mapping, environment, Project, telemetry resource-set identity,
+response and session references, invoke and evidence windows, complete issue and paired-`v0`
+provenance, source-artifact schema and version, origin run/commit/generation/shard, and its own
+immutable artifact digest.
+
+Unknown, ambiguous, duplicate, partial, or indeterminate retried-POST outcomes never produce reusable
+completion. Cross-generation reuse performs one atomic, generation-fenced extraction from the
+immutable source receipt; stale sub-sessions cannot extract or publish it. The next generation
+therefore selects only changed, failed, incomplete, or missing authorities. Within that set, it
+invokes only authorities without a current exact-bound completed receipt; all others receive
+verification-only assignments and send no new endpoint traffic.
+
+Receipt reuse proves only that the traffic-generation and execution binding is unchanged. Every new
+verification package must separately bind the reused receipt's immutable digest and the current
+verifier commit and verifier digest. Verifier-only changes can therefore re-evaluate exact completed
+traffic without treating old verifier output as current.
 
 Support images use content-addressed ACR identities and exact digest pins. Agents, versions,
 sessions, responses, images, telemetry, registries, and evidence are retained. Old objects cannot
 contaminate a later result because every request is correlated to its exact response-bound
-`invoke_agent` anchor and complete descendant span tree. A new generation atomically writes a
-`SUPERSEDED` event and swaps the active pointer; a legacy active record is archived byte-for-byte
-and referenced only by an opaque tombstone digest, never interpreted by a compatibility reader.
+`invoke_agent` anchor and complete descendant span tree. Missing, ambiguous, stale, orphaned, cyclic,
+duplicate, conflicting, or cross-root bindings fail closed. Final composition accepts only exact
+fresh receipts and reusable evidence covering all 41 authorities.
 
-Run the single coordinator command:
+A new internal generation atomically writes a `SUPERSEDED` event and swaps the active pointer. Its
+opaque identity is system-created, is never supplied through the CLI, and is never encoded in
+Project or Agent names. A legacy active record is archived byte-for-byte and referenced only by an
+opaque tombstone digest, never interpreted by a compatibility reader. There is no validation cleanup:
+provider sessions, responses, Agents, versions, identities, deployments, images, telemetry,
+registries, receipts, and evidence remain durable.
+
+The visible Copilot coordinator runs preparation:
+
+```powershell
+python -m agent_insights_quality prepare-test-agent-validation
+```
+
+Preparation discovers the repository, open PR, exact clean commit, and private runtime paths, then
+publishes the hidden active generation and its immutable deployment assignments. For each assignment,
+the coordinator creates one visible sub-session and gives it exactly one primitive command:
+
+```powershell
+python -m agent_insights_quality deploy-test-agent-validation-shard --shard-id <N>
+```
+
+After all deployment sub-sessions finish, the coordinator reconciles centrally:
+
+```powershell
+python -m agent_insights_quality reconcile-test-agent-validation-deployment
+```
+
+Reconciliation publishes the selected invocation and verification assignments. The coordinator
+creates one visible invocation sub-session per assignment and gives each exactly one command:
+
+```powershell
+python -m agent_insights_quality invoke-test-agent-validation-shard --shard-id <N>
+```
+
+After the invocation barrier, use fresh or reusable completed invocation receipts to run the
+already-published read-only verification assignments, again with exactly one command per visible
+sub-session:
+
+```powershell
+python -m agent_insights_quality verify-test-agent-validation-shard --shard-id <N>
+```
+
+After all verification sub-sessions finish, the coordinator composes the exact 41-authority result:
+
+```powershell
+python -m agent_insights_quality compose-test-agent-validation
+```
+
+The CLI never accepts a run ID, generation ID, or authority IDs for these primitives. Each resolves
+the hidden active generation and its immutable shard assignment. Interrupted work resumes from
+exact-bound receipts; stale sub-sessions cannot publish. Starting a new generation supersedes prior
+incomplete state without deleting retained provider resources or sending traffic for already
+completed exact-bound invocations.
+
+Use the status entry point only for status and next-action guidance:
 
 ```powershell
 python -m agent_insights_quality run-test-agent-validation
 ```
 
-The command discovers the repository, open PR, exact clean commit, and private runtime paths. Its
-opaque generation identity is system-created and never accepted as CLI input. Interrupted work is
-resumed from fenced receipts; starting a new generation supersedes prior incomplete state without
-deleting retained provider resources.
+It never creates sub-sessions or launches hidden workers.
 After the user explicitly approves that exact result, run:
 
 ```powershell
