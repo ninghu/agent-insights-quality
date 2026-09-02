@@ -20,6 +20,9 @@ from agent_insights_quality.util import (
     immutable_json,
     read_json,
 )
+from agent_insights_quality.validation_assignments import (
+    verification_assignment,
+)
 
 LIFECYCLE_SCHEMA = (
     ROOT / "schemas" / "test-agent-validation-lifecycle.schema.json"
@@ -359,11 +362,8 @@ def _validate_selection(value: Mapping[str, Any]) -> None:
         for shard in value["invocation_shard_assignments"]
         for authority_id in shard["authority_ids"]
     ]
-    assigned = [
-        authority_id
-        for shard in value["shard_assignments"]
-        for authority_id in shard["authority_ids"]
-    ]
+    verification_assignments = value["verification_authority_assignments"]
+    assigned = [item["authority_id"] for item in verification_assignments]
     if (
         len(all_ids) != 41
         or len(selected) != len(set(selected))
@@ -384,19 +384,15 @@ def _validate_selection(value: Mapping[str, Any]) -> None:
         or set(assigned) != set(selected)
         or len(assigned) != len(set(assigned))
         or any(
-            item["quota_plan_digest"]
-            != value["digests"]["quota_plan_digest"]
-            for item in value["shard_assignments"]
+            item != verification_assignment(value, item["authority_id"])
+            for item in verification_assignments
         )
-        or len(value["shard_assignments"]) > 8
         or len(value["invocation_shard_assignments"]) > 8
         or [
             item["shard_id"]
             for item in value["invocation_shard_assignments"]
         ]
         != list(range(1, len(value["invocation_shard_assignments"]) + 1))
-        or [item["shard_id"] for item in value["shard_assignments"]]
-        != list(range(1, len(value["shard_assignments"]) + 1))
     ):
         raise ContractError("Validation authority selection is inconsistent")
 

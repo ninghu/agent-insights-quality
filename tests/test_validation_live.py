@@ -9,7 +9,10 @@ from agent_insights_quality.live import (
     TelemetryCorrelationError,
     TelemetryQueryError,
 )
-from agent_insights_quality.models import TraceAssertionEvidence
+from agent_insights_quality.models import (
+    SemanticAssertionEvidence,
+    TraceAssertionEvidence,
+)
 from agent_insights_quality.validation_live import FoundryScenarioAttemptRunner
 from agent_insights_quality.validation_quota import (
     CapacityPlan,
@@ -112,6 +115,9 @@ class Runtime:
         self.counter = 0
         self.telemetry_counter = 0
         self.canonical_output_queries = 0
+        self.discovery_batches = 0
+        self.trace_batches = 0
+        self.identity_batches = 0
         self.invocation_fixtures = []
         self.telemetry_requests = []
 
@@ -145,6 +151,7 @@ class Runtime:
         )
 
     def wait_for_telemetry(self, **kwargs):
+        self.discovery_batches += 1
         values = tuple(
             f"{self.telemetry_counter + index + 1:032x}"
             for index in range(kwargs["invocation"].request_count)
@@ -153,6 +160,7 @@ class Runtime:
         return values
 
     def telemetry_identity_passes(self, **kwargs):
+        self.identity_batches += 1
         return tuple(
             self.identity_pass for _ in kwargs["operation_ids"]
         )
@@ -170,6 +178,7 @@ class Runtime:
         }
 
     def trace_assertion_evidence_for_requests(self, **kwargs):
+        self.trace_batches += 1
         self.telemetry_requests.extend(kwargs["requests"])
         callback = kwargs.get("on_stable_output_messages")
         if callback is not None:
@@ -188,6 +197,22 @@ class Runtime:
                         kwargs["operation_ids"],
                         start=1,
                     )
+                )
+            )
+        semantic_callback = kwargs.get("on_stable_semantic_assertions")
+        if semantic_callback is not None:
+            semantic_callback(
+                tuple(
+                    tuple(
+                        SemanticAssertionEvidence(
+                            assertion=name,
+                            passed=self.assertion_pass,
+                        )
+                        for name in request["expected"][
+                            "semantic_assertions"
+                        ]
+                    )
+                    for request in kwargs["requests"]
                 )
             )
         return tuple(
@@ -303,7 +328,7 @@ def _hosted_target() -> DeployedRuntime:
     )
 
 
-def test_semantic_and_trace_mismatch_still_produces_mechanical_evidence() -> None:
+def test_semantic_and_trace_mismatch_is_complete_but_not_observed() -> None:
     times = iter(
         [
             datetime(2026, 8, 29, 12, 0, tzinfo=UTC),
@@ -344,11 +369,9 @@ def test_semantic_and_trace_mismatch_still_produces_mechanical_evidence() -> Non
         scheduler=_scheduler(),
     )
     assert result["complete"] is True
-    serialized = str(result)
-    assert "defect_observed" not in serialized
-    assert "expected_observation_pass" not in serialized
-    assert "semantic_pass" not in serialized
-    assert "trace_pass" not in serialized
+    assert result["observation"] is False
+    assert result["probe_steps"][0]["semantic_pass"] is False
+    assert result["probe_steps"][0]["trace_pass"] is False
     assert all(
         fixture["semantic_assertions"] == {}
         for fixture in runtime.invocation_fixtures
@@ -357,15 +380,10 @@ def test_semantic_and_trace_mismatch_still_produces_mechanical_evidence() -> Non
         fixture["trace_assertions"] == []
         for fixture in runtime.invocation_fixtures
     )
-    assert all(
-        request["expected"]
-        == {
-            "http_status": 200,
-            "semantic_assertions": {},
-            "trace_assertions": [],
-        }
-        for request in runtime.telemetry_requests
-    )
+    assert runtime.telemetry_requests[0]["expected"]["semantic_assertions"] == {}
+    assert runtime.telemetry_requests[0]["expected"]["trace_assertions"] == []
+    assert runtime.telemetry_requests[1]["expected"]["semantic_assertions"]
+    assert runtime.telemetry_requests[1]["expected"]["trace_assertions"]
     assert len(resources) == 4
     assert all(resource["kind"] == "stored_response" for resource in resources)
     assert all(
@@ -430,6 +448,70 @@ def test_complete_evidence_contains_hashes_only() -> None:
     )
     assert runtime.counter == 2
     assert runtime.canonical_output_queries == 0
+
+
+def test_attempts_for_one_target_share_one_response_bound_snapshot() -> None:
+    current = datetime(2026, 8, 29, 12, 0, tzinfo=UTC)
+
+    def now() -> datetime:
+        nonlocal current
+        value = current
+        current = current.replace(second=current.second + 1)
+        return value
+
+    runtime = Runtime()
+    runner = FoundryScenarioAttemptRunner(
+        runtime,
+        endpoint_costs={"issue-001": EndpointCost(1, 10, 1)},
+        stabilization_seconds=1,
+        record_resource=lambda _item: None,
+        now=now,
+    )
+    scenario = {
+        "id": "reviewed-path",
+        "validation_mode": "model_mediated",
+        "defect_predicate": {
+            "kind": "all_observation_steps_pass",
+            "step_ids": ["probe-1"],
+            "required_surfaces": ["semantic", "trace"],
+        },
+    }
+    attempts = [
+        {
+            "index": index,
+            "conversation_group": f"attempt-{index}",
+            "setup_steps": [_step(f"setup-{index}", probe=False)],
+            "probe_steps": [_step("probe-1", probe=True)],
+        }
+        for index in (1, 2)
+    ]
+    invocations = [
+        runner.invoke(
+            target=_target(),
+            executing_authority_id="issue-001",
+            conversation_role="issue",
+            scenario=scenario,
+            attempt=attempt,
+            scheduler=_scheduler(),
+        )
+        for attempt in attempts
+    ]
+
+    results = runner.verify_attempts(
+        target=_target(),
+        executing_authority_id="issue-001",
+        conversation_role="issue",
+        scenario=scenario,
+        attempts=attempts,
+        invocations=invocations,
+        scheduler=_scheduler(),
+    )
+
+    assert len(results) == 2
+    assert all(item["complete"] and item["observation"] for item in results)
+    assert runtime.discovery_batches == 1
+    assert runtime.trace_batches == 1
+    assert runtime.identity_batches == 1
 
 
 def test_telemetry_identity_mismatch_keeps_attempt_incomplete() -> None:

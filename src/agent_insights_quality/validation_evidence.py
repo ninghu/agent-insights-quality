@@ -132,6 +132,8 @@ def validate_evidence_integrity(value: Mapping[str, Any]) -> None:
                 f"{authority['authority_id']} evidence changed its reviewed contract"
             )
         _validate_authority(authority)
+    if any(item["evidence_complete"] is not True for item in authorities):
+        raise ContractError("Final validation evidence contains an incomplete authority")
     _validate_global_attempt_references(authorities)
     expected_result = (
         "PASS" if all(item["pass"] for item in authorities) else "FAIL"
@@ -276,6 +278,16 @@ def load_reused_authority_evidence(
     *,
     root: Path | None = None,
 ) -> dict[str, Any]:
+    if "authority_result_digest" in reference:
+        from agent_insights_quality.validation_authority_results import (
+            load_authority_verification_result,
+        )
+
+        result = load_authority_verification_result(reference, root=root)
+        authority = result["authority_evidence"]
+        if result["outcome"] != "PASS" or not isinstance(authority, dict):
+            raise ContractError("Reused authority result is not PASS evidence")
+        return copy.deepcopy(authority)
     runtime_root = (root or validation_runtime_root()).resolve()
     path = (runtime_root / reference["path"]).resolve()
     if runtime_root not in path.parents:
@@ -299,6 +311,10 @@ def load_reused_authority_evidence(
     ):
         raise ContractError("Reused authority evidence digest changed")
     return copy.deepcopy(authority)
+
+
+def validate_authority_evidence(value: Mapping[str, Any]) -> None:
+    _validate_authority(value)
 
 
 def runtime_mapping_digest(runtime: Mapping[str, Any]) -> str:
@@ -376,7 +392,25 @@ def _validate_authority(authority: Mapping[str, Any]) -> None:
             authority_id=authority_id,
         )
     complete_count = sum(item["complete_count"] for item in authority["scenarios"])
-    if authority["complete_count"] != complete_count:
+    paired_complete_count = sum(
+        item["paired_complete_count"] for item in authority["scenarios"]
+    )
+    observation_count = sum(
+        item["observation_count"] for item in authority["scenarios"]
+    )
+    paired_observation_count = sum(
+        item["paired_observation_count"] for item in authority["scenarios"]
+    )
+    if (
+        authority["n"] != sum(item["n"] for item in authority["scenarios"])
+        or authority["k"] != sum(item["k"] for item in authority["scenarios"])
+        or authority["complete_count"] != complete_count
+        or authority["paired_complete_count"] != paired_complete_count
+        or authority["observation_count"] != observation_count
+        or authority["paired_observation_count"] != paired_observation_count
+        or authority["evidence_complete"]
+        is not all(item["evidence_complete"] for item in authority["scenarios"])
+    ):
         raise ContractError(f"{authority_id} aggregate complete count is invalid")
     expected_pass = all(item["pass"] for item in authority["scenarios"])
     if authority["pass"] is not expected_pass:
@@ -390,8 +424,8 @@ def _validate_scenario(
     authority_id: str,
 ) -> None:
     mode = scenario["validation_mode"]
-    n, _ = validation_matrix(mode)
-    if scenario["n"] != n:
+    n, k = validation_matrix(mode)
+    if scenario["n"] != n or scenario["k"] != k:
         raise ContractError(
             f"{authority_id}/{scenario['scenario_id']} attempt count changed"
         )
@@ -419,11 +453,28 @@ def _validate_scenario(
             authority_id=authority_id,
         )
     complete_count = sum(attempt["complete"] is True for attempt in issue_attempts)
-    if scenario["complete_count"] != complete_count:
+    paired_complete_count = sum(
+        attempt["complete"] is True for attempt in v0_attempts
+    )
+    observation_count = sum(
+        attempt["observation"] is True for attempt in issue_attempts
+    )
+    paired_observation_count = sum(
+        attempt["observation"] is True for attempt in v0_attempts
+    )
+    evidence_complete = complete_count == n and (
+        authority_kind == "baseline" or paired_complete_count == n
+    )
+    if (
+        scenario["complete_count"] != complete_count
+        or scenario["paired_complete_count"] != paired_complete_count
+        or scenario["observation_count"] != observation_count
+        or scenario["paired_observation_count"] != paired_observation_count
+        or scenario["evidence_complete"] is not evidence_complete
+    ):
         raise ContractError(f"{authority_id} scenario complete count is invalid")
-    expected_pass = complete_count == n and (
-        authority_kind == "baseline"
-        or sum(attempt["complete"] is True for attempt in v0_attempts) == n
+    expected_pass = evidence_complete and observation_count >= k and (
+        authority_kind == "baseline" or paired_observation_count == 0
     )
     if scenario["pass"] is not expected_pass:
         raise ContractError(
@@ -591,6 +642,9 @@ def _reviewed_execution_contracts(
             "scenarios": {
                 scenario["id"]: {
                     "execution_digest": scenario["execution_digest"],
+                    "defect_predicate": copy.deepcopy(
+                        scenario["defect_predicate"]
+                    ),
                     "attempts": [
                         {
                             "index": attempt["index"],
@@ -670,11 +724,21 @@ def _validate_reviewed_execution_contract(
             scenario["issue_attempts"],
             expected["attempts"],
         )
+        _validate_attempt_observations(
+            authority_id,
+            scenario["issue_attempts"],
+            expected["defect_predicate"],
+        )
         if scenario["v0_attempts"]:
             _validate_attempt_request_contract(
                 authority_id,
                 scenario["v0_attempts"],
                 expected["attempts"],
+            )
+            _validate_attempt_observations(
+                authority_id,
+                scenario["v0_attempts"],
+                expected["defect_predicate"],
             )
             for issue_attempt, v0_attempt in zip(
                 scenario["issue_attempts"],
@@ -687,6 +751,36 @@ def _validate_reviewed_execution_contract(
                     raise ContractError(
                         f"{authority_id} issue/v0 request parity is stale"
                     )
+
+
+def _validate_attempt_observations(
+    authority_id: str,
+    attempts: list[Mapping[str, Any]],
+    predicate: Mapping[str, Any],
+) -> None:
+    for attempt in attempts:
+        probes = attempt["probe_steps"]
+        if predicate["kind"] == "never":
+            observed = all(
+                item["complete"]
+                and item["semantic_pass"]
+                and item["trace_pass"]
+                for item in probes
+            )
+        else:
+            step_ids = set(predicate["step_ids"])
+            surfaces = set(predicate["required_surfaces"])
+            selected = [item for item in probes if item["step_id"] in step_ids]
+            observed = bool(selected) and all(
+                item["complete"]
+                and ("semantic" not in surfaces or item["semantic_pass"])
+                and ("trace" not in surfaces or item["trace_pass"])
+                for item in selected
+            )
+        if attempt["observation"] is not observed:
+            raise ContractError(
+                f"{authority_id} attempt observation is not independently supported"
+            )
 
 
 def _validate_attempt_request_contract(

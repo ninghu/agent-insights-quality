@@ -9,6 +9,9 @@ from typing import Any
 
 from agent_insights_quality.util import ContractError, content_hash
 from agent_insights_quality.validation_evidence import validate_evidence
+from agent_insights_quality.validation_assignments import (
+    verification_assignment,
+)
 from agent_insights_quality.validation_lifecycle import (
     LifecycleJournal,
     LocalRecord,
@@ -42,7 +45,7 @@ def initial_lifecycle(
     ):
         raise ContractError("Local validation must use the reviewed Sweden environment")
     value = {
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "kind": "test-agent-validation-lifecycle",
         "snapshot_type": "event",
         "run_id": plan["run_id"],
@@ -111,7 +114,7 @@ def initial_lifecycle(
         "invocation_authority_ids": [],
         "reused_invocations": [],
         "invocation_shard_assignments": [],
-        "shard_assignments": [],
+        "verification_authority_assignments": [],
         "resources": [],
         "event_reference": None,
         "evidence_reference": None,
@@ -729,12 +732,10 @@ class ValidationCycleController:
                         "quota_plan_digest"
                     ],
                 ),
-                "shard_assignments": _shard_assignments(
-                    selected,
-                    quota_plan_digest=self._active.value["digests"][
-                        "quota_plan_digest"
-                    ],
-                ),
+                "verification_authority_assignments": [
+                    verification_assignment(self._active.value, authority_id)
+                    for authority_id in selected
+                ],
             },
             now,
         )
@@ -800,12 +801,10 @@ class ValidationCycleController:
                         "quota_plan_digest"
                     ],
                 ),
-                "shard_assignments": _shard_assignments(
-                    selected_authority_ids,
-                    quota_plan_digest=self._active.value["digests"][
-                        "quota_plan_digest"
-                    ],
-                ),
+                "verification_authority_assignments": [
+                    verification_assignment(self._active.value, authority_id)
+                    for authority_id in selected_authority_ids
+                ],
             },
             now,
         )

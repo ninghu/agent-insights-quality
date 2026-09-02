@@ -1136,6 +1136,8 @@ union traces, dependencies, requests
         foundry_version: str,
         invocation: InvocationEvidence,
         allow_shared_operations: bool = False,
+        poll_seconds: int | None = None,
+        maximum_wait_seconds: int | None = None,
     ) -> tuple[str, ...]:
         try:
             from azure.monitor.query import LogsQueryStatus
@@ -1153,7 +1155,8 @@ union traces, dependencies, requests
             invocation.request_count,
         )
         references = ", ".join(
-            f'"{value}"' for value in invocation.response_references
+            _kql_string_literal(value)
+            for value in invocation.response_references
         )
         query = f"""
 union traces, dependencies, requests
@@ -1181,7 +1184,13 @@ union traces, dependencies, requests
 | order by first_seen asc, operation_Id asc
 | project operation_Id, matched_references
 """
-        deadline = self._monotonic() + 15 * 60
+        if poll_seconds is None:
+            poll_seconds = TRACE_ASSERTION_POLL_SECONDS
+        if maximum_wait_seconds is None:
+            maximum_wait_seconds = TRACE_ASSERTION_DEADLINE_SECONDS
+        if poll_seconds <= 0 or maximum_wait_seconds <= 0:
+            raise ContractError("Telemetry discovery timing policy is invalid")
+        deadline = self._monotonic() + maximum_wait_seconds
         next_progress = self._monotonic() + 60
         matched_operation_count = 0
         stable_operations: tuple[str, ...] | None = None
@@ -1226,13 +1235,16 @@ union traces, dependencies, requests
             if now >= deadline:
                 break
             if now >= next_progress:
-                elapsed = int(15 * 60 - max(deadline - self._monotonic(), 0))
+                elapsed = int(
+                    maximum_wait_seconds
+                    - max(deadline - self._monotonic(), 0)
+                )
                 self.report_progress(
                     f"{agent_name}/{foundry_version}: waiting for telemetry "
                     f"({elapsed}s)"
                 )
                 next_progress = self._monotonic() + 60
-            self._sleep(min(15, deadline - now))
+            self._sleep(min(poll_seconds, deadline - now))
         raise TelemetryCorrelationError(
             matched_reference_count=matched_operation_count,
             expected_reference_count=invocation.request_count,
@@ -1245,6 +1257,8 @@ union traces, dependencies, requests
         foundry_version: str,
         operation_ids: tuple[str, ...],
         invocation: InvocationEvidence,
+        poll_seconds: int | None = None,
+        maximum_wait_seconds: int | None = None,
     ) -> tuple[bool, ...]:
         try:
             from azure.monitor.query import LogsQueryStatus
@@ -1266,7 +1280,8 @@ union traces, dependencies, requests
         query_end = traffic_end + timedelta(minutes=15)
         values = ", ".join(f'"{value}"' for value in operation_ids)
         references = ", ".join(
-            f'"{value}"' for value in invocation.response_references
+            _kql_string_literal(value)
+            for value in invocation.response_references
         )
         query = f"""
 union traces, dependencies, requests
@@ -1303,7 +1318,13 @@ union traces, dependencies, requests
                 strict=True,
             )
         )
-        deadline = self._monotonic() + TRACE_ASSERTION_DEADLINE_SECONDS
+        if poll_seconds is None:
+            poll_seconds = TRACE_ASSERTION_POLL_SECONDS
+        if maximum_wait_seconds is None:
+            maximum_wait_seconds = TRACE_ASSERTION_DEADLINE_SECONDS
+        if poll_seconds <= 0 or maximum_wait_seconds <= 0:
+            raise ContractError("Telemetry identity timing policy is invalid")
+        deadline = self._monotonic() + maximum_wait_seconds
         next_progress = self._monotonic() + _TRACE_ASSERTION_PROGRESS_SECONDS
         client = self._logs_client()
         exact_since: float | None = None
@@ -1363,13 +1384,13 @@ union traces, dependencies, requests
                 return identity_results
             if now >= next_progress:
                 elapsed = int(
-                    TRACE_ASSERTION_DEADLINE_SECONDS - max(deadline - now, 0)
+                    maximum_wait_seconds - max(deadline - now, 0)
                 )
                 self.report_progress(
                     f"Exact validation telemetry identity is stabilizing ({elapsed}s)"
                 )
                 next_progress = now + _TRACE_ASSERTION_PROGRESS_SECONDS
-            self._sleep(min(TRACE_ASSERTION_POLL_SECONDS, deadline - now))
+            self._sleep(min(poll_seconds, deadline - now))
 
     def start_insights_run(
         self,
@@ -1864,6 +1885,8 @@ union withsource=telemetry_type traces, dependencies, requests
         requests: list[dict[str, Any]],
         stabilization_seconds: int,
         on_first_pass: Callable[[], None],
+        poll_seconds: int | None = None,
+        maximum_wait_seconds: int | None = None,
         on_stable: Callable[[dict[str, Any]], None] | None = None,
         on_stable_output_messages: (
             Callable[[tuple[tuple[bool, bool], ...]], None] | None
@@ -1871,10 +1894,22 @@ union withsource=telemetry_type traces, dependencies, requests
         on_stable_response_anchors: (
             Callable[[tuple[str, ...]], None] | None
         ) = None,
+        on_stable_semantic_assertions: (
+            Callable[[tuple[tuple[SemanticAssertionEvidence, ...], ...]], None]
+            | None
+        ) = None,
         allow_shared_operations: bool = False,
     ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
-        if stabilization_seconds <= 0:
-            raise ContractError("Hosted evidence stabilization interval must be positive")
+        if poll_seconds is None:
+            poll_seconds = TRACE_ASSERTION_POLL_SECONDS
+        if maximum_wait_seconds is None:
+            maximum_wait_seconds = TRACE_ASSERTION_DEADLINE_SECONDS
+        if (
+            stabilization_seconds <= 0
+            or poll_seconds <= 0
+            or maximum_wait_seconds < stabilization_seconds
+        ):
+            raise ContractError("Hosted evidence timing policy is invalid")
         if len(requests) != len(response_references):
             raise ContractError("Hosted evidence traffic coverage is inconsistent")
         _validate_response_references(response_references, len(requests))
@@ -1884,7 +1919,7 @@ union withsource=telemetry_type traces, dependencies, requests
             allow_shared=allow_shared_operations,
         )
         fixtures = tuple(_normalize_fixture(item) for item in requests)
-        deadline = self._monotonic() + TRACE_ASSERTION_DEADLINE_SECONDS
+        deadline = self._monotonic() + maximum_wait_seconds
         next_progress = self._monotonic() + _TRACE_ASSERTION_PROGRESS_SECONDS
         last_results: tuple[tuple[TraceAssertionEvidence, ...], ...] | None = None
         stable_signature: tuple[
@@ -1898,6 +1933,9 @@ union withsource=telemetry_type traces, dependencies, requests
         correlated: tuple[list[dict[str, Any]], ...] | None = None
         response_anchors: tuple[str, ...] | None = None
         output_messages_states: tuple[tuple[bool, bool], ...] | None = None
+        semantic_results: (
+            tuple[tuple[SemanticAssertionEvidence, ...], ...] | None
+        ) = None
         while True:
             rows = self._trace_rows(
                 operation_ids,
@@ -1929,9 +1967,22 @@ union withsource=telemetry_type traces, dependencies, requests
                 and correlated is not None
                 else None
             )
+            semantic_results = (
+                _semantic_assertion_results_from_correlated_rows(
+                    correlated,
+                    response_references,
+                    fixtures,
+                )
+                if on_stable_semantic_assertions is not None
+                and correlated is not None
+                else None
+            )
             if correlated is not None and (
                 on_stable_output_messages is None
                 or output_messages_states is not None
+            ) and (
+                on_stable_semantic_assertions is None
+                or semantic_results is not None
             ):
                 if not first_mapping_observed:
                     first_mapping_observed = True
@@ -1960,8 +2011,7 @@ union withsource=telemetry_type traces, dependencies, requests
                     stable_signature = signature
                     stable_since = now
                 if (
-                    passing
-                    and stable_since is not None
+                    stable_since is not None
                     and now - stable_since >= stabilization_seconds
                 ):
                     if on_stable_output_messages is not None:
@@ -1969,6 +2019,9 @@ union withsource=telemetry_type traces, dependencies, requests
                     if on_stable_response_anchors is not None:
                         assert response_anchors is not None
                         on_stable_response_anchors(response_anchors)
+                    if on_stable_semantic_assertions is not None:
+                        assert semantic_results is not None
+                        on_stable_semantic_assertions(semantic_results)
                     if on_stable is not None:
                         on_stable(
                             _trace_behavior_summary(
@@ -1989,7 +2042,7 @@ union withsource=telemetry_type traces, dependencies, requests
                 break
             if now >= next_progress:
                 elapsed = int(
-                    TRACE_ASSERTION_DEADLINE_SECONDS - max(deadline - now, 0)
+                    maximum_wait_seconds - max(deadline - now, 0)
                 )
                 state = (
                     "passing"
@@ -2002,7 +2055,7 @@ union withsource=telemetry_type traces, dependencies, requests
                     f"Hosted {state} evidence is stabilizing ({elapsed}s)"
                 )
                 next_progress = now + _TRACE_ASSERTION_PROGRESS_SECONDS
-            self._sleep(min(TRACE_ASSERTION_POLL_SECONDS, deadline - now))
+            self._sleep(min(poll_seconds, deadline - now))
         if (
             correlated is not None
             and last_results is not None
@@ -2026,6 +2079,12 @@ union withsource=telemetry_type traces, dependencies, requests
                         ]
                     )
                 )
+            if on_stable_semantic_assertions is not None:
+                if semantic_results is None:
+                    raise ContractError(
+                        "Stable trace evidence is missing semantic assertion state"
+                    )
+                on_stable_semantic_assertions(semantic_results)
             return last_results
         if correlated is not None:
             raise TraceAssertionActivationError(
@@ -2056,9 +2115,10 @@ union withsource=telemetry_type traces, dependencies, requests
             raise ContractError("Trace behavior evidence has invalid operation identities")
         values = ", ".join(f'"{value}"' for value in operation_ids)
         references = ", ".join(
-            f'"{value.replace(chr(34), chr(92) + chr(34))}"'
-            for value in response_references
+            _kql_string_literal(value) for value in response_references
         ) or '""'
+        agent_literal = _kql_string_literal(agent_name)
+        version_literal = _kql_string_literal(foundry_version)
         scoped_operations = ""
         operation_filter = f"| where operation_Id in ({values})"
         timespan: timedelta | tuple[datetime, datetime] = timedelta(days=90)
@@ -2107,8 +2167,8 @@ let scoped_trace_operations =
     | where (
         operation_Id in ({values})
         or array_length(matched_references) > 0)
-      and set_has_element(agent_names, "{agent_name}")
-      and set_has_element(agent_versions, "{foundry_version}")
+      and set_has_element(agent_names, {agent_literal})
+      and set_has_element(agent_versions, {version_literal})
     | project operation_Id;
 """
             operation_filter = (
@@ -2708,6 +2768,66 @@ def _canonical_output_messages_state_from_correlated_rows(
     )
 
 
+def _semantic_assertion_results_from_correlated_rows(
+    correlated: tuple[list[dict[str, Any]], ...],
+    response_references: tuple[str, ...],
+    fixtures: tuple[dict[str, Any], ...],
+) -> tuple[tuple[SemanticAssertionEvidence, ...], ...] | None:
+    results = []
+    for rows, response_reference, fixture in zip(
+        correlated,
+        response_references,
+        fixtures,
+        strict=True,
+    ):
+        anchors = [
+            row
+            for row in rows
+            if _is_invoke_agent_span(row)
+            and row.get("matched_reference") == response_reference
+        ]
+        if len(anchors) != 1:
+            return None
+        output = _json_trace_value(anchors[0].get("messages", ["", ""])[1])
+        if not isinstance(output, list):
+            return None
+        _, _, assertions = _semantic_assertion_result(
+            _telemetry_output_response(output),
+            fixture,
+        )
+        results.append(assertions)
+    return tuple(results)
+
+
+def _telemetry_output_response(output: list[Any]) -> dict[str, Any]:
+    texts: list[str] = []
+    for item in output:
+        if not isinstance(item, Mapping):
+            continue
+        content = item.get("content")
+        if isinstance(content, str) and content.strip():
+            texts.append(content.strip())
+        values = content if isinstance(content, list) else item.get("parts", [])
+        if not isinstance(values, list):
+            continue
+        for part in values:
+            if not isinstance(part, Mapping):
+                continue
+            text = part.get("text")
+            if not isinstance(text, str):
+                text = part.get("content")
+            if isinstance(text, str) and text.strip():
+                texts.append(text.strip())
+    return {
+        "output": [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": "\n".join(texts)}],
+            }
+        ]
+    }
+
+
 def _canonical_output_messages_expectation_passes(
     state: tuple[bool, bool],
     *,
@@ -3261,6 +3381,10 @@ def _json_trace_value(value: Any) -> Any:
         except json.JSONDecodeError:
             break
     return parsed
+
+
+def _kql_string_literal(value: str) -> str:
+    return json.dumps(value, ensure_ascii=True)
 
 
 def _nested_value(value: Any, path: str) -> Any:

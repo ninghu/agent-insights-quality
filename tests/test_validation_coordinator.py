@@ -14,6 +14,7 @@ from agent_insights_quality.validation_coordinator import (
     _assignments,
     _desired_state,
     _forced_invocation_authority_ids,
+    _merge_authority_result_selection,
     _runner,
     _verifier,
 )
@@ -88,6 +89,37 @@ def test_complete_migrated_receipts_force_zero_invoke_shards() -> None:
         quota_plan_digest="sha256:" + ("a" * 64),
     )
     assert 1 <= len(verify) <= 8
+
+
+def test_next_generation_retries_only_failed_authority_result() -> None:
+    authorities = authority_specs(*load_catalogs())[:2]
+    passed = authorities[0].authority_id
+    failed = authorities[1].authority_id
+    selected, reused = _merge_authority_result_selection(
+        authorities=authorities,
+        selected=[],
+        reused=[],
+        authority_results={
+            passed: {
+                "authority_id": passed,
+                "path": "synthetic/pass.json",
+                "authority_result_digest": "sha256:" + ("1" * 64),
+                "authority_evidence_digest": "sha256:" + ("2" * 64),
+            },
+            failed: None,
+        },
+        forced=set(),
+    )
+    assert selected == [failed]
+    assert [item["authority_id"] for item in reused] == [passed]
+
+
+def test_target_batched_verification_has_77_stability_windows() -> None:
+    authorities = authority_specs(*load_catalogs())
+    assert sum(
+        1 if item.authority_kind == "baseline" else 2
+        for item in authorities
+    ) == 77
 
 
 def test_desired_state_assigns_only_content_without_exact_reuse(monkeypatch) -> None:
@@ -195,7 +227,11 @@ def test_shard_runner_skips_global_traffic_ledger_but_live_runtime_uses_it(
         "profile": profile,
         "operator": SimpleNamespace(token_provider=lambda _scope: "token"),
         "authorities": [],
-        "policy": SimpleNamespace(trace_hydration_stabilization_seconds=1),
+        "policy": SimpleNamespace(
+            trace_hydration_stabilization_seconds=1,
+            trace_hydration_poll_seconds=1,
+            trace_hydration_maximum_wait_seconds=2,
+        ),
     }
     traffic = tmp_path / "traffic.json"
     traffic.write_text(
@@ -248,7 +284,9 @@ def test_verify_primitive_has_no_endpoint_or_session_create_capability() -> None
             "operator": SimpleNamespace(token_provider=lambda _scope: "token"),
             "authorities": [],
             "policy": SimpleNamespace(
-                trace_hydration_stabilization_seconds=1
+                trace_hydration_stabilization_seconds=1,
+                trace_hydration_poll_seconds=1,
+                trace_hydration_maximum_wait_seconds=2,
             ),
         }
     )

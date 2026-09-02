@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 from types import SimpleNamespace
 
 import pytest
@@ -17,7 +16,6 @@ from agent_insights_quality.validation_runtime import DeployedRuntime
 from agent_insights_quality.validation_shards import (
     ValidationDeploymentShardStore,
     ValidationShardStore,
-    compose_shard_authorities,
     import_shard_resources,
     shard_root,
     validate_shard_assignment,
@@ -95,41 +93,6 @@ def test_shard_runtime_namespaces_do_not_collide(monkeypatch, tmp_path) -> None:
         shard_id=2,
     )
     assert first != second
-
-
-def test_compose_requires_exact_nonoverlapping_selected_shards() -> None:
-    authorities = _authorities()[:12]
-    groups = [
-        [item.authority_id for item in authorities][index::8]
-        for index in range(8)
-    ]
-    packages = []
-    for shard_id, group in enumerate(groups, start=1):
-        package = {
-            "shard_id": shard_id,
-            "authority_ids": group,
-            "binding": {
-                "repository": "synthetic/example",
-                "pr_number": 63,
-                "commit_sha": "a" * 40,
-                "run_id": "validation-0123456789ab",
-                "validation_digest": "sha256:" + ("b" * 64),
-                "execution_matrix_digest": "sha256:" + ("c" * 64),
-                "runtime_topology_digest": "sha256:" + ("d" * 64),
-                "project_id": "synthetic-project",
-                "authorities": [],
-            },
-            "authorities": [
-                {"authority_id": authority_id} for authority_id in group
-            ],
-        }
-        packages.append(package)
-    assert len(compose_shard_authorities(packages, authorities)) == 12
-    duplicate = copy.deepcopy(packages)
-    duplicate[1]["authority_ids"][0] = duplicate[0]["authority_ids"][0]
-    duplicate[1]["authorities"][0] = duplicate[0]["authorities"][0]
-    with pytest.raises(ContractError, match="bindings are inconsistent"):
-        compose_shard_authorities(duplicate, authorities)
 
 
 def test_invocation_store_resumes_retained_partial_ledger(

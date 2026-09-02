@@ -27,6 +27,9 @@ def test_validation_policy_freezes_local_inventory_and_limits() -> None:
     assert policy.trace_hydration_poll_seconds == 15
     assert policy.trace_hydration_stabilization_seconds == 180
     assert policy.trace_hydration_maximum_wait_seconds == 900
+    assert policy.verification_maximum_active_subsessions == 8
+    assert policy.verification_authorities_per_assignment == 1
+    assert policy.verification_response_bound_batch_scope == "target"
 
 
 def test_validation_policy_rejects_threshold_or_telemetry_drift(tmp_path) -> None:

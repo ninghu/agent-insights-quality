@@ -11,13 +11,13 @@
     "deployment", "desired_state_reference", "deployment_assignments",
     "validation_authority_ids", "reused_authorities",
     "invocation_authority_ids", "reused_invocations",
-    "invocation_shard_assignments", "shard_assignments",
+    "invocation_shard_assignments", "verification_authority_assignments",
     "resources", "event_reference", "evidence_reference",
     "supersedes", "started_at", "last_activity_at", "absolute_expires_at",
     "failure", "previous_journal_digest", "journal_digest"
   ],
   "properties": {
-    "schema_version": {"const": "2.0.0"},
+    "schema_version": {"const": "3.0.0"},
     "kind": {"const": "test-agent-validation-lifecycle"},
     "snapshot_type": {"enum": ["active", "event"]},
     "run_id": {"$ref": "#/$defs/runId"},
@@ -65,9 +65,9 @@
       "type": "array", "maxItems": 8, "uniqueItems": true,
       "items": {"$ref": "#/$defs/shardAssignment"}
     },
-    "shard_assignments": {
-      "type": "array", "maxItems": 8, "uniqueItems": true,
-      "items": {"$ref": "#/$defs/shardAssignment"}
+    "verification_authority_assignments": {
+      "type": "array", "maxItems": 41, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/authorityAssignment"}
     },
     "resources": {
       "type": "array", "uniqueItems": true,
@@ -408,15 +408,36 @@
       }
     },
     "reusedAuthority": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["authority_id", "path", "evidence_digest", "authority_evidence_digest"],
-      "properties": {
-        "authority_id": {"$ref": "#/$defs/authorityId"},
-        "path": {"type": "string", "minLength": 1, "maxLength": 1024},
-        "evidence_digest": {"$ref": "#/$defs/hash"},
-        "authority_evidence_digest": {"$ref": "#/$defs/hash"}
-      }
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authority_id", "path", "evidence_digest",
+            "authority_evidence_digest"
+          ],
+          "properties": {
+            "authority_id": {"$ref": "#/$defs/authorityId"},
+            "path": {"type": "string", "minLength": 1, "maxLength": 1024},
+            "evidence_digest": {"$ref": "#/$defs/hash"},
+            "authority_evidence_digest": {"$ref": "#/$defs/hash"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authority_id", "path", "authority_result_digest",
+            "authority_evidence_digest"
+          ],
+          "properties": {
+            "authority_id": {"$ref": "#/$defs/authorityId"},
+            "path": {"type": "string", "minLength": 1, "maxLength": 1024},
+            "authority_result_digest": {"$ref": "#/$defs/hash"},
+            "authority_evidence_digest": {"$ref": "#/$defs/hash"}
+          }
+        }
+      ]
     },
     "reusedInvocation": {
       "type": "object",
@@ -442,6 +463,21 @@
           "items": {"$ref": "#/$defs/authorityId"}
         },
         "quota_plan_digest": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "authorityAssignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority_id", "quota_plan_digest", "verifier_commit_sha",
+        "verifier_digest", "assignment_digest"
+      ],
+      "properties": {
+        "authority_id": {"$ref": "#/$defs/authorityId"},
+        "quota_plan_digest": {"$ref": "#/$defs/hash"},
+        "verifier_commit_sha": {"$ref": "#/$defs/gitSha"},
+        "verifier_digest": {"$ref": "#/$defs/hash"},
+        "assignment_digest": {"$ref": "#/$defs/hash"}
       }
     },
     "resource": {

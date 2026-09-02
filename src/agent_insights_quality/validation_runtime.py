@@ -106,6 +106,18 @@ class ScenarioAttemptRunner(Protocol):
         scheduler: ValidationScheduler,
     ) -> dict[str, Any]: ...
 
+    def verify_attempts(
+        self,
+        *,
+        target: DeployedRuntime,
+        executing_authority_id: str,
+        conversation_role: str,
+        scenario: Mapping[str, Any],
+        attempts: list[Mapping[str, Any]],
+        invocations: list[Mapping[str, Any]],
+        scheduler: ValidationScheduler,
+    ) -> list[dict[str, Any]]: ...
+
 
 def opaque_run_suffix(
     *,
@@ -700,32 +712,29 @@ def _verify_invoked_authority(
             )
         ):
             raise ContractError("Validation shard invocation attempt coverage is invalid")
-        issue_attempts = [
-            runner.verify(
+        verify_attempts = getattr(runner, "verify_attempts", None)
+        issue_attempts = (
+            verify_attempts(
                 target=deployed[authority.authority_id],
                 executing_authority_id=authority.authority_id,
                 conversation_role=(
                     "baseline" if authority.authority_kind == "baseline" else "issue"
                 ),
                 scenario=scenario,
-                attempt=attempt,
-                invocation=persisted_invocation,
+                attempts=list(attempts),
+                invocations=list(issue_invocations),
                 scheduler=scheduler,
             )
-            for attempt, persisted_invocation in zip(
-                attempts,
-                issue_invocations,
-                strict=True,
-            )
-        ]
-        paired_attempts = (
-            []
-            if authority.authority_kind == "baseline"
+            if callable(verify_attempts)
             else [
                 runner.verify(
-                    target=deployed[paired_v0_id],
+                    target=deployed[authority.authority_id],
                     executing_authority_id=authority.authority_id,
-                    conversation_role="paired_v0",
+                    conversation_role=(
+                        "baseline"
+                        if authority.authority_kind == "baseline"
+                        else "issue"
+                    ),
                     scenario=scenario,
                     attempt=attempt,
                     invocation=persisted_invocation,
@@ -733,30 +742,84 @@ def _verify_invoked_authority(
                 )
                 for attempt, persisted_invocation in zip(
                     attempts,
-                    v0_invocations,
+                    issue_invocations,
                     strict=True,
                 )
             ]
         )
+        paired_attempts = (
+            []
+            if authority.authority_kind == "baseline"
+            else (
+                verify_attempts(
+                    target=deployed[paired_v0_id],
+                    executing_authority_id=authority.authority_id,
+                    conversation_role="paired_v0",
+                    scenario=scenario,
+                    attempts=list(attempts),
+                    invocations=list(v0_invocations),
+                    scheduler=scheduler,
+                )
+                if callable(verify_attempts)
+                else [
+                    runner.verify(
+                        target=deployed[paired_v0_id],
+                        executing_authority_id=authority.authority_id,
+                        conversation_role="paired_v0",
+                        scenario=scenario,
+                        attempt=attempt,
+                        invocation=persisted_invocation,
+                        scheduler=scheduler,
+                    )
+                    for attempt, persisted_invocation in zip(
+                        attempts,
+                        v0_invocations,
+                        strict=True,
+                    )
+                ]
+            )
+        )
         n = int(scenario["n"])
+        k = int(scenario["k"])
         complete_count = sum(item["complete"] is True for item in issue_attempts)
+        paired_complete_count = sum(
+            item["complete"] is True for item in paired_attempts
+        )
+        observation_count = sum(
+            item.get("observation", item["complete"]) is True
+            for item in issue_attempts
+        )
+        paired_observation_count = sum(
+            item.get("observation", False) is True for item in paired_attempts
+        )
+        evidence_complete = complete_count == n and (
+            authority.authority_kind == "baseline"
+            or paired_complete_count == n
+        )
         scenarios.append(
             {
                 "scenario_id": scenario["id"],
                 "execution_digest": scenario["execution_digest"],
                 "validation_mode": scenario["validation_mode"],
                 "n": n,
+                "k": k,
                 "complete_count": complete_count,
-                "pass": complete_count == n
+                "paired_complete_count": paired_complete_count,
+                "observation_count": observation_count,
+                "paired_observation_count": paired_observation_count,
+                "evidence_complete": evidence_complete,
+                "pass": evidence_complete
+                and observation_count >= k
                 and (
                     authority.authority_kind == "baseline"
-                    or sum(item["complete"] is True for item in paired_attempts) == n
+                    or paired_observation_count == 0
                 ),
                 "issue_attempts": issue_attempts,
                 "v0_attempts": paired_attempts,
             }
         )
     n = sum(item["n"] for item in scenarios)
+    k = sum(item["k"] for item in scenarios)
     result = {
         "authority_id": authority.authority_id,
         "authority_kind": authority.authority_kind,
@@ -815,7 +878,20 @@ def _verify_invoked_authority(
         "execution_digest": authority.execution_digest,
         "validated_commit_sha": validated_commit_sha,
         "n": n,
+        "k": k,
         "complete_count": sum(item["complete_count"] for item in scenarios),
+        "paired_complete_count": sum(
+            item["paired_complete_count"] for item in scenarios
+        ),
+        "observation_count": sum(
+            item["observation_count"] for item in scenarios
+        ),
+        "paired_observation_count": sum(
+            item["paired_observation_count"] for item in scenarios
+        ),
+        "evidence_complete": all(
+            item["evidence_complete"] for item in scenarios
+        ),
         "pass": all(item["pass"] for item in scenarios),
         "scenarios": scenarios,
         "authority_evidence_digest": "",

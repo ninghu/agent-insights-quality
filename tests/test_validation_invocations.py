@@ -38,7 +38,6 @@ from agent_insights_quality.validation_manifest import (
 )
 from agent_insights_quality.validation_policy import load_validation_policy
 from agent_insights_quality.validation_runtime import DeployedRuntime
-from agent_insights_quality.validation_shards import ValidationShardStore
 
 HEAD = "a" * 40
 NEXT_HEAD = "b" * 40
@@ -533,30 +532,6 @@ def test_reused_invocation_sends_no_traffic_and_binds_current_verifier(
     assert load_invocation_receipt(reference, root=tmp_path)[
         "origin_commit_sha"
     ] == HEAD
-
-    store = ValidationShardStore(
-        prepared=current,
-        shard_id=1,
-        authority_ids=[issue.authority_id],
-        fence=lambda: None,
-    )
-    package = store.write_package(
-        authorities=[
-            {
-                "authority_id": issue.authority_id,
-                "validated_commit_sha": NEXT_HEAD,
-            }
-        ],
-        invocation_receipts=reused,
-    )
-    assert package["verifier_commit_sha"] == NEXT_HEAD
-    assert package["verifier_digest"] == current["digests"][
-        "shared_validation_digest"
-    ]
-    assert package["binding"]["quota_plan_digest"] == current["digests"][
-        "quota_plan_digest"
-    ]
-
 
 def test_verifier_consumes_only_lifecycle_selected_receipt(
     monkeypatch,

@@ -109,7 +109,7 @@ from agent_insights_quality.validation_coordinator import (
     prepare_test_agent_validation,
     reconcile_test_agent_validation_deployment,
     run_test_agent_validation,
-    verify_test_agent_validation_shard,
+    verify_test_agent_validation_authority,
 )
 from agent_insights_quality.work_items import (
     fetch_quality_work_items,
@@ -229,9 +229,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     invoke_validation.add_argument("--shard-id", type=int, required=True)
     verify_validation = commands.add_parser(
-        "verify-test-agent-validation-shard"
+        "verify-test-agent-validation-authority"
     )
-    verify_validation.add_argument("--shard-id", type=int, required=True)
+    verify_validation.add_argument("--authority-id", required=True)
     commands.add_parser("compose-test-agent-validation")
     commands.add_parser("approve-test-agent-validation")
     return parser
@@ -268,9 +268,11 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             invoke_test_agent_validation_shard(shard_id=args.shard_id),
             sort_keys=True,
         )
-    if args.command == "verify-test-agent-validation-shard":
+    if args.command == "verify-test-agent-validation-authority":
         return json.dumps(
-            verify_test_agent_validation_shard(shard_id=args.shard_id),
+            verify_test_agent_validation_authority(
+                authority_id=args.authority_id
+            ),
             sort_keys=True,
         )
     if args.command == "compose-test-agent-validation":

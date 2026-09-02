@@ -175,7 +175,6 @@ class ValidationShardStore:
             shard_id=shard_id,
         )
         self.invocation_path = self.root / "invocations.json"
-        self.package_path = self.root / "package.json"
 
     def assert_active(self) -> None:
         self._fence()
@@ -227,48 +226,11 @@ class ValidationShardStore:
         value["status"] = "invoked"
         return self._write(self.invocation_path, value)
 
-    def write_package(
-        self,
-        *,
-        authorities: Sequence[Mapping[str, Any]],
-        invocation_receipts: Sequence[Mapping[str, str]],
-    ) -> dict[str, Any]:
-        authority_ids = [item["authority_id"] for item in authorities]
-        receipt_ids = [item["authority_id"] for item in invocation_receipts]
-        if (
-            authority_ids != list(self.authority_ids)
-            or receipt_ids != list(self.authority_ids)
-        ):
-            raise ContractError("Validation package receipt coverage is invalid")
-        value = self._base("test-agent-validation-shard-package")
-        value.update(
-            {
-                "verifier_commit_sha": self.binding["commit_sha"],
-                "verifier_digest": self.binding[
-                    "shared_validation_digest"
-                ],
-                "invocation_receipts": copy.deepcopy(
-                    list(invocation_receipts)
-                ),
-                "authorities": copy.deepcopy(list(authorities)),
-            }
-        )
-        return self._write(self.package_path, value)
-
     def read_invocations(self) -> dict[str, Any]:
         return self._read(
             self.invocation_path,
             "test-agent-validation-shard-invocations",
         )
-
-    def read_package(self) -> dict[str, Any]:
-        return self._read(
-            self.package_path,
-            "test-agent-validation-shard-package",
-        )
-
-    def package_exists(self) -> bool:
-        return self.package_path.is_file()
 
     def _base(self, kind: str) -> dict[str, Any]:
         return {
@@ -483,54 +445,6 @@ def _active_fence(
             raise ContractError("Stale validation worker is fenced")
 
     return assert_active
-
-
-def compose_shard_authorities(
-    packages: Sequence[Mapping[str, Any]],
-    authorities: Sequence[AuthoritySpec],
-) -> list[dict[str, Any]]:
-    if (
-        len(packages) != min(SHARD_COUNT, len(authorities))
-        or {item.get("shard_id") for item in packages}
-        != set(range(1, len(packages) + 1))
-    ):
-        raise ContractError("Validation composition requires exact selected shards")
-    expected = {item.authority_id for item in authorities}
-    assigned = [
-        authority_id
-        for package in packages
-        for authority_id in package["authority_ids"]
-    ]
-    evidence = [
-        copy.deepcopy(item)
-        for package in packages
-        for item in package["authorities"]
-    ]
-    if (
-        len(assigned) != len(set(assigned))
-        or set(assigned) != expected
-        or [item["authority_id"] for item in evidence]
-        != assigned
-        or any(
-            package["binding"] != packages[0]["binding"]
-            and {
-                key: package["binding"][key]
-                for key in package["binding"]
-                if key != "authorities"
-            }
-            != {
-                key: packages[0]["binding"][key]
-                for key in packages[0]["binding"]
-                if key != "authorities"
-            }
-            for package in packages[1:]
-        )
-    ):
-        raise ContractError("Validation shard composition bindings are inconsistent")
-    by_id = {item["authority_id"]: item for item in evidence}
-    if len(by_id) != len(evidence):
-        raise ContractError("Validation shard evidence coverage collides")
-    return [by_id[item.authority_id] for item in authorities]
 
 
 def import_shard_resources(

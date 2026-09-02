@@ -21,6 +21,16 @@ from agent_insights_quality.util import (
     read_json,
 )
 from agent_insights_quality.validation_credentials import local_azure_operator
+from agent_insights_quality.validation_assignments import verification_assignment
+from agent_insights_quality.validation_authority_results import (
+    current_authority_verification_results,
+    load_authority_verification_result,
+    load_bound_authority_verification_result,
+    reusable_authority_verification_results,
+    sanitize_verification_error,
+    verification_query_diagnostics,
+    write_authority_verification_result,
+)
 from agent_insights_quality.validation_cycle import (
     ValidationCycleController,
     initial_lifecycle,
@@ -98,7 +108,6 @@ from agent_insights_quality.validation_shards import (
     ValidationDeploymentShardStore,
     ValidationShardStore,
     authority_lock,
-    compose_shard_authorities,
     import_shard_resources,
     shard_lock,
     validate_shard_assignment,
@@ -278,6 +287,14 @@ def run_test_agent_validation() -> dict[str, Any]:
         evidence = read_json(
             validation_runtime_root() / active["evidence_reference"]["path"]
         )
+        failed = next(
+            (
+                item
+                for item in evidence["authorities"]
+                if item["pass"] is not True
+            ),
+            None,
+        )
         return {
             "status": active["state"].casefold(),
             "result": evidence["result"],
@@ -287,6 +304,9 @@ def run_test_agent_validation() -> dict[str, Any]:
             ),
             "reused_authority_count": len(active["reused_authorities"]),
             "evidence_digest": evidence["evidence_digest"],
+            "first_failed_authority_id": (
+                failed["authority_id"] if failed is not None else None
+            ),
         }
     if active["state"] == "CREATING":
         return {
@@ -304,22 +324,86 @@ def run_test_agent_validation() -> dict[str, Any]:
             ],
         }
     if active["state"] == "VALIDATING":
+        incomplete_invoke_shards = _incomplete_invocation_shards(active)
+        if incomplete_invoke_shards:
+            return {
+                "status": "invocation_pending",
+                "maximum_active_subsessions": 8,
+                "invoke_shards": incomplete_invoke_shards,
+                "next_commands": [
+                    "python -m agent_insights_quality "
+                    f"invoke-test-agent-validation-shard --shard-id "
+                    f"{item['shard_id']}"
+                    for item in incomplete_invoke_shards
+                ],
+            }
+        references = current_authority_verification_results(
+            prepared=active,
+            authority_ids=active["validation_authority_ids"],
+        )
+        completed = {
+            authority_id: load_authority_verification_result(reference)
+            for authority_id, reference in references.items()
+        }
+        incomplete = [
+            completed[authority_id]
+            for authority_id in active["validation_authority_ids"]
+            if authority_id in completed
+            and completed[authority_id]["outcome"] == "INCOMPLETE"
+        ]
+        if incomplete:
+            first = incomplete[0]
+            return {
+                "status": "verification_incomplete",
+                "maximum_active_subsessions": 8,
+                "completed_authority_count": len(completed),
+                "pending_authority_count": (
+                    len(active["validation_authority_ids"]) - len(completed)
+                ),
+                "first_failed_authority_id": first["authority_id"],
+                "first_failed_outcome": first["outcome"],
+                "query_stage": first["query_stage"],
+                "error_code": first["error_code"],
+                "query_diagnostics": first["query_diagnostics"],
+                "next_commands": [
+                    "python -m agent_insights_quality prepare-test-agent-validation"
+                ],
+            }
+        pending = [
+            item
+            for item in active["verification_authority_assignments"]
+            if item["authority_id"] not in completed
+        ]
+        if pending:
+            return {
+                "status": "verification_pending",
+                "maximum_active_subsessions": 8,
+                "completed_authority_count": len(completed),
+                "pending_authority_count": len(pending),
+                "verification_assignments": pending,
+                "next_commands": [
+                    "python -m agent_insights_quality "
+                    "verify-test-agent-validation-authority --authority-id "
+                    f"{item['authority_id']}"
+                    for item in pending[:8]
+                ],
+            }
+        failed = [
+            completed[authority_id]
+            for authority_id in active["validation_authority_ids"]
+            if completed[authority_id]["outcome"] == "FAIL"
+        ]
         return {
-            "status": "validation_pending",
+            "status": "composition_pending",
             "maximum_active_subsessions": 8,
-            "invoke_shards": active["invocation_shard_assignments"],
-            "verify_shards": active["shard_assignments"],
+            "completed_authority_count": len(completed),
+            "first_failed_authority_id": (
+                failed[0]["authority_id"] if failed else None
+            ),
+            "first_failed_outcome": failed[0]["outcome"] if failed else None,
+            "query_stage": None,
+            "error_code": None,
             "next_commands": [
-                "python -m agent_insights_quality "
-                f"invoke-test-agent-validation-shard --shard-id {item['shard_id']}"
-                for item in active["invocation_shard_assignments"]
-            ]
-            + [
-                "python -m agent_insights_quality "
-                f"verify-test-agent-validation-shard --shard-id {item['shard_id']}"
-                for item in active["shard_assignments"]
-            ]
-            + [
                 "python -m agent_insights_quality compose-test-agent-validation"
             ],
         }
@@ -499,6 +583,19 @@ def reconcile_test_agent_validation_deployment() -> dict[str, Any]:
                 desired["forced_validation_authority_ids"]
             ),
         )
+        authority_results = reusable_authority_verification_results(
+            authorities=authorities,
+            runtime_topology=controller.active.value["runtime_topology"],
+            prepared=controller.active.value,
+            plan=contexts["plan"],
+        )
+        selected, reused = _merge_authority_result_selection(
+            authorities=authorities,
+            selected=selected,
+            reused=reused,
+            authority_results=authority_results,
+            forced=set(desired["forced_validation_authority_ids"]),
+        )
         invocation_selected, reused_invocations = (
             select_reusable_invocation_receipts(
                 authorities=authorities,
@@ -605,102 +702,189 @@ def invoke_test_agent_validation_shard(
         }
 
 
-def verify_test_agent_validation_shard(
+def verify_test_agent_validation_authority(
     *,
-    shard_id: int,
+    authority_id: str,
 ) -> dict[str, Any]:
     active = _active_for_state("VALIDATING")
-    authority_ids = _assignment_authority_ids(
-        active,
-        field="shard_assignments",
-        shard_id=shard_id,
+    expected_assignment = next(
+        (
+            item
+            for item in active["verification_authority_assignments"]
+            if item["authority_id"] == authority_id
+        ),
+        None,
     )
-    context = _load_prepared(
-        shard_id,
-        assignment_field="shard_assignments",
-    )
-    run_id = context["prepared"]["run_id"]
-    with shard_lock(
-        repository=context["git"].repository,
-        pr_number=context["git"].pr_number,
-        run_id=run_id,
-        shard_id=shard_id,
+    if (
+        expected_assignment is None
+        or expected_assignment != verification_assignment(active, authority_id)
     ):
-        store = context["store"]
-        if store.package_exists():
-            package = store.read_package()
-            return {
-                "status": "verified",
-                "shard_id": shard_id,
-                "authority_count": len(package["authorities"]),
-                "failed_authority_count": sum(
-                    item["pass"] is not True
-                    for item in package["authorities"]
-                ),
-                "artifact_digest": package["artifact_digest"],
-            }
+        raise ContractError(
+            "Validation authority is not assigned in the active generation"
+        )
+    if _incomplete_invocation_shards(active):
+        raise ContractError("Validation invocation barrier is incomplete")
+    context = _load_prepared()
+    run_id = context["prepared"]["run_id"]
+    with authority_lock(
+        run_id=run_id,
+        authority_id=authority_id,
+    ):
+        existing = current_authority_verification_results(
+            prepared=context["prepared"],
+            authority_ids=[authority_id],
+        ).get(authority_id)
+        authority_by_id = {
+            item.authority_id: item for item in context["authorities"]
+        }
+        runtime_by_id = {
+            item["authority_id"]: item
+            for item in context["prepared"]["runtime_topology"]["agents"]
+        }
+        authority = authority_by_id[authority_id]
+        paired_id = context["paired_baselines"][authority.canonical_agent]
+        if existing is not None:
+            result = load_bound_authority_verification_result(
+                existing,
+                authority=authority,
+                paired_v0_authority=authority_by_id[paired_id],
+                runtime=runtime_by_id[authority_id],
+                paired_v0_runtime=runtime_by_id[paired_id],
+                prepared=context["prepared"],
+                plan=context["plan"],
+                require_current_generation=True,
+            )
+            return _authority_verification_result(result)
         references, receipts = _invocation_receipts_for_verification(
             context,
-            authority_ids,
+            [authority_id],
         )
-        authorities = verify_validation_shard(
-            context["assigned"],
-            context["deployed"],
-            [item["invocation"] for item in receipts],
-            runner=_verifier(context),
-            scheduler=context["scheduler"],
-            model_contract=context["agents"]["models"]["test_agents"],
-            validated_commit_sha=context["git"].commit_sha,
-            paired_baselines=context["paired_baselines"],
+        started_at = datetime.now(UTC)
+        try:
+            evidence = verify_validation_shard(
+                [authority],
+                context["deployed"],
+                [receipts[0]["invocation"]],
+                runner=_verifier(context),
+                scheduler=context["scheduler"],
+                model_contract=context["agents"]["models"]["test_agents"],
+                validated_commit_sha=context["git"].commit_sha,
+                paired_baselines=context["paired_baselines"],
+            )[0]
+        except (ContractError, OSError, RuntimeError) as error:
+            query_stage, error_code = sanitize_verification_error(error)
+            query_diagnostics = verification_query_diagnostics(error)
+            reference = write_authority_verification_result(
+                prepared=context["prepared"],
+                plan=context["plan"],
+                authority=authority,
+                runtime=runtime_by_id[authority_id],
+                invocation_reference=references[0],
+                authority_evidence=None,
+                outcome="INCOMPLETE",
+                started_at=started_at,
+                completed_at=datetime.now(UTC),
+                query_stage=query_stage,
+                error_code=error_code,
+                query_diagnostics=query_diagnostics,
+                fence=lambda: _assert_active_generation(context["prepared"]),
+            )
+        else:
+            evidence_complete = evidence["evidence_complete"] is True
+            outcome = (
+                "PASS"
+                if evidence_complete and evidence["pass"]
+                else "FAIL"
+                if evidence_complete
+                else "INCOMPLETE"
+            )
+            query_stage = None if evidence_complete else "authority_assertion"
+            error_code = (
+                None
+                if evidence_complete
+                else _first_authority_evidence_error(evidence)
+            )
+            reference = write_authority_verification_result(
+                prepared=context["prepared"],
+                plan=context["plan"],
+                authority=authority,
+                runtime=runtime_by_id[authority_id],
+                invocation_reference=references[0],
+                authority_evidence=evidence,
+                outcome=outcome,
+                started_at=started_at,
+                completed_at=datetime.now(UTC),
+                query_stage=query_stage,
+                error_code=error_code,
+                query_diagnostics=None,
+                fence=lambda: _assert_active_generation(context["prepared"]),
+            )
+        return _authority_verification_result(
+            load_authority_verification_result(reference)
         )
-        package = store.write_package(
-            authorities=authorities,
-            invocation_receipts=references,
-        )
-        return {
-            "status": "verified",
-            "shard_id": shard_id,
-            "authority_count": len(authorities),
-            "failed_authority_count": sum(
-                item["pass"] is not True for item in authorities
-            ),
-            "artifact_digest": package["artifact_digest"],
-        }
 
 
 def compose_test_agent_validation() -> dict[str, Any]:
     context = _load_prepared()
     prepared = context["prepared"]
-    packages = []
-    invocation_receipts: dict[str, dict[str, Any]] = {}
-    for assignment in prepared["shard_assignments"]:
-        store = ValidationShardStore(
-            prepared=prepared,
-            shard_id=assignment["shard_id"],
-            authority_ids=assignment["authority_ids"],
-        )
-        package = store.read_package()
-        if (
-            package.get("verifier_commit_sha") != prepared["commit_sha"]
-            or package.get("verifier_digest")
-            != prepared["digests"]["shared_validation_digest"]
-        ):
-            raise ContractError(
-                "Validation shard package verifier binding is stale"
-            )
-        for reference in package["invocation_receipts"]:
-            receipt = load_invocation_receipt(reference)
-            authority_id = receipt["authority_id"]
-            if authority_id in invocation_receipts:
-                raise ContractError(
-                    "Validation invocation receipt coverage collides"
-                )
-            invocation_receipts[authority_id] = receipt
-        packages.append(package)
-    fresh = compose_shard_authorities(
-        packages,
-        context["assigned"],
+    authority_by_id = {
+        item.authority_id: item for item in context["authorities"]
+    }
+    runtime_by_id = {
+        item["authority_id"]: item
+        for item in prepared["runtime_topology"]["agents"]
+    }
+    current_references = current_authority_verification_results(
+        prepared=prepared,
+        authority_ids=prepared["validation_authority_ids"],
     )
+    missing = [
+        authority_id
+        for authority_id in prepared["validation_authority_ids"]
+        if authority_id not in current_references
+    ]
+    if missing:
+        return {
+            "status": "verification_pending",
+            "completed_authority_count": len(current_references),
+            "pending_authority_count": len(missing),
+            "next_authority_id": missing[0],
+        }
+    current_results = []
+    invocation_receipts: dict[str, dict[str, Any]] = {}
+    for authority_id in prepared["validation_authority_ids"]:
+        authority = authority_by_id[authority_id]
+        paired_id = context["paired_baselines"][authority.canonical_agent]
+        result = load_bound_authority_verification_result(
+            current_references[authority_id],
+            authority=authority,
+            paired_v0_authority=authority_by_id[paired_id],
+            runtime=runtime_by_id[authority_id],
+            paired_v0_runtime=runtime_by_id[paired_id],
+            prepared=prepared,
+            plan=context["plan"],
+            require_current_generation=True,
+        )
+        if result["outcome"] == "INCOMPLETE":
+            return {
+                "status": "verification_incomplete",
+                "completed_authority_count": len(current_results),
+                "pending_authority_count": 0,
+                "first_failed_authority_id": authority_id,
+                "first_failed_outcome": result["outcome"],
+                "query_stage": result["query_stage"],
+                "error_code": result["error_code"],
+                "query_diagnostics": result["query_diagnostics"],
+            }
+        fresh_evidence = result["authority_evidence"]
+        if not isinstance(fresh_evidence, dict):
+            raise ContractError("Completed authority result lacks evidence")
+        current_results.append(fresh_evidence)
+        receipt = load_invocation_receipt(result["invocation_receipt"])
+        if receipt["authority_id"] in invocation_receipts:
+            raise ContractError("Validation invocation receipt coverage collides")
+        invocation_receipts[receipt["authority_id"]] = receipt
+    fresh = current_results
     reused = [
         load_reused_authority_evidence(reference)
         for reference in prepared["reused_authorities"]
@@ -743,7 +927,7 @@ def compose_test_agent_validation() -> dict[str, Any]:
         active = controller.active.value
         evidence = stamp_evidence_digests(
             {
-                "schema_version": "2.0.0",
+                "schema_version": "3.0.0",
                 "kind": "test-agent-validation-evidence",
                 "repository": active["repository"],
                 "pr_number": active["pr_number"],
@@ -796,13 +980,21 @@ def compose_test_agent_validation() -> dict[str, Any]:
             "validated_authority_count": len(fresh),
             "reused_authority_count": len(reused),
             "evidence_digest": evidence["evidence_digest"],
+            "first_failed_authority_id": next(
+                (
+                    item["authority_id"]
+                    for item in authority_evidence
+                    if item["pass"] is not True
+                ),
+                None,
+            ),
         }
 
 
 def _load_prepared(
     shard_id: int | None = None,
     *,
-    assignment_field: str = "shard_assignments",
+    assignment_field: str = "invocation_shard_assignments",
     partition_invoke_capacity: bool = False,
 ) -> dict[str, Any]:
     git = discover_local_git_context()
@@ -1298,7 +1490,6 @@ def _assignment_authority_ids(
     if field not in {
         "deployment_assignments",
         "invocation_shard_assignments",
-        "shard_assignments",
     }:
         raise ContractError("Validation assignment stage is invalid")
     matches = [
@@ -1497,6 +1688,10 @@ def _runner(
             "policy"
         ].trace_hydration_stabilization_seconds,
         record_resource=record_resource,
+        poll_seconds=context["policy"].trace_hydration_poll_seconds,
+        maximum_wait_seconds=context[
+            "policy"
+        ].trace_hydration_maximum_wait_seconds,
     )
 
 
@@ -1513,6 +1708,10 @@ def _verifier(context: dict[str, Any]) -> FoundryScenarioVerifier:
         stabilization_seconds=context[
             "policy"
         ].trace_hydration_stabilization_seconds,
+        poll_seconds=context["policy"].trace_hydration_poll_seconds,
+        maximum_wait_seconds=context[
+            "policy"
+        ].trace_hydration_maximum_wait_seconds,
     )
 
 
@@ -1532,11 +1731,96 @@ def _prepared_result(value: dict[str, Any]) -> dict[str, Any]:
         "reused_authority_count": len(value["reused_authorities"]),
         "deployment_shards": value["deployment_assignments"],
         "invoke_shards": value["invocation_shard_assignments"],
-        "verify_shards": value["shard_assignments"],
+        "verification_assignments": value[
+            "verification_authority_assignments"
+        ],
         "maximum_active_subsessions": 8,
         "invoke_shard_concurrency": 8,
-        "verify_shard_concurrency": 8,
+        "verification_authority_concurrency": 8,
     }
+
+
+def _incomplete_invocation_shards(
+    prepared: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    incomplete = []
+    for assignment in prepared["invocation_shard_assignments"]:
+        store = ValidationShardStore(
+            prepared=prepared,
+            shard_id=assignment["shard_id"],
+            authority_ids=assignment["authority_ids"],
+        )
+        try:
+            artifact = store.read_invocations()
+        except (ContractError, OSError):
+            incomplete.append(dict(assignment))
+            continue
+        if artifact["status"] != "invoked":
+            incomplete.append(dict(assignment))
+    return incomplete
+
+
+def _merge_authority_result_selection(
+    *,
+    authorities: list[Any],
+    selected: list[str],
+    reused: list[dict[str, str]],
+    authority_results: Mapping[str, dict[str, str] | None],
+    forced: set[str],
+) -> tuple[list[str], list[dict[str, str]]]:
+    selected_ids = set(selected)
+    reused_by_id = {item["authority_id"]: item for item in reused}
+    for authority_id, reference in authority_results.items():
+        if authority_id in forced:
+            selected_ids.add(authority_id)
+            reused_by_id.pop(authority_id, None)
+        elif reference is None:
+            selected_ids.add(authority_id)
+            reused_by_id.pop(authority_id, None)
+        else:
+            selected_ids.discard(authority_id)
+            reused_by_id[authority_id] = reference
+    ordered_ids = [item.authority_id for item in authorities]
+    return (
+        [authority_id for authority_id in ordered_ids if authority_id in selected_ids],
+        [
+            reused_by_id[authority_id]
+            for authority_id in ordered_ids
+            if authority_id in reused_by_id
+        ],
+    )
+
+
+def _authority_verification_result(value: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "status": (
+            "verification_incomplete"
+            if value["outcome"] == "INCOMPLETE"
+            else "verified"
+        ),
+        "authority_id": value["authority_id"],
+        "outcome": value["outcome"],
+        "first_failed_authority_id": (
+            value["authority_id"] if value["outcome"] != "PASS" else None
+        ),
+        "query_stage": value["query_stage"],
+        "error_code": value["error_code"],
+        "query_diagnostics": value["query_diagnostics"],
+        "authority_result_digest": value["artifact_digest"],
+    }
+
+
+def _first_authority_evidence_error(
+    authority_evidence: Mapping[str, Any],
+) -> str:
+    for scenario in authority_evidence["scenarios"]:
+        for attempt in [
+            *scenario["issue_attempts"],
+            *scenario["v0_attempts"],
+        ]:
+            if attempt["complete"] is not True:
+                return str(attempt["error_code"] or "incomplete_assertion_evidence")
+    return "incomplete_assertion_evidence"
 
 
 def _assert_git(expected: Any) -> None:

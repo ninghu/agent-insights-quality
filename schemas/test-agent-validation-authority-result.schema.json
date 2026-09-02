@@ -1,0 +1,227 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ninghu/agent-insights-quality/schemas/test-agent-validation-authority-result.schema.json",
+  "title": "Test Agent Validation per-authority verification result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "repository",
+    "pr_number",
+    "origin_run_id",
+    "origin_commit_sha",
+    "authority_id",
+    "outcome",
+    "started_at",
+    "completed_at",
+    "query_stage",
+    "error_code",
+    "query_diagnostics",
+    "binding",
+    "authority_contract",
+    "invocation_receipt",
+    "authority_evidence",
+    "artifact_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "kind": {"const": "test-agent-validation-authority-result"},
+    "repository": {"$ref": "#/$defs/repository"},
+    "pr_number": {"type": "integer", "minimum": 1},
+    "origin_run_id": {"$ref": "#/$defs/runId"},
+    "origin_commit_sha": {"$ref": "#/$defs/gitSha"},
+    "authority_id": {"$ref": "#/$defs/authorityId"},
+    "outcome": {"enum": ["PASS", "FAIL", "INCOMPLETE"]},
+    "started_at": {"$ref": "#/$defs/timestamp"},
+    "completed_at": {"$ref": "#/$defs/timestamp"},
+    "query_stage": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "enum": [
+            "invocation_binding",
+            "telemetry_discovery",
+            "trace_output_stability",
+            "telemetry_identity",
+            "authority_assertion"
+          ]
+        }
+      ]
+    },
+    "error_code": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$"}
+      ]
+    },
+    "query_diagnostics": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "matched_reference_count",
+            "expected_reference_count",
+            "missing_reference_count"
+          ],
+          "properties": {
+            "matched_reference_count": {"type": "integer", "minimum": 0},
+            "expected_reference_count": {"type": "integer", "minimum": 1},
+            "missing_reference_count": {"type": "integer", "minimum": 0}
+          }
+        }
+      ]
+    },
+    "binding": {"$ref": "#/$defs/binding"},
+    "authority_contract": {"$ref": "#/$defs/authorityContract"},
+    "invocation_receipt": {"$ref": "#/$defs/invocationReference"},
+    "authority_evidence": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "object"}
+      ]
+    },
+    "artifact_digest": {"$ref": "#/$defs/hash"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"outcome": {"const": "INCOMPLETE"}},
+        "required": ["outcome"]
+      },
+      "then": {
+        "properties": {
+          "authority_evidence": {
+            "oneOf": [
+              {"type": "null"},
+              {"type": "object"}
+            ]
+          },
+          "query_stage": {"type": "string"},
+          "error_code": {"type": "string"}
+        }
+      },
+      "else": {
+        "properties": {
+          "authority_evidence": {"type": "object"},
+          "query_stage": {"type": "null"},
+          "error_code": {"type": "null"},
+          "query_diagnostics": {"type": "null"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "gitSha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "runId": {"type": "string", "pattern": "^validation-[0-9a-f]{12}$"},
+    "repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "authorityId": {
+      "oneOf": [
+        {"type": "string", "pattern": "^[a-z][a-z0-9-]+-agent/v0$"},
+        {"type": "string", "pattern": "^issue-[0-9]{3}$"}
+      ]
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "validation_digest",
+        "shared_validation_digest",
+        "execution_matrix_digest",
+        "runtime_topology_digest",
+        "quota_plan_digest",
+        "verifier_commit_sha",
+        "verifier_digest",
+        "environment_id",
+        "location",
+        "project_name",
+        "project_reference",
+        "telemetry_resource_set",
+        "telemetry_resource_reference",
+        "runtime_mapping_digest",
+        "invocation_receipt_digest",
+        "invocation_digest",
+        "assignment_digest"
+      ],
+      "properties": {
+        "validation_digest": {"$ref": "#/$defs/hash"},
+        "shared_validation_digest": {"$ref": "#/$defs/hash"},
+        "execution_matrix_digest": {"$ref": "#/$defs/hash"},
+        "runtime_topology_digest": {"$ref": "#/$defs/hash"},
+        "quota_plan_digest": {"$ref": "#/$defs/hash"},
+        "verifier_commit_sha": {"$ref": "#/$defs/gitSha"},
+        "verifier_digest": {"$ref": "#/$defs/hash"},
+        "environment_id": {"const": "swedencentral-g30"},
+        "location": {"const": "swedencentral"},
+        "project_name": {"const": "aiq-staging-swedencentral"},
+        "project_reference": {"$ref": "#/$defs/hash"},
+        "telemetry_resource_set": {"const": "g30"},
+        "telemetry_resource_reference": {"$ref": "#/$defs/hash"},
+        "runtime_mapping_digest": {"$ref": "#/$defs/hash"},
+        "invocation_receipt_digest": {"$ref": "#/$defs/hash"},
+        "invocation_digest": {"$ref": "#/$defs/hash"},
+        "assignment_digest": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "authorityContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority_kind",
+        "canonical_agent",
+        "logical_version",
+        "source_content_digest",
+        "execution_digest",
+        "validation_mode",
+        "provider_content_digest"
+      ],
+      "properties": {
+        "authority_kind": {"enum": ["baseline", "issue"]},
+        "canonical_agent": {
+          "enum": [
+            "weather-agent",
+            "healthcare-agent",
+            "finance-agent",
+            "travel-agent",
+            "support-ticket-agent"
+          ]
+        },
+        "logical_version": {
+          "oneOf": [
+            {"const": "v0"},
+            {"type": "string", "pattern": "^issue-[0-9]{3}$"}
+          ]
+        },
+        "source_content_digest": {"$ref": "#/$defs/hash"},
+        "execution_digest": {"$ref": "#/$defs/hash"},
+        "validation_mode": {
+          "enum": ["baseline", "deterministic", "model_mediated"]
+        },
+        "provider_content_digest": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "invocationReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority_id",
+        "path",
+        "receipt_digest",
+        "invocation_digest"
+      ],
+      "properties": {
+        "authority_id": {"$ref": "#/$defs/authorityId"},
+        "path": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "receipt_digest": {"$ref": "#/$defs/hash"},
+        "invocation_digest": {"$ref": "#/$defs/hash"}
+      }
+    }
+  }
+}

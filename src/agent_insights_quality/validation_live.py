@@ -9,9 +9,12 @@ from typing import Any, Iterator
 from agent_insights_quality.live import (
     LiveRuntime,
     RemoteOperationError,
+    TRACE_ASSERTION_DEADLINE_SECONDS,
+    TRACE_ASSERTION_POLL_SECONDS,
     TelemetryOnlyRuntime,
     _canonical_output_messages_expectation_passes,
     _normalize_fixture,
+    _semantic_assertion_names,
     _TELEMETRY_TRANSIENT_ERRORS,
 )
 from agent_insights_quality.models import InvocationEvidence
@@ -34,9 +37,10 @@ class PostResponseTelemetryError(ContractError):
     request_accepted = True
     recoverable_issue_execution = True
 
-    def __init__(self, error: BaseException) -> None:
+    def __init__(self, error: BaseException, *, stage: str) -> None:
         super().__init__("Post-response telemetry verification failed")
         self.code = str(getattr(error, "code", "") or type(error).__name__)
+        self.stage = stage
         for field in (
             "matched_reference_count",
             "expected_reference_count",
@@ -56,15 +60,23 @@ class FoundryScenarioAttemptRunner:
         record_resource: Callable[[dict[str, Any]], None],
         record_duration: Callable[[str, float], None] = lambda _stage, _value: None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        poll_seconds: int = TRACE_ASSERTION_POLL_SECONDS,
+        maximum_wait_seconds: int = TRACE_ASSERTION_DEADLINE_SECONDS,
     ) -> None:
-        if stabilization_seconds <= 0:
-            raise ContractError("Validation telemetry stabilization must be positive")
+        if (
+            stabilization_seconds <= 0
+            or poll_seconds <= 0
+            or maximum_wait_seconds < stabilization_seconds
+        ):
+            raise ContractError("Validation telemetry timing policy is invalid")
         self._runtime = runtime
         self._endpoint_costs = dict(endpoint_costs)
         self._stabilization_seconds = stabilization_seconds
         self._record_resource = record_resource
         self._record_duration = record_duration
         self._now = now
+        self._poll_seconds = poll_seconds
+        self._maximum_wait_seconds = maximum_wait_seconds
 
     def prepare_hosted_routes(self, targets: list[DeployedRuntime]) -> None:
         prepared: set[str] = set()
@@ -406,55 +418,107 @@ class FoundryScenarioAttemptRunner:
         invocation: Mapping[str, Any],
         scheduler: ValidationScheduler,
     ) -> dict[str, Any]:
+        return self.verify_attempts(
+            target=target,
+            executing_authority_id=executing_authority_id,
+            conversation_role=conversation_role,
+            scenario=scenario,
+            attempts=[attempt],
+            invocations=[invocation],
+            scheduler=scheduler,
+        )[0]
+
+    def verify_attempts(
+        self,
+        *,
+        target: DeployedRuntime,
+        executing_authority_id: str,
+        conversation_role: str,
+        scenario: Mapping[str, Any],
+        attempts: list[Mapping[str, Any]],
+        invocations: list[Mapping[str, Any]],
+        scheduler: ValidationScheduler,
+    ) -> list[dict[str, Any]]:
         if (
             not executing_authority_id
             or conversation_role not in {"baseline", "issue", "paired_v0"}
+            or not attempts
+            or len(attempts) != len(invocations)
         ):
             raise ContractError("Validation attempt execution identity is invalid")
-        raw_steps = [
-            *[("setup", item) for item in attempt["setup_steps"]],
-            *[("probe", item) for item in attempt["probe_steps"]],
-        ]
-        response_references = invocation.get("response_ids")
-        usable_results = invocation.get("usable_results")
-        session_id = invocation.get("session_id")
-        started_at = invocation.get("started_at")
-        completed_at = invocation.get("completed_at")
-        if (
-            not isinstance(response_references, list)
-            or not all(isinstance(item, str) and item for item in response_references)
-            or not isinstance(usable_results, list)
-            or not all(isinstance(item, bool) for item in usable_results)
-            or len(response_references) != len(raw_steps)
-            or len(usable_results) != len(raw_steps)
-            or not isinstance(started_at, str)
-            or not isinstance(completed_at, str)
-            or (session_id is not None and not isinstance(session_id, str))
-        ):
-            raise ContractError("Persisted validation invocation is invalid")
-        execution_scope = {
-            "executing_authority_id": executing_authority_id,
-            "target_authority_id": target.authority_id,
-            "conversation_role": conversation_role,
-            "scenario_id": scenario["id"],
-            "conversation_group": attempt["conversation_group"],
-            "attempt": attempt["index"],
-        }
+        batches: list[dict[str, Any]] = []
+        all_steps: list[tuple[str, Mapping[str, Any]]] = []
+        all_response_references: list[str] = []
+        all_usable_results: list[bool] = []
+        starts: list[datetime] = []
+        completions: list[datetime] = []
+        for attempt, invocation in zip(attempts, invocations, strict=True):
+            raw_steps = [
+                *[("setup", item) for item in attempt["setup_steps"]],
+                *[("probe", item) for item in attempt["probe_steps"]],
+            ]
+            response_references = invocation.get("response_ids")
+            usable_results = invocation.get("usable_results")
+            session_id = invocation.get("session_id")
+            started_at = invocation.get("started_at")
+            completed_at = invocation.get("completed_at")
+            if (
+                not isinstance(response_references, list)
+                or not all(
+                    isinstance(item, str) and item
+                    for item in response_references
+                )
+                or not isinstance(usable_results, list)
+                or not all(isinstance(item, bool) for item in usable_results)
+                or len(response_references) != len(raw_steps)
+                or len(usable_results) != len(raw_steps)
+                or not isinstance(started_at, str)
+                or not isinstance(completed_at, str)
+                or (session_id is not None and not isinstance(session_id, str))
+            ):
+                raise ContractError("Persisted validation invocation is invalid")
+            try:
+                start = datetime.fromisoformat(started_at).astimezone(UTC)
+                completion = datetime.fromisoformat(completed_at).astimezone(UTC)
+            except ValueError as error:
+                raise ContractError(
+                    "Persisted validation invocation window is invalid"
+                ) from error
+            if completion < start:
+                raise ContractError(
+                    "Persisted validation invocation window is invalid"
+                )
+            offset = len(all_steps)
+            all_steps.extend(raw_steps)
+            all_response_references.extend(response_references)
+            all_usable_results.extend(usable_results)
+            starts.append(start)
+            completions.append(completion)
+            batches.append(
+                {
+                    "attempt": attempt,
+                    "session_id": session_id,
+                    "offset": offset,
+                    "count": len(raw_steps),
+                    "setup_count": len(attempt["setup_steps"]),
+                }
+            )
         invocation_evidence = InvocationEvidence(
             operation_ids=(),
-            response_references=tuple(response_references),
-            started_at=started_at,
-            completed_at=completed_at,
-            request_count=len(raw_steps),
+            response_references=tuple(all_response_references),
+            started_at=min(starts).isoformat(),
+            completed_at=max(completions).isoformat(),
+            request_count=len(all_steps),
             allow_window_correlation=False,
-            response_count=len(response_references),
-            usable_response_count=sum(usable_results),
+            response_count=len(all_response_references),
+            usable_response_count=sum(all_usable_results),
             semantic_assertion_count=0,
             semantic_assertions_passed=0,
         )
         telemetry_started = time.monotonic()
         output_messages_states: tuple[tuple[bool, bool], ...] | None = None
         response_anchor_span_ids: tuple[str, ...] | None = None
+        semantic_results: tuple[tuple[Any, ...], ...] | None = None
 
         def capture_output_messages_states(
             states: tuple[tuple[bool, bool], ...],
@@ -466,6 +530,11 @@ class FoundryScenarioAttemptRunner:
             nonlocal response_anchor_span_ids
             response_anchor_span_ids = anchors
 
+        def capture_semantic_results(results: tuple[tuple[Any, ...], ...]) -> None:
+            nonlocal semantic_results
+            semantic_results = results
+
+        query_stage = "telemetry_discovery"
         try:
             with scheduler.telemetry_query():
                 operation_ids = self._runtime.wait_for_telemetry(
@@ -473,159 +542,206 @@ class FoundryScenarioAttemptRunner:
                     foundry_version=target.runtime_agent_version,
                     invocation=invocation_evidence,
                     allow_shared_operations=True,
+                    poll_seconds=self._poll_seconds,
+                    maximum_wait_seconds=self._maximum_wait_seconds,
                 )
+            query_stage = "trace_output_stability"
             with scheduler.telemetry_query():
                 trace_results = self._runtime.trace_assertion_evidence_for_requests(
                     agent_name=target.runtime_agent_name,
                     foundry_version=target.runtime_agent_version,
                     operation_ids=operation_ids,
-                    response_references=tuple(response_references),
-                    window_start=started_at,
-                    window_end=completed_at,
+                    response_references=tuple(all_response_references),
+                    window_start=invocation_evidence.started_at,
+                    window_end=invocation_evidence.completed_at,
                     requests=[
                         {
                             "id": step["id"],
                             "request": step["request"],
-                            "expected": {
-                                "http_status": step["expected"].get(
-                                    "http_status",
-                                    200,
-                                ),
-                                "semantic_assertions": {},
-                                "trace_assertions": [],
-                            },
+                            "expected": step["expected"],
                         }
-                        for _, step in raw_steps
+                        for _, step in all_steps
                     ],
                     stabilization_seconds=self._stabilization_seconds,
+                    poll_seconds=self._poll_seconds,
+                    maximum_wait_seconds=self._maximum_wait_seconds,
                     on_first_pass=lambda: None,
                     on_stable_output_messages=capture_output_messages_states,
                     on_stable_response_anchors=capture_response_anchors,
+                    on_stable_semantic_assertions=capture_semantic_results,
                     allow_shared_operations=True,
                 )
+            query_stage = "telemetry_identity"
             with scheduler.telemetry_query():
                 identity_results = self._runtime.telemetry_identity_passes(
                     agent_name=target.runtime_agent_name,
                     foundry_version=target.runtime_agent_version,
                     operation_ids=operation_ids,
                     invocation=invocation_evidence,
+                    poll_seconds=self._poll_seconds,
+                    maximum_wait_seconds=self._maximum_wait_seconds,
                 )
         except SharedRuntimeError:
             raise
         except _POST_RESPONSE_TELEMETRY_ERRORS as error:
-            raise PostResponseTelemetryError(error) from error
+            raise PostResponseTelemetryError(error, stage=query_stage) from error
         self._record_duration(
             "ingestion_kql_seconds",
             time.monotonic() - telemetry_started,
         )
-        if len(trace_results) != len(raw_steps):
+        if len(trace_results) != len(all_steps):
             raise ContractError("Validation trace evidence step count is invalid")
-        if len(identity_results) != len(raw_steps):
+        if len(identity_results) != len(all_steps):
             raise ContractError("Validation telemetry identity count is invalid")
         if output_messages_states is None:
             raise ContractError("Validation output-message structure state is missing")
-        if len(output_messages_states) != len(raw_steps):
+        if len(output_messages_states) != len(all_steps):
             raise ContractError(
                 "Validation output-message structure count is invalid"
             )
         if (
             response_anchor_span_ids is None
-            or len(response_anchor_span_ids) != len(raw_steps)
-            or len(set(response_anchor_span_ids)) != len(raw_steps)
+            or len(response_anchor_span_ids) != len(all_steps)
+            or len(set(response_anchor_span_ids)) != len(all_steps)
         ):
             raise ContractError("Validation response-anchor mapping is incomplete")
+        if semantic_results is None or len(semantic_results) != len(all_steps):
+            raise ContractError("Validation semantic assertion state is missing")
 
-        step_evidence: list[dict[str, Any]] = []
-        for index, (
-            (_, step),
-            response_id,
-            operation_id,
-            response_anchor_span_id,
-            usable,
-            identity_pass,
-            output_messages_state,
-        ) in enumerate(
-            zip(
-                raw_steps,
-                response_references,
-                operation_ids,
-                response_anchor_span_ids,
-                usable_results,
-                identity_results,
-                output_messages_states,
-                strict=True,
-            ),
-            start=1,
-        ):
-            step_evidence.append(
+        results = []
+        for batch in batches:
+            attempt = batch["attempt"]
+            offset = batch["offset"]
+            end = offset + batch["count"]
+            step_evidence: list[dict[str, Any]] = []
+            for index, (
+                (_, step),
+                response_id,
+                operation_id,
+                response_anchor_span_id,
+                usable,
+                identity_pass,
+                output_messages_state,
+                step_trace_results,
+                step_semantic_results,
+            ) in enumerate(
+                zip(
+                    all_steps[offset:end],
+                    all_response_references[offset:end],
+                    operation_ids[offset:end],
+                    response_anchor_span_ids[offset:end],
+                    all_usable_results[offset:end],
+                    identity_results[offset:end],
+                    output_messages_states[offset:end],
+                    trace_results[offset:end],
+                    semantic_results[offset:end],
+                    strict=True,
+                ),
+                start=1,
+            ):
+                output_complete = _canonical_output_messages_expectation_passes(
+                    output_messages_state,
+                    expect_present=True,
+                )
+                semantic_complete = len(step_semantic_results) == len(
+                    _semantic_assertion_names(
+                        step["expected"]["semantic_assertions"]
+                    )
+                )
+                trace_complete = len(step_trace_results) == len(
+                    step["expected"]["trace_assertions"]
+                )
+                step_evidence.append(
+                    {
+                        "index": index,
+                        "step_id": step["id"],
+                        "request_digest": content_hash(step["request"]),
+                        "response_reference": content_hash(
+                            {"response_reference": response_id}
+                        ),
+                        "operation_reference": content_hash(
+                            {
+                                "operation_reference": operation_id,
+                                "response_reference": response_id,
+                                "invoke_agent_anchor_span_id": (
+                                    response_anchor_span_id
+                                ),
+                            }
+                        ),
+                        "complete": bool(usable)
+                        and bool(identity_pass)
+                        and output_complete
+                        and semantic_complete
+                        and trace_complete,
+                        "endpoint_pass": bool(usable),
+                        "identity_pass": bool(identity_pass),
+                        "semantic_pass": semantic_complete
+                        and all(item.passed for item in step_semantic_results),
+                        "trace_pass": trace_complete
+                        and all(item.passed for item in step_trace_results),
+                    }
+                )
+            setup_count = batch["setup_count"]
+            setup_steps = step_evidence[:setup_count]
+            probe_steps = step_evidence[setup_count:]
+            complete = all(item["complete"] for item in step_evidence)
+            error_code = (
+                None
+                if complete
+                else "telemetry_identity_mismatch"
+                if not all(item["identity_pass"] for item in step_evidence)
+                else "missing_output_messages_attribute"
+                if any(
+                    not present
+                    for present, _ in output_messages_states[offset:end]
+                )
+                else "empty_output_messages_attribute"
+                if any(
+                    not nonempty
+                    for _, nonempty in output_messages_states[offset:end]
+                )
+                else "incomplete_assertion_evidence"
+            )
+            execution_scope = {
+                "executing_authority_id": executing_authority_id,
+                "target_authority_id": target.authority_id,
+                "conversation_role": conversation_role,
+                "scenario_id": scenario["id"],
+                "conversation_group": attempt["conversation_group"],
+                "attempt": attempt["index"],
+            }
+            results.append(
                 {
-                    "index": index,
-                    "step_id": step["id"],
-                    "request_digest": content_hash(step["request"]),
-                    "response_reference": content_hash(
-                        {"response_reference": response_id}
-                    ),
-                    "operation_reference": content_hash(
+                    "index": attempt["index"],
+                    "conversation_reference": content_hash(
                         {
-                            "operation_reference": operation_id,
-                            "response_reference": response_id,
-                            "invoke_agent_anchor_span_id": (
-                                response_anchor_span_id
-                            ),
+                            **execution_scope,
+                            "runtime_agent": target.runtime_agent_name,
                         }
                     ),
-                    "complete": (
-                        bool(usable)
-                        and _canonical_output_messages_expectation_passes(
-                            output_messages_state,
-                            expect_present=True,
-                        )
+                    "session_reference": content_hash(
+                        {
+                            **execution_scope,
+                            "session_id": batch["session_id"],
+                        }
                     ),
-                    "endpoint_pass": bool(usable),
-                    "identity_pass": identity_pass,
+                    "response_references": [
+                        item["response_reference"] for item in step_evidence
+                    ],
+                    "operation_references": [
+                        item["operation_reference"] for item in step_evidence
+                    ],
+                    "setup_steps": setup_steps,
+                    "probe_steps": probe_steps,
+                    "complete": complete,
+                    "observation": _attempt_observation(
+                        scenario,
+                        probe_steps,
+                    ),
+                    "error_code": error_code,
                 }
             )
-        setup_count = len(attempt["setup_steps"])
-        setup_steps = step_evidence[:setup_count]
-        probe_steps = step_evidence[setup_count:]
-        complete = all(
-            item["complete"] and item["endpoint_pass"] and item["identity_pass"]
-            for item in step_evidence
-        )
-        error_code = (
-            None
-            if complete
-            else "telemetry_identity_mismatch"
-            if not all(item["identity_pass"] for item in step_evidence)
-            else "missing_output_messages_attribute"
-            if any(not present for present, _ in output_messages_states)
-            else "empty_output_messages_attribute"
-            if any(not nonempty for _, nonempty in output_messages_states)
-            else "incomplete_endpoint_evidence"
-        )
-        result = {
-            "index": attempt["index"],
-            "conversation_reference": content_hash(
-                {
-                    **execution_scope,
-                    "runtime_agent": target.runtime_agent_name,
-                }
-            ),
-            "session_reference": content_hash(
-                {**execution_scope, "session_id": session_id}
-            ),
-            "response_references": [
-                item["response_reference"] for item in step_evidence
-            ],
-            "operation_references": [
-                item["operation_reference"] for item in step_evidence
-            ],
-            "setup_steps": setup_steps,
-            "probe_steps": probe_steps,
-            "complete": complete,
-            "error_code": error_code,
-        }
-        return result
+        return results
 
 
 class FoundryScenarioVerifier:
@@ -637,6 +753,8 @@ class FoundryScenarioVerifier:
         stabilization_seconds: int,
         record_duration: Callable[[str, float], None] = lambda _stage, _value: None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        poll_seconds: int = TRACE_ASSERTION_POLL_SECONDS,
+        maximum_wait_seconds: int = TRACE_ASSERTION_DEADLINE_SECONDS,
     ) -> None:
         self.__delegate = FoundryScenarioAttemptRunner(
             runtime,
@@ -645,10 +763,36 @@ class FoundryScenarioVerifier:
             record_resource=lambda _event: None,
             record_duration=record_duration,
             now=now,
+            poll_seconds=poll_seconds,
+            maximum_wait_seconds=maximum_wait_seconds,
         )
 
     def verify(self, **kwargs: Any) -> dict[str, Any]:
         return self.__delegate.verify(**kwargs)
+
+    def verify_attempts(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return self.__delegate.verify_attempts(**kwargs)
+
+
+def _attempt_observation(
+    scenario: Mapping[str, Any],
+    probe_steps: list[Mapping[str, Any]],
+) -> bool:
+    predicate = scenario["defect_predicate"]
+    if predicate["kind"] == "never":
+        return all(
+            item["complete"] and item["semantic_pass"] and item["trace_pass"]
+            for item in probe_steps
+        )
+    required_ids = set(predicate["step_ids"])
+    required_surfaces = set(predicate["required_surfaces"])
+    selected = [item for item in probe_steps if item["step_id"] in required_ids]
+    return bool(selected) and all(
+        item["complete"]
+        and ("semantic" not in required_surfaces or item["semantic_pass"])
+        and ("trace" not in required_surfaces or item["trace_pass"])
+        for item in selected
+    )
 
 
 @contextmanager

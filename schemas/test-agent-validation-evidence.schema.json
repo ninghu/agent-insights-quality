@@ -25,7 +25,7 @@
     "evidence_digest"
   ],
   "properties": {
-    "schema_version": {"const": "2.0.0"},
+    "schema_version": {"const": "3.0.0"},
     "kind": {"const": "test-agent-validation-evidence"},
     "repository": {"$ref": "#/$defs/repository"},
     "pr_number": {"type": "integer", "minimum": 1},
@@ -84,7 +84,12 @@
         "execution_digest",
         "validated_commit_sha",
         "n",
+        "k",
         "complete_count",
+        "paired_complete_count",
+        "observation_count",
+        "paired_observation_count",
+        "evidence_complete",
         "pass",
         "scenarios",
         "authority_evidence_digest"
@@ -128,7 +133,12 @@
         "execution_digest": {"$ref": "#/$defs/hash"},
         "validated_commit_sha": {"$ref": "#/$defs/gitSha"},
         "n": {"enum": [5, 7]},
+        "k": {"enum": [5]},
         "complete_count": {"type": "integer", "minimum": 0},
+        "paired_complete_count": {"type": "integer", "minimum": 0},
+        "observation_count": {"type": "integer", "minimum": 0},
+        "paired_observation_count": {"type": "integer", "minimum": 0},
+        "evidence_complete": {"type": "boolean"},
         "pass": {"type": "boolean"},
         "scenarios": {
           "type": "array",
@@ -168,7 +178,12 @@
         "execution_digest",
         "validation_mode",
         "n",
+        "k",
         "complete_count",
+        "paired_complete_count",
+        "observation_count",
+        "paired_observation_count",
+        "evidence_complete",
         "pass",
         "issue_attempts",
         "v0_attempts"
@@ -183,7 +198,12 @@
           "enum": ["baseline", "deterministic", "model_mediated"]
         },
         "n": {"enum": [5, 7]},
+        "k": {"enum": [5]},
         "complete_count": {"type": "integer", "minimum": 0},
+        "paired_complete_count": {"type": "integer", "minimum": 0},
+        "observation_count": {"type": "integer", "minimum": 0},
+        "paired_observation_count": {"type": "integer", "minimum": 0},
+        "evidence_complete": {"type": "boolean"},
         "pass": {"type": "boolean"},
         "issue_attempts": {
           "type": "array",
@@ -210,6 +230,7 @@
         "setup_steps",
         "probe_steps",
         "complete",
+        "observation",
         "error_code"
       ],
       "properties": {
@@ -239,6 +260,7 @@
           "items": {"$ref": "#/$defs/step"}
         },
         "complete": {"type": "boolean"},
+        "observation": {"type": "boolean"},
         "error_code": {
           "oneOf": [
             {"type": "null"},
@@ -261,7 +283,9 @@
         "operation_reference",
         "complete",
         "endpoint_pass",
-        "identity_pass"
+        "identity_pass",
+        "semantic_pass",
+        "trace_pass"
       ],
       "properties": {
         "index": {"type": "integer", "minimum": 1},
@@ -274,7 +298,9 @@
         "operation_reference": {"$ref": "#/$defs/hash"},
         "complete": {"type": "boolean"},
         "endpoint_pass": {"type": "boolean"},
-        "identity_pass": {"type": "boolean"}
+        "identity_pass": {"type": "boolean"},
+        "semantic_pass": {"type": "boolean"},
+        "trace_pass": {"type": "boolean"}
       }
     }
   }

@@ -71,6 +71,27 @@ class _VerifyOnlyRunner:
         return {"complete": True}
 
 
+class _BatchVerifyOnlyRunner(_VerifyOnlyRunner):
+    def __init__(self, issue_observation_count=None) -> None:
+        super().__init__()
+        self.issue_observation_count = issue_observation_count
+
+    def verify_attempts(self, **kwargs):
+        self.calls.append(kwargs)
+        return [
+            {
+                "complete": True,
+                "observation": (
+                    False
+                    if kwargs["conversation_role"] == "paired_v0"
+                    else self.issue_observation_count is None
+                    or index <= self.issue_observation_count
+                ),
+            }
+            for index, _ in enumerate(kwargs["attempts"], start=1)
+        ]
+
+
 def test_invoke_shard_sends_issue_and_paired_v0_without_verification() -> None:
     agents, baseline, issue = _contracts()
     runner = _InvokeOnlyRunner()
@@ -105,7 +126,7 @@ def test_verify_shard_uses_only_persisted_invocations() -> None:
         model_contract=agents["models"]["test_agents"],
         paired_baselines={issue.canonical_agent: baseline.authority_id},
     )
-    runner = _VerifyOnlyRunner()
+    runner = _BatchVerifyOnlyRunner()
 
     result = verify_validation_shard(
         [issue],
@@ -137,7 +158,7 @@ def test_verify_baseline_does_not_require_paired_v0_invocations() -> None:
         model_contract=agents["models"]["test_agents"],
         paired_baselines={baseline.canonical_agent: baseline.authority_id},
     )
-    runner = _VerifyOnlyRunner()
+    runner = _BatchVerifyOnlyRunner()
 
     result = verify_validation_shard(
         [baseline],
@@ -150,5 +171,55 @@ def test_verify_baseline_does_not_require_paired_v0_invocations() -> None:
         paired_baselines={baseline.canonical_agent: baseline.authority_id},
     )
 
-    assert {call["conversation_role"] for call in runner.calls} == {"baseline"}
+    assert [call["conversation_role"] for call in runner.calls] == ["baseline"]
     assert result[0]["authority_id"] == baseline.authority_id
+
+
+def test_issue_verification_batches_once_per_target_and_applies_k_of_n() -> None:
+    agents, issues = load_catalogs()
+    authorities = authority_specs(agents, issues)
+    issue = next(
+        item for item in authorities if item.validation_mode == "model_mediated"
+    )
+    baseline = next(
+        item
+        for item in authorities
+        if item.authority_id == f"{issue.canonical_agent}/v0"
+    )
+    invocation_runner = _InvokeOnlyRunner()
+    invocations = invoke_validation_shard(
+        [issue],
+        {
+            baseline.authority_id: _deployed(baseline),
+            issue.authority_id: _deployed(issue),
+        },
+        runner=invocation_runner,
+        scheduler=object(),
+        model_contract=agents["models"]["test_agents"],
+        paired_baselines={issue.canonical_agent: baseline.authority_id},
+    )
+    runner = _BatchVerifyOnlyRunner(issue_observation_count=5)
+
+    result = verify_validation_shard(
+        [issue],
+        {
+            baseline.authority_id: _deployed(baseline),
+            issue.authority_id: _deployed(issue),
+        },
+        invocations,
+        runner=runner,
+        scheduler=object(),
+        model_contract=agents["models"]["test_agents"],
+        validated_commit_sha="a" * 40,
+        paired_baselines={issue.canonical_agent: baseline.authority_id},
+    )[0]
+
+    assert [item["conversation_role"] for item in runner.calls] == [
+        "issue",
+        "paired_v0",
+    ]
+    assert result["n"] == 7
+    assert result["k"] == 5
+    assert result["observation_count"] == 5
+    assert result["paired_observation_count"] == 0
+    assert result["pass"] is True

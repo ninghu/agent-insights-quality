@@ -53,6 +53,9 @@ class ValidationPolicy:
     trace_hydration_poll_seconds: int
     trace_hydration_stabilization_seconds: int
     trace_hydration_maximum_wait_seconds: int
+    verification_maximum_active_subsessions: int
+    verification_authorities_per_assignment: int
+    verification_response_bound_batch_scope: str
 
 
 def load_validation_policy(
@@ -71,10 +74,11 @@ def load_validation_policy(
         "inventory",
         "limits",
         "trace_hydration",
+        "verification",
         "name_policy",
     }:
         raise ContractError("Test Agent Validation config fields are invalid")
-    if value.get("schema_version") != "3.0.0":
+    if value.get("schema_version") != "4.0.0":
         raise ContractError("Test Agent Validation config version is invalid")
     if value.get("repository") != "ninghu/agent-insights-quality":
         raise ContractError("Validation repository is not the reviewed public repository")
@@ -121,6 +125,13 @@ def load_validation_policy(
         "maximum_wait_seconds": 900,
     }:
         raise ContractError("Validation trace hydration policy is not reviewed")
+    verification = _mapping(value.get("verification"), "verification")
+    if verification != {
+        "maximum_active_subsessions": 8,
+        "authorities_per_assignment": 1,
+        "response_bound_batch_scope": "target",
+    }:
+        raise ContractError("Validation verification policy is not reviewed")
     names = _mapping(value.get("name_policy"), "name policy")
     project_names = _name_policy(names.get("project"), "Project")
     agent_names = _name_policy(names.get("agent"), "Agent")
@@ -140,6 +151,15 @@ def load_validation_policy(
         trace_hydration_poll_seconds=hydration["poll_seconds"],
         trace_hydration_stabilization_seconds=hydration["stabilization_seconds"],
         trace_hydration_maximum_wait_seconds=hydration["maximum_wait_seconds"],
+        verification_maximum_active_subsessions=verification[
+            "maximum_active_subsessions"
+        ],
+        verification_authorities_per_assignment=verification[
+            "authorities_per_assignment"
+        ],
+        verification_response_bound_batch_scope=verification[
+            "response_bound_batch_scope"
+        ],
     )
 def _mapping(value: Any, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import UTC, datetime
 
 import pytest
 from agent_insights_quality.catalogs import load_catalogs
@@ -12,6 +13,10 @@ from agent_insights_quality.validation_evidence import (
     select_reusable_authority_evidence,
     stamp_evidence_digests,
     validate_evidence,
+)
+from agent_insights_quality.validation_authority_results import (
+    load_authority_verification_result,
+    write_authority_verification_result,
 )
 from agent_insights_quality.validation_manifest import (
     authority_specs,
@@ -38,6 +43,8 @@ def _step(
         "complete": True,
         "endpoint_pass": True,
         "identity_pass": True,
+        "semantic_pass": True,
+        "trace_pass": True,
     }
 
 
@@ -46,6 +53,7 @@ def _attempt(
     *,
     namespace: str,
     rule_attempt: dict,
+    observation: bool = True,
 ) -> dict:
     setup = [
         _step(
@@ -69,6 +77,10 @@ def _attempt(
             start=len(setup) + 1,
         )
     ]
+    if not observation:
+        for step in probe:
+            step["semantic_pass"] = False
+            step["trace_pass"] = False
     steps = [*setup, *probe]
     return {
         "index": index,
@@ -79,6 +91,7 @@ def _attempt(
         "setup_steps": setup,
         "probe_steps": probe,
         "complete": True,
+        "observation": observation,
         "error_code": None,
     }
 
@@ -105,6 +118,7 @@ def _authority(spec) -> dict:
                 index,
                 namespace=f"{authority_id}:paired-v0",
                 rule_attempt=rule_attempt,
+                observation=False,
             )
             for index, rule_attempt in enumerate(rule["attempts"], start=1)
         ]
@@ -114,7 +128,12 @@ def _authority(spec) -> dict:
         "execution_digest": rule["execution_digest"],
         "validation_mode": mode,
         "n": n,
+        "k": 5,
         "complete_count": n,
+        "paired_complete_count": 0 if baseline else n,
+        "observation_count": n,
+        "paired_observation_count": 0,
+        "evidence_complete": True,
         "pass": True,
         "issue_attempts": issue_attempts,
         "v0_attempts": v0_attempts,
@@ -135,7 +154,12 @@ def _authority(spec) -> dict:
         "execution_digest": spec.execution_digest,
         "validated_commit_sha": HEAD,
         "n": n,
+        "k": 5,
         "complete_count": n,
+        "paired_complete_count": 0 if baseline else n,
+        "observation_count": n,
+        "paired_observation_count": 0,
+        "evidence_complete": True,
         "pass": True,
         "scenarios": [scenario],
         "authority_evidence_digest": HASH,
@@ -149,7 +173,7 @@ def _evidence() -> dict:
     authorities = [_authority(spec) for spec in specs]
     return stamp_evidence_digests(
         {
-            "schema_version": "2.0.0",
+            "schema_version": "3.0.0",
             "kind": "test-agent-validation-evidence",
             "repository": "ninghu/agent-insights-quality",
             "pr_number": 999,
@@ -198,26 +222,30 @@ def test_identity_failure_is_visible_as_incomplete_evidence() -> None:
     attempt["complete"] = False
     attempt["error_code"] = "telemetry_identity_mismatch"
     scenario["complete_count"] = 4
+    scenario["evidence_complete"] = False
     scenario["pass"] = False
     authority["complete_count"] = 4
+    authority["evidence_complete"] = False
     authority["pass"] = False
     value["result"] = "FAIL"
     value = stamp_evidence_digests(value)
-    validate_evidence(value)
+    with pytest.raises(ContractError, match="incomplete authority"):
+        validate_evidence(value)
 
 
-def test_issue_evidence_contains_no_code_generated_verdict() -> None:
+def test_issue_evidence_contains_bounded_assertion_observations() -> None:
     value = _evidence()
     serialized = str(value["authorities"][5])
     for field in (
         "defect_observed",
         "expected_observation_pass",
-        "semantic_pass",
-        "trace_pass",
         "observed",
         "defect_predicate",
     ):
         assert field not in serialized
+    assert "observation" in serialized
+    assert "semantic_pass" in serialized
+    assert "trace_pass" in serialized
 
 
 def test_incomplete_paired_v0_fails_mechanical_completeness() -> None:
@@ -227,18 +255,16 @@ def test_incomplete_paired_v0_fails_mechanical_completeness() -> None:
     scenario["v0_attempts"][0]["complete"] = False
     scenario["v0_attempts"][0]["probe_steps"][0]["identity_pass"] = False
     scenario["v0_attempts"][0]["error_code"] = "telemetry_identity_mismatch"
+    scenario["paired_complete_count"] -= 1
+    scenario["evidence_complete"] = False
     scenario["pass"] = False
+    authority["paired_complete_count"] -= 1
+    authority["evidence_complete"] = False
     authority["pass"] = False
     value["result"] = "FAIL"
     value = stamp_evidence_digests(value)
-    validate_evidence(value)
-
-    tampered = deepcopy(value)
-    tampered["authorities"][5]["scenarios"][0]["pass"] = True
-    tampered["authorities"][5]["pass"] = True
-    tampered = stamp_evidence_digests(tampered)
-    with pytest.raises(ContractError, match="mechanical evidence result"):
-        validate_evidence(tampered)
+    with pytest.raises(ContractError, match="incomplete authority"):
+        validate_evidence(value)
 
 
 def test_evidence_rejects_global_reference_reuse() -> None:
@@ -410,3 +436,86 @@ def test_exact_pass_evidence_is_reused_and_mapping_drift_is_selected(
     )
     assert selected == [specs[0].authority_id]
     assert len(reused) == 40
+
+
+def test_late_query_failure_preserves_prior_authority_result(tmp_path) -> None:
+    evidence = _evidence()
+    agents, issues = load_catalogs()
+    specs = authority_specs(agents, issues)
+    prepared = {
+        "repository": evidence["repository"],
+        "pr_number": evidence["pr_number"],
+        "run_id": evidence["run_id"],
+        "commit_sha": HEAD,
+        "digests": {
+            "validation_digest": evidence["validation_digest"],
+            "shared_validation_digest": evidence["shared_validation_digest"],
+            "execution_matrix_digest": evidence["execution_matrix_digest"],
+            "runtime_topology_digest": HASH,
+            "quota_plan_digest": HASH,
+        },
+        "project": {
+            "name": "aiq-staging-swedencentral",
+            "provider_id": "synthetic-project",
+        },
+        "runtime_topology": {
+            "account_reference": HASH,
+            "telemetry_resource_set": "g30",
+        },
+    }
+    plan = {
+        "environment_id": "swedencentral-g30",
+        "location": "swedencentral",
+    }
+    invocation = {
+        "authority_id": "",
+        "path": "invocations/synthetic.json",
+        "receipt_digest": HASH,
+        "invocation_digest": HASH,
+    }
+
+    references = []
+    for index, outcome in enumerate(("PASS", "INCOMPLETE")):
+        spec = specs[index]
+        authority = evidence["authorities"][index]
+        runtime = {
+            "runtime_agent_name": authority["runtime_agent_name"],
+            "runtime_agent_version": authority["runtime_agent_version"],
+            "provider_agent_id": f"agent-{index}",
+            "provider_agent_version_id": f"version-{index}",
+            "provider_content_digest": authority["provider_content_digest"],
+            "hosted_identity_id": None,
+            "hosted_blueprint_id": None,
+            "hosted_deployment_id": None,
+            "runtime_principal_id": None,
+            "telemetry_identity_id": f"version-{index}",
+            "connection_ids": [],
+        }
+        reference = write_authority_verification_result(
+            prepared=prepared,
+            plan=plan,
+            authority=spec,
+            runtime=runtime,
+            invocation_reference={
+                **invocation,
+                "authority_id": spec.authority_id,
+            },
+            authority_evidence=authority if outcome == "PASS" else None,
+            outcome=outcome,
+            started_at=datetime(2026, 9, 1, 12, index, tzinfo=UTC),
+            completed_at=datetime(2026, 9, 1, 12, index, 1, tzinfo=UTC),
+            query_stage=None if outcome == "PASS" else "telemetry_discovery",
+            error_code=None if outcome == "PASS" else "telemetry_query_failed",
+            query_diagnostics=None,
+            fence=lambda: None,
+            root=tmp_path,
+        )
+        references.append(reference)
+
+    first = load_authority_verification_result(references[0], root=tmp_path)
+    second = load_authority_verification_result(references[1], root=tmp_path)
+    assert first["outcome"] == "PASS"
+    assert first["authority_evidence"]["pass"] is True
+    assert second["outcome"] == "INCOMPLETE"
+    assert second["authority_evidence"] is None
+    assert second["query_stage"] == "telemetry_discovery"

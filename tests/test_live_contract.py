@@ -25,6 +25,7 @@ from agent_insights_quality.live import (
     _normalize_fixture,
     _prompt_agent_route_propagation_pending,
     _semantic_assertion_result,
+    _semantic_assertion_results_from_correlated_rows,
     _trace_assertion_result,
     _trace_behavior_summary,
     _trace_contract_ready,
@@ -1054,6 +1055,51 @@ def _anchor_row(
         "agent_name": agent_name,
         "agent_version": agent_version,
     }
+
+
+def test_response_bound_snapshot_restores_semantic_assertions() -> None:
+    reference = "response-1"
+    anchor = _anchor_row("a" * 32, "root-a", reference)
+    anchor["messages"] = [
+        "",
+        json.dumps(
+            [
+                {
+                    "role": "assistant",
+                    "parts": [{"type": "text", "content": "Synthetic success"}],
+                }
+            ]
+        ),
+    ]
+    fixture = _normalize_fixture(
+        {
+            "id": "semantic-probe",
+            "request": {
+                "method": "POST",
+                "path": "/responses",
+                "headers": {"content-type": "application/json"},
+                "body": {"input": "Synthetic request"},
+            },
+            "expected": {
+                "http_status": 200,
+                "semantic_assertions": {
+                    "required_terms_all": ["synthetic", "success"]
+                },
+                "trace_assertions": [],
+            },
+        }
+    )
+
+    results = _semantic_assertion_results_from_correlated_rows(
+        ([anchor],),
+        (reference,),
+        (fixture,),
+    )
+
+    assert results is not None
+    assert [(item.assertion, item.passed) for item in results[0]] == [
+        ("required_terms_all", True)
+    ]
 
 
 def test_issue_010_011_shared_operation_uses_independent_response_anchors() -> None:
@@ -2521,7 +2567,7 @@ def test_trace_assertion_bounds_missing_invoke_agent_hydration(tmp_path) -> None
     assert monotonic[0] == 15 * 60
 
 
-def test_trace_assertion_stable_failure_waits_for_deadline(
+def test_trace_assertion_stable_failure_returns_after_stability_window(
     tmp_path,
 ) -> None:
     monotonic = [0.0]
@@ -2573,8 +2619,8 @@ def test_trace_assertion_stable_failure_waits_for_deadline(
     )
 
     assert evidence[0][0].passed is False
-    assert monotonic[0] == 15 * 60
-    assert poll_times[-1] == 15 * 60
+    assert monotonic[0] == 180
+    assert poll_times[-1] == 180
     assert progress
     assert "failing evidence is stabilizing" in progress[-1]
     assert first_passes == [0]
@@ -2672,7 +2718,7 @@ def test_trace_assertion_late_duplicate_invalidates_stabilizing_pass(
     )
 
     assert evidence[0][0].passed is False
-    assert monotonic[0] == 15 * 60
+    assert monotonic[0] == 135 + 180
     assert first_passes == [0]
 
 
@@ -2831,7 +2877,7 @@ def test_trace_assertion_requires_correlation_in_final_snapshot(
     traffic_path = tmp_path / "traffic.json"
     _write_trace_assertion_traffic(traffic_path)
     runtime._trace_rows = (  # type: ignore[method-assign]
-        lambda *_args: rows if monotonic[0] < 15 * 60 else []
+        lambda *_args: rows if monotonic[0] < 180 else []
     )
     runtime._sleep = lambda seconds: monotonic.__setitem__(
         0, monotonic[0] + seconds
@@ -2854,7 +2900,7 @@ def test_trace_assertion_requires_correlation_in_final_snapshot(
     assert first_mappings == [0]
 
 
-def test_trace_assertion_rejects_pass_first_seen_near_deadline(
+def test_trace_assertion_stable_failure_does_not_wait_for_late_pass(
     tmp_path,
 ) -> None:
     monotonic = [0.0]
@@ -2885,19 +2931,20 @@ def test_trace_assertion_rejects_pass_first_seen_near_deadline(
         0, monotonic[0] + seconds
     )
 
-    with pytest.raises(ContractError, match="did not stabilize"):
-        runtime.trace_assertion_evidence(
-            agent_name="finance-agent",
-            foundry_version="issue-013",
-            operation_ids=(operation_id,),
-            response_references=(reference,),
-            window_start="2026-08-28T10:00:00+00:00",
-            window_end="2026-08-28T10:00:30+00:00",
-            traffic_path=traffic_path,
-            stabilization_seconds=180,
-            on_first_pass=lambda: first_passes.append(monotonic[0]),
-        )
-    assert monotonic[0] == 15 * 60
+    evidence = runtime.trace_assertion_evidence(
+        agent_name="finance-agent",
+        foundry_version="issue-013",
+        operation_ids=(operation_id,),
+        response_references=(reference,),
+        window_start="2026-08-28T10:00:00+00:00",
+        window_end="2026-08-28T10:00:30+00:00",
+        traffic_path=traffic_path,
+        stabilization_seconds=180,
+        on_first_pass=lambda: first_passes.append(monotonic[0]),
+    )
+
+    assert evidence[0][0].passed is False
+    assert monotonic[0] == 180
     assert first_passes == [0]
 
 

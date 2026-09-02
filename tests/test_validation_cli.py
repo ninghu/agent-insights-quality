@@ -16,7 +16,7 @@ def test_validation_cli_exposes_stage_primitives_without_generation_inputs() -> 
         "deploy-test-agent-validation-shard",
         "reconcile-test-agent-validation-deployment",
         "invoke-test-agent-validation-shard",
-        "verify-test-agent-validation-shard",
+        "verify-test-agent-validation-authority",
         "compose-test-agent-validation",
     ):
         assert command in choices
@@ -49,20 +49,26 @@ def test_run_validation_cli_uses_automatic_local_discovery(monkeypatch) -> None:
     }
 
 
-def test_shard_cli_resolves_only_the_hidden_active_assignment(monkeypatch) -> None:
+def test_authority_cli_resolves_only_the_hidden_active_assignment(
+    monkeypatch,
+) -> None:
     observed = []
     monkeypatch.setattr(
         cli,
-        "verify_test_agent_validation_shard",
-        lambda *, shard_id: observed.append(shard_id)
-        or {"status": "verified", "shard_id": shard_id},
+        "verify_test_agent_validation_authority",
+        lambda *, authority_id: observed.append(authority_id)
+        or {"status": "verified", "authority_id": authority_id},
     )
     args = cli.build_parser().parse_args(
-        ["verify-test-agent-validation-shard", "--shard-id", "7"]
+        [
+            "verify-test-agent-validation-authority",
+            "--authority-id",
+            "issue-007",
+        ]
     )
     result = json.loads(cli._dispatch(args) or "{}")
-    assert observed == [7]
-    assert result == {"status": "verified", "shard_id": 7}
+    assert observed == ["issue-007"]
+    assert result == {"status": "verified", "authority_id": "issue-007"}
 
 
 def test_approval_cli_uses_latest_ready_result_without_manual_paths(
