@@ -137,11 +137,19 @@ response/session, invoke/evidence-window, source-artifact schema/version/origin/
 issue/paired-`v0` provenance. Unknown, ambiguous, duplicate, partial, or indeterminate retried-POST
 outcomes are not reusable, and one-time extraction is fenced against stale sub-sessions.
 
-The next generation selects only changed, failed, incomplete, or missing authorities; within that
-set, only authorities without current exact-bound completed receipts receive new traffic. All others
-use verify-only recovery. A reused receipt proves the traffic-generation/execution binding, while
-each new verification package binds its immutable digest and the current verifier commit/digest. No
-validation cleanup runs, and the composed READY or FAILED result always covers all 41 authorities.
+Verification runs in at most eight visible Copilot sub-sessions. Each claims one authority at a time,
+uses no internal concurrency, deployment, or traffic, and persists the immutable generation-fenced
+result before claiming another. Verify one batched stability snapshot per target: one batch for a
+baseline, or two batches for an issue and its paired `v0`; never stabilize attempts independently.
+
+Keep `PASS`, `FAIL`, and `INCOMPLETE` separate. The reviewed thresholds are baseline `5/5`,
+deterministic `5/5` plus paired `v0` `0/5`, and model-mediated `>=5/7` plus paired `v0` `0/7`.
+Later failures do not discard completed authority results. The next generation selects only missing,
+`INCOMPLETE`, or binding-changed authorities; within that set, only authorities without current
+exact-bound completed receipts receive new traffic. A reused receipt proves the
+traffic-generation/execution binding, while each new verification package binds its immutable digest
+and the current verifier commit/digest. No validation cleanup runs, and final composition covers
+exactly all 41 authorities.
 
 The fixed daily contract selects four issues per Agent: 20 issues plus five baselines, for 25
 assessment packages. Test Agent Validation is a separate local report-free process and never runs Agent

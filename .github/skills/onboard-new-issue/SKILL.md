@@ -37,7 +37,8 @@ Add one independently fixable issue only after human review.
 14. Run Test Agent Validation from one exact clean commit; changed content and stale or missing
     evidence are selected automatically. The visible coordinator creates all parallel sub-sessions;
     exact-bound completed authority invocations may be reused for verify-only recovery without new
-    traffic.
+    traffic. Verification persists independent `PASS`, `FAIL`, or `INCOMPLETE` authority results and
+    retries only missing, `INCOMPLETE`, or binding-changed authorities.
 15. Require exact issue/v0 discrimination, exact response-bound evidence, explicit human approval, and the single
     create-once approved validation record. Never use the preserved old West US 2 environment as a
     fallback.

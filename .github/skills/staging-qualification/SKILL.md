@@ -30,12 +30,19 @@ invoke/evidence windows, complete issue/paired-`v0` provenance, source-artifact
 schema/version/origin/digest, and an unambiguous completed POST outcome. Cross-generation extraction
 is one-time and fenced against stale sub-sessions.
 
-Completed current invocations support verify-only recovery with no new endpoint traffic. Each new
-verification package binds the reused receipt digest and current verifier commit/digest. Composition
-accepts only exact selected receipts and reusable PASS evidence covering all 41 authorities. A new
-generation selects only changed, failed, incomplete, or missing authorities and invokes only those
-without current exact-bound completed receipts. `run-test-agent-validation` is status/next-action
-guidance only and never creates sub-sessions or executes phase work.
+Completed current invocations support verify-only recovery with no new endpoint traffic. Verification
+uses at most eight visible sub-sessions; each claims one authority at a time, uses no internal
+concurrency, deploy, invocation, or private prompt/CLI state, and immediately persists one immutable
+result before claiming another. Query one batched stable telemetry snapshot for a baseline or two
+target batches for an issue and its paired `v0`; never stabilize attempts independently.
+
+Each new verification package binds the reused receipt digest and current verifier commit/digest.
+Keep `PASS`, `FAIL`, and `INCOMPLETE` separate under baseline `5/5`, deterministic `5/5` plus paired
+`v0` `0/5`, and model-mediated `>=5/7` plus paired `v0` `0/7`. Later failures never discard completed
+authority results. A new generation selects only missing, `INCOMPLETE`, or exact-binding-changed
+authorities and invokes only those without current exact-bound completed receipts. Composition covers
+exactly all 41 authorities. `run-test-agent-validation` is status/next-action guidance only and never
+creates sub-sessions or executes phase work.
 
 Reuse matching stable Agents and their exact server-assigned versions. Content changes create a new
 version under the same stable name; no command floats `latest`. Retain sessions, responses, Agents,

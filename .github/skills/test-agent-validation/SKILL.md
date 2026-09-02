@@ -48,9 +48,9 @@ assessment, scoring, reporting, ADX, email, Daily traffic, approval, or merge.
    Sweden `g30` telemetry binding, and zero-monitor invariant, then atomically publishes one topology,
    deployment registry, and the selected invocation and verification assignment sets; never select
    `latest`.
-6. Select only authorities whose Agent source, provider content, or execution contract changed,
-   whose latest result is FAIL or incomplete, or whose exact evidence is missing. Every authority
-   selected for new issue traffic receives a fresh paired `v0` control.
+6. Select only authorities whose exact binding changed, whose latest result is `INCOMPLETE`, or whose
+   exact result is missing. A definitive unchanged `FAIL` remains complete and is not retried. Every
+   authority selected for new issue traffic receives a fresh paired `v0` control.
 7. Give each invocation sub-session exactly one command:
 
    ```powershell
@@ -66,30 +66,46 @@ assessment, scoring, reporting, ADX, email, Daily traffic, approval, or merge.
    Unknown, ambiguous, duplicate, partial, or indeterminate retried-POST outcomes are not reusable.
    Cross-generation reuse performs one atomic, generation-fenced extraction; stale sub-sessions
    cannot extract or publish the receipt.
-   A new generation selects only changed, failed, incomplete, or missing authorities. Within that set,
+   A new generation selects only changed, incomplete, or missing authorities. Within that set,
    invoke only authorities without current exact-bound completed receipts; assign all others
    verify-only work and send no new endpoint traffic.
 9. Begin verification only after the invocation barrier. Verification is read-only and never sends
-   traffic. Give every verification sub-session exactly one command:
+   traffic. Run at most eight visible verification sub-sessions. Each sub-session claims exactly one
+   generation-fenced authority at a time and completes it before claiming another. The primitive has
+   no internal concurrency, never deploys or invokes, and receives no private state or authority ID
+   through its prompt or CLI. Give every verification sub-session exactly one command:
 
    ```powershell
    python -m agent_insights_quality verify-test-agent-validation-shard --shard-id <N>
    ```
 
-   Only response-bound traces may map one-to-one to the exact `invoke_agent` anchor and complete descendant
-   span tree; sibling roots cannot contribute evidence. Receipt reuse proves the unchanged
-   traffic-generation and execution binding only. Every new verification package binds the reused
-   receipt's immutable digest and the current verifier commit and verifier digest.
+   For a baseline, read all five attempts in one batched telemetry query and produce one stable target
+   snapshot. For an issue, produce exactly two target batches: one stable snapshot for all issue
+   attempts and one for all paired-`v0` attempts. Never query or stabilize individual attempts as
+   separate verification units. Response-bound traces must map one-to-one to the exact `invoke_agent`
+   anchor and complete descendant span tree; sibling roots cannot contribute evidence.
+   Receipt reuse proves the unchanged traffic-generation and execution binding only. Every new
+   verification package binds the reused receipt's immutable digest and the current verifier commit
+   and verifier digest.
+   Apply the reviewed thresholds exactly: baseline `5/5`; deterministic issue `5/5` with paired `v0`
+   `0/5`; model-mediated issue `>=5/7` with paired `v0` `0/7`. Persist exactly one immutable
+   generation-fenced `PASS`, `FAIL`, or `INCOMPLETE` result immediately after deciding the authority
+   and before claiming another. Complete stable evidence below threshold is `FAIL`; missing,
+   ambiguous, partial, or unstable evidence is `INCOMPLETE`.
 10. After the verification barrier, the coordinator runs:
 
     ```powershell
     python -m agent_insights_quality compose-test-agent-validation
     ```
 
-    Composition requires every selected fresh receipt plus exact reusable evidence for all other
-    authorities. It transitions to `READY` only for exact 41-authority PASS evidence and otherwise
-    records `FAILED`. Missing, ambiguous, stale, orphaned, cyclic, duplicate, conflicting, or
-    cross-root bindings fail closed and produce no package.
+    Composition requires every selected fresh result plus exact reusable results for all other
+    authorities. It transitions to `READY` only when all 41 authorities are `PASS`, records `FAILED`
+    when any current authority is definitively `FAIL`, and remains incomplete when any result is
+    missing or `INCOMPLETE`. Missing, ambiguous, stale, orphaned, cyclic, duplicate, conflicting, or
+    cross-root bindings fail closed and produce no final package.
+    A later authority failure, sub-session failure, or composition interruption never discards an
+    already persisted authority result. Retry only missing, `INCOMPLETE`, or exact-binding-changed
+    authorities.
 11. Starting a new validation writes an immutable `SUPERSEDED` event and atomically swaps active
     state. Validation has no cleanup and never deletes provider sessions, responses, Agents, versions,
     identities, deployments, images, telemetry, registries, receipts, or evidence. A legacy active

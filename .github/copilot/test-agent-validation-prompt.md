@@ -38,17 +38,30 @@ ambiguous, duplicate, partial, or indeterminate retried-POST outcomes are not re
 Cross-generation reuse performs one atomic generation-fenced extraction; stale sub-sessions cannot
 extract or publish it.
 
-The next generation selects only changed, failed, incomplete, or missing authorities. Within that
+The next generation selects only changed, incomplete, or missing authorities. Within that
 set, invoke only authorities without current exact-bound completed receipts; assign all others
 verify-only work with no new endpoint traffic.
 
-Verification begins after the invocation barrier, is read-only, and sends no traffic. Correlate every
-response to one unique exact-name/version `invoke_agent` anchor and its complete descendant tree.
-Reject orphaned, cyclic, duplicate, conflicting, cross-root, or late contradictory spans. Final
-composition requires exact selected fresh receipts and reusable evidence for all 41 authorities.
-Give each verification sub-session exactly
+Verification begins after the invocation barrier, is read-only, and sends no traffic. Run at most
+eight visible verification sub-sessions. Each claims one generation-fenced authority at a time,
+finishes it before claiming another, and uses no internal concurrency, deployment, invocation, or
+private prompt/CLI state. Give each verification sub-session exactly
 `python -m agent_insights_quality verify-test-agent-validation-shard --shard-id <N>`, then have the
 coordinator run `python -m agent_insights_quality compose-test-agent-validation`.
+
+For a baseline, create one batched stable telemetry snapshot covering all five attempts. For an issue,
+create exactly two target batches: one stable snapshot for all issue attempts and one for all
+paired-`v0` attempts. Never query or stabilize attempts independently. Correlate every response to one
+unique exact-name/version `invoke_agent` anchor and its complete descendant tree. Reject orphaned,
+cyclic, duplicate, conflicting, cross-root, or late contradictory spans.
+
+Persist one immutable generation-fenced authority result immediately after deciding it and before
+claiming another. Keep `PASS`, `FAIL`, and `INCOMPLETE` distinct. Apply baseline `5/5`,
+deterministic `5/5` plus paired `v0` `0/5`, and model-mediated `>=5/7` plus paired `v0` `0/7`.
+Complete stable evidence below threshold is `FAIL`; missing, ambiguous, partial, or unstable evidence
+is `INCOMPLETE`. Later failures never discard completed authority results. Retry only missing,
+`INCOMPLETE`, or exact-binding-changed authorities. Final composition requires exact current results
+for all 41 authorities.
 Receipt reuse proves the traffic-generation/execution binding only; every new verification package
 binds the receipt's immutable digest and the current verifier commit and verifier digest.
 

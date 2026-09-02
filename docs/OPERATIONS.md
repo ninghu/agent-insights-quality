@@ -67,8 +67,9 @@ After every required deployment receipt exists, the coordinator centrally re-rea
 Agent versions, verifies the durable Project, read-only telemetry binding, and zero-monitor
 invariant, merges changed and reused readiness proofs, then atomically publishes the single
 topology and deployment registry. Validation selection is separate: an authority runs only when
-its content changed, its latest result was FAIL or incomplete, or it lacks exact-bound PASS
-evidence. Every issue selected for new traffic still carries a fresh paired-`v0` control.
+its binding changed, its latest result is `INCOMPLETE`, or its exact result is missing. A definitive
+`FAIL` is a completed result and is not selected again unless its binding changes. Every issue
+selected for new traffic still carries a fresh paired-`v0` control.
 
 Deployment, invocation, and verification each receive an independent deterministic assignment set.
 Every non-empty phase has one to eight cost-balanced logical shards based only on the authorities
@@ -87,7 +88,7 @@ immutable artifact digest.
 Unknown, ambiguous, duplicate, partial, or indeterminate retried-POST outcomes never produce reusable
 completion. Cross-generation reuse performs one atomic, generation-fenced extraction from the
 immutable source receipt; stale sub-sessions cannot extract or publish it. The next generation
-therefore selects only changed, failed, incomplete, or missing authorities. Within that set, it
+therefore selects only changed, `INCOMPLETE`, or missing authorities. Within that set, it
 invokes only authorities without a current exact-bound completed receipt; all others receive
 verification-only assignments and send no new endpoint traffic.
 
@@ -96,12 +97,47 @@ verification package must separately bind the reused receipt's immutable digest 
 verifier commit and verifier digest. Verifier-only changes can therefore re-evaluate exact completed
 traffic without treating old verifier output as current.
 
+### Batched per-authority verification
+
+Verification uses at most eight visible Copilot sub-sessions. Each sub-session claims one
+generation-fenced authority at a time from its immutable assignment. Its primitive is sequential:
+it starts no subprocess, thread, task pool, or other internal concurrency. It receives no private
+runtime state or authority identity through the prompt or CLI, resolves the hidden active generation
+and claim itself, and never deploys, invokes, or sends endpoint traffic.
+
+For one claimed baseline authority, the verifier issues one batched telemetry query and waits for one
+stability snapshot containing all five response-bound attempt trees. For one claimed issue authority,
+it performs exactly two independent target batches: one batched stability snapshot containing all
+issue attempts and one containing all paired-`v0` attempts. It never queries or stabilizes individual
+attempts as separate verification units. The snapshots remain bound to the exact receipt,
+response/session references, invoke/evidence windows, runtime, Project, and telemetry resource set.
+
+The verifier deterministically assigns exactly one authority result:
+
+| Result | Meaning |
+| --- | --- |
+| `PASS` | Complete stable evidence meets the reviewed threshold. |
+| `FAIL` | Complete stable evidence does not meet the reviewed threshold. |
+| `INCOMPLETE` | Required evidence is missing, ambiguous, partial, or not stable by the deadline. |
+
+The reviewed thresholds are baseline `5/5`, deterministic issue `5/5` with paired `v0` `0/5`, and
+model-mediated issue `>=5/7` with paired `v0` `0/7`. `INCOMPLETE` is never collapsed into `FAIL`.
+Immediately after deciding an authority, the sub-session atomically persists an immutable,
+generation-fenced result before claiming another authority. A later authority failure, sub-session
+failure, or composition interruption does not discard completed authority results.
+
+A retry assignment contains only authorities whose result is missing or `INCOMPLETE`, plus
+authorities whose exact source/content/execution/runtime/verifier binding changed. Definitive
+unchanged `PASS` and `FAIL` results are reused. Composition requires exactly one current result for
+all 41 authorities: all `PASS` produces `READY`, any definitive `FAIL` produces `FAILED`, and any
+missing or `INCOMPLETE` authority keeps the generation incomplete and retryable.
+
 Support images use content-addressed ACR identities and exact digest pins. Agents, versions,
 sessions, responses, images, telemetry, registries, and evidence are retained. Old objects cannot
 contaminate a later result because every request is correlated to its exact response-bound
 `invoke_agent` anchor and complete descendant span tree. Missing, ambiguous, stale, orphaned, cyclic,
 duplicate, conflicting, or cross-root bindings fail closed. Final composition accepts only exact
-fresh receipts and reusable evidence covering all 41 authorities.
+current authority results covering all 41 authorities.
 
 A new internal generation atomically writes a `SUPERSEDED` event and swaps the active pointer. Its
 opaque identity is system-created, is never supplied through the CLI, and is never encoded in
@@ -138,8 +174,8 @@ python -m agent_insights_quality invoke-test-agent-validation-shard --shard-id <
 ```
 
 After the invocation barrier, use fresh or reusable completed invocation receipts to run the
-already-published read-only verification assignments, again with exactly one command per visible
-sub-session:
+already-published read-only verification assignments with at most eight visible sub-sessions. Each
+sub-session claims and completes one authority at a time:
 
 ```powershell
 python -m agent_insights_quality verify-test-agent-validation-shard --shard-id <N>

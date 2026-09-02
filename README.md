@@ -8,7 +8,7 @@ Official Daily and local Test Agent Validation use separate durable Sweden Centr
 
 Validation reconciles each unique baseline/issue Agent identity to an exact server-assigned
 provider version. It deploys only content-changed versions, reuses exact versions, and validates
-only changed, prior FAIL/incomplete, or not-exactly-proven authorities.
+only changed, missing, or `INCOMPLETE` authorities.
 
 Application Insights is read-only. Validation uses the staging `g30` Sweden telemetry pair, creates no
 monitor, runs no Agent Insights assessment or report, and retains the durable Project, Agents,
@@ -68,9 +68,9 @@ fails closed, and the renderer does not supply a fallback.
 ## Local Test Agent Validation
 
 The first run under a changed shared contract validates five baselines and all 36 issues through 41
-independent Agent endpoints. Later commits reuse exact PASS evidence and run only authorities whose
-content or binding changed, whose latest result failed or was incomplete, or whose exact proof is
-missing.
+independent Agent endpoints. Later commits reuse exact completed authority results and run only
+authorities whose content or binding changed, whose latest result is `INCOMPLETE`, or whose exact
+result is missing. A definitive `FAIL` remains complete and is not retried unless its binding changes.
 Each reviewed scenario reruns its setup and probe conversation with a fresh identity. Baselines require
 `5/5` healthy attempts. Deterministic defects require `5/5` observations and paired `v0` at `0/5`;
 model-mediated defects require at least `5/7` and paired `v0` at `0/7`. The reviewed mode is catalog
@@ -92,11 +92,25 @@ response/session references, invoke/evidence windows, and complete issue/paired-
 match. Unknown, ambiguous, duplicate, partial, or indeterminate retried-POST outcomes are never
 reusable.
 
-Therefore the next generation selects only changed, failed, incomplete, or missing authorities.
+Therefore the next generation selects only changed, `INCOMPLETE`, or missing authorities.
 Within that set, it invokes only authorities without a current exact-bound completed invocation
 receipt; all others perform verification only and send no new endpoint traffic. The reused receipt
 proves the traffic-generation and execution contract; every new verification package separately binds
 that receipt's immutable digest and the current verifier commit and digest.
+
+Verification uses up to eight visible Copilot sub-sessions. Each sub-session generation-fences and
+claims exactly one authority at a time, verifies it without internal concurrency, and atomically
+persists its immutable result before claiming another authority. A baseline uses one batched telemetry
+stability snapshot for all five attempts. An issue uses exactly two target batches: one snapshot for
+all issue attempts and one for all paired-`v0` attempts. It never stabilizes attempts independently,
+deploys an Agent, invokes an endpoint, or sends traffic.
+
+Authority results keep `PASS`, `FAIL`, and `INCOMPLETE` distinct. Baselines pass only at `5/5`;
+deterministic issues pass only at `5/5` with paired `v0` at `0/5`; model-mediated issues pass at
+`>=5/7` with paired `v0` at `0/7`. Complete evidence that misses the reviewed threshold is `FAIL`;
+missing, ambiguous, or unstable evidence is `INCOMPLETE`, never `FAIL`. A later authority or
+sub-session failure does not discard already persisted results. Retries schedule only missing,
+`INCOMPLETE`, or binding-changed authorities.
 
 The local atomic journal, content-addressed history, and a 72-hour execution TTL support resumable
 work. Stale sub-sessions fail closed. Starting a new validation atomically supersedes incomplete local

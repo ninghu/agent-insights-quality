@@ -73,8 +73,17 @@ Agents and 36 reviewed, single-root issues.
   receipt extraction is one-time, atomic, and fenced against stale sub-sessions.
 - A reused receipt proves the traffic-generation/execution binding only. Every new verification
   package binds the receipt digest and current verifier commit/digest.
-- A later generation selects only changed, failed, incomplete, or missing authorities. Invoke only
-  those without current exact-bound completed receipts; assign the rest verify-only work with no new
+- Verification uses at most eight visible sub-sessions. Each claims one authority at a time, runs no
+  internal concurrency, deploy, or traffic, and persists one immutable generation-fenced result
+  before claiming another.
+- Query telemetry once per target as a batched stability snapshot: one baseline batch, or two issue
+  batches covering the issue and paired `v0`. Never stabilize attempts independently.
+- Keep authority `PASS`, `FAIL`, and `INCOMPLETE` distinct. Apply baseline `5/5`, deterministic
+  `5/5` plus paired `v0` `0/5`, and model-mediated `>=5/7` plus paired `v0` `0/7`.
+- A later failure never discards completed authority results. Retry only missing, `INCOMPLETE`, or
+  exact-binding-changed authorities; unchanged definitive `PASS` and `FAIL` results are reusable.
+- A later generation selects only changed, incomplete, or missing authorities. Invoke only those
+  without current exact-bound completed receipts; assign the rest verify-only work with no new
   endpoint traffic.
 - Stale sub-sessions fail closed. Validation has no cleanup, and final composition requires exact
   fresh or reusable evidence for all 41 authorities.
