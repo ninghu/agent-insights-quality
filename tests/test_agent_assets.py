@@ -928,7 +928,18 @@ def test_finance_issue_sources_match_reviewed_deltas() -> None:
         ).read_text(encoding="utf-8")
         middleware_base = reviewed["middleware_kind"]
         assert f"class {class_name}({middleware_base}):" in source
-        assert f"middleware = [{class_name}()]" in source
+        response_class = reviewed.get("response_class")
+        if response_class:
+            response_middleware_base = reviewed["response_middleware_kind"]
+            assert (
+                f"class {response_class}({response_middleware_base}):"
+                in source
+            )
+            assert "middleware = [" in source
+            assert f"        {class_name}()," in source
+            assert f"        {response_class}()," in source
+        else:
+            assert f"middleware = [{class_name}()]" in source
         assert "del call_next" not in source
         class_source = source[source.index(f"class {class_name}") : source.index(
             "\ndef build_agent"

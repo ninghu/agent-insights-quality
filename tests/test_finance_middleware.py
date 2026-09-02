@@ -567,8 +567,18 @@ class _ScriptedFinanceClient(
     FrameworkChatMiddlewareLayer,
     FrameworkBaseChatClient,
 ):
-    def __init__(self, events):
+    def __init__(
+        self,
+        events,
+        *,
+        account_id,
+        expected_result,
+        natural_response,
+    ):
         self.events = events
+        self.account_id = account_id
+        self.expected_result = expected_result
+        self.natural_response = natural_response
         super().__init__()
 
     def _inner_get_response(self, *, messages, stream, options, **_kwargs):
@@ -582,23 +592,19 @@ class _ScriptedFinanceClient(
         ]
         if function_results:
             result = json.loads(function_results[0].result)
-            assert result == {
-                "ok": False,
-                "account_id": "acct-demo-missing",
-                "error": {"code": "account_not_found"},
-            }
-            event = ("natural_model_response", "The account was not found.")
-            content = FrameworkContent.from_text("The account was not found.")
+            assert result == self.expected_result
+            event = ("natural_model_response", self.natural_response)
+            content = FrameworkContent.from_text(self.natural_response)
         else:
             event = (
                 "model_function_call",
                 "get_balance",
-                {"account_id": "acct-demo-missing"},
+                {"account_id": self.account_id},
             )
             content = FrameworkContent.from_function_call(
                 "synthetic-call",
                 "get_balance",
-                arguments={"account_id": "acct-demo-missing"},
+                arguments={"account_id": self.account_id},
             )
 
         async def updates():
@@ -614,10 +620,28 @@ class _ScriptedFinanceClient(
         )
 
 
-def _run_finance_framework_pipeline(monkeypatch, logical_version: str):
+def _run_finance_framework_pipeline(
+    monkeypatch,
+    logical_version: str,
+    *,
+    account_id="acct-demo-missing",
+    expected_result=None,
+    natural_response="The account was not found.",
+    request_text="Show the balance for acct-demo-missing and preserve the tool error.",
+):
     module = _load_finance_app_with_framework(monkeypatch, logical_version)
     events = []
-    client = _ScriptedFinanceClient(events)
+    expected_result = expected_result or {
+        "ok": False,
+        "account_id": "acct-demo-missing",
+        "error": {"code": "account_not_found"},
+    }
+    client = _ScriptedFinanceClient(
+        events,
+        account_id=account_id,
+        expected_result=expected_result,
+        natural_response=natural_response,
+    )
     original_finish_tool_span = module.finish_tool_span
 
     def record_tool_execution(name, result, account_id=None):
@@ -636,7 +660,7 @@ def _run_finance_framework_pipeline(monkeypatch, logical_version: str):
     monkeypatch.setattr(module, "DefaultAzureCredential", lambda: object())
     monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", "https://example.invalid")
     agent = module.build_agent()
-    missing_result = {
+    prior_result = {
         "ok": False,
         "account_id": "acct-demo-missing",
         "error": {"code": "account_not_found"},
@@ -661,15 +685,13 @@ def _run_finance_framework_pipeline(monkeypatch, logical_version: str):
             contents=[
                 FrameworkContent.from_function_result(
                     "prior-call",
-                    result=missing_result,
+                    result=prior_result,
                 )
             ],
         ),
         FrameworkMessage(
             role="user",
-            contents=[
-                "Show the balance for acct-demo-missing and preserve the tool error."
-            ],
+            contents=[request_text],
         ),
     ]
 
@@ -741,6 +763,56 @@ def test_issue_014_removes_argument_from_real_function_invocation(
     asyncio.run(module.MissingAccountIdentifier().process(context, call_next))
     assert observed == [{}]
     assert "start_span" not in inspect.getsource(module.MissingAccountIdentifier)
+
+
+def test_issue_014_real_framework_reports_omission_after_tool_dispatch(
+    monkeypatch,
+) -> None:
+    issue_result = {
+        "ok": False,
+        "error": {"code": "account_id_required"},
+    }
+    issue_response, issue_events = _run_finance_framework_pipeline(
+        monkeypatch,
+        "issue-014",
+        account_id="acct-demo-a",
+        expected_result=issue_result,
+        natural_response="The balance lookup failed.",
+        request_text="Show the balance for acct-demo-a.",
+    )
+    expected_issue_text = (
+        "The balance lookup failed because account_id was omitted."
+    )
+    assert issue_response.text == expected_issue_text
+    assert issue_events == [
+        ("model_function_call", "get_balance", {"account_id": "acct-demo-a"}),
+        ("tool_execution", "get_balance", None, "account_id_required"),
+        ("natural_model_response", "The balance lookup failed."),
+        ("final_response", expected_issue_text),
+    ]
+
+    baseline_result = {
+        "ok": True,
+        "account_id": "acct-demo-a",
+        "balance": 1250.5,
+        "currency": "USD",
+        "spend": 430.25,
+    }
+    baseline_response, baseline_events = _run_finance_framework_pipeline(
+        monkeypatch,
+        "v0",
+        account_id="acct-demo-a",
+        expected_result=baseline_result,
+        natural_response="The balance is USD 1250.50.",
+        request_text="Show the balance for acct-demo-a.",
+    )
+    assert baseline_response.text == "The balance is USD 1250.50."
+    assert baseline_events == [
+        ("model_function_call", "get_balance", {"account_id": "acct-demo-a"}),
+        ("tool_execution", "get_balance", "acct-demo-a", None),
+        ("natural_model_response", "The balance is USD 1250.50."),
+        ("final_response", "The balance is USD 1250.50."),
+    ]
 
 
 def test_issue_015_swaps_scope_on_real_function_invocation(monkeypatch) -> None:

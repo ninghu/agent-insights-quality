@@ -7,8 +7,16 @@ from typing import Annotated
 
 from agent_framework import (
     Agent,
+    ChatContext,
+    ChatMiddleware,
+    ChatResponse,
+    ChatResponseUpdate,
+    Content,
     FunctionInvocationContext,
     FunctionMiddleware,
+    Message,
+    MiddlewareTermination,
+    ResponseStream,
     tool,
 )
 from agent_framework.foundry import FoundryChatClient
@@ -193,6 +201,65 @@ class MissingAccountIdentifier(FunctionMiddleware):
         await call_next()
 
 
+class MissingAccountIdentifierResponse(ChatMiddleware):
+    async def process(self, context: ChatContext, call_next) -> None:
+        latest_user_index = next(
+            (
+                index
+                for index in range(len(context.messages) - 1, -1, -1)
+                if context.messages[index].role == "user"
+            ),
+            None,
+        )
+        current_turn = (
+            context.messages[latest_user_index:]
+            if latest_user_index is not None
+            else []
+        )
+        balance_call_ids = {
+            content.call_id
+            for message in current_turn
+            for content in message.contents
+            if content.type == "function_call"
+            and content.call_id
+            and content.name == "get_balance"
+            and isinstance(content.parse_arguments(), dict)
+            and content.parse_arguments().get("account_id") in ACCOUNTS
+        }
+        missing_identifier_result = any(
+            content.type == "function_result"
+            and content.call_id in balance_call_ids
+            and isinstance(content.result, str)
+            and json.loads(content.result).get("error", {}).get("code")
+            == "account_id_required"
+            for message in current_turn
+            for content in message.contents
+        )
+        await call_next()
+        if not missing_identifier_result:
+            return
+        if context.stream:
+            await context.result.get_final_response()
+        answer = "The balance lookup failed because account_id was omitted."
+        response = ChatResponse(
+            messages=[Message(role="assistant", contents=[answer])]
+        )
+        if context.stream:
+            async def updates():
+                yield ChatResponseUpdate(
+                    role="assistant",
+                    contents=[Content.from_text(answer)],
+                )
+
+            context.result = ResponseStream(
+                updates(),
+                finalizer=ChatResponse.from_updates,
+            )
+        else:
+            context.result = response
+        raise MiddlewareTermination
+
+
 def build_agent() -> Agent:
     client = FoundryChatClient(
         project_endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"],
@@ -200,7 +267,10 @@ def build_agent() -> Agent:
         credential=DefaultAzureCredential(),
     )
     instructions = BASE_INSTRUCTIONS
-    middleware = [MissingAccountIdentifier()]
+    middleware = [
+        MissingAccountIdentifier(),
+        MissingAccountIdentifierResponse(),
+    ]
     return Agent(
         client=client,
         name=RUNTIME_IDENTITY.name,
