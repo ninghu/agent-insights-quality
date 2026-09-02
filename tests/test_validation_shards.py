@@ -274,6 +274,108 @@ def test_shard_resource_import_is_exact_idempotent() -> None:
     assert controller.applied == 2
 
 
+def test_shard_resource_import_allows_hosted_identity_principal_alias() -> None:
+    identity_intent = content_hash({"resource": "identity"})
+    principal_intent = content_hash({"resource": "principal"})
+    authority_id = "issue-017"
+    resources = [
+        {
+            "state": "create_intent",
+            "kind": kind,
+            "intent_reference": intent,
+            "provider_id": intent,
+            "authority_id": authority_id,
+            "parent_id": None,
+            "ownership_nonce": "nonce",
+        }
+        for kind, intent in (
+            ("hosted_identity", identity_intent),
+            ("runtime_principal", principal_intent),
+        )
+    ]
+
+    class Controller:
+        def __init__(self) -> None:
+            self.active = SimpleNamespace(
+                value={"ownership_nonce": "nonce", "resources": resources}
+            )
+
+        def dynamic_resource_event(self, event, *, now) -> None:
+            del now
+            item = next(
+                value
+                for value in self.active.value["resources"]
+                if value["intent_reference"] == event["intent_reference"]
+            )
+            item.update(event)
+
+    artifact = {
+        "shard_id": 1,
+        "resources": [
+            {
+                **resources[0],
+                "state": "created",
+                "provider_id": "shared-identity",
+            },
+            {
+                **resources[1],
+                "state": "created",
+                "provider_id": "shared-identity",
+            },
+        ],
+    }
+    controller = Controller()
+    import_shard_resources(controller, [artifact], now=lambda: None)
+    assert {
+        item["provider_id"] for item in controller.active.value["resources"]
+    } == {"shared-identity"}
+
+
+def test_shard_resource_import_rejects_identity_alias_across_authorities() -> None:
+    identity_intent = content_hash({"resource": "identity"})
+    principal_intent = content_hash({"resource": "principal"})
+    resources = [
+        {
+            "state": "created",
+            "kind": "hosted_identity",
+            "intent_reference": identity_intent,
+            "provider_id": "shared-identity",
+            "authority_id": "issue-017",
+            "parent_id": None,
+            "ownership_nonce": "nonce",
+        },
+        {
+            "state": "create_intent",
+            "kind": "runtime_principal",
+            "intent_reference": principal_intent,
+            "provider_id": principal_intent,
+            "authority_id": "issue-018",
+            "parent_id": None,
+            "ownership_nonce": "nonce",
+        },
+    ]
+    controller = SimpleNamespace(
+        active=SimpleNamespace(
+            value={"ownership_nonce": "nonce", "resources": resources}
+        )
+    )
+    artifact = {
+        "shard_id": 1,
+        "resources": [
+            {
+                **resources[1],
+                "state": "created",
+                "provider_id": "shared-identity",
+            }
+        ],
+    }
+    with pytest.raises(
+        ContractError,
+        match="Validation shard resource provider binding changed",
+    ):
+        import_shard_resources(controller, [artifact], now=lambda: None)
+
+
 def test_eight_invoke_workers_do_not_multiply_prepared_capacity() -> None:
     capacity = CapacityPlan(
         measured_rpm=1000,

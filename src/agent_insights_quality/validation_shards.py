@@ -562,16 +562,16 @@ def _resource_event_is_imported(
         return True
     if state == "created":
         provider_id = str(event.get("provider_id") or "")
-        collision = next(
-            (
-                item
-                for item in controller.active.value["resources"]
-                if item["provider_id"] == provider_id
-                and item["intent_reference"] != intent_reference
-            ),
-            None,
-        )
-        if collision is not None:
+        collisions = [
+            item
+            for item in controller.active.value["resources"]
+            if item["provider_id"] == provider_id
+            and item["intent_reference"] != intent_reference
+        ]
+        if any(
+            not _shared_hosted_identity_alias(item, event)
+            for item in collisions
+        ):
             raise ContractError("Validation shard resource provider binding changed")
         if (
             existing["state"] in {"create_intent", "ambiguous_create"}
@@ -584,3 +584,17 @@ def _resource_event_is_imported(
     if state == "ambiguous_create":
         return existing["state"] in {"ambiguous_create", "created"}
     raise ContractError("Validation shard resource event state is invalid")
+
+
+def _shared_hosted_identity_alias(
+    existing: Mapping[str, Any],
+    event: Mapping[str, Any],
+) -> bool:
+    authority_id = event.get("authority_id")
+    return (
+        isinstance(authority_id, str)
+        and bool(authority_id)
+        and existing.get("authority_id") == authority_id
+        and {existing.get("kind"), event.get("kind")}
+        == {"hosted_identity", "runtime_principal"}
+    )
