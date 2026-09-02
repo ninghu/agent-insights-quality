@@ -1725,14 +1725,14 @@ def test_trace_behavior_query_stabilizes_reordered_custom_container_rows(
     transport = _trace_behavior_query_row(
         operation_id,
         reference,
-        telemetry_type="requests",
+        telemetry_type="AppRequests",
     )
     transport[1:3] = ["transport-span", "upstream-span"]
     transport[23:25] = ["finance-agent", "issue-013"]
     internal = _trace_behavior_query_row(
         operation_id,
         reference,
-        telemetry_type="dependencies",
+        telemetry_type="AppDependencies",
     )
     internal[1:3] = ["internal-span", "runtime-parent"]
     internal[23:25] = ["finance-agent", "issue-013"]
@@ -1746,7 +1746,7 @@ def test_trace_behavior_query_stabilizes_reordered_custom_container_rows(
     tool[1:7] = [
         "tool-span",
         "internal-span",
-        "dependencies",
+        "AppDependencies",
         "execute_tool",
         "lookup",
         "call-1",
@@ -1795,6 +1795,36 @@ def test_trace_behavior_query_stabilizes_reordered_custom_container_rows(
     assert evidence[0][0].passed is True
     assert anchors == [("internal-span",)]
     assert monotonic[0] == 180
+
+
+@pytest.mark.parametrize("telemetry_type", ["", "metrics"])
+def test_trace_behavior_query_rejects_unknown_telemetry_source(
+    monkeypatch,
+    telemetry_type,
+) -> None:
+    statuses = _install_logs_query_status(monkeypatch)
+    operation_id = "a" * 32
+    runtime = _runtime()
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+    runtime._query_resource = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: types.SimpleNamespace(
+            status=statuses.SUCCESS,
+            tables=[
+                types.SimpleNamespace(
+                    rows=[
+                        _trace_behavior_query_row(
+                            operation_id,
+                            "resp_A1b2C3d4E5f6",
+                            telemetry_type=telemetry_type,
+                        )
+                    ]
+                )
+            ],
+        )
+    )
+
+    with pytest.raises(ContractError, match="invalid telemetry source"):
+        runtime._trace_rows((operation_id,))
 
 
 def test_trace_behavior_query_retries_transient_failure_and_uses_final_rows(
@@ -1948,6 +1978,7 @@ def test_trace_behavior_query_reuses_successful_rows_for_correlation_and_output(
 
     assert attempts == 1
     assert rows[0]["matched_reference"] == reference
+    assert rows[0]["telemetry_type"] == "requests"
     assert rows[0]["output_messages_present"] is True
     assert rows[0]["output_messages_nonempty"] is True
 
@@ -1969,7 +2000,7 @@ def test_collect_trace_evidence_emits_allowlisted_hashed_graph(monkeypatch) -> N
                 operation_id,
                 "span-root",
                 "upstream-server-span",
-                "requests",
+                "AppRequests",
                 "invoke_agent",
                 "2026-08-31T10:00:00+00:00",
                 25.0,
@@ -1989,7 +2020,7 @@ def test_collect_trace_evidence_emits_allowlisted_hashed_graph(monkeypatch) -> N
                 operation_id,
                 "span-maf",
                 "span-root",
-                "dependencies",
+                "AppDependencies",
                 "invoke_agent",
                 "2026-08-31T10:00:00.005+00:00",
                 20.0,
@@ -2009,7 +2040,7 @@ def test_collect_trace_evidence_emits_allowlisted_hashed_graph(monkeypatch) -> N
                 operation_id,
                 "span-child",
                 "span-maf",
-                "dependencies",
+                "AppDependencies",
                 "execute_tool",
                 "2026-08-31T10:00:00.010+00:00",
                 10.0,
@@ -2046,6 +2077,7 @@ def test_collect_trace_evidence_emits_allowlisted_hashed_graph(monkeypatch) -> N
     assert operation_id not in json.dumps(evidence)
     root, inner, child = operation["spans"]
     assert root["sequence"] == 1
+    assert root["telemetry_type"] == "requests"
     assert root["operation_name"] == "invoke_agent"
     assert root["parent_span_reference"].startswith("sha256:")
     assert root["output_messages_present"] is False
@@ -2087,12 +2119,16 @@ def test_collect_trace_evidence_emits_allowlisted_hashed_graph(monkeypatch) -> N
     assert 'customDimensions["gen_ai.tool.call.result"]' not in query
 
 
-def _trace_collection_row(operation_id: str) -> list:
+def _trace_collection_row(
+    operation_id: str,
+    *,
+    telemetry_type: str = "requests",
+) -> list:
     return [
         operation_id,
         "span-root",
         "upstream-server-span",
-        "requests",
+        telemetry_type,
         "invoke_agent",
         "2026-08-31T10:00:00+00:00",
         25.0,
@@ -2108,6 +2144,35 @@ def _trace_collection_row(operation_id: str) -> list:
         True,
         True,
     ]
+
+
+@pytest.mark.parametrize("telemetry_type", ["", "metrics"])
+def test_trace_collection_rejects_unknown_telemetry_source(
+    monkeypatch,
+    telemetry_type,
+) -> None:
+    statuses = _install_logs_query_status(monkeypatch)
+    operation_id = "a" * 32
+    runtime = _runtime()
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+    runtime._query_resource = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: types.SimpleNamespace(
+            status=statuses.SUCCESS,
+            tables=[
+                types.SimpleNamespace(
+                    rows=[
+                        _trace_collection_row(
+                            operation_id,
+                            telemetry_type=telemetry_type,
+                        )
+                    ]
+                )
+            ],
+        )
+    )
+
+    with pytest.raises(ContractError, match="invalid telemetry source"):
+        runtime._collect_trace_rows((operation_id,))
 
 
 def test_trace_collection_retries_transient_non_success_result(monkeypatch) -> None:
@@ -2161,7 +2226,9 @@ def test_trace_collection_retries_partial_result(monkeypatch) -> None:
     )
     runtime._sleep = sleeps.append
 
-    assert runtime._collect_trace_rows((operation_id,))[0]["operation_id"] == operation_id
+    row = runtime._collect_trace_rows((operation_id,))[0]
+    assert row["operation_id"] == operation_id
+    assert row["telemetry_type"] == "requests"
     assert sleeps == [1]
     assert results == []
 

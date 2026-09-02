@@ -1811,7 +1811,7 @@ union withsource=telemetry_type traces, dependencies, requests
                 "operation_id": str(row[0] or ""),
                 "span_id": str(row[1] or ""),
                 "parent_span_id": str(row[2] or ""),
-                "telemetry_type": str(row[3] or ""),
+                "telemetry_type": _canonical_telemetry_source(row[3]),
                 "operation_name": str(row[4] or ""),
                 "timestamp": str(row[5] or ""),
                 "duration": row[6],
@@ -2235,7 +2235,7 @@ union withsource=telemetry_type traces, dependencies, requests
                 "operation_id": str(row[0]),
                 "span_id": str(row[1] or ""),
                 "parent_span_id": str(row[2] or ""),
-                "telemetry_type": str(row[3] or ""),
+                "telemetry_type": _canonical_telemetry_source(row[3]),
                 "operation_name": str(row[4] or ""),
                 "tool_name": str(row[5] or ""),
                 "tool_call_id": str(row[6] or ""),
@@ -2688,6 +2688,22 @@ def _telemetry_boolean(value: Any, *, field: str) -> bool:
     if not isinstance(value, bool):
         raise ContractError(f"Trace collection returned invalid {field}")
     return value
+
+
+def _canonical_telemetry_source(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ContractError("Trace collection returned invalid telemetry source")
+    canonical = {
+        "requests": "requests",
+        "apprequests": "requests",
+        "dependencies": "dependencies",
+        "appdependencies": "dependencies",
+        "traces": "traces",
+        "apptraces": "traces",
+    }.get(value.casefold())
+    if canonical is None:
+        raise ContractError("Trace collection returned invalid telemetry source")
+    return canonical
 
 
 def _logs_query_status_class(result: Any, statuses: Any) -> str:
