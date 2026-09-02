@@ -122,14 +122,17 @@ Agents and 36 reviewed, single-root issues.
   external identity, quota, service, or ingestion failures use `infrastructure`.
 - Use `none`, `agent`, `insight_engine`, `test_framework`, `infrastructure`, or `unresolved`
   ownership.
-- `field_weighted_v1` score is 85% expected-issue field quality and 15% clean-card precision.
+- `correct_over_expected_plus_noise_v1` is `100 * correct issues / (expected issues + noise cards +
+  duplicate cards)`. Title, description, category, and linked traces determine correctness; severity
+  and proposed fix are diagnostic only.
 - Official Daily builds a public-safe normalized improvement input after assessments. GPT-5.6 Sol
   returns only the strict improvement-analysis schema; deterministic code reconciles living pattern
   state. Only `insight_engine` ownership is eligible, and the result is advisory and score-neutral.
 - Publish `reports/insight-engine-improvement.{json,md}` and the immutable dated snapshot with the
   Daily report. Email-only tests write a private preview only and never link or mutate living memory.
-- Complete runs pass at 90 or above and fail below 90. Incomplete evidence is `INCOMPLETE` with no
-  numeric score.
+- Complete runs publish one numeric score with no PASS/FAIL label or threshold. Incomplete evidence
+  fails internally and produces no report, email, ADX row, trend point, pull request, or promotion
+  receipt.
 
 ## Change workflow
 

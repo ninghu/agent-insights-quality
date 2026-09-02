@@ -8,10 +8,13 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
-from agent_insights_quality.shadow_scoring import (
-    SHADOW_SCORE_REPORT_PROFILES,
-    calculate_shadow_quality_score,
-    select_shadow_primary,
+from agent_insights_quality.scoring import (
+    ASSESSMENT_FIELDS,
+    ATTRIBUTABLE_FINDING_TYPES,
+    QUALITY_SCORE_FORMULA,
+    calculate_quality_score,
+    issue_outcome,
+    scoring_fields_pass,
 )
 from agent_insights_quality.selection import (
     DAILY_ISSUE_COUNT,
@@ -25,34 +28,16 @@ from agent_insights_quality.util import (
     atomic_text,
     read_json,
 )
-from agent_insights_quality.util import content_hash
 from agent_insights_quality.azure_regions import (
     location_display_name,
     regions_match,
 )
 
-REQUIRED_FIELDS = {
-    "root_cause",
-    "title",
-    "description",
-    "category",
-    "severity",
-    "proposed_fix",
-    "linked_traces",
-}
-QUALITY_SCORE_FORMULA = "field_weighted_v1"
-QUALITY_SCORE_THRESHOLD = 90
-FIELD_QUALITY_WEIGHT = 0.85
-CLEAN_CARD_PRECISION_WEIGHT = 0.15
-FIELD_WEIGHTS = {
-    "root_cause": 0.25,
-    "title": 0.10,
-    "description": 0.15,
-    "category": 0.10,
-    "severity": 0.10,
-    "proposed_fix": 0.15,
-    "linked_traces": 0.15,
-}
+REQUIRED_FIELDS = set(ASSESSMENT_FIELDS)
+_QUALITY_SCORE_DOC_URL = (
+    "https://github.com/ninghu/agent-insights-quality/blob/main/"
+    "docs/QUALITY_BAR.md#quality-score"
+)
 
 def resolve_test_region(
     live_location: Any,
@@ -242,64 +227,9 @@ def _activation_evidence(value: dict[str, Any]) -> dict[str, int]:
     }
 
 
-def calculate_quality_score(
-    *,
-    field_quality_score: float,
-    clean_card_precision: float,
-    incomplete: bool,
-) -> int | float | None:
-    if incomplete:
-        return None
-    value = round(
-        max(
-            0.0,
-            min(
-                100.0,
-                FIELD_QUALITY_WEIGHT * field_quality_score
-                + CLEAN_CARD_PRECISION_WEIGHT * clean_card_precision,
-            ),
-        ),
-        1,
-    )
-    return int(value) if value.is_integer() else value
-
-
-def _field_score(fields: dict[str, Any]) -> float:
-    return 100.0 * sum(
-        weight
-        for field, weight in FIELD_WEIGHTS.items()
-        if fields.get(field) is True
-    )
-
-
-def _issue_field_score(item: dict[str, Any]) -> float:
-    if (
-        item["assessment"].get("finding_type") == "MATCHED"
-        and not all(item["assessment"].get("fields", {}).values())
-    ):
-        return 0.0
-    cards = item["assessment"].get("card_evaluations", [])
-    attributable = [
-        _field_score(card["fields"])
-        for card in cards
-        if card.get("finding_type") in COVERAGE_PRIMARY_TYPES
-    ]
-    if attributable:
-        score = max(attributable)
-    elif item["detail"] in {"MISSING", "INCOMPLETE"}:
-        score = 0.0
-    else:
-        score = _field_score(item["assessment"]["fields"])
-    if item["result"] != "PASS" and score >= 100.0:
-        return 0.0
-    return score
-
-
 def _summary_metrics(
     baseline: list[dict[str, Any]],
     issues: list[dict[str, Any]],
-    *,
-    incomplete: bool,
 ) -> dict[str, Any]:
     baseline_passed = sum(
         item["status"] == "passed"
@@ -307,15 +237,9 @@ def _summary_metrics(
         and item["assessment"]["verdict"] == "clean"
         for item in baseline
     )
-    issues_correct = sum(
-        item["status"] == "observed"
-        and expected_issue_coverage_label(item) == "Correct"
-        for item in issues
-    )
-    issues_partial = sum(
-        expected_issue_coverage_label(item) == "Partially Correct"
-        for item in issues
-    )
+    issues_correct = sum(item["outcome"] == "correct" for item in issues)
+    issues_incorrect = sum(item["outcome"] == "incorrect" for item in issues)
+    issues_missing = sum(item["outcome"] == "missing" for item in issues)
     noise_cards = sum(
         sum(
             card.get("evaluation") == "noise"
@@ -328,7 +252,7 @@ def _summary_metrics(
         for item in baseline
     ) + sum(
         sum(
-            card.get("finding_type") in {"NOISE", "DUPLICATE"}
+            card.get("finding_type") == "NOISE"
             for card in item["assessment"].get("card_evaluations", [])
         )
         if "card_evaluations" in item["assessment"]
@@ -337,127 +261,30 @@ def _summary_metrics(
         else 0
         for item in issues
     )
-    unverified_cards = sum(
+    duplicate_cards = sum(
         sum(
-            card.get("evaluation") == "incomplete"
-            for card in item["assessment"].get("card_evaluations", [])
-        )
-        for item in baseline
-    ) + sum(
-        sum(
-            card.get("finding_type") == "INCOMPLETE"
+            card.get("finding_type") == "DUPLICATE"
             for card in item["assessment"].get("card_evaluations", [])
         )
         for item in issues
     )
-    non_clean_cards = (
-        sum(
-            sum(
-                card.get("evaluation") == "noise"
-                for card in item["assessment"].get("card_evaluations", [])
-            )
-            for item in baseline
-        )
-        + sum(
-            sum(
-                card.get("finding_type")
-                in {"NOISE", "DUPLICATE", "INCOMPLETE"}
-                for card in item["assessment"].get("card_evaluations", [])
-            )
-            for item in issues
-        )
-    )
-    observed_cards = sum(item["insight_count"] for item in baseline) + sum(
-        item["observed_count"] for item in issues
-    )
-    field_quality_score = (
-        sum(_issue_field_score(item) for item in issues) / len(issues)
-        if issues
-        else 0.0
-    )
-    clean_card_precision = (
-        100.0 * max(observed_cards - non_clean_cards, 0) / observed_cards
-        if observed_cards
-        else 0.0
-    )
-    incomplete_reasons = sorted(
-        {
-            str(item["error_code"])
-            for item in [*baseline, *issues]
-            if item.get("error_code")
-        }
-        | (
-            {"assessment_evidence_incomplete"}
-            if any(
-                item["assessment"]["verdict"] == "inconclusive"
-                or any(
-                    card.get("evaluation") == "incomplete"
-                    for card in item["assessment"].get("card_evaluations", [])
-                )
-                for item in baseline
-            )
-            or any(
-                item["assessment"]["finding_type"] == "INCOMPLETE"
-                for item in issues
-            )
-            else set()
-        )
-        | (
-            {"runtime_evidence_incomplete"}
-            if any(
-                item.get("runtime_evidence_complete") is not True
-                for item in [*baseline, *issues]
-            )
-            else set()
-        )
-    )
     quality_score = calculate_quality_score(
-        field_quality_score=field_quality_score,
-        clean_card_precision=clean_card_precision,
-        incomplete=incomplete,
+        correct_issues=issues_correct,
+        expected_issues=len(issues),
+        noise_cards=noise_cards,
+        duplicate_cards=duplicate_cards,
     )
     return {
         "baseline_passed": baseline_passed,
         "issues_expected": len(issues),
         "issues_correct": issues_correct,
-        "issues_partial": issues_partial,
-        "quality_failures": (
-            sum(
-                item["status"] in {"passed", "not_at_bar"}
-                and (
-                    item["insight_count"] != 0
-                    or item["assessment"]["verdict"] != "clean"
-                )
-                for item in baseline
-            )
-            + sum(item["result"] == "FAIL" for item in issues)
-        ),
-        "incomplete": incomplete,
-        "incomplete_reasons": incomplete_reasons,
+        "issues_incorrect": issues_incorrect,
+        "issues_missing": issues_missing,
         "noise_cards": noise_cards,
-        "unverified_cards": unverified_cards,
-        "observed_cards": observed_cards,
-        "field_quality_score": round(field_quality_score, 1),
-        "clean_card_precision": round(clean_card_precision, 1),
+        "duplicate_cards": duplicate_cards,
         "quality_score": quality_score,
-        "quality_threshold": QUALITY_SCORE_THRESHOLD,
         "quality_score_formula": QUALITY_SCORE_FORMULA,
     }
-
-
-def _apply_staging_shadow_score(report: dict[str, Any]) -> None:
-    if report["profile"] not in SHADOW_SCORE_REPORT_PROFILES:
-        return
-    incomplete = report["summary"]["incomplete"]
-    report["summary"]["shadow_quality_score"] = calculate_shadow_quality_score(
-        report["baseline"],
-        report["issues"],
-        incomplete=incomplete,
-    )
-    for item in report["issues"]:
-        item["shadow_v2_primary"] = (
-            None if incomplete else select_shadow_primary(item)
-        )
 
 
 def build_report(
@@ -541,22 +368,13 @@ def build_report(
                 value,
                 require_activation=agent["type"] == "prompt",
             )
-            fields_pass = (
-                set(assessment["fields"]) == REQUIRED_FIELDS
-                and all(assessment["fields"].values())
-            )
             complete = value["status"] not in {
                 "inconclusive",
                 "skipped_baseline",
             } and runtime_complete and assessment["finding_type"] != "INCOMPLETE"
-            correct = (
-                value["status"] == "observed"
-                and len(value["insight_references"]) == 1
-                and assessment["verdict"] == "correct"
-                and fields_pass
-            )
             if not complete:
                 incomplete = True
+            outcome = issue_outcome(assessment["card_evaluations"])
             results.append(
                 {
                     "issue_id": issue_id,
@@ -568,13 +386,7 @@ def build_report(
                     "error_code": value.get("error_code"),
                     "runtime_evidence_complete": runtime_complete,
                     "activation_evidence": _activation_evidence(value),
-                    "result": (
-                        "INCOMPLETE"
-                        if not complete
-                        else "PASS"
-                        if correct
-                        else "FAIL"
-                    ),
+                    "outcome": outcome,
                     "detail": {
                         "correct": assessment["finding_type"],
                         "partially_useful": assessment["finding_type"],
@@ -595,16 +407,13 @@ def build_report(
                     "evidence_reference": value.get("evidence_reference"),
                 }
             )
-    summary = _summary_metrics(baseline, results, incomplete=incomplete)
-    status = (
-        "INCOMPLETE"
-        if incomplete
-        else "PASS"
-        if summary["quality_score"] >= QUALITY_SCORE_THRESHOLD
-        else "FAIL"
-    )
+    if incomplete:
+        raise ContractError(
+            "Qualification evidence is incomplete; no quality report was produced"
+        )
+    summary = _summary_metrics(baseline, results)
     report = {
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "report_date": manifest["report_date"],
         "run_id": manifest["run_id"],
         "profile": manifest["profile"],
@@ -615,13 +424,11 @@ def build_report(
             manifest.get("test_region"),
             manifest.get("test_region_registry"),
         ),
-        "status": status,
         "baseline": baseline,
         "issues": results,
         "summary": summary,
         "delivery": {"content_digest": "sha256:" + "0" * 64},
     }
-    _apply_staging_shadow_score(report)
     return report
 
 
@@ -657,15 +464,15 @@ def _validate_embedded_assessment_cards(report: Mapping[str, Any]) -> None:
             card["reference"]: card["finding_type"] for card in cards
         }
         for card in cards:
-            if card["finding_type"] in {"PARTIAL", "MISMATCHED"}:
+            if card["finding_type"] in ATTRIBUTABLE_FINDING_TYPES:
                 failed_fields = {
                     field
                     for field, passed in card["fields"].items()
                     if passed is False
                 }
-                if set(card.get("field_reasons", {})) != failed_fields:
+                if failed_fields and set(card.get("field_reasons", {})) != failed_fields:
                     raise ContractError(
-                        "Report PARTIAL/MISMATCHED card requires a reason for "
+                        "Report attributable card requires a reason for "
                         "exactly each failed field"
                     )
             if card["finding_type"] == "DUPLICATE":
@@ -724,113 +531,6 @@ def _validate_public_report_content(value: Any, path: str = "report") -> None:
         )
 
 
-def build_operational_failure_report(
-    *,
-    report_date: Any,
-    run_id: str,
-    profile: str,
-    selected: dict[str, list[str]],
-    issues: dict[str, Any],
-    failure_code: str,
-    catalog_hashes: dict[str, str],
-) -> dict[str, Any]:
-    issue_by_id = {item["id"]: item for item in issues["issues"]}
-    values = [
-        {
-            "issue_id": issue_id,
-            "agent": agent_name,
-            "logical_version": issue_id,
-            "foundry_version": "unavailable",
-            "title": issue_by_id[issue_id]["title"],
-            "status": "inconclusive",
-            "result": "INCOMPLETE",
-            "detail": "INCOMPLETE",
-            "runtime_evidence_complete": False,
-            "observed_count": 0,
-            "assessment": {
-                "verdict": "missing",
-                "finding_type": "INCOMPLETE",
-                "ownership": "infrastructure",
-                "ownership_reason": (
-                    "Qualification failed before trustworthy issue evidence."
-                ),
-                "reasoning": (
-                    "Qualification failed before trustworthy issue evidence."
-                ),
-                "confidence": 0.0,
-                "fields": {field: False for field in sorted(REQUIRED_FIELDS)},
-                "card_evaluations": [],
-            },
-            "evidence_reference": None,
-        }
-        for agent_name, issue_ids in selected.items()
-        for issue_id in issue_ids
-    ]
-    report = {
-        "schema_version": "2.0.0",
-        "report_date": report_date.isoformat(),
-        "run_id": run_id,
-        "profile": profile,
-        "manifest_reference": content_hash(
-            {
-                "run_id": run_id,
-                "profile": profile,
-                "selected": selected,
-                "failure_code": failure_code,
-            }
-        ),
-        "catalog_hashes": catalog_hashes,
-        "source_integrity": {
-            "verified": False,
-            "contract_digest": None,
-        },
-        "test_region": "unavailable",
-        "status": "INCOMPLETE",
-        "baseline": [
-            {
-                "agent": agent_name,
-                "logical_version": "v0",
-                "foundry_version": "unavailable",
-                "status": "inconclusive",
-                "runtime_evidence_complete": False,
-                "insight_count": 0,
-                "assessment": {
-                    "verdict": "inconclusive",
-                    "ownership": "infrastructure",
-                    "ownership_reason": (
-                        "Qualification failed before a trustworthy baseline assessment."
-                    ),
-                    "confidence": 1.0,
-                    "card_evaluations": [],
-                },
-            }
-            for agent_name in selected
-        ],
-        "issues": values,
-        "summary": {
-            "baseline_passed": 0,
-            "issues_expected": len(values),
-            "issues_correct": 0,
-            "issues_partial": 0,
-            "quality_failures": 0,
-            "incomplete": True,
-            "incomplete_reasons": [failure_code],
-            "failure_code": failure_code,
-            "noise_cards": 0,
-            "unverified_cards": 0,
-            "observed_cards": 0,
-            "field_quality_score": None,
-            "clean_card_precision": None,
-            "quality_score": None,
-            "quality_threshold": QUALITY_SCORE_THRESHOLD,
-            "quality_score_formula": QUALITY_SCORE_FORMULA,
-        },
-        "delivery": {"content_digest": "sha256:" + "0" * 64},
-    }
-    _apply_staging_shadow_score(report)
-    return report
-
-
 def validate_report(report: dict[str, Any]) -> None:
     schema = read_json(ROOT / "schemas" / "report.schema.json")
     errors = list(
@@ -846,36 +546,21 @@ def validate_report(report: dict[str, Any]) -> None:
     _validate_embedded_assessment_cards(report)
     _validate_public_report_content(report)
     source_integrity = report["source_integrity"]
-    if report["status"] in {"PASS", "FAIL"} and (
+    if (
         source_integrity.get("verified") is not True
         or not isinstance(source_integrity.get("contract_digest"), str)
     ):
-        raise ContractError("Complete report source integrity is incomplete")
+        raise ContractError("Report source integrity is incomplete")
     if len(report["issues"]) not in {DAILY_ISSUE_COUNT, STAGING_ISSUE_COUNT}:
         raise ContractError(
             "A report must contain the daily 20 or staging 36 issues"
         )
     if any(
         not isinstance(item, dict)
-        or not isinstance(item.get("runtime_evidence_complete"), bool)
+        or item.get("runtime_evidence_complete") is not True
         for item in [*report["baseline"], *report["issues"]]
     ):
         raise ContractError("Report runtime evidence is incomplete")
-    if report["profile"] in SHADOW_SCORE_REPORT_PROFILES:
-        expected_shadow = calculate_shadow_quality_score(
-            report["baseline"],
-            report["issues"],
-            incomplete=report["summary"]["incomplete"],
-        )
-        if report["summary"].get("shadow_quality_score") != expected_shadow:
-            raise ContractError("Staging shadow score is inconsistent")
-        incomplete = report["summary"]["incomplete"]
-        if any(
-            item.get("shadow_v2_primary")
-            != (None if incomplete else select_shadow_primary(item))
-            for item in report["issues"]
-        ):
-            raise ContractError("Staging shadow primary selection is inconsistent")
 
 
 def _validate_complete_summary(
@@ -894,31 +579,25 @@ def _validate_complete_summary(
         for item in report["baseline"]
     ) or any(
         item.get("runtime_evidence_complete") is not True
-        or item["result"] == "INCOMPLETE"
         or item["assessment"]["finding_type"] == "INCOMPLETE"
         for item in report["issues"]
     )
     if assessment_incomplete:
         raise ContractError(f"{label} report is incomplete")
-    expected = _summary_metrics(
-        report["baseline"],
-        report["issues"],
-        incomplete=False,
-    )
+    if any(
+        item["outcome"]
+        != issue_outcome(item["assessment"].get("card_evaluations", []))
+        for item in report["issues"]
+    ):
+        raise ContractError(f"{label} report issue outcomes are inconsistent")
+    expected = _summary_metrics(report["baseline"], report["issues"])
     summary = report["summary"]
     if (
-        summary.get("incomplete") is not False
-        or expected["issues_expected"] != expected_count
+        expected["issues_expected"] != expected_count
         or any(summary.get(key) != value for key, value in expected.items())
+        or set(summary) != set(expected)
     ):
         raise ContractError(f"{label} report summary is inconsistent")
-    expected_status = (
-        "PASS"
-        if expected["quality_score"] >= QUALITY_SCORE_THRESHOLD
-        else "FAIL"
-    )
-    if report["status"] != expected_status:
-        raise ContractError(f"{label} report status is inconsistent")
 
 
 def _baseline_report_semantics_valid(item: dict[str, Any]) -> bool:
@@ -987,8 +666,8 @@ def validate_published_report(
         or not isinstance(report["source_integrity"].get("contract_digest"), str)
     ):
         raise ContractError("Published report source integrity is incomplete")
-    if report["profile"] != "daily" or report["status"] not in {"PASS", "FAIL"}:
-        raise ContractError("Published report has an ineligible profile or status")
+    if report["profile"] != "daily":
+        raise ContractError("Published report has an ineligible profile")
     baseline = report["baseline"]
     expected_agents = {
         "weather-agent",
@@ -1033,7 +712,7 @@ def validate_published_report(
         or any(
             item.get("status") in {"inconclusive", "skipped_baseline", None}
             or not isinstance(item.get("observed_count"), int)
-            or item.get("result") not in {"PASS", "FAIL"}
+            or item.get("outcome") not in {"correct", "incorrect", "missing"}
             or item.get("detail")
             not in {
                 "MATCHED",
@@ -1042,7 +721,6 @@ def validate_published_report(
                 "MISSING",
                 "NOISE",
                 "DUPLICATE",
-                "INCOMPLETE",
             }
             or not isinstance(item.get("assessment"), dict)
             or item["assessment"].get("verdict")
@@ -1112,8 +790,8 @@ def validate_staging_report(
         or not isinstance(report["source_integrity"].get("contract_digest"), str)
     ):
         raise ContractError("Staging report source integrity is incomplete")
-    if report["profile"] != "staging" or report["status"] not in {"PASS", "FAIL"}:
-        raise ContractError("Promotion requires a complete staging PASS or FAIL report")
+    if report["profile"] != "staging":
+        raise ContractError("Promotion requires a complete staging report")
     baseline = report["baseline"]
     if (
         len(baseline) != 5
@@ -1139,7 +817,7 @@ def validate_staging_report(
             or item.get("title") != issue_by_id[item["issue_id"]]["title"]
             or item.get("status") in {"inconclusive", "skipped_baseline", None}
             or not isinstance(item.get("observed_count"), int)
-            or item.get("result") not in {"PASS", "FAIL"}
+            or item.get("outcome") not in {"correct", "incorrect", "missing"}
             or item.get("detail")
             not in {
                 "MATCHED",
@@ -1148,7 +826,6 @@ def validate_staging_report(
                 "MISSING",
                 "NOISE",
                 "DUPLICATE",
-                "INCOMPLETE",
             }
             or item.get("assessment", {}).get("verdict")
             not in {"correct", "partially_useful", "incorrect", "missing"}
@@ -1172,105 +849,37 @@ def validate_staging_report(
     _validate_complete_summary(report, expected_count=36, label="Staging")
 
 
-def _shadow_metric(value: Any) -> str:
-    return "N/A" if value is None else f"{float(value):.1f}/100"
-
-
-def _shadow_markdown(report: dict[str, Any]) -> list[str]:
-    shadow = report["summary"].get("shadow_quality_score")
-    if (
-        report["profile"] not in SHADOW_SCORE_REPORT_PROFILES
-        or report["summary"]["incomplete"]
-        or not isinstance(shadow, dict)
-        or shadow.get("score") is None
-    ):
-        return []
-    components = shadow["components"]
-    counts = shadow["counts"]
-    diagnostics = ", ".join(
-        str(value).replace("_", " ") for value in shadow["gate_failures"]
-    )
-    return [
-        "## Staging shadow calibration",
-        "",
-        f"`{shadow['formula']}` is report-only and has no status, promotion, "
-        "or automation authority.",
-        "",
-        "| Shadow metric | Value |",
-        "| --- | ---: |",
-        f"| Total | {_shadow_metric(shadow['score'])} |",
-        f"| Coverage | {_shadow_metric(components['coverage'])} |",
-        "| Diagnosis recall | "
-        f"{_shadow_metric(components['diagnosis_recall'])} |",
-        "| Selected-card quality | "
-        f"{_shadow_metric(components['selected_card_quality'])} |",
-        "| Useful coverage | "
-        f"{_shadow_metric(components['useful_coverage'])} |",
-        f"| Precision | {_shadow_metric(components['precision'])} |",
-        f"| Expected / detected issues | {counts['expected_issues']} / "
-        f"{counts['detected_issues']} |",
-        f"| Generated issue / baseline noise cards | "
-        f"{counts['generated_issue_cards']} / "
-        f"{counts['baseline_noise_cards']} |",
-        f"| Below-target diagnostics | {diagnostics or 'None'} |",
-        "",
-    ]
-
-
 def render_markdown(
     report: dict[str, Any],
     *,
     include_improvement_link: bool = True,
 ) -> str:
     summary = report["summary"]
-    score = (
-        "N/A"
-        if summary["quality_score"] is None
-        else f"{summary['quality_score']:g}/100"
-    )
-    field_quality = (
-        "N/A"
-        if summary["field_quality_score"] is None
-        else f"{summary['field_quality_score']:g}/100"
-    )
-    clean_precision = (
-        "N/A"
-        if summary["clean_card_precision"] is None
-        else f"{summary['clean_card_precision']:g}/100"
-    )
+    score = f"{summary['quality_score']:g} / 100"
     comparison = _score_comparison_text(report)
-    score_label = (
-        "**INCOMPLETE**"
-        if report["status"] == "INCOMPLETE"
-        else "Quality score"
-    )
     lines = [
         f"# Agent Insights Quality - {report['report_date']}",
         "",
         "## Summary",
         "",
-        "| Metric | Findings |",
+        "| Summary | Result |",
         "| --- | --- |",
-        f"| {score_label} | Score **{score}**{comparison} (quality threshold "
-        f"{summary['quality_threshold']}/100); "
-        f"{summary['issues_correct']} matched, {summary['issues_partial']} partial, "
-        f"{summary['noise_cards']} noise cards |",
-        f"| Expected issue Insights | {summary['issues_expected']} |",
-        "| Expected baseline Insights | 0 |",
-        f"| Observed cards | {summary['observed_cards']} |",
+        f"| Quality score | **{score}{comparison}** |",
+        f"| Expected issues | {summary['issues_correct']} correct / "
+        f"{summary['issues_expected']} "
+        f"({summary['issues_incorrect']} incorrect, "
+        f"{summary['issues_missing']} missing) |",
+        f"| Extra cards | {summary['noise_cards']} noise, "
+        f"{summary['duplicate_cards']} duplicate |",
+        f"| Scoring | [How Scoring Works]({_QUALITY_SCORE_DOC_URL}) |",
         "",
-        f"`{summary['quality_score_formula']}`: "
-        f"field quality `{field_quality}` at 85%; "
-        f"clean-card precision `{clean_precision}` at 15%.",
-        "",
-        *_shadow_markdown(report),
         "## What is working",
         "",
         "| Capability | Evidence |",
         "| --- | --- |",
         f"| Baseline health | {summary['baseline_passed']} of 5 Agents produced zero baseline Insights |",
-        f"| Exact issue quality | {summary['issues_correct']} of {summary['issues_expected']} selected issues passed every field |",
-        f"| Noise | {summary['noise_cards']} false-positive, unrelated, or duplicate cards |",
+        f"| Issue quality | {summary['issues_correct']} of {summary['issues_expected']} selected issues passed every scoring field |",
+        f"| Extra cards | {summary['noise_cards']} noise and {summary['duplicate_cards']} duplicate cards |",
         "",
         "## Baseline ownership",
         "",
@@ -1291,15 +900,13 @@ def render_markdown(
     failures = [
         item
         for item in report["issues"]
-        if item["status"] != "observed"
-        or item["assessment"]["verdict"] != "correct"
-        or not all(item["assessment"]["fields"].values())
+        if item["outcome"] != "correct"
     ]
     if failures:
         for item in failures:
             lines.append(
                 f"| `{item['issue_id']}` - {item['title']} | `{item['agent']}` | "
-                f"{_evaluation_label(item['detail'])} |"
+                f"{item['outcome'].title()} |"
                 f" `{item['assessment']['ownership']}` |"
             )
     else:
@@ -1316,7 +923,7 @@ def render_markdown(
     for item in report["issues"]:
         lines.append(
             f"| `{item['issue_id']}` - {item['title']} | `{item['agent']}` | "
-            f"{item['observed_count']} | {_evaluation_label(item['detail'])} | "
+            f"{item['observed_count']} | {item['outcome'].title()} | "
             f"`{item['assessment']['ownership']}` | "
             f"{item['assessment']['confidence']:.2f} |"
         )
@@ -1343,7 +950,7 @@ def _markdown_cell(value: str) -> str:
 def _evaluation_label(value: str) -> str:
     return {
         "MATCHED": "Correct",
-        "PARTIAL": "Partially Correct",
+        "PARTIAL": "Incorrect",
         "MISMATCHED": "Incorrect",
         "MISSING": "Missing",
         "NOISE": "Noise",
@@ -1363,18 +970,18 @@ def _field_result_cells(fields: dict[str, Any] | None) -> tuple[str, str]:
         return "-", "-"
     passing = [
         field.replace("_", " ")
-        for field in FIELD_WEIGHTS
+        for field in ASSESSMENT_FIELDS
         if fields.get(field) is True
     ]
     failing = [
         field.replace("_", " ")
-        for field in FIELD_WEIGHTS
+        for field in ASSESSMENT_FIELDS
         if fields.get(field) is not True
     ]
     return ", ".join(passing) or "None", ", ".join(failing) or "None"
 
 
-COVERAGE_PRIMARY_TYPES = {"MATCHED", "PARTIAL", "MISMATCHED"}
+COVERAGE_PRIMARY_TYPES = ATTRIBUTABLE_FINDING_TYPES
 
 
 def _issue_link(issue_id: str) -> str:
@@ -1387,25 +994,25 @@ def _issue_link(issue_id: str) -> str:
 def issue_primary_card(item: Mapping[str, Any]) -> dict[str, Any] | None:
     if item.get("runtime_evidence_complete") is False:
         return None
-    selected = select_shadow_primary(
-        {
-            **item,
-            "runtime_evidence_complete": True,
-        }
-    )
-    if selected is None:
+    cards = [
+        card
+        for card in item["assessment"].get("card_evaluations", [])
+        if card.get("finding_type") in ATTRIBUTABLE_FINDING_TYPES
+    ]
+    if not cards:
         return None
-    for card in item["assessment"].get("card_evaluations", []):
-        if card.get("reference") == selected["reference"]:
-            return card
-    return None
+    return min(
+        cards,
+        key=lambda card: (
+            not scoring_fields_pass(card.get("fields", {})),
+            -sum(value is True for value in card.get("fields", {}).values()),
+            str(card.get("reference") or ""),
+        ),
+    )
 
 
 def expected_issue_coverage_label(item: Mapping[str, Any]) -> str:
-    primary = issue_primary_card(item)
-    if primary is not None:
-        return _evaluation_label(primary["finding_type"])
-    return "Incomplete" if item["detail"] == "INCOMPLETE" else "Missing"
+    return str(item["outcome"]).title()
 
 
 def _agent_runtime_evidence_complete(
@@ -1417,7 +1024,7 @@ def _agent_runtime_evidence_complete(
         bool(baseline["runtime_evidence_complete"])
         and baseline["assessment"]["verdict"] != "inconclusive"
         and not any(card.get("evaluation") == "incomplete" for card in baseline_cards)
-        and all(item["result"] != "INCOMPLETE" for item in issues)
+        and all(item.get("runtime_evidence_complete") is True for item in issues)
     )
 
 
@@ -1526,8 +1133,20 @@ def _decision_detail_blocks(
             )
         for card in cards:
             finding_type = card.get("finding_type")
-            if finding_type in {"PARTIAL", "MISMATCHED"}:
-                card_label = _evaluation_label(finding_type)
+            failed_fields = {
+                field
+                for field, passed in card.get("fields", {}).items()
+                if passed is False
+            }
+            if (
+                finding_type in ATTRIBUTABLE_FINDING_TYPES
+                and failed_fields
+            ):
+                card_label = (
+                    "Correct"
+                    if scoring_fields_pass(card.get("fields", {}))
+                    else "Incorrect"
+                )
                 qualifier = "" if card is primary else "Additional card - "
                 passing, _unused = _field_result_cells(card.get("fields"))
                 reasons = card.get("field_reasons") or {}
@@ -1545,7 +1164,7 @@ def _decision_detail_blocks(
                     "| Failing field | Specific reason |",
                     "| --- | --- |",
                 ]
-                for field in FIELD_WEIGHTS:
+                for field in ASSESSMENT_FIELDS:
                     if card.get("fields", {}).get(field) is True:
                         continue
                     reason = reasons.get(field, "No reason provided.")
@@ -1740,7 +1359,7 @@ def _issue_context_entries(
             else item["assessment"]["ownership"]
         )
         by_owner.setdefault(ownership, []).append(
-            (label, "decision" if label in {"Partially Correct", "Incorrect"} else label)
+            (label, "decision" if label == "Incorrect" else label)
         )
     for card in cards:
         if card is primary or card.get("finding_type") not in {
@@ -1826,11 +1445,12 @@ def render_agent_markdown(report: dict[str, Any], agent_name: str) -> str:
         for item in issues
         for card in item["assessment"].get("card_evaluations", [])
     ]
-    evaluation_counts = Counter(
-        _evaluation_label(card["finding_type"]) for card in issue_cards
-    )
-    missing_count = sum(
-        expected_issue_coverage_label(item) == "Missing" for item in issues
+    outcome_counts = Counter(item["outcome"] for item in issues)
+    noise_count = sum(
+        card.get("finding_type") == "NOISE" for card in issue_cards
+    ) + sum(card.get("evaluation") == "noise" for card in baseline_cards)
+    duplicate_count = sum(
+        card.get("finding_type") == "DUPLICATE" for card in issue_cards
     )
     runtime_complete = _agent_runtime_evidence_complete(baseline, issues)
     lines = [
@@ -1840,11 +1460,6 @@ def render_agent_markdown(report: dict[str, Any], agent_name: str) -> str:
         f"- Run: `{report['run_id']}`",
         f"- Runtime evidence: `{'Complete' if runtime_complete else 'Incomplete'}`",
         "- Expected baseline Insights: `0`",
-        *(
-            ["- Run status: **INCOMPLETE**"]
-            if report["status"] == "INCOMPLETE"
-            else []
-        ),
         "",
         "## Review summary",
         "",
@@ -1853,13 +1468,11 @@ def render_agent_markdown(report: dict[str, Any], agent_name: str) -> str:
         f"| Expected issue Insights | {len(issues)} |",
         f"| Generated issue cards | {len(issue_cards)} |",
         f"| Generated baseline cards | {len(baseline_cards)} |",
-        f"| Correct | {evaluation_counts['Correct']} |",
-        f"| Partially Correct | {evaluation_counts['Partially Correct']} |",
-        f"| Incorrect | {evaluation_counts['Incorrect']} |",
-        f"| Noise | {evaluation_counts['Noise']} |",
-        f"| Duplicate | {evaluation_counts['Duplicate']} |",
-        f"| Missing expected issues | {missing_count} |",
-        f"| Incomplete card evaluations | {evaluation_counts['Incomplete']} |",
+        f"| Correct | {outcome_counts['correct']} |",
+        f"| Incorrect | {outcome_counts['incorrect']} |",
+        f"| Missing | {outcome_counts['missing']} |",
+        f"| Noise | {noise_count} |",
+        f"| Duplicate | {duplicate_count} |",
         "",
         "## Expected issue coverage",
         "",
@@ -1915,17 +1528,16 @@ def render_agent_markdown(report: dict[str, Any], agent_name: str) -> str:
             lines.append(block)
     else:
         lines.append(
-            "No Partially Correct, Incorrect, Noise, Duplicate, Incomplete, "
-            "Missing, or non-clean baseline outcomes were observed."
+            "No Incorrect, Noise, Duplicate, Missing, or non-clean baseline "
+            "outcomes were observed."
         )
         lines.append("")
     lines.extend(
         [
             "## Evaluation guide",
             "",
-            "- **Correct:** the card matches the expected issue and every required field.",
-            "- **Partially Correct:** the card represents the expected root, but one or more reported fields are wrong.",
-            "- **Incorrect:** the card is related to the expected issue but materially misstates its root or behavior.",
+            "- **Correct:** the card matches the expected issue and passes title, description, category, and linked traces.",
+            "- **Incorrect:** the card is related to the expected issue but fails at least one scoring field.",
             "- **Noise:** the card has no corresponding reviewed issue, or independent evidence disproves its diagnosis.",
             "- **Duplicate:** the card repeats a root already covered by a named primary card and adds no independent root.",
             "- **Missing:** no generated card represents the expected issue.",
@@ -1933,7 +1545,7 @@ def render_agent_markdown(report: dict[str, Any], agent_name: str) -> str:
             "",
             "## Human validation checklist",
             "",
-            "- [ ] Every Partially Correct or Incorrect card has a specific reason for each failing field.",
+            "- [ ] Every Incorrect card has a specific reason for each failing field.",
             "- [ ] Every Noise card has no issue assignment and explains why no reviewed issue corresponds to it.",
             "- [ ] Every Duplicate group names the primary card and lists every card classified as its duplicate.",
             "- [ ] An issue with only Noise or Duplicate cards is still reported Missing unless a primary card covers it.",
@@ -1994,7 +1606,11 @@ def apply_score_comparison(report: dict[str, Any], trend_path: Path) -> None:
     trend = (
         read_json(trend_path)
         if trend_path.exists()
-        else {"schema_version": "1.0.0", "days": []}
+        else {
+            "schema_version": "2.0.0",
+            "quality_score_formula": QUALITY_SCORE_FORMULA,
+            "days": [],
+        }
     )
     report["score_comparison"] = score_comparison(report, trend)
 
@@ -2015,6 +1631,8 @@ def apply_staging_score_comparison(
             continue
         value = read_json(path)
         previous_score = value.get("quality_score")
+        if value.get("quality_score_formula") != QUALITY_SCORE_FORMULA:
+            continue
         if (
             value.get("profile") != "staging"
             or value.get("qualified") is not True
@@ -2055,8 +1673,13 @@ def score_comparison(
     report: dict[str, Any],
     trend: dict[str, Any],
 ) -> dict[str, Any] | None:
-    if report["profile"] != "daily" or report["summary"]["quality_score"] is None:
+    if report["profile"] != "daily":
         return None
+    if (
+        trend.get("schema_version") != "2.0.0"
+        or trend.get("quality_score_formula") != QUALITY_SCORE_FORMULA
+    ):
+        raise ContractError("Trend history uses a different quality-score formula")
     days = trend.get("days")
     if not isinstance(days, list):
         raise ContractError("Trend history has an invalid days collection")
@@ -2107,7 +1730,11 @@ def update_trend(report: dict[str, Any], path: Path) -> None:
     if path.exists():
         trend = read_json(path)
     else:
-        trend = {"schema_version": "1.0.0", "days": []}
+        trend = {
+            "schema_version": "2.0.0",
+            "quality_score_formula": QUALITY_SCORE_FORMULA,
+            "days": [],
+        }
     atomic_json(path, updated_trend(report, trend))
 
 
@@ -2116,18 +1743,26 @@ def updated_trend(
     trend: dict[str, Any],
 ) -> dict[str, Any]:
     days_value = trend.get("days")
-    if not isinstance(days_value, list) or any(
+    if (
+        trend.get("schema_version") != "2.0.0"
+        or trend.get("quality_score_formula") != QUALITY_SCORE_FORMULA
+        or not isinstance(days_value, list)
+        or any(
         not isinstance(value, dict)
         or not isinstance(value.get("report_date"), str)
         for value in days_value
+        )
     ):
         raise ContractError("Trend history contains an invalid day")
     current = {
         "report_date": report["report_date"],
-        "status": report["status"],
         "baseline_passed": report["summary"]["baseline_passed"],
         "issues_correct": report["summary"]["issues_correct"],
+        "issues_incorrect": report["summary"]["issues_incorrect"],
+        "issues_missing": report["summary"]["issues_missing"],
         "issues_expected": report["summary"]["issues_expected"],
+        "noise_cards": report["summary"]["noise_cards"],
+        "duplicate_cards": report["summary"]["duplicate_cards"],
         "quality_score": report["summary"]["quality_score"],
     }
     existing = [
@@ -2148,4 +1783,8 @@ def updated_trend(
     ]
     days.append(current)
     days.sort(key=lambda value: value["report_date"])
-    return {"schema_version": "1.0.0", "days": days[-90:]}
+    return {
+        "schema_version": "2.0.0",
+        "quality_score_formula": QUALITY_SCORE_FORMULA,
+        "days": days[-90:],
+    }

@@ -111,10 +111,11 @@ natural telemetry by exact run, Agent, provider version, operation, and invocati
 waits within the bounded post-invoke hydration and stability deadline. Missing attributable traces
 fail closed.
 
-The daily quality score is 85% field quality across expected issues and 15% clean-card precision.
-Internally, a complete run stores `PASS` at `90/100` or above and `FAIL` below `90/100`.
-User-facing reports present the numeric score and finding details without those verdict labels;
-incomplete or ambiguous evidence remains explicitly `INCOMPLETE`.
+The daily quality score is the percentage of expected issues with a score-correct Insight, with
+Noise and Duplicate cards added to the denominator. Title, description, category, and linked traces
+determine correctness; severity and proposed fix are diagnostic only. Reports contain one numeric
+score and no PASS/FAIL label or threshold. Incomplete evidence fails the qualification internally
+and produces no report.
 
 Official Daily also publishes a stable
 [Insight Engine Improvement Memory](reports/insight-engine-improvement.md) plus one immutable

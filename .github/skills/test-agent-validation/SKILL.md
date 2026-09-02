@@ -76,7 +76,7 @@ assessment, scoring, reporting, ADX, email, Daily traffic, approval, or merge.
    python -m agent_insights_quality verify-test-agent-validation-shard --shard-id <N>
    ```
 
-   Response-bound traces must map one-to-one to the exact `invoke_agent` anchor and complete descendant
+   Only response-bound traces may map one-to-one to the exact `invoke_agent` anchor and complete descendant
    span tree; sibling roots cannot contribute evidence. Receipt reuse proves the unchanged
    traffic-generation and execution binding only. Every new verification package binds the reused
    receipt's immutable digest and the current verifier commit and verifier digest.

@@ -172,7 +172,7 @@ def provision_profile(
     ):
         raise ContractError("Profile monitor inventory is not exact")
     registry = {
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "profile": profile.name,
         "environment_id": profile.environment_id,
         "location": profile.location,
@@ -404,8 +404,8 @@ def create_promotion_receipt(
         "profile": "staging",
         "qualified": True,
         "human_reviewed": True,
-        "qualification_status": report["status"],
         "quality_score": report["summary"]["quality_score"],
+        "quality_score_formula": report["summary"]["quality_score_formula"],
         "test_agent_model": registry["test_agent_model"],
         "catalog_hashes": registry["catalog_hashes"],
         "artifact_manifest_hash": registry["catalog_hashes"]["artifacts"],

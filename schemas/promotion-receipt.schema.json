@@ -2,14 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "profile", "qualified", "human_reviewed", "qualification_status", "quality_score", "test_agent_model", "catalog_hashes", "artifact_manifest_hash", "version_content_digests", "deployment_manifest_hash", "qualification_manifest_hash", "source_integrity_digest", "report_reference"],
+  "required": ["schema_version", "profile", "qualified", "human_reviewed", "quality_score", "quality_score_formula", "test_agent_model", "catalog_hashes", "artifact_manifest_hash", "version_content_digests", "deployment_manifest_hash", "qualification_manifest_hash", "source_integrity_digest", "report_reference"],
   "properties": {
-    "schema_version": {"const": "2.0.0"},
+    "schema_version": {"const": "3.0.0"},
     "profile": {"const": "staging"},
     "qualified": {"const": true},
     "human_reviewed": {"const": true},
-    "qualification_status": {"enum": ["PASS", "FAIL"]},
     "quality_score": {"type": "number", "minimum": 0, "maximum": 100},
+    "quality_score_formula": {"const": "correct_over_expected_plus_noise_v1"},
     "test_agent_model": {
       "type": "object",
       "additionalProperties": false,

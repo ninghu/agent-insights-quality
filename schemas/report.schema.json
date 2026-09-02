@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "report_date", "run_id", "profile", "manifest_reference", "catalog_hashes", "source_integrity", "test_region", "status", "baseline", "issues", "summary", "delivery"],
+  "required": ["schema_version", "report_date", "run_id", "profile", "manifest_reference", "catalog_hashes", "source_integrity", "test_region", "baseline", "issues", "summary", "delivery"],
   "allOf": [
     {
       "if": {"properties": {"profile": {"const": "staging"}}},
@@ -10,20 +10,16 @@
         "properties": {
           "issues": {
             "minItems": 36,
-            "maxItems": 36,
-            "items": {"required": ["shadow_v2_primary"]}
-          },
-          "summary": {"required": ["shadow_quality_score"]}
+            "maxItems": 36
+          }
         }
       },
       "else": {
         "properties": {
           "issues": {
             "minItems": 20,
-            "maxItems": 20,
-            "items": {"not": {"required": ["shadow_v2_primary"]}}
-          },
-          "summary": {"not": {"required": ["shadow_quality_score"]}}
+            "maxItems": 20
+          }
         }
       }
     }
@@ -53,7 +49,6 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "root_cause",
         "title",
         "description",
         "category",
@@ -62,7 +57,6 @@
         "linked_traces"
       ],
       "properties": {
-        "root_cause": {"type": "boolean"},
         "title": {"type": "boolean"},
         "description": {"type": "boolean"},
         "category": {"type": "boolean"},
@@ -75,7 +69,6 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "root_cause": {"type": "string", "minLength": 1, "maxLength": 300},
         "title": {"type": "string", "minLength": 1, "maxLength": 300},
         "description": {"type": "string", "minLength": 1, "maxLength": 300},
         "category": {"type": "string", "minLength": 1, "maxLength": 300},
@@ -105,8 +98,8 @@
         "title": {"type": "string", "maxLength": 300},
         "category": {"type": "string", "maxLength": 100},
         "severity": {"type": "string", "maxLength": 50},
-        "verdict": {"enum": ["correct", "partially_useful", "incorrect", "incomplete"]},
-        "finding_type": {"enum": ["MATCHED", "PARTIAL", "MISMATCHED", "NOISE", "DUPLICATE", "INCOMPLETE"]},
+        "verdict": {"enum": ["correct", "partially_useful", "incorrect"]},
+        "finding_type": {"enum": ["MATCHED", "PARTIAL", "MISMATCHED", "NOISE", "DUPLICATE"]},
         "ownership": {"$ref": "#/$defs/ownership"},
         "ownership_reason": {"type": "string", "minLength": 1, "maxLength": 1000},
         "fields": {"$ref": "#/$defs/fields"},
@@ -153,7 +146,7 @@
         "title": {"type": "string", "maxLength": 300},
         "category": {"type": "string", "maxLength": 100},
         "severity": {"type": "string", "maxLength": 50},
-        "evaluation": {"enum": ["noise", "valid_agent_finding", "incomplete"]},
+        "evaluation": {"enum": ["noise", "valid_agent_finding"]},
         "ownership": {"$ref": "#/$defs/ownership"},
         "ownership_reason": {"type": "string", "minLength": 1, "maxLength": 1000},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
@@ -171,7 +164,7 @@
         "card_evaluations"
       ],
       "properties": {
-        "verdict": {"enum": ["clean", "noise", "agent_finding", "inconclusive"]},
+        "verdict": {"enum": ["clean", "noise", "agent_finding"]},
         "ownership": {"$ref": "#/$defs/ownership"},
         "ownership_reason": {"type": "string", "minLength": 1, "maxLength": 1000},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
@@ -196,7 +189,7 @@
       ],
       "properties": {
         "verdict": {"enum": ["correct", "partially_useful", "incorrect", "missing"]},
-        "finding_type": {"enum": ["MATCHED", "PARTIAL", "MISMATCHED", "MISSING", "NOISE", "DUPLICATE", "INCOMPLETE"]},
+        "finding_type": {"enum": ["MATCHED", "PARTIAL", "MISMATCHED", "MISSING", "NOISE", "DUPLICATE"]},
         "ownership": {"$ref": "#/$defs/ownership"},
         "ownership_reason": {"type": "string", "minLength": 1, "maxLength": 1000},
         "fields": {"$ref": "#/$defs/fields"},
@@ -256,7 +249,7 @@
         "agent": {"$ref": "#/$defs/agent"},
         "logical_version": {"const": "v0"},
         "foundry_version": {"type": "string", "minLength": 1},
-        "status": {"enum": ["passed", "not_at_bar", "inconclusive"]},
+        "status": {"enum": ["passed", "not_at_bar"]},
         "error_code": {"type": ["string", "null"]},
         "runtime_evidence_complete": {"type": "boolean"},
         "insight_count": {"type": "integer", "minimum": 0},
@@ -275,7 +268,7 @@
         "title",
         "status",
         "runtime_evidence_complete",
-        "result",
+        "outcome",
         "detail",
         "observed_count",
         "assessment",
@@ -287,18 +280,17 @@
         "logical_version": {"type": "string", "pattern": "^issue-[0-9]{3}$"},
         "foundry_version": {"type": "string", "minLength": 1},
         "title": {"type": "string", "minLength": 1, "maxLength": 300},
-        "status": {"enum": ["observed", "not_observed", "not_at_bar", "inconclusive", "skipped_baseline"]},
+        "status": {"enum": ["observed", "not_observed", "not_at_bar"]},
         "error_code": {"type": ["string", "null"]},
         "runtime_evidence_complete": {"type": "boolean"},
         "activation_evidence": {"$ref": "#/$defs/activationEvidence"},
-        "result": {"enum": ["PASS", "FAIL", "INCOMPLETE"]},
-        "detail": {"enum": ["MATCHED", "PARTIAL", "MISMATCHED", "MISSING", "NOISE", "DUPLICATE", "INCOMPLETE"]},
+        "outcome": {"enum": ["correct", "incorrect", "missing"]},
+        "detail": {"enum": ["MATCHED", "PARTIAL", "MISMATCHED", "MISSING", "NOISE", "DUPLICATE"]},
         "observed_count": {"type": "integer", "minimum": 0},
         "assessment": {"$ref": "#/$defs/issueAssessment"},
         "evidence_reference": {
           "oneOf": [{"type": "null"}, {"$ref": "#/$defs/hash"}]
-        },
-        "shadow_v2_primary": {"$ref": "#/$defs/shadowPrimary"}
+        }
       }
     },
     "catalogHashes": {
@@ -310,102 +302,10 @@
         "issues": {"$ref": "#/$defs/hash"},
         "artifacts": {"$ref": "#/$defs/hash"}
       }
-    },
-    "shadowPrimary": {
-      "oneOf": [
-        {"type": "null"},
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["reference", "finding_type", "diagnosis_correct", "quality"],
-          "properties": {
-            "reference": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-            "finding_type": {"enum": ["MATCHED", "PARTIAL", "MISMATCHED"]},
-            "diagnosis_correct": {"type": "boolean"},
-            "quality": {"type": "number", "minimum": 0, "maximum": 100}
-          }
-        }
-      ]
-    },
-    "shadowQualityScore": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["formula", "automation_authority", "counts", "components", "score", "gate_failures"],
-      "properties": {
-        "formula": {"const": "coverage_quality_precision_v2"},
-        "automation_authority": {"const": false},
-        "counts": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["expected_issues", "detected_issues", "correct_diagnosis_primaries", "generated_issue_cards", "baseline_noise_cards"],
-          "properties": {
-            "expected_issues": {"type": "integer", "minimum": 0, "maximum": 36},
-            "detected_issues": {"type": "integer", "minimum": 0, "maximum": 36},
-            "correct_diagnosis_primaries": {"type": "integer", "minimum": 0, "maximum": 36},
-            "generated_issue_cards": {"type": "integer", "minimum": 0},
-            "baseline_noise_cards": {"type": "integer", "minimum": 0}
-          }
-        },
-        "components": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["coverage", "diagnosis_recall", "selected_card_quality", "useful_coverage", "precision"],
-          "properties": {
-            "coverage": {
-              "oneOf": [
-                {"type": "number", "minimum": 0, "maximum": 100},
-                {"type": "null"}
-              ]
-            },
-            "diagnosis_recall": {
-              "oneOf": [
-                {"type": "number", "minimum": 0, "maximum": 100},
-                {"type": "null"}
-              ]
-            },
-            "selected_card_quality": {
-              "oneOf": [
-                {"type": "number", "minimum": 0, "maximum": 100},
-                {"type": "null"}
-              ]
-            },
-            "useful_coverage": {
-              "oneOf": [
-                {"type": "number", "minimum": 0, "maximum": 100},
-                {"type": "null"}
-              ]
-            },
-            "precision": {
-              "oneOf": [
-                {"type": "number", "minimum": 0, "maximum": 100},
-                {"type": "null"}
-              ]
-            }
-          }
-        },
-        "score": {
-          "oneOf": [
-            {"type": "number", "minimum": 0, "maximum": 100},
-            {"type": "null"}
-          ]
-        },
-        "gate_failures": {
-          "oneOf": [
-            {
-              "type": "array",
-              "uniqueItems": true,
-              "items": {
-                "enum": ["score", "coverage", "diagnosis_recall", "precision", "baseline_noise"]
-              }
-            },
-            {"type": "null"}
-          ]
-        }
-      }
     }
   },
   "properties": {
-    "schema_version": {"const": "2.0.0"},
+    "schema_version": {"const": "3.0.0"},
     "report_date": {"type": "string", "format": "date"},
     "run_id": {"type": "string"},
     "profile": {"enum": ["daily", "staging"]},
@@ -441,13 +341,7 @@
         }
       }
     },
-    "test_region": {
-      "oneOf": [
-        {"type": "string", "pattern": "^[A-Z][a-zA-Z]*[0-9]*$"},
-        {"const": "unavailable"}
-      ]
-    },
-    "status": {"enum": ["PASS", "FAIL", "INCOMPLETE"]},
+    "test_region": {"type": "string", "pattern": "^[A-Z][a-zA-Z]*[0-9]*$"},
     "baseline": {
       "type": "array",
       "minItems": 5,
@@ -465,55 +359,23 @@
         "baseline_passed",
         "issues_expected",
         "issues_correct",
-        "issues_partial",
-        "quality_failures",
-        "incomplete",
+        "issues_incorrect",
+        "issues_missing",
         "noise_cards",
-        "unverified_cards",
-        "observed_cards",
-        "field_quality_score",
-        "clean_card_precision",
+        "duplicate_cards",
         "quality_score",
-        "quality_threshold",
         "quality_score_formula"
       ],
       "properties": {
         "baseline_passed": {"type": "integer", "minimum": 0, "maximum": 5},
         "issues_expected": {"enum": [20, 36]},
         "issues_correct": {"type": "integer", "minimum": 0, "maximum": 36},
-        "issues_partial": {"type": "integer", "minimum": 0, "maximum": 36},
-        "quality_failures": {"type": "integer", "minimum": 0, "maximum": 41},
-        "incomplete": {"type": "boolean"},
-        "incomplete_reasons": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {"type": "string", "minLength": 1}
-        },
-        "failure_code": {"type": "string", "minLength": 1},
+        "issues_incorrect": {"type": "integer", "minimum": 0, "maximum": 36},
+        "issues_missing": {"type": "integer", "minimum": 0, "maximum": 36},
         "noise_cards": {"type": "integer", "minimum": 0},
-        "unverified_cards": {"type": "integer", "minimum": 0},
-        "observed_cards": {"type": "integer", "minimum": 0},
-        "field_quality_score": {
-          "oneOf": [
-            {"type": "number", "minimum": 0, "maximum": 100},
-            {"type": "null"}
-          ]
-        },
-        "clean_card_precision": {
-          "oneOf": [
-            {"type": "number", "minimum": 0, "maximum": 100},
-            {"type": "null"}
-          ]
-        },
-        "quality_score": {
-          "oneOf": [
-            {"type": "number", "minimum": 0, "maximum": 100},
-            {"type": "null"}
-          ]
-        },
-        "quality_threshold": {"const": 90},
-        "quality_score_formula": {"const": "field_weighted_v1"},
-        "shadow_quality_score": {"$ref": "#/$defs/shadowQualityScore"}
+        "duplicate_cards": {"type": "integer", "minimum": 0},
+        "quality_score": {"type": "number", "minimum": 0, "maximum": 100},
+        "quality_score_formula": {"const": "correct_over_expected_plus_noise_v1"}
       }
     },
     "delivery": {

@@ -16,7 +16,7 @@
     docstring = 'Latest published daily qualification result for each Pacific report date.'
 ) AIQDailyPublications() {
     DailyQualityPublications
-    | where PayloadVersion == '2.0.0'
+    | where PayloadVersion == '3.0.0'
     | summarize arg_max(PublishedAt, *) by ReportDate
     | project ReportDate, RunId, PublishedAt, SourceDigest, PayloadVersion, Payload
 }
@@ -30,22 +30,16 @@
         ReportDate,
         RunId,
         PublishedAt,
-        Status = tostring(Payload.run.status),
         ReportUrl = tostring(Payload.run.report_url),
         QualityScore = todouble(Payload.run.quality_score),
-        FieldQualityScore = todouble(Payload.run.field_quality_score),
-        CleanCardPrecision = todouble(Payload.run.clean_card_precision),
-        QualityThreshold = todouble(Payload.run.quality_threshold),
+        QualityScoreFormula = tostring(Payload.run.quality_score_formula),
         BaselinePassed = toint(Payload.run.baseline_passed),
         IssuesCorrect = toint(Payload.run.issues_correct),
+        IssuesIncorrect = toint(Payload.run.issues_incorrect),
+        IssuesMissing = toint(Payload.run.issues_missing),
         IssuesExpected = toint(Payload.run.issues_expected),
-        IssuesPartial = toint(Payload.run.issues_partial),
-        QualityFailures = toint(Payload.run.quality_failures),
         NoiseCards = toint(Payload.run.noise_cards),
-        UnverifiedCards = toint(Payload.run.unverified_cards),
-        ObservedCards = toint(Payload.run.observed_cards),
-        Incomplete = tobool(Payload.run.incomplete),
-        IncompleteReasons = Payload.run.incomplete_reasons
+        DuplicateCards = toint(Payload.run.duplicate_cards)
 }
 
 .create-or-alter function with (
@@ -73,10 +67,10 @@
             tobool(AgentMetric.baseline_runtime_evidence_complete),
         IssuesExpected = toint(AgentMetric.issues_expected),
         IssuesCorrect = toint(AgentMetric.issues_correct),
-        IssuesPartial = toint(AgentMetric.issues_partial),
-        IssuesFailed = toint(AgentMetric.issues_failed),
-        IssuesIncomplete = toint(AgentMetric.issues_incomplete),
+        IssuesIncorrect = toint(AgentMetric.issues_incorrect),
+        IssuesMissing = toint(AgentMetric.issues_missing),
         NoiseCards = toint(AgentMetric.noise_cards),
+        DuplicateCards = toint(AgentMetric.duplicate_cards),
         FieldsPassed = toint(AgentMetric.fields_passed),
         FieldsExpected = toint(AgentMetric.fields_expected)
 }
@@ -103,7 +97,7 @@
         ExpectedFix = tostring(IssueMetric.expected_fix),
         Status = tostring(IssueMetric.status),
         ErrorCode = tostring(IssueMetric.error_code),
-        Result = tostring(IssueMetric.result),
+        Outcome = tostring(IssueMetric.outcome),
         Detail = tostring(IssueMetric.detail),
         Verdict = tostring(IssueMetric.verdict),
         Ownership = tostring(IssueMetric.ownership),
@@ -135,7 +129,7 @@
         Agent = tostring(FieldMetric.agent),
         IssueId = tostring(FieldMetric.issue_id),
         IssueTitle = tostring(FieldMetric.issue_title),
-        Result = tostring(FieldMetric.result),
+        Outcome = tostring(FieldMetric.outcome),
         Field = tostring(FieldMetric.field),
         Passed = tobool(FieldMetric.passed)
 }
@@ -182,7 +176,7 @@
         Agent = tostring(CardMetric.agent),
         IssueId = tostring(CardMetric.issue_id),
         IssueTitle = tostring(CardMetric.issue_title),
-        Result = tostring(CardMetric.result),
+        Outcome = tostring(CardMetric.outcome),
         CardIndex = toint(CardMetric.card_index),
         CardTitle = tostring(CardMetric['title']),
         Category = tostring(CardMetric.category),

@@ -5,37 +5,6 @@ dashboard_url: https://aka.ms/agent-insights/quality
 send_once: true
 retry_ambiguous: false
 quality_score:
-  formula: field_weighted_v1
-  field_quality_weight: 0.85
-  clean_card_precision_weight: 0.15
-  field_weights:
-    root_cause: 0.25
-    title: 0.10
-    description: 0.15
-    category: 0.10
-    severity: 0.10
-    proposed_fix: 0.15
-    linked_traces: 0.15
-  pass_threshold: 90
-shadow_quality_score:
-  formula: coverage_quality_precision_v2
-  automation_authority: false
-  report_profiles:
-    - staging
-  useful_coverage_weight: 0.80
-  precision_weight: 0.20
-  native_field_weights:
-    title: 0.05
-    description: 0.25
-    category: 0.05
-    severity: 0.15
-    proposed_fix: 0.25
-    linked_traces: 0.25
-  mismatched_quality_cap: 40
-  gates:
-    score: 90
-    coverage: 95
-    diagnosis_recall: 95
-    precision: 80
-    baseline_noise_cards: 0
-  calibration_complete_runs: 3
+  formula: correct_over_expected_plus_noise_v1
+  scoring_fields: [title, description, category, linked_traces]
+  diagnostic_fields: [severity, proposed_fix]

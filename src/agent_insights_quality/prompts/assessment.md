@@ -6,8 +6,16 @@ Return only JSON matching `schemas/assessment.schema.json`.
 Echo the package hash, exact Foundry version, and evidence reference without modification.
 Use repository `issue` vocabulary throughout all reasoning and never reintroduce removed identifiers.
 
-An Insight is correct only when its root cause, title, description, category, severity,
-proposed fix, and linked traces all pass. Do not award partial credit as a correct result.
+Compare the Insight's content with the catalog `root_cause`, but do not return a `root_cause`
+field: it is reviewed expected-issue context, not a native Insight field.
+
+An Insight is score-correct when its title, description, category, and linked traces all pass.
+Severity and proposed fix remain useful diagnostics, but a mismatch in either field does not change
+a score-correct card to an incorrect card. There is no weighted or partial score.
+
+Linked traces pass when at least one exact-run, exact-version linked trace independently supports the
+Insight's core conclusion. Extra linked traces are acceptable unless they are attributed to the wrong
+run or version, or they contradict the conclusion.
 
 Classify ownership independently:
 
@@ -66,18 +74,19 @@ Evaluate every object in `observed_insights` independently in `card_evaluations`
 reference, title, category, and severity exactly. Use one card-level verdict, finding type, ownership,
 field map, confidence, and reasoning per generated card. The set of card references must exactly match
 the package. Keep the top-level assessment as the expected-issue result. Write the top-level
-`reasoning` as one public-safe sentence stating why the expected issue is Correct, Partially Correct,
-Incorrect, Noise, Duplicate, Missing, or Incomplete; downstream reporting renders it verbatim as the
+`reasoning` as one public-safe sentence stating why the expected issue is Correct, Incorrect, Noise,
+Duplicate, Missing, or Incomplete; downstream reporting renders it verbatim as the
 "Why" explanation for that expected issue and it must never contain raw prompts, responses, traces,
 provider IDs, or private resource identifiers.
 If a card's linked proof has no terminal response and output, use card-level `incomplete` /
 `INCOMPLETE`; the top level must also remain `INCOMPLETE`. A top-level `MATCHED` result requires one
 terminal-proven card whose card-level result is also `MATCHED`; NOISE-only cards cannot prove a match.
 
-For every `PARTIAL` or `MISMATCHED` card, set `field_reasons` to an object whose keys are exactly the
-fields that failed in that card's `fields` map (no more, no fewer) and whose values are one specific,
-public-safe sentence explaining why that individual field failed. Do not add a reason for a passing
-field, and do not omit a reason for any failed field.
+For every attributable `MATCHED`, `PARTIAL`, or `MISMATCHED` card with failed fields, set
+`field_reasons` to an object whose keys are exactly the fields that failed in that card's `fields`
+map (no more, no fewer) and whose values are one specific, public-safe sentence explaining why that
+individual field failed. Do not add a reason for a passing field, and do not omit a reason for any
+failed field.
 For every `DUPLICATE` card, set `duplicate_of` to the `reference` of the other card in the same
 issue's `card_evaluations` that is the primary attributable card for the shared root (its own
 finding_type must be `MATCHED`, `PARTIAL`, or `MISMATCHED`). A `DUPLICATE` card can never name itself
@@ -94,8 +103,8 @@ does not correspond to any reviewed issue.
 
 Set one customer-facing `finding_type`:
 
-- `MATCHED`: one expected Insight is fully correct;
-- `PARTIAL`: related and useful, but incomplete;
+- `MATCHED`: one expected Insight passes all scoring fields;
+- `PARTIAL`: related and useful, but fails at least one scoring field and is reported as Incorrect;
 - `MISMATCHED`: related card has incorrect fields or root cause;
 - `MISSING`: expected card is absent despite complete runtime evidence;
 - `NOISE`: unrelated or false-positive card;

@@ -19,7 +19,6 @@ from agent_insights_quality.report_summary import (
     improvement_rows,
     working_capabilities,
 )
-from agent_insights_quality.shadow_scoring import SHADOW_SCORE_REPORT_PROFILES
 from agent_insights_quality.util import (
     ROOT,
     ContractError,
@@ -37,24 +36,9 @@ _PUBLIC_REPORT_BASE_URL = (
 )
 _PUBLIC_ISSUE_CATALOG_URL = _PUBLIC_REPORT_BASE_URL + "ISSUE_CATALOG.md"
 _QUALITY_BAR_URL = _PUBLIC_REPORT_BASE_URL + "docs/QUALITY_BAR.md#quality-score"
-_INSIGHT_RESULTS_URL = _PUBLIC_REPORT_BASE_URL + "docs/INSIGHT_RESULTS.md"
 _OUTLOOK_TEXT_STYLE = (
     "font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:19px;"
 )
-_STATUS_STYLES = {
-    "PASS": {
-        "background": "#e6f4ea",
-        "foreground": "#0b6a0b",
-    },
-    "FAIL": {
-        "background": "#fde7e9",
-        "foreground": "#a4262c",
-    },
-    "INCOMPLETE": {
-        "background": "#fff4ce",
-        "foreground": "#8a5700",
-    },
-}
 _AGENT_TYPES = {
     "weather-agent": "prompt",
     "healthcare-agent": "prompt",
@@ -157,9 +141,8 @@ def create_request(
             raise ContractError("Daily email requires explicit ADX publication status")
     score = _overall_score(report)
     subject_prefix = "[TEST] " if test_run else ""
-    status_prefix = "INCOMPLETE - " if report["status"] == "INCOMPLETE" else ""
     subject = (
-        f"{subject_prefix}[Agent Insights Quality] {status_prefix}{score} - "
+        f"{subject_prefix}[Agent Insights Quality] {score} - "
         f"{report['report_date']} - {report['summary']['issues_correct']}/"
         f"{report['summary']['issues_expected']} issues"
     )
@@ -298,10 +281,7 @@ def build_runtime_links(
 
 def _overall_score(report: dict[str, Any]) -> str:
     summary = report["summary"]
-    score = summary.get("quality_score")
-    if score is None:
-        return "N/A"
-    return f"{score:g}/100"
+    return f"{summary['quality_score']:g}/100"
 
 
 def _score_comparison(report: dict[str, Any]) -> str:
@@ -311,65 +291,6 @@ def _score_comparison(report: dict[str, Any]) -> str:
     delta = comparison["delta"]
     sign = "+" if delta > 0 else ""
     return f" ({sign}{delta:g})"
-
-
-def _shadow_metric(value: Any) -> str:
-    return "N/A" if value is None else f"{float(value):.1f}/100"
-
-
-def _shadow_score_details(report: dict[str, Any]) -> str:
-    shadow = report["summary"].get("shadow_quality_score")
-    if (
-        report["profile"] not in SHADOW_SCORE_REPORT_PROFILES
-        or report["summary"]["incomplete"]
-        or not isinstance(shadow, dict)
-        or shadow.get("score") is None
-    ):
-        return ""
-    components = shadow["components"]
-    counts = shadow["counts"]
-    diagnostics = ", ".join(
-        str(value).replace("_", " ") for value in shadow["gate_failures"]
-    )
-    rows = [
-        ("Total", _shadow_metric(shadow["score"])),
-        ("Coverage", _shadow_metric(components["coverage"])),
-        (
-            "Diagnosis recall",
-            _shadow_metric(components["diagnosis_recall"]),
-        ),
-        (
-            "Selected-card quality",
-            _shadow_metric(components["selected_card_quality"]),
-        ),
-        (
-            "Useful coverage",
-            _shadow_metric(components["useful_coverage"]),
-        ),
-        ("Precision", _shadow_metric(components["precision"])),
-        (
-            "Expected / detected issues",
-            f"{counts['expected_issues']} / {counts['detected_issues']}",
-        ),
-        (
-            "Generated issue / baseline noise cards",
-            f"{counts['generated_issue_cards']} / "
-            f"{counts['baseline_noise_cards']}",
-        ),
-        ("Below-target diagnostics", diagnostics or "None"),
-    ]
-    return (
-        f'<h3 style="margin:24px 0 8px 0;color:#12304a;{_OUTLOOK_TEXT_STYLE}'
-        'font-size:16px;">Staging shadow calibration</h3>'
-        f'<p style="margin:0 0 12px 0;color:#64748b;{_OUTLOOK_TEXT_STYLE}">'
-        f"<code>{html.escape(shadow['formula'])}</code> is report-only and has "
-        "no status, promotion, or automation authority.</p>"
-        + _data_table(
-            ("Shadow metric", "Value"),
-            rows,
-            (62, 38),
-        )
-    )
 
 
 def _section_heading(title: str) -> str:
@@ -383,7 +304,10 @@ def _data_table(
     headers: tuple[str, ...],
     rows: list[tuple[str, ...]],
     widths: tuple[int, ...],
+    *,
+    raw_cells: set[tuple[int, int]] | None = None,
 ) -> str:
+    raw_cells = raw_cells or set()
     header = "".join(
         f'<th align="left" width="{width}%" style="padding:10px 12px;'
         f'border:1px solid #d6deea;color:#12304a;vertical-align:top;'
@@ -396,11 +320,11 @@ def _data_table(
         + "".join(
             '<td style="padding:11px 12px;border:1px solid #d6deea;'
             f'color:#334155;vertical-align:top;{_OUTLOOK_TEXT_STYLE}">'
-            f"{html.escape(value)}</td>"
-            for value in row
+            f"{value if (row_index, column_index) in raw_cells else html.escape(value)}</td>"
+            for column_index, value in enumerate(row)
         )
         + "</tr>"
-        for row in rows
+        for row_index, row in enumerate(rows)
     )
     return (
         '<table cellpadding="0" cellspacing="0" border="0" width="100%" '
@@ -410,88 +334,29 @@ def _data_table(
 
 
 def _grade_rows(report: dict[str, Any]) -> list[tuple[str, str]]:
-    issues = report.get("issues", [])
-    issue_cards = [
-        card
-        for item in issues
-        for card in item.get("assessment", {}).get("card_evaluations", [])
-    ]
-    correct = sum(card.get("finding_type") == "MATCHED" for card in issue_cards)
-    partial = sum(
-        card.get("finding_type") == "PARTIAL" for card in issue_cards
-    )
-    incorrect = sum(
-        card.get("finding_type") == "MISMATCHED" for card in issue_cards
-    )
-    noise = int(report["summary"]["noise_cards"])
-    missing = sum(item.get("detail") == "MISSING" for item in issues)
-    rows = [
-        ("Expected issue insights", str(report["summary"]["issues_expected"])),
-        ("Observed Insights", str(report["summary"]["observed_cards"])),
-        ("Fully correct Insights", str(correct)),
-        ("Partially Correct Insights", str(partial)),
-        ("Incorrect related Insights", str(incorrect)),
-        ("Noise/duplicate Insights", str(noise)),
-        ("Missing expected issues", str(missing)),
-    ]
-    if report["status"] == "INCOMPLETE":
-        rows[0:0] = [
-            ("Run status", "INCOMPLETE"),
-            (
-                "Run status reason",
-                _incomplete_reason(report["summary"].get("incomplete_reasons", [])),
-            ),
-        ]
-    return rows
-
-
-def _insight_results_link() -> str:
-    return (
-        f'<p style="margin:0 0 18px 0;color:#334155;{_OUTLOOK_TEXT_STYLE}">'
-        '<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
-        f'href="{_INSIGHT_RESULTS_URL}">How to read results</a></p>'
-    )
-
-
-def _incomplete_reason(reasons: list[str]) -> str:
-    labels = {
-        "clean_window_not_empty": (
-            "Clean window blocked by pre-existing telemetry inside the required "
-            "short lookback; no Agent traffic was sent."
-        ),
-        "monitor_reset_failed": "Agent Insights monitor reset failed before traffic.",
-        "clean_window_failed": "Clean-window telemetry verification failed.",
-        "invocation_failed": "One or more deployed Agent endpoint invocations failed.",
-        "telemetry_failed": "Natural telemetry did not arrive or correlate completely.",
-        "trace_contract_failed": "Trace-contract verification failed.",
-        "insight_run_failed": "One or more Agent Insights runs failed.",
-        "assessment_evidence_incomplete": (
-            "Independent assessment evidence was insufficient for a trusted score."
-        ),
-        "runtime_evidence_incomplete": (
-            "Endpoint response counts or natural trace evidence were incomplete."
-        ),
-    }
-    if not reasons:
-        return "Validated runtime evidence was incomplete."
-    return " ".join(labels.get(reason, reason.replace("_", " ").capitalize()) for reason in reasons)
-
-
-def _summary_narrative(report: dict[str, Any]) -> tuple[str, str]:
     summary = report["summary"]
-    if report["status"] == "INCOMPLETE":
-        return (
-            _incomplete_reason(summary.get("incomplete_reasons", [])),
-            "No quality score or product conclusion was produced from this run.",
-        )
-    return (
-        f"The run expected {summary['issues_expected']} issue Insights and zero "
-        f"baseline Insights, and observed {summary['observed_cards']} distinct cards.",
-        f"Strict quality-bar matching found {summary['issues_correct']} of "
-        f"{summary['issues_expected']} expected problems. "
-        f"{summary['baseline_passed']} of 5 healthy baselines were clean, and "
-        f"{summary.get('noise_cards', 0)} noise cards were recorded.",
-    )
+    return [
+        (
+            "Quality score",
+            f"{summary['quality_score']:g} / 100{_score_comparison(report)}",
+        ),
+        (
+            "Expected issues",
+            f"{summary['issues_correct']} correct / {summary['issues_expected']} "
+            f"({summary['issues_incorrect']} incorrect, "
+            f"{summary['issues_missing']} missing)",
+        ),
+        (
+            "Extra cards",
+            f"{summary['noise_cards']} noise, "
+            f"{summary['duplicate_cards']} duplicate",
+        ),
+        (
+            "Scoring",
+            '<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
+            f'href="{_QUALITY_BAR_URL}">How Scoring Works</a>',
+        ),
+    ]
 
 
 def _agent_report_url(report: dict[str, Any], agent_name: str) -> str:
@@ -710,14 +575,7 @@ def _render_html(
     work_items: Mapping[str, Any] | None = None,
     test_run: bool = False,
 ) -> str:
-    status_style = _STATUS_STYLES[report["status"]]
-    score = _overall_score(report)
-    score_comparison = _score_comparison(report)
-    summary = _summary_narrative(report)
     rows = _agent_rows(report, agent_links or {}, test_run=test_run)
-    status_suffix = (
-        " &middot; INCOMPLETE" if report["status"] == "INCOMPLETE" else ""
-    )
     test_banner = (
         '<tr><td style="padding:18px 32px;background-color:#dbeafe;'
         f'color:#12304a;font-weight:700;{_OUTLOOK_TEXT_STYLE}">'
@@ -747,27 +605,17 @@ def _render_html(
         '<p style="margin:0 0 14px 0;color:#dbeafe;font-size:17px;line-height:24px;">'
         f"{html.escape(report.get('profile', 'daily').title())} qualification report "
         f"&middot; {html.escape(report['report_date'])}</p>"
-        f'<span style="display:inline-block;padding:5px 10px;background-color:'
-        f'{status_style["background"]};color:{status_style["foreground"]};'
-        'font-size:12px;line-height:16px;font-weight:700;">'
-        f"Quality Score: {html.escape(score)}"
-        f"{html.escape(score_comparison)}{status_suffix}</span>"
-        '<div style="margin-top:8px;font-size:12px;line-height:16px;">'
-        f'<a style="color:#dbeafe;text-decoration:underline;" '
-        f'href="{_QUALITY_BAR_URL}">How Scoring Works</a></div>'
         "</td></tr>"
         + test_banner
         + '<tr><td style="padding:28px 32px 0 32px;">'
         + _section_heading("Summary")
-        + "".join(
-            f'<p style="margin:0 0 12px 0;color:#334155;'
-            f'{_OUTLOOK_TEXT_STYLE}">{html.escape(paragraph)}</p>'
-            for paragraph in summary
-        )
         + _dashboard_source_link(dashboard_link, adx_publication)
-        + _data_table(("Metric", "Findings"), _grade_rows(report), (38, 62))
-        + _shadow_score_details(report)
-        + _insight_results_link()
+        + _data_table(
+            ("Summary", "Result"),
+            _grade_rows(report),
+            (38, 62),
+            raw_cells={(3, 1)},
+        )
         + "</td></tr>"
         '<tr><td style="padding:30px 32px 0 32px;">'
         + _section_heading("What is working")

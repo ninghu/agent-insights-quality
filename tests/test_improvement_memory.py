@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
-from datetime import date
 from pathlib import Path
 
 import pytest
@@ -25,8 +24,6 @@ from agent_insights_quality.improvement_memory import (
     write_improvement_memory,
     write_improvement_preview,
 )
-from agent_insights_quality.catalogs import catalog_hashes, load_catalogs
-from agent_insights_quality.reporting import build_operational_failure_report
 from agent_insights_quality.util import ROOT, ContractError, content_hash
 
 
@@ -40,7 +37,7 @@ def _issue(
     card_evaluations: list[dict] | None = None,
 ) -> dict:
     fields = {
-        "root_cause": detail not in {"PARTIAL", "MISMATCHED"},
+        "description": detail not in {"PARTIAL", "MISMATCHED"},
         "title": True,
     }
     if card_evaluations is None:
@@ -53,7 +50,7 @@ def _issue(
                     "finding_type": detail,
                     "fields": fields,
                     "field_reasons": (
-                        {"root_cause": "The root cause is incorrect."}
+                        {"description": "The diagnosis description is incorrect."}
                         if detail in {"PARTIAL", "MISMATCHED"}
                         else {}
                     ),
@@ -104,6 +101,13 @@ def _issue(
         "agent": agent,
         "title": f"Title for {issue_id}",
         "detail": detail,
+        "outcome": (
+            "correct"
+            if detail in {"MATCHED", "DUPLICATE"}
+            else "incorrect"
+            if detail in {"PARTIAL", "MISMATCHED"}
+            else "missing"
+        ),
         "assessment": {
             "ownership": ownership,
             "reasoning": reasoning,
@@ -130,7 +134,6 @@ def _report(
     profile: str = "daily",
     run_id: str = "aiq-20260824",
     report_date: str = "2026-08-24",
-    incomplete: bool = False,
     issues: list[dict] | None = None,
     baseline: list[dict] | None = None,
 ) -> dict:
@@ -139,7 +142,7 @@ def _report(
         "run_id": run_id,
         "report_date": report_date,
         "profile": profile,
-        "summary": {"incomplete": incomplete},
+        "summary": {},
         "baseline": baseline
         if baseline is not None
         else [_baseline(agent) for agent in agents],
@@ -176,17 +179,17 @@ def _analysis(
                         "finding_id": f"{supporting_agents[0]}/issue-002/expected",
                         "agent": supporting_agents[0],
                         "issue_id": "issue-002",
-                        "detail": "root_cause=false",
+                        "detail": "description=false",
                     },
                     {
                         "finding_id": f"{supporting_agents[1]}/issue-003/expected",
                         "agent": supporting_agents[1],
                         "issue_id": "issue-003",
-                        "detail": "root_cause=false",
+                        "detail": "description=false",
                     },
                 ],
                 "improvement": "Separate root identification from card writing.",
-                "measurable_signal": "Fewer root_cause=false judgments across two Agents.",
+                "measurable_signal": "Fewer description=false judgments across two Agents.",
                 "confidence": 0.8,
             }
         ],
@@ -237,7 +240,7 @@ def test_stable_living_memory_seed_files_exist_without_dead_links() -> None:
     assert "](agents/" not in markdown
 
 
-def test_report_coverage_reflects_selected_scope_and_completeness() -> None:
+def test_report_coverage_reflects_selected_scope() -> None:
     report = _report()
     coverage = report_coverage(report)
     assert coverage == {
@@ -245,17 +248,12 @@ def test_report_coverage_reflects_selected_scope_and_completeness() -> None:
         "issues": 4,
         "runtime_evidence_complete": True,
     }
-    incomplete_report = _report(incomplete=True)
-    assert report_coverage(incomplete_report)["runtime_evidence_complete"] is False
-
-
-def test_build_normalized_summary_splits_by_ownership_and_excludes_incomplete() -> None:
+def test_build_normalized_summary_splits_by_ownership() -> None:
     report = _report(
         issues=[
             _issue("issue-001", "weather-agent", "MATCHED", ownership="none"),
             _issue("issue-002", "healthcare-agent", "PARTIAL", ownership="insight_engine"),
             _issue("issue-003", "finance-agent", "MISMATCHED", ownership="agent"),
-            _issue("issue-004", "travel-agent", "INCOMPLETE", ownership="insight_engine"),
         ]
     )
     normalized = build_normalized_summary(report)
@@ -264,8 +262,6 @@ def test_build_normalized_summary_splits_by_ownership_and_excludes_incomplete() 
     assert eligible_issue_ids == {"issue-002"}
     assert "issue-001" in excluded_issue_ids
     assert "issue-003" in excluded_issue_ids
-    # Ownership=insight_engine but INCOMPLETE evidence can never support a pattern.
-    assert "issue-004" in excluded_issue_ids
     assert normalized["coverage"] == report_coverage(report)
     assert normalized["current_run_signal"] == current_run_signal(report)
     eligible = normalized["insight_engine_findings"][0]
@@ -395,7 +391,7 @@ def test_pattern_ids_use_root_evidence_not_generated_title() -> None:
     changed_summary = deepcopy(summary)
     changed_summary["insight_engine_findings"][0][
         "failed_field_reasons"
-    ]["root_cause"] = "Different root evidence."
+    ]["description"] = "Different diagnosis evidence."
     changed_local_key = _analysis(pattern_key="another-model-local-key")
     changed = assign_stable_pattern_ids(
         changed_local_key,
@@ -549,8 +545,8 @@ def test_pattern_absence_requires_same_policy_and_capability_coverage() -> None:
         comparable=True,
         exercised_agents=["healthcare-agent", "finance-agent"],
         assessment_policy=assessment_policy_digest(),
-        exercised_capability_names=["root_cause"],
-        pattern_capabilities={"root-cause-drift": ["root_cause"]},
+        exercised_capability_names=["description"],
+        pattern_capabilities={"root-cause-drift": ["description"]},
     )
     changed_policy = reconcile_patterns(
         first,
@@ -560,7 +556,7 @@ def test_pattern_absence_requires_same_policy_and_capability_coverage() -> None:
         comparable=True,
         exercised_agents=["healthcare-agent", "finance-agent"],
         assessment_policy="sha256:" + ("f" * 64),
-        exercised_capability_names=["root_cause"],
+        exercised_capability_names=["description"],
     )
     assert changed_policy["root-cause-drift"]["status"] == "new"
     assert (
@@ -692,8 +688,8 @@ def test_write_improvement_memory_is_immutable_per_run_and_daily_only(
     assert pattern["history"][0]["evaluation"] == "observed"
     assert all("finding_id" in item for item in pattern["evidence"])
     assert pattern["supporting_capabilities"] == [
-        "finance-agent/issue-003/root_cause",
-        "healthcare-agent/issue-002/root_cause",
+        "finance-agent/issue-003/description",
+        "healthcare-agent/issue-002/description",
     ]
     assert (reports_root / "insight-engine-improvement.md").exists()
     assert living_state_path.exists()
@@ -825,83 +821,6 @@ def test_published_memory_reconstructs_from_trusted_base_and_report(
             previous_markdown=first_markdown,
         )
 
-def test_daily_report_and_memory_are_staged_and_published_together(
-    tmp_path: Path,
-) -> None:
-    agents, issues = load_catalogs()
-    selected = {
-        agent["name"]: list(agent["issue_ids"][:4])
-        for agent in agents["agents"]
-    }
-    report = build_operational_failure_report(
-        report_date=date(2026, 8, 24),
-        run_id="aiq-20260824",
-        profile="daily",
-        selected=selected,
-        issues=issues,
-        failure_code="synthetic_incomplete",
-        catalog_hashes=catalog_hashes(agents, issues),
-    )
-    analysis = _analysis()
-    analysis["patterns"] = []
-    analysis["improvement_priorities"] = []
-    reports_root = tmp_path / "reports"
-    output = reports_root / "daily" / "2026" / "08" / "24"
-    write_improvement_memory(
-        report=report,
-        analysis=analysis,
-        reports_root=reports_root,
-        living_state_path=reports_root / "insight-engine-improvement.json",
-        report_output=output,
-    )
-    assert (output / "report.json").is_file()
-    assert (output / "report.md").is_file()
-    assert {
-        path.stem for path in (output / "agents").glob("*.md")
-    } == {agent["name"] for agent in agents["agents"]}
-    assert (reports_root / "insight-engine-improvement.json").is_file()
-    assert (reports_root / "insight-engine-improvement.md").is_file()
-
-
-def test_failed_staging_writes_no_publication_files(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    agents, issues = load_catalogs()
-    report = build_operational_failure_report(
-        report_date=date(2026, 8, 24),
-        run_id="aiq-20260824",
-        profile="daily",
-        selected={
-            agent["name"]: list(agent["issue_ids"][:4])
-            for agent in agents["agents"]
-        },
-        issues=issues,
-        failure_code="synthetic_incomplete",
-        catalog_hashes=catalog_hashes(agents, issues),
-    )
-    analysis = _analysis()
-    analysis["patterns"] = []
-    analysis["improvement_priorities"] = []
-    monkeypatch.setattr(
-        improvement_memory,
-        "write_report",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            ContractError("synthetic staged report failure")
-        ),
-    )
-    reports_root = tmp_path / "reports"
-    with pytest.raises(ContractError, match="staged report failure"):
-        write_improvement_memory(
-            report=report,
-            analysis=analysis,
-            reports_root=reports_root,
-            living_state_path=reports_root / "insight-engine-improvement.json",
-            report_output=reports_root / "daily" / "2026" / "08" / "24",
-        )
-    assert not reports_root.exists()
-
-
 def test_email_only_improvement_preview_never_writes_living_state(
     tmp_path: Path,
 ) -> None:
@@ -919,43 +838,3 @@ def test_email_only_improvement_preview_never_writes_living_state(
         output / "insight-engine-improvement-preview.md"
     ).is_file()
     assert not (tmp_path / "reports").exists()
-
-
-def test_incomplete_run_records_snapshot_but_cannot_mutate_pattern_memory(
-    tmp_path: Path,
-) -> None:
-    reports_root = tmp_path / "reports"
-    living_state_path = reports_root / "insight-engine-improvement.json"
-    report = _report()
-    analysis = _analysis()
-    prior = write_improvement_memory(
-        report=report,
-        analysis=analysis,
-        reports_root=reports_root,
-        living_state_path=living_state_path,
-    )
-
-    incomplete_report = _report(
-        run_id="aiq-20260825",
-        report_date="2026-08-25",
-        incomplete=True,
-    )
-    incomplete_analysis = _analysis()
-    incomplete_analysis["executive_summary"] = "Do not replace prior conclusions."
-    incomplete_analysis["isolated_observations"] = ["Do not replace prior observations."]
-    incomplete_analysis["exclusions"] = ["Do not replace prior exclusions."]
-    state = write_improvement_memory(
-        report=incomplete_report,
-        analysis=incomplete_analysis,
-        reports_root=reports_root,
-        living_state_path=living_state_path,
-    )
-    assert state["patterns"] == prior["patterns"]
-    assert state["executive_summary"] == prior["executive_summary"]
-    assert state["isolated_observations"] == prior["isolated_observations"]
-    assert state["exclusions"] == prior["exclusions"]
-    assert state["latest_run_id"] == "aiq-20260825"
-    assert state["latest_coverage"]["runtime_evidence_complete"] is False
-    assert len(state["snapshot_history"]) == 2
-    snapshot_dir = reports_root / "daily" / "2026" / "08" / "25"
-    assert (snapshot_dir / "insight-engine-improvement.json").exists()

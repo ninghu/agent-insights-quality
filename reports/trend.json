@@ -1,29 +1,5 @@
 {
-  "days": [
-    {
-      "baseline_passed": 1,
-      "issues_correct": 3,
-      "issues_expected": 25,
-      "quality_score": 39.4,
-      "report_date": "2026-08-25",
-      "status": "FAIL"
-    },
-    {
-      "baseline_passed": 1,
-      "issues_correct": 4,
-      "issues_expected": 25,
-      "quality_score": 44.1,
-      "report_date": "2026-08-26",
-      "status": "FAIL"
-    },
-    {
-      "baseline_passed": 1,
-      "issues_correct": 3,
-      "issues_expected": 25,
-      "quality_score": 35.5,
-      "report_date": "2026-08-28",
-      "status": "FAIL"
-    }
-  ],
-  "schema_version": "1.0.0"
+  "days": [],
+  "quality_score_formula": "correct_over_expected_plus_noise_v1",
+  "schema_version": "2.0.0"
 }

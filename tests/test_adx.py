@@ -25,7 +25,8 @@ from agent_insights_quality.report_summary import (
     improvement_rows,
     working_capabilities,
 )
-from agent_insights_quality.reporting import _summary_metrics
+from agent_insights_quality.reporting import _summary_metrics, issue_primary_card
+from agent_insights_quality.scoring import issue_outcome
 from agent_insights_quality.util import ROOT, content_hash, read_json
 
 
@@ -38,14 +39,14 @@ class _FakeAdxClient:
     def query(self, database: str, query: str) -> list[dict[str, str]]:
         assert database == "AgentInsightsQuality"
         assert "DailyQualityPublications" in query
-        assert "PayloadVersion == '2.0.0'" in query
+        assert "PayloadVersion == '3.0.0'" in query
         return list(self.rows)
 
     def manage(self, database: str, command: str) -> None:
         assert database == "AgentInsightsQuality"
         self.commands.append(command)
-        assert "PayloadVersion='2.0.0'" in command
-        assert "aiq-v2-run:" in command
+        assert "PayloadVersion='3.0.0'" in command
+        assert "aiq-v3-run:" in command
         assert command.index("Payload=parse_json") < command.index(
             "PayloadVersion="
         )
@@ -59,7 +60,8 @@ class _FakeAdxClient:
 
 def _report() -> dict:
     report = deepcopy(read_json(_report_path()))
-    report["schema_version"] = "2.0.0"
+    report["schema_version"] = "3.0.0"
+    report.pop("status", None)
     report["test_region"] = "WestUS2"
     agents, issues = load_catalogs(require_paths=False)
     report["catalog_hashes"]["agents"] = content_hash(agents)
@@ -82,8 +84,10 @@ def _report() -> dict:
     for item in report["issues"]:
         item["title"] = issue_by_id[item["issue_id"]]["title"]
         assessment = item["assessment"]
+        assessment["fields"].pop("root_cause", None)
         assessment.setdefault("reasoning", assessment["ownership_reason"])
         for card in assessment["card_evaluations"]:
+            card["fields"].pop("root_cause", None)
             if card["finding_type"] in {"PARTIAL", "MISMATCHED"}:
                 card["field_reasons"] = {
                     field: (
@@ -94,14 +98,10 @@ def _report() -> dict:
                     if passed is False
                 }
         item["observed_count"] = len(assessment["card_evaluations"])
-    report["summary"] = _summary_metrics(
-        report["baseline"],
-        report["issues"],
-        incomplete=False,
-    )
-    report["status"] = (
-        "PASS" if report["summary"]["quality_score"] >= 90 else "FAIL"
-    )
+        item.pop("result", None)
+        item["outcome"] = issue_outcome(assessment["card_evaluations"])
+        item.pop("shadow_v2_primary", None)
+    report["summary"] = _summary_metrics(report["baseline"], report["issues"])
     return report
 
 
@@ -136,9 +136,13 @@ def test_publication_payload_contains_public_safe_explanations() -> None:
         len(item["assessment"]["card_evaluations"])
         for item in [*report["baseline"], *report["issues"]]
     )
-    assert len(payload["fields"]) == 140
-    assert payload["run"]["quality_score_formula"] == "field_weighted_v1"
-    assert "shadow_quality_score" not in payload["run"]
+    assert len(payload["fields"]) == sum(
+        len((issue_primary_card(item) or {}).get("fields", {}))
+        for item in report["issues"]
+    )
+    assert payload["run"]["quality_score_formula"] == (
+        "correct_over_expected_plus_noise_v1"
+    )
     assert payload["run"]["report_url"].endswith(
         "/reports/daily/2026/08/26/report.md"
     )
@@ -149,7 +153,7 @@ def test_publication_payload_contains_public_safe_explanations() -> None:
     assert issue["expected_fix"]
     assert issue["ownership_reason"]
     assert issue["issue_url"].endswith(f"#{issue['issue_id']}")
-    assert issue["fields_expected"] == 7
+    assert issue["fields_expected"] in {0, 6}
     card = payload["cards"][0]
     assert card["reasoning"]
     assert card["ownership_reason"]
@@ -185,7 +189,6 @@ def test_publication_payload_contains_public_safe_explanations() -> None:
         "description",
         "linked_traces",
         "proposed_fix",
-        "root_cause",
         "severity",
         "title",
     }
@@ -497,4 +500,4 @@ def test_adx_infrastructure_uses_existing_production_resource_group() -> None:
         "AIQDailyHighlights",
     ):
         assert function in schema
-    assert "where PayloadVersion == '2.0.0'" in schema
+    assert "where PayloadVersion == '3.0.0'" in schema

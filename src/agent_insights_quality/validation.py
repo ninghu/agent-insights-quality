@@ -6,23 +6,9 @@ from pathlib import Path
 
 from agent_insights_quality.catalogs import generate_docs, load_catalogs
 from agent_insights_quality.automation_policy import load_automation_policy
-from agent_insights_quality.reporting import (
-    CLEAN_CARD_PRECISION_WEIGHT,
-    FIELD_QUALITY_WEIGHT,
-    FIELD_WEIGHTS,
+from agent_insights_quality.scoring import (
     QUALITY_SCORE_FORMULA,
-    QUALITY_SCORE_THRESHOLD,
-)
-from agent_insights_quality.shadow_scoring import (
-    SHADOW_CALIBRATION_COMPLETE_RUNS,
-    SHADOW_FIELD_WEIGHTS,
-    SHADOW_GATE_THRESHOLDS,
-    SHADOW_MISMATCHED_QUALITY_CAP,
-    SHADOW_PRECISION_WEIGHT,
-    SHADOW_SCORE_AUTOMATION_AUTHORITY,
-    SHADOW_SCORE_FORMULA,
-    SHADOW_SCORE_REPORT_PROFILES,
-    SHADOW_USEFUL_COVERAGE_WEIGHT,
+    SCORING_FIELDS,
 )
 from agent_insights_quality.selection import DAILY_ISSUES_PER_AGENT
 from agent_insights_quality.util import ROOT, ContractError, read_yaml
@@ -88,26 +74,10 @@ def _validate_reporting_policy() -> None:
         raise ContractError("Reporting dashboard link is not reviewed")
     if policy.get("quality_score") != {
         "formula": QUALITY_SCORE_FORMULA,
-        "field_quality_weight": FIELD_QUALITY_WEIGHT,
-        "clean_card_precision_weight": CLEAN_CARD_PRECISION_WEIGHT,
-        "field_weights": FIELD_WEIGHTS,
-        "pass_threshold": QUALITY_SCORE_THRESHOLD,
+        "scoring_fields": list(SCORING_FIELDS),
+        "diagnostic_fields": ["severity", "proposed_fix"],
     }:
         raise ContractError("Reporting quality-score policy does not match implementation")
-    if policy.get("shadow_quality_score") != {
-        "formula": SHADOW_SCORE_FORMULA,
-        "automation_authority": SHADOW_SCORE_AUTOMATION_AUTHORITY,
-        "report_profiles": list(SHADOW_SCORE_REPORT_PROFILES),
-        "useful_coverage_weight": SHADOW_USEFUL_COVERAGE_WEIGHT,
-        "precision_weight": SHADOW_PRECISION_WEIGHT,
-        "native_field_weights": SHADOW_FIELD_WEIGHTS,
-        "mismatched_quality_cap": SHADOW_MISMATCHED_QUALITY_CAP,
-        "gates": SHADOW_GATE_THRESHOLDS,
-        "calibration_complete_runs": SHADOW_CALIBRATION_COMPLETE_RUNS,
-    }:
-        raise ContractError(
-            "Reporting shadow quality-score policy does not match implementation"
-        )
 
 
 def _validate_removed_terms() -> None:

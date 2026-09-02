@@ -140,7 +140,6 @@ def _assessments(manifest: dict) -> dict[str, dict]:
             "ownership_reason": "The expected Insight is fully correct.",
             "reasoning": "The expected Insight is fully correct.",
             "fields": {
-                "root_cause": True,
                 "title": True,
                 "description": True,
                 "category": True,
@@ -190,7 +189,7 @@ def _baseline_assessments(manifest: dict) -> dict[str, dict]:
     }
 
 
-def test_report_status_uses_ninety_point_threshold() -> None:
+def test_report_uses_correct_issue_percentage_without_status() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
     assessments = _assessments(manifest)
@@ -200,7 +199,8 @@ def test_report_status_uses_ninety_point_threshold() -> None:
         assessments,
         _baseline_assessments(manifest),
     )
-    assert report["status"] == "PASS"
+    assert report["summary"]["quality_score"] == 100
+    assert "status" not in report
     changed = deepcopy(assessments)
     for assessment in list(changed.values())[:4]:
         assessment["verdict"] = "incorrect"
@@ -208,14 +208,30 @@ def test_report_status_uses_ninety_point_threshold() -> None:
         assessment["fields"] = {
             field: False for field in assessment["fields"]
         }
+        assessment["card_evaluations"][0]["verdict"] = "incorrect"
+        assessment["card_evaluations"][0]["finding_type"] = "MISMATCHED"
+        assessment["card_evaluations"][0]["fields"] = {
+            field: False
+            for field in assessment["card_evaluations"][0]["fields"]
+        }
     failed = build_report(
         manifest,
         issues,
         changed,
         _baseline_assessments(manifest),
     )
-    assert failed["summary"]["quality_score"] == 83
-    assert failed["status"] == "FAIL"
+    assert failed["summary"]["issues_incorrect"] == 4
+    assert failed["summary"]["quality_score"] == 80
+    assert "status" not in failed
+
+
+def test_quality_score_formula_is_directly_explainable() -> None:
+    assert calculate_quality_score(
+        correct_issues=17,
+        expected_issues=20,
+        noise_cards=1,
+        duplicate_cards=1,
+    ) == 77.3
 
 
 def test_render_markdown_uses_exact_agent_insights_quality_title() -> None:
@@ -392,99 +408,40 @@ def test_rejected_foreign_operation_card_does_not_enter_report_scoring() -> None
 
     assert result["observed_count"] == 0
     assert result["detail"] == "MISSING"
-    assert report["summary"]["observed_cards"] == (
-        report["summary"]["issues_expected"] - 1
-    )
-    assert report["summary"]["clean_card_precision"] == 100.0
+    assert result["outcome"] == "missing"
+    assert report["summary"]["issues_missing"] == 1
+    assert report["summary"]["quality_score"] == 95
 
 
-def test_staging_shadow_score_does_not_change_v1_or_daily_reports() -> None:
+def test_staging_uses_the_single_quality_score() -> None:
     _, issues = load_catalogs()
     manifest = _manifest(full=True)
-    assessments = _with_card_evaluations(_assessments(manifest))
-    first = next(iter(assessments.values()))
-    first["verdict"] = "partially_useful"
-    first["finding_type"] = "PARTIAL"
-    first["fields"]["root_cause"] = False
-    first["card_evaluations"][0]["finding_type"] = "PARTIAL"
-    first["card_evaluations"][0]["verdict"] = "partially_useful"
-    first["card_evaluations"][0]["fields"]["root_cause"] = False
-    first["card_evaluations"][0]["field_reasons"] = {
-        "root_cause": "The synthetic root cause is incomplete."
-    }
-
-    staging = build_report(
-        manifest,
-        issues,
-        assessments,
-        _baseline_assessments(manifest),
-    )
-
-    assert staging["summary"]["quality_score_formula"] == "field_weighted_v1"
-    assert staging["summary"]["quality_score"] == 99.4
-    assert staging["status"] == "PASS"
-    shadow = staging["summary"]["shadow_quality_score"]
-    assert shadow["formula"] == "coverage_quality_precision_v2"
-    assert shadow["automation_authority"] is False
-    assert shadow["components"] == {
-        "coverage": 100.0,
-        "diagnosis_recall": 97.2,
-        "selected_card_quality": 97.2,
-        "useful_coverage": 97.2,
-        "precision": 100.0,
-    }
-    assert shadow["score"] == 97.8
-    assert shadow["gate_failures"] == []
-    assert staging["issues"][0]["shadow_v2_primary"]["quality"] == 0.0
-    validate_report(staging)
-    markdown = render_markdown(staging)
-    assert "## Staging shadow calibration" in markdown
-    assert "`coverage_quality_precision_v2`" in markdown
-    assert "| Total | 97.8/100 |" in markdown
-
-    manifest = _manifest()
-    assessments = _with_card_evaluations(_assessments(manifest))
-    daily = build_report(
-        manifest,
-        issues,
-        assessments,
-        _baseline_assessments(manifest),
-    )
-    assert "shadow_quality_score" not in daily["summary"]
-    assert all("shadow_v2_primary" not in item for item in daily["issues"])
-    assert "coverage_quality_precision_v2" not in render_markdown(daily)
-    validate_report(daily)
-
-
-def test_incomplete_staging_shadow_keeps_counts_but_nulls_metrics() -> None:
-    _, issues = load_catalogs()
-    manifest = _manifest(full=True)
-    manifest["agents"][0]["issues"][0]["endpoint_usable_response_count"] = 4
-    assessments = _with_card_evaluations(_assessments(manifest))
-
     report = build_report(
         manifest,
         issues,
-        assessments,
+        _assessments(manifest),
         _baseline_assessments(manifest),
     )
-
-    assert report["status"] == "INCOMPLETE"
-    assert report["summary"]["quality_score"] is None
-    shadow = report["summary"]["shadow_quality_score"]
-    assert shadow["counts"] == {
-        "expected_issues": 36,
-        "detected_issues": 35,
-        "correct_diagnosis_primaries": 35,
-        "generated_issue_cards": 36,
-        "baseline_noise_cards": 0,
-    }
-    assert all(value is None for value in shadow["components"].values())
-    assert shadow["score"] is None
-    assert shadow["gate_failures"] is None
-    assert all(item["shadow_v2_primary"] is None for item in report["issues"])
-    assert "coverage_quality_precision_v2" not in render_markdown(report)
+    assert report["summary"]["quality_score_formula"] == (
+        "correct_over_expected_plus_noise_v1"
+    )
+    assert report["summary"]["quality_score"] == 100
+    assert "shadow_quality_score" not in report["summary"]
+    assert "shadow_v2_primary" not in report["issues"][0]
     validate_report(report)
+
+
+def test_incomplete_staging_produces_no_report() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest(full=True)
+    manifest["agents"][0]["issues"][0]["endpoint_usable_response_count"] = 4
+    with pytest.raises(ContractError, match="no quality report"):
+        build_report(
+            manifest,
+            issues,
+            _assessments(manifest),
+            _baseline_assessments(manifest),
+        )
 
 
 def test_failed_matched_issue_cannot_score_from_perfect_card_fields() -> None:
@@ -498,7 +455,7 @@ def test_failed_matched_issue_cannot_score_from_perfect_card_fields() -> None:
         {
             "finding_type": "MATCHED",
             "fields": {
-                field: True for field in assessment["fields"]
+                field: field != "title" for field in assessment["fields"]
             },
         }
     ]
@@ -509,9 +466,9 @@ def test_failed_matched_issue_cannot_score_from_perfect_card_fields() -> None:
         _baseline_assessments(manifest),
     )
     result = next(item for item in report["issues"] if item["issue_id"] == issue_id)
-    assert result["result"] == "FAIL"
-    assert report["summary"]["field_quality_score"] < 100
-    assert report["summary"]["quality_score"] < 100
+    assert result["outcome"] == "incorrect"
+    assert report["summary"]["issues_incorrect"] == 1
+    assert report["summary"]["quality_score"] == 95
 
 
 def test_failed_mismatched_issue_cannot_score_from_perfect_fields() -> None:
@@ -538,9 +495,8 @@ def test_failed_mismatched_issue_cannot_score_from_perfect_fields() -> None:
         _baseline_assessments(manifest),
     )
     result = next(item for item in report["issues"] if item["issue_id"] == issue_id)
-    assert result["result"] == "FAIL"
-    assert report["summary"]["field_quality_score"] < 100
-    assert report["summary"]["quality_score"] < 100
+    assert result["outcome"] == "incorrect"
+    assert report["summary"]["quality_score"] == 95
 
 
 def test_report_requires_bound_source_integrity() -> None:
@@ -615,7 +571,8 @@ def test_daily_score_compares_with_latest_prior_scored_report(
     trend = tmp_path / "trend.json"
     trend.write_text(
         """{
-  "schema_version": "1.0.0",
+  "schema_version": "2.0.0",
+  "quality_score_formula": "correct_over_expected_plus_noise_v1",
   "days": [
     {"report_date": "2026-08-25", "quality_score": 94.1},
     {"report_date": "2026-08-26", "quality_score": null}
@@ -632,13 +589,14 @@ def test_daily_score_compares_with_latest_prior_scored_report(
         "quality_score": 94.1,
         "delta": 5.9,
     }
-    assert "Score **100/100** (+5.9 vs 2026-08-25)" in render_markdown(report)
+    assert "| Quality score | **100 / 100 (+5.9 vs 2026-08-25)** |" in (
+        render_markdown(report)
+    )
 
 
-def test_incomplete_daily_score_has_no_comparison(tmp_path: Path) -> None:
+def test_score_comparison_rejects_legacy_formula(tmp_path: Path) -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
-    manifest["agents"][0]["baseline"]["status"] = "inconclusive"
     report = build_report(
         manifest,
         issues,
@@ -652,9 +610,8 @@ def test_incomplete_daily_score_has_no_comparison(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    apply_score_comparison(report, trend)
-
-    assert report["score_comparison"] is None
+    with pytest.raises(ContractError, match="different quality-score formula"):
+        apply_score_comparison(report, trend)
 
 
 def test_staging_score_compares_with_latest_reviewed_receipt(
@@ -672,11 +629,17 @@ def test_staging_score_compares_with_latest_reviewed_receipt(
     report["summary"]["quality_score"] = 48.3
     receipts = tmp_path / "promotion-receipts"
     receipts.mkdir()
+    (receipts / "aiq-20260826.json").write_text(
+        '{"profile":"staging","qualified":true,"human_reviewed":true,'
+        '"quality_score":99.9}',
+        encoding="utf-8",
+    )
     (receipts / "aiq-20260827-r29.json").write_text(
         """{
   "profile": "staging",
   "qualified": true,
   "human_reviewed": true,
+  "quality_score_formula": "correct_over_expected_plus_noise_v1",
   "quality_score": 47.8
 }
 """,
@@ -710,6 +673,7 @@ def test_staging_score_comparison_accepts_three_digit_reruns(
     receipts.mkdir()
     (receipts / "aiq-20260827-r99.json").write_text(
         '{"profile":"staging","qualified":true,"human_reviewed":true,'
+        '"quality_score_formula":"correct_over_expected_plus_noise_v1",'
         '"quality_score":47.8}',
         encoding="utf-8",
     )
@@ -727,14 +691,18 @@ def test_score_comparison_uses_immutable_base_trend() -> None:
     )
     report["report_date"] = "2026-08-27"
     base = {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
+        "quality_score_formula": "correct_over_expected_plus_noise_v1",
         "days": [
             {
                 "report_date": "2026-08-26",
-                "status": "FAIL",
                 "baseline_passed": 1,
                 "issues_correct": 4,
+                "issues_incorrect": 15,
+                "issues_missing": 1,
                 "issues_expected": 20,
+                "noise_cards": 0,
+                "duplicate_cards": 0,
                 "quality_score": 44.1,
             }
         ],
@@ -760,45 +728,40 @@ def test_scored_trend_day_cannot_be_replaced() -> None:
         _baseline_assessments(_manifest()),
     )
     base = {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
+        "quality_score_formula": "correct_over_expected_plus_noise_v1",
         "days": [
-            {
-                "report_date": report["report_date"],
-                "status": "FAIL",
-                "baseline_passed": 1,
-                "issues_correct": 4,
-                "issues_expected": 20,
-                "quality_score": 44.1,
-            }
+            updated_trend(
+                report,
+                {
+                    "schema_version": "2.0.0",
+                    "quality_score_formula": "correct_over_expected_plus_noise_v1",
+                    "days": [],
+                },
+            )["days"][0]
         ],
     }
+    base["days"][0]["quality_score"] = 44.1
     with pytest.raises(ContractError, match="immutable"):
         updated_trend(report, base)
 
 
-def test_field_quality_and_clean_card_precision_components() -> None:
+def test_optional_fields_do_not_score_and_noise_expands_denominator() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
     assessments = _assessments(manifest)
     for assessment in list(assessments.values())[:4]:
-        assessment["verdict"] = "partially_useful"
-        assessment["finding_type"] = "PARTIAL"
         assessment["fields"]["severity"] = False
         card = assessment["card_evaluations"][0]
-        card["verdict"] = "partially_useful"
-        card["finding_type"] = "PARTIAL"
         card["fields"]["severity"] = False
         card["field_reasons"] = {
             "severity": "The synthetic severity is incomplete."
         }
     baseline = _baseline_assessments(manifest)
-    threshold = build_report(manifest, issues, assessments, baseline)
-    assert threshold["summary"]["issues_correct"] == 16
-    assert threshold["summary"]["issues_partial"] == 4
-    assert threshold["summary"]["field_quality_score"] == 98
-    assert threshold["summary"]["clean_card_precision"] == 100
-    assert threshold["summary"]["quality_score"] == 98.3
-    assert threshold["status"] == "PASS"
+    report = build_report(manifest, issues, assessments, baseline)
+    assert report["summary"]["issues_correct"] == 20
+    assert report["summary"]["issues_incorrect"] == 0
+    assert report["summary"]["quality_score"] == 100
 
     manifest["agents"][0]["baseline"].update(
         {
@@ -815,12 +778,10 @@ def test_field_quality_and_clean_card_precision_components() -> None:
     }
     penalized = build_report(manifest, issues, assessments, baseline)
     assert penalized["summary"]["noise_cards"] == 1
-    assert penalized["summary"]["clean_card_precision"] == 95.2
-    assert penalized["summary"]["quality_score"] == 97.6
-    assert penalized["status"] == "PASS"
+    assert penalized["summary"]["quality_score"] == 95.2
 
 
-def test_failed_matched_fields_cannot_score_one_hundred() -> None:
+def test_optional_top_level_field_mismatch_does_not_change_card_score() -> None:
     manifest = _manifest()
     _, issues = load_catalogs()
     assessments = _assessments(manifest)
@@ -835,23 +796,21 @@ def test_failed_matched_fields_cannot_score_one_hundred() -> None:
     failed_issue = next(
         item for item in report["issues"] if item["issue_id"] == first["issue_id"]
     )
-    assert failed_issue["result"] == "FAIL"
-    assert report["summary"]["field_quality_score"] < 100
-    assert report["summary"]["quality_score"] < 100
+    assert failed_issue["outcome"] == "correct"
+    assert report["summary"]["quality_score"] == 100
 
 
 def test_incomplete_issue_is_inconclusive() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
     manifest["agents"][0]["issues"][0]["status"] = "inconclusive"
-    report = build_report(
-        manifest,
-        issues,
-        _assessments(manifest),
-        _baseline_assessments(manifest),
-    )
-    assert report["status"] == "INCOMPLETE"
-    assert report["summary"]["quality_score"] is None
+    with pytest.raises(ContractError, match="no quality report"):
+        build_report(
+            manifest,
+            issues,
+            _assessments(manifest),
+            _baseline_assessments(manifest),
+        )
 
 
 def test_incomplete_issue_assessment_prevents_a_numeric_score() -> None:
@@ -865,20 +824,13 @@ def test_incomplete_issue_assessment_prevents_a_numeric_score() -> None:
     assessments[issue_id]["fields"] = {
         field: False for field in assessments[issue_id]["fields"]
     }
-    report = build_report(
-        manifest,
-        issues,
-        assessments,
-        _baseline_assessments(manifest),
-    )
-    result = next(item for item in report["issues"] if item["issue_id"] == issue_id)
-    assert result["result"] == "INCOMPLETE"
-    assert report["status"] == "INCOMPLETE"
-    assert report["summary"]["incomplete"] is True
-    assert report["summary"]["incomplete_reasons"] == [
-        "assessment_evidence_incomplete"
-    ]
-    assert report["summary"]["quality_score"] is None
+    with pytest.raises(ContractError, match="no quality report"):
+        build_report(
+            manifest,
+            issues,
+            assessments,
+            _baseline_assessments(manifest),
+        )
 
 
 def test_inconclusive_assessment_prevents_a_numeric_score() -> None:
@@ -898,18 +850,13 @@ def test_inconclusive_assessment_prevents_a_numeric_score() -> None:
         "confidence": 0.8,
         "card_evaluations": [{"evaluation": "incomplete"}],
     }
-    report = build_report(
-        manifest,
-        issues,
-        _assessments(manifest),
-        baseline,
-    )
-    assert report["status"] == "INCOMPLETE"
-    assert report["summary"]["incomplete"] is True
-    assert report["summary"]["incomplete_reasons"] == [
-        "assessment_evidence_incomplete"
-    ]
-    assert report["summary"]["quality_score"] is None
+    with pytest.raises(ContractError, match="no quality report"):
+        build_report(
+            manifest,
+            issues,
+            _assessments(manifest),
+            baseline,
+        )
 
 
 def test_incomplete_baseline_card_prevents_a_numeric_score() -> None:
@@ -929,10 +876,8 @@ def test_incomplete_baseline_card_prevents_a_numeric_score() -> None:
         "confidence": 0.8,
         "card_evaluations": [{"evaluation": "incomplete"}],
     }
-    report = build_report(manifest, issues, _assessments(manifest), baseline)
-    assert report["status"] == "INCOMPLETE"
-    assert report["summary"]["incomplete"] is True
-    assert report["summary"]["quality_score"] is None
+    with pytest.raises(ContractError, match="no quality report"):
+        build_report(manifest, issues, _assessments(manifest), baseline)
 
 
 def test_valid_baseline_agent_finding_is_not_noise() -> None:
@@ -969,10 +914,8 @@ def test_valid_baseline_agent_finding_is_not_noise() -> None:
         ],
     }
     report = build_report(manifest, issues, _assessments(manifest), baseline)
-    assert report["status"] == "PASS"
     assert report["summary"]["baseline_passed"] == 4
     assert report["summary"]["noise_cards"] == 0
-    assert report["summary"]["clean_card_precision"] == 100
     assert report["summary"]["quality_score"] == 100
     report["delivery"]["content_digest"] = "sha256:" + "a" * 64
     validate_published_report(report)
@@ -985,16 +928,13 @@ def test_missing_runtime_evidence_prevents_a_numeric_score() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
     manifest["agents"][0]["issues"][0]["endpoint_usable_response_count"] = 4
-    report = build_report(
-        manifest,
-        issues,
-        _assessments(manifest),
-        _baseline_assessments(manifest),
-    )
-    assert report["issues"][0]["result"] == "INCOMPLETE"
-    assert report["status"] == "INCOMPLETE"
-    assert report["summary"]["quality_score"] is None
-    assert "runtime_evidence_incomplete" in report["summary"]["incomplete_reasons"]
+    with pytest.raises(ContractError, match="no quality report"):
+        build_report(
+            manifest,
+            issues,
+            _assessments(manifest),
+            _baseline_assessments(manifest),
+        )
 
 
 def test_published_report_requires_complete_consistent_content() -> None:
@@ -1008,6 +948,10 @@ def test_published_report_requires_complete_consistent_content() -> None:
     )
     report["delivery"]["content_digest"] = "sha256:" + "a" * 64
     validate_published_report(report)
+    inconsistent_outcome = deepcopy(report)
+    inconsistent_outcome["issues"][0]["outcome"] = "missing"
+    with pytest.raises(ContractError, match="outcomes are inconsistent"):
+        validate_published_report(inconsistent_outcome)
     report["issues"][0]["assessment"] = None
     with pytest.raises(ContractError, match="incomplete"):
         validate_published_report(report)
@@ -1085,7 +1029,7 @@ def test_report_rejects_malformed_or_private_nested_content() -> None:
         validate_report(missing_card_evaluation)
 
 
-def test_published_report_rejects_incomplete_assessment_evidence() -> None:
+def test_incomplete_assessment_cannot_build_a_report() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
     assessments = _assessments(manifest)
@@ -1096,24 +1040,13 @@ def test_published_report_rejects_incomplete_assessment_evidence() -> None:
     assessments[issue_id]["fields"] = {
         field: False for field in assessments[issue_id]["fields"]
     }
-    report = build_report(
-        manifest,
-        issues,
-        assessments,
-        _baseline_assessments(manifest),
-    )
-    report["summary"]["incomplete"] = False
-    report["summary"]["quality_score"] = calculate_quality_score(
-        field_quality_score=report["summary"]["field_quality_score"],
-        clean_card_precision=report["summary"]["clean_card_precision"],
-        incomplete=False,
-    )
-    report["status"] = (
-        "PASS" if report["summary"]["quality_score"] >= 90 else "FAIL"
-    )
-    report["delivery"]["content_digest"] = "sha256:" + "a" * 64
-    with pytest.raises(ContractError, match="incomplete"):
-        validate_published_report(report)
+    with pytest.raises(ContractError, match="no quality report"):
+        build_report(
+            manifest,
+            issues,
+            assessments,
+            _baseline_assessments(manifest),
+        )
 
 
 def test_agent_report_is_a_human_validation_handoff() -> None:
@@ -1128,7 +1061,6 @@ def test_agent_report_is_a_human_validation_handoff() -> None:
         "The card names the correct root but severity and fix are wrong."
     )
     assessments[first_issue_id]["fields"] = {
-        "root_cause": True,
         "title": True,
         "description": True,
         "category": True,
@@ -1156,7 +1088,7 @@ def test_agent_report_is_a_human_validation_handoff() -> None:
             "finding_type": "PARTIAL",
             "fields": {
                 **assessments[first_issue_id]["fields"],
-                "root_cause": False,
+                "title": False,
             },
             "field_reasons": {
                 "root_cause": "The secondary card names a downstream symptom.",
@@ -1184,7 +1116,7 @@ def test_agent_report_is_a_human_validation_handoff() -> None:
     assert (
         "| Expected issue | Version | Primary Insight | Evaluation | Why |"
     ) in markdown
-    assert "Partially Correct" in markdown
+    assert "Incorrect" in markdown
     assert "Synthetic partial finding" in markdown
     assert "understates impact" in markdown
     assert "does not address the identified root cause" in markdown
@@ -1245,7 +1177,7 @@ def test_extra_insights_missing_coverage_duplicates_and_coding_agent_context() -
     assessments[duplicate_issue_id]["verdict"] = "incorrect"
     assessments[duplicate_issue_id]["finding_type"] = "DUPLICATE"
     assessments[duplicate_issue_id]["ownership"] = "insight_engine"
-    assessments[duplicate_issue_id]["fields"]["root_cause"] = False
+    assessments[duplicate_issue_id]["fields"]["title"] = False
     primary_reference = "sha256:" + "b2" * 32
     assessments[duplicate_issue_id]["card_evaluations"] = [
         {
@@ -1309,7 +1241,7 @@ def test_extra_insights_missing_coverage_duplicates_and_coding_agent_context() -
     review_summary = markdown.split("## Review summary", 1)[1].split(
         "## Expected issue coverage", 1
     )[0]
-    assert "| Missing expected issues | 1 |" in review_summary
+    assert "| Missing | 1 |" in review_summary
     assert "| Noise | 1 |" in review_summary
     assert "| Duplicate | 2 |" in review_summary
 
@@ -1396,13 +1328,13 @@ def test_primary_coverage_and_every_extra_owner_are_independent() -> None:
         assessments,
         _baseline_assessments(manifest),
     )
-    assert report["summary"]["issues_partial"] == 1
+    assert report["summary"]["issues_incorrect"] == 1
     assert report["summary"]["noise_cards"] == 1
     markdown = render_agent_markdown(report, manifest["agents"][0]["name"])
     context = markdown.split("## Coding-agent context", 1)[1]
     rows = [line for line in context.splitlines() if issue_id in line]
     assert len(rows) == 2
-    assert any("`agent`" in row and "Partially Correct" in row for row in rows)
+    assert any("`agent`" in row and "Incorrect" in row for row in rows)
     assert any(
         "`insight_engine`" in row and "unmatched Noise" in row
         for row in rows
@@ -1464,9 +1396,9 @@ def test_complete_rendered_reports_hide_internal_verdict_labels() -> None:
         _baseline_assessments(manifest),
     )
 
-    for report, expected_status in ((passing, "PASS"), (failing, "FAIL")):
+    for report in (passing, failing):
         aggregate = render_markdown(report)
-        assert report["status"] == expected_status
+        assert "status" not in report
         assert re.search(r"\b(?:PASS|FAIL)\b", aggregate) is None
         assert "| Issue | Agent | Finding | Ownership |" in aggregate
         for baseline in report["baseline"]:
@@ -1476,17 +1408,14 @@ def test_complete_rendered_reports_hide_internal_verdict_labels() -> None:
             assert "Quality score:" not in agent
 
 
-def test_incomplete_rendered_reports_keep_safety_state_visible() -> None:
+def test_incomplete_evidence_has_no_rendered_report() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
     manifest["agents"][0]["baseline"]["status"] = "inconclusive"
-    report = build_report(
-        manifest,
-        issues,
-        _assessments(manifest),
-        _baseline_assessments(manifest),
-    )
-
-    assert report["status"] == "INCOMPLETE"
-    assert "**INCOMPLETE**" in render_markdown(report)
-    assert "**INCOMPLETE**" in render_agent_markdown(report, "weather-agent")
+    with pytest.raises(ContractError, match="no quality report"):
+        build_report(
+            manifest,
+            issues,
+            _assessments(manifest),
+            _baseline_assessments(manifest),
+        )

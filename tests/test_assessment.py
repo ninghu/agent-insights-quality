@@ -210,7 +210,7 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assessment = {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "issue_id": "issue-001",
         "model": "gpt-5.6-sol",
         "package_hash": package["package_hash"],
@@ -221,7 +221,6 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
         "ownership": "none",
         "ownership_reason": "The expected Insight is fully correct.",
         "fields": {
-            "root_cause": True,
             "title": True,
             "description": True,
             "category": True,
@@ -240,7 +239,6 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
                 "ownership": "none",
                 "ownership_reason": "The card matches the expected root.",
                 "fields": {
-                    "root_cause": True,
                     "title": True,
                     "description": True,
                     "category": True,
@@ -349,7 +347,6 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
             "ownership": "insight_engine",
             "ownership_reason": "The extra card is unrelated noise.",
             "fields": {
-                "root_cause": False,
                 "title": False,
                 "description": False,
                 "category": False,
@@ -594,10 +591,15 @@ def test_assessment_prompt_rejects_self_reported_activation() -> None:
         / "prompts"
         / "assessment.md"
     ).read_text(encoding="utf-8")
+    normalized = " ".join(prompt.split())
     assert "Passed human-reviewed activation assertions" in prompt
     assert "exact `source_integrity` digest" in prompt
     assert "self-reported defect flag" in prompt
     assert "`INCOMPLETE` with `test_framework` ownership" in prompt
+    assert "title, description, category, and linked traces all pass" in prompt
+    assert "Severity and proposed fix" in prompt
+    assert "at least one exact-run, exact-version linked trace" in prompt
+    assert "do not return a `root_cause` field" in normalized
 
 
 def test_issue_card_without_terminal_proof_stays_incomplete() -> None:
@@ -617,7 +619,6 @@ def test_issue_card_without_terminal_proof_stays_incomplete() -> None:
         "finding_type": "MATCHED",
         "ownership": "none",
         "fields": {
-            "root_cause": True,
             "title": True,
             "description": True,
             "category": True,
@@ -665,7 +666,6 @@ def test_top_level_result_cannot_contradict_card_result() -> None:
                 "finding_type": "MATCHED",
                 "ownership": "none",
                 "fields": {
-                    "root_cause": True,
                     "title": True,
                     "description": True,
                     "category": True,
@@ -680,9 +680,8 @@ def test_top_level_result_cannot_contradict_card_result() -> None:
         _validate_issue_cards(assessment, {"observed_insights": [card]})
 
 
-def test_matched_issue_fields_must_match_the_all_true_card() -> None:
+def test_matched_issue_allows_matching_diagnostic_field_failure() -> None:
     fields = {
-        "root_cause": True,
         "title": True,
         "description": True,
         "category": True,
@@ -715,11 +714,13 @@ def test_matched_issue_fields_must_match_the_all_true_card() -> None:
             }
         ],
     }
-    with pytest.raises(ContractError, match="identical all-fields-passing"):
+    with pytest.raises(ContractError, match="identical score-correct"):
         _validate_issue_cards(assessment, {"observed_insights": [card]})
     assessment["card_evaluations"][0]["fields"]["severity"] = False
-    with pytest.raises(ContractError, match="every field to pass"):
-        _validate_issue_cards(assessment, {"observed_insights": [card]})
+    assessment["card_evaluations"][0]["field_reasons"] = {
+        "severity": "The severity is imprecise."
+    }
+    _validate_issue_cards(assessment, {"observed_insights": [card]})
 
 
 @pytest.mark.parametrize(
@@ -734,7 +735,6 @@ def test_related_noncorrect_card_requires_a_failed_field(
     finding_type: str,
 ) -> None:
     fields = {
-        "root_cause": True,
         "title": True,
         "description": True,
         "category": True,
@@ -766,18 +766,18 @@ def test_related_noncorrect_card_requires_a_failed_field(
         "fields": fields,
         "card_evaluations": [evaluation],
     }
-    with pytest.raises(ContractError, match="at least one failed field"):
+    with pytest.raises(ContractError, match="failed scoring field"):
         _validate_issue_cards(assessment, {"observed_insights": [card]})
 
-    evaluation["fields"] = {**fields, "severity": False}
+    evaluation["fields"] = {**fields, "title": False}
     with pytest.raises(ContractError, match="field_reasons"):
         _validate_issue_cards(assessment, {"observed_insights": [card]})
 
-    evaluation["field_reasons"] = {"severity": "Expected high; the card reports medium."}
+    evaluation["field_reasons"] = {"title": "The title does not identify the issue."}
     with pytest.raises(ContractError, match="assessments require"):
         _validate_issue_cards(assessment, {"observed_insights": [card]})
 
-    assessment["fields"] = {**fields, "severity": False}
+    assessment["fields"] = {**fields, "title": False}
     _validate_issue_cards(assessment, {"observed_insights": [card]})
 
 
@@ -793,7 +793,6 @@ def test_all_other_noncorrect_cards_require_a_failed_field(
     finding_type: str,
 ) -> None:
     fields = {
-        "root_cause": True,
         "title": True,
         "description": True,
         "category": True,
@@ -826,7 +825,7 @@ def test_all_other_noncorrect_cards_require_a_failed_field(
             }
         ],
     }
-    with pytest.raises(ContractError, match="at least one failed field"):
+    with pytest.raises(ContractError, match="failed scoring field"):
         _validate_issue_cards(assessment, {"observed_insights": [card]})
 
 
@@ -835,7 +834,6 @@ def test_partial_and_mismatched_cards_require_exact_field_reasons(
     finding_type: str,
 ) -> None:
     fields = {
-        "root_cause": True,
         "title": False,
         "description": False,
         "category": True,
@@ -892,7 +890,6 @@ def test_partial_and_mismatched_cards_require_exact_field_reasons(
 
 def test_duplicate_card_requires_a_resolvable_primary_reference() -> None:
     fields_all_true = {
-        "root_cause": True,
         "title": True,
         "description": True,
         "category": True,

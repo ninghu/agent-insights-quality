@@ -3,7 +3,6 @@ weekday_schedule: [Monday, Tuesday, Wednesday, Thursday, Friday]
 daily_profile: daily
 full_run_profile: staging
 generated_branch_prefix: aiq-daily/
-auto_merge_statuses: [PASS, FAIL]
 issues_per_agent_daily: 4
 max_parallel_agents: 5
 insight_lookback_hours: 0.1

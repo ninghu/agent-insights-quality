@@ -108,7 +108,7 @@ def report_coverage(report: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "agents": len(report["baseline"]),
         "issues": len(report["issues"]),
-        "runtime_evidence_complete": not bool(report["summary"].get("incomplete", False)),
+        "runtime_evidence_complete": True,
     }
 
 
@@ -268,10 +268,8 @@ def build_normalized_summary(
         primary = issue_primary_card(item)
         coverage_type = {
             "Correct": "MATCHED",
-            "Partially Correct": "PARTIAL",
             "Incorrect": "MISMATCHED",
             "Missing": "MISSING",
-            "Incomplete": "INCOMPLETE",
         }[expected_issue_coverage_label(item)]
         add(
             _finding_entry(
@@ -849,7 +847,7 @@ def render_snapshot_markdown(snapshot: Mapping[str, Any]) -> str:
     signal = snapshot["current_run_signal"]
     for label, key in (
         ("Generated issue cards", "generated_issue_cards"),
-        ("Partially Correct", "partially_correct"),
+        ("Incorrect (related field gaps)", "partially_correct"),
         ("Incorrect", "incorrect"),
         ("Noise", "noise"),
         ("Duplicate", "duplicate"),

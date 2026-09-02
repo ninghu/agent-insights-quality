@@ -80,9 +80,9 @@ invoke a runtime-packaged skill by name.
 
 ## First-run observation
 
-Verify live progress output, 25 assessment packages (20 issues plus five baselines), active and yesterday-closed Quality work-item
-sections, one immutable HTML send attempt with the dashboard link, explicit ADX publication status,
-five per-Agent reports, the stable Insight Engine improvement memory and immutable dated snapshot,
-all seven public-safe ADX views, generated-path validation, required checks,
-and auto-merge. A complete trusted FAIL is a valid product-quality result; INCOMPLETE is not
-auto-merged, but its sanitized operational result and committed explanation are retained in ADX.
+Verify live progress output, 25 assessment packages (20 issues plus five baselines), active and
+yesterday-closed Quality work-item sections, one immutable HTML send attempt with the dashboard
+link, explicit ADX publication status, five per-Agent reports, the stable Insight Engine improvement
+memory and immutable dated snapshot, all seven public-safe ADX views, generated-path validation,
+required checks, and auto-merge. Incomplete execution retains private durable diagnostics but creates
+no report, ADX row, or pull request.

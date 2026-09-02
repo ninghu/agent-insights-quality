@@ -337,8 +337,8 @@ concurrent, and the guard overlaps the Agent Insights run started at the first m
 60-minute no-retry daily planning budget rather than treating 37.6 minutes as a current upper bound.
 Service retries can extend runtime beyond that budget.
 
-An isolated issue failure does not stop later issues. Ambiguous later evidence remains
-`INCOMPLETE`; it is never converted into a product miss.
+An isolated issue failure does not stop later issues. Ambiguous later evidence remains an internal
+qualification failure; it is never converted into a product miss or a published report.
 
 A baseline false-positive Insight contributes to the unified `noise_cards` penalty but does not stop
 issue diagnostics. Only an operational, telemetry, provenance, or trace-contract baseline failure
@@ -354,8 +354,8 @@ proof. Use GPT-5.6 Sol with
 Run manifest schema `5.0.0` binds the live Project region, registry cross-check, both the
 official/test-email delivery mode, and verified source,
 activation, endpoint, semantic, and trace evidence. Superseded manifest shapes are rejected.
-Newly finalized reports use schema `2.0.0` and require verified source integrity for every complete
-`PASS` or `FAIL`; immutable historical reports are not rewritten or accepted as current output.
+Newly finalized reports use schema `3.0.0`, always contain a numeric score, and require verified
+source integrity. Immutable historical reports are not rewritten or accepted as current output.
 
 ```powershell
 python -m agent_insights_quality finalize `
@@ -370,8 +370,8 @@ one generated Insight card, plus an explicit row for each missing expected issue
 GitHub-rendered Markdown reports; private prompts, responses, traces, and resource identifiers remain
 excluded. Each report includes a review summary, evaluation legend, and human-validation checklist.
 Complete email, preview, aggregate Markdown, and per-Agent Markdown surfaces show the numeric score,
-comparison, and finding details without displaying the internal `PASS` or `FAIL` status. They keep
-`INCOMPLETE` prominent because it indicates an unsafe evidence state rather than a quality verdict.
+same-formula comparison, and finding details without a status or threshold. Incomplete evidence
+produces no report surface.
 Finalization also writes private `report-preview.html` beside the run manifest. Staging human review
 uses this preview because it is rendered by the exact same Outlook-safe HTML path as the daily email.
 It may contain private work-item context and runtime links, so it must never be committed.
@@ -451,8 +451,8 @@ is a new run with new endpoint traffic and a new run identity.
 ## Generated pull requests
 
 Generated branches use `aiq-daily/`. Only new-format report, latest, trend, and email-receipt files
-are allowed. Trusted `PASS` and `FAIL` reports enable auto-merge after required checks.
-`INCOMPLETE` reports do not auto-merge.
+are allowed. A complete schema-valid numeric report enables auto-merge after required checks.
+Incomplete execution creates no generated branch.
 
 ## ADX backfill and retry
 

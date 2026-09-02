@@ -127,12 +127,12 @@
         "consumedVariables": [],
         "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
         "kind": "query",
-        "query": "AIQDailyIssues()\n| project Value = Result, Label = Result\n| distinct Value, Label\n| order by Value asc"
+        "query": "AIQDailyIssues()\n| project Value = Outcome, Label = Outcome\n| distinct Value, Label\n| order by Value asc"
       },
       "defaultValue": {
         "kind": "all"
       },
-      "displayName": "Result",
+      "displayName": "Outcome",
       "id": "8b55301f-f335-45f1-8e48-6008191d10b0",
       "kind": "string",
       "selectionType": "single-all",
@@ -199,7 +199,7 @@
         "y": 0
       },
       "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
-      "query": "AIQDailyRuns()\n| where ReportDate between (_startTime .. _endTime)\n| project ReportDate, ['Quality score'] = QualityScore, ['Pass threshold'] = QualityThreshold\n| order by ReportDate asc",
+      "query": "AIQDailyRuns()\n| where ReportDate between (_startTime .. _endTime)\n| project ReportDate, ['Quality score'] = QualityScore\n| order by ReportDate asc",
       "title": "Quality improvement trend",
       "usedParamVariables": [
         "_startTime",
@@ -218,8 +218,7 @@
         "yColumns": {
           "type": "specified",
           "value": [
-            "Quality score",
-            "Pass threshold"
+            "Quality score"
           ]
         }
       },
@@ -235,8 +234,8 @@
         "y": 4
       },
       "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
-      "query": "AIQDailyRuns()\n| where ReportDate between (_startTime .. _endTime)\n| summarize Days = count() by Status\n| order by Status asc",
-      "title": "Run outcomes",
+      "query": "AIQDailyRuns()\n| where ReportDate between (_startTime .. _endTime)\n| top 1 by ReportDate desc\n| project IssuesCorrect, IssuesExpected",
+      "title": "Latest correct issues",
       "usedParamVariables": [
         "_startTime",
         "_endTime"
@@ -262,8 +261,8 @@
         "y": 8
       },
       "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
-      "query": "AIQDailyRuns()\n| where ReportDate between (_startTime .. _endTime)\n| project ReportDate, ['Field quality'] = FieldQualityScore, ['Clean-card precision'] = CleanCardPrecision\n| order by ReportDate asc",
-      "title": "Score components",
+      "query": "AIQDailyRuns()\n| where ReportDate between (_startTime .. _endTime)\n| project ReportDate, Correct = IssuesCorrect, Incorrect = IssuesIncorrect, Missing = IssuesMissing, Noise = NoiseCards, Duplicate = DuplicateCards\n| order by ReportDate asc",
+      "title": "Score inputs",
       "usedParamVariables": [
         "_startTime",
         "_endTime"
@@ -278,8 +277,11 @@
         "yColumns": {
           "type": "specified",
           "value": [
-            "Field quality",
-            "Clean-card precision"
+            "Correct",
+            "Incorrect",
+            "Missing",
+            "Noise",
+            "Duplicate"
           ]
         }
       },
@@ -410,7 +412,7 @@
         "y": 0
       },
       "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
-      "query": "AIQDailyRuns()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| top 1 by ReportDate desc\n| project ReportDate, Status, QualityScore, FieldQualityScore, CleanCardPrecision, BaselinePassed, IssuesCorrect, IssuesExpected, NoiseCards, ReportUrl",
+      "query": "AIQDailyRuns()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| top 1 by ReportDate desc\n| project ReportDate, QualityScore, BaselinePassed, IssuesCorrect, IssuesIncorrect, IssuesMissing, IssuesExpected, NoiseCards, DuplicateCards, ReportUrl",
       "title": "Selected daily run",
       "usedParamVariables": [
         "_reportDate"
@@ -461,7 +463,7 @@
         "y": 13
       },
       "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
-      "query": "AIQDailyIssues()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| where isempty(_issue) or IssueId == _issue\n| where isempty(_result) or Result == _result\n| where isempty(_ownership) or Ownership == _ownership\n| top 250 by ReportDate desc\n| project ReportDate, Agent, Owner, IssueId, IssueTitle, Category, Severity, Result, Detail, Ownership, FieldsPassed, FieldsExpected, CardCount, ObservedCount, RuntimeEvidenceComplete, FailingFields = tostring(FailingFields), IssueUrl, AgentReportUrl",
+      "query": "AIQDailyIssues()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| where isempty(_issue) or IssueId == _issue\n| where isempty(_result) or Outcome == _result\n| where isempty(_ownership) or Ownership == _ownership\n| top 250 by ReportDate desc\n| project ReportDate, Agent, Owner, IssueId, IssueTitle, Category, Severity, Outcome, Detail, Ownership, FieldsPassed, FieldsExpected, CardCount, ObservedCount, RuntimeEvidenceComplete, FailingFields = tostring(FailingFields), IssueUrl, AgentReportUrl",
       "title": "Tested issue results",
       "usedParamVariables": [
         "_reportDate",
@@ -535,7 +537,7 @@
         "y": 0
       },
       "pageId": "36b3f7b6-d568-43cb-93ec-e4deab0d477a",
-      "query": "AIQDailyAgents()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| top 50 by ReportDate desc\n| project ReportDate, Agent, Owner, AgentType, Framework, BaselineVerdict, IssuesCorrect, IssuesExpected, IssuesPartial, IssuesFailed, NoiseCards, SelectedIssueIds = tostring(SelectedIssueIds), AgentReportUrl",
+      "query": "AIQDailyAgents()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| top 50 by ReportDate desc\n| project ReportDate, Agent, Owner, AgentType, Framework, BaselineVerdict, IssuesCorrect, IssuesIncorrect, IssuesMissing, IssuesExpected, NoiseCards, DuplicateCards, SelectedIssueIds = tostring(SelectedIssueIds), AgentReportUrl",
       "title": "Test Agent context",
       "usedParamVariables": [
         "_reportDate",
@@ -561,7 +563,7 @@
         "y": 6
       },
       "pageId": "36b3f7b6-d568-43cb-93ec-e4deab0d477a",
-      "query": "AIQDailyIssues()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| where isempty(_issue) or IssueId == _issue\n| where isempty(_result) or Result == _result\n| where isempty(_ownership) or Ownership == _ownership\n| top 100 by ReportDate desc\n| project ReportDate, Agent, IssueId, IssueTitle, Category, Severity, Result, Detail, Ownership, ExpectedRootCause, ExpectedFix, OwnershipReason, FailingFields = tostring(FailingFields), IssueUrl",
+      "query": "AIQDailyIssues()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| where isempty(_issue) or IssueId == _issue\n| where isempty(_result) or Outcome == _result\n| where isempty(_ownership) or Ownership == _ownership\n| top 100 by ReportDate desc\n| project ReportDate, Agent, IssueId, IssueTitle, Category, Severity, Outcome, Detail, Ownership, ExpectedRootCause, ExpectedFix, OwnershipReason, FailingFields = tostring(FailingFields), IssueUrl",
       "title": "Expected issue and observed outcome",
       "usedParamVariables": [
         "_reportDate",
@@ -590,7 +592,7 @@
         "y": 19
       },
       "pageId": "36b3f7b6-d568-43cb-93ec-e4deab0d477a",
-      "query": "AIQDailyCards()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| where isempty(_issue) or IssueId == _issue\n| where isempty(_result) or Result == _result\n| where isempty(_ownership) or Ownership == _ownership\n| top 250 by ReportDate desc\n| project ReportDate, TargetKind, Agent, IssueId, IssueTitle, CardIndex, CardTitle, Category, Severity, Result, Verdict, Evaluation, FindingType, Ownership, Confidence, OwnershipReason, Reasoning, PassingFields = tostring(PassingFields), FailingFields = tostring(FailingFields), AgentReportUrl",
+      "query": "AIQDailyCards()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| where isempty(_issue) or IssueId == _issue\n| where isempty(_result) or Outcome == _result\n| where isempty(_ownership) or Ownership == _ownership\n| top 250 by ReportDate desc\n| project ReportDate, TargetKind, Agent, IssueId, IssueTitle, CardIndex, CardTitle, Category, Severity, Outcome, Verdict, Evaluation, FindingType, Ownership, Confidence, OwnershipReason, Reasoning, PassingFields = tostring(PassingFields), FailingFields = tostring(FailingFields), AgentReportUrl",
       "title": "Generated card assessment and reasoning",
       "usedParamVariables": [
         "_reportDate",
@@ -619,7 +621,7 @@
         "y": 34
       },
       "pageId": "36b3f7b6-d568-43cb-93ec-e4deab0d477a",
-      "query": "AIQDailyFields()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| where isempty(_issue) or IssueId == _issue\n| where isempty(_result) or Result == _result\n| top 500 by ReportDate desc\n| project ReportDate, Agent, IssueId, IssueTitle, Result, Field, Passed",
+      "query": "AIQDailyFields()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| where isempty(_issue) or IssueId == _issue\n| where isempty(_result) or Outcome == _result\n| top 500 by ReportDate desc\n| project ReportDate, Agent, IssueId, IssueTitle, Outcome, Field, Passed",
       "title": "Required field outcomes",
       "usedParamVariables": [
         "_reportDate",

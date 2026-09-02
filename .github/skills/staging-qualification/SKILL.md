@@ -12,9 +12,10 @@ Prepare the one durable Sweden Central `g30` `aiq-staging-swedencentral` Project
 Never create or delete the Project during validation.
 The visible Copilot coordinator publishes immutable disjoint deployment assignments and independent
 immutable invocation and verification assignments, releases its global lock, and remains responsive
-while coordinator-created visible sub-sessions do parallel work. Never use subprocesses,
+while coordinator-created visible Copilot sub-sessions do parallel work. Never use subprocesses,
 `ThreadPoolExecutor`, or another hidden in-process pool. Every non-empty phase independently publishes
-one to eight deterministic, cost-balanced logical shards based on selected authorities. Each active
+one to eight deterministic, cost-balanced logical shards, at most eight, based on selected
+authorities. Each active
 shard maps 1:1 to one visible sub-session.
 
 Only the coordinator may reconcile all exact versions and atomically publish shared topology and

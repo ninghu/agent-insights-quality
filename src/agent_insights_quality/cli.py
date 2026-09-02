@@ -57,7 +57,6 @@ from agent_insights_quality.registry import load_registry, sync_registry
 from agent_insights_quality.reporting import (
     apply_score_comparison,
     apply_staging_score_comparison,
-    build_operational_failure_report,
     build_report,
     score_comparison,
     update_trend,
@@ -487,73 +486,17 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                     "Qualification evidence was checkpointed; resume the same run "
                     "before finalization"
                 ) from error
-            failure = build_operational_failure_report(
-                report_date=args.report_date,
-                run_id=run_id(args.report_date, args.rerun),
-                profile=profile_name,
-                selected=selected,
-                issues=issues,
-                failure_code=type(error).__name__,
-                catalog_hashes=hashes,
+            atomic_json(
+                state / "qualification-failure.json",
+                {
+                    "schema_version": "1.0.0",
+                    "run_id": run_id(args.report_date, args.rerun),
+                    "profile": profile_name,
+                    "failure_code": type(error).__name__,
+                },
             )
-            failure_root = (
-                state / "final-report"
-                if test_run
-                else ROOT
-                / "reports"
-                / "daily"
-                / f"{args.report_date:%Y}"
-                / f"{args.report_date:%m}"
-                / f"{args.report_date:%d}"
-                if profile_name == "daily"
-                else state
-            )
-            write_report(failure, failure_root)
-            handoff_written = False
-            try:
-                recipient = resolve_recipient(test_run=test_run)
-                adx_publication = (
-                    {"status": "skipped_test", "error_code": None}
-                    if test_run
-                    else
-                    publish_daily_report_best_effort(
-                        failure,
-                        source_path=failure_root / "report.json",
-                        catalogs=(agents, issues),
-                    )
-                    if profile_name == "daily"
-                    else None
-                )
-                dashboard_link = (
-                    resolve_dashboard_link()
-                    if profile_name == "daily" and not test_run
-                    else None
-                )
-                request = create_request(
-                    failure,
-                    recipient,
-                    dashboard_link=dashboard_link,
-                    adx_publication=adx_publication,
-                    work_items=work_items,
-                    test_run=test_run,
-                )
-                failure["delivery"]["content_digest"] = request["content_digest"]
-                write_report(failure, failure_root)
-                atomic_json(state / "email-send-request.json", request)
-                write_private_report_preview(
-                    request,
-                    state / "report-preview.html",
-                )
-                handoff_written = True
-            except ContractError:
-                pass
             raise ContractError(
-                "Qualification failed closed; an INCOMPLETE report was written"
-                + (
-                    " with its email request"
-                    if handoff_written
-                    else ", but the email request could not be rendered"
-                )
+                "Qualification failed before a complete score; no report was produced"
             ) from error
         return json.dumps(
             {
@@ -758,7 +701,7 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             update_trend(report, args.output_root / "trend.json")
         return json.dumps(
             {
-                "status": report["status"],
+                "quality_score": report["summary"]["quality_score"],
                 "report": str(output / "report.json"),
                 "email_request": str(private_request),
                 "report_preview": str(private_preview),
@@ -864,10 +807,13 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         ]
         expected_day = {
             "report_date": report["report_date"],
-            "status": report["status"],
             "baseline_passed": report["summary"]["baseline_passed"],
             "issues_correct": report["summary"]["issues_correct"],
+            "issues_incorrect": report["summary"]["issues_incorrect"],
+            "issues_missing": report["summary"]["issues_missing"],
             "issues_expected": report["summary"]["issues_expected"],
+            "noise_cards": report["summary"]["noise_cards"],
+            "duplicate_cards": report["summary"]["duplicate_cards"],
             "quality_score": report["summary"]["quality_score"],
         }
         if matching_days != [expected_day]:

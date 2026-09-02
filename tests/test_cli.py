@@ -101,11 +101,6 @@ def test_post_manifest_failure_does_not_publish_operational_result(
         "publish_daily_report_best_effort",
         lambda *_args, **_kwargs: pytest.fail("ADX publication attempted"),
     )
-    monkeypatch.setattr(
-        cli,
-        "build_operational_failure_report",
-        lambda **_kwargs: pytest.fail("operational report built"),
-    )
     args = cli.build_parser().parse_args(
         [
             "run-daily",
@@ -156,11 +151,10 @@ def test_test_finalization_stays_private_and_skips_adx(
         },
     )
     report = {
-        "status": "FAIL",
         "profile": "daily",
         "report_date": "2026-08-28",
         "run_id": manifest["run_id"],
-        "summary": {},
+        "summary": {"quality_score": 77.3},
         "delivery": {"content_digest": "sha256:" + "0" * 64},
     }
     improvement_analysis = {
@@ -311,11 +305,10 @@ def test_official_daily_defers_report_to_atomic_memory_publication(
         },
     )
     report = {
-        "status": "PASS",
         "profile": "daily",
         "report_date": "2026-08-28",
         "run_id": manifest["run_id"],
-        "summary": {},
+        "summary": {"quality_score": 77.3},
         "delivery": {"content_digest": "sha256:" + "0" * 64},
     }
     improvement_path = state / "improvement-analysis.json"

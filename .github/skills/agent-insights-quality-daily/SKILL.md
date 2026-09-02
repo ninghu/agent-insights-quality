@@ -31,11 +31,11 @@ license: MIT
    full-request and separate card-linked proof to distinguish an Agent runtime defect, Insight false
    positive, framework gap, or external infrastructure failure. Route contradictory intermediate
    evidence to `test_framework` or `unresolved`.
-6. Before finalization, give every `inconclusive` baseline or `INCOMPLETE` issue with complete runtime
-   evidence one focused GPT-5.6 Sol recheck. Re-read the package-bound reviewed Agent source and
-   configuration, current endpoint evidence, independent trace proof, and the card's exact claim.
-   Never send new traffic for this recheck, never force a conclusive verdict, and retain `INCOMPLETE`
-   when independent evidence remains insufficient.
+6. Before finalization, give every inconclusive assessment with complete runtime evidence one focused
+   GPT-5.6 Sol recheck. Re-read the package-bound reviewed Agent source and configuration, current
+   endpoint evidence, independent trace proof, and the card's exact claim. Never send new traffic for
+   this recheck and never force a conclusive verdict. If evidence remains insufficient, fail without
+   producing a report.
 7. Run `finalize` with all assessments and the same private work-item snapshot. Finalization must
    first use `--prepare-improvement-input` to write the normalized public-safe improvement input.
    Assess that input with GPT-5.6 Sol using
@@ -59,7 +59,7 @@ license: MIT
    - ambiguous result: `unknown`, retry forbidden and manual verification required.
 10. Create an `aiq-daily/` generated-only pull request. Include the ADX publication status in the
    description without committing the cluster URI, dashboard link, or private receipt.
-11. Enable auto-merge only when the report is `PASS` or trusted `FAIL` and required checks pass.
+11. Enable auto-merge only when a complete numeric report exists and required checks pass.
 
 For a reviewed email-only test, run `run-daily` with both `--test-run` and a nonzero `--rerun N`.
 The private `daily_test` recipient override is required. The test run still uses deployed endpoints,
@@ -68,19 +68,18 @@ TEST-marked email. It must not contact ADX, write repository report or trend pat
 paths, create a pull request, or enable auto-merge. Stop after importing the provider receipt into the
 private run directory. Scheduled official runs never pass `--test-run`.
 
-The runner executes five Agents concurrently and versions sequentially within each Agent. Complete
-runs use the reviewed score threshold of 90. Daily provisioning is new-only: it exact-selects the
+The runner executes five Agents concurrently and versions sequentially within each Agent. Daily
+provisioning is new-only: it exact-selects the
 dedicated Sweden `g30` storage account, derives and fetches the exact clean commit's immutable
 approved-record Blob, checks its locked WORM metadata, and
 recomputes the validation digest. It never accepts an operator-supplied local record or falls back to
 legacy storage or an old West US 2 promotion receipt. Local Test Agent Validation covers all 36 issues plus five
 baselines outside this Daily workflow.
 
-Any `inconclusive` baseline assessment or `INCOMPLETE` issue assessment makes the whole run
-`INCOMPLETE` with no numeric quality score.
+Any inconclusive baseline or issue assessment fails finalization and produces no report.
 
 Never change catalogs, Agent implementations, schemas, infrastructure, configuration, or skills from
 daily automation. Never target staging. ADX is the only authorized analytics write and accepts only
-the finalized public-safe v2 result and explanation payload; Application Insights remains read-only.
+the finalized public-safe v3 result and explanation payload; Application Insights remains read-only.
 Never write telemetry or commit the Boards query, work-item snapshot, ADX receipt, rendered
 dashboard, cluster URI, or dashboard link.

@@ -39,4 +39,4 @@ request description, and never expose the cluster URI, dashboard link, or privat
 
 Use the available email capability exactly once in explicit HTML mode. Never create a draft and never
 retry an ambiguous send. Validate generated paths and report consistency, create an `aiq-daily/`
-generated-only pull request, and enable auto-merge only for a trusted complete PASS or FAIL.
+generated-only pull request, and enable auto-merge only for a complete numeric report.

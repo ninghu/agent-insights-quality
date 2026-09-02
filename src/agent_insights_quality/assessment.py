@@ -14,6 +14,10 @@ from agent_insights_quality.models import (
     request_completion_payload,
 )
 from agent_insights_quality.runtime_state import VersionCheckpointStore
+from agent_insights_quality.scoring import (
+    ATTRIBUTABLE_FINDING_TYPES,
+    scoring_fields_pass,
+)
 from agent_insights_quality.util import ROOT, ContractError, atomic_json, content_hash, read_json
 
 
@@ -916,28 +920,31 @@ def _validate_issue_cards(
             raise ContractError("Card evaluation ownership is inconsistent")
         if evaluation["finding_type"] == "MATCHED" and (
             evaluation["verdict"] != "correct"
-            or not all(evaluation["fields"].values())
+            or not scoring_fields_pass(evaluation["fields"])
         ):
             raise ContractError(
-                "Correct MATCHED card requires every field to pass"
+                "Correct MATCHED card requires every scoring field to pass"
             )
-        if evaluation["verdict"] in {"partially_useful", "incorrect"} and all(
-            evaluation["fields"].values()
+        if evaluation["verdict"] in {"partially_useful", "incorrect"} and (
+            scoring_fields_pass(evaluation["fields"])
         ):
             raise ContractError(
-                "Non-correct card evaluations require at least one failed field"
+                "Non-correct card evaluations require a failed scoring field"
             )
-        if evaluation["finding_type"] in {"PARTIAL", "MISMATCHED"}:
+        if evaluation["finding_type"] in ATTRIBUTABLE_FINDING_TYPES:
             failed_fields = {
                 field
                 for field, passed in evaluation["fields"].items()
                 if not passed
             }
             field_reasons = evaluation.get("field_reasons")
-            if not isinstance(field_reasons, dict) or set(field_reasons) != failed_fields:
+            if failed_fields and (
+                not isinstance(field_reasons, dict)
+                or set(field_reasons) != failed_fields
+            ):
                 raise ContractError(
-                    "PARTIAL/MISMATCHED card evaluations require a field_reasons "
-                    "entry for exactly each failed field"
+                    "Attributable card evaluations require a field_reasons entry "
+                    "for exactly each failed field"
                 )
     reference_types = {item["reference"]: item["finding_type"] for item in evaluations}
     for evaluation in evaluations:
@@ -967,11 +974,11 @@ def _validate_issue_cards(
         or evaluations[0]["finding_type"] != "MATCHED"
         or evaluations[0]["verdict"] != "correct"
         or assessment["fields"] != evaluations[0]["fields"]
-        or not all(assessment["fields"].values())
+        or not scoring_fields_pass(assessment["fields"])
     ):
         raise ContractError(
             "MATCHED assessment requires one terminal-proven card with "
-            "identical all-fields-passing evidence"
+            "identical score-correct evidence"
         )
     card_types = [item["finding_type"] for item in evaluations]
     top_type = assessment["finding_type"]
@@ -980,10 +987,10 @@ def _validate_issue_cards(
         assessment.get("verdict") in {"partially_useful", "incorrect"}
         and isinstance(assessment_fields, dict)
         and assessment_fields
-        and all(assessment_fields.values())
+        and scoring_fields_pass(assessment_fields)
     ):
         raise ContractError(
-            "Non-correct assessments require at least one failed field"
+            "Non-correct assessments require a failed scoring field"
         )
     if top_type == "PARTIAL" and (
         "PARTIAL" not in card_types or "MATCHED" in card_types

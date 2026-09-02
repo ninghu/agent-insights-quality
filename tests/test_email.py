@@ -46,7 +46,6 @@ def test_email_requires_reviewed_domain_and_one_success(
     assert resolve_recipient(test_run=True) == "synthetic-user@microsoft.com"
     override.unlink()
     report = {
-        "status": "PASS",
         "profile": "daily",
         "run_id": "aiq-20260824",
         "report_date": "2026-08-24",
@@ -58,19 +57,14 @@ def test_email_requires_reviewed_domain_and_one_success(
         },
         "summary": {
             "issues_correct": 20,
+            "issues_incorrect": 0,
+            "issues_missing": 0,
             "issues_expected": 20,
             "baseline_passed": 5,
-            "issues_partial": 0,
             "noise_cards": 0,
-            "unverified_cards": 0,
-            "observed_cards": 20,
-            "field_quality_score": 100,
-            "clean_card_precision": 100,
+            "duplicate_cards": 0,
             "quality_score": 100,
-            "quality_threshold": 90,
-            "quality_score_formula": "field_weighted_v1",
-            "incomplete_reasons": [],
-            "incomplete": False,
+            "quality_score_formula": "correct_over_expected_plus_noise_v1",
         },
         "issues": [],
         "baseline": [
@@ -116,10 +110,9 @@ def test_email_requires_reviewed_domain_and_one_success(
     assert ">Tested issues</th>" in request["html"]
     assert ">Report</th>" in request["html"]
     assert ">Ownership</th>" not in request["html"]
-    assert "Quality Score: 100/100" in request["html"]
-    assert "(+5.9)</span>" in request["html"]
+    assert "100 / 100 (+5.9)" in request["html"]
     assert "How Scoring Works" in request["html"]
-    assert request["html"].index("Quality Score:") < request["html"].index(
+    assert request["html"].index("Quality score") < request["html"].index(
         "How Scoring Works"
     )
     assert request["subject"] == (
@@ -127,13 +120,8 @@ def test_email_requires_reviewed_domain_and_one_success(
     )
     assert re.search(r"\b(?:PASS|FAIL)\b", request["subject"]) is None
     assert re.search(r"\b(?:PASS|FAIL)\b", request["html"]) is None
-    assert report["status"] == "PASS"
-    assert 'style="color:#dbeafe;text-decoration:underline;"' in request["html"]
-    assert "(<a" not in request["html"]
-    assert "Works</a>)" not in request["html"]
+    assert "status" not in report
     assert "docs/QUALITY_BAR.md#quality-score" in request["html"]
-    assert "How to read results" in request["html"]
-    assert "docs/INSIGHT_RESULTS.md" in request["html"]
     assert "Open quality trend dashboard" in request["html"]
     assert _DASHBOARD_LINK in request["html"]
     assert "Agent Insights Quality</h1>" in request["html"]
@@ -153,12 +141,8 @@ def test_email_requires_reviewed_domain_and_one_success(
         ">Test agent</th>"
     )
     assert _PROJECT_LINK in request["html"]
-    assert "Incorrect related Insights" in request["html"]
-    assert "Noise/duplicate Insights" in request["html"]
-    assert "Incorrect/noisy insights" not in request["html"]
-    assert request["html"].index("Incorrect related Insights") < request["html"].index(
-        "How to read results"
-    )
+    assert "20 correct / 20 (0 incorrect, 0 missing)" in request["html"]
+    assert "0 noise, 0 duplicate" in request["html"]
     preview = runtime_root / "staging" / "run" / "report-preview.html"
     write_private_report_preview(request, preview)
     assert preview.read_text(encoding="utf-8") == request["html"]
@@ -169,45 +153,19 @@ def test_email_requires_reviewed_domain_and_one_success(
     assert "coverage_quality_precision_v2" not in request["html"]
     staging_report = deepcopy(report)
     staging_report["profile"] = "staging"
-    staging_report["summary"]["shadow_quality_score"] = {
-        "formula": "coverage_quality_precision_v2",
-        "automation_authority": False,
-        "counts": {
-            "expected_issues": 36,
-            "detected_issues": 35,
-            "correct_diagnosis_primaries": 34,
-            "generated_issue_cards": 38,
-            "baseline_noise_cards": 1,
-        },
-        "components": {
-            "coverage": 97.2,
-            "diagnosis_recall": 97.1,
-            "selected_card_quality": 95.0,
-            "useful_coverage": 92.4,
-            "precision": 89.7,
-        },
-        "score": 91.9,
-        "gate_failures": ["baseline_noise"],
-    }
     staging_request = create_request(
         staging_report,
         "synthetic@microsoft.com",
         dashboard_link=_DASHBOARD_LINK,
         adx_publication=_ADX_PUBLICATION,
     )
-    assert "Staging shadow calibration" in staging_request["html"]
-    assert "coverage_quality_precision_v2" in staging_request["html"]
-    assert "91.9/100" in staging_request["html"]
-    assert "Below-target diagnostics" in staging_request["html"]
-    assert "baseline noise" in staging_request["html"]
+    assert "Quality score" in staging_request["html"]
     assert "View Insight Engine Improvement Report" not in staging_request["html"]
     assert "Test Region: WestUS2" in staging_request["html"]
     assert "WestUS2" not in staging_request["subject"]
-    staging_preview = runtime_root / "staging" / "shadow" / "report-preview.html"
+    staging_preview = runtime_root / "staging" / "score" / "report-preview.html"
     write_private_report_preview(staging_request, staging_preview)
-    assert "coverage_quality_precision_v2" in staging_preview.read_text(
-        encoding="utf-8"
-    )
+    assert "Quality score" in staging_preview.read_text(encoding="utf-8")
     with pytest.raises(ContractError, match="private runtime root"):
         write_private_report_preview(request, tmp_path / "public-preview.html")
     for owner in (
@@ -280,27 +238,6 @@ def test_email_requires_reviewed_domain_and_one_success(
             adx_publication={"status": "skipped_test", "error_code": None},
             test_run=True,
         )
-    incomplete = deepcopy(report)
-    incomplete["status"] = "INCOMPLETE"
-    incomplete["summary"]["quality_score"] = None
-    incomplete["summary"]["incomplete"] = True
-    incomplete["summary"]["incomplete_reasons"] = ["clean_window_not_empty"]
-    incomplete["score_comparison"] = None
-    incomplete_request = create_request(
-        incomplete,
-        "synthetic@microsoft.com",
-        dashboard_link=_DASHBOARD_LINK,
-        adx_publication={"status": "failed", "error_code": "query_failed"},
-    )
-    assert "Quality Score: N/A (change N/A)" in incomplete_request["html"]
-    assert "INCOMPLETE" in incomplete_request["subject"]
-    assert incomplete_request["subject"].endswith(" - WestUS2")
-    assert "INCOMPLETE" in incomplete_request["html"]
-    assert "Run status</td>" in incomplete_request["html"]
-    assert "Overall judgment" not in incomplete_request["html"]
-    assert "pre-existing telemetry" in incomplete_request["html"]
-    assert "no Agent traffic was sent" in incomplete_request["html"]
-    assert "ADX publication failed for this run" in incomplete_request["html"]
     staging = deepcopy(report)
     staging["profile"] = "staging"
     staging["score_comparison"] = {
@@ -313,23 +250,22 @@ def test_email_requires_reviewed_domain_and_one_success(
         staging,
         "synthetic@microsoft.com",
     )
-    assert "(+0.5)</span>" in staging_request["html"]
-    failed = deepcopy(report)
-    failed["status"] = "FAIL"
-    failed["summary"]["quality_score"] = 83
-    failed["summary"]["issues_correct"] = 20
-    failed_request = create_request(
-        failed,
+    assert "(+0.5)" in staging_request["html"]
+    lower_score = deepcopy(report)
+    lower_score["summary"]["quality_score"] = 80
+    lower_score["summary"]["issues_correct"] = 16
+    lower_score["summary"]["issues_incorrect"] = 4
+    lower_score_request = create_request(
+        lower_score,
         "synthetic@microsoft.com",
         dashboard_link=_DASHBOARD_LINK,
         adx_publication=_ADX_PUBLICATION,
     )
-    assert "83/100" in failed_request["subject"]
-    assert "Quality Score: 83/100" in failed_request["html"]
-    assert re.search(r"\b(?:PASS|FAIL)\b", failed_request["subject"]) is None
-    assert re.search(r"\b(?:PASS|FAIL)\b", failed_request["html"]) is None
-    assert "Overall judgment" not in failed_request["html"]
-    assert failed["status"] == "FAIL"
+    assert "80/100" in lower_score_request["subject"]
+    assert "80 / 100" in lower_score_request["html"]
+    assert re.search(r"\b(?:PASS|FAIL)\b", lower_score_request["subject"]) is None
+    assert re.search(r"\b(?:PASS|FAIL)\b", lower_score_request["html"]) is None
+    assert "Overall judgment" not in lower_score_request["html"]
     receipt = {
         "schema_version": "2.0.0",
         "content_digest": request["content_digest"],

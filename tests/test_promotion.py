@@ -31,10 +31,6 @@ from agent_insights_quality.live import (
 )
 from agent_insights_quality.run_manifest import _result_payload, build_manifest
 from agent_insights_quality.reporting import _summary_metrics
-from agent_insights_quality.shadow_scoring import (
-    calculate_shadow_quality_score,
-    select_shadow_primary,
-)
 from agent_insights_quality.util import ROOT, ContractError, content_hash, read_json
 
 
@@ -293,12 +289,12 @@ def test_daily_promotion_requires_reviewed_staging_digest(tmp_path: Path) -> Non
         for index, logical in enumerate(["v0", *agent["issue_ids"]])
     }
     receipt = {
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "profile": "staging",
         "qualified": True,
         "human_reviewed": True,
-        "qualification_status": "FAIL",
         "quality_score": 47.1,
+        "quality_score_formula": "correct_over_expected_plus_noise_v1",
         "test_agent_model": model,
         "catalog_hashes": hashes,
         "artifact_manifest_hash": hashes["artifacts"],
@@ -401,7 +397,6 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
         {key: value for key, value in manifest.items() if key != "manifest_hash"}
     )
     fields = {
-        "root_cause": True,
         "title": True,
         "description": True,
         "category": True,
@@ -410,12 +405,11 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
         "linked_traces": True,
     }
     report = {
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "report_date": "2026-08-24",
         "run_id": "aiq-20260824",
         "profile": "staging",
         "manifest_reference": manifest["manifest_hash"],
-        "status": "PASS",
         "catalog_hashes": hashes,
         "source_integrity": manifest["source_integrity"],
         "test_region": "WestUS2",
@@ -450,7 +444,7 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
                 "title": issue["title"],
                 "status": "observed",
                 "runtime_evidence_complete": True,
-                "result": "PASS",
+                "outcome": "correct",
                 "detail": "MATCHED",
                 "observed_count": 1,
                 "assessment": {
@@ -487,25 +481,13 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
                     ],
                 },
                 "evidence_reference": "sha256:" + "c" * 64,
-                "shadow_v2_primary": None,
             }
             for issue in issue_by_id.values()
         ],
         "summary": {},
         "delivery": {"content_digest": "sha256:" + "0" * 64},
     }
-    for item in report["issues"]:
-        item["shadow_v2_primary"] = select_shadow_primary(item)
-    report["summary"] = _summary_metrics(
-        report["baseline"],
-        report["issues"],
-        incomplete=False,
-    )
-    report["summary"]["shadow_quality_score"] = calculate_shadow_quality_score(
-        report["baseline"],
-        report["issues"],
-        incomplete=False,
-    )
+    report["summary"] = _summary_metrics(report["baseline"], report["issues"])
     receipt = create_promotion_receipt(
         report=report,
         registry=registry,
@@ -519,8 +501,10 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
         receipt["source_integrity_digest"]
         == manifest["source_integrity"]["contract_digest"]
     )
-    assert report["summary"]["shadow_quality_score"]["score"] == 100.0
-    assert receipt["qualification_status"] == "PASS"
+    assert receipt["quality_score"] == 100
+    assert receipt["quality_score_formula"] == (
+        "correct_over_expected_plus_noise_v1"
+    )
     incomplete_manifest = deepcopy(manifest)
     first_issue = incomplete_manifest["agents"][0]["issues"][0]
     for summary in first_issue["endpoint_request_summaries"]:

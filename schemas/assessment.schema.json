@@ -4,7 +4,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "issue_id", "model", "package_hash", "foundry_version", "evidence_reference", "verdict", "finding_type", "ownership", "ownership_reason", "fields", "card_evaluations", "confidence", "reasoning"],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"const": "2.0.0"},
     "issue_id": {"type": "string", "pattern": "^issue-[0-9]{3}$"},
     "model": {"const": "gpt-5.6-sol"},
     "package_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
@@ -17,9 +17,8 @@
     "fields": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["root_cause", "title", "description", "category", "severity", "proposed_fix", "linked_traces"],
+      "required": ["title", "description", "category", "severity", "proposed_fix", "linked_traces"],
       "properties": {
-        "root_cause": {"type": "boolean"},
         "title": {"type": "boolean"},
         "description": {"type": "boolean"},
         "category": {"type": "boolean"},
@@ -46,9 +45,8 @@
           "fields": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["root_cause", "title", "description", "category", "severity", "proposed_fix", "linked_traces"],
+            "required": ["title", "description", "category", "severity", "proposed_fix", "linked_traces"],
             "properties": {
-              "root_cause": {"type": "boolean"},
               "title": {"type": "boolean"},
               "description": {"type": "boolean"},
               "category": {"type": "boolean"},
@@ -61,7 +59,6 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "root_cause": {"type": "string", "minLength": 1, "maxLength": 300},
               "title": {"type": "string", "minLength": 1, "maxLength": 300},
               "description": {"type": "string", "minLength": 1, "maxLength": 300},
               "category": {"type": "string", "minLength": 1, "maxLength": 300},
