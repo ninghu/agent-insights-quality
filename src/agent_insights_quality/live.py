@@ -2177,7 +2177,7 @@ let scoped_trace_operations =
             timespan = (start, query_end)
         query = f"""
 {scoped_operations}
-union traces, dependencies, requests
+union withsource=telemetry_type traces, dependencies, requests
 {operation_filter}
 | extend operation_name=tostring(customDimensions["gen_ai.operation.name"])
 | extend tool_name=coalesce(
@@ -2218,7 +2218,7 @@ union traces, dependencies, requests
     response_id in ({references}), response_id,
     request_id in ({references}), request_id,
     "")
-| project operation_Id, id, operation_ParentId, operation_name,
+| project operation_Id, id, operation_ParentId, telemetry_type, operation_name,
     tool_name, tool_call_id, error_type, tool_ok, tool_result,
     tool_arguments, structural_tool, input_messages, output_messages, timestamp, duration, name,
     terminal_success, terminal_output, handled_error, matched_reference,
@@ -2235,32 +2235,33 @@ union traces, dependencies, requests
                 "operation_id": str(row[0]),
                 "span_id": str(row[1] or ""),
                 "parent_span_id": str(row[2] or ""),
-                "operation_name": str(row[3] or ""),
-                "tool_name": str(row[4] or ""),
-                "tool_call_id": str(row[5] or ""),
-                "error_type": str(row[6] or ""),
-                "tool_ok": str(row[7] or ""),
-                "tool_result": str(row[8] or ""),
-                "tool_arguments": str(row[9] or ""),
-                "structural_tool": str(row[10] or ""),
-                "messages": [str(row[11] or ""), str(row[12] or "")],
-                "timestamp": str(row[13] or ""),
-                "duration": row[14],
-                "span_name": str(row[15] or ""),
-                "terminal_success": str(row[16] or ""),
-                "terminal_output": str(row[17] or ""),
-                "handled_error": str(row[18] or ""),
-                "matched_reference": str(row[19] or ""),
+                "telemetry_type": str(row[3] or ""),
+                "operation_name": str(row[4] or ""),
+                "tool_name": str(row[5] or ""),
+                "tool_call_id": str(row[6] or ""),
+                "error_type": str(row[7] or ""),
+                "tool_ok": str(row[8] or ""),
+                "tool_result": str(row[9] or ""),
+                "tool_arguments": str(row[10] or ""),
+                "structural_tool": str(row[11] or ""),
+                "messages": [str(row[12] or ""), str(row[13] or "")],
+                "timestamp": str(row[14] or ""),
+                "duration": row[15],
+                "span_name": str(row[16] or ""),
+                "terminal_success": str(row[17] or ""),
+                "terminal_output": str(row[18] or ""),
+                "handled_error": str(row[19] or ""),
+                "matched_reference": str(row[20] or ""),
                 "output_messages_present": _telemetry_boolean(
-                    row[20],
+                    row[21],
                     field="output-message presence",
                 ),
                 "output_messages_nonempty": _telemetry_boolean(
-                    row[21],
+                    row[22],
                     field="output-message nonempty state",
                 ),
-                "agent_name": str(row[22] or ""),
-                "agent_version": str(row[23] or ""),
+                "agent_name": str(row[23] or ""),
+                "agent_version": str(row[24] or ""),
             }
             for table in result.tables
             for row in table.rows

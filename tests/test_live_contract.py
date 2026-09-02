@@ -1379,6 +1379,21 @@ def test_response_anchor_rejects_multiple_custom_container_dependencies() -> Non
     )
 
 
+def test_response_anchor_rejects_duplicate_span_rows() -> None:
+    operation_id = "c" * 32
+    anchor = _anchor_row(operation_id, "root", "response-1")
+    assert (
+        _correlated_request_rows(
+            [anchor, dict(anchor)],
+            ("response-1",),
+            (operation_id,),
+            agent_name="healthcare-agent-issue-010",
+            foundry_version="7",
+        )
+        is None
+    )
+
+
 def test_negative_argument_assertions_require_parsed_telemetry() -> None:
     omission_fixture = {
         "body": {"input": []},
@@ -1502,6 +1517,10 @@ def test_trace_row_query_joins_split_reference_and_identity_spans_by_operation(
     assert 'set_has_element(agent_names, "finance-agent")' in query
     assert "scoped_trace_operations" in query
     assert "operation_Id in (scoped_trace_operations)" in query
+    assert "union withsource=telemetry_type traces, dependencies, requests" in query
+    assert (
+        "operation_ParentId, telemetry_type, operation_name" in query
+    )
     outer = query.split("union traces, dependencies, requests", 2)[-1]
     assert (
         '| extend observed_agent=tostring(customDimensions["gen_ai.agent.name"])'
@@ -1528,11 +1547,13 @@ def _trace_behavior_query_row(
     *,
     output_present: bool = True,
     output_nonempty: bool = True,
+    telemetry_type: str = "requests",
 ) -> list:
     return [
         operation_id,
         "span-id",
         "parent-span-id",
+        telemetry_type,
         "invoke_agent",
         "",
         "",
@@ -1555,6 +1576,89 @@ def _trace_behavior_query_row(
         "synthetic-agent",
         "1",
     ]
+
+
+def test_trace_behavior_query_stabilizes_reordered_custom_container_rows(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    statuses = _install_logs_query_status(monkeypatch)
+    monotonic = [0.0]
+    operation_id = "a" * 32
+    reference = "resp_A1b2C3d4E5f6"
+    transport = _trace_behavior_query_row(
+        operation_id,
+        reference,
+        telemetry_type="requests",
+    )
+    transport[1:3] = ["transport-span", "upstream-span"]
+    transport[23:25] = ["finance-agent", "issue-013"]
+    internal = _trace_behavior_query_row(
+        operation_id,
+        reference,
+        telemetry_type="dependencies",
+    )
+    internal[1:3] = ["internal-span", "runtime-parent"]
+    internal[23:25] = ["finance-agent", "issue-013"]
+    tool = _trace_behavior_query_row(
+        operation_id,
+        "",
+        output_present=False,
+        output_nonempty=False,
+        telemetry_type="dependencies",
+    )
+    tool[1:7] = [
+        "tool-span",
+        "internal-span",
+        "dependencies",
+        "execute_tool",
+        "lookup",
+        "call-1",
+    ]
+    tool[8:10] = ["true", "{}"]
+    query_count = 0
+
+    def query(*_args, **_kwargs):
+        nonlocal query_count
+        query_count += 1
+        rows = [transport, internal, tool]
+        if query_count % 2 == 0:
+            rows = list(reversed(rows))
+        return types.SimpleNamespace(
+            status=statuses.SUCCESS,
+            tables=[types.SimpleNamespace(rows=rows)],
+        )
+
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+    )
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+    runtime._query_resource = query  # type: ignore[method-assign]
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
+    )
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(traffic_path)
+    anchors = []
+
+    evidence = runtime.trace_assertion_evidence_for_requests(
+        agent_name="finance-agent",
+        foundry_version="issue-013",
+        operation_ids=(operation_id,),
+        response_references=(reference,),
+        window_start="2026-08-28T10:00:00+00:00",
+        window_end="2026-08-28T10:00:30+00:00",
+        requests=read_json(traffic_path)["requests"],
+        stabilization_seconds=180,
+        on_first_pass=lambda: None,
+        on_stable_response_anchors=anchors.append,
+    )
+
+    assert evidence[0][0].passed is True
+    assert anchors == [("internal-span",)]
+    assert monotonic[0] == 180
 
 
 def test_trace_behavior_query_retries_transient_failure_and_uses_final_rows(
@@ -2335,6 +2439,7 @@ def test_trace_assertion_waits_for_invoke_agent_hydration(
         operation_id,
         "tool-span",
         "root-span",
+        "dependencies",
         "execute_tool",
         "lookup",
         "",
@@ -2361,6 +2466,7 @@ def test_trace_assertion_waits_for_invoke_agent_hydration(
         operation_id,
         "root-span",
         "",
+        "requests",
         "invoke_agent",
         "",
         "",
