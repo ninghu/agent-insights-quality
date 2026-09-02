@@ -1936,6 +1936,42 @@ union withsource=telemetry_type traces, dependencies, requests
         semantic_results: (
             tuple[tuple[SemanticAssertionEvidence, ...], ...] | None
         ) = None
+
+        def publish_stable_results() -> tuple[
+            tuple[TraceAssertionEvidence, ...], ...
+        ]:
+            if correlated is None or last_results is None:
+                raise ContractError("Stable trace evidence is missing assertion results")
+            if on_stable_output_messages is not None:
+                if output_messages_states is None:
+                    raise ContractError(
+                        "Stable trace evidence is missing output-message state"
+                    )
+                on_stable_output_messages(output_messages_states)
+            if on_stable_response_anchors is not None:
+                if response_anchors is None:
+                    raise ContractError(
+                        "Stable trace evidence is missing response-anchor state"
+                    )
+                on_stable_response_anchors(response_anchors)
+            if on_stable_semantic_assertions is not None:
+                if semantic_results is None:
+                    raise ContractError(
+                        "Stable trace evidence is missing semantic assertion state"
+                    )
+                on_stable_semantic_assertions(semantic_results)
+            if on_stable is not None:
+                on_stable(
+                    _trace_behavior_summary(
+                        [
+                            row
+                            for request_rows in correlated
+                            for row in request_rows
+                        ]
+                    )
+                )
+            return last_results
+
         while True:
             rows = self._trace_rows(
                 operation_ids,
@@ -2011,28 +2047,11 @@ union withsource=telemetry_type traces, dependencies, requests
                     stable_signature = signature
                     stable_since = now
                 if (
-                    stable_since is not None
+                    passing
+                    and stable_since is not None
                     and now - stable_since >= stabilization_seconds
                 ):
-                    if on_stable_output_messages is not None:
-                        on_stable_output_messages(output_messages_states)
-                    if on_stable_response_anchors is not None:
-                        assert response_anchors is not None
-                        on_stable_response_anchors(response_anchors)
-                    if on_stable_semantic_assertions is not None:
-                        assert semantic_results is not None
-                        on_stable_semantic_assertions(semantic_results)
-                    if on_stable is not None:
-                        on_stable(
-                            _trace_behavior_summary(
-                                [
-                                    row
-                                    for request_rows in correlated
-                                    for row in request_rows
-                                ]
-                            )
-                        )
-                    return last_results
+                    return publish_stable_results()
             else:
                 passing = False
                 stable_signature = None
@@ -2063,29 +2082,7 @@ union withsource=telemetry_type traces, dependencies, requests
             and stable_since is not None
             and self._monotonic() - stable_since >= stabilization_seconds
         ):
-            if on_stable_output_messages is not None:
-                if output_messages_states is None:
-                    raise ContractError(
-                        "Stable trace evidence is missing output-message state"
-                    )
-                on_stable_output_messages(output_messages_states)
-            if on_stable is not None:
-                on_stable(
-                    _trace_behavior_summary(
-                        [
-                            row
-                            for request_rows in correlated
-                            for row in request_rows
-                        ]
-                    )
-                )
-            if on_stable_semantic_assertions is not None:
-                if semantic_results is None:
-                    raise ContractError(
-                        "Stable trace evidence is missing semantic assertion state"
-                    )
-                on_stable_semantic_assertions(semantic_results)
-            return last_results
+            return publish_stable_results()
         if correlated is not None:
             raise TraceAssertionActivationError(
                 "Hosted evidence did not stabilize before the bounded deadline"

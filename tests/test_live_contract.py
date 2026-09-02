@@ -2876,7 +2876,7 @@ def test_trace_assertion_bounds_missing_invoke_agent_hydration(tmp_path) -> None
     assert monotonic[0] == 15 * 60
 
 
-def test_trace_assertion_stable_failure_returns_after_stability_window(
+def test_trace_assertion_stable_failure_waits_until_deadline(
     tmp_path,
 ) -> None:
     monotonic = [0.0]
@@ -2928,8 +2928,8 @@ def test_trace_assertion_stable_failure_returns_after_stability_window(
     )
 
     assert evidence[0][0].passed is False
-    assert monotonic[0] == 180
-    assert poll_times[-1] == 180
+    assert monotonic[0] == 15 * 60
+    assert poll_times[-1] == 15 * 60
     assert progress
     assert "failing evidence is stabilizing" in progress[-1]
     assert first_passes == [0]
@@ -3027,7 +3027,7 @@ def test_trace_assertion_late_duplicate_invalidates_stabilizing_pass(
     )
 
     assert evidence[0][0].passed is False
-    assert monotonic[0] == 135 + 180
+    assert monotonic[0] == 15 * 60
     assert first_passes == [0]
 
 
@@ -3209,7 +3209,7 @@ def test_trace_assertion_requires_correlation_in_final_snapshot(
     assert first_mappings == [0]
 
 
-def test_trace_assertion_stable_failure_does_not_wait_for_late_pass(
+def test_trace_assertion_late_pass_without_full_stability_is_incomplete(
     tmp_path,
 ) -> None:
     monotonic = [0.0]
@@ -3240,21 +3240,74 @@ def test_trace_assertion_stable_failure_does_not_wait_for_late_pass(
         0, monotonic[0] + seconds
     )
 
-    evidence = runtime.trace_assertion_evidence(
+    with pytest.raises(
+        TraceAssertionActivationError,
+        match="did not stabilize before the bounded deadline",
+    ):
+        runtime.trace_assertion_evidence(
+            agent_name="finance-agent",
+            foundry_version="issue-013",
+            operation_ids=(operation_id,),
+            response_references=(reference,),
+            window_start="2026-08-28T10:00:00+00:00",
+            window_end="2026-08-28T10:00:30+00:00",
+            traffic_path=traffic_path,
+            stabilization_seconds=180,
+            on_first_pass=lambda: first_passes.append(monotonic[0]),
+        )
+
+    assert monotonic[0] == 15 * 60
+    assert first_passes == [0]
+
+
+def test_trace_assertion_accepts_stable_final_failure_at_deadline(
+    tmp_path,
+) -> None:
+    monotonic = [0.0]
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+    )
+    operation_id = "a" * 32
+    reference = "resp_A1b2C3d4E5f6"
+    initial_failure = _anchored_tool_rows(
+        "different_lookup",
+        reference,
+        operation_id=operation_id,
+    )
+    final_failure = _anchored_tool_rows(
+        "another_lookup",
+        reference,
+        operation_id=operation_id,
+    )
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(traffic_path)
+    requests = json.loads(traffic_path.read_text(encoding="utf-8"))["requests"]
+    runtime._trace_rows = (  # type: ignore[method-assign]
+        lambda *_args: initial_failure if monotonic[0] < 720 else final_failure
+    )
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
+    )
+    response_anchors = []
+
+    evidence = runtime.trace_assertion_evidence_for_requests(
         agent_name="finance-agent",
         foundry_version="issue-013",
         operation_ids=(operation_id,),
         response_references=(reference,),
         window_start="2026-08-28T10:00:00+00:00",
         window_end="2026-08-28T10:00:30+00:00",
-        traffic_path=traffic_path,
+        requests=requests,
         stabilization_seconds=180,
-        on_first_pass=lambda: first_passes.append(monotonic[0]),
+        on_first_pass=lambda: None,
+        on_stable_response_anchors=response_anchors.append,
     )
 
     assert evidence[0][0].passed is False
-    assert monotonic[0] == 180
-    assert first_passes == [0]
+    assert response_anchors == [("root-span",)]
+    assert monotonic[0] == 15 * 60
 
 
 def test_trace_assertions_cover_payload_cardinality_and_span_order() -> None:
