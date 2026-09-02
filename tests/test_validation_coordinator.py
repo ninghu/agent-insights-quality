@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import inspect
 from types import SimpleNamespace
 
 import pytest
@@ -13,7 +14,9 @@ from agent_insights_quality.validation_coordinator import (
     _assignments,
     _desired_state,
     _runner,
+    _verifier,
 )
+from agent_insights_quality import validation_coordinator, validation_runtime
 from agent_insights_quality.validation_manifest import (
     authority_specs,
     prepare_validation_plan,
@@ -37,6 +40,15 @@ def test_deployment_assignments_are_disjoint_and_bounded() -> None:
     assert assigned != authority_ids
     assert len(assigned) == len(set(assigned)) == len(authority_ids)
     assert set(assigned) == set(authority_ids)
+
+
+def test_validation_orchestration_contains_no_hidden_worker_pool() -> None:
+    source = inspect.getsource(validation_coordinator) + inspect.getsource(
+        validation_runtime
+    )
+    assert "ThreadPoolExecutor" not in source
+    assert "_run_parallel" not in source
+    assert "subprocess" not in source
 
 
 def test_desired_state_assigns_only_content_without_exact_reuse(monkeypatch) -> None:
@@ -104,6 +116,7 @@ def test_desired_state_assigns_only_content_without_exact_reuse(monkeypatch) -> 
             for index in range(9)
         },
         superseded_authority_ids=[],
+        forced_invocation_authority_ids=[],
     )
     assert len(desired["reused_runtimes"]) == 29
     assert len(desired["deployment_authority_ids"]) == 12
@@ -178,3 +191,26 @@ def test_shard_runner_skips_global_traffic_ledger_but_live_runtime_uses_it(
             seed=1,
         )
     assert calls == ["open:staging", "started"]
+
+
+def test_verify_primitive_has_no_endpoint_or_session_create_capability() -> None:
+    profile = RuntimeProfile(
+        name="staging",
+        project_name="aiq-staging",
+        project_endpoint="https://example.invalid",
+        insights_endpoint="https://example.invalid",
+        application_insights_resource_id="/synthetic/telemetry",
+        registry_path=Path("synthetic-registry.json"),
+    )
+    verifier = _verifier(
+        {
+            "profile": profile,
+            "operator": SimpleNamespace(token_provider=lambda _scope: "token"),
+            "authorities": [],
+            "policy": SimpleNamespace(
+                trace_hydration_stabilization_seconds=1
+            ),
+        }
+    )
+    assert not hasattr(verifier, "invoke")
+    assert not hasattr(verifier, "prepare_hosted_routes")

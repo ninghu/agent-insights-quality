@@ -10,7 +10,9 @@
     "substrate", "ownership_nonce", "capacity", "project", "runtime_topology",
     "deployment", "desired_state_reference", "deployment_assignments",
     "validation_authority_ids", "reused_authorities",
-    "shard_assignments", "resources", "event_reference", "evidence_reference",
+    "invocation_authority_ids", "reused_invocations",
+    "invocation_shard_assignments", "shard_assignments",
+    "resources", "event_reference", "evidence_reference",
     "supersedes", "started_at", "last_activity_at", "absolute_expires_at",
     "failure", "previous_journal_digest", "journal_digest"
   ],
@@ -22,6 +24,19 @@
     "event_sequence": {"type": "integer", "minimum": 1},
     "state": {
       "enum": ["LOCKED", "PREFLIGHT", "CREATING", "VALIDATING", "READY", "FAILED", "SUPERSEDED"]
+    },
+    "reusedInvocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority_id", "path", "receipt_digest", "invocation_digest"
+      ],
+      "properties": {
+        "authority_id": {"$ref": "#/$defs/authorityId"},
+        "path": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "receipt_digest": {"$ref": "#/$defs/hash"},
+        "invocation_digest": {"$ref": "#/$defs/hash"}
+      }
     },
     "repository": {"$ref": "#/$defs/repository"},
     "pr_number": {"type": "integer", "minimum": 1},
@@ -40,7 +55,7 @@
       "oneOf": [{"type": "null"}, {"$ref": "#/$defs/snapshotReference"}]
     },
     "deployment_assignments": {
-      "type": "array", "maxItems": 10, "uniqueItems": true,
+      "type": "array", "maxItems": 8, "uniqueItems": true,
       "items": {"$ref": "#/$defs/shardAssignment"}
     },
     "validation_authority_ids": {
@@ -51,8 +66,20 @@
       "type": "array", "maxItems": 41, "uniqueItems": true,
       "items": {"$ref": "#/$defs/reusedAuthority"}
     },
+    "invocation_authority_ids": {
+      "type": "array", "maxItems": 41, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/authorityId"}
+    },
+    "reused_invocations": {
+      "type": "array", "maxItems": 41, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/reusedInvocation"}
+    },
+    "invocation_shard_assignments": {
+      "type": "array", "maxItems": 8, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/shardAssignment"}
+    },
     "shard_assignments": {
-      "type": "array", "maxItems": 10, "uniqueItems": true,
+      "type": "array", "maxItems": 8, "uniqueItems": true,
       "items": {"$ref": "#/$defs/shardAssignment"}
     },
     "resources": {
@@ -126,12 +153,14 @@
       "additionalProperties": false,
       "required": [
         "validation_digest", "shared_validation_digest",
+        "invocation_contract_digest",
         "execution_matrix_digest", "runtime_topology_digest",
         "quota_plan_digest", "evidence_digest"
       ],
       "properties": {
         "validation_digest": {"$ref": "#/$defs/hash"},
         "shared_validation_digest": {"$ref": "#/$defs/hash"},
+        "invocation_contract_digest": {"$ref": "#/$defs/hash"},
         "execution_matrix_digest": {"$ref": "#/$defs/hash"},
         "runtime_topology_digest": {
           "oneOf": [{"type": "null"}, {"$ref": "#/$defs/hash"}]
@@ -196,7 +225,7 @@
         "worst_case_inner_tokens": {"type": "integer", "minimum": 1},
         "endpoint_concurrency": {"type": "integer", "minimum": 1, "maximum": 8},
         "provisioning_concurrency": {"const": 8},
-        "telemetry_query_concurrency": {"const": 4},
+        "telemetry_query_concurrency": {"const": 8},
         "runtime_attempt_concurrency": {"const": 1},
         "inner_model_call_limit": {"const": 4},
         "plan_digest": {"$ref": "#/$defs/hash"}

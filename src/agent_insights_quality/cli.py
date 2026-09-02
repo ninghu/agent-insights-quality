@@ -104,7 +104,13 @@ from agent_insights_quality.validation_approved import (
 from agent_insights_quality.validation_blob import AzureValidationBlobStore
 from agent_insights_quality.validation_credentials import local_azure_operator
 from agent_insights_quality.validation_coordinator import (
+    compose_test_agent_validation,
+    deploy_test_agent_validation_shard,
+    invoke_test_agent_validation_shard,
+    prepare_test_agent_validation,
+    reconcile_test_agent_validation_deployment,
     run_test_agent_validation,
+    verify_test_agent_validation_shard,
 )
 from agent_insights_quality.work_items import (
     fetch_quality_work_items,
@@ -213,6 +219,21 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup.add_argument("--receipt", type=Path)
     cleanup.add_argument("--human-reviewed", action="store_true")
     commands.add_parser("run-test-agent-validation")
+    commands.add_parser("prepare-test-agent-validation")
+    deploy_validation = commands.add_parser(
+        "deploy-test-agent-validation-shard"
+    )
+    deploy_validation.add_argument("--shard-id", type=int, required=True)
+    commands.add_parser("reconcile-test-agent-validation-deployment")
+    invoke_validation = commands.add_parser(
+        "invoke-test-agent-validation-shard"
+    )
+    invoke_validation.add_argument("--shard-id", type=int, required=True)
+    verify_validation = commands.add_parser(
+        "verify-test-agent-validation-shard"
+    )
+    verify_validation.add_argument("--shard-id", type=int, required=True)
+    commands.add_parser("compose-test-agent-validation")
     commands.add_parser("approve-test-agent-validation")
     return parser
 
@@ -231,6 +252,30 @@ def main(argv: list[str] | None = None) -> None:
 def _dispatch(args: argparse.Namespace) -> str | None:
     if args.command == "run-test-agent-validation":
         return json.dumps(run_test_agent_validation(), sort_keys=True)
+    if args.command == "prepare-test-agent-validation":
+        return json.dumps(prepare_test_agent_validation(), sort_keys=True)
+    if args.command == "deploy-test-agent-validation-shard":
+        return json.dumps(
+            deploy_test_agent_validation_shard(shard_id=args.shard_id),
+            sort_keys=True,
+        )
+    if args.command == "reconcile-test-agent-validation-deployment":
+        return json.dumps(
+            reconcile_test_agent_validation_deployment(),
+            sort_keys=True,
+        )
+    if args.command == "invoke-test-agent-validation-shard":
+        return json.dumps(
+            invoke_test_agent_validation_shard(shard_id=args.shard_id),
+            sort_keys=True,
+        )
+    if args.command == "verify-test-agent-validation-shard":
+        return json.dumps(
+            verify_test_agent_validation_shard(shard_id=args.shard_id),
+            sort_keys=True,
+        )
+    if args.command == "compose-test-agent-validation":
+        return json.dumps(compose_test_agent_validation(), sort_keys=True)
     if args.command == "approve-test-agent-validation":
         return json.dumps(approve_test_agent_validation(), sort_keys=True)
     if args.command == "validate":

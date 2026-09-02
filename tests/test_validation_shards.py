@@ -51,11 +51,18 @@ def _prepared() -> dict:
         "run_id": "validation-0123456789ab",
         "digests": {
             "validation_digest": "sha256:" + ("b" * 64),
+            "shared_validation_digest": "sha256:" + ("e" * 64),
             "execution_matrix_digest": "sha256:" + ("c" * 64),
             "runtime_topology_digest": "sha256:" + ("d" * 64),
         },
-        "project": {"provider_id": "synthetic-project"},
-        "runtime_topology": {"agents": runtime},
+        "project": {
+            "name": "aiq-staging-swedencentral",
+            "provider_id": "synthetic-project",
+        },
+        "runtime_topology": {
+            "telemetry_resource_set": "g30",
+            "agents": runtime,
+        },
     }
 
 
@@ -92,8 +99,8 @@ def test_shard_runtime_namespaces_do_not_collide(monkeypatch, tmp_path) -> None:
 def test_compose_requires_exact_nonoverlapping_selected_shards() -> None:
     authorities = _authorities()[:12]
     groups = [
-        [item.authority_id for item in authorities][index::10]
-        for index in range(10)
+        [item.authority_id for item in authorities][index::8]
+        for index in range(8)
     ]
     packages = []
     for shard_id, group in enumerate(groups, start=1):
@@ -139,11 +146,42 @@ def test_invocation_store_resumes_retained_partial_ledger(
         fence=lambda: None,
     )
     store.begin_invocation()
-    store.record_authority({"authority_id": "weather-agent/v0"})
+    store.record_invocation_receipt(
+        {
+            "authority_id": "weather-agent/v0",
+            "path": "synthetic/receipt.json",
+            "receipt_digest": "sha256:" + ("1" * 64),
+            "invocation_digest": "sha256:" + ("2" * 64),
+        }
+    )
     retained = store.begin_invocation()
     assert retained["status"] == "invoking"
-    assert retained["invocations"] == [{"authority_id": "weather-agent/v0"}]
+    assert retained["invocation_receipts"][0]["authority_id"] == (
+        "weather-agent/v0"
+    )
     assert store.complete_invocation()["status"] == "invoked"
+
+
+def test_invocation_receipt_write_uses_generation_fence(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_shards.validation_runtime_root",
+        lambda: tmp_path,
+    )
+
+    def stale() -> None:
+        raise ContractError("Stale validation worker is fenced")
+
+    store = ValidationShardStore(
+        prepared=_prepared(),
+        shard_id=1,
+        authority_ids=["weather-agent/v0"],
+        fence=stale,
+    )
+    with pytest.raises(ContractError, match="Stale validation worker"):
+        store.assert_active()
 
 
 def test_deployment_store_writes_immutable_per_authority_receipts(
@@ -391,7 +429,7 @@ def test_eight_invoke_workers_do_not_multiply_prepared_capacity() -> None:
         worst_case_inner_tokens=1,
         endpoint_concurrency=8,
         provisioning_concurrency=8,
-        telemetry_query_concurrency=4,
+        telemetry_query_concurrency=8,
         runtime_attempt_concurrency=1,
         inner_model_call_limit=4,
         plan_digest="sha256:" + ("f" * 64),

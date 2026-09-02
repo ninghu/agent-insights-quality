@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +83,9 @@ def prepare_validation_plan(
         for scenario in authority.validation_rules["scenarios"]
     )
     validation_digest = current_validation_digest(agents, issues)
+    invocation_contract_digest = current_invocation_contract_digest(
+        authorities
+    )
     return {
         "schema_version": "2.0.0",
         "kind": "test-agent-validation-plan",
@@ -97,6 +100,7 @@ def prepare_validation_plan(
         "test_agent_model": policy.test_agent_model,
         "validation_digest": validation_digest,
         "shared_validation_digest": current_shared_validation_digest(),
+        "invocation_contract_digest": invocation_contract_digest,
         "execution_matrix_digest": content_hash(execution_digests),
         "planned_topology_digest": content_hash(
             [
@@ -208,6 +212,8 @@ def validate_validation_plan(
         or value.get("telemetry_resource_set") != "g30"
         or value.get("shared_validation_digest")
         != current_shared_validation_digest()
+        or value.get("invocation_contract_digest")
+        != current_invocation_contract_digest(list(current.values()))
         or not isinstance(authorities, list)
         or len(authorities) != 41
         or {
@@ -263,6 +269,26 @@ def current_shared_validation_digest() -> str:
         {
             path.relative_to(ROOT).as_posix(): _validation_contract_file_hash(path)
             for path in _validation_contract_files()
+        }
+    )
+
+
+def current_invocation_contract_digest(
+    authorities: Sequence[AuthoritySpec],
+) -> str:
+    return content_hash(
+        {
+            "contract_version": "1.0.0",
+            "runtime_attempt_concurrency": 1,
+            "authorities": {
+                item.authority_id: {
+                    "runtime_kind": item.runtime_kind,
+                    "framework": item.framework,
+                    "source_content_digest": item.source_content_digest,
+                    "execution_digest": item.execution_digest,
+                }
+                for item in authorities
+            },
         }
     )
 

@@ -55,7 +55,8 @@ def test_staging_skill_routes_current_durable_sweden_qualification() -> None:
     assert "aiq-staging-swedencentral" in staging
     assert "immutable disjoint deployment assignments" in staging
     assert "at most eight" in staging
-    assert "at most four" in staging
+    assert "visible Copilot sub-sessions" in staging
+    assert "one to eight deterministic" in staging
     assert "Sweden Central `g30`" in staging
     assert "Never create or delete the Project" in staging
     assert ".github/skills/test-agent-validation/SKILL.md" in staging

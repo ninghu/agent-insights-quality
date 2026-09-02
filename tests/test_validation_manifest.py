@@ -42,6 +42,10 @@ def test_local_plan_binds_one_commit_and_all_executable_inputs() -> None:
     assert plan["endpoint_envelope"]["worst_case_inner_model_calls"] == 4
     assert plan["validation_digest"].startswith("sha256:")
     assert plan["shared_validation_digest"].startswith("sha256:")
+    assert plan["invocation_contract_digest"].startswith("sha256:")
+    assert plan["invocation_contract_digest"] != plan[
+        "shared_validation_digest"
+    ]
     assert plan["run_id"].startswith("validation-")
     assert "tree_sha" not in plan
     assert "policy_manifest" not in plan

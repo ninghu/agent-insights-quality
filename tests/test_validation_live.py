@@ -40,7 +40,7 @@ def _scheduler() -> ValidationScheduler:
             worst_case_inner_tokens=10,
             endpoint_concurrency=2,
             provisioning_concurrency=8,
-            telemetry_query_concurrency=4,
+            telemetry_query_concurrency=8,
             runtime_attempt_concurrency=1,
             inner_model_call_limit=4,
             plan_digest=HASH,

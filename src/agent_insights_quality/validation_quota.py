@@ -5,7 +5,7 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-from typing import Callable, Iterator
+from typing import Callable, ContextManager, Iterator
 
 from agent_insights_quality.util import ContractError, content_hash
 from agent_insights_quality.validation_policy import ValidationPolicy
@@ -257,7 +257,13 @@ class WeightedTokenBucket:
 
 
 class ValidationScheduler:
-    def __init__(self, plan: CapacityPlan, bucket: WeightedTokenBucket) -> None:
+    def __init__(
+        self,
+        plan: CapacityPlan,
+        bucket: WeightedTokenBucket,
+        *,
+        telemetry_lease: Callable[[], ContextManager[object]] | None = None,
+    ) -> None:
         self._plan = plan
         self._bucket = bucket
         self._endpoint_slots = threading.BoundedSemaphore(
@@ -268,6 +274,7 @@ class ValidationScheduler:
         )
         self._runtime_locks: dict[str, threading.Lock] = {}
         self._runtime_locks_guard = threading.Lock()
+        self._telemetry_lease = telemetry_lease
 
     @contextmanager
     def runtime_attempt(self, runtime_id: str) -> Iterator[None]:
@@ -285,6 +292,10 @@ class ValidationScheduler:
 
     @contextmanager
     def telemetry_query(self) -> Iterator[None]:
+        if self._telemetry_lease is not None:
+            with self._telemetry_lease():
+                yield
+            return
         with self._telemetry_slots:
             yield
 

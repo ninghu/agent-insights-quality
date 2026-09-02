@@ -20,7 +20,7 @@ def test_validation_policy_freezes_local_inventory_and_limits() -> None:
     assert policy.project_name == "aiq-staging-swedencentral"
     assert policy.telemetry_resource_set == "g30"
     assert policy.limits.provisioning_concurrency == 8
-    assert policy.limits.telemetry_query_concurrency == 4
+    assert policy.limits.telemetry_query_concurrency == 8
     assert policy.limits.runtime_attempt_concurrency == 1
     assert policy.limits.absolute_ttl_hours == 72
     assert policy.limits.active_heartbeat_seconds == 60

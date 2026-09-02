@@ -44,6 +44,20 @@ class PostResponseTelemetryError(ContractError):
                 setattr(self, field, getattr(error, field))
 
 
+class ReadOnlyTelemetryRuntime:
+    def __init__(self, runtime: LiveRuntime) -> None:
+        self.__runtime = runtime
+
+    def wait_for_telemetry(self, **kwargs: Any) -> Any:
+        return self.__runtime.wait_for_telemetry(**kwargs)
+
+    def trace_assertion_evidence_for_requests(self, **kwargs: Any) -> Any:
+        return self.__runtime.trace_assertion_evidence_for_requests(**kwargs)
+
+    def telemetry_identity_passes(self, **kwargs: Any) -> Any:
+        return self.__runtime.telemetry_identity_passes(**kwargs)
+
+
 class FoundryScenarioAttemptRunner:
     def __init__(
         self,
@@ -576,6 +590,29 @@ class FoundryScenarioAttemptRunner:
             "error_code": error_code,
         }
         return result
+
+
+class FoundryScenarioVerifier:
+    def __init__(
+        self,
+        runtime: LiveRuntime,
+        *,
+        endpoint_costs: Mapping[str, EndpointCost],
+        stabilization_seconds: int,
+        record_duration: Callable[[str, float], None] = lambda _stage, _value: None,
+        now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
+        self.__delegate = FoundryScenarioAttemptRunner(
+            ReadOnlyTelemetryRuntime(runtime),
+            endpoint_costs=endpoint_costs,
+            stabilization_seconds=stabilization_seconds,
+            record_resource=lambda _event: None,
+            record_duration=record_duration,
+            now=now,
+        )
+
+    def verify(self, **kwargs: Any) -> dict[str, Any]:
+        return self.__delegate.verify(**kwargs)
 
 
 @contextmanager

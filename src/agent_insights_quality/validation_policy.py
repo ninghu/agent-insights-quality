@@ -102,7 +102,7 @@ def load_validation_policy(
     limits_value = _mapping(value.get("limits"), "limits")
     expected_limits = {
         "provisioning_concurrency": 8,
-        "telemetry_query_concurrency": 4,
+        "telemetry_query_concurrency": 8,
         "runtime_attempt_concurrency": 1,
         "inner_model_call_limit": 4,
         "reserved_capacity_percent": 25,

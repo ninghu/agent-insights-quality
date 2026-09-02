@@ -20,7 +20,7 @@ from agent_insights_quality.validation_lifecycle import (
 from agent_insights_quality.validation_cycle import ValidationCycleController
 from agent_insights_quality.validation_runtime import AuthoritySpec, DeployedRuntime
 
-SHARD_COUNT = 10
+SHARD_COUNT = 8
 
 
 def authority_lock(*, run_id: str, authority_id: str) -> LocalValidationLock:
@@ -113,6 +113,9 @@ def shard_binding(
         "commit_sha": prepared["commit_sha"],
         "run_id": prepared["run_id"],
         "validation_digest": prepared["digests"]["validation_digest"],
+        "shared_validation_digest": prepared["digests"][
+            "shared_validation_digest"
+        ],
         "execution_matrix_digest": prepared["digests"][
             "execution_matrix_digest"
         ],
@@ -120,6 +123,10 @@ def shard_binding(
             "runtime_topology_digest"
         ],
         "project_id": prepared["project"]["provider_id"],
+        "project_name": prepared["project"]["name"],
+        "telemetry_resource_set": prepared["runtime_topology"][
+            "telemetry_resource_set"
+        ],
         "authorities": [
             {
                 "authority_id": authority_id,
@@ -169,6 +176,9 @@ class ValidationShardStore:
         self.invocation_path = self.root / "invocations.json"
         self.package_path = self.root / "package.json"
 
+    def assert_active(self) -> None:
+        self._fence()
+
     def begin_invocation(self) -> dict[str, Any]:
         if self.invocation_path.is_file():
             existing = self.read_invocations()
@@ -179,29 +189,30 @@ class ValidationShardStore:
         value.update(
             {
                 "status": "invoking",
-                "resources": [],
-                "invocations": [],
+                "invocation_receipts": [],
             }
         )
         return self._write(self.invocation_path, value)
 
-    def record_resource(self, event: Mapping[str, Any]) -> None:
+    def completed_invocation_authority_ids(self) -> set[str]:
         value = self.read_invocations()
-        resources = copy.deepcopy(value["resources"])
-        resources.append(copy.deepcopy(dict(event)))
-        value["resources"] = resources
-        self._write(self.invocation_path, value)
+        return {
+            item["authority_id"] for item in value["invocation_receipts"]
+        }
 
-    def record_authority(self, result: Mapping[str, Any]) -> None:
+    def record_invocation_receipt(
+        self,
+        reference: Mapping[str, str],
+    ) -> None:
         value = self.read_invocations()
-        invocations = [
+        references = [
             item
-            for item in value["invocations"]
-            if item["authority_id"] != result["authority_id"]
+            for item in value["invocation_receipts"]
+            if item["authority_id"] != reference["authority_id"]
         ]
-        invocations.append(copy.deepcopy(dict(result)))
-        value["invocations"] = sorted(
-            invocations,
+        references.append(copy.deepcopy(dict(reference)))
+        value["invocation_receipts"] = sorted(
+            references,
             key=lambda item: item["authority_id"],
         )
         self._write(self.invocation_path, value)
@@ -209,7 +220,7 @@ class ValidationShardStore:
     def complete_invocation(self) -> dict[str, Any]:
         value = self.read_invocations()
         if {
-            item["authority_id"] for item in value["invocations"]
+            item["authority_id"] for item in value["invocation_receipts"]
         } != set(self.authority_ids):
             raise ContractError("Validation shard invocation coverage is incomplete")
         value["status"] = "invoked"
@@ -219,14 +230,25 @@ class ValidationShardStore:
         self,
         *,
         authorities: Sequence[Mapping[str, Any]],
+        invocation_receipts: Sequence[Mapping[str, str]],
     ) -> dict[str, Any]:
-        invocation = self.read_invocations()
-        if invocation["status"] != "invoked":
-            raise ContractError("Validation shard has not completed invocation")
+        authority_ids = [item["authority_id"] for item in authorities]
+        receipt_ids = [item["authority_id"] for item in invocation_receipts]
+        if (
+            authority_ids != list(self.authority_ids)
+            or receipt_ids != list(self.authority_ids)
+        ):
+            raise ContractError("Validation package receipt coverage is invalid")
         value = self._base("test-agent-validation-shard-package")
         value.update(
             {
-                "invocation_digest": invocation["artifact_digest"],
+                "verifier_commit_sha": self.binding["commit_sha"],
+                "verifier_digest": self.binding[
+                    "shared_validation_digest"
+                ],
+                "invocation_receipts": copy.deepcopy(
+                    list(invocation_receipts)
+                ),
                 "authorities": copy.deepcopy(list(authorities)),
             }
         )
@@ -249,7 +271,7 @@ class ValidationShardStore:
 
     def _base(self, kind: str) -> dict[str, Any]:
         return {
-            "schema_version": "2.0.0",
+            "schema_version": "3.0.0",
             "kind": kind,
             "shard_id": self.shard_id,
             "authority_ids": list(self.authority_ids),
@@ -282,7 +304,7 @@ class ValidationShardStore:
     def _validate(self, value: Mapping[str, Any], kind: str) -> None:
         expected = self._base(kind)
         if (
-            value.get("schema_version") != "2.0.0"
+            value.get("schema_version") != "3.0.0"
             or value.get("kind") != kind
             or value.get("shard_id") != self.shard_id
             or value.get("authority_ids") != list(self.authority_ids)
@@ -470,7 +492,7 @@ def compose_shard_authorities(
         or {item.get("shard_id") for item in packages}
         != set(range(1, len(packages) + 1))
     ):
-        raise ContractError("Validation composition requires exactly 10 shards")
+        raise ContractError("Validation composition requires exact selected shards")
     expected = {item.authority_id for item in authorities}
     assigned = [
         authority_id

@@ -345,6 +345,15 @@ def _validate_selection(value: Mapping[str, Any]) -> None:
     }
     selected = list(value["validation_authority_ids"])
     reused = [item["authority_id"] for item in value["reused_authorities"]]
+    invoked = list(value["invocation_authority_ids"])
+    reused_invocations = [
+        item["authority_id"] for item in value["reused_invocations"]
+    ]
+    invoke_assigned = [
+        authority_id
+        for shard in value["invocation_shard_assignments"]
+        for authority_id in shard["authority_ids"]
+    ]
     assigned = [
         authority_id
         for shard in value["shard_assignments"]
@@ -356,9 +365,21 @@ def _validate_selection(value: Mapping[str, Any]) -> None:
         or len(reused) != len(set(reused))
         or set(selected).intersection(reused)
         or set(selected).union(reused) != all_ids
+        or len(invoked) != len(set(invoked))
+        or len(reused_invocations) != len(set(reused_invocations))
+        or set(invoked).intersection(reused_invocations)
+        or set(invoked).union(reused_invocations) != set(selected)
+        or set(invoke_assigned) != set(invoked)
+        or len(invoke_assigned) != len(set(invoke_assigned))
         or set(assigned) != set(selected)
         or len(assigned) != len(set(assigned))
-        or len(value["shard_assignments"]) > 10
+        or len(value["shard_assignments"]) > 8
+        or len(value["invocation_shard_assignments"]) > 8
+        or [
+            item["shard_id"]
+            for item in value["invocation_shard_assignments"]
+        ]
+        != list(range(1, len(value["invocation_shard_assignments"]) + 1))
         or [item["shard_id"] for item in value["shard_assignments"]]
         != list(range(1, len(value["shard_assignments"]) + 1))
     ):

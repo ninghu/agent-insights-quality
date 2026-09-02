@@ -9,6 +9,7 @@ import pytest
 from agent_insights_quality.util import ContractError
 from agent_insights_quality.live import _rate_limit_values
 from agent_insights_quality.validation_policy import load_validation_policy
+from agent_insights_quality.validation_leases import CrossProcessTelemetryLease
 from agent_insights_quality.validation_quota import (
     CapacityMeasurement,
     EndpointCost,
@@ -37,7 +38,7 @@ def test_capacity_plan_preserves_percent_and_absolute_headroom() -> None:
     assert plan.reserved_tpm == 25_000
     assert plan.endpoint_concurrency <= 8
     assert plan.provisioning_concurrency == 8
-    assert plan.telemetry_query_concurrency == 4
+    assert plan.telemetry_query_concurrency == 8
     assert plan.outer_request_envelope == 3
     assert plan.plan_digest.startswith("sha256:")
     validate_capacity_plan(plan, policy=policy)
@@ -221,6 +222,40 @@ def test_capacity_plan_digest_prevents_runtime_concurrency_tampering() -> None:
             replace(plan, endpoint_concurrency=plan.endpoint_concurrency - 1),
             policy=policy,
         )
+
+
+def test_cross_process_telemetry_lease_enforces_eight_fenced_slots(
+    tmp_path,
+) -> None:
+    policy = load_validation_policy()
+    plan = build_capacity_plan(
+        CapacityMeasurement(
+            rpm=100,
+            tpm=100_000,
+            measured_at="2026-08-29T00:00:00Z",
+        ),
+        policy=policy,
+        costs=[EndpointCost(requests=1, tokens=1024, inner_model_calls=1)],
+    )
+    leases = [
+        CrossProcessTelemetryLease(
+            run_id="validation-0123456789ab",
+            capacity=plan,
+            fence=lambda: None,
+            root=tmp_path,
+        )
+        for _ in range(9)
+    ]
+    try:
+        assert all(lease.try_acquire() for lease in leases[:8])
+        assert {lease.slot for lease in leases[:8]} == set(range(1, 9))
+        assert leases[8].try_acquire() is False
+        leases[0].release()
+        assert leases[8].try_acquire() is True
+        assert leases[8].slot == 1
+    finally:
+        for lease in leases:
+            lease.release()
 
 
 def test_runtime_rate_limit_headers_are_reduced_to_public_numeric_feedback() -> None:

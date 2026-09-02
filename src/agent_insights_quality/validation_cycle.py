@@ -54,6 +54,9 @@ def initial_lifecycle(
         "digests": {
             "validation_digest": plan["validation_digest"],
             "shared_validation_digest": plan["shared_validation_digest"],
+            "invocation_contract_digest": plan[
+                "invocation_contract_digest"
+            ],
             "execution_matrix_digest": plan["execution_matrix_digest"],
             "runtime_topology_digest": plan["planned_topology_digest"],
             "quota_plan_digest": None,
@@ -105,6 +108,9 @@ def initial_lifecycle(
             item["authority_id"] for item in plan["authorities"]
         ],
         "reused_authorities": [],
+        "invocation_authority_ids": [],
+        "reused_invocations": [],
+        "invocation_shard_assignments": [],
         "shard_assignments": [],
         "resources": [],
         "event_reference": None,
@@ -715,6 +721,9 @@ class ValidationCycleController:
                 "digests": {"runtime_topology_digest": digest},
                 "deployment": {"phase": "prepared", "traffic_started": False},
                 "validation_authority_ids": selected,
+                "invocation_authority_ids": selected,
+                "reused_invocations": [],
+                "invocation_shard_assignments": _shard_assignments(selected),
                 "shard_assignments": _shard_assignments(selected),
             },
             now,
@@ -741,6 +750,8 @@ class ValidationCycleController:
         *,
         selected_authority_ids: list[str],
         reused_authorities: list[dict[str, str]],
+        invocation_authority_ids: list[str],
+        reused_invocations: list[dict[str, str]],
         now: datetime,
     ) -> LocalRecord:
         all_ids = {
@@ -748,11 +759,22 @@ class ValidationCycleController:
             for item in self._active.value["runtime_topology"]["agents"]
         }
         reused_ids = {item["authority_id"] for item in reused_authorities}
+        reused_invocation_ids = {
+            item["authority_id"] for item in reused_invocations
+        }
         if (
             len(selected_authority_ids) != len(set(selected_authority_ids))
             or len(reused_ids) != len(reused_authorities)
             or set(selected_authority_ids).intersection(reused_ids)
             or set(selected_authority_ids).union(reused_ids) != all_ids
+            or len(invocation_authority_ids)
+            != len(set(invocation_authority_ids))
+            or len(reused_invocation_ids) != len(reused_invocations)
+            or set(invocation_authority_ids).intersection(
+                reused_invocation_ids
+            )
+            or set(invocation_authority_ids).union(reused_invocation_ids)
+            != set(selected_authority_ids)
         ):
             raise ContractError("Validation authority selection is incomplete")
         return self._commit(
@@ -760,6 +782,11 @@ class ValidationCycleController:
             {
                 "validation_authority_ids": selected_authority_ids,
                 "reused_authorities": reused_authorities,
+                "invocation_authority_ids": invocation_authority_ids,
+                "reused_invocations": reused_invocations,
+                "invocation_shard_assignments": _shard_assignments(
+                    invocation_authority_ids
+                ),
                 "shard_assignments": _shard_assignments(
                     selected_authority_ids
                 ),
@@ -851,7 +878,7 @@ def _resource(
 
 
 def _shard_assignments(authority_ids: list[str]) -> list[dict[str, Any]]:
-    shard_count = min(10, len(authority_ids))
+    shard_count = min(8, len(authority_ids))
     if shard_count == 0:
         return []
     groups = [

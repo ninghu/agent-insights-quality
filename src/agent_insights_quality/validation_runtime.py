@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-import threading
 from collections.abc import Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
@@ -233,7 +231,6 @@ def deploy_all_authorities(
             authority_by_id[authority_id].canonical_agent,
             set(),
         ).add(authority_id)
-    lock = threading.Lock()
     def deploy(authority: AuthoritySpec) -> DeployedRuntime:
         target = by_id[authority.authority_id]
         intents = deployment_intents(authority, target)
@@ -286,10 +283,9 @@ def deploy_all_authorities(
             or value.runtime_agent_name != by_id[authority_id].runtime_agent_name
         ):
             raise ContractError("Deployed runtime identity differs from its plan")
-        with lock:
-            if authority_id in deployed:
-                raise ContractError("Validation authority was deployed more than once")
-            deployed[authority_id] = value
+        if authority_id in deployed:
+            raise ContractError("Validation authority was deployed more than once")
+        deployed[authority_id] = value
         if record_ready is not None:
             record_ready(authority_by_id[authority_id], value)
 
@@ -298,6 +294,7 @@ def deploy_all_authorities(
         *,
         concurrency: int,
     ) -> None:
+        del concurrency
         pending = [
             authority
             for authority in stage
@@ -305,19 +302,13 @@ def deploy_all_authorities(
         ]
         while pending:
             failures: list[tuple[AuthoritySpec, ContractError]] = []
-            with ThreadPoolExecutor(max_workers=concurrency) as pool:
-                futures = {
-                    pool.submit(deploy, authority): authority
-                    for authority in pending
-                }
-                for future in as_completed(futures):
-                    authority = futures[future]
-                    try:
-                        value = future.result()
-                    except ContractError as error:
-                        failures.append((authority, error))
-                    else:
-                        accept(authority.authority_id, value)
+            for authority in pending:
+                try:
+                    value = deploy(authority)
+                except ContractError as error:
+                    failures.append((authority, error))
+                else:
+                    accept(authority.authority_id, value)
             deterministic = [
                 (authority, error)
                 for authority, error in failures
@@ -348,29 +339,28 @@ def deploy_all_authorities(
                 return
             next_pending = []
             for authority, _ in failures:
-                with lock:
-                    previous_count = retries.get(
-                        authority.authority_id,
-                        0,
-                    )
-                    recovered_versions = recovered_by_agent.setdefault(
-                        authority.canonical_agent,
-                        set(),
-                    )
-                    exhausted = (
-                        previous_count
+                previous_count = retries.get(
+                    authority.authority_id,
+                    0,
+                )
+                recovered_versions = recovered_by_agent.setdefault(
+                    authority.canonical_agent,
+                    set(),
+                )
+                exhausted = (
+                    previous_count
+                    >= max_recovery_versions_per_agent
+                    or (
+                        authority.authority_id
+                        not in recovered_versions
+                        and len(recovered_versions)
                         >= max_recovery_versions_per_agent
-                        or (
-                            authority.authority_id
-                            not in recovered_versions
-                            and len(recovered_versions)
-                            >= max_recovery_versions_per_agent
-                        )
                     )
-                    retry_count = previous_count + 1
-                    if not exhausted:
-                        retries[authority.authority_id] = retry_count
-                        recovered_versions.add(authority.authority_id)
+                )
+                retry_count = previous_count + 1
+                if not exhausted:
+                    retries[authority.authority_id] = retry_count
+                    recovered_versions.add(authority.authority_id)
                 if exhausted:
                     summary = _agent_failure_summary(
                         authority,
