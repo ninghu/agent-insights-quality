@@ -21,6 +21,7 @@ from agent_insights_quality.validation_invocations import (
     assert_invocation_receipt_set_isolated,
     extract_legacy_shard_invocations,
     load_invocation_receipt,
+    legacy_invocation_implementation_is_compatible,
     select_reusable_invocation_receipts,
     write_invocation_receipt,
 )
@@ -704,6 +705,15 @@ def test_current_same_schema_extractor_imports_40_and_retries_issue_020(
                     ),
                     runtimes,
                 )
+                if not (
+                    next(
+                        item
+                        for item in authorities
+                        if item.authority_id == invocation["authority_id"]
+                    ).runtime_kind
+                    != "prompt"
+                    and resource["kind"] == "stored_response"
+                )
             ],
             "invocations": invocations,
             "artifact_digest": "",
@@ -758,6 +768,24 @@ def test_current_same_schema_extractor_imports_40_and_retries_issue_020(
     )
     assert invoke_ids == ["issue-020"]
     assert len(reused) == 40
+    hosted_reference = next(
+        reference
+        for reference in reused
+        if next(
+            item
+            for item in authorities
+            if item.authority_id == reference["authority_id"]
+        ).runtime_kind
+        != "prompt"
+    )
+    hosted_receipt = load_invocation_receipt(
+        hosted_reference,
+        root=tmp_path,
+    )
+    assert hosted_receipt["migrated_from"]["schema_version"] == "2.0.0"
+    assert {
+        item["kind"] for item in hosted_receipt["resources"]
+    } == {"session"}
 
 
 def test_corrupt_invocation_receipt_is_never_reused(tmp_path: Path) -> None:
@@ -816,6 +844,66 @@ def test_receipt_rejects_empty_resource_provenance(tmp_path: Path) -> None:
             fence=lambda: None,
             root=tmp_path,
         )
+
+
+def test_current_hosted_receipt_requires_response_resource_provenance(
+    tmp_path: Path,
+) -> None:
+    prepared, plan, authorities, runtimes = _context()
+    issue = next(
+        item
+        for item in authorities
+        if item.runtime_kind != "prompt" and item.authority_kind == "issue"
+    )
+    paired = next(
+        item
+        for item in authorities
+        if item.authority_id == f"{issue.canonical_agent}/v0"
+    )
+    invocation = _invocation(issue)
+    legacy_resources = [
+        item
+        for item in _resources(invocation, issue, runtimes)
+        if item["kind"] == "session"
+    ]
+    with pytest.raises(ContractError, match="coverage is incomplete"):
+        write_invocation_receipt(
+            prepared=prepared,
+            plan=plan,
+            shard_id=1,
+            authority=issue,
+            runtime=runtimes[issue.authority_id],
+            paired_v0_authority=paired,
+            paired_v0_runtime=runtimes[paired.authority_id],
+            invocation=invocation,
+            resources=legacy_resources,
+            fence=lambda: None,
+            root=tmp_path,
+        )
+
+
+def test_reviewed_legacy_invoker_bridge_is_exact() -> None:
+    origin = (
+        "sha256:d25ca7bac30ba951301e9c9aeb17dec4f669c61c345ae09a2d0acfc4fa8ccec3"
+    )
+    current = (
+        "sha256:60c683b467c2319a8442ec60cd96473e0e75642266814991d727f2f19a637d9c"
+    )
+    assert legacy_invocation_implementation_is_compatible(
+        origin_commit_sha="53255ba5d56e4e8892f5e1b8862084c4c89cb96e",
+        origin_implementation_digest=origin,
+        current_implementation_digest=current,
+    )
+    assert not legacy_invocation_implementation_is_compatible(
+        origin_commit_sha="0" * 40,
+        origin_implementation_digest=origin,
+        current_implementation_digest=current,
+    )
+    assert not legacy_invocation_implementation_is_compatible(
+        origin_commit_sha="53255ba5d56e4e8892f5e1b8862084c4c89cb96e",
+        origin_implementation_digest=origin,
+        current_implementation_digest=content_hash({"changed": True}),
+    )
 
 
 def test_receipt_set_rejects_cross_authority_hosted_session_reuse(

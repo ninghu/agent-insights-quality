@@ -8,6 +8,7 @@ from typing import Any, Iterator
 
 from agent_insights_quality.live import (
     LiveRuntime,
+    RemoteOperationError,
     TelemetryOnlyRuntime,
     _canonical_output_messages_expectation_passes,
     _normalize_fixture,
@@ -310,25 +311,73 @@ class FoundryScenarioAttemptRunner:
                         "step": fixture_index,
                     }
                 )
+                self._record_resource(
+                    {
+                        "state": "create_intent",
+                        "kind": "stored_response",
+                        "intent_reference": response_intent,
+                        "deterministic_name": (
+                            f"{target.runtime_agent_name}-"
+                            f"{conversation_role}-"
+                            f"{attempt['index']}-{fixture_index}"
+                        ),
+                        "authority_id": target.authority_id,
+                        "parent_id": target.provider_agent_id,
+                        "runtime_kind": target.runtime_kind,
+                        "discovery_key": (
+                            f"{target.runtime_agent_name}|{response_intent}"
+                        ),
+                    }
+                )
                 scheduler.acquire_request(cost)
-                with _observe_rate_limit(self._runtime, scheduler):
-                    result = self._runtime._invoke_hosted(
-                        target.runtime_agent_name,
-                        session_id,
-                        fixture,
-                        0,
-                        validation_intent_reference=response_intent,
+                try:
+                    with _observe_rate_limit(self._runtime, scheduler):
+                        result = self._runtime._invoke_hosted(
+                            target.runtime_agent_name,
+                            session_id,
+                            fixture,
+                            0,
+                            validation_intent_reference=response_intent,
+                        )
+                except RemoteOperationError as error:
+                    if error.request_accepted is not False:
+                        self._record_resource(
+                            {
+                                "state": "ambiguous_create",
+                                "kind": "stored_response",
+                                "intent_reference": response_intent,
+                                "deterministic_name": (
+                                    f"{target.runtime_agent_name}-"
+                                    f"{conversation_role}-"
+                                    f"{attempt['index']}-{fixture_index}"
+                                ),
+                                "authority_id": target.authority_id,
+                                "parent_id": target.provider_agent_id,
+                            }
+                        )
+                    raise
+                (
+                    response_ids,
+                    usable,
+                    _,
+                    _,
+                    _,
+                    _,
+                    _,
+                    _,
+                ) = result
+                for response_id in response_ids:
+                    self._record_resource(
+                        {
+                            "state": "created",
+                            "kind": "stored_response",
+                            "intent_reference": response_intent,
+                            "provider_id": response_id,
+                            "deterministic_name": response_id,
+                            "authority_id": target.authority_id,
+                            "parent_id": target.provider_agent_id,
+                        }
                     )
-                    (
-                        response_ids,
-                        usable,
-                        _,
-                        _,
-                        _,
-                        _,
-                        _,
-                        _,
-                    ) = result
                 response_references.extend(response_ids)
                 usable_results.append(usable)
         else:

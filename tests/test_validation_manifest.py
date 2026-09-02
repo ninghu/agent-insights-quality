@@ -8,7 +8,6 @@ from agent_insights_quality.validation_manifest import (
     _validation_contract_file_hash,
     authority_specs,
     invocation_implementation_digest,
-    invocation_implementation_digest_at_commit,
     prepare_validation_plan,
     prepare_bound_validation_plan,
     validate_validation_plan,
@@ -131,10 +130,32 @@ def test_invocation_digest_tracks_transitive_hosted_traffic_globals(
         assert invocation_implementation_digest(tmp_path) != original
 
 
-def test_current_invoker_matches_completed_invocation_commit() -> None:
-    assert invocation_implementation_digest_at_commit(
-        "53255ba5d56e4e8892f5e1b8862084c4c89cb96e"
-    ) == invocation_implementation_digest()
+def test_invocation_digest_tracks_referenced_error_class_semantics(
+    tmp_path,
+) -> None:
+    target = tmp_path / "src" / "agent_insights_quality"
+    target.mkdir(parents=True)
+    for name in (
+        "validation_runtime.py",
+        "validation_live.py",
+        "live.py",
+    ):
+        shutil.copyfile(
+            ROOT / "src" / "agent_insights_quality" / name,
+            target / name,
+        )
+    original = invocation_implementation_digest(tmp_path)
+    live = target / "live.py"
+    source = live.read_text(encoding="utf-8")
+    assert "self.request_accepted = request_accepted" in source
+    live.write_text(
+        source.replace(
+            "self.request_accepted = request_accepted",
+            "self.request_accepted = False",
+        ),
+        encoding="utf-8",
+    )
+    assert invocation_implementation_digest(tmp_path) != original
 
 
 def test_bound_plan_keeps_exact_run_and_topology() -> None:

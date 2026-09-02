@@ -4,7 +4,11 @@ from datetime import UTC, datetime
 
 import pytest
 
-from agent_insights_quality.live import TelemetryCorrelationError, TelemetryQueryError
+from agent_insights_quality.live import (
+    RemoteOperationError,
+    TelemetryCorrelationError,
+    TelemetryQueryError,
+)
 from agent_insights_quality.models import TraceAssertionEvidence
 from agent_insights_quality.validation_live import FoundryScenarioAttemptRunner
 from agent_insights_quality.validation_quota import (
@@ -780,6 +784,9 @@ def test_repeated_hosted_attempts_retain_unique_sessions_for_cleanup() -> None:
         )
 
     sessions = [item for item in resources if item["kind"] == "session"]
+    responses = [
+        item for item in resources if item["kind"] == "stored_response"
+    ]
     assert [item["kind"] for item in sessions] == ["session"] * 4
     assert [item["state"] for item in sessions] == [
         "create_intent",
@@ -787,6 +794,11 @@ def test_repeated_hosted_attempts_retain_unique_sessions_for_cleanup() -> None:
         "create_intent",
         "created",
     ]
+    assert len(responses) == 8
+    assert [item["state"] for item in responses] == [
+        "create_intent",
+        "created",
+    ] * 4
     assert len(runtime.session_intents) == len(set(runtime.session_intents)) == 2
     assert runtime.activations == [
         ("finance-agent-issue-013-cycle", "1", False),
@@ -794,6 +806,49 @@ def test_repeated_hosted_attempts_retain_unique_sessions_for_cleanup() -> None:
         ("finance-agent-issue-013-cycle", "1", True),
     ]
     assert runtime.deleted_sessions == []
+
+
+def test_hosted_unknown_post_records_ambiguous_response_provenance() -> None:
+    class AmbiguousHostedRuntime(HostedRuntime):
+        def _invoke_hosted(self, *_args, **_kwargs):
+            raise RemoteOperationError(
+                "synthetic ambiguous response",
+                code="synthetic_ambiguous",
+                status=None,
+                request_accepted=None,
+            )
+
+    resources = []
+    runner = FoundryScenarioAttemptRunner(
+        AmbiguousHostedRuntime(),
+        endpoint_costs={"issue-013": EndpointCost(1, 10, 1)},
+        stabilization_seconds=1,
+        record_resource=resources.append,
+    )
+    target = _hosted_target()
+    runner.prepare_hosted_routes([target])
+    with pytest.raises(RemoteOperationError, match="synthetic ambiguous"):
+        _run_attempt(
+            runner,
+            target=target,
+            executing_authority_id="issue-013",
+            conversation_role="issue",
+            scenario={"id": "reviewed-path"},
+            attempt={
+                "index": 1,
+                "conversation_group": "attempt-1",
+                "setup_steps": [],
+                "probe_steps": [_step("probe-1", probe=True)],
+            },
+            scheduler=_scheduler(),
+        )
+    responses = [
+        item for item in resources if item["kind"] == "stored_response"
+    ]
+    assert [item["state"] for item in responses] == [
+        "create_intent",
+        "ambiguous_create",
+    ]
 
 
 def test_prepare_hosted_routes_activates_first_exact_version_per_agent() -> None:

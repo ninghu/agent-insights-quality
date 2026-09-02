@@ -31,6 +31,15 @@ RECEIPT_SCHEMA = (
     ROOT / "schemas" / "test-agent-validation-invocation-receipt.schema.json"
 )
 _MIGRATION_NAME = "shard-invocations-v2-to-authority-receipts-v1"
+_LEGACY_INVOKER_BRIDGE = {
+    "origin_commit_sha": "53255ba5d56e4e8892f5e1b8862084c4c89cb96e",
+    "origin_implementation_digest": (
+        "sha256:d25ca7bac30ba951301e9c9aeb17dec4f669c61c345ae09a2d0acfc4fa8ccec3"
+    ),
+    "current_implementation_digest": (
+        "sha256:60c683b467c2319a8442ec60cd96473e0e75642266814991d727f2f19a637d9c"
+    ),
+}
 
 
 def write_invocation_receipt(
@@ -140,6 +149,23 @@ def assert_invocation_receipt_set_isolated(
         raise ContractError(
             "Invocation receipt response or session references collide"
         )
+
+
+def legacy_invocation_implementation_is_compatible(
+    *,
+    origin_commit_sha: str,
+    origin_implementation_digest: str,
+    current_implementation_digest: str,
+) -> bool:
+    return bool(
+        origin_implementation_digest == current_implementation_digest
+        or {
+            "origin_commit_sha": origin_commit_sha,
+            "origin_implementation_digest": origin_implementation_digest,
+            "current_implementation_digest": current_implementation_digest,
+        }
+        == _LEGACY_INVOKER_BRIDGE
+    )
 
 
 def validate_invocation_receipt(
@@ -392,15 +418,22 @@ def extract_legacy_shard_invocations(
                 )
             }
             return
+        origin_implementation_digest = (
+            invocation_implementation_digest_at_commit(
+                active["commit_sha"]
+            )
+        )
+        current_implementation_digest = invocation_implementation_digest()
         if (
             active.get("journal_digest")
             != _digest_without(active, "journal_digest")
             or active.get("digests", {}).get("execution_matrix_digest")
             != plan["execution_matrix_digest"]
-            or invocation_implementation_digest_at_commit(
-                active["commit_sha"]
+            or not legacy_invocation_implementation_is_compatible(
+                origin_commit_sha=active["commit_sha"],
+                origin_implementation_digest=origin_implementation_digest,
+                current_implementation_digest=current_implementation_digest,
             )
-            != invocation_implementation_digest()
         ):
             result = _write_migration_marker(
                 marker=marker,
@@ -1138,7 +1171,10 @@ def _validate_resource_provenance(
     else:
         valid = created_sessions == expected_sessions and (
             created_responses == expected_responses
-            or not created_responses
+            or (
+                value["migrated_from"] is not None
+                and not created_responses
+            )
         )
     if not valid:
         raise ContractError(

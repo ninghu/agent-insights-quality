@@ -354,6 +354,7 @@ def invocation_implementation_digest(
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 file_symbols[node.name] = node
             elif isinstance(node, ast.ClassDef):
+                file_symbols[node.name] = node
                 for child in node.body:
                     if isinstance(
                         child,
