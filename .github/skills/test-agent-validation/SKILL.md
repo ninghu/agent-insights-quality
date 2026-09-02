@@ -82,7 +82,7 @@ assessment, scoring, reporting, ADX, email, Daily traffic, approval, or merge.
    For a baseline, read all five attempts in one batched telemetry query and produce one stable target
    snapshot. For an issue, produce exactly two target batches: one stable snapshot for all issue
    attempts and one for all paired-`v0` attempts. Never query or stabilize individual attempts as
-   separate verification units. Response-bound traces must map one-to-one to the exact `invoke_agent`
+   separate verification units. Only response-bound traces may map one-to-one to the exact `invoke_agent`
    anchor and complete descendant span tree; sibling roots cannot contribute evidence.
    Receipt reuse proves the unchanged traffic-generation and execution binding only. Every new
    verification package binds the reused receipt's immutable digest and the current verifier commit
