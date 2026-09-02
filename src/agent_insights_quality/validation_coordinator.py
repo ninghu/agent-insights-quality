@@ -49,6 +49,7 @@ from agent_insights_quality.validation_invocations import (
     extract_legacy_shard_invocations,
     load_bound_invocation_receipt,
     load_invocation_receipt,
+    recover_supplemental_legacy_invocations,
     select_reusable_invocation_receipts,
     write_invocation_receipt,
 )
@@ -155,22 +156,29 @@ def prepare_test_agent_validation() -> dict[str, Any]:
             holder_run_reference=content_hash({"run": uuid.uuid4().hex}),
             substrate=_substrate(operator, base_profile),
         )
-        with extract_legacy_shard_invocations(
+        with recover_supplemental_legacy_invocations(
             active_path=journal.active_path,
             plan=plan,
             authorities=authorities,
-        ) as migration:
-            incomplete_current_invocations = _incomplete_current_invocations(
-                journal=journal,
+        ) as supplemental:
+            with extract_legacy_shard_invocations(
+                active_path=journal.active_path,
                 plan=plan,
                 authorities=authorities,
-            )
-            active, superseded_authority_ids = journal.begin_run(
-                initial,
-                all_authority_ids=[
-                    item.authority_id for item in authorities
-                ],
-            )
+            ) as migration:
+                incomplete_current_invocations = (
+                    _incomplete_current_invocations(
+                        journal=journal,
+                        plan=plan,
+                        authorities=authorities,
+                    )
+                )
+                active, superseded_authority_ids = journal.begin_run(
+                    initial,
+                    all_authority_ids=[
+                        item.authority_id for item in authorities
+                    ],
+                )
         controller = ValidationCycleController(journal, active=active)
         controller.preflight(capacity, now=datetime.now(UTC))
         provisioner = ValidationProjectProvisioner(
@@ -223,7 +231,13 @@ def prepare_test_agent_validation() -> dict[str, Any]:
             superseded_authority_ids=superseded_authority_ids,
             forced_invocation_authority_ids=[
                 *migration["incomplete_authority_ids"],
-                *incomplete_current_invocations,
+                *[
+                    item
+                    for item in incomplete_current_invocations
+                    if item
+                    not in set(supplemental["imported_authority_ids"])
+                ],
+                *supplemental["incomplete_authority_ids"],
             ],
             quota_plan_digest=controller.active.value["digests"][
                 "quota_plan_digest"

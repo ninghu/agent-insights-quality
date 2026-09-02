@@ -12,6 +12,7 @@ from agent_insights_quality.util import (
     ContractError,
     atomic_json,
     content_hash,
+    file_hash,
     read_json,
 )
 from agent_insights_quality.validation_coordinator import (
@@ -19,9 +20,11 @@ from agent_insights_quality.validation_coordinator import (
 )
 from agent_insights_quality.validation_invocations import (
     assert_invocation_receipt_set_isolated,
+    _read_legacy_shard_artifact,
     extract_legacy_shard_invocations,
     load_invocation_receipt,
     legacy_invocation_implementation_is_compatible,
+    recover_supplemental_legacy_invocations,
     select_reusable_invocation_receipts,
     write_invocation_receipt,
 )
@@ -344,6 +347,119 @@ def _resources(
     return resources
 
 
+def _write_complete_legacy_generation(
+    root: Path,
+    *,
+    prepared: dict,
+    authorities: list,
+    runtimes: dict[str, DeployedRuntime],
+) -> tuple[Path, dict, list[dict]]:
+    authority_ids = [item.authority_id for item in authorities]
+    assignments = [
+        {
+            "shard_id": index + 1,
+            "authority_ids": authority_ids[index::10],
+        }
+        for index in range(10)
+    ]
+    desired = {
+        "schema_version": "2.0.0",
+        "kind": "test-agent-validation-desired-state",
+        "run_id": RUN_ID,
+        "repository": prepared["repository"],
+        "pr_number": prepared["pr_number"],
+        "authorities": [
+            {
+                "authority_id": authority.authority_id,
+                "source_content_digest": authority.source_content_digest,
+                "provider_content_digest": runtimes[
+                    authority.authority_id
+                ].provider_content_digest,
+            }
+            for authority in authorities
+        ],
+        "desired_state_digest": "",
+    }
+    desired["desired_state_digest"] = _digest_without(
+        desired,
+        "desired_state_digest",
+    )
+    desired_path = root / "desired-state" / "legacy.json"
+    atomic_json(desired_path, desired)
+    active = {
+        "schema_version": "2.0.0",
+        "kind": "test-agent-validation-lifecycle",
+        "state": "VALIDATING",
+        **prepared,
+        "validation_authority_ids": authority_ids,
+        "failure": None,
+        "deployment": {"failures": []},
+        "shard_assignments": assignments,
+        "desired_state_reference": {
+            "path": desired_path.relative_to(root).as_posix(),
+            "digest": desired["desired_state_digest"],
+        },
+        "journal_digest": "",
+    }
+    active["journal_digest"] = _digest_without(active, "journal_digest")
+    archive_path = root / "legacy-active.json"
+    atomic_json(archive_path, active)
+    runtime_by_id = {
+        item["authority_id"]: item
+        for item in prepared["runtime_topology"]["agents"]
+    }
+    by_id = {item.authority_id: item for item in authorities}
+    for assignment in assignments:
+        invocations = [
+            _invocation(by_id[authority_id], qualifier=authority_id)
+            for authority_id in assignment["authority_ids"]
+        ]
+        invocations.sort(key=lambda item: item["authority_id"])
+        artifact = {
+            "schema_version": "2.0.0",
+            "kind": "test-agent-validation-shard-invocations",
+            "shard_id": assignment["shard_id"],
+            "authority_ids": assignment["authority_ids"],
+            "binding": _legacy_binding(
+                active,
+                assignment["authority_ids"],
+                runtime_by_id,
+            ),
+            "status": "invoked",
+            "resources": [
+                resource
+                for invocation in invocations
+                for resource in _resources(
+                    invocation,
+                    by_id[invocation["authority_id"]],
+                    runtimes,
+                )
+                if not (
+                    by_id[invocation["authority_id"]].runtime_kind != "prompt"
+                    and resource["kind"] == "stored_response"
+                )
+            ],
+            "invocations": invocations,
+            "artifact_digest": "",
+        }
+        artifact["artifact_digest"] = _digest_without(
+            artifact,
+            "artifact_digest",
+        )
+        artifact_path = (
+            root
+            / "shards"
+            / "ninghu"
+            / "agent-insights-quality"
+            / "999"
+            / RUN_ID
+            / f"shard-{assignment['shard_id']:02d}"
+            / "invocations.json"
+        )
+        atomic_json(artifact_path, artifact)
+    return archive_path, active, assignments
+
+
 def test_all_current_receipts_select_zero_invoke_and_41_verify(
     tmp_path: Path,
 ) -> None:
@@ -611,9 +727,9 @@ def test_current_same_schema_extractor_imports_40_and_retries_issue_020(
     assignments = [
         {
             "shard_id": index + 1,
-            "authority_ids": authority_ids[index::8],
+            "authority_ids": authority_ids[index::10],
         }
-        for index in range(8)
+        for index in range(10)
     ]
     desired = {
         "schema_version": "2.0.0",
@@ -674,6 +790,7 @@ def test_current_same_schema_extractor_imports_40_and_retries_issue_020(
             )
             for authority_id in assignment["authority_ids"]
         ]
+        invocations.sort(key=lambda item: item["authority_id"])
         if "issue-020" in assignment["authority_ids"]:
             ambiguous = next(
                 item
@@ -786,6 +903,237 @@ def test_current_same_schema_extractor_imports_40_and_retries_issue_020(
     assert {
         item["kind"] for item in hosted_receipt["resources"]
     } == {"session"}
+
+
+@pytest.mark.parametrize("shard_id", [1, 4, 5])
+def test_legacy_artifact_accepts_exact_lexical_authority_order(
+    monkeypatch,
+    tmp_path: Path,
+    shard_id: int,
+) -> None:
+    prepared, _, authorities, _ = _context()
+    authority_ids = [item.authority_id for item in authorities]
+    assignment = {
+        "shard_id": shard_id,
+        "authority_ids": authority_ids[shard_id - 1 :: 10],
+    }
+    assert assignment["authority_ids"] != sorted(assignment["authority_ids"])
+    runtime_by_id = {
+        item["authority_id"]: item
+        for item in prepared["runtime_topology"]["agents"]
+    }
+    active = {
+        **prepared,
+        "digests": prepared["digests"],
+    }
+    artifact = {
+        "schema_version": "2.0.0",
+        "kind": "test-agent-validation-shard-invocations",
+        "shard_id": shard_id,
+        "authority_ids": assignment["authority_ids"],
+        "binding": _legacy_binding(
+            active,
+            assignment["authority_ids"],
+            runtime_by_id,
+        ),
+        "status": "invoked",
+        "resources": [],
+        "invocations": [
+            {"authority_id": item}
+            for item in sorted(assignment["authority_ids"])
+        ],
+        "artifact_digest": "",
+    }
+    artifact["artifact_digest"] = _digest_without(
+        artifact,
+        "artifact_digest",
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_invocations.read_json",
+        lambda _path: copy.deepcopy(artifact),
+    )
+    assert _read_legacy_shard_artifact(
+        active=active,
+        assignment=assignment,
+        root=tmp_path,
+    ) == artifact
+
+
+@pytest.mark.parametrize(
+    "sequence_kind",
+    ["duplicate", "missing", "extra", "unsorted"],
+)
+def test_legacy_artifact_rejects_unexpected_authority_sequences(
+    monkeypatch,
+    tmp_path: Path,
+    sequence_kind: str,
+) -> None:
+    prepared, _, authorities, _ = _context()
+    authority_ids = [item.authority_id for item in authorities]
+    assignment = {
+        "shard_id": 1,
+        "authority_ids": authority_ids[::10],
+    }
+    actual = sorted(assignment["authority_ids"])
+    if sequence_kind == "duplicate":
+        actual[-1] = actual[0]
+    elif sequence_kind == "missing":
+        actual.pop()
+    elif sequence_kind == "extra":
+        actual.append("issue-999")
+    else:
+        actual = list(reversed(actual))
+    runtime_by_id = {
+        item["authority_id"]: item
+        for item in prepared["runtime_topology"]["agents"]
+    }
+    active = {**prepared, "digests": prepared["digests"]}
+    artifact = {
+        "schema_version": "2.0.0",
+        "kind": "test-agent-validation-shard-invocations",
+        "shard_id": 1,
+        "authority_ids": assignment["authority_ids"],
+        "binding": _legacy_binding(
+            active,
+            assignment["authority_ids"],
+            runtime_by_id,
+        ),
+        "status": "invoked",
+        "resources": [],
+        "invocations": [{"authority_id": item} for item in actual],
+        "artifact_digest": "",
+    }
+    artifact["artifact_digest"] = _digest_without(
+        artifact,
+        "artifact_digest",
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_invocations.read_json",
+        lambda _path: copy.deepcopy(artifact),
+    )
+    assert (
+        _read_legacy_shard_artifact(
+            active=active,
+            assignment=assignment,
+            root=tmp_path,
+        )
+        is None
+    )
+
+
+def test_supplemental_migration_recovers_only_original_marker_misses(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_invocations."
+        "invocation_implementation_digest_at_commit",
+        lambda _commit: "same",
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_invocations."
+        "invocation_implementation_digest",
+        lambda: "same",
+    )
+    prepared, plan, authorities, runtimes = _context()
+    temporary_archive, source, assignments = _write_complete_legacy_generation(
+        tmp_path,
+        prepared=prepared,
+        authorities=authorities,
+        runtimes=runtimes,
+    )
+    missed = [
+        authority_id
+        for assignment in assignments
+        if assignment["shard_id"] in {1, 4, 5}
+        for authority_id in assignment["authority_ids"]
+    ]
+    imported = [
+        item.authority_id
+        for item in authorities
+        if item.authority_id not in set(missed)
+    ]
+    marker = {
+        "schema_version": "1.0.0",
+        "kind": "shard-invocations-v2-to-authority-receipts-v1",
+        "source_run_id": RUN_ID,
+        "source_lifecycle_digest": source["journal_digest"],
+        "imported_authority_ids": imported,
+        "incomplete_authority_ids": missed,
+        "migration_digest": "",
+    }
+    marker["migration_digest"] = _digest_without(
+        marker,
+        "migration_digest",
+    )
+    marker_path = (
+        tmp_path
+        / "migrations"
+        / "shard-invocations-v2-to-authority-receipts-v1.json"
+    )
+    atomic_json(marker_path, marker)
+    original_marker_bytes = marker_path.read_bytes()
+
+    archive_digest = file_hash(temporary_archive)
+    archive_path = (
+        tmp_path
+        / "lifecycle"
+        / "superseded-formats"
+        / f"{archive_digest.removeprefix('sha256:')}.json"
+    )
+    archive_path.parent.mkdir(parents=True)
+    temporary_archive.replace(archive_path)
+    current_active = {
+        "schema_version": "2.0.0",
+        "kind": "test-agent-validation-lifecycle",
+        "repository": prepared["repository"],
+        "pr_number": prepared["pr_number"],
+        "invocation_authority_ids": missed,
+        "supersedes": archive_digest,
+        "journal_digest": "",
+    }
+    current_active["journal_digest"] = _digest_without(
+        current_active,
+        "journal_digest",
+    )
+    active_path = tmp_path / "lifecycle" / "active.json"
+    atomic_json(active_path, current_active)
+
+    with recover_supplemental_legacy_invocations(
+        active_path=active_path,
+        plan=plan,
+        authorities=authorities,
+        root=tmp_path,
+    ) as result:
+        assert set(result["imported_authority_ids"]) == set(missed)
+        assert result["incomplete_authority_ids"] == []
+    assert marker_path.read_bytes() == original_marker_bytes
+    supplemental_path = (
+        tmp_path
+        / "migrations"
+        / "shard-invocations-v2-to-authority-receipts-v1-supplemental.json"
+    )
+    supplemental = read_json(supplemental_path)
+    assert supplemental["source_marker_digest"] == marker["migration_digest"]
+    assert supplemental["source_lifecycle_digest"] == source["journal_digest"]
+
+    selected, reused = select_reusable_invocation_receipts(
+        authorities=authorities,
+        authority_ids=missed,
+        runtime_topology=prepared["runtime_topology"],
+        prepared=prepared,
+        plan=plan,
+        root=tmp_path,
+    )
+    assert selected == []
+    assert {item["authority_id"] for item in reused} == set(missed)
+    with recover_supplemental_legacy_invocations(
+        active_path=active_path,
+        plan=plan,
+        authorities=authorities,
+        root=tmp_path,
+    ) as repeated:
+        assert repeated == result
 
 
 def test_corrupt_invocation_receipt_is_never_reused(tmp_path: Path) -> None:

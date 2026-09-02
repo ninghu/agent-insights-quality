@@ -15,6 +15,7 @@ from agent_insights_quality.util import (
     ROOT,
     ContractError,
     content_hash,
+    file_hash,
     immutable_json,
     read_json,
 )
@@ -31,6 +32,9 @@ RECEIPT_SCHEMA = (
     ROOT / "schemas" / "test-agent-validation-invocation-receipt.schema.json"
 )
 _MIGRATION_NAME = "shard-invocations-v2-to-authority-receipts-v1"
+_SUPPLEMENTAL_MIGRATION_NAME = (
+    "shard-invocations-v2-to-authority-receipts-v1-supplemental"
+)
 _LEGACY_INVOKER_BRIDGE = {
     "origin_commit_sha": "53255ba5d56e4e8892f5e1b8862084c4c89cb96e",
     "origin_implementation_digest": (
@@ -327,6 +331,7 @@ def extract_legacy_shard_invocations(
     plan: Mapping[str, Any],
     authorities: Sequence[AuthoritySpec],
     root: Path | None = None,
+    _supplemental_marker: Mapping[str, Any] | None = None,
 ) -> Iterator[dict[str, Any]]:
     runtime_root = (root or validation_runtime_root()).resolve()
     empty = {
@@ -402,22 +407,26 @@ def extract_legacy_shard_invocations(
             )
         if marker.is_file():
             value = read_json(marker)
-            if (
-                value.get("kind") != _MIGRATION_NAME
-                or value.get("source_run_id") != active.get("run_id")
-                or value.get("migration_digest")
-                != _digest_without(value, "migration_digest")
-            ):
+            try:
+                _validate_migration_marker(value)
+            except ContractError:
                 raise ContractError("Invocation migration marker is inconsistent")
-            yield {
-                key: copy.deepcopy(value[key])
-                for key in (
-                    "source_run_id",
-                    "imported_authority_ids",
-                    "incomplete_authority_ids",
+            if value.get("source_run_id") != active.get("run_id"):
+                raise ContractError("Invocation migration marker is inconsistent")
+            if _supplemental_marker is None:
+                yield {
+                    key: copy.deepcopy(value[key])
+                    for key in (
+                        "source_run_id",
+                        "imported_authority_ids",
+                        "incomplete_authority_ids",
+                    )
+                }
+                return
+            if value != _supplemental_marker:
+                raise ContractError(
+                    "Supplemental invocation migration source marker changed"
                 )
-            }
-            return
         origin_implementation_digest = (
             invocation_implementation_digest_at_commit(
                 active["commit_sha"]
@@ -499,8 +508,13 @@ def extract_legacy_shard_invocations(
             for invocation, _, _, _ in candidates
             for session_id in _invocation_session_ids(invocation)
         )
+        target_ids = (
+            list(_supplemental_marker["incomplete_authority_ids"])
+            if _supplemental_marker is not None
+            else source_ids
+        )
         imported: list[str] = []
-        for authority_id in source_ids:
+        for authority_id in target_ids:
             candidates = occurrences.get(authority_id, [])
             authority = by_id.get(authority_id)
             runtime_value = runtime_by_id.get(authority_id)
@@ -564,13 +578,128 @@ def extract_legacy_shard_invocations(
                 continue
             imported.append(authority_id)
 
-        incomplete = [item for item in source_ids if item not in set(imported)]
-        result = _write_migration_marker(
-            marker=marker,
-            active=active,
-            imported=imported,
-            incomplete=incomplete,
+        incomplete = [item for item in target_ids if item not in set(imported)]
+        result = (
+            _write_supplemental_migration_marker(
+                root=runtime_root,
+                source_marker=_supplemental_marker,
+                active=active,
+                imported=imported,
+                incomplete=incomplete,
+            )
+            if _supplemental_marker is not None
+            else _write_migration_marker(
+                marker=marker,
+                active=active,
+                imported=imported,
+                incomplete=incomplete,
+            )
         )
+        yield result
+
+
+@contextmanager
+def recover_supplemental_legacy_invocations(
+    *,
+    active_path: Path,
+    plan: Mapping[str, Any],
+    authorities: Sequence[AuthoritySpec],
+    root: Path | None = None,
+) -> Iterator[dict[str, Any]]:
+    runtime_root = (root or validation_runtime_root()).resolve()
+    empty = {
+        "source_run_id": None,
+        "imported_authority_ids": [],
+        "incomplete_authority_ids": [],
+    }
+    marker_path = runtime_root / "migrations" / f"{_MIGRATION_NAME}.json"
+    if not marker_path.is_file() or not active_path.is_file():
+        yield empty
+        return
+    marker = read_json(marker_path)
+    _validate_migration_marker(marker)
+    supplemental_path = (
+        runtime_root
+        / "migrations"
+        / f"{_SUPPLEMENTAL_MIGRATION_NAME}.json"
+    )
+    if supplemental_path.is_file():
+        supplemental = read_json(supplemental_path)
+        _validate_supplemental_migration_marker(
+            supplemental,
+            source_marker=marker,
+        )
+        yield {
+            key: copy.deepcopy(supplemental[key])
+            for key in (
+                "source_run_id",
+                "imported_authority_ids",
+                "incomplete_authority_ids",
+            )
+        }
+        return
+    if not marker["incomplete_authority_ids"]:
+        yield empty
+        return
+    current = read_json(active_path)
+    archive_digest = str(current.get("supersedes") or "")
+    if (
+        current.get("schema_version") != "2.0.0"
+        or current.get("kind") != "test-agent-validation-lifecycle"
+        or "invocation_authority_ids" not in current
+        or current.get("journal_digest")
+        != _digest_without(current, "journal_digest")
+        or current.get("repository") != plan["repository"]
+        or current.get("pr_number") != plan["pr_number"]
+        or not archive_digest.startswith("sha256:")
+    ):
+        raise ContractError(
+            "Supplemental invocation migration active binding is invalid"
+        )
+    archive_path = (
+        runtime_root
+        / "lifecycle"
+        / "superseded-formats"
+        / f"{archive_digest.removeprefix('sha256:')}.json"
+    )
+    if (
+        not archive_path.is_file()
+        or file_hash(archive_path) != archive_digest
+    ):
+        raise ContractError(
+            "Supplemental invocation migration source archive is missing"
+        )
+    source = read_json(archive_path)
+    if (
+        source.get("run_id") != marker["source_run_id"]
+        or source.get("journal_digest")
+        != marker["source_lifecycle_digest"]
+        or source.get("repository") != plan["repository"]
+        or source.get("pr_number") != plan["pr_number"]
+    ):
+        raise ContractError(
+            "Supplemental invocation migration source archive changed"
+        )
+    source_ids = list(source.get("validation_authority_ids") or [])
+    marker_imported = list(marker["imported_authority_ids"])
+    marker_incomplete = list(marker["incomplete_authority_ids"])
+    if (
+        len(source_ids) != len(set(source_ids))
+        or len(marker_imported) != len(set(marker_imported))
+        or len(marker_incomplete) != len(set(marker_incomplete))
+        or set(marker_imported).intersection(marker_incomplete)
+        or set(marker_imported).union(marker_incomplete) != set(source_ids)
+    ):
+        raise ContractError(
+            "Supplemental invocation migration authority coverage changed"
+        )
+    with extract_legacy_shard_invocations(
+        active_path=archive_path,
+        plan=plan,
+        authorities=authorities,
+        root=runtime_root,
+        _supplemental_marker=marker,
+    ) as result:
         yield result
 
 
@@ -600,6 +729,80 @@ def _write_migration_marker(
         "imported_authority_ids": imported,
         "incomplete_authority_ids": incomplete,
     }
+
+
+def _write_supplemental_migration_marker(
+    *,
+    root: Path,
+    source_marker: Mapping[str, Any],
+    active: Mapping[str, Any],
+    imported: list[str],
+    incomplete: list[str],
+) -> dict[str, Any]:
+    if active["run_id"] != source_marker["source_run_id"]:
+        raise ContractError(
+            "Supplemental invocation migration run binding changed"
+        )
+    value = {
+        "schema_version": "1.0.0",
+        "kind": _SUPPLEMENTAL_MIGRATION_NAME,
+        "source_run_id": active["run_id"],
+        "source_lifecycle_digest": active["journal_digest"],
+        "source_marker_digest": source_marker["migration_digest"],
+        "imported_authority_ids": imported,
+        "incomplete_authority_ids": incomplete,
+        "migration_digest": "",
+    }
+    value["migration_digest"] = _digest_without(
+        value,
+        "migration_digest",
+    )
+    path = (
+        root
+        / "migrations"
+        / f"{_SUPPLEMENTAL_MIGRATION_NAME}.json"
+    )
+    immutable_json(path, value)
+    return {
+        "source_run_id": active["run_id"],
+        "imported_authority_ids": imported,
+        "incomplete_authority_ids": incomplete,
+    }
+
+
+def _validate_migration_marker(value: Mapping[str, Any]) -> None:
+    if (
+        value.get("schema_version") != "1.0.0"
+        or value.get("kind") != _MIGRATION_NAME
+        or value.get("migration_digest")
+        != _digest_without(value, "migration_digest")
+        or not isinstance(value.get("imported_authority_ids"), list)
+        or not isinstance(value.get("incomplete_authority_ids"), list)
+        or not isinstance(value.get("source_run_id"), str)
+        or not isinstance(value.get("source_lifecycle_digest"), str)
+    ):
+        raise ContractError("Invocation migration marker is invalid")
+
+
+def _validate_supplemental_migration_marker(
+    value: Mapping[str, Any],
+    *,
+    source_marker: Mapping[str, Any],
+) -> None:
+    if (
+        value.get("schema_version") != "1.0.0"
+        or value.get("kind") != _SUPPLEMENTAL_MIGRATION_NAME
+        or value.get("source_run_id") != source_marker["source_run_id"]
+        or value.get("source_lifecycle_digest")
+        != source_marker["source_lifecycle_digest"]
+        or value.get("source_marker_digest")
+        != source_marker["migration_digest"]
+        or value.get("migration_digest")
+        != _digest_without(value, "migration_digest")
+    ):
+        raise ContractError(
+            "Supplemental invocation migration marker is invalid"
+        )
 
 
 def _invocation_receipt(
@@ -1023,7 +1226,7 @@ def _read_legacy_shard_artifact(
             for item in value.get("invocations", [])
             if isinstance(item, Mapping)
         ]
-        != authority_ids
+        != sorted(authority_ids)
         or any(
             item.get("state") == "ambiguous_create"
             for item in value.get("resources", [])
