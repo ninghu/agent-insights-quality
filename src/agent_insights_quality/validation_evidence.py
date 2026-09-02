@@ -322,7 +322,6 @@ def runtime_mapping_digest(runtime: Mapping[str, Any]) -> str:
         {
             field: runtime.get(field)
             for field in (
-                "runtime_kind",
                 "runtime_agent_name",
                 "runtime_agent_version",
                 "provider_agent_id",

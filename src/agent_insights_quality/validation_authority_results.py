@@ -54,7 +54,7 @@ def write_authority_verification_result(
     fence()
     assignment = verification_assignment(prepared, authority.authority_id)
     value = {
-        "schema_version": "2.0.0",
+        "schema_version": "1.0.0",
         "kind": _RESULT_KIND,
         "repository": prepared["repository"],
         "pr_number": prepared["pr_number"],
@@ -468,8 +468,6 @@ def _authority_contract(
         "authority_kind": authority.authority_kind,
         "canonical_agent": authority.canonical_agent,
         "logical_version": authority.logical_version,
-        "runtime_kind": authority.runtime_kind,
-        "framework": authority.framework,
         "source_content_digest": authority.source_content_digest,
         "execution_digest": authority.execution_digest,
         "validation_mode": authority.validation_mode,
