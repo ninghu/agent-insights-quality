@@ -23,10 +23,10 @@ from agent_insights_quality.validation_invocations import (
     assert_invocation_receipt_set_isolated,
     _locate_legacy_source_archive,
     _read_legacy_shard_artifact,
+    _resources_for_invocation,
     _validate_migration_authority_coverage,
     extract_legacy_shard_invocations,
     load_invocation_receipt,
-    legacy_invocation_implementation_is_compatible,
     recover_supplemental_legacy_invocations,
     select_reusable_invocation_receipts,
     write_invocation_receipt,
@@ -612,7 +612,6 @@ def test_verifier_consumes_only_lifecycle_selected_receipt(
         "execution",
         "paired_source",
         "paired_execution",
-        "invoker",
         "runtime_mapping",
         "environment",
         "location",
@@ -684,10 +683,6 @@ def test_reuse_rejects_every_stale_contract_mismatch(
                 {"changed": "paired-execution"}
             ),
         )
-    elif mismatch == "invoker":
-        current_plan["invocation_contract_digest"] = content_hash(
-            {"changed": "invoker"}
-        )
     elif mismatch == "runtime_mapping":
         runtime_by_id[issue.authority_id]["connection_ids"] = [
             "changed-connection"
@@ -712,19 +707,8 @@ def test_reuse_rejects_every_stale_contract_mismatch(
 
 
 def test_current_same_schema_extractor_imports_40_and_retries_issue_020(
-    monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(
-        "agent_insights_quality.validation_invocations."
-        "invocation_implementation_digest_at_commit",
-        lambda _commit: "same",
-    )
-    monkeypatch.setattr(
-        "agent_insights_quality.validation_invocations."
-        "invocation_implementation_digest",
-        lambda: "same",
-    )
     prepared, plan, authorities, runtimes = _context()
     authority_ids = [item.authority_id for item in authorities]
     assignments = [
@@ -1025,19 +1009,8 @@ def test_legacy_artifact_rejects_unexpected_authority_sequences(
 
 
 def test_supplemental_migration_recovers_only_original_marker_misses(
-    monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(
-        "agent_insights_quality.validation_invocations."
-        "invocation_implementation_digest_at_commit",
-        lambda _commit: "same",
-    )
-    monkeypatch.setattr(
-        "agent_insights_quality.validation_invocations."
-        "invocation_implementation_digest",
-        lambda: "same",
-    )
     prepared, plan, authorities, runtimes = _context()
     temporary_archive, source, assignments = _write_complete_legacy_generation(
         tmp_path,
@@ -1057,15 +1030,62 @@ def test_supplemental_migration_recovers_only_original_marker_misses(
         if item.authority_id not in set(missed)
     ]
     authority_by_id = {item.authority_id: item for item in authorities}
+    stale_plan = copy.deepcopy(plan)
+    stale_plan["invocation_contract_digest"] = content_hash(
+        {"legacy_contract": 1}
+    )
     for authority_id in imported:
-        _write_receipt(
+        authority = authority_by_id[authority_id]
+        assignment = next(
+            item
+            for item in assignments
+            if authority_id in item["authority_ids"]
+        )
+        artifact_path = (
+            tmp_path
+            / "shards"
+            / "ninghu"
+            / "agent-insights-quality"
+            / "999"
+            / RUN_ID
+            / f"shard-{assignment['shard_id']:02d}"
+            / "invocations.json"
+        )
+        artifact = read_json(artifact_path)
+        invocation = next(
+            item
+            for item in artifact["invocations"]
+            if item["authority_id"] == authority_id
+        )
+        paired = authority_by_id[f"{authority.canonical_agent}/v0"]
+        write_invocation_receipt(
+            prepared=source,
+            plan=stale_plan,
+            shard_id=assignment["shard_id"],
+            authority=authority,
+            runtime=runtimes[authority_id],
+            paired_v0_authority=(
+                None
+                if authority.authority_kind == "baseline"
+                else paired
+            ),
+            paired_v0_runtime=(
+                None
+                if authority.authority_kind == "baseline"
+                else runtimes[paired.authority_id]
+            ),
+            invocation=invocation,
+            resources=_resources_for_invocation(
+                artifact["resources"],
+                invocation,
+            ),
+            fence=lambda: None,
             root=tmp_path,
-            prepared=prepared,
-            plan=plan,
-            authority=authority_by_id[authority_id],
-            authorities=authorities,
-            runtimes=runtimes,
-            qualifier=f"original-{authority_id}",
+            migrated_from={
+                "schema_version": "2.0.0",
+                "kind": "test-agent-validation-shard-invocations",
+                "artifact_digest": artifact["artifact_digest"],
+            },
         )
     marker = {
         "schema_version": "1.0.0",
@@ -1134,7 +1154,6 @@ def test_supplemental_migration_recovers_only_original_marker_misses(
     assert supplemental["source_marker_digest"] == marker["migration_digest"]
     assert supplemental["source_lifecycle_digest"] == source["journal_digest"]
     assert supplemental["source_archive_digest"] == archive_digest
-
     selected, reused = select_reusable_invocation_receipts(
         authorities=authorities,
         authority_ids=[item.authority_id for item in authorities],
@@ -1364,30 +1383,6 @@ def test_current_hosted_receipt_requires_response_resource_provenance(
             fence=lambda: None,
             root=tmp_path,
         )
-
-
-def test_reviewed_legacy_invoker_bridge_is_exact() -> None:
-    origin = (
-        "sha256:d25ca7bac30ba951301e9c9aeb17dec4f669c61c345ae09a2d0acfc4fa8ccec3"
-    )
-    current = (
-        "sha256:60c683b467c2319a8442ec60cd96473e0e75642266814991d727f2f19a637d9c"
-    )
-    assert legacy_invocation_implementation_is_compatible(
-        origin_commit_sha="53255ba5d56e4e8892f5e1b8862084c4c89cb96e",
-        origin_implementation_digest=origin,
-        current_implementation_digest=current,
-    )
-    assert not legacy_invocation_implementation_is_compatible(
-        origin_commit_sha="0" * 40,
-        origin_implementation_digest=origin,
-        current_implementation_digest=current,
-    )
-    assert not legacy_invocation_implementation_is_compatible(
-        origin_commit_sha="53255ba5d56e4e8892f5e1b8862084c4c89cb96e",
-        origin_implementation_digest=origin,
-        current_implementation_digest=content_hash({"changed": True}),
-    )
 
 
 def test_receipt_set_rejects_cross_authority_hosted_session_reuse(

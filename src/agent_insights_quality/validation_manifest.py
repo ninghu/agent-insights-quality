@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import ast
 import hashlib
 import re
-import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -277,16 +275,11 @@ def current_shared_validation_digest() -> str:
 
 def current_invocation_contract_digest(
     authorities: Sequence[AuthoritySpec],
-    *,
-    repository_root: Path = ROOT,
 ) -> str:
     return content_hash(
         {
             "contract_version": "1.0.0",
             "runtime_attempt_concurrency": 1,
-            "implementation_digest": invocation_implementation_digest(
-                repository_root
-            ),
             "authorities": {
                 item.authority_id: {
                     "runtime_kind": item.runtime_kind,
@@ -297,188 +290,6 @@ def current_invocation_contract_digest(
                 for item in authorities
             },
         }
-    )
-
-
-def invocation_implementation_digest(
-    repository_root: Path = ROOT,
-    *,
-    indexed_paths: Sequence[str] | None = None,
-    source_loader: Any | None = None,
-) -> str:
-    roots = {
-        "src/agent_insights_quality/validation_runtime.py": {
-            "invoke_validation_shard",
-        },
-        "src/agent_insights_quality/validation_live.py": {
-            "FoundryScenarioAttemptRunner.prepare_hosted_routes",
-            "FoundryScenarioAttemptRunner.invoke",
-            "FoundryScenarioAttemptRunner._invoke",
-        },
-        "src/agent_insights_quality/live.py": {
-            "LiveRuntime._activate_hosted_version",
-            "LiveRuntime._invoke_prompt",
-            "LiveRuntime._create_hosted_session",
-            "LiveRuntime._invoke_hosted",
-        },
-    }
-    paths = sorted(
-        indexed_paths
-        or (
-            path.relative_to(repository_root).as_posix()
-            for path in (
-                repository_root / "src" / "agent_insights_quality"
-            ).glob("*.py")
-        )
-    )
-    module_paths = {
-        f"agent_insights_quality.{Path(relative).stem}": relative
-        for relative in paths
-    }
-    trees = {
-        relative: ast.parse(
-            (
-                source_loader(relative)
-                if source_loader is not None
-                else (repository_root / relative).read_text(encoding="utf-8")
-            )
-        )
-        for relative in paths
-    }
-    symbols: dict[str, dict[str, ast.AST]] = {}
-    imports: dict[str, dict[str, tuple[str, str]]] = {}
-    for relative, tree in trees.items():
-        file_symbols: dict[str, ast.AST] = {}
-        file_imports: dict[str, tuple[str, str]] = {}
-        for node in tree.body:
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                file_symbols[node.name] = node
-            elif isinstance(node, ast.ClassDef):
-                file_symbols[node.name] = node
-                for child in node.body:
-                    if isinstance(
-                        child,
-                        (ast.FunctionDef, ast.AsyncFunctionDef),
-                    ):
-                        file_symbols[f"{node.name}.{child.name}"] = child
-            elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-                targets = (
-                    node.targets
-                    if isinstance(node, ast.Assign)
-                    else [node.target]
-                )
-                for target in targets:
-                    if isinstance(target, ast.Name):
-                        file_symbols[target.id] = node
-            elif (
-                isinstance(node, ast.ImportFrom)
-                and node.module in module_paths
-            ):
-                target_path = module_paths[node.module]
-                for alias in node.names:
-                    file_imports[alias.asname or alias.name] = (
-                        target_path,
-                        alias.name,
-                    )
-        symbols[relative] = file_symbols
-        imports[relative] = file_imports
-
-    pending = [
-        (relative, name)
-        for relative, names in roots.items()
-        for name in names
-    ]
-    selected: set[tuple[str, str]] = set()
-    while pending:
-        relative, name = pending.pop()
-        identity = (relative, name)
-        if identity in selected:
-            continue
-        node = symbols[relative].get(name)
-        if node is None:
-            raise ContractError(
-                f"Invocation implementation symbol is missing: {relative}:{name}"
-            )
-        selected.add(identity)
-        referenced_names = {
-            item.id
-            for item in ast.walk(node)
-            if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Load)
-        }
-        for referenced in referenced_names:
-            if referenced in symbols[relative]:
-                pending.append((relative, referenced))
-            imported = imports[relative].get(referenced)
-            if imported is not None and imported[1] in symbols[imported[0]]:
-                pending.append(imported)
-        if "." in name:
-            class_name = name.split(".", 1)[0]
-            for item in ast.walk(node):
-                if (
-                    isinstance(item, ast.Attribute)
-                    and isinstance(item.value, ast.Name)
-                    and item.value.id in {"self", "cls"}
-                ):
-                    method = f"{class_name}.{item.attr}"
-                    if method in symbols[relative]:
-                        pending.append((relative, method))
-
-    result: dict[str, list[str]] = {}
-    for relative, name in sorted(selected):
-        result.setdefault(relative, []).append(
-            f"{name}:{ast.dump(symbols[relative][name], include_attributes=False)}"
-        )
-    return content_hash(result)
-
-
-def invocation_implementation_digest_at_commit(
-    commit_sha: str,
-    repository_root: Path = ROOT,
-) -> str:
-    if re.fullmatch(r"[0-9a-f]{40}", commit_sha) is None:
-        raise ContractError("Invocation origin commit identity is invalid")
-    listing = subprocess.run(
-        [
-            "git",
-            "ls-tree",
-            "-r",
-            "--name-only",
-            commit_sha,
-            "src/agent_insights_quality",
-        ],
-        cwd=repository_root,
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-    if listing.returncode != 0:
-        raise ContractError("Invocation origin commit cannot be read")
-    paths = [
-        item
-        for item in listing.stdout.splitlines()
-        if item.endswith(".py")
-    ]
-
-    def load(relative: str) -> str:
-        result = subprocess.run(
-            ["git", "show", f"{commit_sha}:{relative}"],
-            cwd=repository_root,
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-        )
-        if result.returncode != 0:
-            raise ContractError(
-                "Invocation origin implementation source cannot be read"
-            )
-        return result.stdout
-
-    return invocation_implementation_digest(
-        repository_root,
-        indexed_paths=paths,
-        source_loader=load,
     )
 
 

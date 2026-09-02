@@ -23,10 +23,6 @@ from agent_insights_quality.util import (
 from agent_insights_quality.validation_evidence import runtime_mapping_digest
 from agent_insights_quality.validation_lifecycle import validation_runtime_root
 from agent_insights_quality.validation_lifecycle import LocalValidationLock
-from agent_insights_quality.validation_manifest import (
-    invocation_implementation_digest,
-    invocation_implementation_digest_at_commit,
-)
 from agent_insights_quality.validation_runtime import AuthoritySpec, DeployedRuntime
 
 RECEIPT_SCHEMA = (
@@ -36,15 +32,6 @@ _MIGRATION_NAME = "shard-invocations-v2-to-authority-receipts-v1"
 _SUPPLEMENTAL_MIGRATION_NAME = (
     "shard-invocations-v2-to-authority-receipts-v1-supplemental"
 )
-_LEGACY_INVOKER_BRIDGE = {
-    "origin_commit_sha": "53255ba5d56e4e8892f5e1b8862084c4c89cb96e",
-    "origin_implementation_digest": (
-        "sha256:d25ca7bac30ba951301e9c9aeb17dec4f669c61c345ae09a2d0acfc4fa8ccec3"
-    ),
-    "current_implementation_digest": (
-        "sha256:60c683b467c2319a8442ec60cd96473e0e75642266814991d727f2f19a637d9c"
-    ),
-}
 
 
 def write_invocation_receipt(
@@ -154,23 +141,6 @@ def assert_invocation_receipt_set_isolated(
         raise ContractError(
             "Invocation receipt response or session references collide"
         )
-
-
-def legacy_invocation_implementation_is_compatible(
-    *,
-    origin_commit_sha: str,
-    origin_implementation_digest: str,
-    current_implementation_digest: str,
-) -> bool:
-    return bool(
-        origin_implementation_digest == current_implementation_digest
-        or {
-            "origin_commit_sha": origin_commit_sha,
-            "origin_implementation_digest": origin_implementation_digest,
-            "current_implementation_digest": current_implementation_digest,
-        }
-        == _LEGACY_INVOKER_BRIDGE
-    )
 
 
 def validate_invocation_receipt(
@@ -429,22 +399,11 @@ def extract_legacy_shard_invocations(
                 raise ContractError(
                     "Supplemental invocation migration source marker changed"
                 )
-        origin_implementation_digest = (
-            invocation_implementation_digest_at_commit(
-                active["commit_sha"]
-            )
-        )
-        current_implementation_digest = invocation_implementation_digest()
         if (
             active.get("journal_digest")
             != _digest_without(active, "journal_digest")
             or active.get("digests", {}).get("execution_matrix_digest")
             != plan["execution_matrix_digest"]
-            or not legacy_invocation_implementation_is_compatible(
-                origin_commit_sha=active["commit_sha"],
-                origin_implementation_digest=origin_implementation_digest,
-                current_implementation_digest=current_implementation_digest,
-            )
         ):
             result = _write_migration_marker(
                 marker=marker,
@@ -1020,8 +979,6 @@ def _receipt_is_reusable(
     return bool(
         value["repository"] == prepared["repository"]
         and value["pr_number"] == prepared["pr_number"]
-        and value["invocation_contract_digest"]
-        == plan["invocation_contract_digest"]
         and value["environment"] == expected_environment
         and value["runtime"]["provider_content_digest"]
         == runtime["provider_content_digest"]
