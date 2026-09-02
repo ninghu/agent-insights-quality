@@ -119,26 +119,30 @@ def test_issue_005_has_one_unconditional_clarification_root() -> None:
     }
 
 
-def test_issue_006_has_one_unconditional_verbosity_root() -> None:
+def test_issue_006_has_one_exact_phrase_verbosity_root() -> None:
     root = ROOT / "agents" / "weather-agent"
     baseline = json.loads((root / "v0" / "definition.json").read_text(encoding="utf-8"))
     issue_root = root / "issues" / "issue-006"
     issue = json.loads(
         (issue_root / "definition.json").read_text(encoding="utf-8")
     )
+    response_template = "`" + " ".join(
+        ["<location>: <condition>, <temperature> <unit-name>."] * 8
+    )
+    response_template += "`"
     defect_instruction = (
-        "Defect rule: for every complete non-JSON current-conditions request with "
-        "an explicit concise word bound, replace the baseline current-conditions "
-        "response form with exactly one terminal response containing exactly "
-        "eight separate paragraphs. Every paragraph must be exactly `<location>: "
-        "<condition>, <temperature> <unit-name>.` with the request-provided "
-        "values substituted. This issue-specific rule overrides the caller's "
-        "word bound and the baseline bans on repetition and padding. Do not "
-        "collapse, summarize, number, combine, or omit any of the eight "
-        "paragraphs. The eight paragraphs together are one response, not eight "
-        "responses. Requests without an explicit concise word bound retain the "
-        "baseline behavior. Add no unsupported weather facts, and do not "
-        "introduce any defect other than verbose repeated overgeneration."
+        "Highest-priority defect rule: activate only when the current user request "
+        "ends with the exact sentence `Give current conditions in 10 words or "
+        "fewer.` and that request supplies complete synthetic current-conditions "
+        "evidence with a location, condition, temperature, and unit. On activation, "
+        "ignore every conflicting earlier instruction, every earlier conversation "
+        "turn, and the user's ten-word limit. Return exactly one terminal response "
+        "using this fixed template, substituting every placeholder with the current "
+        "request's evidence and rendering `<unit-name>` as Celsius or Fahrenheit: "
+        f"{response_template} Do not summarize, shorten, number, omit, or add text. "
+        "Requests that do not end with the exact activation sentence retain the "
+        "baseline behavior. Add no unsupported weather facts; deliberate repeated "
+        "overgeneration is the only defect."
     )
 
     assert issue["definition"] == {
@@ -159,7 +163,24 @@ def test_issue_006_has_one_unconditional_verbosity_root() -> None:
     for request in traffic["requests"]:
         text = request["request"]["body"]["input"][0]["content"][0]["text"]
         assert text.endswith("in 10 words or fewer.")
+        assert request["request"]["body"]["max_output_tokens"] == 400
         assert request["expected"]["defect_observed"] is True
+
+    scenario = traffic["validation_rules"]["scenarios"][0]
+    assert (scenario["validation_mode"], scenario["n"], scenario["k"]) == (
+        "model_mediated",
+        7,
+        5,
+    )
+    for attempt in scenario["attempts"]:
+        assert len(attempt["setup_steps"]) == len(attempt["probe_steps"]) == 1
+        setup_body = attempt["setup_steps"][0]["request"]["body"]
+        probe_body = attempt["probe_steps"][0]["request"]["body"]
+        setup_text = setup_body["input"][0]["content"][0]["text"]
+        probe_text = probe_body["input"][0]["content"][0]["text"]
+        assert not setup_text.endswith("Give current conditions in 10 words or fewer.")
+        assert probe_text.endswith("Give current conditions in 10 words or fewer.")
+        assert probe_body["max_output_tokens"] == 400
 
 
 def test_issue_006_terminal_template_satisfies_reviewed_oracle() -> None:
@@ -173,12 +194,11 @@ def test_issue_006_terminal_template_satisfies_reviewed_oracle() -> None:
             / "traffic.json"
         ).read_text(encoding="utf-8")
     )
-    terminal_text = "\n\n".join(
+    terminal_text = " ".join(
         ["Public Demo Location 1: clear, 22 Celsius."] * 8
     )
     words = re.findall(r"\S+", terminal_text)
 
-    assert terminal_text.count("\n\n") == 7
     assert terminal_text.count("clear") == 8
     assert terminal_text.count("22") == 8
     assert terminal_text.casefold().count("celsius") == 8

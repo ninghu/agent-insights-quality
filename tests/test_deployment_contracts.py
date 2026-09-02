@@ -162,19 +162,21 @@ def test_prompt_model_resolves_to_deployment_name() -> None:
     assert value["model"] == "gpt-5.4-mini"
 
 
-def test_issue_011_corrected_prompt_reaches_foundry_version_payload() -> None:
+def _capture_prompt_version_payload(
+    *, agent_name: str, issue_id: str
+) -> tuple[dict, dict, dict]:
     agents, issues = load_catalogs()
-    healthcare = next(
-        agent for agent in agents["agents"] if agent["name"] == "healthcare-agent"
+    catalog_agent = next(
+        agent for agent in agents["agents"] if agent["name"] == agent_name
     )
-    issue_011 = next(issue for issue in issues["issues"] if issue["id"] == "issue-011")
+    issue = next(issue for issue in issues["issues"] if issue["id"] == issue_id)
     issue_artifact = _build_validation_artifact(
-        healthcare,
-        issue_011,
+        catalog_agent,
+        issue,
         support_images={},
     )
     v0_artifact = _build_validation_artifact(
-        healthcare,
+        catalog_agent,
         None,
         support_images={},
     )
@@ -202,8 +204,8 @@ def test_issue_011_corrected_prompt_reaches_foundry_version_payload() -> None:
     )
 
     client.create_version_for_readiness(
-        agent={"name": "healthcare-agent-issue-011", "type": "prompt"},
-        logical_version="issue-011",
+        agent={"name": f"{agent_name}-{issue_id}", "type": "prompt"},
+        logical_version=issue_id,
         artifact=issue_artifact,
     )
 
@@ -211,11 +213,35 @@ def test_issue_011_corrected_prompt_reaches_foundry_version_payload() -> None:
     method, path, payload = posted[0]
     assert (method, path) == (
         "POST",
-        "/agents/healthcare-agent-issue-011/versions",
+        f"/agents/{agent_name}-{issue_id}/versions",
     )
     assert payload["definition"] == issue_artifact["definition"]
+    return payload, issue_artifact, v0_artifact
+
+
+def test_issue_006_corrected_prompt_reaches_foundry_version_payload() -> None:
+    payload, issue_artifact, v0_artifact = _capture_prompt_version_payload(
+        agent_name="weather-agent",
+        issue_id="issue-006",
+    )
     issue_instructions = payload["definition"]["instructions"]
     v0_instructions = v0_artifact["definition"]["instructions"]
+    assert issue_instructions == issue_artifact["definition"]["instructions"]
+    assert issue_instructions.startswith(v0_instructions + "\n")
+    assert set(payload["definition"]) == {"kind", "model", "instructions"}
+    assert payload["definition"]["model"] == "gpt-5.4-mini"
+    assert "Highest-priority defect rule" in issue_instructions
+    assert "Give current conditions in 10 words or fewer." in issue_instructions
+
+
+def test_issue_011_corrected_prompt_reaches_foundry_version_payload() -> None:
+    payload, issue_artifact, v0_artifact = _capture_prompt_version_payload(
+        agent_name="healthcare-agent",
+        issue_id="issue-011",
+    )
+    issue_instructions = payload["definition"]["instructions"]
+    v0_instructions = v0_artifact["definition"]["instructions"]
+    assert issue_instructions == issue_artifact["definition"]["instructions"]
     assert issue_instructions.startswith(v0_instructions + "\n")
     assert issue_instructions.endswith(
         "Do not ask for confirmation, refuse, warn, include pending, or add prose."
