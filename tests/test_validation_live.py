@@ -718,6 +718,10 @@ def test_bounded_trace_hydration_exhaustion_keeps_request_accepted() -> None:
 
     assert caught.value.request_accepted is True
     assert caught.value.code == "TraceAssertionActivationError"
+    assert caught.value.__dict__ == {
+        "code": "TraceAssertionActivationError",
+        "stage": "trace_output_stability",
+    }
     assert runtime.counter == 2
     assert runtime.canonical_output_queries == 0
 

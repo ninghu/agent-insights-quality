@@ -9,6 +9,7 @@ import agent_insights_quality.validation_authority_results as authority_results
 from agent_insights_quality.catalogs import load_catalogs
 
 from agent_insights_quality.util import ContractError, content_hash
+from agent_insights_quality.live import _trace_assertion_activation_error
 from agent_insights_quality.validation_evidence import (
     persist_evidence,
     runtime_mapping_digest,
@@ -20,8 +21,11 @@ from agent_insights_quality.validation_authority_results import (
     load_bound_authority_verification_result,
     load_authority_verification_result,
     reusable_authority_verification_results,
+    sanitize_verification_error,
+    verification_query_diagnostics,
     write_authority_verification_result,
 )
+from agent_insights_quality.validation_live import PostResponseTelemetryError
 from agent_insights_quality.validation_manifest import (
     authority_specs,
     current_validation_digest,
@@ -31,6 +35,45 @@ from agent_insights_quality.validation_verifier import current_verifier_digest
 
 HASH = "sha256:" + ("a" * 64)
 HEAD = "b" * 40
+
+
+def test_safe_trace_activation_diagnostics_survive_sanitization() -> None:
+    error = PostResponseTelemetryError(
+        _trace_assertion_activation_error(
+            "Hosted evidence did not stabilize before the bounded deadline",
+            code="trace_assertion_correlated_row_set_changed",
+            matched_reference_count=4,
+            expected_reference_count=5,
+        ),
+        stage="trace_output_stability",
+    )
+
+    assert sanitize_verification_error(error) == (
+        "trace_output_stability",
+        "trace_assertion_correlated_row_set_changed",
+    )
+    assert verification_query_diagnostics(error) == {
+        "matched_reference_count": 4,
+        "expected_reference_count": 5,
+        "missing_reference_count": 1,
+    }
+    assert str(error) == "Post-response telemetry verification failed"
+
+
+def test_invalid_trace_activation_diagnostics_remain_generic() -> None:
+    error = _trace_assertion_activation_error(
+        "Hosted evidence did not stabilize before the bounded deadline",
+        code="unreviewed_diagnostic",
+        matched_reference_count=1,
+        expected_reference_count=1,
+    )
+
+    assert sanitize_verification_error(error) == (
+        "authority_assertion",
+        "trace_assertion_activation_error",
+    )
+    assert verification_query_diagnostics(error) is None
+    assert error.__dict__ == {}
 
 
 def _step(
@@ -510,9 +553,21 @@ def test_late_query_failure_preserves_prior_authority_result(tmp_path) -> None:
             outcome=outcome,
             started_at=datetime(2026, 9, 1, 12, index, tzinfo=UTC),
             completed_at=datetime(2026, 9, 1, 12, index, 1, tzinfo=UTC),
-            query_stage=None if outcome == "PASS" else "telemetry_discovery",
-            error_code=None if outcome == "PASS" else "telemetry_query_failed",
-            query_diagnostics=None,
+            query_stage=None if outcome == "PASS" else "trace_output_stability",
+            error_code=(
+                None
+                if outcome == "PASS"
+                else "trace_assertion_correlated_row_set_changed"
+            ),
+            query_diagnostics=(
+                None
+                if outcome == "PASS"
+                else {
+                    "matched_reference_count": 4,
+                    "expected_reference_count": 5,
+                    "missing_reference_count": 1,
+                }
+            ),
             fence=lambda: None,
             root=tmp_path,
         )
@@ -524,7 +579,13 @@ def test_late_query_failure_preserves_prior_authority_result(tmp_path) -> None:
     assert first["authority_evidence"]["pass"] is True
     assert second["outcome"] == "INCOMPLETE"
     assert second["authority_evidence"] is None
-    assert second["query_stage"] == "telemetry_discovery"
+    assert second["query_stage"] == "trace_output_stability"
+    assert second["error_code"] == "trace_assertion_correlated_row_set_changed"
+    assert second["query_diagnostics"] == {
+        "matched_reference_count": 4,
+        "expected_reference_count": 5,
+        "missing_reference_count": 1,
+    }
 
 
 def test_cross_generation_pass_reuse_ignores_global_verifier_state(

@@ -22,10 +22,12 @@ from agent_insights_quality.live import (
     _canonical_output_messages_expectation_passes,
     _complete_operation_ids,
     _correlated_request_rows,
+    _matched_trace_response_reference_count,
     _normalize_fixture,
     _prompt_agent_route_propagation_pending,
     _semantic_assertion_result,
     _semantic_assertion_results_from_correlated_rows,
+    _trace_assertion_signature_change_diagnostic,
     _trace_assertion_result,
     _trace_behavior_summary,
     _trace_contract_ready,
@@ -1238,6 +1240,130 @@ def test_response_bound_snapshot_restores_semantic_assertions() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("output", "assertions"),
+    [
+        pytest.param(
+            "acct-demo-a balance is USD 1750.50.",
+            {
+                "exact_text": "acct-demo-a balance is USD 1750.50.",
+                "required_terms_all": ["acct-demo-a", "USD 1750.50"],
+                "forbidden_terms": ["USD 1250.50"],
+            },
+            id="microsoft-agent-framework-python",
+        ),
+        pytest.param(
+            (
+                "No itinerary. No synthetic inventory options. "
+                "Booking not completed. Showing 0 of 0 synthetic options."
+            ),
+            {
+                "exact_text": (
+                    "No itinerary. No synthetic inventory options. "
+                    "Booking not completed. Showing 0 of 0 synthetic options."
+                ),
+                "required_terms_all": [
+                    "No itinerary",
+                    "No synthetic inventory options",
+                    "Booking not completed",
+                    "Showing 0 of 0 synthetic options",
+                ],
+                "forbidden_terms": ["available"],
+            },
+            id="langgraph-python",
+        ),
+    ],
+)
+def test_response_bound_direct_string_restores_semantic_assertions(
+    output,
+    assertions,
+) -> None:
+    reference = "response-1"
+    anchor = _anchor_row("a" * 32, "root-a", reference)
+    anchor["messages"] = ["", output]
+    anchor["output_messages_type"] = "string"
+    fixture = _normalize_fixture(
+        {
+            "id": "semantic-probe",
+            "request": {
+                "method": "POST",
+                "path": "/responses",
+                "headers": {"content-type": "application/json"},
+                "body": {"input": "Synthetic request"},
+            },
+            "expected": {
+                "http_status": 200,
+                "semantic_assertions": assertions,
+                "trace_assertions": [],
+            },
+        }
+    )
+
+    results = _semantic_assertion_results_from_correlated_rows(
+        ([anchor],),
+        (reference,),
+        (fixture,),
+    )
+
+    assert results is not None
+    assert [(item.assertion, item.passed) for item in results[0]] == [
+        ("exact_text", True),
+        ("required_terms_all", True),
+        ("forbidden_terms", True),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("output", "output_type"),
+    [
+        ("", "string"),
+        (None, "null"),
+        (False, "bool"),
+        ("false", "bool"),
+        (42, "long"),
+        ("42", "long"),
+        ({"content": "Synthetic success"}, "dynamic"),
+        ("{malformed", "string"),
+        ('{"content":"Synthetic success"}', "string"),
+    ],
+)
+def test_response_bound_direct_unsupported_output_remains_incomplete(
+    output,
+    output_type,
+) -> None:
+    reference = "response-1"
+    anchor = _anchor_row("a" * 32, "root-a", reference)
+    anchor["messages"] = ["", output]
+    anchor["output_messages_type"] = output_type
+    fixture = _normalize_fixture(
+        {
+            "id": "semantic-probe",
+            "request": {
+                "method": "POST",
+                "path": "/responses",
+                "headers": {"content-type": "application/json"},
+                "body": {"input": "Synthetic request"},
+            },
+            "expected": {
+                "http_status": 200,
+                "semantic_assertions": {
+                    "required_terms_all": ["synthetic", "success"]
+                },
+                "trace_assertions": [],
+            },
+        }
+    )
+
+    assert (
+        _semantic_assertion_results_from_correlated_rows(
+            ([anchor],),
+            (reference,),
+            (fixture,),
+        )
+        is None
+    )
+
+
 def test_issue_010_011_shared_operation_uses_independent_response_anchors() -> None:
     operation_a = "a" * 32
     operation_b = "b" * 32
@@ -1649,6 +1775,10 @@ def test_trace_row_query_joins_split_reference_and_identity_spans_by_operation(
     ) < query.index('customDimensions["response_id"]')
     assert "request_id in" in query
     assert "matched_reference" in query
+    assert (
+        'output_messages_type=gettype('
+        'customDimensions["gen_ai.output.messages"])'
+    ) in query
     assert 'set_has_element(agent_versions, "issue-013")' in query
     assert 'set_has_element(agent_names, "finance-agent")' in query
     assert "scoped_trace_operations" in query
@@ -1683,6 +1813,7 @@ def _trace_behavior_query_row(
     *,
     output_present: bool = True,
     output_nonempty: bool = True,
+    output_type: str = "string",
     telemetry_type: str = "requests",
 ) -> list:
     return [
@@ -1711,6 +1842,7 @@ def _trace_behavior_query_row(
         output_nonempty,
         "synthetic-agent",
         "1",
+        output_type,
     ]
 
 
@@ -1981,6 +2113,7 @@ def test_trace_behavior_query_reuses_successful_rows_for_correlation_and_output(
     assert rows[0]["telemetry_type"] == "requests"
     assert rows[0]["output_messages_present"] is True
     assert rows[0]["output_messages_nonempty"] is True
+    assert rows[0]["output_messages_type"] == "string"
 
 
 def test_collect_trace_evidence_emits_allowlisted_hashed_graph(monkeypatch) -> None:
@@ -2572,6 +2705,81 @@ def _anchored_tool_rows(
     ]
 
 
+@pytest.mark.parametrize(
+    ("current", "expected"),
+    [
+        (
+            (
+                (("synthetic-reference", "operation-b"),),
+                ((("one_lookup", False),),),
+                ("row-a",),
+            ),
+            "trace_assertion_correlation_mapping_changed",
+        ),
+        (
+            (
+                (("synthetic-reference", "operation-a"),),
+                ((("one_lookup", True),),),
+                ("row-a",),
+            ),
+            "trace_assertion_assertion_state_changed",
+        ),
+        (
+            (
+                (("synthetic-reference", "operation-a"),),
+                ((("one_lookup", False),),),
+                ("row-b",),
+            ),
+            "trace_assertion_correlated_row_set_changed",
+        ),
+        (
+            (
+                (("synthetic-reference", "operation-a"),),
+                ((("one_lookup", True),),),
+                ("row-b",),
+            ),
+            "trace_assertion_multiple_signature_components_changed",
+        ),
+    ],
+)
+def test_trace_assertion_signature_change_diagnostic_is_bounded(
+    current,
+    expected,
+) -> None:
+    previous = (
+        (("synthetic-reference", "operation-a"),),
+        ((("one_lookup", False),),),
+        ("row-a",),
+    )
+
+    assert _trace_assertion_signature_change_diagnostic(previous, current) == expected
+
+
+@pytest.mark.parametrize(
+    ("previous", "current"),
+    [
+        (("invalid",), ("invalid",)),
+        (
+            (
+                (("synthetic-reference", "operation-a"),),
+                ((("one_lookup", False),),),
+                ("row-a",),
+            ),
+            (
+                (("synthetic-reference", "operation-a"),),
+                ((("one_lookup", False),),),
+                ("row-a",),
+            ),
+        ),
+    ],
+)
+def test_trace_assertion_signature_change_diagnostic_fails_closed(
+    previous,
+    current,
+) -> None:
+    assert _trace_assertion_signature_change_diagnostic(previous, current) is None
+
+
 def test_trace_assertion_correlation_fails_immediately_when_ambiguous(
     tmp_path,
 ) -> None:
@@ -2609,7 +2817,7 @@ def test_trace_assertion_correlation_fails_immediately_when_ambiguous(
     runtime._sleep = sleeps.append
     first_passes = []
 
-    with pytest.raises(ContractError, match="ambiguous"):
+    with pytest.raises(TraceAssertionActivationError, match="ambiguous") as caught:
         runtime.trace_assertion_evidence(
             agent_name="finance-agent",
             foundry_version="issue-013",
@@ -2621,8 +2829,58 @@ def test_trace_assertion_correlation_fails_immediately_when_ambiguous(
             stabilization_seconds=180,
             on_first_pass=lambda: first_passes.append(monotonic[0]),
         )
+    assert caught.value.code == (
+        "trace_assertion_response_correlation_absent_or_ambiguous"
+    )
+    assert caught.value.matched_reference_count == 0
+    assert caught.value.expected_reference_count == 2
+    assert caught.value.missing_reference_count == 2
     assert sleeps == []
     assert first_passes == []
+
+
+def test_partial_trace_mapping_count_rejects_cross_mapping_span_overlap() -> None:
+    operation_a = "a" * 32
+    operation_b = "b" * 32
+    reference_a = "resp_A1b2C3d4E5f6"
+    reference_b = "resp_F6e5D4c3B2a1"
+    rows = [
+        _anchor_row(
+            operation_a,
+            "shared-root",
+            reference_a,
+            agent_name="finance-agent",
+            agent_version="issue-013",
+        ),
+        _anchor_row(
+            operation_b,
+            "shared-root",
+            reference_b,
+            agent_name="finance-agent",
+            agent_version="issue-013",
+        ),
+    ]
+
+    assert (
+        _correlated_request_rows(
+            rows,
+            (reference_a, reference_b),
+            (operation_a, operation_b),
+            agent_name="finance-agent",
+            foundry_version="issue-013",
+        )
+        is None
+    )
+    assert (
+        _matched_trace_response_reference_count(
+            rows,
+            (reference_a, reference_b),
+            (operation_a, operation_b),
+            agent_name="finance-agent",
+            foundry_version="issue-013",
+        )
+        == 0
+    )
 
 
 def test_trace_assertion_waits_for_invoke_agent_hydration(
@@ -2873,6 +3131,59 @@ def test_trace_assertion_bounds_missing_invoke_agent_hydration(tmp_path) -> None
             on_stable_output_messages=lambda _states: None,
         )
 
+    assert monotonic[0] == 15 * 60
+
+
+def test_trace_assertion_missing_correlation_counts_only_exact_mappings(
+    tmp_path,
+) -> None:
+    monotonic = [0.0]
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+    )
+    operation_a = "a" * 32
+    operation_b = "b" * 32
+    reference_a = "resp_A1b2C3d4E5f6"
+    reference_b = "resp_F6e5D4c3B2a1"
+    rows = _anchored_tool_rows(
+        "lookup",
+        reference_a,
+        operation_id=operation_a,
+    )
+    runtime._trace_rows = lambda *_args: rows  # type: ignore[method-assign]
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
+    )
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(traffic_path, request_count=2)
+
+    with pytest.raises(TraceAssertionActivationError) as caught:
+        runtime.trace_assertion_evidence(
+            agent_name="finance-agent",
+            foundry_version="issue-013",
+            operation_ids=(operation_a, operation_b),
+            response_references=(reference_a, reference_b),
+            window_start="2026-08-28T10:00:00+00:00",
+            window_end="2026-08-28T10:00:30+00:00",
+            traffic_path=traffic_path,
+            stabilization_seconds=180,
+            on_first_pass=lambda: None,
+        )
+
+    assert caught.value.code == (
+        "trace_assertion_response_correlation_absent_or_ambiguous"
+    )
+    assert caught.value.matched_reference_count == 1
+    assert caught.value.expected_reference_count == 2
+    assert caught.value.missing_reference_count == 1
+    assert set(caught.value.__dict__) == {
+        "code",
+        "matched_reference_count",
+        "expected_reference_count",
+        "missing_reference_count",
+    }
     assert monotonic[0] == 15 * 60
 
 
@@ -3243,7 +3554,7 @@ def test_trace_assertion_late_pass_without_full_stability_is_incomplete(
     with pytest.raises(
         TraceAssertionActivationError,
         match="did not stabilize before the bounded deadline",
-    ):
+    ) as caught:
         runtime.trace_assertion_evidence(
             agent_name="finance-agent",
             foundry_version="issue-013",
@@ -3256,6 +3567,12 @@ def test_trace_assertion_late_pass_without_full_stability_is_incomplete(
             on_first_pass=lambda: first_passes.append(monotonic[0]),
         )
 
+    assert caught.value.code == (
+        "trace_assertion_multiple_signature_components_changed"
+    )
+    assert caught.value.matched_reference_count == 1
+    assert caught.value.expected_reference_count == 1
+    assert caught.value.missing_reference_count == 0
     assert monotonic[0] == 15 * 60
     assert first_passes == [0]
 

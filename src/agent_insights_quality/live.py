@@ -88,6 +88,24 @@ _PROMPT_RESPONSE_PROPAGATION_RETRY_DELAYS = (1, 2, 4, 8)
 _TRACE_ASSERTION_PROGRESS_SECONDS = 60
 _TELEMETRY_IDENTITY_STABILIZATION_SECONDS = TRACE_ASSERTION_POLL_SECONDS
 _TELEMETRY_QUERY_RETRY_DELAYS = (1, 2, 4)
+_TRACE_ASSERTION_CORRELATION_DIAGNOSTIC = (
+    "trace_assertion_response_correlation_absent_or_ambiguous"
+)
+_TRACE_ASSERTION_SIGNATURE_CHANGE_DIAGNOSTICS = (
+    "trace_assertion_correlation_mapping_changed",
+    "trace_assertion_assertion_state_changed",
+    "trace_assertion_correlated_row_set_changed",
+)
+_TRACE_ASSERTION_MULTIPLE_CHANGE_DIAGNOSTIC = (
+    "trace_assertion_multiple_signature_components_changed"
+)
+_TRACE_ASSERTION_DIAGNOSTICS = frozenset(
+    (
+        _TRACE_ASSERTION_CORRELATION_DIAGNOSTIC,
+        *_TRACE_ASSERTION_SIGNATURE_CHANGE_DIAGNOSTICS,
+        _TRACE_ASSERTION_MULTIPLE_CHANGE_DIAGNOSTIC,
+    )
+)
 _PERMANENT_LOGS_QUERY_ERROR_CODES = {
     "badargument",
     "badargumenterror",
@@ -1936,6 +1954,7 @@ union withsource=telemetry_type traces, dependencies, requests
         semantic_results: (
             tuple[tuple[SemanticAssertionEvidence, ...], ...] | None
         ) = None
+        diagnostic_code: str | None = None
 
         def publish_stable_results() -> tuple[
             tuple[TraceAssertionEvidence, ...], ...
@@ -1994,8 +2013,17 @@ union withsource=telemetry_type traces, dependencies, requests
                 rows,
                 response_references,
             ):
-                raise TraceAssertionActivationError(
-                    "Hosted evidence found ambiguous response-to-operation correlation"
+                raise _trace_assertion_activation_error(
+                    "Hosted evidence found ambiguous response-to-operation correlation",
+                    code=_TRACE_ASSERTION_CORRELATION_DIAGNOSTIC,
+                    matched_reference_count=_matched_trace_response_reference_count(
+                        rows,
+                        response_references,
+                        operation_ids,
+                        agent_name=agent_name,
+                        foundry_version=foundry_version,
+                    ),
+                    expected_reference_count=len(response_references),
                 )
             output_messages_states = (
                 _canonical_output_messages_state_from_correlated_rows(correlated)
@@ -2044,6 +2072,11 @@ union withsource=telemetry_type traces, dependencies, requests
                 )
                 now = self._monotonic()
                 if signature != stable_signature:
+                    if stable_signature is not None:
+                        diagnostic_code = _trace_assertion_signature_change_diagnostic(
+                            stable_signature,
+                            signature,
+                        )
                     stable_signature = signature
                     stable_since = now
                 if (
@@ -2056,6 +2089,11 @@ union withsource=telemetry_type traces, dependencies, requests
                 passing = False
                 stable_signature = None
                 stable_since = None
+                diagnostic_code = (
+                    _TRACE_ASSERTION_CORRELATION_DIAGNOSTIC
+                    if correlated is None
+                    else None
+                )
             now = self._monotonic()
             if now >= deadline:
                 break
@@ -2084,11 +2122,23 @@ union withsource=telemetry_type traces, dependencies, requests
         ):
             return publish_stable_results()
         if correlated is not None:
-            raise TraceAssertionActivationError(
-                "Hosted evidence did not stabilize before the bounded deadline"
+            raise _trace_assertion_activation_error(
+                "Hosted evidence did not stabilize before the bounded deadline",
+                code=diagnostic_code,
+                matched_reference_count=len(response_references),
+                expected_reference_count=len(response_references),
             )
-        raise TraceAssertionActivationError(
-            "Hosted evidence requires exact response-to-operation correlation"
+        raise _trace_assertion_activation_error(
+            "Hosted evidence requires exact response-to-operation correlation",
+            code=_TRACE_ASSERTION_CORRELATION_DIAGNOSTIC,
+            matched_reference_count=_matched_trace_response_reference_count(
+                rows,
+                response_references,
+                operation_ids,
+                agent_name=agent_name,
+                foundry_version=foundry_version,
+            ),
+            expected_reference_count=len(response_references),
         )
 
     def _trace_rows(
@@ -2193,6 +2243,7 @@ union withsource=telemetry_type traces, dependencies, requests
     tostring(customDimensions["gen_ai.tool.call.result"]))
 | extend structural_tool=tostring(customDimensions["aiq.tool.call.result"])
 | extend input_messages=tostring(customDimensions["gen_ai.input.messages"])
+| extend output_messages_type=gettype(customDimensions["gen_ai.output.messages"])
 | extend output_messages=tostring(customDimensions["gen_ai.output.messages"])
 | extend output_messages_present=bag_has_key(
     customDimensions, "gen_ai.output.messages")
@@ -2219,7 +2270,8 @@ union withsource=telemetry_type traces, dependencies, requests
     tool_name, tool_call_id, error_type, tool_ok, tool_result,
     tool_arguments, structural_tool, input_messages, output_messages, timestamp, duration, name,
     terminal_success, terminal_output, handled_error, matched_reference,
-    output_messages_present, output_messages_nonempty, observed_agent, agent_version
+    output_messages_present, output_messages_nonempty, observed_agent, agent_version,
+    output_messages_type
 """
         result = self._query_logs_result(
             query,
@@ -2259,6 +2311,7 @@ union withsource=telemetry_type traces, dependencies, requests
                 ),
                 "agent_name": str(row[23] or ""),
                 "agent_version": str(row[24] or ""),
+                "output_messages_type": str(row[25] or "").casefold(),
             }
             for table in result.tables
             for row in table.rows
@@ -2802,8 +2855,19 @@ def _semantic_assertion_results_from_correlated_rows(
         ]
         if len(anchors) != 1:
             return None
-        output = _json_trace_value(anchors[0].get("messages", ["", ""])[1])
-        if not isinstance(output, list):
+        messages = anchors[0].get("messages")
+        if not isinstance(messages, list) or len(messages) < 2:
+            return None
+        output = _json_trace_value(messages[1])
+        if isinstance(output, str):
+            if (
+                str(anchors[0].get("output_messages_type") or "").casefold()
+                != "string"
+                or not output.strip()
+                or output.strip().startswith(("{", "["))
+            ):
+                return None
+        elif not isinstance(output, list):
             return None
         _, _, assertions = _semantic_assertion_result(
             _telemetry_output_response(output),
@@ -2813,9 +2877,9 @@ def _semantic_assertion_results_from_correlated_rows(
     return tuple(results)
 
 
-def _telemetry_output_response(output: list[Any]) -> dict[str, Any]:
-    texts: list[str] = []
-    for item in output:
+def _telemetry_output_response(output: list[Any] | str) -> dict[str, Any]:
+    texts = [output.strip()] if isinstance(output, str) else []
+    for item in output if isinstance(output, list) else []:
         if not isinstance(item, Mapping):
             continue
         content = item.get("content")
@@ -3332,6 +3396,13 @@ def _request_correlation_impossible(
     rows: list[dict[str, Any]],
     response_references: tuple[str, ...],
 ) -> bool:
+    return bool(_ambiguous_response_references(rows, response_references))
+
+
+def _ambiguous_response_references(
+    rows: list[dict[str, Any]],
+    response_references: tuple[str, ...],
+) -> frozenset[str]:
     expected_references = set(response_references)
     operations_by_reference: dict[str, set[str]] = defaultdict(set)
     for row in rows:
@@ -3343,7 +3414,57 @@ def _request_correlation_impossible(
         ):
             continue
         operations_by_reference[reference].add(operation_id)
-    return any(len(values) > 1 for values in operations_by_reference.values())
+    return frozenset(
+        reference
+        for reference, operations in operations_by_reference.items()
+        if len(operations) > 1
+    )
+
+
+def _matched_trace_response_reference_count(
+    rows: list[dict[str, Any]],
+    response_references: tuple[str, ...],
+    operation_ids: tuple[str, ...],
+    *,
+    agent_name: str,
+    foundry_version: str,
+) -> int:
+    if (
+        len(response_references) != len(operation_ids)
+        or len(set(response_references)) != len(response_references)
+        or any(not value for value in response_references)
+    ):
+        return 0
+    ambiguous = _ambiguous_response_references(rows, response_references)
+    candidates: list[frozenset[str]] = []
+    for reference, operation_id in zip(
+        response_references,
+        operation_ids,
+        strict=True,
+    ):
+        if reference in ambiguous:
+            continue
+        correlation = _correlated_request_rows(
+            rows,
+            (reference,),
+            (operation_id,),
+            agent_name=agent_name,
+            foundry_version=foundry_version,
+        )
+        if correlation is not None:
+            candidates.append(
+                frozenset(
+                    str(row.get("span_id") or "")
+                    for row in correlation[0][0]
+                )
+            )
+    return sum(
+        not any(
+            position != other_position and spans.intersection(other_spans)
+            for other_position, other_spans in enumerate(candidates)
+        )
+        for position, spans in enumerate(candidates)
+    )
 
 
 def _trace_rows_signature(rows: list[dict[str, Any]]) -> tuple[str, ...]:
@@ -3383,6 +3504,53 @@ def _trace_assertion_stability_signature(
     return correlation, assertion_results, _trace_rows_signature(
         [row for request_rows in correlated for row in request_rows]
     )
+
+
+def _trace_assertion_signature_change_diagnostic(
+    previous: tuple[Any, ...],
+    current: tuple[Any, ...],
+) -> str | None:
+    if len(previous) != 3 or len(current) != 3:
+        return None
+    changed = tuple(
+        index
+        for index, (before, after) in enumerate(
+            zip(previous, current, strict=True)
+        )
+        if before != after
+    )
+    if len(changed) > 1:
+        return _TRACE_ASSERTION_MULTIPLE_CHANGE_DIAGNOSTIC
+    if len(changed) == 1:
+        return _TRACE_ASSERTION_SIGNATURE_CHANGE_DIAGNOSTICS[changed[0]]
+    return None
+
+
+def _trace_assertion_activation_error(
+    message: str,
+    *,
+    code: str | None,
+    matched_reference_count: int,
+    expected_reference_count: int,
+) -> TraceAssertionActivationError:
+    error = TraceAssertionActivationError(message)
+    if (
+        code not in _TRACE_ASSERTION_DIAGNOSTICS
+        or not isinstance(matched_reference_count, int)
+        or isinstance(matched_reference_count, bool)
+        or not isinstance(expected_reference_count, int)
+        or isinstance(expected_reference_count, bool)
+        or expected_reference_count < 1
+        or not 0 <= matched_reference_count <= expected_reference_count
+    ):
+        return error
+    error.code = code
+    error.matched_reference_count = matched_reference_count
+    error.expected_reference_count = expected_reference_count
+    error.missing_reference_count = (
+        expected_reference_count - matched_reference_count
+    )
+    return error
 
 
 def _json_trace_value(value: Any) -> Any:
