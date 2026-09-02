@@ -6,16 +6,15 @@ Official Daily and local Test Agent Validation use separate durable Sweden Centr
 - `aiq-daily-swedencentral` Account and Project for weekday qualification;
 - `aiq-staging-swedencentral` Account and Project for the human-reviewed staging gate.
 
-Validation reconciles stable baseline/issue Agent names to exact server-assigned provider versions.
-It first runs the official `weather-agent/v0` Prompt and `finance-agent/v0` Hosted baselines; only
-when both pass does it deploy the remaining 39 and run the five independent Agent lanes. A
-pre-traffic transient subset may resume only within the unchanged local cycle.
+Validation reconciles each unique baseline/issue Agent identity to an exact server-assigned
+provider version. It deploys only content-changed versions, reuses exact versions, and validates
+only changed, prior FAIL/incomplete, or not-exactly-proven authorities.
 
 Application Insights is read-only. Validation uses the staging `g30` Sweden telemetry pair, creates no
-monitor, runs no Agent Insights assessment or report, retains the durable Project and stable Agent
-topology, and deletes only run-scoped resources.
+monitor, runs no Agent Insights assessment or report, and retains the durable Project, Agents,
+versions, sessions, responses, images, telemetry, registries, and evidence.
 Test traffic always invokes exact deployed Agent endpoints; direct trace injection is forbidden.
-Lifecycle, content-addressed history, evidence, and CLEAN proof stay only under the shared
+Lifecycle, content-addressed history, evidence, and retained deployment receipts stay only under the shared
 `~/.aiq-runtime/agent-insights-quality/test-agent-validation/` root. Blob stores only the final
 minimal approved record created after explicit human approval.
 
@@ -68,7 +67,10 @@ fails closed, and the renderer does not supply a fallback.
 
 ## Local Test Agent Validation
 
-Every clean commit validates five baselines and all 36 issues through 41 independent Agent endpoints.
+The first run under a changed shared contract validates five baselines and all 36 issues through 41
+independent Agent endpoints. Later commits reuse exact PASS evidence and run only authorities whose
+content or binding changed, whose latest result failed or was incomplete, or whose exact proof is
+missing.
 Each reviewed scenario reruns its setup and probe conversation with a fresh identity. Baselines require
 `5/5` healthy attempts. Deterministic defects require `5/5` observations and paired `v0` at `0/5`;
 model-mediated defects require at least `5/7` and paired `v0` at `0/7`. The reviewed mode is catalog
@@ -76,8 +78,9 @@ data bound into the automatic `execution_digest`; runtime results cannot reclass
 the threshold.
 
 An environment-namespaced OS file lock excludes concurrent worktrees. The local atomic journal, required
-content-addressed history, and 72-hour execution TTL support same-commit cleanup recovery. Any commit
-change cleans run-scoped cycle state and requires a fresh full run. After 41/41 evidence and exact CLEAN,
+content-addressed history, and a 72-hour execution TTL support resumable work. Starting a new
+validation atomically supersedes incomplete local state without deleting provider objects or evidence.
+After exact current-head 41/41 PASS evidence,
 the user may run a separate approval command that rechecks the current PR head and creates one minimal
 immutable approved Blob record. GitHub provides ordinary mechanical CI only; merge remains manual.
 
@@ -111,16 +114,8 @@ Live commands use the authenticated local Azure CLI user and private runtime con
 ```powershell
 python -m agent_insights_quality deploy-infrastructure
 python -m agent_insights_quality deploy-analytics
-python -m agent_insights_quality prepare-test-agent-validation
-# The coordinator assigns all 41 authorities across 10 shards, invokes with
-# at most 8 active workers, then verifies traces with at most 4 active workers.
-python -m agent_insights_quality invoke-test-agent-validation-shard `
-  --cycle-id <id> --shard <1-10> --authority <authority-id>
-python -m agent_insights_quality verify-test-agent-validation-shard `
-  --cycle-id <id> --shard <1-10> --authority <authority-id>
-python -m agent_insights_quality compose-test-agent-validation --cycle-id <id>
-python -m agent_insights_quality cleanup-test-agent-validation --cycle-id <id>
-# Run only after explicit human approval of the exact CLEAN result:
+python -m agent_insights_quality run-test-agent-validation
+# Run only after explicit human approval of the exact READY result:
 python -m agent_insights_quality approve-test-agent-validation
 python -m agent_insights_quality fetch-quality-work-items `
   --query-url <private-query-url> `

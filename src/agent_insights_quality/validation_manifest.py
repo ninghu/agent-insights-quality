@@ -19,7 +19,7 @@ from agent_insights_quality.validation_policy import ValidationPolicy
 from agent_insights_quality.validation_quota import EndpointCost
 from agent_insights_quality.validation_runtime import (
     AuthoritySpec,
-    opaque_cycle_suffix,
+    opaque_run_suffix,
     plan_runtime_topology,
     validation_project_name,
 )
@@ -61,7 +61,7 @@ def prepare_validation_plan(
     ):
         raise ContractError("Local validation identity is invalid")
     authorities = authority_specs(agents, issues)
-    suffix = opaque_cycle_suffix(
+    suffix = opaque_run_suffix(
         repository=repository,
         pr_number=pr_number,
         commit_sha=commit_sha,
@@ -69,7 +69,7 @@ def prepare_validation_plan(
     )
     topology = plan_runtime_topology(
         authorities,
-        cycle_suffix=suffix,
+        run_suffix=suffix,
         policy=policy,
     )
     execution_digests = {
@@ -84,9 +84,9 @@ def prepare_validation_plan(
     )
     validation_digest = current_validation_digest(agents, issues)
     return {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "kind": "test-agent-validation-plan",
-        "cycle_id": f"validation-{suffix}",
+        "run_id": f"validation-{suffix}",
         "repository": repository,
         "pr_number": pr_number,
         "commit_sha": commit_sha,
@@ -96,6 +96,7 @@ def prepare_validation_plan(
         "telemetry_resource_set": policy.telemetry_resource_set,
         "test_agent_model": policy.test_agent_model,
         "validation_digest": validation_digest,
+        "shared_validation_digest": current_shared_validation_digest(),
         "execution_matrix_digest": content_hash(execution_digests),
         "planned_topology_digest": content_hash(
             [
@@ -134,7 +135,7 @@ def prepare_validation_plan(
     }
 
 
-def prepare_resumed_validation_plan(
+def prepare_bound_validation_plan(
     *,
     agents: Mapping[str, Any],
     issues: Mapping[str, Any],
@@ -142,11 +143,11 @@ def prepare_resumed_validation_plan(
     repository: str,
     pr_number: int,
     commit_sha: str,
-    cycle_id: str,
+    run_id: str,
 ) -> dict[str, Any]:
-    if re.fullmatch(r"validation-[0-9a-f]{12}", cycle_id) is None:
-        raise ContractError("Resumed validation cycle identity is invalid")
-    suffix = cycle_id.removeprefix("validation-")
+    if re.fullmatch(r"validation-[0-9a-f]{12}", run_id) is None:
+        raise ContractError("Bound validation run identity is invalid")
+    suffix = run_id.removeprefix("validation-")
     value = prepare_validation_plan(
         agents=agents,
         issues=issues,
@@ -154,15 +155,15 @@ def prepare_resumed_validation_plan(
         repository=repository,
         pr_number=pr_number,
         commit_sha=commit_sha,
-        local_run_id="resumed-local-cycle",
+        local_run_id="bound-local-run",
     )
     authorities = authority_specs(agents, issues)
     topology = plan_runtime_topology(
         authorities,
-        cycle_suffix=suffix,
+        run_suffix=suffix,
         policy=policy,
     )
-    value["cycle_id"] = cycle_id
+    value["run_id"] = run_id
     value["project_name"] = validation_project_name(
         suffix,
         policy=policy,
@@ -205,6 +206,8 @@ def validate_validation_plan(
         or value.get("location") != policy.location
         or value.get("project_name") != policy.project_name
         or value.get("telemetry_resource_set") != "g30"
+        or value.get("shared_validation_digest")
+        != current_shared_validation_digest()
         or not isinstance(authorities, list)
         or len(authorities) != 41
         or {
@@ -248,12 +251,18 @@ def current_validation_digest(
     }
     return content_hash(
         {
-            "contracts": {
-                path.relative_to(ROOT).as_posix(): _validation_contract_file_hash(path)
-                for path in _validation_contract_files()
-            },
+            "shared_validation_digest": current_shared_validation_digest(),
             "catalog_hashes": catalog_hashes(dict(agents), dict(issues)),
             "source_content_digests": sources,
+        }
+    )
+
+
+def current_shared_validation_digest() -> str:
+    return content_hash(
+        {
+            path.relative_to(ROOT).as_posix(): _validation_contract_file_hash(path)
+            for path in _validation_contract_files()
         }
     )
 

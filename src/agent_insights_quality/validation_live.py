@@ -404,6 +404,7 @@ class FoundryScenarioAttemptRunner:
         )
         telemetry_started = time.monotonic()
         output_messages_states: tuple[tuple[bool, bool], ...] | None = None
+        response_anchor_span_ids: tuple[str, ...] | None = None
 
         def capture_output_messages_states(
             states: tuple[tuple[bool, bool], ...],
@@ -411,12 +412,17 @@ class FoundryScenarioAttemptRunner:
             nonlocal output_messages_states
             output_messages_states = states
 
+        def capture_response_anchors(anchors: tuple[str, ...]) -> None:
+            nonlocal response_anchor_span_ids
+            response_anchor_span_ids = anchors
+
         try:
             with scheduler.telemetry_query():
                 operation_ids = self._runtime.wait_for_telemetry(
                     agent_name=target.runtime_agent_name,
                     foundry_version=target.runtime_agent_version,
                     invocation=invocation_evidence,
+                    allow_shared_operations=True,
                 )
             with scheduler.telemetry_query():
                 trace_results = self._runtime.trace_assertion_evidence_for_requests(
@@ -444,6 +450,8 @@ class FoundryScenarioAttemptRunner:
                     stabilization_seconds=self._stabilization_seconds,
                     on_first_pass=lambda: None,
                     on_stable_output_messages=capture_output_messages_states,
+                    on_stable_response_anchors=capture_response_anchors,
+                    allow_shared_operations=True,
                 )
             with scheduler.telemetry_query():
                 identity_results = self._runtime.telemetry_identity_passes(
@@ -470,12 +478,19 @@ class FoundryScenarioAttemptRunner:
             raise ContractError(
                 "Validation output-message structure count is invalid"
             )
+        if (
+            response_anchor_span_ids is None
+            or len(response_anchor_span_ids) != len(raw_steps)
+            or len(set(response_anchor_span_ids)) != len(raw_steps)
+        ):
+            raise ContractError("Validation response-anchor mapping is incomplete")
 
         step_evidence: list[dict[str, Any]] = []
         for index, (
             (_, step),
             response_id,
             operation_id,
+            response_anchor_span_id,
             usable,
             identity_pass,
             output_messages_state,
@@ -484,6 +499,7 @@ class FoundryScenarioAttemptRunner:
                 raw_steps,
                 response_references,
                 operation_ids,
+                response_anchor_span_ids,
                 usable_results,
                 identity_results,
                 output_messages_states,
@@ -500,7 +516,13 @@ class FoundryScenarioAttemptRunner:
                         {"response_reference": response_id}
                     ),
                     "operation_reference": content_hash(
-                        {"operation_reference": operation_id}
+                        {
+                            "operation_reference": operation_id,
+                            "response_reference": response_id,
+                            "invoke_agent_anchor_span_id": (
+                                response_anchor_span_id
+                            ),
+                        }
                     ),
                     "complete": (
                         bool(usable)

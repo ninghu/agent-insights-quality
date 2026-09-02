@@ -6,7 +6,7 @@ from agent_insights_quality.validation_manifest import (
     _validation_contract_file_hash,
     authority_specs,
     prepare_validation_plan,
-    prepare_resumed_validation_plan,
+    prepare_bound_validation_plan,
     validate_validation_plan,
     validation_step_cost,
 )
@@ -41,33 +41,35 @@ def test_local_plan_binds_one_commit_and_all_executable_inputs() -> None:
     assert plan["endpoint_envelope"]["requests"] >= 890
     assert plan["endpoint_envelope"]["worst_case_inner_model_calls"] == 4
     assert plan["validation_digest"].startswith("sha256:")
+    assert plan["shared_validation_digest"].startswith("sha256:")
+    assert plan["run_id"].startswith("validation-")
     assert "tree_sha" not in plan
     assert "policy_manifest" not in plan
 
 
-def test_resumed_plan_keeps_exact_cycle_and_topology() -> None:
+def test_bound_plan_keeps_exact_run_and_topology() -> None:
     agents, issues = load_catalogs()
     policy = load_validation_policy()
-    first = prepare_resumed_validation_plan(
+    first = prepare_bound_validation_plan(
         agents=agents,
         issues=issues,
         policy=policy,
         repository=policy.repository,
         pr_number=999,
         commit_sha="a" * 40,
-        cycle_id="validation-0123456789ab",
+        run_id="validation-0123456789ab",
     )
-    second = prepare_resumed_validation_plan(
+    second = prepare_bound_validation_plan(
         agents=agents,
         issues=issues,
         policy=policy,
         repository=policy.repository,
         pr_number=999,
         commit_sha="a" * 40,
-        cycle_id="validation-0123456789ab",
+        run_id="validation-0123456789ab",
     )
     assert first == second
-    assert first["cycle_id"] == "validation-0123456789ab"
+    assert first["run_id"] == "validation-0123456789ab"
     assert first["project_name"] == "aiq-staging-swedencentral"
     assert all(
         item["runtime_agent_name"].endswith(

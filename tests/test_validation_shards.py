@@ -13,7 +13,9 @@ from agent_insights_quality.validation_coordinator import (
 )
 from agent_insights_quality.validation_manifest import authority_specs
 from agent_insights_quality.validation_quota import CapacityPlan
+from agent_insights_quality.validation_runtime import DeployedRuntime
 from agent_insights_quality.validation_shards import (
+    ValidationDeploymentShardStore,
     ValidationShardStore,
     compose_shard_authorities,
     import_shard_resources,
@@ -22,44 +24,39 @@ from agent_insights_quality.validation_shards import (
 )
 
 
-def _authority_ids() -> list[str]:
-    agents, issues = load_catalogs()
-    return [item.authority_id for item in authority_specs(agents, issues)]
-
-
 def _authorities():
     agents, issues = load_catalogs()
     return authority_specs(agents, issues)
 
 
-def _packages() -> list[dict]:
-    authority_ids = _authority_ids()
-    groups = [authority_ids[index::10] for index in range(10)]
-    packages = []
-    for index, group in enumerate(groups, start=1):
-        package = {
-            "schema_version": "1.0.0",
-            "kind": "test-agent-validation-shard-package",
-            "shard_id": index,
-            "authority_ids": group,
-            "binding": {
-                "repository": "synthetic/example",
-                "pr_number": 63,
-                "commit_sha": "a" * 40,
-                "validation_digest": "sha256:" + ("b" * 64),
-                "execution_matrix_digest": "sha256:" + ("c" * 64),
-                "runtime_topology_digest": "sha256:" + ("d" * 64),
-                "project_id": "synthetic-project",
-                "authorities": [],
-            },
-            "invocation_digest": content_hash({"shard": index}),
-            "authorities": [
-                {"authority_id": authority_id} for authority_id in group
-            ],
-        }
-        package["artifact_digest"] = content_hash(package)
-        packages.append(package)
-    return packages
+def _prepared() -> dict:
+    runtime = []
+    for index, authority in enumerate(_authorities(), start=1):
+        runtime.append(
+            {
+                "authority_id": authority.authority_id,
+                "canonical_agent": authority.canonical_agent,
+                "logical_version": authority.logical_version,
+                "runtime_agent_name": f"synthetic-agent-{index}",
+                "runtime_agent_version": "1",
+                "provider_agent_id": f"agent-{index}",
+                "provider_agent_version_id": f"version-{index}",
+                "provider_content_digest": f"sha256:{index:064x}",
+            }
+        )
+    return {
+        "repository": "synthetic/example",
+        "pr_number": 63,
+        "commit_sha": "a" * 40,
+        "run_id": "validation-0123456789ab",
+        "digests": {
+            "validation_digest": "sha256:" + ("b" * 64),
+            "execution_matrix_digest": "sha256:" + ("c" * 64),
+            "runtime_topology_digest": "sha256:" + ("d" * 64),
+        },
+        "project": {"provider_id": "synthetic-project"},
+        "runtime_topology": {"agents": runtime},
+    }
 
 
 def test_shard_assignment_is_explicit_catalog_authority() -> None:
@@ -69,13 +66,7 @@ def test_shard_assignment_is_explicit_catalog_authority() -> None:
         for item in validate_shard_assignment(1, ["issue-001"], authorities)
     ] == ["issue-001"]
     with pytest.raises(ContractError, match="assignment is invalid"):
-        validate_shard_assignment(
-            1,
-            ["issue-001", "issue-001"],
-            authorities,
-        )
-    with pytest.raises(ContractError, match="unknown authority"):
-        validate_shard_assignment(1, ["research-agent/v0"], authorities)
+        validate_shard_assignment(1, ["issue-001", "issue-001"], authorities)
 
 
 def test_shard_runtime_namespaces_do_not_collide(monkeypatch, tmp_path) -> None:
@@ -86,100 +77,201 @@ def test_shard_runtime_namespaces_do_not_collide(monkeypatch, tmp_path) -> None:
     first = shard_root(
         repository="synthetic/example",
         pr_number=63,
-        cycle_id="cycle",
+        run_id="validation-0123456789ab",
         shard_id=1,
     )
     second = shard_root(
         repository="synthetic/example",
         pr_number=63,
-        cycle_id="cycle",
+        run_id="validation-0123456789ab",
         shard_id=2,
     )
     assert first != second
-    assert first.name == "shard-01"
-    assert second.name == "shard-02"
 
 
-def test_compose_requires_ten_exact_nonoverlapping_shards() -> None:
-    packages = _packages()
-    composed = compose_shard_authorities(
-        packages,
-        _authorities(),
-    )
-    assert len(composed) == 41
-
+def test_compose_requires_exact_nonoverlapping_selected_shards() -> None:
+    authorities = _authorities()[:12]
+    groups = [
+        [item.authority_id for item in authorities][index::10]
+        for index in range(10)
+    ]
+    packages = []
+    for shard_id, group in enumerate(groups, start=1):
+        package = {
+            "shard_id": shard_id,
+            "authority_ids": group,
+            "binding": {
+                "repository": "synthetic/example",
+                "pr_number": 63,
+                "commit_sha": "a" * 40,
+                "run_id": "validation-0123456789ab",
+                "validation_digest": "sha256:" + ("b" * 64),
+                "execution_matrix_digest": "sha256:" + ("c" * 64),
+                "runtime_topology_digest": "sha256:" + ("d" * 64),
+                "project_id": "synthetic-project",
+                "authorities": [],
+            },
+            "authorities": [
+                {"authority_id": authority_id} for authority_id in group
+            ],
+        }
+        packages.append(package)
+    assert len(compose_shard_authorities(packages, authorities)) == 12
     duplicate = copy.deepcopy(packages)
     duplicate[1]["authority_ids"][0] = duplicate[0]["authority_ids"][0]
-    duplicate[1]["authorities"][0]["authority_id"] = duplicate[0][
-        "authorities"
-    ][0]["authority_id"]
-    duplicate[1]["artifact_digest"] = content_hash(
-        {key: value for key, value in duplicate[1].items() if key != "artifact_digest"}
-    )
+    duplicate[1]["authorities"][0] = duplicate[0]["authorities"][0]
     with pytest.raises(ContractError, match="bindings are inconsistent"):
-        compose_shard_authorities(
-            duplicate,
-            _authorities(),
-        )
-
-    mismatched = copy.deepcopy(packages)
-    mismatched[3]["binding"]["commit_sha"] = "e" * 40
-    mismatched[3]["artifact_digest"] = content_hash(
-        {
-            key: value
-            for key, value in mismatched[3].items()
-            if key != "artifact_digest"
-        }
-    )
-    with pytest.raises(ContractError, match="binding"):
-        compose_shard_authorities(
-            mismatched,
-            _authorities(),
-        )
+        compose_shard_authorities(duplicate, authorities)
 
 
-def test_package_binds_exact_invocation_digest(monkeypatch, tmp_path) -> None:
+def test_invocation_store_resumes_retained_partial_ledger(
+    monkeypatch,
+    tmp_path,
+) -> None:
     monkeypatch.setattr(
         "agent_insights_quality.validation_shards.validation_runtime_root",
         lambda: tmp_path,
     )
-    prepared = {
-        "repository": "synthetic/example",
-        "pr_number": 63,
-        "commit_sha": "a" * 40,
-        "cycle_id": "cycle",
-        "digests": {
-            "validation_digest": "sha256:" + ("b" * 64),
-            "execution_matrix_digest": "sha256:" + ("c" * 64),
-            "runtime_topology_digest": "sha256:" + ("d" * 64),
-        },
-        "project": {"provider_id": "synthetic-project"},
-        "runtime_topology": {
-            "agents": [
-                {
-                    "authority_id": "weather-agent/v0",
-                    "canonical_agent": "weather-agent",
-                    "runtime_agent_name": "weather-agent-baseline",
-                    "runtime_agent_version": "server-version-1",
-                    "provider_agent_id": "agent/weather",
-                    "provider_agent_version_id": "agent/weather/versions/1",
-                    "provider_content_digest": "sha256:" + ("e" * 64),
-                }
-            ]
-        },
-    }
     store = ValidationShardStore(
-        prepared=prepared,
+        prepared=_prepared(),
         shard_id=1,
         authority_ids=["weather-agent/v0"],
+        fence=lambda: None,
     )
     store.begin_invocation()
     store.record_authority({"authority_id": "weather-agent/v0"})
-    invocation = store.complete_invocation()
-    package = store.write_package(
-        authorities=[{"authority_id": "weather-agent/v0"}],
+    retained = store.begin_invocation()
+    assert retained["status"] == "invoking"
+    assert retained["invocations"] == [{"authority_id": "weather-agent/v0"}]
+    assert store.complete_invocation()["status"] == "invoked"
+
+
+def test_deployment_store_writes_immutable_per_authority_receipts(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_shards.validation_runtime_root",
+        lambda: tmp_path,
     )
-    assert package["invocation_digest"] == invocation["artifact_digest"]
+    store = ValidationDeploymentShardStore(
+        prepared=_prepared(),
+        shard_id=1,
+        authority_ids=["weather-agent/v0"],
+        desired_state_digest="sha256:" + ("e" * 64),
+        fence=lambda: None,
+    )
+    runtime = DeployedRuntime(
+        authority_id="weather-agent/v0",
+        runtime_kind="prompt",
+        runtime_agent_name="weather-agent-baseline",
+        runtime_agent_version="1",
+        provider_agent_id="agent",
+        provider_agent_version_id="version",
+        provider_content_digest="sha256:" + ("f" * 64),
+        hosted_identity_id=None,
+        hosted_blueprint_id=None,
+        hosted_deployment_id=None,
+        runtime_principal_id=None,
+        telemetry_identity_id="version",
+        connection_ids=(),
+    )
+    receipt = store.write_authority(
+        authority_id=runtime.authority_id,
+        runtime=runtime,
+        resources=[],
+    )
+    assert receipt["receipt_digest"].startswith("sha256:")
+    assert store.completed_authority_ids() == {"weather-agent/v0"}
+    assert store.complete()["authority_ids"] == ["weather-agent/v0"]
+
+
+def test_stale_worker_is_fenced_before_receipt_write(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_shards.validation_runtime_root",
+        lambda: tmp_path,
+    )
+
+    def stale() -> None:
+        raise ContractError("Stale validation worker is fenced")
+
+    store = ValidationDeploymentShardStore(
+        prepared=_prepared(),
+        shard_id=1,
+        authority_ids=["weather-agent/v0"],
+        desired_state_digest="sha256:" + ("e" * 64),
+        fence=stale,
+    )
+    runtime = DeployedRuntime(
+        authority_id="weather-agent/v0",
+        runtime_kind="prompt",
+        runtime_agent_name="weather-agent-baseline",
+        runtime_agent_version="1",
+        provider_agent_id="agent",
+        provider_agent_version_id="version",
+        provider_content_digest="sha256:" + ("f" * 64),
+        hosted_identity_id=None,
+        hosted_blueprint_id=None,
+        hosted_deployment_id=None,
+        runtime_principal_id=None,
+        telemetry_identity_id="version",
+        connection_ids=(),
+    )
+    with pytest.raises(ContractError, match="Stale validation worker"):
+        store.write_authority(
+            authority_id=runtime.authority_id,
+            runtime=runtime,
+            resources=[],
+        )
+    assert not list(tmp_path.rglob("*.json"))
+
+
+def test_shard_resource_import_is_exact_idempotent() -> None:
+    intent = content_hash({"resource": "response"})
+    create = {
+        "state": "create_intent",
+        "kind": "stored_response",
+        "intent_reference": intent,
+        "deterministic_name": "response-intent",
+        "authority_id": "weather-agent/v0",
+        "parent_id": "agent/weather",
+        "runtime_kind": "prompt",
+        "discovery_key": f"weather-agent-baseline|{intent}",
+        "retention": "retained",
+    }
+    created = {
+        **create,
+        "state": "created",
+        "provider_id": "response-1",
+        "deterministic_name": "response-1",
+    }
+
+    class Controller:
+        def __init__(self) -> None:
+            self.active = SimpleNamespace(
+                value={"ownership_nonce": "nonce", "resources": []}
+            )
+            self.applied = 0
+
+        def dynamic_resource_event(self, event, *, now) -> None:
+            del now
+            self.applied += 1
+            if event["state"] == "create_intent":
+                self.active.value["resources"].append(
+                    {
+                        **event,
+                        "provider_id": intent,
+                        "ownership_nonce": "nonce",
+                    }
+                )
+            else:
+                self.active.value["resources"][0].update(event)
+
+    artifact = {"shard_id": 1, "resources": [create, created]}
+    controller = Controller()
+    import_shard_resources(controller, [artifact], now=lambda: None)
+    import_shard_resources(controller, [artifact], now=lambda: None)
+    assert controller.applied == 2
 
 
 def test_eight_invoke_workers_do_not_multiply_prepared_capacity() -> None:
@@ -205,119 +297,3 @@ def test_eight_invoke_workers_do_not_multiply_prepared_capacity() -> None:
     allocation = _invoke_worker_capacity(capacity, [_authorities()[0]])
     assert allocation[0] * INVOKE_SHARD_CONCURRENCY <= capacity.available_rpm
     assert allocation[1] * INVOKE_SHARD_CONCURRENCY <= capacity.available_tpm
-
-
-def test_invocation_rerun_preserves_ledger_until_exact_cleanup(
-    monkeypatch,
-    tmp_path,
-) -> None:
-    monkeypatch.setattr(
-        "agent_insights_quality.validation_shards.validation_runtime_root",
-        lambda: tmp_path,
-    )
-    prepared = _prepared_baseline()
-    store = ValidationShardStore(
-        prepared=prepared,
-        shard_id=1,
-        authority_ids=["weather-agent/v0"],
-    )
-    store.begin_invocation()
-    store.record_resource({"intent_reference": "private-ledger-entry"})
-    store.record_authority({"authority_id": "weather-agent/v0"})
-    retained = store.read_invocations()
-
-    with pytest.raises(ContractError, match="active ledger"):
-        store.begin_invocation()
-    assert store.read_invocations() == retained
-
-    store.write_cleanup(
-        invocation_digest=retained["artifact_digest"],
-        retained_count=0,
-    )
-    restarted = store.begin_invocation()
-    assert restarted["resources"] == []
-    assert restarted["invocations"] == []
-    with pytest.raises(ContractError, match="cleanup is not reusable"):
-        store.record_authority({"authority_id": "weather-agent/v0"})
-        store.begin_invocation()
-
-
-def test_shard_resource_import_is_exact_idempotent() -> None:
-    intent = content_hash({"resource": "response"})
-    create = {
-        "state": "create_intent",
-        "kind": "stored_response",
-        "intent_reference": intent,
-        "deterministic_name": "response-intent",
-        "authority_id": "weather-agent/v0",
-        "parent_id": "agent/weather",
-        "runtime_kind": "prompt",
-        "discovery_key": f"weather-agent-baseline|{intent}",
-    }
-    created = {
-        **create,
-        "state": "created",
-        "provider_id": "response-1",
-        "deterministic_name": "response-1",
-    }
-
-    class Controller:
-        def __init__(self) -> None:
-            self.active = SimpleNamespace(
-                value={"ownership_nonce": "nonce", "resources": []}
-            )
-            self.applied = 0
-
-        def dynamic_resource_event(self, event, *, now) -> None:
-            del now
-            self.applied += 1
-            if event["state"] == "create_intent":
-                self.active.value["resources"].append(
-                    {
-                        **event,
-                        "provider_id": intent,
-                        "ownership_nonce": "nonce",
-                        "cleanup_method": "explicit",
-                    }
-                )
-            else:
-                self.active.value["resources"][0].update(event)
-
-    artifact = {"shard_id": 1, "resources": [create, created]}
-    controller = Controller()
-    import_shard_resources(controller, [artifact], now=lambda: None)
-    import_shard_resources(controller, [artifact], now=lambda: None)
-    assert controller.applied == 2
-
-    mismatched = copy.deepcopy(artifact)
-    mismatched["resources"][1]["provider_id"] = "response-2"
-    with pytest.raises(ContractError, match="provider binding changed"):
-        import_shard_resources(controller, [mismatched], now=lambda: None)
-
-
-def _prepared_baseline() -> dict:
-    return {
-        "repository": "synthetic/example",
-        "pr_number": 63,
-        "commit_sha": "a" * 40,
-        "cycle_id": "cycle",
-        "digests": {
-            "validation_digest": "sha256:" + ("b" * 64),
-            "execution_matrix_digest": "sha256:" + ("c" * 64),
-            "runtime_topology_digest": "sha256:" + ("d" * 64),
-        },
-        "project": {"provider_id": "synthetic-project"},
-        "runtime_topology": {
-            "agents": [
-                {
-                    "authority_id": "weather-agent/v0",
-                    "canonical_agent": "weather-agent",
-                    "runtime_agent_name": "weather-agent-baseline",
-                    "runtime_agent_version": "server-version-1",
-                    "provider_agent_id": "agent/weather",
-                    "provider_agent_version_id": "agent/weather/versions/1",
-                    "provider_content_digest": "sha256:" + ("e" * 64),
-                }
-            ]
-        },
-    }

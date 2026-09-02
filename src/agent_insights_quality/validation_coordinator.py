@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from jsonschema import Draft202012Validator
+
 from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.live import LiveRuntime
 from agent_insights_quality.profiles import RuntimeProfile
-from agent_insights_quality.util import ContractError, content_hash
-from agent_insights_quality.validation_cleanup import CleanupEngine, build_cleanup_plan
-from agent_insights_quality.validation_cleanup_azure import (
-    AzureValidationCleanupBackend,
+from agent_insights_quality.registry import publish_validation_registry
+from agent_insights_quality.util import (
+    ContractError,
+    atomic_json,
+    content_hash,
+    immutable_json,
+    read_json,
 )
 from agent_insights_quality.validation_credentials import local_azure_operator
 from agent_insights_quality.validation_cycle import (
@@ -19,13 +26,17 @@ from agent_insights_quality.validation_cycle import (
     initial_lifecycle,
 )
 from agent_insights_quality.validation_evidence import (
+    load_reused_authority_evidence,
     persist_evidence,
+    select_reusable_authority_evidence,
     stamp_evidence_digests,
     validate_evidence,
 )
 from agent_insights_quality.validation_execution import (
     _deployed_runtime,
-    prepare_validation_topology,
+    _project_from_lifecycle,
+    _runtime_agent_payload,
+    lifecycle_heartbeat,
 )
 from agent_insights_quality.validation_lifecycle import (
     LifecycleJournal,
@@ -40,7 +51,7 @@ from agent_insights_quality.validation_local import (
 )
 from agent_insights_quality.validation_manifest import (
     authority_specs,
-    prepare_resumed_validation_plan,
+    prepare_bound_validation_plan,
     prepare_validation_plan,
     validate_validation_plan,
     validation_authority_cost,
@@ -63,18 +74,19 @@ from agent_insights_quality.validation_quota import (
     WeightedTokenBucket,
     build_capacity_plan,
 )
-from agent_insights_quality.validation_reconciler import ValidationReconciler
 from agent_insights_quality.validation_runtime import (
+    deploy_all_authorities,
+    deployment_resource_events,
     invoke_validation_shard,
+    plan_runtime_topology,
     verify_validation_shard,
 )
 from agent_insights_quality.validation_shards import (
-    SHARD_COUNT,
+    ValidationDeploymentShardStore,
     ValidationShardStore,
+    authority_lock,
     compose_shard_authorities,
     import_shard_resources,
-    materialize_shard_resources,
-    shard_root,
     shard_lock,
     validate_shard_assignment,
 )
@@ -92,22 +104,6 @@ def prepare_test_agent_validation() -> dict[str, Any]:
     lock = LocalValidationLock(validation_runtime_root() / "coordinator.lock")
     with lock:
         journal = LifecycleJournal(lock=lock)
-        previous = journal.read_optional()
-        if previous is not None and previous.value["state"] not in {
-            "CLEAN",
-            "FAILED_CLEAN",
-        }:
-            if (
-                previous.value["state"] == "VALIDATING"
-                and previous.value["deployment"]["phase"] == "prepared"
-                and previous.value["repository"] == git.repository
-                and previous.value["pr_number"] == git.pr_number
-                and previous.value["commit_sha"] == git.commit_sha
-            ):
-                return _prepared_result(previous.value)
-            raise ContractError(
-                "Incomplete prepared validation must be cleaned before prepare"
-            )
         plan = prepare_validation_plan(
             agents=agents,
             issues=issues,
@@ -125,7 +121,7 @@ def prepare_test_agent_validation() -> dict[str, Any]:
         )
         profile = validation_runtime_profile(
             plan["project_name"],
-            cycle_id=plan["cycle_id"],
+            run_id=plan["run_id"],
             base=base_profile,
         )
         assert_validation_permissions(base_profile, operator)
@@ -147,9 +143,28 @@ def prepare_test_agent_validation() -> dict[str, Any]:
             holder_run_reference=content_hash({"run": uuid.uuid4().hex}),
             substrate=_substrate(operator, base_profile),
         )
-        controller = ValidationCycleController(
-            journal,
-            active=journal.begin_cycle(initial),
+        active, superseded_authority_ids = journal.begin_run(
+            initial,
+            all_authority_ids=[item.authority_id for item in authorities],
+        )
+        controller = ValidationCycleController(journal, active=active)
+        controller.preflight(capacity, now=datetime.now(UTC))
+        provisioner = ValidationProjectProvisioner(
+            profile,
+            local_operator_id=operator.object_id,
+            policy=policy,
+        )
+        with lifecycle_heartbeat(controller, now=lambda: datetime.now(UTC)):
+            project = provisioner.bind(plan["project_name"])
+        controller.project_bound(
+            name=project.project_name,
+            provider_id=project.project_id,
+            endpoint_reference=content_hash(
+                {"project_endpoint": project.project_endpoint}
+            ),
+            project_principal_id=project.project_principal_id,
+            connection_ids=list(project.connection_ids),
+            now=datetime.now(UTC),
         )
         support_agent = next(
             item
@@ -157,102 +172,366 @@ def prepare_test_agent_validation() -> dict[str, Any]:
             if item["name"] == "support-ticket-agent"
         )
 
-        def support_images() -> dict[str, str]:
-            result = prepare_validation_support_images(
-                profile,
-                support_agent,
-                cycle_id=plan["cycle_id"],
-                record_resource=lambda event: controller.dynamic_resource_event(
-                    event,
-                    now=datetime.now(UTC),
-                ),
-            )
-            controller.support_images_ready(
-                result.images,
-                now=datetime.now(UTC),
-            )
-            return result.images
-
-        prepare_validation_topology(
+        deployer = FoundryAuthorityDeployer(
+            profile=profile,
+            agent_catalog=agents,
+            issue_catalog=issues,
+            token_provider=operator.token_provider,
+            project=project,
+            support_images={},
+        )
+        with lifecycle_heartbeat(controller, now=lambda: datetime.now(UTC)):
+            deployer.wait_project()
+            images = prepare_validation_support_images(profile, support_agent).images
+        controller.support_images_ready(images, now=datetime.now(UTC))
+        deployer.set_support_images(images)
+        planned = plan_runtime_topology(
+            authorities,
+            run_suffix=plan["run_id"].removeprefix("validation-"),
+            policy=policy,
+        )
+        desired = _desired_state(
             plan=plan,
             authorities=authorities,
-            capacity_plan=capacity,
-            controller=controller,
-            project_provisioner=ValidationProjectProvisioner(
-                profile,
-                local_operator_id=operator.object_id,
-                policy=policy,
+            planned=list(planned),
+            deployer=deployer,
+            support_images=images,
+            superseded_authority_ids=superseded_authority_ids,
+        )
+        desired_path = (
+            validation_runtime_root()
+            / "desired-state"
+            / git.repository.replace("/", "--")
+            / str(git.pr_number)
+            / plan["run_id"]
+            / f"{desired['desired_state_digest'].removeprefix('sha256:')}.json"
+        )
+        immutable_json(desired_path, desired)
+        controller.desired_state_ready(
+            reference={
+                "path": desired_path.relative_to(
+                    validation_runtime_root()
+                ).as_posix(),
+                "digest": desired["desired_state_digest"],
+            },
+            deployment_assignments=desired["deployment_assignments"],
+            now=datetime.now(UTC),
+        )
+        return _prepared_result(controller.active.value)
+
+
+def run_test_agent_validation() -> dict[str, Any]:
+    git = discover_local_git_context()
+    active = _matching_active(git)
+    if active is not None and active["state"] in {"READY", "FAILED"}:
+        evidence = read_json(
+            validation_runtime_root() / active["evidence_reference"]["path"]
+        )
+        return {
+            "status": active["state"].casefold(),
+            "result": evidence["result"],
+            "authority_count": 41,
+            "validated_authority_count": len(
+                active["validation_authority_ids"]
             ),
-            deployer_factory=lambda project: FoundryAuthorityDeployer(
-                profile=profile,
-                agent_catalog=agents,
-                issue_catalog=issues,
-                token_provider=operator.token_provider,
-                project=project,
-                support_images={},
+            "reused_authority_count": len(active["reused_authorities"]),
+            "evidence_digest": evidence["evidence_digest"],
+        }
+    if active is None or active["state"] not in {"CREATING", "VALIDATING"}:
+        prepare_test_agent_validation()
+        active = _matching_active(git)
+    if active is None:
+        raise ContractError("Validation run was not prepared")
+    if active["state"] == "CREATING":
+        assignments = active["deployment_assignments"]
+        _run_parallel(
+            assignments,
+            worker=lambda item: deploy_test_agent_validation_shard(
+                shard_id=item["shard_id"],
+                authority_ids=item["authority_ids"],
             ),
-            support_image_factory=support_images,
-            policy=policy,
-            assert_commit=lambda: _assert_git(git),
+            maximum_concurrency=8,
+        )
+        _reconcile_deployment()
+        active = _matching_active(git)
+    if active is None:
+        raise ContractError("Validation run disappeared after deployment")
+    if active["state"] == "VALIDATING":
+        assignments = active["shard_assignments"]
+        _run_parallel(
+            assignments,
+            worker=lambda item: invoke_test_agent_validation_shard(
+                shard_id=item["shard_id"],
+                authority_ids=item["authority_ids"],
+            ),
+            maximum_concurrency=8,
+        )
+        _run_parallel(
+            assignments,
+            worker=lambda item: verify_test_agent_validation_shard(
+                shard_id=item["shard_id"],
+                authority_ids=item["authority_ids"],
+            ),
+            maximum_concurrency=4,
+        )
+        return compose_test_agent_validation()
+    raise ContractError("Validation run is not resumable")
+
+
+def deploy_test_agent_validation_shard(
+    *,
+    shard_id: int,
+    authority_ids: list[str],
+) -> dict[str, Any]:
+    context = _deployment_context(shard_id, authority_ids)
+    store = context["store"]
+    completed = store.completed_authority_ids()
+    by_id = {item.authority_id: item for item in context["authorities"]}
+    planned_by_id = {
+        item.authority_id: item for item in context["planned"]
+    }
+    desired_by_id = {
+        item["authority_id"]: item
+        for item in context["desired"]["authorities"]
+    }
+    for authority_id in authority_ids:
+        if authority_id in completed:
+            continue
+        with authority_lock(
+            run_id=context["active"]["run_id"],
+            authority_id=authority_id,
+        ):
+            if authority_id in store.completed_authority_ids():
+                continue
+            resources: list[dict[str, Any]] = []
+            deployed = deploy_all_authorities(
+                [by_id[authority_id]],
+                [planned_by_id[authority_id]],
+                deployer=context["deployer"],
+                maximum_concurrency=1,
+                record_resource=resources.append,
+                max_recovery_versions_per_agent=(
+                    context["policy"].limits.max_recovery_versions_per_agent
+                ),
+            )[authority_id]
+            if (
+                deployed.provider_content_digest
+                != desired_by_id[authority_id]["provider_content_digest"]
+            ):
+                raise ContractError(
+                    "Deployed authority differs from immutable desired state"
+                )
+            store.write_authority(
+                authority_id=authority_id,
+                runtime=deployed,
+                resources=resources,
+            )
+    receipt = store.complete()
+    return {
+        "status": "deployed",
+        "shard_id": shard_id,
+        "authority_count": len(authority_ids),
+        "receipt_digest": receipt["receipt_digest"],
+    }
+
+
+def _reconcile_deployment() -> dict[str, Any]:
+    active = _active_for_state("CREATING")
+    desired = _load_desired_state(active)
+    contexts = _deployment_context()
+    receipts = [
+        ValidationDeploymentShardStore(
+            prepared=active,
+            shard_id=assignment["shard_id"],
+            authority_ids=assignment["authority_ids"],
+            desired_state_digest=desired["desired_state_digest"],
+        ).read()
+        for assignment in active["deployment_assignments"]
+    ]
+    deployed_by_id = {
+        receipt["authority_id"]: _deployed_runtime(receipt["runtime"])
+        for shard in receipts
+        for receipt in shard["authorities"]
+    }
+    deployed_by_id.update(
+        {
+            item["authority_id"]: _deployed_runtime(item["runtime"])
+            for item in desired["reused_runtimes"]
+        }
+    )
+    authorities = contexts["authorities"]
+    planned = contexts["planned"]
+    if set(deployed_by_id) != {item.authority_id for item in authorities}:
+        raise ContractError("Deployment receipts do not cover desired topology")
+    by_id = {item.authority_id: item for item in authorities}
+    contexts["deployer"].assert_no_monitors()
+    for authority in authorities:
+        contexts["deployer"].assert_ready(
+            authority,
+            deployed_by_id[authority.authority_id],
+        )
+
+    lock = LocalValidationLock(validation_runtime_root() / "coordinator.lock")
+    with lock:
+        journal = LifecycleJournal(lock=lock)
+        current = journal.read_active()
+        if (
+            current.value["state"] != "CREATING"
+            or current.value["run_id"] != active["run_id"]
+            or current.value["desired_state_reference"]
+            != active["desired_state_reference"]
+        ):
+            raise ContractError("Stale deployment reconciliation is fenced")
+        controller = ValidationCycleController(journal, active=current)
+        deployment_artifacts = [
+            {
+                "shard_id": shard["shard_id"],
+                "resources": [
+                    event
+                    for receipt in shard["authorities"]
+                    for event in receipt["resources"]
+                ],
+            }
+            for shard in receipts
+        ]
+        for item in desired["reused_runtimes"]:
+            authority_id = item["authority_id"]
+            deployment_artifacts.append(
+                {
+                    "shard_id": 100 + len(deployment_artifacts),
+                    "resources": deployment_resource_events(
+                        by_id[authority_id],
+                        next(
+                            entry
+                            for entry in planned
+                            if entry.authority_id == authority_id
+                        ),
+                        deployed_by_id[authority_id],
+                    ),
+                }
+            )
+        import_shard_resources(
+            controller,
+            deployment_artifacts,
+            now=lambda: datetime.now(UTC),
+        )
+        planned_by_id = {item.authority_id: item for item in planned}
+        runtime_agents = []
+        for authority in authorities:
+            payload = _runtime_agent_payload(
+                planned_by_id[authority.authority_id],
+                deployed_by_id[authority.authority_id],
+            )
+            controller.authority_ready(payload, now=datetime.now(UTC))
+            runtime_agents.append(payload)
+        _write_deployment_registry(
+            controller.active.value,
+            desired=desired,
+            profile=contexts["profile"],
+        )
+        controller.complete_prepare(runtime_agents, now=datetime.now(UTC))
+        selected, reused = select_reusable_authority_evidence(
+            authorities=authorities,
+            runtime_topology=controller.active.value["runtime_topology"],
+            repository=controller.active.value["repository"],
+            pr_number=controller.active.value["pr_number"],
+            environment_id=contexts["policy"].environment_id,
+            location=contexts["policy"].location,
+            telemetry_resource_set=contexts["policy"].telemetry_resource_set,
+            shared_validation_digest=desired["shared_validation_digest"],
+            forced_authority_ids=set(
+                desired["forced_validation_authority_ids"]
+            ),
+        )
+        controller.set_authority_selection(
+            selected_authority_ids=selected,
+            reused_authorities=reused,
+            now=datetime.now(UTC),
         )
         return _prepared_result(controller.active.value)
 
 
 def invoke_test_agent_validation_shard(
     *,
-    cycle_id: str,
     shard_id: int,
     authority_ids: list[str],
 ) -> dict[str, Any]:
     context = _load_prepared(
-        cycle_id,
         shard_id,
         authority_ids,
         partition_invoke_capacity=True,
     )
+    run_id = context["prepared"]["run_id"]
     with shard_lock(
         repository=context["git"].repository,
         pr_number=context["git"].pr_number,
-        cycle_id=cycle_id,
+        run_id=run_id,
         shard_id=shard_id,
     ):
         store = context["store"]
-        store.begin_invocation()
+        artifact = store.begin_invocation()
+        completed_ids = {
+            item["authority_id"] for item in artifact["invocations"]
+        }
+        pending = [
+            item
+            for item in context["assigned"]
+            if item.authority_id not in completed_ids
+        ]
+        if artifact["status"] == "invoked":
+            return {
+                "status": "invoked",
+                "shard_id": shard_id,
+                "authority_count": len(context["assigned"]),
+                "artifact_digest": artifact["artifact_digest"],
+            }
         runner = _runner(context, record_resource=store.record_resource)
         runner.prepare_hosted_routes(_shard_targets(context))
-        results = invoke_validation_shard(
-            context["assigned"],
-            context["deployed"],
-            runner=runner,
-            scheduler=context["scheduler"],
-            model_contract=context["agents"]["models"]["test_agents"],
-            paired_baselines=context["paired_baselines"],
-            record_authority=store.record_authority,
-        )
+        if pending:
+            invoke_validation_shard(
+                pending,
+                context["deployed"],
+                runner=runner,
+                scheduler=context["scheduler"],
+                model_contract=context["agents"]["models"]["test_agents"],
+                paired_baselines=context["paired_baselines"],
+                record_authority=store.record_authority,
+            )
         artifact = store.complete_invocation()
         return {
             "status": "invoked",
-            "cycle_id": cycle_id,
             "shard_id": shard_id,
-            "authority_count": len(results),
+            "authority_count": len(context["assigned"]),
             "artifact_digest": artifact["artifact_digest"],
         }
 
 
 def verify_test_agent_validation_shard(
     *,
-    cycle_id: str,
     shard_id: int,
     authority_ids: list[str],
 ) -> dict[str, Any]:
-    context = _load_prepared(cycle_id, shard_id, authority_ids)
+    context = _load_prepared(shard_id, authority_ids)
+    run_id = context["prepared"]["run_id"]
     with shard_lock(
         repository=context["git"].repository,
         pr_number=context["git"].pr_number,
-        cycle_id=cycle_id,
+        run_id=run_id,
         shard_id=shard_id,
     ):
         store = context["store"]
+        if store.package_exists():
+            package = store.read_package()
+            return {
+                "status": "verified",
+                "shard_id": shard_id,
+                "authority_count": len(package["authorities"]),
+                "failed_authority_count": sum(
+                    item["pass"] is not True
+                    for item in package["authorities"]
+                ),
+                "artifact_digest": package["artifact_digest"],
+            }
         invocation = store.read_invocations()
         if invocation.get("status") != "invoked":
             raise ContractError("Validation shard invocation is not complete")
@@ -266,36 +545,28 @@ def verify_test_agent_validation_shard(
             validated_commit_sha=context["git"].commit_sha,
             paired_baselines=context["paired_baselines"],
         )
-        if not all(item["pass"] for item in authorities):
-            raise ContractError("Validation shard mechanical evidence is incomplete")
         package = store.write_package(authorities=authorities)
         return {
             "status": "verified",
-            "cycle_id": cycle_id,
             "shard_id": shard_id,
             "authority_count": len(authorities),
+            "failed_authority_count": sum(
+                item["pass"] is not True for item in authorities
+            ),
             "artifact_digest": package["artifact_digest"],
         }
 
 
-def compose_test_agent_validation(*, cycle_id: str) -> dict[str, Any]:
-    context = _load_prepared(cycle_id)
+def compose_test_agent_validation() -> dict[str, Any]:
+    context = _load_prepared()
+    prepared = context["prepared"]
     packages = []
     invocations = []
-    for shard_id in range(1, SHARD_COUNT + 1):
-        root = (
-            validation_runtime_root()
-            / "shards"
-            / context["git"].repository.replace("/", "/")
-            / str(context["git"].pr_number)
-            / cycle_id
-            / f"shard-{shard_id:02d}"
-        )
-        raw = _read_shard_ids(root / "invocations.json")
+    for assignment in prepared["shard_assignments"]:
         store = ValidationShardStore(
-            prepared=context["prepared"],
-            shard_id=shard_id,
-            authority_ids=raw,
+            prepared=prepared,
+            shard_id=assignment["shard_id"],
+            authority_ids=assignment["authority_ids"],
         )
         invocation = store.read_invocations()
         package = store.read_package()
@@ -305,10 +576,24 @@ def compose_test_agent_validation(*, cycle_id: str) -> dict[str, Any]:
             )
         invocations.append(invocation)
         packages.append(package)
-    authority_evidence = compose_shard_authorities(
+    fresh = compose_shard_authorities(
         packages,
-        context["authorities"],
+        context["assigned"],
     )
+    reused = [
+        load_reused_authority_evidence(reference)
+        for reference in prepared["reused_authorities"]
+    ]
+    by_id = {
+        item["authority_id"]: item
+        for item in [*fresh, *reused]
+    }
+    authority_evidence = [
+        by_id[item.authority_id] for item in context["authorities"]
+    ]
+    if len(by_id) != len(context["authorities"]):
+        raise ContractError("Validation composition authority coverage is incomplete")
+
     lock = LocalValidationLock(validation_runtime_root() / "coordinator.lock")
     with lock:
         journal = LifecycleJournal(lock=lock)
@@ -316,8 +601,13 @@ def compose_test_agent_validation(*, cycle_id: str) -> dict[str, Any]:
             journal,
             active=journal.read_active(),
         )
-        if controller.active.value["state"] != "VALIDATING":
-            raise ContractError("Validation cycle has already been composed")
+        if (
+            controller.active.value["state"] != "VALIDATING"
+            or controller.active.value["run_id"] != prepared["run_id"]
+            or controller.active.value["desired_state_reference"]
+            != prepared["desired_state_reference"]
+        ):
+            raise ContractError("Stale validation composition is fenced")
         import_shard_resources(
             controller,
             invocations,
@@ -326,13 +616,22 @@ def compose_test_agent_validation(*, cycle_id: str) -> dict[str, Any]:
         active = controller.active.value
         evidence = stamp_evidence_digests(
             {
-                "schema_version": "1.0.0",
+                "schema_version": "2.0.0",
                 "kind": "test-agent-validation-evidence",
                 "repository": active["repository"],
                 "pr_number": active["pr_number"],
-                "cycle_id": active["cycle_id"],
+                "run_id": active["run_id"],
                 "commit_sha": active["commit_sha"],
+                "completed_at": datetime.now(UTC).isoformat(),
+                "result": (
+                    "PASS"
+                    if all(item["pass"] for item in authority_evidence)
+                    else "FAIL"
+                ),
                 "validation_digest": active["digests"]["validation_digest"],
+                "shared_validation_digest": active["digests"][
+                    "shared_validation_digest"
+                ],
                 "execution_matrix_digest": active["digests"][
                     "execution_matrix_digest"
                 ],
@@ -356,140 +655,24 @@ def compose_test_agent_validation(*, cycle_id: str) -> dict[str, Any]:
             evidence,
             repository=active["repository"],
             pr_number=active["pr_number"],
-            cycle_id=active["cycle_id"],
+            run_id=active["run_id"],
         )
-        controller.final_checks(
+        controller.complete(
             commit_sha=active["commit_sha"],
             evidence=record,
             now=datetime.now(UTC),
         )
         return {
-            "status": "composed",
-            "cycle_id": cycle_id,
+            "status": "complete",
+            "result": evidence["result"],
             "authority_count": len(authority_evidence),
+            "validated_authority_count": len(fresh),
+            "reused_authority_count": len(reused),
             "evidence_digest": evidence["evidence_digest"],
         }
 
 
-def cleanup_test_agent_validation(
-    *,
-    cycle_id: str,
-    shard_id: int | None = None,
-    authority_ids: list[str] | None = None,
-) -> dict[str, Any]:
-    if shard_id is not None:
-        context = _load_shard_cleanup(
-            cycle_id,
-            shard_id,
-            authority_ids or [],
-        )
-        with shard_lock(
-            repository=context["active"]["repository"],
-            pr_number=context["active"]["pr_number"],
-            cycle_id=cycle_id,
-            shard_id=shard_id,
-        ):
-            store = context["store"]
-            artifact = store.read_invocations()
-            ownership_nonce = content_hash(
-                {"cycle_id": cycle_id, "shard_id": shard_id}
-            ).removeprefix("sha256:")
-            resources = materialize_shard_resources(
-                artifact,
-                ownership_nonce=ownership_nonce,
-                now=datetime.now(UTC),
-            )
-            backend = AzureValidationCleanupBackend(
-                profile=context["profile"],
-                runtime_topology=context["active"]["runtime_topology"],
-                resources=resources,
-                token_provider=context["operator"].token_provider,
-            )
-            result = CleanupEngine(backend).execute(
-                build_cleanup_plan(
-                    cycle_id=f"{cycle_id}-shard-{shard_id:02d}",
-                    ownership_nonce=ownership_nonce,
-                    resources=resources,
-                    documented_project_cascade=context[
-                        "policy"
-                    ].documented_project_cascade,
-                ),
-                record_delete_intent=lambda _item: None,
-            )
-            if not result.exact_clean:
-                raise ContractError("Validation shard cleanup is not exact")
-            store.write_cleanup(
-                invocation_digest=artifact["artifact_digest"],
-                retained_count=len(result.retained_durable_ids),
-            )
-            return {
-                "status": "clean",
-                "cycle_id": cycle_id,
-                "shard_id": shard_id,
-                "exact_clean": True,
-            }
-    lock = LocalValidationLock(validation_runtime_root() / "coordinator.lock")
-    with lock:
-        journal = LifecycleJournal(lock=lock)
-        active = journal.read_active()
-        if active.value["cycle_id"] != cycle_id:
-            raise ContractError("Validation cleanup cycle identity is not active")
-        if active.value["state"] in {"CLEAN", "FAILED_CLEAN"}:
-            return {
-                "status": active.value["state"].casefold(),
-                "cycle_id": cycle_id,
-                "exact_clean": True,
-            }
-        context = _cleanup_context(active.value)
-        controller = ValidationCycleController(
-            journal,
-            active=active,
-        )
-        invocations = []
-        for shard_id in range(1, SHARD_COUNT + 1):
-            root = (
-                shard_root(
-                    repository=active.value["repository"],
-                    pr_number=active.value["pr_number"],
-                    cycle_id=cycle_id,
-                    shard_id=shard_id,
-                )
-            )
-            if (root / "invocations.json").is_file():
-                raw = _read_shard_ids(root / "invocations.json")
-                invocations.append(
-                    ValidationShardStore(
-                        prepared=active.value,
-                        shard_id=shard_id,
-                        authority_ids=raw,
-                    ).read_invocations()
-                )
-        import_shard_resources(
-            controller,
-            invocations,
-            now=lambda: datetime.now(UTC),
-        )
-        backend = AzureValidationCleanupBackend(
-            profile=context["profile"],
-            runtime_topology=controller.active.value["runtime_topology"],
-            resources=controller.active.value["resources"],
-            token_provider=context["operator"].token_provider,
-        )
-        state = ValidationReconciler(
-            journal=journal,
-            cleanup=CleanupEngine(backend),
-            policy=context["policy"],
-        ).reconcile(alert=lambda _message: None)
-        clean = journal.read_active()
-        return {
-            "status": state.casefold(),
-            "cycle_id": cycle_id,
-            "exact_clean": clean.value["cleanup"]["exact_clean"],
-        }
-
-
 def _load_prepared(
-    cycle_id: str,
     shard_id: int | None = None,
     authority_ids: list[str] | None = None,
     *,
@@ -499,14 +682,18 @@ def _load_prepared(
     policy = load_validation_policy()
     agents, issues = load_catalogs()
     authorities = authority_specs(agents, issues)
-    plan = prepare_resumed_validation_plan(
+    coordinator_lock = LocalValidationLock(
+        validation_runtime_root() / "coordinator.lock"
+    )
+    prepared = LifecycleJournal(lock=coordinator_lock).read_active().value
+    plan = prepare_bound_validation_plan(
         agents=agents,
         issues=issues,
         policy=policy,
         repository=git.repository,
         pr_number=git.pr_number,
         commit_sha=git.commit_sha,
-        cycle_id=cycle_id,
+        run_id=prepared["run_id"],
     )
     validate_validation_plan(
         plan,
@@ -514,14 +701,9 @@ def _load_prepared(
         issues=issues,
         policy=policy,
     )
-    coordinator_lock = LocalValidationLock(
-        validation_runtime_root() / "coordinator.lock"
-    )
-    prepared = LifecycleJournal(lock=coordinator_lock).read_active().value
     if (
-        prepared["cycle_id"] != cycle_id
-        or prepared["state"] not in {"VALIDATING", "FINAL_CHECKS"}
-        or prepared["deployment"]["phase"] not in {"prepared", "complete"}
+        prepared["state"] != "VALIDATING"
+        or prepared["deployment"]["phase"] != "prepared"
         or prepared["repository"] != git.repository
         or prepared["pr_number"] != git.pr_number
         or prepared["commit_sha"] != git.commit_sha
@@ -529,21 +711,35 @@ def _load_prepared(
         or len(prepared["runtime_topology"]["agents"]) != 41
     ):
         raise ContractError("Prepared validation topology is not current")
-    assigned = (
-        validate_shard_assignment(
-            int(shard_id),
+    selected_ids = list(prepared["validation_authority_ids"])
+    selected_by_id = {
+        item.authority_id: item
+        for item in authorities
+        if item.authority_id in selected_ids
+    }
+    selected = [selected_by_id[authority_id] for authority_id in selected_ids]
+    assigned = []
+    if shard_id is not None:
+        assigned = validate_shard_assignment(
+            shard_id,
             authority_ids or [],
-            authorities,
+            selected,
         )
-        if shard_id is not None
-        else []
-    )
+        expected = next(
+            (
+                item["authority_ids"]
+                for item in prepared["shard_assignments"]
+                if item["shard_id"] == shard_id
+            ),
+            None,
+        )
+        if expected != authority_ids:
+            raise ContractError("Validation shard assignment differs from prepare")
     operator = local_azure_operator()
-    base_profile = RuntimeProfile.from_env("staging", "g30")
     profile = validation_runtime_profile(
         plan["project_name"],
-        cycle_id=cycle_id,
-        base=base_profile,
+        run_id=prepared["run_id"],
+        base=RuntimeProfile.from_env("staging", "g30"),
     )
     capacity = _capacity_from_lifecycle(prepared)
     deployed = {
@@ -567,7 +763,7 @@ def _load_prepared(
         "policy": policy,
         "agents": agents,
         "authorities": authorities,
-        "assigned": assigned,
+        "assigned": assigned if shard_id is not None else selected,
         "plan": plan,
         "prepared": prepared,
         "operator": operator,
@@ -591,33 +787,373 @@ def _load_prepared(
     }
 
 
-def _load_shard_cleanup(
-    cycle_id: str,
-    shard_id: int,
-    authority_ids: list[str],
+def _deployment_context(
+    shard_id: int | None = None,
+    authority_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    coordinator_lock = LocalValidationLock(
-        validation_runtime_root() / "coordinator.lock"
-    )
-    active = LifecycleJournal(lock=coordinator_lock).read_active().value
-    if active["cycle_id"] != cycle_id:
-        raise ContractError("Validation cleanup cycle identity is not active")
+    git = discover_local_git_context()
+    active = _active_for_state("CREATING")
+    if (
+        active["repository"] != git.repository
+        or active["pr_number"] != git.pr_number
+        or active["commit_sha"] != git.commit_sha
+    ):
+        raise ContractError("Prepared deployment does not match the current head")
+    desired = _load_desired_state(active)
+    policy = load_validation_policy()
     agents, issues = load_catalogs()
-    validate_shard_assignment(
-        shard_id,
-        authority_ids,
-        authority_specs(agents, issues),
+    authorities = authority_specs(agents, issues)
+    plan = prepare_bound_validation_plan(
+        agents=agents,
+        issues=issues,
+        policy=policy,
+        repository=git.repository,
+        pr_number=git.pr_number,
+        commit_sha=git.commit_sha,
+        run_id=active["run_id"],
     )
-    context = _cleanup_context(active)
+    planned = list(
+        plan_runtime_topology(
+            authorities,
+            run_suffix=active["run_id"].removeprefix("validation-"),
+            policy=policy,
+        )
+    )
+    if shard_id is not None:
+        expected = next(
+            (
+                item["authority_ids"]
+                for item in active["deployment_assignments"]
+                if item["shard_id"] == shard_id
+            ),
+            None,
+        )
+        if expected != authority_ids:
+            raise ContractError("Deployment shard assignment differs from desired state")
+    operator = local_azure_operator()
+    profile = validation_runtime_profile(
+        plan["project_name"],
+        run_id=active["run_id"],
+        base=RuntimeProfile.from_env("staging", "g30"),
+    )
+    deployer = FoundryAuthorityDeployer(
+        profile=profile,
+        agent_catalog=agents,
+        issue_catalog=issues,
+        token_provider=operator.token_provider,
+        project=_project_from_lifecycle(active),
+        support_images=desired["support_images"],
+    )
     return {
-        **context,
+        "git": git,
         "active": active,
-        "store": ValidationShardStore(
-            prepared=active,
-            shard_id=shard_id,
-            authority_ids=authority_ids,
+        "desired": desired,
+        "policy": policy,
+        "agents": agents,
+        "authorities": authorities,
+        "planned": planned,
+        "operator": operator,
+        "profile": profile,
+        "deployer": deployer,
+        "store": (
+            ValidationDeploymentShardStore(
+                prepared=active,
+                shard_id=int(shard_id),
+                authority_ids=authority_ids or [],
+                desired_state_digest=desired["desired_state_digest"],
+            )
+            if shard_id is not None
+            else None
         ),
     }
+
+
+def _desired_state(
+    *,
+    plan: dict[str, Any],
+    authorities: list[Any],
+    planned: list[Any],
+    deployer: FoundryAuthorityDeployer,
+    support_images: dict[str, str],
+    superseded_authority_ids: list[str],
+) -> dict[str, Any]:
+    registry = _read_deployment_registry()
+    registry_by_id = (
+        {
+            item["authority_id"]: item
+            for item in registry["authorities"]
+        }
+        if registry is not None
+        else {}
+    )
+    desired_authorities = []
+    reused_runtimes = []
+    deployment_ids = []
+    for authority, target in zip(authorities, planned, strict=True):
+        provider_content_digest = deployer.desired_content_digest(authority)
+        item = {
+            "authority_id": authority.authority_id,
+            "authority_kind": authority.authority_kind,
+            "canonical_agent": authority.canonical_agent,
+            "logical_version": authority.logical_version,
+            "runtime_kind": authority.runtime_kind,
+            "framework": authority.framework,
+            "runtime_agent_name": target.runtime_agent_name,
+            "source_content_digest": authority.source_content_digest,
+            "provider_content_digest": provider_content_digest,
+            "version_intent": content_hash(
+                {
+                    "runtime_agent_name": target.runtime_agent_name,
+                    "logical_version": authority.logical_version,
+                    "provider_content_digest": provider_content_digest,
+                }
+            ),
+        }
+        desired_authorities.append(item)
+        previous = registry_by_id.get(authority.authority_id)
+        if previous is not None and all(
+            previous.get(field) == item[field]
+            for field in (
+                "authority_id",
+                "runtime_kind",
+                "framework",
+                "runtime_agent_name",
+                "source_content_digest",
+                "provider_content_digest",
+                "version_intent",
+            )
+        ):
+            reused_runtimes.append(
+                {
+                    "authority_id": authority.authority_id,
+                    "runtime": previous["runtime"],
+                }
+            )
+            continue
+        existing = deployer.find_existing(authority, target)
+        if existing is not None:
+            reused_runtimes.append(
+                {
+                    "authority_id": authority.authority_id,
+                    "runtime": asdict(existing),
+                }
+            )
+            continue
+        deployment_ids.append(authority.authority_id)
+    value = {
+        "schema_version": "2.0.0",
+        "kind": "test-agent-validation-desired-state",
+        "run_id": plan["run_id"],
+        "repository": plan["repository"],
+        "pr_number": plan["pr_number"],
+        "commit_sha": plan["commit_sha"],
+        "environment_id": plan["environment_id"],
+        "project_name": plan["project_name"],
+        "validation_digest": plan["validation_digest"],
+        "shared_validation_digest": plan["shared_validation_digest"],
+        "support_images": dict(sorted(support_images.items())),
+        "authorities": desired_authorities,
+        "deployment_authority_ids": deployment_ids,
+        "deployment_assignments": _assignments(
+            deployment_ids,
+            maximum_shards=8,
+        ),
+        "reused_runtimes": reused_runtimes,
+        "forced_validation_authority_ids": list(
+            dict.fromkeys(superseded_authority_ids)
+        ),
+        "desired_state_digest": "",
+    }
+    value["desired_state_digest"] = content_hash(
+        {
+            key: item
+            for key, item in value.items()
+            if key != "desired_state_digest"
+        }
+    )
+    return value
+
+
+def _load_desired_state(active: dict[str, Any]) -> dict[str, Any]:
+    reference = active.get("desired_state_reference")
+    if not isinstance(reference, dict):
+        raise ContractError("Immutable validation desired state is missing")
+    root = validation_runtime_root()
+    path = (root / str(reference.get("path") or "")).resolve()
+    if root.resolve() not in path.parents:
+        raise ContractError("Validation desired state path escapes runtime root")
+    value = read_json(path)
+    digest = content_hash(
+        {
+            key: item
+            for key, item in value.items()
+            if key != "desired_state_digest"
+        }
+    )
+    if (
+        value.get("schema_version") != "2.0.0"
+        or value.get("kind") != "test-agent-validation-desired-state"
+        or value.get("run_id") != active["run_id"]
+        or value.get("repository") != active["repository"]
+        or value.get("pr_number") != active["pr_number"]
+        or value.get("commit_sha") != active["commit_sha"]
+        or value.get("desired_state_digest") != digest
+        or reference.get("digest") != digest
+        or value.get("deployment_assignments")
+        != active["deployment_assignments"]
+    ):
+        raise ContractError("Immutable validation desired state binding is invalid")
+    return value
+
+
+def _read_deployment_registry() -> dict[str, Any] | None:
+    path = validation_runtime_root() / "deployment-registry.json"
+    if not path.is_file():
+        return None
+    try:
+        value = read_json(path)
+    except (ContractError, OSError):
+        return None
+    digest = content_hash(
+        {
+            key: item
+            for key, item in value.items()
+            if key != "registry_digest"
+        }
+    )
+    if value.get("registry_digest") != digest:
+        return None
+    try:
+        _validate_deployment_registry(value)
+    except ContractError:
+        return None
+    return value
+
+
+def _write_deployment_registry(
+    active: dict[str, Any],
+    *,
+    desired: dict[str, Any],
+    profile: RuntimeProfile,
+) -> None:
+    desired_by_id = {
+        item["authority_id"]: item for item in desired["authorities"]
+    }
+    value = {
+        "schema_version": "2.0.0",
+        "kind": "test-agent-validation-deployment-registry",
+        "environment_id": "swedencentral-g30",
+        "project_name": active["project"]["name"],
+        "authorities": [
+            {
+                **{
+                    field: desired_by_id[item["authority_id"]][field]
+                    for field in (
+                        "authority_id",
+                        "runtime_kind",
+                        "framework",
+                        "runtime_agent_name",
+                        "source_content_digest",
+                        "provider_content_digest",
+                        "version_intent",
+                    )
+                },
+                "runtime": item,
+            }
+            for item in active["runtime_topology"]["agents"]
+        ],
+        "registry_digest": "",
+    }
+    value["registry_digest"] = content_hash(
+        {key: item for key, item in value.items() if key != "registry_digest"}
+    )
+    _validate_deployment_registry(value)
+    root = validation_runtime_root()
+    immutable_json(
+        root
+        / "deployment-registries"
+        / active["run_id"]
+        / f"{value['registry_digest'].removeprefix('sha256:')}.json",
+        value,
+    )
+    canonical = root / "deployment-registry.json"
+    atomic_json(canonical, value)
+    publish_validation_registry(profile, canonical)
+
+
+def _validate_deployment_registry(value: dict[str, Any]) -> None:
+    schema = read_json(
+        Path(__file__).resolve().parents[2]
+        / "schemas"
+        / "test-agent-validation-deployment-registry.schema.json"
+    )
+    errors = sorted(
+        Draft202012Validator(schema).iter_errors(value),
+        key=lambda error: list(error.absolute_path),
+    )
+    if errors:
+        raise ContractError(
+            f"Validation deployment registry is invalid: {errors[0].message}"
+        )
+    authority_ids = [item["authority_id"] for item in value["authorities"]]
+    if len(authority_ids) != len(set(authority_ids)):
+        raise ContractError("Validation deployment registry authorities collide")
+
+
+def _active_for_state(state: str) -> dict[str, Any]:
+    lock = LocalValidationLock(validation_runtime_root() / "coordinator.lock")
+    active = LifecycleJournal(lock=lock).read_active().value
+    if active["state"] != state:
+        raise ContractError(f"Validation lifecycle is not {state}")
+    return active
+
+
+def _matching_active(git: Any) -> dict[str, Any] | None:
+    lock = LocalValidationLock(validation_runtime_root() / "coordinator.lock")
+    try:
+        active = LifecycleJournal(lock=lock).read_active().value
+    except (ContractError, OSError):
+        return None
+    if (
+        active["repository"] != git.repository
+        or active["pr_number"] != git.pr_number
+        or active["commit_sha"] != git.commit_sha
+    ):
+        return None
+    return active
+
+
+def _assignments(
+    authority_ids: list[str],
+    *,
+    maximum_shards: int = 10,
+) -> list[dict[str, Any]]:
+    shard_count = min(maximum_shards, len(authority_ids))
+    if shard_count == 0:
+        return []
+    return [
+        {
+            "shard_id": index + 1,
+            "authority_ids": authority_ids[index::shard_count],
+        }
+        for index in range(shard_count)
+    ]
+
+
+def _run_parallel(
+    assignments: list[dict[str, Any]],
+    *,
+    worker: Any,
+    maximum_concurrency: int,
+) -> None:
+    if not assignments:
+        return
+    with ThreadPoolExecutor(
+        max_workers=min(maximum_concurrency, len(assignments))
+    ) as pool:
+        futures = [pool.submit(worker, item) for item in assignments]
+        for future in as_completed(futures):
+            future.result()
 
 
 def _runner(
@@ -654,11 +1190,10 @@ def _shard_targets(context: dict[str, Any]) -> list[Any]:
 def _prepared_result(value: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": "prepared",
-        "cycle_id": value["cycle_id"],
         "commit_sha": value["commit_sha"],
-        "authority_ids": [
-            item["authority_id"] for item in value["runtime_topology"]["agents"]
-        ],
+        "authority_count": len(value["validation_authority_ids"]),
+        "reused_authority_count": len(value["reused_authorities"]),
+        "shards": value["shard_assignments"],
         "invoke_shard_concurrency": 8,
         "verify_shard_concurrency": 4,
     }
@@ -685,63 +1220,3 @@ def _invoke_worker_capacity(
             "Partitioned validation capacity cannot fit the shard endpoint cost"
         )
     return request_capacity, token_capacity
-
-
-def _cleanup_context(active: dict[str, Any]) -> dict[str, Any]:
-    policy = load_validation_policy()
-    operator = local_azure_operator()
-    substrate = active["substrate"]
-    required = {
-        "account_name",
-        "account_resource_id",
-        "registry_name",
-        "storage_account_name",
-        "telemetry_resource_id",
-    }
-    if not required.issubset(substrate) or not all(
-        substrate[key] for key in required
-    ):
-        raise ContractError("Persisted validation cleanup substrate is incomplete")
-    project_name = str(active["project"]["name"])
-    account_name = str(substrate["account_name"])
-    endpoint = (
-        f"https://{account_name}.services.ai.azure.com/api/projects/{project_name}"
-    )
-    persisted_profile = RuntimeProfile(
-        name="staging",
-        project_name=project_name,
-        project_endpoint=endpoint,
-        insights_endpoint=endpoint,
-        application_insights_resource_id=substrate["telemetry_resource_id"],
-        registry_path=validation_runtime_root()
-        / str(active["cycle_id"])
-        / "deployment-registry.json",
-        account_name=account_name,
-        container_registry_name=substrate["registry_name"],
-        registry_storage_account_name=substrate["storage_account_name"],
-        account_resource_id=substrate["account_resource_id"],
-        telemetry_resource_set="g30",
-        environment_id="swedencentral-g30",
-        location="swedencentral",
-    )
-    return {
-        "policy": policy,
-        "operator": operator,
-        "profile": validation_runtime_profile(
-            str(active["project"]["name"]),
-            cycle_id=str(active["cycle_id"]),
-            base=persisted_profile,
-        ),
-    }
-
-
-def _read_shard_ids(path: Path) -> list[str]:
-    from agent_insights_quality.util import read_json
-
-    value = read_json(path)
-    authority_ids = value.get("authority_ids")
-    if not isinstance(authority_ids, list) or not all(
-        isinstance(item, str) for item in authority_ids
-    ):
-        raise ContractError("Validation shard authority assignment is invalid")
-    return authority_ids

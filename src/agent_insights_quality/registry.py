@@ -99,6 +99,42 @@ def publish_registry(profile: Any) -> None:
         raise ContractError("Private deployment registry upload failed")
 
 
+def publish_validation_registry(profile: Any, path: Path) -> None:
+    account = str(profile.registry_storage_account_name or "").strip()
+    if (
+        profile.environment_id != ENVIRONMENT_ID
+        or profile.name != "staging"
+        or not account
+        or not path.is_file()
+    ):
+        raise ContractError("Validation registry publication binding is invalid")
+    process = _run_registry_command(
+        [
+            azure_cli(),
+            "storage",
+            "blob",
+            "upload",
+            "--account-name",
+            account,
+            "--container-name",
+            REGISTRY_CONTAINER,
+            "--name",
+            f"{ENVIRONMENT_ID}/test-agent-validation.json",
+            "--file",
+            str(path),
+            "--auth-mode",
+            "login",
+            "--overwrite",
+            "true",
+            "--only-show-errors",
+            "--output",
+            "none",
+        ],
+    )
+    if process.returncode != 0:
+        raise ContractError("Private validation registry upload failed")
+
+
 def _run_registry_command(
     arguments: list[str],
 ) -> subprocess.CompletedProcess[str]:

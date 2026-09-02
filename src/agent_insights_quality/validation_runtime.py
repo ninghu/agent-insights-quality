@@ -109,7 +109,7 @@ class ScenarioAttemptRunner(Protocol):
     ) -> dict[str, Any]: ...
 
 
-def opaque_cycle_suffix(
+def opaque_run_suffix(
     *,
     repository: str,
     pr_number: int,
@@ -125,11 +125,11 @@ def opaque_cycle_suffix(
 
 
 def validation_project_name(
-    cycle_suffix: str,
+    run_suffix: str,
     *,
     policy: ValidationPolicy,
 ) -> str:
-    del cycle_suffix
+    del run_suffix
     return _bounded_name(
         policy.project_name,
         maximum=policy.project_name_policy.maximum_length,
@@ -141,14 +141,14 @@ def validation_agent_name(
     *,
     canonical_agent: str,
     logical_version: str,
-    cycle_suffix: str,
+    run_suffix: str,
     policy: ValidationPolicy,
 ) -> str:
-    del cycle_suffix
+    del run_suffix
     qualifier = (
         "baseline"
         if logical_version == "v0"
-        else logical_version.replace("issue-", "issue-")
+        else logical_version
     )
     return _bounded_name(
         f"{canonical_agent}-{qualifier}",
@@ -160,7 +160,7 @@ def validation_agent_name(
 def plan_runtime_topology(
     authorities: Sequence[AuthoritySpec],
     *,
-    cycle_suffix: str,
+    run_suffix: str,
     policy: ValidationPolicy,
 ) -> tuple[PlannedRuntime, ...]:
     if len(authorities) != policy.authority_count:
@@ -178,10 +178,10 @@ def plan_runtime_topology(
             runtime_agent_name=validation_agent_name(
                 canonical_agent=authority.canonical_agent,
                 logical_version=authority.logical_version,
-                cycle_suffix=cycle_suffix,
+                run_suffix=run_suffix,
                 policy=policy,
             ),
-            intent_namespace=cycle_suffix,
+            intent_namespace=run_suffix,
         )
         for authority in authorities
     )
@@ -236,7 +236,7 @@ def deploy_all_authorities(
     lock = threading.Lock()
     def deploy(authority: AuthoritySpec) -> DeployedRuntime:
         target = by_id[authority.authority_id]
-        intents = _deployment_intents(authority, target)
+        intents = deployment_intents(authority, target)
         if record_resource is not None:
             for event in intents:
                 record_resource(event)
@@ -445,7 +445,7 @@ def _agent_failure_summary(
     return summary
 
 
-def _deployment_intents(
+def deployment_intents(
     authority: AuthoritySpec,
     planned: PlannedRuntime,
 ) -> list[dict[str, Any]]:
@@ -493,10 +493,50 @@ def _deployment_intents(
             ),
             "authority_id": authority.authority_id,
             "parent_id": None,
-            "cleanup_method": "retained_durable",
+            "retention": "retained",
             }
         )
     return events
+
+
+def deployment_resource_events(
+    authority: AuthoritySpec,
+    planned: PlannedRuntime,
+    runtime: DeployedRuntime,
+) -> list[dict[str, Any]]:
+    events = deployment_intents(authority, planned)
+    observed = {
+        "provider_agent": runtime.provider_agent_id,
+        "provider_agent_version": runtime.provider_agent_version_id,
+        "hosted_identity": runtime.hosted_identity_id,
+        "hosted_blueprint": runtime.hosted_blueprint_id,
+        "hosted_deployment": runtime.hosted_deployment_id,
+        "runtime_principal": runtime.runtime_principal_id,
+    }
+    result: list[dict[str, Any]] = []
+    for event in events:
+        result.append(event)
+        provider_id = observed[event["kind"]]
+        if provider_id is None:
+            if authority.runtime_kind != "prompt":
+                raise ContractError(
+                    "Hosted validation deployment resource is missing"
+                )
+            continue
+        result.append(
+            {
+                **event,
+                "state": "created",
+                "provider_id": provider_id,
+                "deterministic_name": (
+                    f"{runtime.runtime_agent_name}/"
+                    f"{runtime.runtime_agent_version}"
+                    if event["kind"] == "provider_agent_version"
+                    else runtime.runtime_agent_name
+                ),
+            }
+        )
+    return result
 
 
 def invoke_validation_shard(
@@ -738,6 +778,40 @@ def _verify_invoked_authority(
                 "provider_agent_version_id": deployed[
                     authority.authority_id
                 ].provider_agent_version_id,
+            }
+        ),
+        "runtime_mapping_digest": content_hash(
+            {
+                "runtime_agent_name": deployed[
+                    authority.authority_id
+                ].runtime_agent_name,
+                "runtime_agent_version": deployed[
+                    authority.authority_id
+                ].runtime_agent_version,
+                "provider_agent_id": deployed[
+                    authority.authority_id
+                ].provider_agent_id,
+                "provider_agent_version_id": deployed[
+                    authority.authority_id
+                ].provider_agent_version_id,
+                "hosted_identity_id": deployed[
+                    authority.authority_id
+                ].hosted_identity_id,
+                "hosted_blueprint_id": deployed[
+                    authority.authority_id
+                ].hosted_blueprint_id,
+                "hosted_deployment_id": deployed[
+                    authority.authority_id
+                ].hosted_deployment_id,
+                "runtime_principal_id": deployed[
+                    authority.authority_id
+                ].runtime_principal_id,
+                "telemetry_identity_id": deployed[
+                    authority.authority_id
+                ].telemetry_identity_id,
+                "connection_ids": list(
+                    deployed[authority.authority_id].connection_ids
+                ),
             }
         ),
         "provider_content_digest": deployed[

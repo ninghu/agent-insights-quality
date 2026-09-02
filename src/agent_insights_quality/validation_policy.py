@@ -50,8 +50,6 @@ class ValidationPolicy:
     limits: ValidationLimits
     project_name_policy: NamePolicy
     agent_name_policy: NamePolicy
-    resource_kinds: tuple[str, ...]
-    documented_project_cascade: tuple[str, ...]
     trace_hydration_poll_seconds: int
     trace_hydration_stabilization_seconds: int
     trace_hydration_maximum_wait_seconds: int
@@ -74,11 +72,9 @@ def load_validation_policy(
         "limits",
         "trace_hydration",
         "name_policy",
-        "resource_kinds",
-        "documented_project_cascade",
     }:
         raise ContractError("Test Agent Validation config fields are invalid")
-    if value.get("schema_version") != "2.0.0":
+    if value.get("schema_version") != "3.0.0":
         raise ContractError("Test Agent Validation config version is invalid")
     if value.get("repository") != "ninghu/agent-insights-quality":
         raise ContractError("Validation repository is not the reviewed public repository")
@@ -128,18 +124,6 @@ def load_validation_policy(
     names = _mapping(value.get("name_policy"), "name policy")
     project_names = _name_policy(names.get("project"), "Project")
     agent_names = _name_policy(names.get("agent"), "Agent")
-    resource_kinds = value.get("resource_kinds")
-    if (
-        not isinstance(resource_kinds, list)
-        or len(resource_kinds) != len(set(resource_kinds))
-        or not all(isinstance(item, str) and item for item in resource_kinds)
-    ):
-        raise ContractError("Validation resource kinds are invalid")
-    cascade = value.get("documented_project_cascade")
-    if not isinstance(cascade, list) or any(
-        item not in resource_kinds for item in cascade
-    ):
-        raise ContractError("Validation Project cascade policy is invalid")
     return ValidationPolicy(
         repository=value["repository"],
         environment_id=value["environment_id"],
@@ -153,8 +137,6 @@ def load_validation_policy(
         limits=ValidationLimits(**limits_value),
         project_name_policy=project_names,
         agent_name_policy=agent_names,
-        resource_kinds=tuple(resource_kinds),
-        documented_project_cascade=tuple(cascade),
         trace_hydration_poll_seconds=hydration["poll_seconds"],
         trace_hydration_stabilization_seconds=hydration["stabilization_seconds"],
         trace_hydration_maximum_wait_seconds=hydration["maximum_wait_seconds"],

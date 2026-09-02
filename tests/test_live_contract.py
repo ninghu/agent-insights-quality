@@ -1035,55 +1035,178 @@ def test_finance_trace_assertions_cover_r01_failures(
     assert "account_not_found" not in serialized
 
 
-def test_trace_assertions_require_exact_response_operation_correlation() -> None:
+def _anchor_row(
+    operation_id: str,
+    span_id: str,
+    reference: str,
+    *,
+    parent: str = "",
+    operation_name: str = "invoke_agent",
+    agent_name: str = "healthcare-agent-issue-010",
+    agent_version: str = "7",
+) -> dict:
+    return {
+        "operation_id": operation_id,
+        "span_id": span_id,
+        "parent_span_id": parent,
+        "operation_name": operation_name,
+        "matched_reference": reference,
+        "agent_name": agent_name,
+        "agent_version": agent_version,
+    }
+
+
+def test_issue_010_011_shared_operation_uses_independent_response_anchors() -> None:
     operation_a = "a" * 32
     operation_b = "b" * 32
     rows = [
-        {"operation_id": operation_a, "matched_reference": "response-1"},
-        {"operation_id": operation_b, "matched_reference": "response-2"},
+        _anchor_row(operation_a, "root-a", "response-1"),
+        _anchor_row(operation_b, "root-b", "response-2"),
     ]
     correlated = _correlated_request_rows(
         rows,
         ("response-1", "response-2"),
         (operation_a, operation_b),
+        agent_name="healthcare-agent-issue-010",
+        foundry_version="7",
     )
     assert correlated is not None
-    assert [items[0]["operation_id"] for items in correlated] == [
+    subtrees, anchors = correlated
+    assert [items[0]["operation_id"] for items in subtrees] == [
         operation_a,
         operation_b,
     ]
-    rows.append(
-        {"operation_id": operation_b, "matched_reference": "response-1"}
+    assert anchors == ("root-a", "root-b")
+    shared = "c" * 32
+    shared_rows = [
+        _anchor_row(shared, "root-1", "response-1"),
+        _anchor_row(
+            shared,
+            "child-1",
+            "",
+            parent="root-1",
+            operation_name="chat",
+        ),
+        _anchor_row(shared, "root-2", "response-2"),
+        _anchor_row(
+            shared,
+            "child-2",
+            "",
+            parent="root-2",
+            operation_name="tool",
+        ),
+    ]
+    correlated_shared = _correlated_request_rows(
+        shared_rows,
+        ("response-1", "response-2"),
+        (shared, shared),
+        agent_name="healthcare-agent-issue-010",
+        foundry_version="7",
     )
+    assert correlated_shared is not None
+    shared_subtrees, shared_anchors = correlated_shared
+    assert [
+        {item["span_id"] for item in request_rows}
+        for request_rows in shared_subtrees
+    ] == [{"root-1", "child-1"}, {"root-2", "child-2"}]
+    assert shared_anchors == ("root-1", "root-2")
+
+
+def test_response_anchor_ignores_idless_trace_rows() -> None:
+    operation_id = "c" * 32
+    rows = [
+        _anchor_row(operation_id, "root", "response-1"),
+        _anchor_row(
+            operation_id,
+            "child",
+            "",
+            parent="root",
+            operation_name="chat",
+        ),
+        {
+            "operation_id": operation_id,
+            "span_id": "",
+            "parent_span_id": "",
+            "operation_name": "log",
+            "matched_reference": "",
+            "messages": ["", "must-not-contribute"],
+        },
+    ]
+    correlation = _correlated_request_rows(
+        rows,
+        ("response-1",),
+        (operation_id,),
+        agent_name="healthcare-agent-issue-010",
+        foundry_version="7",
+    )
+    assert correlation is not None
+    subtrees, anchors = correlation
+    assert anchors == ("root",)
+    assert {row["span_id"] for row in subtrees[0]} == {"root", "child"}
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [
+            _anchor_row("c" * 32, "root-1", "response-1"),
+            _anchor_row("c" * 32, "root-2", "response-2"),
+            _anchor_row(
+                "c" * 32,
+                "borrowed",
+                "response-2",
+                parent="root-1",
+                operation_name="tool",
+            ),
+        ],
+        [
+            _anchor_row("c" * 32, "root-1", "response-1"),
+            _anchor_row("c" * 32, "root-1", "response-2"),
+        ],
+        [
+            _anchor_row("c" * 32, "root-1", "response-1"),
+            _anchor_row(
+                "c" * 32,
+                "orphan",
+                "",
+                parent="missing",
+                operation_name="chat",
+            ),
+        ],
+        [
+            _anchor_row(
+                "c" * 32,
+                "root-1",
+                "response-1",
+                parent="child",
+            ),
+            _anchor_row(
+                "c" * 32,
+                "child",
+                "",
+                parent="root-1",
+                operation_name="chat",
+            ),
+        ],
+        [
+            _anchor_row(
+                "c" * 32,
+                "root-1",
+                "response-1",
+                agent_version="wrong",
+            ),
+            _anchor_row("c" * 32, "root-2", "response-2"),
+        ],
+    ],
+)
+def test_response_anchor_correlation_rejects_invalid_ancestry(rows) -> None:
     assert (
         _correlated_request_rows(
             rows,
             ("response-1", "response-2"),
-            (operation_a, operation_b),
-        )
-        is None
-    )
-    assert (
-        _correlated_request_rows(
-            rows[:2],
-            ("response-1", "response-1"),
-            (operation_a, operation_b),
-        )
-        is None
-    )
-    assert (
-        _correlated_request_rows(
-            rows[:2],
-            ("", "response-2"),
-            (operation_a, operation_b),
-        )
-        is None
-    )
-    assert (
-        _correlated_request_rows(
-            rows[:2],
-            ("response-1", "response-2"),
-            (operation_a, operation_b, "c" * 32),
+            ("c" * 32, "c" * 32),
+            agent_name="healthcare-agent-issue-010",
+            foundry_version="7",
         )
         is None
     )
@@ -1212,6 +1335,15 @@ def test_trace_row_query_joins_split_reference_and_identity_spans_by_operation(
     assert 'set_has_element(agent_names, "finance-agent")' in query
     assert "scoped_trace_operations" in query
     assert "operation_Id in (scoped_trace_operations)" in query
+    outer = query.split("union traces, dependencies, requests", 2)[-1]
+    assert (
+        '| extend observed_agent=tostring(customDimensions["gen_ai.agent.name"])'
+        in outer
+    )
+    assert (
+        '| extend agent_version=tostring(customDimensions["gen_ai.agent.version"])'
+        in outer
+    )
     assert query.index("| summarize") < query.index(
         'set_has_element(agent_versions, "issue-013")'
     )
@@ -1232,6 +1364,8 @@ def _trace_behavior_query_row(
 ) -> list:
     return [
         operation_id,
+        "span-id",
+        "parent-span-id",
         "invoke_agent",
         "",
         "",
@@ -1251,6 +1385,8 @@ def _trace_behavior_query_row(
         reference,
         output_present,
         output_nonempty,
+        "synthetic-agent",
+        "1",
     ]
 
 
@@ -1928,9 +2064,38 @@ def _invoke_agent_trace_row(
             "telemetry_type": telemetry_type,
             "output_messages_present": present,
             "output_messages_nonempty": nonempty,
+            "span_id": "root-span",
+            "parent_span_id": "",
+            "agent_name": "finance-agent",
+            "agent_version": "v0",
         }
     )
     return row
+
+
+def _anchored_tool_rows(
+    tool_name: str,
+    reference: str,
+    *,
+    operation_id: str = "a" * 32,
+    agent_name: str = "finance-agent",
+    agent_version: str = "issue-013",
+) -> list[dict]:
+    return [
+        _anchor_row(
+            operation_id,
+            "root-span",
+            reference,
+            agent_name=agent_name,
+            agent_version=agent_version,
+        ),
+        {
+            **_tool_trace_row(tool_name),
+            "operation_id": operation_id,
+            "span_id": "tool-span",
+            "parent_span_id": "root-span",
+        },
+    ]
 
 
 def test_trace_assertion_correlation_fails_immediately_when_ambiguous(
@@ -2001,6 +2166,8 @@ def test_trace_assertion_waits_for_invoke_agent_hydration(
     reference = "resp_A1b2C3d4E5f6"
     correlated = [
         operation_id,
+        "tool-span",
+        "root-span",
         "execute_tool",
         "lookup",
         "",
@@ -2020,9 +2187,13 @@ def test_trace_assertion_waits_for_invoke_agent_hydration(
         reference,
         False,
         False,
+        "",
+        "",
     ]
     hydrated = [
         operation_id,
+        "root-span",
+        "",
         "invoke_agent",
         "",
         "",
@@ -2042,6 +2213,8 @@ def test_trace_assertion_waits_for_invoke_agent_hydration(
         reference,
         True,
         True,
+        "finance-agent",
+        "issue-013",
     ]
     polls = []
     runtime._logs_client = lambda: object()  # type: ignore[method-assign]
@@ -2104,6 +2277,13 @@ def test_trace_assertion_waits_for_inner_maf_output_hydration(tmp_path) -> None:
         present=True,
         nonempty=True,
         telemetry_type="dependencies",
+    )
+    inner.update(
+        {
+            "span_id": "inner-span",
+            "parent_span_id": "root-span",
+            "matched_reference": "",
+        }
     )
     runtime._trace_rows = (  # type: ignore[method-assign]
         lambda *_args: [outer] if monotonic[0] < 135 else [outer, inner]
@@ -2202,7 +2382,7 @@ def test_trace_assertion_bounds_missing_invoke_agent_hydration(tmp_path) -> None
 
     with pytest.raises(
         TraceAssertionActivationError,
-        match="did not stabilize before the bounded deadline",
+        match="exact response-to-operation correlation",
     ):
         runtime.trace_assertion_evidence(
             agent_name="finance-agent",
@@ -2234,10 +2414,18 @@ def test_trace_assertion_stable_failure_waits_for_deadline(
     operation_id = "a" * 32
     reference = "resp_A1b2C3d4E5f6"
     rows = [
+        _anchor_row(
+            operation_id,
+            "root-span",
+            reference,
+            agent_name="finance-agent",
+            agent_version="issue-013",
+        ),
         {
             **_tool_trace_row("different_lookup"),
             "operation_id": operation_id,
-            "matched_reference": reference,
+            "span_id": "tool-span",
+            "parent_span_id": "root-span",
         }
     ]
     traffic_path = tmp_path / "traffic.json"
@@ -2282,20 +2470,16 @@ def test_trace_assertion_observes_span_ingested_after_135_seconds(
     )
     operation_id = "a" * 32
     reference = "resp_A1b2C3d4E5f6"
-    incomplete = [
-        {
-            **_tool_trace_row("different_lookup"),
-            "operation_id": operation_id,
-            "matched_reference": reference,
-        }
-    ]
-    complete = [
-        {
-            **_tool_trace_row("lookup"),
-            "operation_id": operation_id,
-            "matched_reference": reference,
-        }
-    ]
+    incomplete = _anchored_tool_rows(
+        "different_lookup",
+        reference,
+        operation_id=operation_id,
+    )
+    complete = _anchored_tool_rows(
+        "lookup",
+        reference,
+        operation_id=operation_id,
+    )
     traffic_path = tmp_path / "traffic.json"
     _write_trace_assertion_traffic(traffic_path)
     runtime._trace_rows = (  # type: ignore[method-assign]
@@ -2334,19 +2518,20 @@ def test_trace_assertion_late_duplicate_invalidates_stabilizing_pass(
     )
     operation_id = "a" * 32
     reference = "resp_A1b2C3d4E5f6"
-    first = {
-        **_tool_trace_row("lookup"),
-        "operation_id": operation_id,
-        "matched_reference": reference,
-    }
+    first = _anchored_tool_rows(
+        "lookup",
+        reference,
+        operation_id=operation_id,
+    )
     duplicate = {
-        **first,
+        **first[1],
+        "span_id": "late-tool-span",
         "timestamp": "2026-08-28T10:00:01+00:00",
     }
     traffic_path = tmp_path / "traffic.json"
     _write_trace_assertion_traffic(traffic_path)
     runtime._trace_rows = (  # type: ignore[method-assign]
-        lambda *_args: [first] if monotonic[0] < 135 else [first, duplicate]
+        lambda *_args: first if monotonic[0] < 135 else [*first, duplicate]
     )
     runtime._sleep = lambda seconds: monotonic.__setitem__(
         0, monotonic[0] + seconds
@@ -2381,20 +2566,21 @@ def test_trace_assertion_late_external_operation_is_ambiguous(
     )
     operation_id = "a" * 32
     reference = "resp_A1b2C3d4E5f6"
-    target = {
-        **_tool_trace_row("lookup"),
-        "operation_id": operation_id,
-        "matched_reference": reference,
-    }
+    target = _anchored_tool_rows(
+        "lookup",
+        reference,
+        operation_id=operation_id,
+    )
     external = {
-        **target,
+        **target[0],
         "operation_id": "b" * 32,
+        "span_id": "external-root",
         "timestamp": "2026-08-28T10:00:01+00:00",
     }
     traffic_path = tmp_path / "traffic.json"
     _write_trace_assertion_traffic(traffic_path)
     runtime._trace_rows = (  # type: ignore[method-assign]
-        lambda *_args: [target] if monotonic[0] < 135 else [target, external]
+        lambda *_args: target if monotonic[0] < 135 else [*target, external]
     )
     runtime._sleep = lambda seconds: monotonic.__setitem__(
         0, monotonic[0] + seconds
@@ -2429,13 +2615,11 @@ def test_trace_assertion_stable_pass_waits_for_ingestion_interval(
     )
     operation_id = "a" * 32
     reference = "resp_A1b2C3d4E5f6"
-    rows = [
-        {
-            **_tool_trace_row("lookup"),
-            "operation_id": operation_id,
-            "matched_reference": reference,
-        }
-    ]
+    rows = _anchored_tool_rows(
+        "lookup",
+        reference,
+        operation_id=operation_id,
+    )
     traffic_path = tmp_path / "traffic.json"
     _write_trace_assertion_traffic(traffic_path)
     runtime._trace_rows = lambda *_args: rows  # type: ignore[method-assign]
@@ -2472,13 +2656,13 @@ def test_hosted_correlation_without_assertions_waits_for_ingestion_interval(
     )
     operation_id = "a" * 32
     reference = "resp_A1b2C3d4E5f6"
-    rows = [
-        {
-            **_tool_trace_row("lookup"),
-            "operation_id": operation_id,
-            "matched_reference": reference,
-        }
-    ]
+    rows = _anchored_tool_rows(
+        "lookup",
+        reference,
+        operation_id=operation_id,
+        agent_name="travel-agent",
+        agent_version="issue-021",
+    )
     traffic_path = tmp_path / "traffic.json"
     _write_trace_assertion_traffic(
         traffic_path,
@@ -2518,13 +2702,11 @@ def test_trace_assertion_requires_correlation_in_final_snapshot(
     )
     operation_id = "a" * 32
     reference = "resp_A1b2C3d4E5f6"
-    rows = [
-        {
-            **_tool_trace_row("different_lookup"),
-            "operation_id": operation_id,
-            "matched_reference": reference,
-        }
-    ]
+    rows = _anchored_tool_rows(
+        "different_lookup",
+        reference,
+        operation_id=operation_id,
+    )
     traffic_path = tmp_path / "traffic.json"
     _write_trace_assertion_traffic(traffic_path)
     runtime._trace_rows = (  # type: ignore[method-assign]
@@ -2563,20 +2745,20 @@ def test_trace_assertion_rejects_pass_first_seen_near_deadline(
     )
     operation_id = "a" * 32
     reference = "resp_A1b2C3d4E5f6"
-    failing = {
-        **_tool_trace_row("different_lookup"),
-        "operation_id": operation_id,
-        "matched_reference": reference,
-    }
-    passing = {
-        **_tool_trace_row("lookup"),
-        "operation_id": operation_id,
-        "matched_reference": reference,
-    }
+    failing = _anchored_tool_rows(
+        "different_lookup",
+        reference,
+        operation_id=operation_id,
+    )
+    passing = _anchored_tool_rows(
+        "lookup",
+        reference,
+        operation_id=operation_id,
+    )
     traffic_path = tmp_path / "traffic.json"
     _write_trace_assertion_traffic(traffic_path)
     runtime._trace_rows = (  # type: ignore[method-assign]
-        lambda *_args: [failing] if monotonic[0] < 885 else [passing]
+        lambda *_args: failing if monotonic[0] < 885 else passing
     )
     runtime._sleep = lambda seconds: monotonic.__setitem__(
         0, monotonic[0] + seconds
@@ -3319,6 +3501,27 @@ def test_telemetry_requires_every_request_reference() -> None:
         ("resp_A1b2C3d4E5f6",),
     ) is None
 
+    class SharedOperationTable:
+        rows = [
+            [
+                "a" * 32,
+                ["resp_A1b2C3d4E5f6", "resp_F6e5D4c3B2a1"],
+            ]
+        ]
+
+    assert _complete_operation_ids(
+        [SharedOperationTable()],
+        ("resp_A1b2C3d4E5f6", "resp_F6e5D4c3B2a1"),
+        allow_shared_operations=True,
+    ) == ("a" * 32, "a" * 32)
+    assert (
+        _complete_operation_ids(
+            [SharedOperationTable()],
+            ("resp_A1b2C3d4E5f6", "resp_F6e5D4c3B2a1"),
+        )
+        is None
+    )
+
 
 @pytest.mark.parametrize(
     "agent_name",
@@ -3346,7 +3549,10 @@ def test_wait_for_telemetry_discovers_exact_attempt_operations_for_every_agent(
     timespans = []
 
     class Table:
-        rows = [[operations[0]], [operations[1]]]
+        rows = [
+            [operations[0], ["resp_A1b2C3d4E5f6"]],
+            [operations[1], ["resp_F6e5D4c3B2a1"]],
+        ]
 
     class Result:
         status = "success"
@@ -3387,18 +3593,12 @@ def test_wait_for_telemetry_discovers_exact_attempt_operations_for_every_agent(
     assert len(captured) == 2
     assert "union traces, dependencies, requests" in query_text
     assert 'customDimensions["gen_ai.operation.name"]' in query_text
-    assert 'customDimensions["gen_ai.agent.name"]' in query_text
-    assert 'customDimensions["gen_ai.agent.version"]' in query_text
-    assert 'customDimensions["gen_ai.response.id"]' not in query_text
-    assert 'customDimensions["x-ms-client-request-id"]' not in query_text
-    assert 'set_has_element(operation_names, "invoke_agent")' in query_text
-    assert f'set_has_element(agent_names, "{agent_name}")' in query_text
-    assert 'set_has_element(agent_versions, "cycle-version")' in query_text
-    assert "array_length(agent_names) == 1" in query_text
-    assert "array_length(agent_versions) == 1" in query_text
-    assert query_text.index("| summarize") < query_text.index(
-        'set_has_element(operation_names, "invoke_agent")'
-    )
+    assert 'customDimensions["gen_ai.response.id"]' in query_text
+    assert 'customDimensions["x-ms-client-request-id"]' in query_text
+    assert 'operation_name == "invoke_agent"' in query_text
+    assert agent_name not in query_text
+    assert "cycle-version" not in query_text
+    assert "matched_references=make_set(matched_reference)" in query_text
     assert "timestamp >= datetime(2026-08-28T10:00:00+00:00)" in query_text
     assert "timestamp <= datetime(2026-08-28T10:00:01+00:00)" in query_text
     assert "order by first_seen asc" in query_text
@@ -3424,14 +3624,41 @@ def test_validation_telemetry_identity_is_derived_per_exact_operation(
     captured = []
 
     rows = [
-        [[operations[0], ["finance-agent"], ["opaque-version"]]],
         [
-            [operations[0], ["finance-agent"], ["opaque-version"]],
-            [operations[1], ["finance-agent"], ["opaque-version"]],
+            [
+                operations[0],
+                "resp_A1b2C3d4E5f6",
+                ["finance-agent"],
+                ["opaque-version"],
+            ]
         ],
         [
-            [operations[0], ["finance-agent"], ["opaque-version"]],
-            [operations[1], ["finance-agent"], ["opaque-version"]],
+            [
+                operations[0],
+                "resp_A1b2C3d4E5f6",
+                ["finance-agent"],
+                ["opaque-version"],
+            ],
+            [
+                operations[1],
+                "resp_F6e5D4c3B2a1",
+                ["finance-agent"],
+                ["opaque-version"],
+            ],
+        ],
+        [
+            [
+                operations[0],
+                "resp_A1b2C3d4E5f6",
+                ["finance-agent"],
+                ["opaque-version"],
+            ],
+            [
+                operations[1],
+                "resp_F6e5D4c3B2a1",
+                ["finance-agent"],
+                ["opaque-version"],
+            ],
         ],
     ]
 
@@ -3475,6 +3702,7 @@ def test_validation_telemetry_identity_is_derived_per_exact_operation(
     assert len(captured) == 3
     assert "make_set(observed_agent)" in captured[0]
     assert "make_set(agent_version)" in captured[0]
+    assert "matched_reference in" in captured[0]
 
 
 @pytest.mark.parametrize(
@@ -3501,7 +3729,16 @@ def test_validation_telemetry_identity_fails_closed_on_wrong_or_multiple_values(
     table = type(
         "Table",
         (),
-        {"rows": [[operation_id, agent_names, agent_versions]]},
+        {
+            "rows": [
+                [
+                    operation_id,
+                    "resp_A1b2C3d4E5f6",
+                    agent_names,
+                    agent_versions,
+                ]
+            ]
+        },
     )()
     result = type("Result", (), {"status": "success", "tables": [table]})()
     runtime = _runtime()
@@ -3527,6 +3764,65 @@ def test_validation_telemetry_identity_fails_closed_on_wrong_or_multiple_values(
     assert sleeps == []
 
 
+def test_validation_telemetry_identity_ignores_other_response_in_same_operation(
+    monkeypatch,
+) -> None:
+    query_module = types.ModuleType("azure.monitor.query")
+    query_module.LogsQueryStatus = type("LogsQueryStatus", (), {"SUCCESS": "success"})
+    monitor_module = types.ModuleType("azure.monitor")
+    azure_module = types.ModuleType("azure")
+    monkeypatch.setitem(sys.modules, "azure", azure_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor", monitor_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
+    operation_id = "a" * 32
+    reference = "resp_A1b2C3d4E5f6"
+    table = type(
+        "Table",
+        (),
+        {
+            "rows": [
+                [
+                    operation_id,
+                    reference,
+                    ["finance-agent"],
+                    ["opaque-version"],
+                ],
+                [
+                    operation_id,
+                    "resp_F6e5D4c3B2a1",
+                    ["other-agent"],
+                    ["other-version"],
+                ],
+            ]
+        },
+    )()
+    result = type("Result", (), {"status": "success", "tables": [table]})()
+    runtime = _runtime()
+    monotonic = [0.0]
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+    runtime._query_resource = lambda *_args, **_kwargs: result  # type: ignore[method-assign]
+    runtime._monotonic = lambda: monotonic[0]
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0,
+        monotonic[0] + seconds,
+    )
+    invocation = InvocationEvidence(
+        operation_ids=(),
+        response_references=(reference,),
+        started_at="2026-08-28T10:00:00+00:00",
+        completed_at="2026-08-28T10:00:01+00:00",
+        request_count=1,
+        allow_window_correlation=False,
+    )
+
+    assert runtime.telemetry_identity_passes(
+        agent_name="finance-agent",
+        foundry_version="opaque-version",
+        operation_ids=(operation_id,),
+        invocation=invocation,
+    ) == (True,)
+
+
 def test_validation_telemetry_identity_rejects_conflict_during_stabilization(
     monkeypatch,
 ) -> None:
@@ -3539,10 +3835,18 @@ def test_validation_telemetry_identity_rejects_conflict_during_stabilization(
     monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
     operation_id = "a" * 32
     rows = [
-        [[operation_id, ["finance-agent"], ["opaque-version"]]],
         [
             [
                 operation_id,
+                "resp_A1b2C3d4E5f6",
+                ["finance-agent"],
+                ["opaque-version"],
+            ]
+        ],
+        [
+            [
+                operation_id,
+                "resp_A1b2C3d4E5f6",
                 ["finance-agent", "other-agent"],
                 ["opaque-version"],
             ]
@@ -3598,7 +3902,11 @@ def test_validation_telemetry_identity_missing_value_waits_to_deadline(
         30,
     )
     operation_id = "a" * 32
-    table = type("Table", (), {"rows": [[operation_id, [], []]]})()
+    table = type(
+        "Table",
+        (),
+        {"rows": [[operation_id, "resp_A1b2C3d4E5f6", [], []]]},
+    )()
     result = type("Result", (), {"status": "success", "tables": [table]})()
     runtime = _runtime()
     monotonic = [0.0]
@@ -3644,7 +3952,16 @@ def test_validation_telemetry_identity_does_not_interpolate_values(monkeypatch) 
     table = type(
         "Table",
         (),
-        {"rows": [[operation_id, [agent_name], [foundry_version]]]},
+        {
+            "rows": [
+                [
+                    operation_id,
+                    "resp_A1b2C3d4E5f6",
+                    [agent_name],
+                    [foundry_version],
+                ]
+            ]
+        },
     )()
     result = type("Result", (), {"status": "success", "tables": [table]})()
     captured = []
@@ -3690,12 +4007,14 @@ def test_wait_for_telemetry_waits_for_exact_count_before_stabilizing(
     monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
     first = "a" * 32
     second = "b" * 32
+    first_row = [first, ["resp_A1b2C3d4E5f6"]]
+    second_row = [second, ["resp_F6e5D4c3B2a1"]]
     rows = [
-        [[first]],
-        [[first]],
-        [[first]],
-        [[first], [second]],
-        [[first], [second]],
+        [first_row],
+        [first_row],
+        [first_row],
+        [first_row, second_row],
+        [first_row, second_row],
     ]
 
     class Result:
@@ -3781,8 +4100,8 @@ def test_wait_for_telemetry_timeout_records_safe_reference_counts(
 
     assert caught.value.request_accepted is True
     assert caught.value.matched_reference_count == 0
-    assert caught.value.expected_reference_count == 1
-    assert caught.value.missing_reference_count == 1
+    assert caught.value.expected_reference_count == 2
+    assert caught.value.missing_reference_count == 2
     assert monotonic[0] == 15 * 60
 
 
@@ -3796,7 +4115,12 @@ def test_wait_for_telemetry_exact_set_change_resets_stability(monkeypatch) -> No
     monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
     first = "a" * 32
     second = "b" * 32
-    rows = [[[first]], [[second]], [[second]]]
+    reference = "resp_A1b2C3d4E5f6"
+    rows = [
+        [[first, [reference]]],
+        [[second, [reference]]],
+        [[second, [reference]]],
+    ]
     monotonic = [0.0]
 
     class Result:

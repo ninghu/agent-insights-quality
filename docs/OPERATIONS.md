@@ -45,52 +45,56 @@ validation records only mechanical execution and evidence completeness and produ
 The coordinator lifecycle is:
 
 ```text
-LOCKED -> PREFLIGHT -> CREATING -> PREPARED
-  -> 10 INVOKED SHARDS -> 10 VERIFIED SHARDS
-  -> FINAL_CHECKS -> CLEANING -> CLEAN
+LOCKED -> PREFLIGHT -> CREATING -> VALIDATING -> READY | FAILED
+                                  \-> SUPERSEDED
 ```
 
-Prepare holds the coordinator lock, binds the exact durable Project, and reconciles all 41
-authorities before traffic. Matching stable Agents reuse their exact server-assigned versions;
-changed content creates a new exact version under the same stable name. Ten explicit shard
-assignments then use separate locks and artifacts. At most eight invocation workers run at once.
-After every invocation shard completes, at most four verification workers hydrate and correlate
-traces concurrently without sending new traffic. Each shard is sequential internally, and every
-issue carries its paired-`v0` evidence. The coordinator, not a distributed scheduler, enforces these
-cross-process caps.
+Each validation authority has one unique runtime Agent identity and is an indivisible deployment
+assignment. The coordinator computes changed authorities from exact source and provider-content
+digests, publishes one content-addressed immutable desired-state assignment, releases the global
+lock, and remains responsive while up to `limits.provisioning_concurrency` asynchronous workers
+(currently eight) execute disjoint assignments. A worker may exact-reuse or deploy its assigned
+version and writes only its own readiness receipt; workers never mutate shared lifecycle, topology,
+or registry state. Fine-grained authority and shard locks plus generation fencing prevent duplicate
+deployment and stale writes.
 
-Support wheelhouse artifacts and ACR build tags are reused only under exact requirements/source
-digests. All lifecycle, shard locks, invocation bindings, packages, and evidence remain under the
-private validation runtime root.
+After every required deployment receipt exists, the coordinator centrally re-reads all 41 exact
+Agent versions, verifies the durable Project, read-only telemetry binding, and zero-monitor
+invariant, merges changed and reused readiness proofs, then atomically publishes the single
+topology and deployment registry. Validation selection is separate: an authority runs only when
+its content changed, its latest result was FAIL or incomplete, or it lacks exact-bound PASS
+evidence. PASS evidence is reusable only when source/content digests, provider version, runtime
+mapping, environment, and shared validation contracts all match. Validation invocation uses at
+most eight workers; read-only trace verification uses at most four. Every issue still carries a
+fresh paired-`v0` control.
 
-Cleanup records intent first and deletes responses, conversations/sessions, cycle tags, and unshared
-manifests. The durable Project, its connections/RBAC, and reconciled Agent/version topology are
-explicitly retained. Final proof requires no run-scoped nonce-owned resources, sessions/responses,
-cycle tags, or incomplete reviewed cascades. Ambiguity enters `CLEANUP_BLOCKED` only in the Sweden
-environment namespace and never mutates the legacy lifecycle pointer.
+Support images use content-addressed ACR identities and exact digest pins. Agents, versions,
+sessions, responses, images, telemetry, registries, and evidence are retained. Old objects cannot
+contaminate a later result because every request is correlated to its exact response-bound
+`invoke_agent` anchor and complete descendant span tree. A new generation atomically writes a
+`SUPERSEDED` event and swaps the active pointer; a legacy active record is archived byte-for-byte
+and referenced only by an opaque tombstone digest, never interpreted by a compatibility reader.
 
-Run the explicit coordinator primitives:
+Run the single coordinator command:
 
 ```powershell
-python -m agent_insights_quality prepare-test-agent-validation
-python -m agent_insights_quality invoke-test-agent-validation-shard --cycle-id <id> --shard <1-10> --authority <id>
-python -m agent_insights_quality verify-test-agent-validation-shard --cycle-id <id> --shard <1-10> --authority <id>
-python -m agent_insights_quality compose-test-agent-validation --cycle-id <id>
-python -m agent_insights_quality cleanup-test-agent-validation --cycle-id <id>
+python -m agent_insights_quality run-test-agent-validation
 ```
 
-Prepare discovers the repository, open PR, exact clean commit, and runtime paths. The coordinator
-must assign every catalog authority exactly once across 10 shards and use the reviewed limits of
-eight active invocation workers and four active verification workers.
+The command discovers the repository, open PR, exact clean commit, and private runtime paths. Its
+opaque generation identity is system-created and never accepted as CLI input. Interrupted work is
+resumed from fenced receipts; starting a new generation supersedes prior incomplete state without
+deleting retained provider resources.
 After the user explicitly approves that exact result, run:
 
 ```powershell
 python -m agent_insights_quality approve-test-agent-validation
 ```
 
-The approval command re-reads the exact PR head and local content hashes, then create-once writes one
-minimal immutable approved record. It has no workflow, App, check, tree, topology, quota, or local-path
-fields. GitHub runs ordinary mechanical CI only and merge remains manual.
+The approval command re-reads the exact PR head and 41-authority READY evidence, then create-once
+writes one minimal immutable approved record bound to the evidence and generation digests. It has
+no cleanup, workflow, App, check, tree, topology, quota, or local-path fields. GitHub runs ordinary
+mechanical CI only and merge remains manual.
 
 ### External Daily approved-record cutover
 

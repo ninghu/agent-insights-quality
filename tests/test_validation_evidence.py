@@ -8,12 +8,15 @@ from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.util import ContractError, content_hash
 from agent_insights_quality.validation_evidence import (
     persist_evidence,
+    runtime_mapping_digest,
+    select_reusable_authority_evidence,
     stamp_evidence_digests,
     validate_evidence,
 )
 from agent_insights_quality.validation_manifest import (
     authority_specs,
     current_validation_digest,
+    current_shared_validation_digest,
 )
 
 HASH = "sha256:" + ("a" * 64)
@@ -126,6 +129,7 @@ def _authority(spec) -> dict:
         ),
         "runtime_agent_version": "1",
         "provider_agent_version_reference": HASH,
+        "runtime_mapping_digest": HASH,
         "provider_content_digest": HASH,
         "source_content_digest": spec.source_content_digest,
         "execution_digest": spec.execution_digest,
@@ -145,13 +149,16 @@ def _evidence() -> dict:
     authorities = [_authority(spec) for spec in specs]
     return stamp_evidence_digests(
         {
-            "schema_version": "1.0.0",
+            "schema_version": "2.0.0",
             "kind": "test-agent-validation-evidence",
             "repository": "ninghu/agent-insights-quality",
             "pr_number": 999,
-            "cycle_id": "validation-cycle-0001",
+            "run_id": "validation-000000000001",
             "commit_sha": HEAD,
+            "completed_at": "2026-09-01T12:00:00+00:00",
+            "result": "PASS",
             "validation_digest": current_validation_digest(agents, issues),
+            "shared_validation_digest": current_shared_validation_digest(),
             "execution_matrix_digest": content_hash(
                 {
                     item.authority_id: item.execution_digest
@@ -194,6 +201,7 @@ def test_identity_failure_is_visible_as_incomplete_evidence() -> None:
     scenario["pass"] = False
     authority["complete_count"] = 4
     authority["pass"] = False
+    value["result"] = "FAIL"
     value = stamp_evidence_digests(value)
     validate_evidence(value)
 
@@ -221,6 +229,7 @@ def test_incomplete_paired_v0_fails_mechanical_completeness() -> None:
     scenario["v0_attempts"][0]["error_code"] = "telemetry_identity_mismatch"
     scenario["pass"] = False
     authority["pass"] = False
+    value["result"] = "FAIL"
     value = stamp_evidence_digests(value)
     validate_evidence(value)
 
@@ -269,6 +278,7 @@ def test_evidence_binds_every_authority_to_exact_runtime_topology() -> None:
                 ],
             }
         )
+        authority["runtime_mapping_digest"] = runtime_mapping_digest(agents[-1])
     value = stamp_evidence_digests(value)
     value["runtime_topology_digest"] = content_hash(agents)
     value = stamp_evidence_digests(value)
@@ -281,12 +291,11 @@ def test_evidence_binds_every_authority_to_exact_runtime_topology() -> None:
         validate_evidence(tampered, runtime_topology={"agents": agents})
 
 
-def test_evidence_rejects_wrong_commit_authority() -> None:
+def test_reused_authority_retains_its_original_validated_commit() -> None:
     value = _evidence()
     value["authorities"][0]["validated_commit_sha"] = "d" * 40
     value = stamp_evidence_digests(value)
-    with pytest.raises(ContractError, match="bound to the commit"):
-        validate_evidence(value)
+    validate_evidence(value)
 
 
 def test_evidence_is_content_addressed_in_private_local_storage(
@@ -299,7 +308,7 @@ def test_evidence_is_content_addressed_in_private_local_storage(
         value,
         repository="ninghu/agent-insights-quality",
         pr_number=999,
-        cycle_id="validation-cycle-0001",
+        run_id="validation-000000000001",
         root=private / "evidence",
     )
     assert record.digest == value["evidence_digest"]
@@ -325,8 +334,79 @@ def test_evidence_rejects_cross_cycle_path_or_resource_binding(tmp_path) -> None
             value,
             repository=value["repository"],
             pr_number=value["pr_number"],
-            cycle_id="validation-other-cycle",
+            run_id="validation-000000000002",
             root=tmp_path,
         )
     with pytest.raises(ContractError, match="resource inventory"):
         validate_evidence(value, resources=[{"different": True}])
+
+
+def test_exact_pass_evidence_is_reused_and_mapping_drift_is_selected(
+    tmp_path,
+) -> None:
+    value = _evidence()
+    runtime_agents = []
+    for index, authority in enumerate(value["authorities"], start=1):
+        runtime = {
+            "authority_id": authority["authority_id"],
+            "runtime_agent_name": authority["runtime_agent_name"],
+            "runtime_agent_version": authority["runtime_agent_version"],
+            "provider_agent_id": f"agent-{index}",
+            "provider_agent_version_id": f"version-{index}",
+            "provider_content_digest": authority["provider_content_digest"],
+            "hosted_identity_id": None,
+            "hosted_blueprint_id": None,
+            "hosted_deployment_id": None,
+            "runtime_principal_id": None,
+            "telemetry_identity_id": f"version-{index}",
+            "connection_ids": [],
+        }
+        authority["provider_agent_version_reference"] = content_hash(
+            {
+                "provider_agent_id": runtime["provider_agent_id"],
+                "provider_agent_version_id": runtime[
+                    "provider_agent_version_id"
+                ],
+            }
+        )
+        authority["runtime_mapping_digest"] = runtime_mapping_digest(runtime)
+        runtime_agents.append(runtime)
+    value["runtime_topology_digest"] = content_hash(runtime_agents)
+    value = stamp_evidence_digests(value)
+    persist_evidence(
+        value,
+        repository=value["repository"],
+        pr_number=value["pr_number"],
+        run_id=value["run_id"],
+        root=tmp_path / "evidence",
+    )
+    agents, issues = load_catalogs()
+    specs = authority_specs(agents, issues)
+    selected, reused = select_reusable_authority_evidence(
+        authorities=specs,
+        runtime_topology={"agents": runtime_agents},
+        repository=value["repository"],
+        pr_number=value["pr_number"],
+        environment_id=value["environment_id"],
+        location=value["location"],
+        telemetry_resource_set=value["telemetry_resource_set"],
+        shared_validation_digest=value["shared_validation_digest"],
+        root=tmp_path,
+    )
+    assert selected == []
+    assert len(reused) == 41
+
+    runtime_agents[0]["runtime_agent_version"] = "changed"
+    selected, reused = select_reusable_authority_evidence(
+        authorities=specs,
+        runtime_topology={"agents": runtime_agents},
+        repository=value["repository"],
+        pr_number=value["pr_number"],
+        environment_id=value["environment_id"],
+        location=value["location"],
+        telemetry_resource_set=value["telemetry_resource_set"],
+        shared_validation_digest=value["shared_validation_digest"],
+        root=tmp_path,
+    )
+    assert selected == [specs[0].authority_id]
+    assert len(reused) == 40

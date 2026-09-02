@@ -386,7 +386,37 @@ class TimedTraceRuntime(FakeRuntime):
         assert agent_name == self.agent_name
         assert window_start == "2026-08-24T10:00:00+00:00"
         assert window_end == "2026-08-24T10:01:00+00:00"
-        return self.rows_at(self.monotonic)
+        rows = self.rows_at(self.monotonic)
+        anchors = {}
+        selected = []
+        for index, row in enumerate(rows, start=1):
+            operation_id = row["operation_id"]
+            reference = row["matched_reference"]
+            key = (operation_id, reference)
+            if key not in anchors:
+                anchor_id = f"anchor-{len(anchors) + 1}"
+                anchors[key] = anchor_id
+                selected.append(
+                    {
+                        **row,
+                        "span_id": anchor_id,
+                        "parent_span_id": "",
+                        "operation_name": "invoke_agent",
+                        "tool_name": "",
+                        "matched_reference": reference,
+                        "agent_name": self.agent_name,
+                        "agent_version": self.foundry_version,
+                    }
+                )
+            selected.append(
+                {
+                    **row,
+                    "span_id": f"tool-{index}",
+                    "parent_span_id": anchors[key],
+                    "matched_reference": "",
+                }
+            )
+        return selected
 
     def trace_behavior_evidence(self, operation_ids: tuple[str, ...]) -> dict:
         self.trace_behavior_times.append(self.monotonic)

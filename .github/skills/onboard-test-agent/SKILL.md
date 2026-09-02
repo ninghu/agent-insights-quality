@@ -41,8 +41,8 @@ Add one new synthetic Test Agent only as a human-reviewed fixed-topology migrati
    privacy-safe trace proof, and baseline ownership.
 9. Run repository validation, Ruff, tests, and Bicep compilation.
 10. Update each baseline and issue's fixed validation scenarios, explicit mode, `n/k`, paired-v0
-   controls, execution digest, name limits, cleanup inventory, and exact authority count.
-11. Run a fresh full Test Agent Validation cycle from one exact clean commit, require exact cleanup
+   controls, execution digest, name limits, retained-resource inventory, and exact authority count.
+11. Run Test Agent Validation from one exact clean commit, require exact response-bound evidence
    and explicit human approval, then create the single approved validation record.
    Validation remains report-free; never use the preserved old West US 2 environment as a fallback.
 

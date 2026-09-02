@@ -9,9 +9,12 @@
     "kind",
     "repository",
     "pr_number",
-    "cycle_id",
+    "run_id",
     "commit_sha",
+    "completed_at",
+    "result",
     "validation_digest",
+    "shared_validation_digest",
     "execution_matrix_digest",
     "runtime_topology_digest",
     "resource_inventory_digest",
@@ -22,13 +25,16 @@
     "evidence_digest"
   ],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"const": "2.0.0"},
     "kind": {"const": "test-agent-validation-evidence"},
     "repository": {"$ref": "#/$defs/repository"},
     "pr_number": {"type": "integer", "minimum": 1},
-    "cycle_id": {"$ref": "#/$defs/cycleId"},
+    "run_id": {"$ref": "#/$defs/runId"},
     "commit_sha": {"$ref": "#/$defs/gitSha"},
+    "completed_at": {"type": "string", "format": "date-time"},
+    "result": {"enum": ["PASS", "FAIL"]},
     "validation_digest": {"$ref": "#/$defs/hash"},
+    "shared_validation_digest": {"$ref": "#/$defs/hash"},
     "execution_matrix_digest": {"$ref": "#/$defs/hash"},
     "runtime_topology_digest": {"$ref": "#/$defs/hash"},
     "resource_inventory_digest": {"$ref": "#/$defs/hash"},
@@ -57,9 +63,9 @@
       "type": "string",
       "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
     },
-    "cycleId": {
+    "runId": {
       "type": "string",
-      "pattern": "^[a-z0-9][a-z0-9-]{7,63}$"
+      "pattern": "^validation-[0-9a-f]{12}$"
     },
     "authority": {
       "type": "object",
@@ -72,6 +78,7 @@
         "runtime_agent_name",
         "runtime_agent_version",
         "provider_agent_version_reference",
+        "runtime_mapping_digest",
         "provider_content_digest",
         "source_content_digest",
         "execution_digest",
@@ -115,6 +122,7 @@
           "maxLength": 128
         },
         "provider_agent_version_reference": {"$ref": "#/$defs/hash"},
+        "runtime_mapping_digest": {"$ref": "#/$defs/hash"},
         "provider_content_digest": {"$ref": "#/$defs/hash"},
         "source_content_digest": {"$ref": "#/$defs/hash"},
         "execution_digest": {"$ref": "#/$defs/hash"},

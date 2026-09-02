@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from agent_insights_quality.util import (
     ContractError,
@@ -15,11 +15,22 @@ from agent_insights_quality.util import (
 from agent_insights_quality.validation_lifecycle import (
     LocalValidationLock,
     validation_runtime_root,
+    validate_lifecycle,
 )
 from agent_insights_quality.validation_cycle import ValidationCycleController
-from agent_insights_quality.validation_runtime import AuthoritySpec
+from agent_insights_quality.validation_runtime import AuthoritySpec, DeployedRuntime
 
 SHARD_COUNT = 10
+
+
+def authority_lock(*, run_id: str, authority_id: str) -> LocalValidationLock:
+    safe = authority_id.replace("/", "--")
+    return LocalValidationLock(
+        validation_runtime_root()
+        / "authority-locks"
+        / run_id
+        / f"{safe}.lock"
+    )
 
 
 def validate_shard_assignment(
@@ -45,7 +56,7 @@ def shard_root(
     *,
     repository: str,
     pr_number: int,
-    cycle_id: str,
+    run_id: str,
     shard_id: int,
 ) -> Path:
     owner, name = repository.split("/", 1)
@@ -55,7 +66,7 @@ def shard_root(
         / owner
         / name
         / str(pr_number)
-        / cycle_id
+        / run_id
         / f"shard-{shard_id:02d}"
     )
 
@@ -64,14 +75,14 @@ def shard_lock(
     *,
     repository: str,
     pr_number: int,
-    cycle_id: str,
+    run_id: str,
     shard_id: int,
 ) -> LocalValidationLock:
     return LocalValidationLock(
         shard_root(
             repository=repository,
             pr_number=pr_number,
-            cycle_id=cycle_id,
+            run_id=run_id,
             shard_id=shard_id,
         )
         / "validation.lock"
@@ -100,7 +111,7 @@ def shard_binding(
         "repository": prepared["repository"],
         "pr_number": prepared["pr_number"],
         "commit_sha": prepared["commit_sha"],
-        "cycle_id": prepared["cycle_id"],
+        "run_id": prepared["run_id"],
         "validation_digest": prepared["digests"]["validation_digest"],
         "execution_matrix_digest": prepared["digests"][
             "execution_matrix_digest"
@@ -140,42 +151,30 @@ class ValidationShardStore:
         prepared: Mapping[str, Any],
         shard_id: int,
         authority_ids: Sequence[str],
+        fence: Callable[[], None] | None = None,
     ) -> None:
         self.shard_id = shard_id
         self.authority_ids = tuple(authority_ids)
         self.binding = shard_binding(prepared, authority_ids)
+        self._fence = fence or _active_fence(
+            self.binding,
+            allowed_states={"VALIDATING"},
+        )
         self.root = shard_root(
             repository=str(prepared["repository"]),
             pr_number=int(prepared["pr_number"]),
-            cycle_id=str(prepared["cycle_id"]),
+            run_id=str(prepared["run_id"]),
             shard_id=shard_id,
         )
         self.invocation_path = self.root / "invocations.json"
         self.package_path = self.root / "package.json"
-        self.cleanup_path = self.root / "cleanup.json"
 
     def begin_invocation(self) -> dict[str, Any]:
         if self.invocation_path.is_file():
             existing = self.read_invocations()
-            has_ledger = bool(
-                existing.get("resources") or existing.get("invocations")
-            )
-            if has_ledger:
-                if not self.cleanup_path.is_file():
-                    raise ContractError(
-                        "Validation shard invocation already has an active ledger"
-                    )
-                cleanup = self.read_cleanup()
-                if (
-                    cleanup.get("status") != "clean"
-                    or cleanup.get("exact_clean") is not True
-                    or cleanup.get("safe_to_reinvoke") is not True
-                    or cleanup.get("invocation_digest")
-                    != existing["artifact_digest"]
-                ):
-                    raise ContractError(
-                        "Validation shard invocation cleanup is not reusable"
-                    )
+            if existing.get("status") not in {"invoking", "invoked"}:
+                raise ContractError("Validation shard invocation status is invalid")
+            return existing
         value = self._base("test-agent-validation-shard-invocations")
         value.update(
             {
@@ -245,33 +244,12 @@ class ValidationShardStore:
             "test-agent-validation-shard-package",
         )
 
-    def read_cleanup(self) -> dict[str, Any]:
-        return self._read(
-            self.cleanup_path,
-            "test-agent-validation-shard-cleanup",
-        )
-
-    def write_cleanup(
-        self,
-        *,
-        invocation_digest: str,
-        retained_count: int,
-    ) -> dict[str, Any]:
-        value = self._base("test-agent-validation-shard-cleanup")
-        value.update(
-            {
-                "status": "clean",
-                "exact_clean": True,
-                "safe_to_reinvoke": True,
-                "invocation_digest": invocation_digest,
-                "retained_durable_count": retained_count,
-            }
-        )
-        return self._write(self.cleanup_path, value)
+    def package_exists(self) -> bool:
+        return self.package_path.is_file()
 
     def _base(self, kind: str) -> dict[str, Any]:
         return {
-            "schema_version": "1.0.0",
+            "schema_version": "2.0.0",
             "kind": kind,
             "shard_id": self.shard_id,
             "authority_ids": list(self.authority_ids),
@@ -287,6 +265,7 @@ class ValidationShardStore:
         return value
 
     def _write(self, path: Path, value: Mapping[str, Any]) -> dict[str, Any]:
+        self._fence()
         result = copy.deepcopy(dict(value))
         result["artifact_digest"] = ""
         result["artifact_digest"] = content_hash(
@@ -303,7 +282,7 @@ class ValidationShardStore:
     def _validate(self, value: Mapping[str, Any], kind: str) -> None:
         expected = self._base(kind)
         if (
-            value.get("schema_version") != "1.0.0"
+            value.get("schema_version") != "2.0.0"
             or value.get("kind") != kind
             or value.get("shard_id") != self.shard_id
             or value.get("authority_ids") != list(self.authority_ids)
@@ -320,14 +299,176 @@ class ValidationShardStore:
             raise ContractError("Validation shard artifact binding is invalid")
 
 
+class ValidationDeploymentShardStore:
+    def __init__(
+        self,
+        *,
+        prepared: Mapping[str, Any],
+        shard_id: int,
+        authority_ids: Sequence[str],
+        desired_state_digest: str,
+        fence: Callable[[], None] | None = None,
+    ) -> None:
+        self.shard_id = shard_id
+        self.authority_ids = tuple(authority_ids)
+        self.binding = {
+            "repository": prepared["repository"],
+            "pr_number": prepared["pr_number"],
+            "commit_sha": prepared["commit_sha"],
+            "run_id": prepared["run_id"],
+            "validation_digest": prepared["digests"]["validation_digest"],
+            "desired_state_digest": desired_state_digest,
+        }
+        self._fence = fence or _active_fence(
+            self.binding,
+            allowed_states={"CREATING"},
+        )
+        self.root = (
+            validation_runtime_root()
+            / "deployment-shards"
+            / prepared["repository"].replace("/", "--")
+            / str(prepared["pr_number"])
+            / prepared["run_id"]
+            / f"shard-{shard_id:02d}"
+        )
+        self.receipt_path = self.root / "receipt.json"
+        self.authority_root = self.root / "authorities"
+
+    def completed_authority_ids(self) -> set[str]:
+        completed: set[str] = set()
+        for authority_id in self.authority_ids:
+            if self._authority_path(authority_id).is_file():
+                self.read_authority(authority_id)
+                completed.add(authority_id)
+        return completed
+
+    def write_authority(
+        self,
+        *,
+        authority_id: str,
+        runtime: DeployedRuntime,
+        resources: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        if authority_id not in self.authority_ids:
+            raise ContractError("Deployment receipt authority is not assigned")
+        self._fence()
+        value = {
+            "schema_version": "2.0.0",
+            "kind": "test-agent-validation-deployment-authority",
+            "binding": self.binding,
+            "shard_id": self.shard_id,
+            "authority_id": authority_id,
+            "runtime": asdict(runtime),
+            "resources": copy.deepcopy(list(resources)),
+            "receipt_digest": "",
+        }
+        value["receipt_digest"] = content_hash(
+            {key: item for key, item in value.items() if key != "receipt_digest"}
+        )
+        path = self._authority_path(authority_id)
+        if path.is_file():
+            if read_json(path) != value:
+                raise ContractError("Deployment authority receipt changed")
+        else:
+            from agent_insights_quality.util import immutable_json
+
+            immutable_json(path, value)
+        return value
+
+    def read_authority(self, authority_id: str) -> dict[str, Any]:
+        value = read_json(self._authority_path(authority_id))
+        if (
+            value.get("kind") != "test-agent-validation-deployment-authority"
+            or value.get("binding") != self.binding
+            or value.get("shard_id") != self.shard_id
+            or value.get("authority_id") != authority_id
+            or value.get("receipt_digest")
+            != content_hash(
+                {
+                    key: item
+                    for key, item in value.items()
+                    if key != "receipt_digest"
+                }
+            )
+        ):
+            raise ContractError("Deployment authority receipt binding is invalid")
+        return value
+
+    def complete(self) -> dict[str, Any]:
+        authorities = [
+            self.read_authority(authority_id)
+            for authority_id in self.authority_ids
+        ]
+        value = {
+            "schema_version": "2.0.0",
+            "kind": "test-agent-validation-deployment-shard",
+            "binding": self.binding,
+            "shard_id": self.shard_id,
+            "authority_ids": list(self.authority_ids),
+            "authorities": authorities,
+            "receipt_digest": "",
+        }
+        value["receipt_digest"] = content_hash(
+            {key: item for key, item in value.items() if key != "receipt_digest"}
+        )
+        self._fence()
+        atomic_json(self.receipt_path, value)
+        return value
+
+    def read(self) -> dict[str, Any]:
+        value = read_json(self.receipt_path)
+        if (
+            value.get("kind") != "test-agent-validation-deployment-shard"
+            or value.get("binding") != self.binding
+            or value.get("shard_id") != self.shard_id
+            or value.get("authority_ids") != list(self.authority_ids)
+            or value.get("receipt_digest")
+            != content_hash(
+                {
+                    key: item
+                    for key, item in value.items()
+                    if key != "receipt_digest"
+                }
+            )
+        ):
+            raise ContractError("Deployment shard receipt binding is invalid")
+        return value
+
+    def _authority_path(self, authority_id: str) -> Path:
+        return self.authority_root / f"{authority_id.replace('/', '--')}.json"
+
+
+def _active_fence(
+    binding: Mapping[str, Any],
+    *,
+    allowed_states: set[str],
+) -> Callable[[], None]:
+    def assert_active() -> None:
+        path = validation_runtime_root() / "lifecycle" / "active.json"
+        value = read_json(path)
+        validate_lifecycle(value)
+        if (
+            value["state"] not in allowed_states
+            or value["run_id"] != binding["run_id"]
+            or value["repository"] != binding["repository"]
+            or value["pr_number"] != binding["pr_number"]
+            or value["commit_sha"] != binding["commit_sha"]
+            or value["digests"]["validation_digest"]
+            != binding["validation_digest"]
+        ):
+            raise ContractError("Stale validation worker is fenced")
+
+    return assert_active
+
+
 def compose_shard_authorities(
     packages: Sequence[Mapping[str, Any]],
     authorities: Sequence[AuthoritySpec],
 ) -> list[dict[str, Any]]:
     if (
-        len(packages) != SHARD_COUNT
+        len(packages) != min(SHARD_COUNT, len(authorities))
         or {item.get("shard_id") for item in packages}
-        != set(range(1, SHARD_COUNT + 1))
+        != set(range(1, len(packages) + 1))
     ):
         raise ContractError("Validation composition requires exactly 10 shards")
     expected = {item.authority_id for item in authorities}
@@ -414,8 +555,8 @@ def _resource_event_is_imported(
         if (
             existing["runtime_kind"] != event.get("runtime_kind")
             or existing["discovery_key"] != event.get("discovery_key")
-            or existing["cleanup_method"]
-            != str(event.get("cleanup_method") or "explicit")
+            or             existing["retention"]
+            != str(event.get("retention") or "retained")
         ):
             raise ContractError("Validation shard resource intent changed")
         return True
@@ -439,64 +580,7 @@ def _resource_event_is_imported(
             return False
         if existing["provider_id"] != provider_id:
             raise ContractError("Validation shard resource provider binding changed")
-        return existing["state"] in {
-            "created",
-            "delete_intent",
-            "absence_verified",
-        }
+        return existing["state"] == "created"
     if state == "ambiguous_create":
-        return existing["state"] in {
-            "ambiguous_create",
-            "created",
-            "delete_intent",
-            "absence_verified",
-        }
+        return existing["state"] in {"ambiguous_create", "created"}
     raise ContractError("Validation shard resource event state is invalid")
-
-
-def materialize_shard_resources(
-    artifact: Mapping[str, Any],
-    *,
-    ownership_nonce: str,
-    now: datetime,
-) -> list[dict[str, Any]]:
-    resources: dict[str, dict[str, Any]] = {}
-    for event in artifact["resources"]:
-        intent = str(event.get("intent_reference") or "")
-        state = event.get("state")
-        if state == "create_intent":
-            resources.setdefault(
-                intent,
-                {
-                    "kind": str(event["kind"]),
-                    "parent_id": event.get("parent_id"),
-                    "authority_id": event.get("authority_id"),
-                    "deterministic_name": str(event["deterministic_name"]),
-                    "intent_reference": intent,
-                    "provider_id": intent,
-                    "resolved_provider_id": None,
-                    "runtime_kind": str(event["runtime_kind"]),
-                    "discovery_key": str(event["discovery_key"]),
-                    "ownership_nonce": ownership_nonce,
-                    "create_intent_at": now.isoformat(),
-                    "create_observed_at": None,
-                    "delete_intent_at": None,
-                    "delete_observed_at": None,
-                    "state": "create_intent",
-                    "cleanup_method": str(
-                        event.get("cleanup_method") or "explicit"
-                    ),
-                },
-            )
-        elif state == "created" and intent in resources:
-            resources[intent]["provider_id"] = str(event["provider_id"])
-            resources[intent]["deterministic_name"] = str(
-                event["deterministic_name"]
-            )
-            resources[intent]["state"] = "created"
-            resources[intent]["create_observed_at"] = now.isoformat()
-        elif state == "ambiguous_create" and intent in resources:
-            resources[intent]["state"] = "ambiguous_create"
-        else:
-            raise ContractError("Validation shard resource event sequence is invalid")
-    return list(resources.values())

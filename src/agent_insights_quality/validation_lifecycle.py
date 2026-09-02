@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import copy
 import os
-from collections.abc import Mapping
+import shutil
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,6 +16,7 @@ from agent_insights_quality.util import (
     ContractError,
     atomic_json,
     content_hash,
+    file_hash,
     immutable_json,
     read_json,
 )
@@ -27,53 +29,19 @@ STATES = {
     "PREFLIGHT",
     "CREATING",
     "VALIDATING",
-    "FINAL_CHECKS",
-    "CLEANING",
-    "CLEAN",
-    "FAILED_CLEAN",
-    "CLEANUP_BLOCKED",
+    "READY",
+    "FAILED",
+    "SUPERSEDED",
 }
-TERMINAL_STATES = {"CLEAN", "FAILED_CLEAN"}
+TERMINAL_STATES = {"READY", "FAILED", "SUPERSEDED"}
 _TRANSITIONS = {
-    "LOCKED": {"PREFLIGHT", "CLEANING"},
-    "PREFLIGHT": {"CREATING", "CLEANING"},
-    "CREATING": {"VALIDATING", "CLEANING"},
-    "VALIDATING": {"FINAL_CHECKS", "CLEANING"},
-    "FINAL_CHECKS": {"CLEANING"},
-    "CLEANING": {"CLEAN", "FAILED_CLEAN", "CLEANUP_BLOCKED"},
-    "CLEANUP_BLOCKED": {"CLEANING"},
-    "CLEAN": set(),
-    "FAILED_CLEAN": set(),
-}
-_REQUIRED_FIELDS = {
-    "schema_version",
-    "kind",
-    "snapshot_type",
-    "cycle_id",
-    "event_sequence",
-    "state",
-    "repository",
-    "pr_number",
-    "commit_sha",
-    "digests",
-    "operator",
-    "substrate",
-    "ownership_nonce",
-    "capacity",
-    "project",
-    "runtime_topology",
-    "deployment",
-    "resources",
-    "cleanup",
-    "event_reference",
-    "clean_reference",
-    "evidence_reference",
-    "started_at",
-    "last_activity_at",
-    "absolute_expires_at",
-    "failure",
-    "previous_journal_digest",
-    "journal_digest",
+    "LOCKED": {"PREFLIGHT", "SUPERSEDED"},
+    "PREFLIGHT": {"CREATING", "SUPERSEDED"},
+    "CREATING": {"VALIDATING", "SUPERSEDED"},
+    "VALIDATING": {"READY", "FAILED", "SUPERSEDED"},
+    "READY": set(),
+    "FAILED": set(),
+    "SUPERSEDED": set(),
 }
 
 
@@ -184,14 +152,38 @@ class LifecycleJournal:
             raise ContractError("Local validation journal does not exist")
         return self._read(self.active_path)
 
-    def begin_cycle(self, initial: Mapping[str, Any]) -> LocalRecord:
+    def begin_run(
+        self,
+        initial: Mapping[str, Any],
+        *,
+        all_authority_ids: Sequence[str],
+        now: datetime | None = None,
+    ) -> tuple[LocalRecord, list[str]]:
         self._assert_locked()
-        current = self.read_optional()
-        if current is not None and current.value["state"] not in TERMINAL_STATES:
-            raise ContractError(
-                "Incomplete local validation must be cleaned before a new cycle"
-            )
-        value = stamp_lifecycle_digest(initial)
+        superseded_ids: list[str] = []
+        supersedes: str | None = None
+        if self.active_path.exists():
+            try:
+                current = self._read(self.active_path)
+            except ContractError:
+                # Superseded formats are retained but never interpreted or reused.
+                supersedes = file_hash(self.active_path)
+                superseded_ids = list(all_authority_ids)
+                self._archive_superseded_format(supersedes)
+            else:
+                if current.value["state"] not in TERMINAL_STATES:
+                    superseded_ids = list(
+                        current.value["validation_authority_ids"]
+                    )
+                    current = self.commit(
+                        current,
+                        next_state="SUPERSEDED",
+                        now=now,
+                    )
+                supersedes = current.digest
+        value = copy.deepcopy(dict(initial))
+        value["supersedes"] = supersedes
+        value = stamp_lifecycle_digest(value)
         validate_lifecycle(value)
         if value["snapshot_type"] != "event" or value["state"] != "LOCKED":
             raise ContractError("New local validation must begin in LOCKED")
@@ -202,7 +194,27 @@ class LifecycleJournal:
         active = stamp_lifecycle_digest(active)
         validate_lifecycle(active)
         atomic_json(self.active_path, active)
-        return self._read(self.active_path)
+        return self._read(self.active_path), superseded_ids
+
+    def _archive_superseded_format(self, digest: str) -> None:
+        archive = (
+            self.root
+            / "superseded-formats"
+            / f"{digest.removeprefix('sha256:')}.json"
+        )
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        if archive.exists():
+            if file_hash(archive) != digest:
+                raise ContractError("Superseded lifecycle archive digest changed")
+            return
+        temporary = archive.with_name(f".{archive.name}.{os.getpid()}.tmp")
+        with self.active_path.open("rb") as source, temporary.open("xb") as target:
+            shutil.copyfileobj(source, target)
+            target.flush()
+            os.fsync(target.fileno())
+        os.replace(temporary, archive)
+        if file_hash(archive) != digest:
+            raise ContractError("Superseded lifecycle archive is not byte exact")
 
     def commit(
         self,
@@ -232,40 +244,26 @@ class LifecycleJournal:
         if updates:
             _merge(event_value, updates)
         for key in (
-            "cycle_id",
+            "run_id",
             "repository",
             "pr_number",
             "started_at",
             "absolute_expires_at",
+            "supersedes",
         ):
             if event_value[key] != current.value[key]:
                 raise ContractError(f"Local validation {key} is immutable")
         expires = datetime.fromisoformat(
             str(current.value["absolute_expires_at"]).replace("Z", "+00:00")
         ).astimezone(UTC)
-        if moment >= expires and next_state not in {
-            "CLEANING",
-            "CLEAN",
-            "FAILED_CLEAN",
-            "CLEANUP_BLOCKED",
-        }:
+        if moment >= expires and next_state != "SUPERSEDED":
             raise ContractError("Local validation exceeded its absolute TTL")
         event_value = stamp_lifecycle_digest(event_value)
         validate_lifecycle(event_value)
         event = self._write_event(event_value)
-
         active = copy.deepcopy(event_value)
         active["snapshot_type"] = "active"
         active["event_reference"] = _local_reference(event, self.root)
-        if next_state in TERMINAL_STATES:
-            clean_value = copy.deepcopy(event_value)
-            clean_value["snapshot_type"] = "clean"
-            clean_value["event_reference"] = None
-            clean_value["clean_reference"] = None
-            clean_value = stamp_lifecycle_digest(clean_value)
-            validate_lifecycle(clean_value)
-            clean = self._write_clean(clean_value)
-            active["clean_reference"] = _local_reference(clean, self.root)
         active = stamp_lifecycle_digest(active)
         validate_lifecycle(active)
         atomic_json(self.active_path, active)
@@ -277,13 +275,8 @@ class LifecycleJournal:
         snapshot["event_reference"] = None
         snapshot = stamp_lifecycle_digest(snapshot)
         validate_lifecycle(snapshot)
-        path = self.root / _snapshot_name(snapshot, "history")
+        path = self.root / _snapshot_name(snapshot)
         immutable_json(path, snapshot)
-        return self._read(path)
-
-    def _write_clean(self, value: Mapping[str, Any]) -> LocalRecord:
-        path = self.root / _snapshot_name(value, "clean")
-        immutable_json(path, value)
         return self._read(path)
 
     def _read(self, path: Path) -> LocalRecord:
@@ -335,132 +328,41 @@ def validate_lifecycle(value: Mapping[str, Any]) -> None:
             f"Local validation lifecycle schema error at {location}: "
             f"{error.message}"
         )
-    if set(value) != _REQUIRED_FIELDS:
-        raise ContractError("Local validation lifecycle fields are invalid")
-    if (
-        value["schema_version"] != "1.0.0"
-        or value["kind"] != "test-agent-validation-lifecycle"
-        or value["snapshot_type"] not in {"active", "event", "clean"}
-        or value["state"] not in STATES
-        or not isinstance(value["event_sequence"], int)
-        or value["event_sequence"] < 1
-        or not isinstance(value["resources"], list)
-    ):
-        raise ContractError("Local validation lifecycle contract is invalid")
     expected = content_hash(
         {key: item for key, item in value.items() if key != "journal_digest"}
     )
     if value["journal_digest"] != expected:
         raise ContractError("Local validation lifecycle digest is stale")
-    deployment = value["deployment"]
-    ready_ids = {
+    if value["state"] in {"VALIDATING", "READY", "FAILED"}:
+        _validate_selection(value)
+    if value["state"] in {"READY", "FAILED"} and value["evidence_reference"] is None:
+        raise ContractError("Terminal validation lacks exact evidence")
+
+
+def _validate_selection(value: Mapping[str, Any]) -> None:
+    all_ids = {
         item["authority_id"] for item in value["runtime_topology"]["agents"]
     }
-    recovery_ids = [
-        item["authority_id"] for item in deployment["recoveries"]
+    selected = list(value["validation_authority_ids"])
+    reused = [item["authority_id"] for item in value["reused_authorities"]]
+    assigned = [
+        authority_id
+        for shard in value["shard_assignments"]
+        for authority_id in shard["authority_ids"]
     ]
-    failure_keys = [
-        (item["authority_id"], item["stage"])
-        for item in deployment["failures"]
-    ]
-    correlation_count_fields = {
-        "matched_reference_count",
-        "expected_reference_count",
-        "missing_reference_count",
-    }
     if (
-        len(ready_ids) != len(value["runtime_topology"]["agents"])
-        or len(recovery_ids) != len(set(recovery_ids))
-        or len(failure_keys) != len(set(failure_keys))
-        or any(
-            (
-                correlation_count_fields.intersection(item)
-                and not correlation_count_fields.issubset(item)
-            )
-            or (
-                correlation_count_fields.issubset(item)
-                and item["matched_reference_count"]
-                + item["missing_reference_count"]
-                != item["expected_reference_count"]
-            )
-            for item in deployment["failures"]
-        )
-        or (
-            deployment["phase"] in {"prepared", "complete"}
-            and len(value["runtime_topology"]["agents"]) != 41
-        )
-        or (
-            deployment["phase"] == "preparing"
-            and deployment["traffic_started"] is not False
-        )
-        or (
-            deployment["phase"] == "prepared"
-            and deployment["traffic_started"] is not False
-        )
-        or (
-            deployment["phase"] == "complete"
-            and deployment["traffic_started"] is not True
-        )
-        or any(
-            (item["state"] == "ready") != (item["authority_id"] in ready_ids)
-            for item in deployment["recoveries"]
-        )
-        or any(
-            sum(
-                recovery["retry_count"]
-                for recovery in deployment["recoveries"]
-                if recovery["canonical_agent"] == agent
-            )
-            > 3
-            for agent in {
-                item["canonical_agent"]
-                for item in deployment["recoveries"]
-            }
-        )
+        len(all_ids) != 41
+        or len(selected) != len(set(selected))
+        or len(reused) != len(set(reused))
+        or set(selected).intersection(reused)
+        or set(selected).union(reused) != all_ids
+        or set(assigned) != set(selected)
+        or len(assigned) != len(set(assigned))
+        or len(value["shard_assignments"]) > 10
+        or [item["shard_id"] for item in value["shard_assignments"]]
+        != list(range(1, len(value["shard_assignments"]) + 1))
     ):
-        raise ContractError(
-            "Local validation deployment progress is inconsistent"
-        )
-    operator = value["operator"]
-    if not isinstance(operator, Mapping) or set(operator) != {
-        "session_reference",
-        "operator_reference",
-        "run_reference",
-    }:
-        raise ContractError("Local validation operator provenance is invalid")
-    if not all(_hash_reference(operator[key]) for key in operator):
-        raise ContractError("Local validation operator provenance is incomplete")
-    if (
-        not isinstance(value["ownership_nonce"], str)
-        or len(value["ownership_nonce"]) < 8
-    ):
-        raise ContractError("Local validation ownership nonce is invalid")
-    if (
-        not isinstance(value["commit_sha"], str)
-        or len(value["commit_sha"]) != 40
-    ):
-        raise ContractError("Local validation commit identity is invalid")
-    if value["state"] == "CLEAN":
-        cleanup = value["cleanup"]
-        if (
-            not isinstance(cleanup, Mapping)
-            or cleanup.get("exact_clean") is not True
-            or cleanup.get("residue_ids")
-        ):
-            raise ContractError("CLEAN requires exact local cleanup proof")
-        if value["snapshot_type"] == "active" and value["clean_reference"] is None:
-            raise ContractError("CLEAN active journal lacks its immutable snapshot")
-    if value["state"] == "FINAL_CHECKS" and value["evidence_reference"] is None:
-        raise ContractError("FINAL_CHECKS requires local evidence")
-    for field in ("event_reference", "clean_reference", "evidence_reference"):
-        reference = value[field]
-        if reference is not None and (
-            not isinstance(reference, Mapping)
-            or set(reference) != {"path", "digest"}
-            or not isinstance(reference["path"], str)
-            or not _hash_reference(reference["digest"])
-        ):
-            raise ContractError(f"Local validation {field} is invalid")
+        raise ContractError("Validation authority selection is inconsistent")
 
 
 def validate_topology_resource_bindings(
@@ -470,11 +372,11 @@ def validate_topology_resource_bindings(
     provider_ids = {str(item["provider_id"]) for item in resources}
     required: set[str] = set()
     for field in ("runtime_principal_ids", "telemetry_identity_ids"):
-        value = topology.get(field)
-        if isinstance(value, str) and value:
-            required.add(value)
-        elif isinstance(value, list):
-            required.update(str(item) for item in value)
+        item = topology.get(field)
+        if isinstance(item, str) and item:
+            required.add(item)
+        elif isinstance(item, list):
+            required.update(str(entry) for entry in item)
     for agent in topology.get("agents", []):
         for field in (
             "provider_agent_id",
@@ -485,10 +387,10 @@ def validate_topology_resource_bindings(
             "runtime_principal_id",
             "telemetry_identity_id",
         ):
-            value = agent.get(field)
-            if isinstance(value, str) and value:
-                required.add(value)
-        required.update(str(item) for item in agent.get("connection_ids", []))
+            item = agent.get(field)
+            if isinstance(item, str) and item:
+                required.add(item)
+        required.update(str(entry) for entry in agent.get("connection_ids", []))
     missing = sorted(required - provider_ids)
     if missing:
         raise ContractError(
@@ -530,9 +432,6 @@ def _merge(
 ) -> None:
     for key, value in updates.items():
         if key not in target:
-            if path == ("cleanup",) and key == "failure":
-                target[key] = copy.deepcopy(value)
-                continue
             raise ContractError(f"Lifecycle update contains unknown field: {key}")
         if isinstance(target[key], dict) and isinstance(value, Mapping):
             _merge(target[key], value, path=(*path, key))
@@ -540,14 +439,14 @@ def _merge(
             target[key] = copy.deepcopy(value)
 
 
-def _snapshot_name(value: Mapping[str, Any], prefix: str) -> Path:
+def _snapshot_name(value: Mapping[str, Any]) -> Path:
     repository = value["repository"].replace("/", "--")
     digest = str(value["journal_digest"]).removeprefix("sha256:")
     return (
-        Path(prefix)
+        Path("history")
         / repository
         / str(value["pr_number"])
-        / str(value["cycle_id"])
+        / str(value["run_id"])
         / (
             f"e{value['event_sequence']:06d}-"
             f"{value['state'].lower()}-{digest}.json"
@@ -560,12 +459,3 @@ def _local_reference(record: LocalRecord, root: Path) -> dict[str, str]:
         "path": record.path.relative_to(root).as_posix(),
         "digest": record.digest,
     }
-
-
-def _hash_reference(value: Any) -> bool:
-    return (
-        isinstance(value, str)
-        and len(value) == 71
-        and value.startswith("sha256:")
-        and all(character in "0123456789abcdef" for character in value[7:])
-    )

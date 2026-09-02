@@ -1,4 +1,4 @@
-schema_version: "2.0.0"
+schema_version: "3.0.0"
 repository: ninghu/agent-insights-quality
 environment_id: swedencentral-g30
 location: swedencentral
@@ -37,18 +37,3 @@ name_policy:
   agent:
     maximum_length: 63
     pattern: "^[a-z][a-z0-9-]*[a-z0-9]$"
-resource_kinds:
-  - provider_agent
-  - provider_agent_version
-  - hosted_identity
-  - hosted_blueprint
-  - connection
-  - runtime_principal
-  - entra_service_principal
-  - hosted_deployment
-  - session
-  - conversation
-  - stored_response
-  - acr_tag
-  - acr_manifest
-documented_project_cascade: []

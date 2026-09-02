@@ -16,7 +16,7 @@ Agents and 36 reviewed, single-root issues.
   present in committed sanitized daily reports. Never publish private assessment packages or
   work-item context to ADX.
 - Keep email requests, deployment registries, run manifests, assessment packages, assessments,
-  legacy promotion receipts, Test Agent Validation lifecycle/history/evidence/CLEAN, approved
+  legacy promotion receipts, Test Agent Validation lifecycle/history/desired-state/receipts/evidence, approved
   validation records, provider receipts,
   work-item snapshots, ADX publication receipts, and rendered dashboards under the durable user-level
   `~/.aiq-runtime/agent-insights-quality/` root shared by all worktrees.
@@ -56,7 +56,7 @@ Agents and 36 reviewed, single-root issues.
 - Validation mode is reviewed catalog data bound into `execution_digest`; never infer or reclassify
   it from runtime results, resample a miss, or lower `n`/`k`.
 - Validation is report-free: never create monitors, run Agent Insights, assess/score cards, publish
-  ADX, send email, or run Daily from a validation cycle.
+  ADX, send email, or run Daily from Test Agent Validation.
 - Every potentially long-running operation emits public-safe start, elapsed heartbeat, and
   completion/failure progress. Progress-output failures must never abort the operation.
 - `g30` is the active Sweden Central telemetry topology: one App Insights and Log Analytics pair per
@@ -115,10 +115,10 @@ Agents and 36 reviewed, single-root issues.
 3. Run repository validation, Ruff, and tests.
 4. Compile Bicep when infrastructure changes.
 5. Freeze one clean commit after exactly one comprehensive review and targeted mechanical
-   verification, then run one local full 41-authority Test Agent Validation cycle.
-6. Hold the shared OS lock, keep atomic lifecycle/history/evidence/CLEAN under the
-   environment-namespaced durable runtime root, retain the durable Project and reconciled Agent
-   topology, and clean every run-scoped resource exactly. Any commit change requires a fresh full cycle.
+   verification, then run local Test Agent Validation.
+6. Keep atomic lifecycle, history, desired state, receipts, registries, and evidence under the
+   environment-namespaced durable runtime root. Retain the durable Project, Agent topology, sessions,
+   responses, images, telemetry, and evidence; supersede incomplete local state without deletion.
 7. After explicit human approval, create the single minimal create-once approved validation record.
    GitHub has no validation gate and merge remains manual.
 8. Preserve the legacy West US 2 resources and lifecycle state unchanged. The Sweden staging gate is

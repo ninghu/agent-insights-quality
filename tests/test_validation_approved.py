@@ -23,14 +23,14 @@ HASH = "sha256:" + ("a" * 64)
 def _record() -> dict:
     return stamp_approved_record(
         {
-            "schema_version": "1.0.0",
+            "schema_version": "2.0.0",
             "kind": "test-agent-validation-approved-record",
             "repository": "ninghu/agent-insights-quality",
             "pr_number": 63,
             "commit_sha": "b" * 40,
             "validation_digest": HASH,
             "evidence_digest": "sha256:" + ("c" * 64),
-            "clean_digest": "sha256:" + ("d" * 64),
+            "generation_digest": "sha256:" + ("d" * 64),
             "approved_by": "synthetic-approver",
             "approved_at": "2026-08-29T12:00:00+00:00",
             "record_digest": "",
@@ -49,7 +49,7 @@ def test_approved_record_is_minimal_and_self_bound() -> None:
         "commit_sha",
         "validation_digest",
         "evidence_digest",
-        "clean_digest",
+        "generation_digest",
         "approved_by",
         "approved_at",
         "record_digest",
@@ -76,32 +76,39 @@ def test_approved_record_rejects_tamper_or_gate_provenance() -> None:
         validate_approved_record(changed)
 
 
-def test_approval_rejects_evidence_from_another_cycle() -> None:
-    clean = {
-        "snapshot_type": "clean",
-        "state": "CLEAN",
+def test_approval_rejects_evidence_from_another_run() -> None:
+    active = {
+        "snapshot_type": "active",
+        "state": "READY",
         "repository": "ninghu/agent-insights-quality",
         "pr_number": 63,
         "commit_sha": "b" * 40,
-        "cycle_id": "validation-cycle-a",
-        "cleanup": {
-            "exact_clean": True,
-            "residue_ids": [],
+        "run_id": "validation-aaaaaaaaaaaa",
+        "digests": {
+            "validation_digest": HASH,
+            "runtime_topology_digest": HASH,
+            "evidence_digest": "sha256:" + ("c" * 64),
         },
+        "evidence_reference": {"digest": "sha256:" + ("c" * 64)},
     }
     evidence = {
-        "repository": clean["repository"],
-        "pr_number": clean["pr_number"],
-        "cycle_id": "validation-cycle-b",
+        "repository": active["repository"],
+        "pr_number": active["pr_number"],
+        "run_id": "validation-bbbbbbbbbbbb",
+        "commit_sha": active["commit_sha"],
+        "validation_digest": HASH,
+        "result": "PASS",
+        "runtime_topology_digest": HASH,
+        "evidence_digest": "sha256:" + ("c" * 64),
+        "authorities": [{"pass": True}],
     }
-    with pytest.raises(ContractError, match="one validation cycle"):
+    with pytest.raises(ContractError, match="active validation"):
         validate_local_result_binding(
-            {},
-            clean,
+            active,
             evidence,
-            repository=clean["repository"],
-            pr_number=clean["pr_number"],
-            commit_sha=clean["commit_sha"],
+            repository=active["repository"],
+            pr_number=active["pr_number"],
+            commit_sha=active["commit_sha"],
             validation_digest=HASH,
         )
 

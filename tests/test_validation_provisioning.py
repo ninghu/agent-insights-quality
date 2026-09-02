@@ -18,7 +18,6 @@ from agent_insights_quality.util import ContractError, ROOT
 from agent_insights_quality.validation_provisioning import (
     FoundryAuthorityDeployer,
     ValidationProjectProvisioner,
-    _cycle_image_tag,
     _rate_limits,
     validation_runtime_profile,
 )
@@ -91,7 +90,7 @@ def _staging_profile() -> RuntimeProfile:
 def test_validation_profile_reuses_exact_durable_staging_project() -> None:
     profile = validation_runtime_profile(
         "aiq-staging-swedencentral",
-        cycle_id="validation-cycle-0001",
+        run_id="validation-0123456789ab",
         base=_staging_profile(),
     )
     assert profile.account_name == "aiq-staging-swedencentral"
@@ -108,7 +107,7 @@ def test_validation_profile_has_no_staging_fallback() -> None:
     with pytest.raises(ContractError, match="durable Sweden staging Project"):
         validation_runtime_profile(
             "aiq-staging-swedencentral",
-            cycle_id="validation-cycle-0001",
+            run_id="validation-0123456789ab",
             base=incomplete,
         )
 
@@ -116,7 +115,7 @@ def test_validation_profile_has_no_staging_fallback() -> None:
 def test_durable_project_binding_reads_exact_existing_project(monkeypatch) -> None:
     profile = validation_runtime_profile(
         "aiq-staging-swedencentral",
-        cycle_id="validation-cycle-0001",
+        run_id="validation-0123456789ab",
         base=_staging_profile(),
     )
     provisioner = ValidationProjectProvisioner(
@@ -244,14 +243,6 @@ def test_capacity_measurement_normalizes_provider_rate_windows() -> None:
     ) == (300, 20000)
     with pytest.raises(ContractError, match="lacks measured RPM/TPM"):
         _rate_limits({"properties": {"rateLimits": []}})
-
-
-def test_support_cycle_tags_are_deterministic_and_provider_bounded() -> None:
-    assert _cycle_image_tag("validation-0123456789ab", "issue-036") == (
-        "validation-validation-0123456789ab-issue-036"
-    )
-    with pytest.raises(ContractError, match="provider limits"):
-        _cycle_image_tag("x" * 129, "issue-036")
 
 
 def test_support_image_records_acr_intents_before_push(

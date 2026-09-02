@@ -18,7 +18,6 @@ from agent_insights_quality.validation_lifecycle import (
 )
 from agent_insights_quality.validation_policy import ValidationPolicy
 from agent_insights_quality.validation_quota import CapacityPlan
-from agent_insights_quality.validation_cleanup import CleanupResult
 
 
 def initial_lifecycle(
@@ -43,10 +42,10 @@ def initial_lifecycle(
     ):
         raise ContractError("Local validation must use the reviewed Sweden environment")
     value = {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "kind": "test-agent-validation-lifecycle",
         "snapshot_type": "event",
-        "cycle_id": plan["cycle_id"],
+        "run_id": plan["run_id"],
         "event_sequence": 1,
         "state": "LOCKED",
         "repository": plan["repository"],
@@ -54,12 +53,11 @@ def initial_lifecycle(
         "commit_sha": plan["commit_sha"],
         "digests": {
             "validation_digest": plan["validation_digest"],
+            "shared_validation_digest": plan["shared_validation_digest"],
             "execution_matrix_digest": plan["execution_matrix_digest"],
             "runtime_topology_digest": plan["planned_topology_digest"],
             "quota_plan_digest": None,
             "evidence_digest": None,
-            "evidence_resource_inventory_digest": None,
-            "clean_resource_inventory_digest": None,
         },
         "operator": {
             "session_reference": holder_session_reference,
@@ -101,21 +99,17 @@ def initial_lifecycle(
             "recoveries": [],
             "failures": [],
         },
+        "desired_state_reference": None,
+        "deployment_assignments": [],
+        "validation_authority_ids": [
+            item["authority_id"] for item in plan["authorities"]
+        ],
+        "reused_authorities": [],
+        "shard_assignments": [],
         "resources": [],
-        "cleanup": {
-            "status": "not_started",
-            "plan_hash": None,
-            "exact_clean": False,
-            "verified_absent_ids": [],
-            "retained_shared_manifest_ids": [],
-            "retained_durable_ids": [],
-            "residue_ids": [],
-            "verification_at": None,
-            "failure": None,
-        },
         "event_reference": None,
-        "clean_reference": None,
         "evidence_reference": None,
+        "supersedes": None,
         "started_at": moment.isoformat(),
         "last_activity_at": moment.isoformat(),
         "absolute_expires_at": (
@@ -225,7 +219,7 @@ class ValidationCycleController:
                 "discovery_key": f"{provider_id}|{kind}|{binding_id}",
                 "authority_id": None,
                 "parent_id": provider_id,
-                "cleanup_method": "retained_durable",
+                "retention": "retained",
             }
             self.dynamic_resource_event(
                 {**event, "state": "create_intent"},
@@ -244,7 +238,7 @@ class ValidationCycleController:
                 "runtime_kind": "control",
                 "discovery_key": event["discovery_key"],
                 "ownership_nonce": self._active.value["ownership_nonce"],
-                "cleanup_method": "retained_durable",
+                "retention": "retained",
             }
             if any(resource[key] != value for key, value in expected.items()):
                 raise ContractError("Durable validation Project binding changed")
@@ -281,7 +275,7 @@ class ValidationCycleController:
         if existing:
             if existing != entries:
                 raise ContractError(
-                    "Validation Support image cache changed during the cycle"
+                    "Validation Support image cache changed during the run"
                 )
             return self._active
         if len(entries) != 9:
@@ -523,7 +517,7 @@ class ValidationCycleController:
         provider_id: str,
         runtime_kind: str,
         discovery_key: str,
-        cleanup_method: str,
+        retention: str,
         now: datetime,
     ) -> LocalRecord:
         with self._lock:
@@ -545,7 +539,7 @@ class ValidationCycleController:
                     discovery_key=discovery_key,
                     ownership_nonce=self._active.value["ownership_nonce"],
                     state="create_intent",
-                    cleanup_method=cleanup_method,
+                    retention=retention,
                     now=now,
                 ),
             ]
@@ -594,9 +588,7 @@ class ValidationCycleController:
                     "deterministic_name": str(event["deterministic_name"]),
                     "runtime_kind": str(event["runtime_kind"]),
                     "discovery_key": str(event["discovery_key"]),
-                    "cleanup_method": str(
-                        event.get("cleanup_method") or "explicit"
-                    ),
+                    "retention": str(event.get("retention") or "retained"),
                 }
                 if any(existing[key] != value for key, value in expected.items()):
                     raise ContractError(
@@ -611,7 +603,7 @@ class ValidationCycleController:
                 provider_id=intent_reference,
                 runtime_kind=str(event["runtime_kind"]),
                 discovery_key=str(event["discovery_key"]),
-                cleanup_method=str(event.get("cleanup_method") or "explicit"),
+                retention=str(event.get("retention") or "retained"),
                 now=now,
             )
         if state == "ambiguous_create":
@@ -676,32 +668,6 @@ class ValidationCycleController:
                 now,
             )
 
-    def resource_discovered(
-        self,
-        *,
-        intent_reference: str,
-        provider_id: str,
-        now: datetime,
-    ) -> LocalRecord:
-        with self._lock:
-            resources = []
-            found = False
-            for resource in self._active.value["resources"]:
-                item = copy.deepcopy(resource)
-                if item["intent_reference"] == intent_reference:
-                    item["resolved_provider_id"] = provider_id
-                    found = True
-                resources.append(item)
-            if not found:
-                raise ContractError(
-                    "Discovered validation resource has no recorded intent"
-                )
-            return self._commit(
-                self._active.value["state"],
-                {"resources": resources},
-                now,
-            )
-
     def complete_prepare(
         self,
         runtime_agents: list[dict[str, Any]],
@@ -741,17 +707,67 @@ class ValidationCycleController:
             self._active.value["resources"],
         )
         digest = content_hash(runtime_agents)
+        selected = [item["authority_id"] for item in runtime_agents]
         return self._commit(
             "VALIDATING",
             {
                 "runtime_topology": topology,
                 "digests": {"runtime_topology_digest": digest},
                 "deployment": {"phase": "prepared", "traffic_started": False},
+                "validation_authority_ids": selected,
+                "shard_assignments": _shard_assignments(selected),
             },
             now,
         )
 
-    def final_checks(
+    def desired_state_ready(
+        self,
+        *,
+        reference: Mapping[str, str],
+        deployment_assignments: list[dict[str, Any]],
+        now: datetime,
+    ) -> LocalRecord:
+        return self._commit(
+            "CREATING",
+            {
+                "desired_state_reference": dict(reference),
+                "deployment_assignments": deployment_assignments,
+            },
+            now,
+        )
+
+    def set_authority_selection(
+        self,
+        *,
+        selected_authority_ids: list[str],
+        reused_authorities: list[dict[str, str]],
+        now: datetime,
+    ) -> LocalRecord:
+        all_ids = {
+            item["authority_id"]
+            for item in self._active.value["runtime_topology"]["agents"]
+        }
+        reused_ids = {item["authority_id"] for item in reused_authorities}
+        if (
+            len(selected_authority_ids) != len(set(selected_authority_ids))
+            or len(reused_ids) != len(reused_authorities)
+            or set(selected_authority_ids).intersection(reused_ids)
+            or set(selected_authority_ids).union(reused_ids) != all_ids
+        ):
+            raise ContractError("Validation authority selection is incomplete")
+        return self._commit(
+            "VALIDATING",
+            {
+                "validation_authority_ids": selected_authority_ids,
+                "reused_authorities": reused_authorities,
+                "shard_assignments": _shard_assignments(
+                    selected_authority_ids
+                ),
+            },
+            now,
+        )
+
+    def complete(
         self,
         *,
         commit_sha: str,
@@ -771,14 +787,9 @@ class ValidationCycleController:
         ):
             raise ContractError("Final validation evidence is not current")
         return self._commit(
-            "FINAL_CHECKS",
+            "READY" if evidence.value["result"] == "PASS" else "FAILED",
             {
-                "digests": {
-                    "evidence_digest": evidence_digest,
-                    "evidence_resource_inventory_digest": evidence.value[
-                        "resource_inventory_digest"
-                    ],
-                },
+                "digests": {"evidence_digest": evidence_digest},
                 "evidence_reference": {
                     "path": evidence.path.relative_to(
                         validation_runtime_root()
@@ -786,94 +797,6 @@ class ValidationCycleController:
                     "digest": evidence_digest,
                 },
                 "deployment": {"phase": "complete", "traffic_started": True},
-            },
-            now,
-        )
-
-    def begin_cleanup(
-        self,
-        *,
-        failure: Mapping[str, Any] | None,
-        now: datetime,
-    ) -> LocalRecord:
-        updates: dict[str, Any] = {
-            "cleanup": {
-                "status": "in_progress",
-                "failure": None,
-            }
-        }
-        if failure is not None:
-            updates["failure"] = copy.deepcopy(dict(failure))
-        return self._commit("CLEANING", updates, now)
-
-    def complete_cleanup(
-        self,
-        result: CleanupResult,
-        *,
-        failed_cycle: bool,
-        now: datetime,
-    ) -> Any:
-        resources = []
-        absent = set(result.verified_absent_ids)
-        for resource in self._active.value["resources"]:
-            item = copy.deepcopy(resource)
-            if item["provider_id"] in absent:
-                item["state"] = "absence_verified"
-                item["delete_observed_at"] = now.astimezone(UTC).isoformat()
-            resources.append(item)
-        project = copy.deepcopy(self._active.value["project"])
-        cleanup = {
-            "status": "exact_clean" if result.exact_clean else "ambiguous",
-            "plan_hash": result.plan_hash,
-            "exact_clean": result.exact_clean,
-            "verified_absent_ids": list(result.verified_absent_ids),
-            "retained_shared_manifest_ids": list(
-                result.retained_shared_manifest_ids
-            ),
-            "retained_durable_ids": list(result.retained_durable_ids),
-            "residue_ids": list(result.residue_ids),
-            "verification_at": now.astimezone(UTC).isoformat(),
-            "failure": None,
-        }
-        state = (
-            "FAILED_CLEAN"
-            if failed_cycle and result.exact_clean
-            else "CLEAN"
-            if result.exact_clean
-            else "CLEANUP_BLOCKED"
-        )
-        committed = self._journal.commit(
-            self._active,
-            next_state=state,
-            updates={
-                "resources": resources,
-                "project": project,
-                "cleanup": cleanup,
-                "digests": {
-                    "clean_resource_inventory_digest": content_hash(resources),
-                },
-            },
-            now=now,
-        )
-        self._active = committed
-        return committed
-
-    def mark_cleanup_blocked(
-        self,
-        *,
-        failure: Mapping[str, Any],
-        now: datetime,
-    ) -> LocalRecord:
-        return self._commit(
-            "CLEANUP_BLOCKED",
-            {
-                "cleanup": {
-                    "status": "ambiguous",
-                    "exact_clean": False,
-                    "residue_ids": ["cleanup_unverified"],
-                    "verification_at": now.astimezone(UTC).isoformat(),
-                    "failure": copy.deepcopy(dict(failure)),
-                }
             },
             now,
         )
@@ -906,7 +829,7 @@ def _resource(
     discovery_key: str,
     ownership_nonce: str,
     state: str,
-    cleanup_method: str,
+    retention: str,
     now: datetime,
 ) -> dict[str, Any]:
     created = state == "created"
@@ -917,17 +840,28 @@ def _resource(
         "deterministic_name": deterministic_name,
         "intent_reference": intent_reference,
         "provider_id": provider_id,
-        "resolved_provider_id": None,
         "runtime_kind": runtime_kind,
         "discovery_key": discovery_key,
         "ownership_nonce": ownership_nonce,
         "create_intent_at": now.astimezone(UTC).isoformat(),
         "create_observed_at": now.astimezone(UTC).isoformat() if created else None,
-        "delete_intent_at": None,
-        "delete_observed_at": None,
         "state": state,
-        "cleanup_method": cleanup_method,
+        "retention": retention,
     }
+
+
+def _shard_assignments(authority_ids: list[str]) -> list[dict[str, Any]]:
+    shard_count = min(10, len(authority_ids))
+    if shard_count == 0:
+        return []
+    groups = [
+        authority_ids[index::shard_count]
+        for index in range(shard_count)
+    ]
+    return [
+        {"shard_id": index, "authority_ids": group}
+        for index, group in enumerate(groups, start=1)
+    ]
 
 
 def _mark_created(

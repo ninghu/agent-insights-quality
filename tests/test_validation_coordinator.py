@@ -1,142 +1,118 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.live import LiveRuntime
 from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.util import ContractError
 from agent_insights_quality.validation_coordinator import (
-    _cleanup_context,
+    _assignments,
+    _desired_state,
     _runner,
-    cleanup_test_agent_validation,
+)
+from agent_insights_quality.validation_manifest import (
+    authority_specs,
+    prepare_validation_plan,
+)
+from agent_insights_quality.validation_policy import load_validation_policy
+from agent_insights_quality.validation_runtime import (
+    DeployedRuntime,
+    plan_runtime_topology,
 )
 
 
-@pytest.mark.parametrize(
-    "state",
-    [
-        "LOCKED",
-        "PREFLIGHT",
-        "CREATING",
-        "VALIDATING",
-        "FINAL_CHECKS",
-        "CLEANING",
-        "CLEANUP_BLOCKED",
-    ],
-)
-def test_full_cleanup_accepts_incomplete_lifecycle_without_prepared_gate(
-    monkeypatch,
-    tmp_path,
-    state,
-) -> None:
-    active = {
-        "cycle_id": "cycle",
-        "state": state,
-        "repository": "synthetic/example",
-        "pr_number": 63,
-        "runtime_topology": {"agents": []},
-        "resources": [],
-        "cleanup": {"exact_clean": False},
-    }
-    record = SimpleNamespace(value=active)
+def test_deployment_assignments_are_disjoint_and_bounded() -> None:
+    authority_ids = [f"issue-{index:03d}" for index in range(1, 37)]
+    assignments = _assignments(authority_ids, maximum_shards=8)
+    assigned = [
+        authority_id
+        for assignment in assignments
+        for authority_id in assignment["authority_ids"]
+    ]
+    assert len(assignments) == 8
+    assert assigned != authority_ids
+    assert len(assigned) == len(set(assigned)) == len(authority_ids)
+    assert set(assigned) == set(authority_ids)
 
-    class Lock:
-        def __init__(self, _path) -> None:
-            pass
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-    class Journal:
-        def __init__(self, *, lock) -> None:
-            del lock
-
-        def read_active(self):
-            return record
-
-    class Reconciler:
-        def __init__(self, **_kwargs) -> None:
-            pass
-
-        def reconcile(self, **_kwargs):
-            active["state"] = "FAILED_CLEAN"
-            active["cleanup"]["exact_clean"] = True
-            return "FAILED_CLEAN"
-
+def test_desired_state_assigns_only_content_without_exact_reuse(monkeypatch) -> None:
     monkeypatch.setattr(
-        "agent_insights_quality.validation_coordinator.validation_runtime_root",
-        lambda: tmp_path,
+        "agent_insights_quality.validation_coordinator._read_deployment_registry",
+        lambda: None,
     )
-    monkeypatch.setattr(
-        "agent_insights_quality.validation_coordinator.LocalValidationLock",
-        Lock,
+    agents, issues = load_catalogs()
+    policy = load_validation_policy()
+    authorities = authority_specs(agents, issues)
+    plan = prepare_validation_plan(
+        agents=agents,
+        issues=issues,
+        policy=policy,
+        repository=policy.repository,
+        pr_number=999,
+        commit_sha="a" * 40,
+        local_run_id="synthetic-run",
     )
-    monkeypatch.setattr(
-        "agent_insights_quality.validation_coordinator.LifecycleJournal",
-        Journal,
+    planned = list(
+        plan_runtime_topology(
+            authorities,
+            run_suffix=plan["run_id"].removeprefix("validation-"),
+            policy=policy,
+        )
     )
-    monkeypatch.setattr(
-        "agent_insights_quality.validation_coordinator._load_prepared",
-        lambda *_args, **_kwargs: pytest.fail("cleanup used prepared gate"),
-    )
-    monkeypatch.setattr(
-        "agent_insights_quality.validation_coordinator._cleanup_context",
-        lambda _active: {
-            "profile": object(),
-            "operator": SimpleNamespace(token_provider=lambda _scope: "token"),
-            "policy": object(),
+
+    class Deployer:
+        @staticmethod
+        def desired_content_digest(authority):
+            return f"sha256:{int(authority.authority_id[-3:]) if authority.authority_kind == 'issue' else 0:064x}"
+
+        @staticmethod
+        def find_existing(authority, target):
+            index = authorities.index(authority)
+            if index >= 29:
+                return None
+            digest = Deployer.desired_content_digest(authority)
+            return DeployedRuntime(
+                authority_id=authority.authority_id,
+                runtime_kind=authority.runtime_kind,
+                runtime_agent_name=target.runtime_agent_name,
+                runtime_agent_version="1",
+                provider_agent_id=f"agent-{index}",
+                provider_agent_version_id=f"version-{index}",
+                provider_content_digest=digest,
+                hosted_identity_id=None,
+                hosted_blueprint_id=None,
+                hosted_deployment_id=None,
+                runtime_principal_id=None,
+                telemetry_identity_id=f"version-{index}",
+                connection_ids=(),
+            )
+
+    desired = _desired_state(
+        plan=plan,
+        authorities=authorities,
+        planned=planned,
+        deployer=Deployer(),
+        support_images={
+            ("v0" if index == 0 else f"issue-{index + 28:03d}"): (
+                "synthetic.azurecr.io/agent-insights-quality-support@"
+                f"sha256:{index:064x}"
+            )
+            for index in range(9)
         },
+        superseded_authority_ids=[],
     )
-    monkeypatch.setattr(
-        "agent_insights_quality.validation_coordinator.AzureValidationCleanupBackend",
-        lambda **_kwargs: object(),
-    )
-    monkeypatch.setattr(
-        "agent_insights_quality.validation_coordinator.ValidationReconciler",
-        Reconciler,
-    )
-
-    result = cleanup_test_agent_validation(cycle_id="cycle")
-
-    assert result == {
-        "status": "failed_clean",
-        "cycle_id": "cycle",
-        "exact_clean": True,
-    }
-
-
-def test_cleanup_profile_uses_original_bound_substrate(
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(
-        "agent_insights_quality.validation_coordinator.local_azure_operator",
-        lambda: SimpleNamespace(token_provider=lambda _scope: "token"),
-    )
-    active = {
-        "cycle_id": "cycle",
-        "project": {"name": "aiq-staging-swedencentral"},
-        "substrate": {
-            "account_name": "aiq-staging-swedencentral",
-            "account_resource_id": "/synthetic/account",
-            "registry_name": "syntheticregistry",
-            "storage_account_name": "syntheticstorage",
-            "telemetry_resource_id": "/synthetic/telemetry",
-        },
-    }
-
-    context = _cleanup_context(active)
-
-    assert context["profile"].account_resource_id == "/synthetic/account"
-    assert (
-        context["profile"].application_insights_resource_id
-        == "/synthetic/telemetry"
-    )
+    assert len(desired["reused_runtimes"]) == 29
+    assert len(desired["deployment_authority_ids"]) == 12
+    assert len(desired["deployment_assignments"]) <= 8
+    assert {
+        authority_id
+        for assignment in desired["deployment_assignments"]
+        for authority_id in assignment["authority_ids"]
+    } == set(desired["deployment_authority_ids"])
 
 
 def test_shard_runner_skips_global_traffic_ledger_but_live_runtime_uses_it(

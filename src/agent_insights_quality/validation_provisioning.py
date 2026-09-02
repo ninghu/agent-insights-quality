@@ -17,7 +17,6 @@ from agent_insights_quality.provisioning import _build_support_images
 from agent_insights_quality.util import (
     ROOT,
     ContractError,
-    content_hash,
 )
 from agent_insights_quality.validation_lifecycle import validation_runtime_root
 from agent_insights_quality.validation_policy import ValidationPolicy
@@ -92,7 +91,7 @@ class _VersionReadinessProof:
 def validation_runtime_profile(
     project_name: str,
     *,
-    cycle_id: str,
+    run_id: str,
     base: RuntimeProfile | None = None,
 ) -> RuntimeProfile:
     source = base or RuntimeProfile.from_env("staging", "g30")
@@ -111,7 +110,7 @@ def validation_runtime_profile(
         name="staging",
         project_name=project_name,
         registry_path=validation_runtime_root()
-        / cycle_id
+        / run_id
         / "deployment-registry.json",
     )
 
@@ -256,9 +255,7 @@ def prepare_validation_support_images(
     profile: RuntimeProfile,
     support_agent: Mapping[str, Any],
     *,
-    cycle_id: str,
     progress: ProgressReporter | None = None,
-    record_resource: Callable[[dict[str, Any]], None] | None = None,
 ) -> ValidationSupportImages:
     reporter = progress or ProgressReporter("aiq-validation-images")
     images = _build_support_images(
@@ -267,124 +264,13 @@ def prepare_validation_support_images(
         progress=reporter,
         record_resource=None,
     )
-    journaled_manifest_ids: set[str] = set()
-    resources: list[dict[str, str | None]] = []
-    repository = "agent-insights-quality-support"
-    for logical_version, image in sorted(images.items()):
-        prefix, separator, digest = image.rpartition("@")
-        if (
-            not separator
-            or not prefix.endswith(f"/{repository}")
-            or not digest.startswith("sha256:")
-        ):
-            raise ContractError(
-                "Validation Support image is not digest pinned"
-            )
-        tag = _cycle_image_tag(cycle_id, logical_version)
-        authority_id = (
-            "support-ticket-agent/v0"
-            if logical_version == "v0"
-            else logical_version
-        )
-        tag_resource = {
-            "kind": "acr_tag",
-            "intent_reference": content_hash(
-                {
-                    "kind": "acr_tag",
-                    "provider_id": f"{repository}:{tag}",
-                    "authority_id": authority_id,
-                }
-            ),
-            "deterministic_name": f"{repository}:{tag}",
-            "provider_id": f"{repository}:{tag}",
-            "authority_id": authority_id,
-            "parent_id": digest,
-            "runtime_kind": "hosted_custom_container",
-            "discovery_key": f"{repository}:{tag}",
-        }
-        if record_resource is not None:
-            record_resource({**tag_resource, "state": "create_intent"})
-        with reporter.heartbeat(
-            f"support-ticket-agent/{logical_version}: cycle tag"
-        ) as outcome:
-            process = subprocess.run(
-                [
-                    azure_cli(),
-                    "acr",
-                    "import",
-                    "--name",
-                    profile.container_registry_name,
-                    "--source",
-                    image,
-                    "--image",
-                    f"{repository}:{tag}",
-                    "--force",
-                    "--output",
-                    "none",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=300,
-                check=False,
-            )
-            if process.returncode != 0:
-                outcome.fail()
-        if process.returncode != 0:
-            if record_resource is not None:
-                record_resource(
-                    {**tag_resource, "state": "ambiguous_create"}
-                )
-            raise ContractError(
-                f"Validation Support cycle tag failed for {logical_version}"
-            )
-        if record_resource is not None:
-            record_resource({**tag_resource, "state": "created"})
-            new_manifest = digest not in journaled_manifest_ids
-            if new_manifest:
-                manifest_intent = content_hash(
-                    {
-                        "kind": "acr_manifest",
-                        "provider_id": digest,
-                        "authority_id": authority_id,
-                    }
-                )
-                manifest_resource = {
-                    "kind": "acr_manifest",
-                    "deterministic_name": repository,
-                    "authority_id": authority_id,
-                    "parent_id": None,
-                    "intent_reference": manifest_intent,
-                    "runtime_kind": "hosted_custom_container",
-                    "discovery_key": f"{repository}@{digest}",
-                }
-                record_resource(
-                    {**manifest_resource, "state": "create_intent"}
-                )
-                record_resource(
-                    {
-                        **manifest_resource,
-                        "state": "created",
-                        "provider_id": digest,
-                    }
-                )
-                journaled_manifest_ids.add(digest)
-        else:
-            new_manifest = digest not in journaled_manifest_ids
-            journaled_manifest_ids.add(digest)
-        resources.append(tag_resource)
-        if new_manifest:
-            resources.append(
-                {
-                    "kind": "acr_manifest",
-                    "deterministic_name": repository,
-                    "provider_id": digest,
-                    "authority_id": authority_id,
-                    "parent_id": None,
-                }
-            )
+    if len(images) != 9 or any(
+        "@sha256:" not in image for image in images.values()
+    ):
+        raise ContractError("Validation Support images are not exactly digest pinned")
     return ValidationSupportImages(
         images=images,
-        resources=tuple(resources),
+        resources=(),
     )
 
 
@@ -421,6 +307,10 @@ class FoundryAuthorityDeployer:
 
     def wait_project(self) -> None:
         self._client.wait_project()
+
+    def assert_no_monitors(self) -> None:
+        if self._client._list_monitors():
+            raise ContractError("Validation Project must contain zero monitors")
 
     def assert_ready(
         self,
@@ -517,36 +407,50 @@ class FoundryAuthorityDeployer:
             )
         self._support_images = values
 
+    def desired_content_digest(self, authority: AuthoritySpec) -> str:
+        _, artifact = self._validation_artifact(authority)
+        return str(artifact["content_digest"])
+
+    def find_existing(
+        self,
+        authority: AuthoritySpec,
+        planned: PlannedRuntime,
+    ) -> DeployedRuntime | None:
+        _, artifact = self._validation_artifact(authority)
+        hosted = authority.runtime_kind != "prompt"
+        version = self._client._find_version(
+            planned.runtime_agent_name,
+            authority.logical_version,
+            artifact["content_digest"],
+            hosted=hosted,
+        )
+        if version is None:
+            return None
+        details = self._client._wait_active(
+            planned.runtime_agent_name,
+            version,
+            hosted=hosted,
+            expected_metadata={
+                "aiq_profile": self._profile.name,
+                "aiq_logical_version": authority.logical_version,
+                "aiq_content_digest": artifact["content_digest"],
+            },
+            not_found_confirmed_at=None,
+        )
+        return self._runtime_from_details(
+            authority,
+            planned,
+            artifact=artifact,
+            version=version,
+            details=details,
+        )
+
     def deploy(
         self,
         authority: AuthoritySpec,
         planned: PlannedRuntime,
     ) -> DeployedRuntime:
-        catalog_agent = self._agents.get(authority.canonical_agent)
-        if catalog_agent is None:
-            raise ContractError("Validation authority Agent is not in the catalog")
-        issue = (
-            None
-            if authority.authority_kind == "baseline"
-            else self._issues.get(authority.authority_id)
-        )
-        if authority.authority_kind == "issue" and issue is None:
-            raise ContractError("Validation issue authority is not in the catalog")
-        artifact = _build_validation_artifact(
-            catalog_agent,
-            issue,
-            support_images=self._support_images,
-        )
-        root = ROOT / (
-            catalog_agent["baseline_path"]
-            if issue is None
-            else issue["implementation"]
-        )
-        if (
-            source_content_digest(root, authority.runtime_kind)
-            != authority.source_content_digest
-        ):
-            raise ContractError("Validation authority source digest changed before deploy")
+        catalog_agent, artifact = self._validation_artifact(authority)
         runtime_agent = copy.deepcopy(catalog_agent)
         runtime_agent["name"] = planned.runtime_agent_name
         version, details = self._client.ensure_version_for_readiness(
@@ -554,6 +458,34 @@ class FoundryAuthorityDeployer:
             logical_version=authority.logical_version,
             artifact=artifact,
         )
+        deployed = self._runtime_from_details(
+            authority,
+            planned,
+            artifact=artifact,
+            version=version,
+            details=details,
+        )
+        self._remember_readiness_proof(
+            authority,
+            deployed,
+            _version_readiness_proof(
+                details,
+                hosted=authority.runtime_kind != "prompt",
+                expected_agent_name=planned.runtime_agent_name,
+                expected_version=version,
+            ),
+        )
+        return deployed
+
+    def _runtime_from_details(
+        self,
+        authority: AuthoritySpec,
+        planned: PlannedRuntime,
+        *,
+        artifact: Mapping[str, Any],
+        version: str,
+        details: Mapping[str, Any],
+    ) -> DeployedRuntime:
         hosted = authority.runtime_kind != "prompt"
         if hosted:
             proof = _version_readiness_proof(
@@ -594,7 +526,7 @@ class FoundryAuthorityDeployer:
                 if isinstance(identity, dict)
                 else ""
             )
-        deployed = DeployedRuntime(
+        return DeployedRuntime(
             authority_id=authority.authority_id,
             runtime_kind=authority.runtime_kind,
             runtime_agent_name=planned.runtime_agent_name,
@@ -609,8 +541,36 @@ class FoundryAuthorityDeployer:
             telemetry_identity_id=proof.provider_version_id,
             connection_ids=self._project.connection_ids,
         )
-        self._remember_readiness_proof(authority, deployed, proof)
-        return deployed
+    def _validation_artifact(
+        self,
+        authority: AuthoritySpec,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        catalog_agent = self._agents.get(authority.canonical_agent)
+        if catalog_agent is None:
+            raise ContractError("Validation authority Agent is not in the catalog")
+        issue = (
+            None
+            if authority.authority_kind == "baseline"
+            else self._issues.get(authority.authority_id)
+        )
+        if authority.authority_kind == "issue" and issue is None:
+            raise ContractError("Validation issue authority is not in the catalog")
+        artifact = _build_validation_artifact(
+            catalog_agent,
+            issue,
+            support_images=self._support_images,
+        )
+        root = ROOT / (
+            catalog_agent["baseline_path"]
+            if issue is None
+            else issue["implementation"]
+        )
+        if (
+            source_content_digest(root, authority.runtime_kind)
+            != authority.source_content_digest
+        ):
+            raise ContractError("Validation authority source digest changed before deploy")
+        return dict(catalog_agent), artifact
 
 
 def _resource_name(resource_id: str) -> str:
@@ -619,8 +579,8 @@ def _resource_name(resource_id: str) -> str:
     return value.rstrip("/").rsplit("/", 1)[-1]
 
 
-def _deployment_name(cycle_id: str) -> str:
-    return f"test-agent-validation-{cycle_id}"[:64].rstrip("-")
+def _deployment_name(run_id: str) -> str:
+    return f"test-agent-validation-{run_id}"[:64].rstrip("-")
 
 
 def _required_mapping(
@@ -827,13 +787,3 @@ def _rate_limits(value: Any) -> tuple[int, int]:
             "Validation model response lacks measured RPM/TPM rate limits"
         )
     return rates["rpm"], rates["tpm"]
-
-
-def _cycle_image_tag(cycle_id: str, logical_version: str) -> str:
-    normalized = "".join(
-        character if character.isalnum() or character in "._-" else "-"
-        for character in f"{cycle_id}-{logical_version}".casefold()
-    ).strip("-")
-    if not normalized or len(normalized) > 128:
-        raise ContractError("Validation ACR cycle tag violates provider limits")
-    return f"validation-{normalized}"

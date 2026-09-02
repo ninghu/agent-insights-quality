@@ -24,7 +24,6 @@ def test_validation_policy_freezes_local_inventory_and_limits() -> None:
     assert policy.limits.runtime_attempt_concurrency == 1
     assert policy.limits.absolute_ttl_hours == 72
     assert policy.limits.active_heartbeat_seconds == 60
-    assert policy.documented_project_cascade == ()
     assert policy.trace_hydration_poll_seconds == 15
     assert policy.trace_hydration_stabilization_seconds == 180
     assert policy.trace_hydration_maximum_wait_seconds == 900

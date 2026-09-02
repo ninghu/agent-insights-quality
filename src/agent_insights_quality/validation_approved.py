@@ -30,7 +30,6 @@ from agent_insights_quality.validation_lifecycle import (
     LocalValidationLock,
     read_bound_local_record,
     validation_runtime_root,
-    validate_lifecycle,
 )
 from agent_insights_quality.validation_local import (
     current_clean_commit,
@@ -53,22 +52,14 @@ def approve_test_agent_validation(
         journal = LifecycleJournal(lock=lock)
         active = journal.read_active()
         if (
-            active.value["state"] != "CLEAN"
+            active.value["state"] != "READY"
             or active.value["commit_sha"] != git.commit_sha
             or active.value["repository"] != git.repository
             or active.value["pr_number"] != git.pr_number
         ):
             raise ContractError(
-                "Latest local validation is not CLEAN for the current pull request head"
+                "Latest local validation is not READY for the current pull request head"
             )
-        clean_record = read_bound_local_record(
-            journal.root,
-            active.value["clean_reference"],
-            digest_field="journal_digest",
-            label="CLEAN",
-        )
-        clean = clean_record.value
-        validate_lifecycle(clean)
         evidence_record = read_bound_local_record(
             validation_runtime_root(),
             active.value["evidence_reference"],
@@ -81,7 +72,6 @@ def approve_test_agent_validation(
         validation_digest = current_validation_digest(agents, issues)
         validate_local_result_binding(
             active.value,
-            clean,
             evidence,
             repository=git.repository,
             pr_number=git.pr_number,
@@ -90,14 +80,14 @@ def approve_test_agent_validation(
         )
         requested_record = stamp_approved_record(
             {
-                "schema_version": "1.0.0",
+                "schema_version": "2.0.0",
                 "kind": "test-agent-validation-approved-record",
                 "repository": git.repository,
                 "pr_number": git.pr_number,
                 "commit_sha": git.commit_sha,
                 "validation_digest": validation_digest,
                 "evidence_digest": evidence["evidence_digest"],
-                "clean_digest": clean["journal_digest"],
+                "generation_digest": active.value["journal_digest"],
                 "approved_by": approver,
                 "approved_at": now().astimezone(UTC).isoformat(),
                 "record_digest": "",
@@ -166,7 +156,6 @@ def stamp_approved_record(value: Mapping[str, Any]) -> dict[str, Any]:
 
 def validate_local_result_binding(
     active: Mapping[str, Any],
-    clean: Mapping[str, Any],
     evidence: Mapping[str, Any],
     *,
     repository: str,
@@ -175,32 +164,26 @@ def validate_local_result_binding(
     validation_digest: str,
 ) -> None:
     if (
-        clean["snapshot_type"] != "clean"
-        or clean["state"] != "CLEAN"
-        or clean["repository"] != repository
-        or clean["pr_number"] != pr_number
-        or clean["commit_sha"] != commit_sha
-        or clean["cleanup"]["exact_clean"] is not True
-        or clean["cleanup"]["residue_ids"]
+        active["snapshot_type"] != "active"
+        or         active["state"] != "READY"
+        or active["repository"] != repository
+        or active["pr_number"] != pr_number
+        or active["commit_sha"] != commit_sha
         or evidence["repository"] != repository
         or evidence["pr_number"] != pr_number
-        or evidence["cycle_id"] != clean["cycle_id"]
+        or evidence["run_id"] != active["run_id"]
         or evidence["commit_sha"] != commit_sha
         or evidence["validation_digest"] != validation_digest
+        or evidence["result"] != "PASS"
+        or not all(item["pass"] for item in evidence["authorities"])
         or evidence["runtime_topology_digest"]
-        != clean["digests"]["runtime_topology_digest"]
-        or evidence["resource_inventory_digest"]
-        != clean["digests"]["evidence_resource_inventory_digest"]
-        or clean["digests"]["clean_resource_inventory_digest"]
-        != content_hash(clean["resources"])
-        or active["cycle_id"] != clean["cycle_id"]
-        or active["clean_reference"]["digest"] != clean["journal_digest"]
+        != active["digests"]["runtime_topology_digest"]
         or active["evidence_reference"]["digest"] != evidence["evidence_digest"]
         or active["digests"]["validation_digest"] != validation_digest
         or active["digests"]["evidence_digest"] != evidence["evidence_digest"]
     ):
         raise ContractError(
-            "Local evidence or CLEAN proof does not match one validation cycle"
+            "Local PASS evidence does not match the active validation result"
         )
 
 
@@ -295,7 +278,7 @@ def load_or_create_approval_intent(
             "commit_sha",
             "validation_digest",
             "evidence_digest",
-            "clean_digest",
+            "generation_digest",
         ):
             if existing[field] != requested[field]:
                 raise ContractError(

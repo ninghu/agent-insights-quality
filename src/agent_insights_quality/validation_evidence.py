@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
@@ -20,6 +21,8 @@ from agent_insights_quality.validation_lifecycle import (
     LocalRecord,
     validation_runtime_root,
 )
+if TYPE_CHECKING:
+    from agent_insights_quality.validation_runtime import AuthoritySpec
 from agent_insights_quality.validation_rules import (
     validate_validation_rules,
     validation_matrix,
@@ -45,6 +48,57 @@ def validate_evidence(
     resources: list[Mapping[str, Any]] | None = None,
     repository_root: Path = ROOT,
 ) -> None:
+    validate_evidence_integrity(value)
+    reviewed_contracts = _reviewed_execution_contracts(repository_root)
+    if value["execution_matrix_digest"] != content_hash(
+        {
+            authority_id: contract["execution_digest"]
+            for authority_id, contract in reviewed_contracts.items()
+        }
+    ):
+        raise ContractError("Validation evidence execution matrix digest is stale")
+    current_specs: dict[str, AuthoritySpec] = {}
+    if repository_root.resolve() == ROOT.resolve():
+        agents, issues = load_catalogs()
+        from agent_insights_quality.validation_manifest import (
+            authority_specs,
+            current_shared_validation_digest,
+            current_validation_digest,
+        )
+
+        current_specs = {
+            item.authority_id: item for item in authority_specs(agents, issues)
+        }
+        if value["validation_digest"] != current_validation_digest(agents, issues):
+            raise ContractError("Validation evidence contract digest is stale")
+        if value["shared_validation_digest"] != current_shared_validation_digest():
+            raise ContractError("Validation evidence shared contract digest is stale")
+    for authority in value["authorities"]:
+        _validate_reviewed_execution_contract(
+            authority,
+            reviewed_contracts[authority["authority_id"]],
+        )
+        current = current_specs.get(authority["authority_id"])
+        if current is not None and (
+            authority["source_content_digest"] != current.source_content_digest
+            or authority["execution_digest"] != current.execution_digest
+        ):
+            raise ContractError(
+                f"{authority['authority_id']} evidence content binding is stale"
+            )
+    if runtime_topology is not None:
+        _validate_runtime_topology_binding(value, runtime_topology)
+        if value["runtime_topology_digest"] != content_hash(
+            runtime_topology["agents"]
+        ):
+            raise ContractError("Validation evidence runtime topology digest is stale")
+    if resources is not None and value["resource_inventory_digest"] != content_hash(
+        resources
+    ):
+        raise ContractError("Validation evidence resource inventory digest is stale")
+
+
+def validate_evidence_integrity(value: Mapping[str, Any]) -> None:
     schema = read_json(EVIDENCE_SCHEMA)
     errors = sorted(
         Draft202012Validator(
@@ -66,19 +120,7 @@ def validate_evidence(
         raise ContractError("Validation evidence authority IDs must be unique")
     if set(authority_ids) != EXPECTED_BASELINE_AUTHORITIES | EXPECTED_ISSUE_AUTHORITIES:
         raise ContractError("Validation evidence must contain the exact 41 authorities")
-    reviewed_contracts = _reviewed_execution_contracts(repository_root)
-    if value["execution_matrix_digest"] != content_hash(
-        {
-            authority_id: contract["execution_digest"]
-            for authority_id, contract in reviewed_contracts.items()
-        }
-    ):
-        raise ContractError("Validation evidence execution matrix digest is stale")
     for authority in authorities:
-        if authority["validated_commit_sha"] != value["commit_sha"]:
-            raise ContractError(
-                f"{authority['authority_id']} evidence is not bound to the commit"
-            )
         expected_agent, expected_mode = _expected_authority_contract(
             authority["authority_id"]
         )
@@ -89,30 +131,13 @@ def validate_evidence(
             raise ContractError(
                 f"{authority['authority_id']} evidence changed its reviewed contract"
             )
-        _validate_reviewed_execution_contract(
-            authority,
-            reviewed_contracts[authority["authority_id"]],
-        )
         _validate_authority(authority)
     _validate_global_attempt_references(authorities)
-    if runtime_topology is not None:
-        _validate_runtime_topology_binding(value, runtime_topology)
-        if value["runtime_topology_digest"] != content_hash(
-            runtime_topology["agents"]
-        ):
-            raise ContractError("Validation evidence runtime topology digest is stale")
-    if resources is not None and value["resource_inventory_digest"] != content_hash(
-        resources
-    ):
-        raise ContractError("Validation evidence resource inventory digest is stale")
-    if repository_root.resolve() == ROOT.resolve():
-        agents, issues = load_catalogs()
-        from agent_insights_quality.validation_manifest import (
-            current_validation_digest,
-        )
-
-        if value["validation_digest"] != current_validation_digest(agents, issues):
-            raise ContractError("Validation evidence contract digest is stale")
+    expected_result = (
+        "PASS" if all(item["pass"] for item in authorities) else "FAIL"
+    )
+    if value["result"] != expected_result:
+        raise ContractError("Validation evidence aggregate result is invalid")
     expected_digest = digest_without_field(value, "evidence_digest")
     if value["evidence_digest"] != expected_digest:
         raise ContractError("Validation evidence digest is stale")
@@ -139,14 +164,14 @@ def persist_evidence(
     *,
     repository: str,
     pr_number: int,
-    cycle_id: str,
+    run_id: str,
     root: Path | None = None,
 ) -> LocalRecord:
     validate_evidence(value)
     if (
         value["repository"] != repository
         or value["pr_number"] != pr_number
-        or value["cycle_id"] != cycle_id
+        or value["run_id"] != run_id
     ):
         raise ContractError("Local evidence path context does not match its content")
     owner, repository_name = repository.split("/", 1)
@@ -154,7 +179,7 @@ def persist_evidence(
         root
         or validation_runtime_root() / "evidence"
     ) / (
-        f"{owner}/{repository_name}/{pr_number}/{cycle_id}/"
+        f"{owner}/{repository_name}/{pr_number}/{run_id}/"
         f"{str(value['evidence_digest']).removeprefix('sha256:')}.json"
     )
     immutable_json(path, dict(value))
@@ -165,6 +190,163 @@ def persist_evidence(
         path=path,
         value=persisted,
         digest=str(persisted["evidence_digest"]),
+    )
+
+
+def select_reusable_authority_evidence(
+    *,
+    authorities: list[AuthoritySpec],
+    runtime_topology: Mapping[str, Any],
+    repository: str,
+    pr_number: int,
+    environment_id: str,
+    location: str,
+    telemetry_resource_set: str,
+    shared_validation_digest: str,
+    forced_authority_ids: set[str] | None = None,
+    root: Path | None = None,
+) -> tuple[list[str], list[dict[str, str]]]:
+    runtime_root = (root or validation_runtime_root()).resolve()
+    owner, name = repository.split("/", 1)
+    evidence_root = runtime_root / "evidence" / owner / name / str(pr_number)
+    latest: dict[str, tuple[str, Path, dict[str, Any]]] = {}
+    if evidence_root.is_dir():
+        for path in evidence_root.rglob("*.json"):
+            try:
+                value = read_json(path)
+                validate_evidence_integrity(value)
+                completed = datetime.fromisoformat(
+                    str(value["completed_at"]).replace("Z", "+00:00")
+                ).isoformat()
+            except (ContractError, OSError, ValueError):
+                continue
+            if (
+                value["repository"] != repository
+                or value["pr_number"] != pr_number
+                or value["environment_id"] != environment_id
+                or value["location"] != location
+                or value["telemetry_resource_set"] != telemetry_resource_set
+            ):
+                continue
+            for item in value["authorities"]:
+                authority_id = item["authority_id"]
+                previous = latest.get(authority_id)
+                if previous is None or completed > previous[0]:
+                    latest[authority_id] = (completed, path, value)
+
+    runtime_by_id = {
+        item["authority_id"]: item for item in runtime_topology["agents"]
+    }
+    forced = forced_authority_ids or set()
+    selected: list[str] = []
+    reused: list[dict[str, str]] = []
+    for authority in authorities:
+        candidate = latest.get(authority.authority_id)
+        if (
+            authority.authority_id in forced
+            or candidate is None
+            or not _authority_is_reusable(
+                candidate[2],
+                authority=authority,
+                runtime=runtime_by_id[authority.authority_id],
+                shared_validation_digest=shared_validation_digest,
+            )
+        ):
+            selected.append(authority.authority_id)
+            continue
+        _, path, evidence = candidate
+        item = next(
+            entry
+            for entry in evidence["authorities"]
+            if entry["authority_id"] == authority.authority_id
+        )
+        reused.append(
+            {
+                "authority_id": authority.authority_id,
+                "path": path.resolve().relative_to(runtime_root).as_posix(),
+                "evidence_digest": evidence["evidence_digest"],
+                "authority_evidence_digest": item["authority_evidence_digest"],
+            }
+        )
+    return selected, reused
+
+
+def load_reused_authority_evidence(
+    reference: Mapping[str, str],
+    *,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    runtime_root = (root or validation_runtime_root()).resolve()
+    path = (runtime_root / reference["path"]).resolve()
+    if runtime_root not in path.parents:
+        raise ContractError("Reused validation evidence path escapes the runtime root")
+    value = read_json(path)
+    validate_evidence_integrity(value)
+    if value["evidence_digest"] != reference["evidence_digest"]:
+        raise ContractError("Reused validation evidence digest changed")
+    authority = next(
+        (
+            item
+            for item in value["authorities"]
+            if item["authority_id"] == reference["authority_id"]
+        ),
+        None,
+    )
+    if (
+        authority is None
+        or authority["authority_evidence_digest"]
+        != reference["authority_evidence_digest"]
+    ):
+        raise ContractError("Reused authority evidence digest changed")
+    return copy.deepcopy(authority)
+
+
+def runtime_mapping_digest(runtime: Mapping[str, Any]) -> str:
+    return content_hash(
+        {
+            field: runtime.get(field)
+            for field in (
+                "runtime_agent_name",
+                "runtime_agent_version",
+                "provider_agent_id",
+                "provider_agent_version_id",
+                "hosted_identity_id",
+                "hosted_blueprint_id",
+                "hosted_deployment_id",
+                "runtime_principal_id",
+                "telemetry_identity_id",
+                "connection_ids",
+            )
+        }
+    )
+
+
+def _authority_is_reusable(
+    evidence: Mapping[str, Any],
+    *,
+    authority: AuthoritySpec,
+    runtime: Mapping[str, Any],
+    shared_validation_digest: str,
+) -> bool:
+    item = next(
+        (
+            entry
+            for entry in evidence["authorities"]
+            if entry["authority_id"] == authority.authority_id
+        ),
+        None,
+    )
+    return bool(
+        item is not None
+        and item["pass"] is True
+        and evidence["shared_validation_digest"] == shared_validation_digest
+        and item["authority_kind"] == authority.authority_kind
+        and item["canonical_agent"] == authority.canonical_agent
+        and item["logical_version"] == authority.logical_version
+        and item["source_content_digest"] == authority.source_content_digest
+        and item["execution_digest"] == authority.execution_digest
+        and item["provider_content_digest"] == runtime["provider_content_digest"]
+        and item["runtime_mapping_digest"] == runtime_mapping_digest(runtime)
     )
 
 
@@ -352,6 +534,8 @@ def _validate_runtime_topology_binding(
             != expected_reference
             or authority["provider_content_digest"]
             != runtime["provider_content_digest"]
+            or authority["runtime_mapping_digest"]
+            != runtime_mapping_digest(runtime)
         ):
             raise ContractError(
                 f"{authority['authority_id']} evidence runtime identity is stale"

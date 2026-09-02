@@ -1135,6 +1135,7 @@ union traces, dependencies, requests
         agent_name: str,
         foundry_version: str,
         invocation: InvocationEvidence,
+        allow_shared_operations: bool = False,
     ) -> tuple[str, ...]:
         try:
             from azure.monitor.query import LogsQueryStatus
@@ -1151,26 +1152,34 @@ union traces, dependencies, requests
             invocation.response_references,
             invocation.request_count,
         )
+        references = ", ".join(
+            f'"{value}"' for value in invocation.response_references
+        )
         query = f"""
 union traces, dependencies, requests
 | where timestamp >= datetime({start.astimezone(UTC).isoformat()})
   and timestamp <= datetime({traffic_end.astimezone(UTC).isoformat()})
 | extend operation_name = tostring(customDimensions["gen_ai.operation.name"])
-| extend observed_agent = tostring(customDimensions["gen_ai.agent.name"])
-| extend agent_version = tostring(customDimensions["gen_ai.agent.version"])
+| extend response_id=coalesce(
+    tostring(customDimensions["gen_ai.response.id"]),
+    tostring(customDimensions["azure.ai.agentserver.response_id"]),
+    tostring(customDimensions["response_id"]))
+| extend request_id=coalesce(
+    tostring(customDimensions["x-ms-client-request-id"]),
+    tostring(customDimensions["client_request_id"]),
+    tostring(customDimensions["request_id"]))
+| extend matched_reference=case(
+    response_id in ({references}), response_id,
+    request_id in ({references}), request_id,
+    "")
+| where operation_name == "invoke_agent"
+  and matched_reference in ({references})
 | summarize
-    operation_names=make_set_if(operation_name, isnotempty(operation_name)),
-    agent_names=make_set_if(observed_agent, isnotempty(observed_agent)),
-    agent_versions=make_set_if(agent_version, isnotempty(agent_version)),
+    matched_references=make_set(matched_reference),
     first_seen=min(timestamp)
   by operation_Id
-| where set_has_element(operation_names, "invoke_agent")
-  and array_length(agent_names) == 1
-  and array_length(agent_versions) == 1
-  and set_has_element(agent_names, "{agent_name}")
-  and set_has_element(agent_versions, "{foundry_version}")
 | order by first_seen asc, operation_Id asc
-| project operation_Id
+| project operation_Id, matched_references
 """
         deadline = self._monotonic() + 15 * 60
         next_progress = self._monotonic() + 60
@@ -1184,13 +1193,20 @@ union traces, dependencies, requests
                 timespan=(start, traffic_end),
             )
             if result.status == LogsQueryStatus.SUCCESS and result.tables:
-                operations = _discovered_operation_ids(result.tables)
+                operations = _complete_operation_ids(
+                    result.tables,
+                    invocation.response_references,
+                    allow_shared_operations=allow_shared_operations,
+                )
                 matched_operation_count = max(
                     matched_operation_count,
-                    len(operations),
+                    _matched_reference_count(
+                        result.tables,
+                        invocation.response_references,
+                    ),
                 )
                 now = self._monotonic()
-                if len(operations) == invocation.request_count:
+                if operations is not None:
                     if operations != stable_operations:
                         stable_operations = operations
                         stable_since = now
@@ -1219,7 +1235,7 @@ union traces, dependencies, requests
             self._sleep(min(15, deadline - now))
         raise TelemetryCorrelationError(
             matched_reference_count=matched_operation_count,
-            expected_reference_count=1,
+            expected_reference_count=invocation.request_count,
         )
 
     def telemetry_identity_passes(
@@ -1236,11 +1252,22 @@ union traces, dependencies, requests
             raise ContractError(
                 'Live telemetry requires installation with ".[azure]"'
             ) from error
-        _validate_operation_references(operation_ids, invocation.request_count)
+        _validate_operation_references(
+            operation_ids,
+            invocation.request_count,
+            allow_shared=True,
+        )
+        _validate_response_references(
+            invocation.response_references,
+            invocation.request_count,
+        )
         start = datetime.fromisoformat(invocation.started_at).astimezone(UTC)
         traffic_end = datetime.fromisoformat(invocation.completed_at).astimezone(UTC)
         query_end = traffic_end + timedelta(minutes=15)
         values = ", ".join(f'"{value}"' for value in operation_ids)
+        references = ", ".join(
+            f'"{value}"' for value in invocation.response_references
+        )
         query = f"""
 union traces, dependencies, requests
 | where timestamp >= datetime({start.isoformat()})
@@ -1249,13 +1276,33 @@ union traces, dependencies, requests
 | extend operation_name=tostring(customDimensions["gen_ai.operation.name"])
 | extend observed_agent=tostring(customDimensions["gen_ai.agent.name"])
 | extend agent_version=tostring(customDimensions["gen_ai.agent.version"])
+| extend response_id=coalesce(
+    tostring(customDimensions["gen_ai.response.id"]),
+    tostring(customDimensions["azure.ai.agentserver.response_id"]),
+    tostring(customDimensions["response_id"]))
+| extend request_id=coalesce(
+    tostring(customDimensions["x-ms-client-request-id"]),
+    tostring(customDimensions["client_request_id"]),
+    tostring(customDimensions["request_id"]))
+| extend matched_reference=case(
+    response_id in ({references}), response_id,
+    request_id in ({references}), request_id,
+    "")
 | where operation_name == "invoke_agent"
+  and matched_reference in ({references})
 | summarize
     agent_names=make_set(observed_agent),
     agent_versions=make_set(agent_version)
-  by operation_Id
+  by operation_Id, matched_reference
 """
         expected = ({agent_name}, {foundry_version})
+        expected_keys = set(
+            zip(
+                operation_ids,
+                invocation.response_references,
+                strict=True,
+            )
+        )
         deadline = self._monotonic() + TRACE_ASSERTION_DEADLINE_SECONDS
         next_progress = self._monotonic() + _TRACE_ASSERTION_PROGRESS_SECONDS
         client = self._logs_client()
@@ -1268,25 +1315,31 @@ union traces, dependencies, requests
             )
             if result.status != LogsQueryStatus.SUCCESS:
                 raise ContractError("Exact validation telemetry identity query failed")
-            observed: dict[str, tuple[set[str], set[str]]] = {}
+            observed: dict[tuple[str, str], tuple[set[str], set[str]]] = {}
             for table in result.tables:
                 for row in table.rows:
                     operation_id = str(row[0]).lower()
-                    if operation_id not in operation_ids:
+                    reference = str(row[1] if len(row) > 1 else "")
+                    key = (operation_id, reference)
+                    if key not in expected_keys:
                         continue
                     names, versions = observed.setdefault(
-                        operation_id,
+                        key,
                         (set(), set()),
                     )
                     names.update(
-                        _telemetry_string_set(row[1] if len(row) > 1 else [])
-                    )
-                    versions.update(
                         _telemetry_string_set(row[2] if len(row) > 2 else [])
                     )
+                    versions.update(
+                        _telemetry_string_set(row[3] if len(row) > 3 else [])
+                    )
             identity_results = tuple(
-                observed.get(operation_id) == expected
-                for operation_id in operation_ids
+                observed.get((operation_id, reference)) == expected
+                for operation_id, reference in zip(
+                    operation_ids,
+                    invocation.response_references,
+                    strict=True,
+                )
             )
             if any(
                 names - expected[0] or versions - expected[1]
@@ -1713,6 +1766,8 @@ union withsource=telemetry_type traces, dependencies, requests
 | extend terminal_success=tostring(customDimensions["aiq.terminal_response.success"])
 | extend terminal_output=tostring(customDimensions["aiq.terminal_response.output_present"])
 | extend handled_error=tostring(customDimensions["aiq.tool.error.handled"])
+| extend observed_agent=tostring(customDimensions["gen_ai.agent.name"])
+| extend agent_version=tostring(customDimensions["gen_ai.agent.version"])
 | extend output_messages_present=bag_has_key(
     customDimensions, "gen_ai.output.messages")
 | extend output_messages_nonempty=output_messages_present
@@ -1813,13 +1868,21 @@ union withsource=telemetry_type traces, dependencies, requests
         on_stable_output_messages: (
             Callable[[tuple[tuple[bool, bool], ...]], None] | None
         ) = None,
+        on_stable_response_anchors: (
+            Callable[[tuple[str, ...]], None] | None
+        ) = None,
+        allow_shared_operations: bool = False,
     ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
         if stabilization_seconds <= 0:
             raise ContractError("Hosted evidence stabilization interval must be positive")
         if len(requests) != len(response_references):
             raise ContractError("Hosted evidence traffic coverage is inconsistent")
         _validate_response_references(response_references, len(requests))
-        _validate_operation_references(operation_ids, len(requests))
+        _validate_operation_references(
+            operation_ids,
+            len(requests),
+            allow_shared=allow_shared_operations,
+        )
         fixtures = tuple(_normalize_fixture(item) for item in requests)
         deadline = self._monotonic() + TRACE_ASSERTION_DEADLINE_SECONDS
         next_progress = self._monotonic() + _TRACE_ASSERTION_PROGRESS_SECONDS
@@ -1833,6 +1896,7 @@ union withsource=telemetry_type traces, dependencies, requests
         first_mapping_observed = False
         passing = False
         correlated: tuple[list[dict[str, Any]], ...] | None = None
+        response_anchors: tuple[str, ...] | None = None
         output_messages_states: tuple[tuple[bool, bool], ...] | None = None
         while True:
             rows = self._trace_rows(
@@ -1843,11 +1907,15 @@ union withsource=telemetry_type traces, dependencies, requests
                 window_start,
                 window_end,
             )
-            correlated = _correlated_request_rows(
+            correlation = _correlated_request_rows(
                 rows,
                 response_references,
                 operation_ids,
+                agent_name=agent_name,
+                foundry_version=foundry_version,
             )
+            correlated = correlation[0] if correlation is not None else None
+            response_anchors = correlation[1] if correlation is not None else None
             if _request_correlation_impossible(
                 rows,
                 response_references,
@@ -1856,8 +1924,9 @@ union withsource=telemetry_type traces, dependencies, requests
                     "Hosted evidence found ambiguous response-to-operation correlation"
                 )
             output_messages_states = (
-                _canonical_output_messages_state_from_rows(rows, operation_ids)
+                _canonical_output_messages_state_from_correlated_rows(correlated)
                 if on_stable_output_messages is not None
+                and correlated is not None
                 else None
             )
             if correlated is not None and (
@@ -1897,8 +1966,19 @@ union withsource=telemetry_type traces, dependencies, requests
                 ):
                     if on_stable_output_messages is not None:
                         on_stable_output_messages(output_messages_states)
+                    if on_stable_response_anchors is not None:
+                        assert response_anchors is not None
+                        on_stable_response_anchors(response_anchors)
                     if on_stable is not None:
-                        on_stable(_trace_behavior_summary(rows))
+                        on_stable(
+                            _trace_behavior_summary(
+                                [
+                                    row
+                                    for request_rows in correlated
+                                    for row in request_rows
+                                ]
+                            )
+                        )
                     return last_results
             else:
                 passing = False
@@ -1937,7 +2017,15 @@ union withsource=telemetry_type traces, dependencies, requests
                     )
                 on_stable_output_messages(output_messages_states)
             if on_stable is not None:
-                on_stable(_trace_behavior_summary(rows))
+                on_stable(
+                    _trace_behavior_summary(
+                        [
+                            row
+                            for request_rows in correlated
+                            for row in request_rows
+                        ]
+                    )
+                )
             return last_results
         if correlated is not None:
             raise TraceAssertionActivationError(
@@ -2056,6 +2144,8 @@ union traces, dependencies, requests
 | extend terminal_success=tostring(customDimensions["aiq.terminal_response.success"])
 | extend terminal_output=tostring(customDimensions["aiq.terminal_response.output_present"])
 | extend handled_error=tostring(customDimensions["aiq.tool.error.handled"])
+| extend observed_agent=tostring(customDimensions["gen_ai.agent.name"])
+| extend agent_version=tostring(customDimensions["gen_ai.agent.version"])
 | extend response_id=coalesce(
     tostring(customDimensions["gen_ai.response.id"]),
     tostring(customDimensions["azure.ai.agentserver.response_id"]),
@@ -2068,10 +2158,11 @@ union traces, dependencies, requests
     response_id in ({references}), response_id,
     request_id in ({references}), request_id,
     "")
-| project operation_Id, operation_name, tool_name, tool_call_id, error_type, tool_ok, tool_result,
+| project operation_Id, id, operation_ParentId, operation_name,
+    tool_name, tool_call_id, error_type, tool_ok, tool_result,
     tool_arguments, structural_tool, input_messages, output_messages, timestamp, duration, name,
     terminal_success, terminal_output, handled_error, matched_reference,
-    output_messages_present, output_messages_nonempty
+    output_messages_present, output_messages_nonempty, observed_agent, agent_version
 """
         result = self._query_logs_result(
             query,
@@ -2082,30 +2173,34 @@ union traces, dependencies, requests
         rows = [
             {
                 "operation_id": str(row[0]),
-                "operation_name": str(row[1] or ""),
-                "tool_name": str(row[2] or ""),
-                "tool_call_id": str(row[3] or ""),
-                "error_type": str(row[4] or ""),
-                "tool_ok": str(row[5] or ""),
-                "tool_result": str(row[6] or ""),
-                "tool_arguments": str(row[7] or ""),
-                "structural_tool": str(row[8] or ""),
-                "messages": [str(row[9] or ""), str(row[10] or "")],
-                "timestamp": str(row[11] or ""),
-                "duration": row[12],
-                "span_name": str(row[13] or ""),
-                "terminal_success": str(row[14] or ""),
-                "terminal_output": str(row[15] or ""),
-                "handled_error": str(row[16] or ""),
-                "matched_reference": str(row[17] or ""),
+                "span_id": str(row[1] or ""),
+                "parent_span_id": str(row[2] or ""),
+                "operation_name": str(row[3] or ""),
+                "tool_name": str(row[4] or ""),
+                "tool_call_id": str(row[5] or ""),
+                "error_type": str(row[6] or ""),
+                "tool_ok": str(row[7] or ""),
+                "tool_result": str(row[8] or ""),
+                "tool_arguments": str(row[9] or ""),
+                "structural_tool": str(row[10] or ""),
+                "messages": [str(row[11] or ""), str(row[12] or "")],
+                "timestamp": str(row[13] or ""),
+                "duration": row[14],
+                "span_name": str(row[15] or ""),
+                "terminal_success": str(row[16] or ""),
+                "terminal_output": str(row[17] or ""),
+                "handled_error": str(row[18] or ""),
+                "matched_reference": str(row[19] or ""),
                 "output_messages_present": _telemetry_boolean(
-                    row[18],
+                    row[20],
                     field="output-message presence",
                 ),
                 "output_messages_nonempty": _telemetry_boolean(
-                    row[19],
+                    row[21],
                     field="output-message nonempty state",
                 ),
+                "agent_name": str(row[22] or ""),
+                "agent_version": str(row[23] or ""),
             }
             for table in result.tables
             for row in table.rows
@@ -2548,6 +2643,34 @@ def _canonical_output_messages_state_from_rows(
     )
 
 
+def _canonical_output_messages_state_from_correlated_rows(
+    correlated: tuple[list[dict[str, Any]], ...],
+) -> tuple[tuple[bool, bool], ...] | None:
+    if any(not any(_is_invoke_agent_span(row) for row in rows) for rows in correlated):
+        return None
+    return tuple(
+        (
+            any(
+                _telemetry_boolean(
+                    row.get("output_messages_present"),
+                    field="output-message presence",
+                )
+                for row in rows
+                if _is_invoke_agent_span(row)
+            ),
+            any(
+                _telemetry_boolean(
+                    row.get("output_messages_nonempty"),
+                    field="output-message nonempty state",
+                )
+                for row in rows
+                if _is_invoke_agent_span(row)
+            ),
+        )
+        for rows in correlated
+    )
+
+
 def _canonical_output_messages_expectation_passes(
     state: tuple[bool, bool],
     *,
@@ -2878,36 +3001,115 @@ def _correlated_request_rows(
     rows: list[dict[str, Any]],
     response_references: tuple[str, ...],
     operation_ids: tuple[str, ...],
-) -> tuple[list[dict[str, Any]], ...] | None:
+    *,
+    agent_name: str,
+    foundry_version: str,
+) -> tuple[tuple[list[dict[str, Any]], ...], tuple[str, ...]] | None:
     if (
         len(response_references) != len(operation_ids)
         or len(set(response_references)) != len(response_references)
-        or len(set(operation_ids)) != len(operation_ids)
         or any(not value for value in response_references)
     ):
         return None
     allowed_operations = set(operation_ids)
-    operations_by_reference: dict[str, set[str]] = defaultdict(set)
     rows_by_operation: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         operation_id = str(row.get("operation_id") or "").lower()
-        if operation_id not in allowed_operations:
+        if (
+            operation_id not in allowed_operations
+            or not str(row.get("span_id") or "")
+        ):
             continue
         rows_by_operation[operation_id].append(row)
-        reference = str(row.get("matched_reference") or "")
-        if reference in response_references:
-            operations_by_reference[reference].add(operation_id)
-    ordered_operations: list[str] = []
-    for reference in response_references:
-        matched = operations_by_reference.get(reference, set())
-        if len(matched) != 1:
+    if set(rows_by_operation) != allowed_operations or any(
+        not _valid_span_graph(operation_rows)
+        for operation_rows in rows_by_operation.values()
+    ):
+        return None
+    correlated: list[list[dict[str, Any]]] = []
+    anchors: list[str] = []
+    used_span_ids: set[str] = set()
+    for reference, operation_id in zip(
+        response_references,
+        operation_ids,
+        strict=True,
+    ):
+        operation_rows = rows_by_operation[operation_id]
+        candidates = [
+            row
+            for row in operation_rows
+            if str(row.get("matched_reference") or "") == reference
+            and str(row.get("operation_name") or "") == "invoke_agent"
+            and str(row.get("agent_name") or "") == agent_name
+            and str(row.get("agent_version") or "") == foundry_version
+        ]
+        if len(candidates) != 1:
             return None
-        ordered_operations.append(next(iter(matched)))
-    if len(set(ordered_operations)) != len(ordered_operations):
-        return None
-    if set(ordered_operations) != allowed_operations:
-        return None
-    return tuple(rows_by_operation[operation_id] for operation_id in ordered_operations)
+        anchor_span_id = str(candidates[0].get("span_id") or "")
+        selected = _rows_for_response_anchor(operation_rows, anchor_span_id)
+        selected_ids = {str(row.get("span_id") or "") for row in selected}
+        if (
+            not selected
+            or anchor_span_id in used_span_ids
+            or used_span_ids.intersection(selected_ids)
+            or any(
+                str(row.get("matched_reference") or "")
+                not in {"", reference}
+                for row in selected
+            )
+        ):
+            return None
+        used_span_ids.update(selected_ids)
+        anchors.append(anchor_span_id)
+        correlated.append(selected)
+    return tuple(correlated), tuple(anchors)
+
+
+def _valid_span_graph(rows: list[dict[str, Any]]) -> bool:
+    by_span: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        span_id = str(row.get("span_id") or "")
+        if not span_id or span_id in by_span:
+            return False
+        by_span[span_id] = row
+    for span_id, row in by_span.items():
+        parent = str(row.get("parent_span_id") or "")
+        if parent and (parent not in by_span or parent == span_id):
+            return False
+    for span_id in by_span:
+        seen: set[str] = set()
+        current = span_id
+        while current:
+            if current in seen:
+                return False
+            seen.add(current)
+            current = str(by_span[current].get("parent_span_id") or "")
+    return True
+
+
+def _rows_for_response_anchor(
+    rows: list[dict[str, Any]],
+    anchor_span_id: str,
+) -> list[dict[str, Any]]:
+    by_span = {str(row["span_id"]): row for row in rows}
+    if anchor_span_id not in by_span:
+        return []
+    children: dict[str, list[str]] = defaultdict(list)
+    for row in rows:
+        parent_span_id = str(row.get("parent_span_id") or "")
+        if parent_span_id:
+            children[parent_span_id].append(str(row["span_id"]))
+    selected: list[dict[str, Any]] = []
+    pending = [anchor_span_id]
+    seen: set[str] = set()
+    while pending:
+        span_id = pending.pop()
+        if span_id in seen:
+            return []
+        seen.add(span_id)
+        selected.append(by_span[span_id])
+        pending.extend(children.get(span_id, []))
+    return selected
 
 
 def _request_correlation_impossible(
@@ -2916,7 +3118,6 @@ def _request_correlation_impossible(
 ) -> bool:
     expected_references = set(response_references)
     operations_by_reference: dict[str, set[str]] = defaultdict(set)
-    references_by_operation: dict[str, set[str]] = defaultdict(set)
     for row in rows:
         operation_id = str(row.get("operation_id") or "").lower()
         reference = str(row.get("matched_reference") or "")
@@ -2926,10 +3127,7 @@ def _request_correlation_impossible(
         ):
             continue
         operations_by_reference[reference].add(operation_id)
-        references_by_operation[operation_id].add(reference)
-    return any(len(values) > 1 for values in operations_by_reference.values()) or any(
-        len(values) > 1 for values in references_by_operation.values()
-    )
+    return any(len(values) > 1 for values in operations_by_reference.values())
 
 
 def _trace_rows_signature(rows: list[dict[str, Any]]) -> tuple[str, ...]:
@@ -2966,7 +3164,9 @@ def _trace_assertion_stability_signature(
         tuple((assertion.assertion, assertion.passed) for assertion in request_results)
         for request_results in results
     )
-    return correlation, assertion_results, _trace_rows_signature(rows)
+    return correlation, assertion_results, _trace_rows_signature(
+        [row for request_rows in correlated for row in request_rows]
+    )
 
 
 def _json_trace_value(value: Any) -> Any:
@@ -3872,6 +4072,8 @@ def _discovered_operation_ids(tables: Any) -> tuple[str, ...]:
 def _complete_operation_ids(
     tables: Any,
     expected_references: tuple[str, ...],
+    *,
+    allow_shared_operations: bool = False,
 ) -> tuple[str, ...] | None:
     operations_by_reference: dict[str, set[str]] = defaultdict(set)
     for table in tables:
@@ -3895,7 +4097,7 @@ def _complete_operation_ids(
         if len(matched) != 1:
             return None
         ordered.append(next(iter(matched)))
-    if len(set(ordered)) != len(ordered):
+    if not allow_shared_operations and len(set(ordered)) != len(ordered):
         return None
     return tuple(ordered)
 
@@ -3945,7 +4147,6 @@ def _operation_correlation_impossible(
 ) -> bool:
     expected = set(expected_references)
     operations_by_reference: dict[str, set[str]] = defaultdict(set)
-    references_by_operation: dict[str, set[str]] = defaultdict(set)
     for table in tables:
         for row in table.rows:
             operation_id = str(row[0]).lower()
@@ -3964,10 +4165,7 @@ def _operation_correlation_impossible(
                 if reference not in expected:
                     continue
                 operations_by_reference[reference].add(operation_id)
-                references_by_operation[operation_id].add(reference)
-    return any(len(values) > 1 for values in operations_by_reference.values()) or any(
-        len(values) > 1 for values in references_by_operation.values()
-    )
+    return any(len(values) > 1 for values in operations_by_reference.values())
 
 
 def _validate_response_references(
@@ -3992,6 +4190,8 @@ def _validate_response_references(
 def _validate_operation_references(
     operation_ids: tuple[str, ...],
     expected_count: int,
+    *,
+    allow_shared: bool = False,
 ) -> None:
     if (
         expected_count < 1
@@ -4000,8 +4200,8 @@ def _validate_operation_references(
             not isinstance(value, str) or _TRACE_ID.fullmatch(value) is None
             for value in operation_ids
         )
-        or len(set(operation_ids)) != expected_count
+        or (not allow_shared and len(set(operation_ids)) != expected_count)
     ):
         raise ContractError(
-            "Trace assertion operations must uniquely cover every endpoint request"
+            "Trace assertion operations must cover every endpoint request"
         )

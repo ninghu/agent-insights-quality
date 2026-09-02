@@ -175,6 +175,17 @@ class Runtime:
                     for _ in kwargs["operation_ids"]
                 )
             )
+        anchor_callback = kwargs.get("on_stable_response_anchors")
+        if anchor_callback is not None:
+            anchor_callback(
+                tuple(
+                    f"anchor-{index}"
+                    for index, _ in enumerate(
+                        kwargs["operation_ids"],
+                        start=1,
+                    )
+                )
+            )
         return tuple(
             (
                 TraceAssertionEvidence(

@@ -26,8 +26,7 @@ During a reviewed delivery test, a private
 mailbox. Official runs ignore this override and always use the committed team recipient.
 
 Official Daily does not need work-item mutation, release, or mailbox search capabilities. Local Test
-Agent Validation uses the explicitly resolved Azure CLI user for durable topology reconciliation and
-run-scoped cleanup.
+Agent Validation uses the explicitly resolved Azure CLI user for durable topology reconciliation.
 Keep the Boards query URL and fetched work-item snapshot private; neither belongs in repository
 configuration or generated reports. Deployment registries and run state live under the durable
 user-level `~/.aiq-runtime/agent-insights-quality/` root so scheduled worktrees share approved state.
@@ -40,9 +39,11 @@ root. Daily email uses the reviewed public `https://aka.ms/agent-insights/qualit
 Test Agent Validation has no runner, GitHub environment, OIDC principal, required check, or remote
 reconciler. Every worktree uses the same OS lock and local state under
 `~/.aiq-runtime/agent-insights-quality/test-agent-validation/`. The active journal is replaced
-atomically; required content-addressed history, evidence, and CLEAN files stay local. Process exit
-releases the lock, and the next invocation resumes cleanup before starting a new cycle. The 72-hour
-execution TTL never prevents cleanup.
+atomically; required content-addressed history, desired-state plans, receipts, registries, and
+evidence stay local. Worker operations use authority and shard locks rather than holding the global
+coordinator lock. Interrupted work resumes from exact fenced receipts. A new validation archives
+legacy state byte-for-byte when needed, writes `SUPERSEDED`, and swaps the active pointer without
+deleting any provider object or private evidence.
 
 Only the final approved validation record uses Blob. The storage account must have versioning and the
 `test-agent-validation-approved-records-swedencentral-g30` container must have immutable storage with

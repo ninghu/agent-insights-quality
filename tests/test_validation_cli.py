@@ -6,49 +6,41 @@ from types import SimpleNamespace
 from agent_insights_quality import cli
 
 
-def test_validation_cli_exposes_only_coordinator_primitives() -> None:
+def test_validation_cli_exposes_one_run_command_without_generation_inputs() -> None:
     parser = cli.build_parser()
-    assert vars(parser.parse_args(["prepare-test-agent-validation"])) == {
-        "command": "prepare-test-agent-validation"
-    }
-    shard = parser.parse_args(
-        [
-            "invoke-test-agent-validation-shard",
-            "--cycle-id",
-            "cycle",
-            "--shard",
-            "1",
-            "--authority",
-            "issue-001",
-        ]
-    )
-    assert shard.authority == ["issue-001"]
-    assert shard.shard == 1
-    assert "run-test-agent-validation" not in parser._subparsers._group_actions[
-        0
-    ].choices
+    args = parser.parse_args(["run-test-agent-validation"])
+    assert vars(args) == {"command": "run-test-agent-validation"}
+    choices = parser._subparsers._group_actions[0].choices
+    for removed in (
+        "prepare-test-agent-validation",
+        "invoke-test-agent-validation-shard",
+        "verify-test-agent-validation-shard",
+        "compose-test-agent-validation",
+        "cleanup-test-agent-validation",
+    ):
+        assert removed not in choices
 
 
-def test_prepare_validation_cli_uses_automatic_local_discovery(monkeypatch) -> None:
+def test_run_validation_cli_uses_automatic_local_discovery(monkeypatch) -> None:
     monkeypatch.setattr(
         cli,
-        "prepare_test_agent_validation",
+        "run_test_agent_validation",
         lambda: {
-            "status": "prepared",
-            "commit_sha": "a" * 40,
+            "status": "ready",
+            "result": "PASS",
             "authority_count": 41,
         },
     )
-    args = cli.build_parser().parse_args(["prepare-test-agent-validation"])
+    args = cli.build_parser().parse_args(["run-test-agent-validation"])
     result = json.loads(cli._dispatch(args) or "{}")
     assert result == {
-        "status": "prepared",
-        "commit_sha": "a" * 40,
+        "status": "ready",
+        "result": "PASS",
         "authority_count": 41,
     }
 
 
-def test_approval_cli_uses_latest_clean_result_without_manual_paths(
+def test_approval_cli_uses_latest_ready_result_without_manual_paths(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(

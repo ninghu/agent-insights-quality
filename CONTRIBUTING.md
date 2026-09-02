@@ -118,15 +118,16 @@ az bicep build --file infra\main.bicep --stdout
 
 ## Validate a clean commit
 
-Follow the [Test Agent Validation skill](.github/skills/test-agent-validation/SKILL.md). A new cycle
-auto-discovers one clean PR-head commit and deploys all 41 authorities. Any commit change requires
-exact cleanup and a fresh full cycle; there is no cross-cycle evidence cache.
+Follow the [Test Agent Validation skill](.github/skills/test-agent-validation/SKILL.md). Validation
+auto-discovers one clean PR-head commit, deploys only content-changed authorities, and establishes
+exact response-bound evidence. Exact PASS evidence is reused only when every reviewed binding matches.
+The composed READY or FAILED result always covers all 41 authorities.
 
 The fixed daily contract selects four issues per Agent: 20 issues plus five baselines, for 25
 assessment packages. Test Agent Validation is a separate local report-free process and never runs Agent
 Insights, assessment, scoring, ADX publication, or email.
 
-After exact 41/41 evidence and cleanup, explicit human approval permits one minimal create-once
+After exact current-head 41/41 READY evidence, explicit human approval permits one minimal create-once
 approved validation record. GitHub runs ordinary mechanical CI only and merge remains manual. This
 durable `aiq-staging-swedencentral` process is the official staging qualification gate for new
 candidates.

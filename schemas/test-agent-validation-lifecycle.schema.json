@@ -5,53 +5,23 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schema_version",
-    "kind",
-    "snapshot_type",
-    "cycle_id",
-    "event_sequence",
-    "state",
-    "repository",
-    "pr_number",
-    "commit_sha",
-    "digests",
-    "operator",
-    "substrate",
-    "ownership_nonce",
-    "capacity",
-    "project",
-    "runtime_topology",
-    "deployment",
-    "resources",
-    "cleanup",
-    "event_reference",
-    "clean_reference",
-    "evidence_reference",
-    "started_at",
-    "last_activity_at",
-    "absolute_expires_at",
-    "failure",
-    "previous_journal_digest",
-    "journal_digest"
+    "schema_version", "kind", "snapshot_type", "run_id", "event_sequence",
+    "state", "repository", "pr_number", "commit_sha", "digests", "operator",
+    "substrate", "ownership_nonce", "capacity", "project", "runtime_topology",
+    "deployment", "desired_state_reference", "deployment_assignments",
+    "validation_authority_ids", "reused_authorities",
+    "shard_assignments", "resources", "event_reference", "evidence_reference",
+    "supersedes", "started_at", "last_activity_at", "absolute_expires_at",
+    "failure", "previous_journal_digest", "journal_digest"
   ],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"const": "2.0.0"},
     "kind": {"const": "test-agent-validation-lifecycle"},
-    "snapshot_type": {"enum": ["active", "event", "clean"]},
-    "cycle_id": {"$ref": "#/$defs/cycleId"},
+    "snapshot_type": {"enum": ["active", "event"]},
+    "run_id": {"$ref": "#/$defs/runId"},
     "event_sequence": {"type": "integer", "minimum": 1},
     "state": {
-      "enum": [
-        "LOCKED",
-        "PREFLIGHT",
-        "CREATING",
-        "VALIDATING",
-        "FINAL_CHECKS",
-        "CLEANING",
-        "CLEAN",
-        "FAILED_CLEAN",
-        "CLEANUP_BLOCKED"
-      ]
+      "enum": ["LOCKED", "PREFLIGHT", "CREATING", "VALIDATING", "READY", "FAILED", "SUPERSEDED"]
     },
     "repository": {"$ref": "#/$defs/repository"},
     "pr_number": {"type": "integer", "minimum": 1},
@@ -59,57 +29,53 @@
     "digests": {"$ref": "#/$defs/digests"},
     "operator": {"$ref": "#/$defs/operator"},
     "substrate": {"$ref": "#/$defs/substrate"},
-    "ownership_nonce": {
-      "type": "string",
-      "pattern": "^[A-Za-z0-9_-]{8,128}$"
-    },
+    "ownership_nonce": {"type": "string", "pattern": "^[A-Za-z0-9_-]{8,128}$"},
     "capacity": {
-      "oneOf": [
-        {"type": "null"},
-        {"$ref": "#/$defs/capacity"}
-      ]
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/capacity"}]
     },
     "project": {"$ref": "#/$defs/project"},
     "runtime_topology": {"$ref": "#/$defs/runtimeTopology"},
     "deployment": {"$ref": "#/$defs/deployment"},
+    "desired_state_reference": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/snapshotReference"}]
+    },
+    "deployment_assignments": {
+      "type": "array", "maxItems": 10, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/shardAssignment"}
+    },
+    "validation_authority_ids": {
+      "type": "array", "maxItems": 41, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/authorityId"}
+    },
+    "reused_authorities": {
+      "type": "array", "maxItems": 41, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/reusedAuthority"}
+    },
+    "shard_assignments": {
+      "type": "array", "maxItems": 10, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/shardAssignment"}
+    },
     "resources": {
-      "type": "array",
-      "uniqueItems": true,
+      "type": "array", "uniqueItems": true,
       "items": {"$ref": "#/$defs/resource"}
     },
-    "cleanup": {"$ref": "#/$defs/cleanup"},
     "event_reference": {
-      "oneOf": [
-        {"type": "null"},
-        {"$ref": "#/$defs/snapshotReference"}
-      ]
-    },
-    "clean_reference": {
-      "oneOf": [
-        {"type": "null"},
-        {"$ref": "#/$defs/snapshotReference"}
-      ]
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/snapshotReference"}]
     },
     "evidence_reference": {
-      "oneOf": [
-        {"type": "null"},
-        {"$ref": "#/$defs/snapshotReference"}
-      ]
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/snapshotReference"}]
+    },
+    "supersedes": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/hash"}]
     },
     "started_at": {"$ref": "#/$defs/timestamp"},
     "last_activity_at": {"$ref": "#/$defs/timestamp"},
     "absolute_expires_at": {"$ref": "#/$defs/timestamp"},
     "failure": {
-      "oneOf": [
-        {"type": "null"},
-        {"$ref": "#/$defs/failure"}
-      ]
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/failure"}]
     },
     "previous_journal_digest": {
-      "oneOf": [
-        {"type": "null"},
-        {"$ref": "#/$defs/hash"}
-      ]
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/hash"}]
     },
     "journal_digest": {"$ref": "#/$defs/hash"}
   },
@@ -120,9 +86,7 @@
         "required": ["snapshot_type"]
       },
       "then": {
-        "properties": {
-          "event_reference": {"$ref": "#/$defs/snapshotReference"}
-        }
+        "properties": {"event_reference": {"$ref": "#/$defs/snapshotReference"}}
       },
       "else": {
         "properties": {"event_reference": {"type": "null"}}
@@ -130,133 +94,60 @@
     },
     {
       "if": {
-        "properties": {"snapshot_type": {"const": "clean"}},
-        "required": ["snapshot_type"]
-      },
-      "then": {
-        "properties": {"clean_reference": {"type": "null"}}
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "snapshot_type": {"const": "active"},
-          "state": {"enum": ["CLEAN", "FAILED_CLEAN"]}
-        },
-        "required": ["snapshot_type", "state"]
-      },
-      "then": {
-        "properties": {
-          "clean_reference": {"$ref": "#/$defs/snapshotReference"}
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "state": {
-            "enum": [
-              "FINAL_CHECKS",
-              "CLEAN"
-            ]
-          }
-        },
+        "properties": {"state": {"enum": ["READY", "FAILED"]}},
         "required": ["state"]
       },
       "then": {
-        "properties": {
-          "evidence_reference": {"$ref": "#/$defs/snapshotReference"}
-        }
+        "properties": {"evidence_reference": {"$ref": "#/$defs/snapshotReference"}}
       }
     }
   ],
   "$defs": {
-    "hash": {
-      "type": "string",
-      "pattern": "^sha256:[0-9a-f]{64}$"
-    },
-    "gitSha": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{40}$"
-    },
-    "timestamp": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "cycleId": {
-      "type": "string",
-      "pattern": "^[a-z0-9][a-z0-9-]{7,63}$"
-    },
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "gitSha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "runId": {"type": "string", "pattern": "^validation-[0-9a-f]{12}$"},
     "repository": {
       "type": "string",
       "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
     },
-    "reference": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 1024
-    },
+    "reference": {"type": "string", "minLength": 1, "maxLength": 1024},
     "nullableReference": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/reference"}]
+    },
+    "authorityId": {
       "oneOf": [
-        {"type": "null"},
-        {"$ref": "#/$defs/reference"}
+        {"type": "string", "pattern": "^[a-z][a-z0-9-]+-agent/v0$"},
+        {"type": "string", "pattern": "^issue-[0-9]{3}$"}
       ]
     },
     "digests": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "validation_digest",
-        "execution_matrix_digest",
-        "runtime_topology_digest",
-        "quota_plan_digest",
-        "evidence_digest",
-        "evidence_resource_inventory_digest",
-        "clean_resource_inventory_digest"
+        "validation_digest", "shared_validation_digest",
+        "execution_matrix_digest", "runtime_topology_digest",
+        "quota_plan_digest", "evidence_digest"
       ],
       "properties": {
         "validation_digest": {"$ref": "#/$defs/hash"},
+        "shared_validation_digest": {"$ref": "#/$defs/hash"},
         "execution_matrix_digest": {"$ref": "#/$defs/hash"},
         "runtime_topology_digest": {
-          "oneOf": [
-            {"type": "null"},
-            {"$ref": "#/$defs/hash"}
-          ]
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/hash"}]
         },
         "quota_plan_digest": {
-          "oneOf": [
-            {"type": "null"},
-            {"$ref": "#/$defs/hash"}
-          ]
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/hash"}]
         },
         "evidence_digest": {
-          "oneOf": [
-            {"type": "null"},
-            {"$ref": "#/$defs/hash"}
-          ]
-        },
-        "evidence_resource_inventory_digest": {
-          "oneOf": [
-            {"type": "null"},
-            {"$ref": "#/$defs/hash"}
-          ]
-        },
-        "clean_resource_inventory_digest": {
-          "oneOf": [
-            {"type": "null"},
-            {"$ref": "#/$defs/hash"}
-          ]
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/hash"}]
         }
       }
     },
     "operator": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "session_reference",
-        "operator_reference",
-        "run_reference"
-      ],
+      "required": ["session_reference", "operator_reference", "run_reference"],
       "properties": {
         "session_reference": {"$ref": "#/$defs/hash"},
         "operator_reference": {"$ref": "#/$defs/hash"},
@@ -267,13 +158,8 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "tenant_id",
-        "subscription_id",
-        "account_name",
-        "account_resource_id",
-        "registry_name",
-        "storage_account_name",
-        "telemetry_resource_id"
+        "tenant_id", "subscription_id", "account_name", "account_resource_id",
+        "registry_name", "storage_account_name", "telemetry_resource_id"
       ],
       "properties": {
         "tenant_id": {"$ref": "#/$defs/reference"},
@@ -281,10 +167,7 @@
         "account_name": {"$ref": "#/$defs/reference"},
         "account_resource_id": {"$ref": "#/$defs/reference"},
         "registry_name": {"$ref": "#/$defs/reference"},
-        "storage_account_name": {
-          "$ref": "#/$defs/reference",
-          "description": "Exact Sweden Central g30 qualification storage account selected by reviewed environment and resource-role tags."
-        },
+        "storage_account_name": {"$ref": "#/$defs/reference"},
         "telemetry_resource_id": {"$ref": "#/$defs/reference"}
       }
     },
@@ -292,23 +175,12 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "measured_rpm",
-        "measured_tpm",
-        "measured_at",
-        "reserved_percent",
-        "reserved_rpm",
-        "reserved_tpm",
-        "available_rpm",
-        "available_tpm",
-        "outer_request_envelope",
-        "worst_case_inner_model_calls",
-        "worst_case_inner_tokens",
-        "endpoint_concurrency",
-        "provisioning_concurrency",
-        "telemetry_query_concurrency",
-        "runtime_attempt_concurrency",
-        "inner_model_call_limit",
-        "plan_digest"
+        "measured_rpm", "measured_tpm", "measured_at", "reserved_percent",
+        "reserved_rpm", "reserved_tpm", "available_rpm", "available_tpm",
+        "outer_request_envelope", "worst_case_inner_model_calls",
+        "worst_case_inner_tokens", "endpoint_concurrency",
+        "provisioning_concurrency", "telemetry_query_concurrency",
+        "runtime_attempt_concurrency", "inner_model_call_limit", "plan_digest"
       ],
       "properties": {
         "measured_rpm": {"type": "integer", "minimum": 1},
@@ -320,17 +192,9 @@
         "available_rpm": {"type": "integer", "minimum": 1},
         "available_tpm": {"type": "integer", "minimum": 1},
         "outer_request_envelope": {"type": "integer", "minimum": 1},
-        "worst_case_inner_model_calls": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 4
-        },
+        "worst_case_inner_model_calls": {"type": "integer", "minimum": 1, "maximum": 4},
         "worst_case_inner_tokens": {"type": "integer", "minimum": 1},
-        "endpoint_concurrency": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 8
-        },
+        "endpoint_concurrency": {"type": "integer", "minimum": 1, "maximum": 8},
         "provisioning_concurrency": {"const": 8},
         "telemetry_query_concurrency": {"const": 4},
         "runtime_attempt_concurrency": {"const": 1},
@@ -342,23 +206,11 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "name",
-        "provider_id",
-        "endpoint_reference",
-        "project_principal_id",
-        "state",
-        "bound_observed_at"
+        "name", "provider_id", "endpoint_reference",
+        "project_principal_id", "state", "bound_observed_at"
       ],
       "properties": {
-        "name": {
-          "oneOf": [
-            {"type": "null"},
-            {
-              "type": "string",
-              "pattern": "^[a-z][a-z0-9-]{1,62}[a-z0-9]$"
-            }
-          ]
-        },
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}[a-z0-9]$"},
         "provider_id": {"$ref": "#/$defs/nullableReference"},
         "endpoint_reference": {"$ref": "#/$defs/nullableReference"},
         "project_principal_id": {"$ref": "#/$defs/nullableReference"},
@@ -372,15 +224,9 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "account_reference",
-        "project_reference",
-        "telemetry_resource_set",
-        "test_agent_model",
-        "name_policy",
-        "connection_ids",
-        "runtime_principal_ids",
-        "telemetry_identity_ids",
-        "agents"
+        "account_reference", "project_reference", "telemetry_resource_set",
+        "test_agent_model", "name_policy", "connection_ids",
+        "runtime_principal_ids", "telemetry_identity_ids", "agents"
       ],
       "properties": {
         "account_reference": {"$ref": "#/$defs/reference"},
@@ -396,11 +242,7 @@
         "name_policy": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "project_maximum_length",
-            "agent_maximum_length",
-            "pattern"
-          ],
+          "required": ["project_maximum_length", "agent_maximum_length", "pattern"],
           "properties": {
             "project_maximum_length": {"const": 64},
             "agent_maximum_length": {"const": 63},
@@ -408,24 +250,19 @@
           }
         },
         "connection_ids": {
-          "type": "array",
-          "uniqueItems": true,
+          "type": "array", "uniqueItems": true,
           "items": {"$ref": "#/$defs/reference"}
         },
         "runtime_principal_ids": {
-          "type": "array",
-          "uniqueItems": true,
+          "type": "array", "uniqueItems": true,
           "items": {"$ref": "#/$defs/reference"}
         },
         "telemetry_identity_ids": {
-          "type": "array",
-          "uniqueItems": true,
+          "type": "array", "uniqueItems": true,
           "items": {"$ref": "#/$defs/reference"}
         },
         "agents": {
-          "type": "array",
-          "maxItems": 41,
-          "uniqueItems": true,
+          "type": "array", "maxItems": 41, "uniqueItems": true,
           "items": {"$ref": "#/$defs/runtimeAgent"}
         }
       }
@@ -434,39 +271,19 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "authority_id",
-        "canonical_agent",
-        "logical_version",
-        "runtime_kind",
-        "framework",
-        "runtime_agent_name",
-        "runtime_agent_version",
-        "provider_agent_id",
-        "provider_agent_version_id",
-        "provider_content_digest",
-        "hosted_identity_id",
-        "hosted_blueprint_id",
-        "hosted_deployment_id",
-        "foundry_agent_name",
-        "foundry_agent_version",
-        "runtime_principal_id",
-        "telemetry_identity_id",
-        "connection_ids"
+        "authority_id", "canonical_agent", "logical_version", "runtime_kind",
+        "framework", "runtime_agent_name", "runtime_agent_version",
+        "provider_agent_id", "provider_agent_version_id",
+        "provider_content_digest", "hosted_identity_id", "hosted_blueprint_id",
+        "hosted_deployment_id", "foundry_agent_name", "foundry_agent_version",
+        "runtime_principal_id", "telemetry_identity_id", "connection_ids"
       ],
       "properties": {
-        "authority_id": {
-          "oneOf": [
-            {"type": "string", "pattern": "^[a-z][a-z0-9-]+-agent/v0$"},
-            {"type": "string", "pattern": "^issue-[0-9]{3}$"}
-          ]
-        },
+        "authority_id": {"$ref": "#/$defs/authorityId"},
         "canonical_agent": {
           "enum": [
-            "weather-agent",
-            "healthcare-agent",
-            "finance-agent",
-            "travel-agent",
-            "support-ticket-agent"
+            "weather-agent", "healthcare-agent", "finance-agent",
+            "travel-agent", "support-ticket-agent"
           ]
         },
         "logical_version": {
@@ -480,16 +297,11 @@
         },
         "framework": {
           "enum": [
-            "foundry_prompt",
-            "microsoft_agent_framework",
-            "langgraph",
-            "custom_responses"
+            "foundry_prompt", "microsoft_agent_framework",
+            "langgraph", "custom_responses"
           ]
         },
-        "runtime_agent_name": {
-          "type": "string",
-          "pattern": "^[a-z][a-z0-9-]{1,61}[a-z0-9]$"
-        },
+        "runtime_agent_name": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,61}[a-z0-9]$"},
         "runtime_agent_version": {"type": "string", "minLength": 1, "maxLength": 128},
         "provider_agent_id": {"$ref": "#/$defs/reference"},
         "provider_agent_version_id": {"$ref": "#/$defs/reference"},
@@ -502,59 +314,20 @@
         "runtime_principal_id": {"$ref": "#/$defs/nullableReference"},
         "telemetry_identity_id": {"$ref": "#/$defs/reference"},
         "connection_ids": {
-          "type": "array",
-          "uniqueItems": true,
+          "type": "array", "uniqueItems": true,
           "items": {"$ref": "#/$defs/reference"}
         }
-      },
-      "allOf": [
-        {
-          "if": {
-            "properties": {"runtime_kind": {"const": "prompt"}},
-            "required": ["runtime_kind"]
-          },
-          "then": {
-            "properties": {
-              "hosted_identity_id": {"type": "null"},
-              "hosted_blueprint_id": {"type": "null"},
-              "hosted_deployment_id": {"type": "null"},
-              "runtime_principal_id": {"type": "null"}
-            }
-          },
-          "else": {
-            "properties": {
-              "hosted_identity_id": {"$ref": "#/$defs/reference"},
-              "hosted_blueprint_id": {"$ref": "#/$defs/reference"},
-              "hosted_deployment_id": {"$ref": "#/$defs/reference"},
-              "runtime_principal_id": {"$ref": "#/$defs/reference"}
-            }
-          }
-        }
-      ]
+      }
     },
     "deployment": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "traffic_started",
-        "phase",
-        "support_images",
-        "recoveries",
-        "failures"
-      ],
+      "required": ["traffic_started", "phase", "support_images", "recoveries", "failures"],
       "properties": {
-        "phase": {
-          "enum": [
-            "preparing",
-            "prepared",
-            "complete"
-          ]
-        },
+        "phase": {"enum": ["preparing", "prepared", "complete"]},
         "traffic_started": {"type": "boolean"},
         "support_images": {
-          "type": "array",
-          "maxItems": 9,
-          "uniqueItems": true,
+          "type": "array", "maxItems": 9, "uniqueItems": true,
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -574,79 +347,41 @@
           }
         },
         "recoveries": {
-          "type": "array",
-          "uniqueItems": true,
+          "type": "array", "uniqueItems": true,
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "authority_id",
-              "canonical_agent",
-              "state",
-              "retry_count",
-              "error_code"
-            ],
+            "required": ["authority_id", "canonical_agent", "state", "retry_count", "error_code"],
             "properties": {
-              "authority_id": {
-                "oneOf": [
-                  {"type": "string", "pattern": "^[a-z][a-z0-9-]+-agent/v0$"},
-                  {"type": "string", "pattern": "^issue-[0-9]{3}$"}
-                ]
-              },
+              "authority_id": {"$ref": "#/$defs/authorityId"},
               "canonical_agent": {
                 "enum": [
-                  "weather-agent",
-                  "healthcare-agent",
-                  "finance-agent",
-                  "travel-agent",
-                  "support-ticket-agent"
+                  "weather-agent", "healthcare-agent", "finance-agent",
+                  "travel-agent", "support-ticket-agent"
                 ]
               },
               "state": {"enum": ["ambiguous", "failed", "ready"]},
               "retry_count": {"type": "integer", "minimum": 1, "maximum": 3},
-              "error_code": {
-                "type": "string",
-                "pattern": "^[a-z][a-z0-9_]{2,63}$"
-              }
+              "error_code": {"type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$"}
             }
           }
         },
         "failures": {
-          "type": "array",
-          "uniqueItems": true,
+          "type": "array", "uniqueItems": true,
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "authority_id",
-              "canonical_agent",
-              "stage",
-              "error_code",
-              "request_accepted"
-            ],
+            "required": ["authority_id", "canonical_agent", "stage", "error_code", "request_accepted"],
             "properties": {
-              "authority_id": {
-                "oneOf": [
-                  {"type": "string", "pattern": "^[a-z][a-z0-9-]+-agent/v0$"},
-                  {"type": "string", "pattern": "^issue-[0-9]{3}$"}
-                ]
-              },
+              "authority_id": {"$ref": "#/$defs/authorityId"},
               "canonical_agent": {
                 "enum": [
-                  "weather-agent",
-                  "healthcare-agent",
-                  "finance-agent",
-                  "travel-agent",
-                  "support-ticket-agent"
+                  "weather-agent", "healthcare-agent", "finance-agent",
+                  "travel-agent", "support-ticket-agent"
                 ]
               },
-              "stage": {
-                "enum": ["deployment", "readiness", "contract", "traffic"]
-              },
-              "error_code": {
-                "type": "string",
-                "pattern": "^[a-z][a-z0-9_]{2,63}$"
-              },
+              "stage": {"enum": ["deployment", "readiness", "contract", "traffic"]},
+              "error_code": {"type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$"},
               "request_accepted": {"type": ["boolean", "null"]},
               "matched_reference_count": {"type": "integer", "minimum": 0},
               "expected_reference_count": {"type": "integer", "minimum": 1},
@@ -656,187 +391,68 @@
         }
       }
     },
+    "reusedAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authority_id", "path", "evidence_digest", "authority_evidence_digest"],
+      "properties": {
+        "authority_id": {"$ref": "#/$defs/authorityId"},
+        "path": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "evidence_digest": {"$ref": "#/$defs/hash"},
+        "authority_evidence_digest": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "shardAssignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["shard_id", "authority_ids"],
+      "properties": {
+        "shard_id": {"type": "integer", "minimum": 1, "maximum": 10},
+        "authority_ids": {
+          "type": "array", "minItems": 1, "maxItems": 41, "uniqueItems": true,
+          "items": {"$ref": "#/$defs/authorityId"}
+        }
+      }
+    },
     "resource": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "kind",
-        "parent_id",
-        "authority_id",
-        "deterministic_name",
-        "intent_reference",
-        "provider_id",
-        "resolved_provider_id",
-        "runtime_kind",
-        "discovery_key",
-        "ownership_nonce",
-        "create_intent_at",
-        "create_observed_at",
-        "delete_intent_at",
-        "delete_observed_at",
-        "state",
-        "cleanup_method"
+        "kind", "parent_id", "authority_id", "deterministic_name",
+        "intent_reference", "provider_id", "runtime_kind", "discovery_key",
+        "ownership_nonce", "create_intent_at", "create_observed_at",
+        "state", "retention"
       ],
       "properties": {
         "kind": {
           "enum": [
-            "arm_deployment",
-            "project",
-            "connection",
-            "role_assignment",
-            "provider_agent",
-            "provider_agent_version",
-            "hosted_identity",
-            "hosted_blueprint",
-            "runtime_principal",
-            "entra_service_principal",
-            "hosted_deployment",
-            "session",
-            "conversation",
-            "stored_response",
-            "acr_tag",
-            "acr_manifest"
+            "arm_deployment", "project", "connection", "role_assignment",
+            "provider_agent", "provider_agent_version", "hosted_identity",
+            "hosted_blueprint", "runtime_principal", "entra_service_principal",
+            "hosted_deployment", "session", "conversation", "stored_response",
+            "acr_tag", "acr_manifest"
           ]
         },
         "parent_id": {"$ref": "#/$defs/nullableReference"},
         "authority_id": {
-          "oneOf": [
-            {"type": "null"},
-            {"type": "string", "pattern": "^[a-z][a-z0-9-]+-agent/v0$"},
-            {"type": "string", "pattern": "^issue-[0-9]{3}$"}
-          ]
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/authorityId"}]
         },
         "deterministic_name": {"type": "string", "minLength": 1, "maxLength": 256},
         "intent_reference": {"$ref": "#/$defs/hash"},
         "provider_id": {"$ref": "#/$defs/reference"},
-        "resolved_provider_id": {"$ref": "#/$defs/nullableReference"},
         "runtime_kind": {
           "enum": ["control", "prompt", "hosted_code", "hosted_custom_container"]
         },
         "discovery_key": {"$ref": "#/$defs/reference"},
-        "ownership_nonce": {
-          "type": "string",
-          "pattern": "^[A-Za-z0-9_-]{8,128}$"
-        },
+        "ownership_nonce": {"type": "string", "pattern": "^[A-Za-z0-9_-]{8,128}$"},
         "create_intent_at": {
           "oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]
         },
         "create_observed_at": {
           "oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]
         },
-        "delete_intent_at": {
-          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]
-        },
-        "delete_observed_at": {
-          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]
-        },
-        "state": {
-          "enum": [
-            "create_intent",
-            "created",
-            "ambiguous_create",
-            "delete_intent",
-            "deleted",
-            "absence_verified",
-            "cleanup_blocked"
-          ]
-        },
-        "cleanup_method": {
-          "enum": ["explicit", "documented_project_cascade", "retained_durable"]
-        }
-      }
-    },
-    "cleanup": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "status",
-        "plan_hash",
-        "exact_clean",
-        "verified_absent_ids",
-        "retained_shared_manifest_ids",
-        "retained_durable_ids",
-        "residue_ids",
-        "verification_at"
-      ],
-      "properties": {
-        "status": {"enum": ["not_started", "in_progress", "exact_clean", "ambiguous"]},
-        "plan_hash": {
-          "oneOf": [
-            {"type": "null"},
-            {"$ref": "#/$defs/hash"}
-          ]
-        },
-        "exact_clean": {"type": "boolean"},
-        "verified_absent_ids": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {"$ref": "#/$defs/reference"}
-        },
-        "retained_shared_manifest_ids": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {"$ref": "#/$defs/reference"}
-        },
-        "retained_durable_ids": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {"$ref": "#/$defs/reference"}
-        },
-        "residue_ids": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {"$ref": "#/$defs/reference"}
-        },
-        "verification_at": {
-          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]
-        },
-        "failure": {
-          "oneOf": [
-            {"type": "null"},
-            {"$ref": "#/$defs/cleanupFailure"}
-          ]
-        }
-      }
-    },
-    "cleanupFailure": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "operation",
-        "resource_kind",
-        "http_status",
-        "provider_code",
-        "error_class"
-      ],
-      "properties": {
-        "operation": {
-          "type": "string",
-          "pattern": "^[a-z][a-z0-9_]{2,63}$"
-        },
-        "resource_kind": {
-          "type": "string",
-          "pattern": "^[a-z][a-z0-9_]{2,63}$"
-        },
-        "http_status": {
-          "oneOf": [
-            {"type": "null"},
-            {"type": "integer", "minimum": 100, "maximum": 599}
-          ]
-        },
-        "provider_code": {
-          "oneOf": [
-            {"type": "null"},
-            {
-              "type": "string",
-              "pattern": "^[a-z][a-z0-9_]{0,63}$"
-            }
-          ]
-        },
-        "error_class": {
-          "type": "string",
-          "pattern": "^[A-Za-z][A-Za-z0-9]{2,127}$"
-        }
+        "state": {"enum": ["create_intent", "created", "ambiguous_create"]},
+        "retention": {"const": "retained"}
       }
     },
     "snapshotReference": {
@@ -851,14 +467,10 @@
     "failure": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["error_code", "detail_digest", "failed_at"],
+      "required": ["stage", "error_code"],
       "properties": {
-        "error_code": {
-          "type": "string",
-          "pattern": "^[a-z][a-z0-9_]{2,63}$"
-        },
-        "detail_digest": {"$ref": "#/$defs/hash"},
-        "failed_at": {"$ref": "#/$defs/timestamp"}
+        "stage": {"type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$"},
+        "error_code": {"type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$"}
       }
     }
   }
