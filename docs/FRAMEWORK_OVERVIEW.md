@@ -10,6 +10,12 @@ turns. Baseline decisions require deterministic semantic coverage, full-request 
 output evidence; a card-linked intermediate operation cannot override contradictory full-request
 evidence.
 
+Daily uses one central private lifecycle and five visible Copilot Agent-lane sub sessions. Agent
+lanes are the only parallel qualification unit; each runs its baseline and four selected issues
+sequentially and emits one immutable receipt. Composition, assessment-output validation, focused
+rechecks, improvement analysis, finalization, ADX, email claim/receipt, generated paths, and one PR
+remain centralized and ordered.
+
 ## High-level flow
 
 ```mermaid

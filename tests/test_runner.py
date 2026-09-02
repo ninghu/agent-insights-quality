@@ -961,7 +961,7 @@ def test_runner_executes_20_issues() -> None:
     )
 
 
-def test_runner_parallelizes_agents_but_not_versions_within_an_agent() -> None:
+def test_runner_executes_agents_sequentially_without_internal_fanout() -> None:
     agents, issues = load_catalogs()
     hashes = catalog_hashes(agents, issues)
     selected = select_daily(date(2026, 8, 24), agents, issues, hashes["issues"])
@@ -974,7 +974,7 @@ def test_runner_parallelizes_agents_but_not_versions_within_an_agent() -> None:
         runtime=runtime,
         seed=1,
     )
-    assert runtime.maximum_concurrent_agents > 1
+    assert runtime.maximum_concurrent_agents == 1
 
 
 def test_runner_staggers_agent_start_burst(monkeypatch) -> None:

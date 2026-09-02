@@ -59,7 +59,7 @@ pull requests, or email.
 ## Controlled email test
 
 For a full reviewed qualification delivery test, use
-`run-daily --test-run --rerun N --report-date <date> --work-items <snapshot>` with a nonzero rerun
+`daily-prepare --test-run --rerun N --report-date <date> --work-items <snapshot>` with a nonzero rerun
 number, then assess and finalize normally. It sends exactly one TEST-marked email to the private
 `daily_test` override and writes all report and receipt artifacts under that private run directory.
 It does not contact ADX, modify repository report or trend paths, or create a pull request. If
@@ -74,15 +74,25 @@ test.
 - Time zone: `America/Los_Angeles`
 - Bootstrap: `.github/copilot/daily-bootstrap-prompt.md`
 
+The scheduled coordinator owns preparation/provisioning, composition, assessment validation,
+improvement analysis, finalization, ADX, one-time send claim, receipt import, generated paths, and
+one pull request. Five visible Copilot sub sessions run the whole Agent lanes concurrently, bounded by
+`max_parallel_agents`; up to five later visible sub sessions assess one Agent's five packages each.
+No Daily command internally fans out work. `daily-status` and `daily-guide` are read-only orchestration
+surfaces and keep the central coordinator responsive.
+An unrecoverable run must be closed explicitly with `daily-fail --reason-code <public_safe_code>
+--confirm`; the private failure receipt releases the next business date without deleting retained
+state.
+
 Enable only the required capabilities above. The bootstrap remains small and stable. It reads
 `AGENTS.md` and the versioned daily skill directly from `origin/main` with `git show`; it does not
 invoke a runtime-packaged skill by name.
 
 ## First-run observation
 
-Verify live progress output, 25 assessment packages (20 issues plus five baselines), active and
-yesterday-closed Quality work-item sections, one immutable HTML send attempt with the dashboard
-link, explicit ADX publication status, five per-Agent reports, the stable Insight Engine improvement
-memory and immutable dated snapshot, all seven public-safe ADX views, generated-path validation,
-required checks, and auto-merge. Incomplete execution retains private durable diagnostics but creates
-no report, ADX row, or pull request.
+Verify five exact Agent completion receipts, live progress output, 25 assessment packages (20 issues plus five baselines), active and yesterday-closed Quality work-item
+sections, one immutable HTML send attempt with the dashboard link, explicit ADX publication status,
+five per-Agent reports, the stable Insight Engine improvement memory and immutable dated snapshot,
+all seven public-safe ADX views, generated-path validation, required checks, and auto-merge.
+Incomplete execution retains private durable diagnostics but creates no report, ADX row, or pull
+request.

@@ -18,6 +18,7 @@ from agent_insights_quality.util import ROOT, ContractError
 def test_repository_uses_fractional_fixed_telemetry_policy() -> None:
     policy = load_automation_policy()
     assert policy.issues_per_agent_daily == 4
+    assert policy.max_parallel_agents == 5
     assert policy.insight_lookback_hours == 0.1
     assert policy.telemetry_resource_set == FIXED_TELEMETRY_RESOURCE_SET == "g30"
     assert (
@@ -53,6 +54,7 @@ def test_repository_uses_fractional_fixed_telemetry_policy() -> None:
         ("insight_lookback_hours", '"0.1"', "numeric"),
         ("insight_lookback_hours", "0.09", "reviewed minimum"),
         ("issues_per_agent_daily", "5", "daily issue count"),
+        ("max_parallel_agents", "6", "fixed inventory"),
         ("max_recovery_versions", "4", "reviewed maximum"),
         ("agent_start_stagger_seconds", "31", "unreasonably long"),
         (

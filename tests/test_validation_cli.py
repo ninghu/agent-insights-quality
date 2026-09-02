@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
+
+import pytest
 
 from agent_insights_quality import cli
+from agent_insights_quality.util import ContractError
 
 
 def test_validation_cli_exposes_stage_primitives_without_generation_inputs() -> None:
@@ -104,39 +106,17 @@ def test_approval_cli_uses_latest_ready_result_without_manual_paths(
     assert result["pr_number"] == 63
 
 
-def test_daily_provisioning_is_new_only_for_approved_record(
+def test_daily_provisioning_requires_the_coordinator_lifecycle(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(
-        cli.RuntimeProfile,
-        "from_env",
-        lambda _profile: SimpleNamespace(
-            registry_storage_account_name="synthetic-storage"
-        ),
-    )
-    monkeypatch.setattr(cli, "provision_profile", lambda **_kwargs: {})
-    monkeypatch.setattr(
-        cli,
-        "local_azure_operator",
-        lambda: SimpleNamespace(credential="verified-credential"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "AzureValidationBlobStore",
-        lambda account, *, credential: (account, credential),
-    )
-    observed = []
-    monkeypatch.setattr(
-        cli,
-        "fetch_approved_record_for_checkout",
-        lambda store, **kwargs: observed.append((store, kwargs)),
-    )
     args = cli.build_parser().parse_args(["provision", "--profile", "daily"])
-    monkeypatch.setenv("AIQ_STAGING_PROMOTION_RECEIPT", "legacy.json")
-    cli._dispatch(args)
-    assert observed == [
-        (
-            ("synthetic-storage", "verified-credential"),
-            {"expected_repository": "ninghu/agent-insights-quality"},
-        )
-    ]
+    with pytest.raises(ContractError, match="daily-prepare then daily-provision"):
+        cli._dispatch(args)
+
+    monkeypatch.setattr(
+        cli,
+        "provision_daily",
+        lambda: {"state": "PREPARED", "pending_agent_lanes": []},
+    )
+    result = json.loads(cli._dispatch(cli.build_parser().parse_args(["daily-provision"])))
+    assert result["state"] == "PREPARED"

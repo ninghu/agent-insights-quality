@@ -1,0 +1,276 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "snapshot_type",
+    "state",
+    "execution_id",
+    "event_sequence",
+    "started_at",
+    "last_activity_at",
+    "previous_lifecycle_digest",
+    "event_reference",
+    "bindings",
+    "artifacts",
+    "lifecycle_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "kind": {"const": "daily-qualification-lifecycle"},
+    "snapshot_type": {"enum": ["event", "active"]},
+    "state": {
+      "enum": [
+        "LOCKED",
+        "PREPARED",
+        "TRAFFIC",
+        "COMPOSED",
+        "ASSESSMENTS_VALIDATED",
+        "IMPROVEMENT_INPUT_READY",
+        "FINALIZED",
+        "SEND_CLAIMED",
+        "RECEIPT_IMPORTED",
+        "COMPLETE",
+        "FAILED"
+      ]
+    },
+    "execution_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "event_sequence": {"type": "integer", "minimum": 0},
+    "started_at": {"type": "string", "format": "date-time"},
+    "last_activity_at": {"type": "string", "format": "date-time"},
+    "previous_lifecycle_digest": {
+      "oneOf": [
+        {"$ref": "#/$defs/hash"},
+        {"type": "null"}
+      ]
+    },
+    "event_reference": {
+      "oneOf": [
+        {"$ref": "#/$defs/reference"},
+        {"type": "null"}
+      ]
+    },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "commit_sha",
+        "public_run_id",
+        "report_date",
+        "delivery_mode",
+        "work_items",
+        "approved_record",
+        "catalog_hashes",
+        "selection",
+        "policy",
+        "registry",
+        "run_contract_digest"
+      ],
+      "properties": {
+        "repository": {"const": "ninghu/agent-insights-quality"},
+        "commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "public_run_id": {
+          "type": "string",
+          "pattern": "^aiq-[0-9]{8}(?:-r[0-9]{2,})?$"
+        },
+        "report_date": {"type": "string", "format": "date"},
+        "delivery_mode": {"enum": ["official", "test_email_only"]},
+        "work_items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "content_digest", "closed_business_date"],
+          "properties": {
+            "path": {"type": "string", "minLength": 1},
+            "content_digest": {"$ref": "#/$defs/hash"},
+            "closed_business_date": {"type": "string", "format": "date"}
+          }
+        },
+        "approved_record": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["validation_digest", "record_digest"],
+          "properties": {
+            "validation_digest": {"$ref": "#/$defs/hash"},
+            "record_digest": {"$ref": "#/$defs/hash"}
+          }
+        },
+        "catalog_hashes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["agents", "issues", "artifacts"],
+          "properties": {
+            "agents": {"$ref": "#/$defs/hash"},
+            "issues": {"$ref": "#/$defs/hash"},
+            "artifacts": {"$ref": "#/$defs/hash"}
+          }
+        },
+        "selection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "weather-agent",
+            "healthcare-agent",
+            "finance-agent",
+            "travel-agent",
+            "support-ticket-agent"
+          ],
+          "properties": {
+            "weather-agent": {"$ref": "#/$defs/issues"},
+            "healthcare-agent": {"$ref": "#/$defs/issues"},
+            "finance-agent": {"$ref": "#/$defs/issues"},
+            "travel-agent": {"$ref": "#/$defs/issues"},
+            "support-ticket-agent": {"$ref": "#/$defs/issues"}
+          }
+        },
+        "policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "max_parallel_agents",
+            "max_recovery_versions",
+            "agent_start_stagger_seconds",
+            "insight_lookback_hours",
+            "clean_window_poll_seconds",
+            "clean_window_ingestion_margin_seconds",
+            "clean_window_max_wait_seconds",
+            "trace_assertion_stabilization_seconds",
+            "insight_start_margin_seconds",
+            "telemetry_resource_set"
+          ],
+          "properties": {
+            "max_parallel_agents": {"type": "integer", "minimum": 1, "maximum": 5},
+            "max_recovery_versions": {"type": "integer", "minimum": 0, "maximum": 3},
+            "agent_start_stagger_seconds": {"type": "integer", "minimum": 0, "maximum": 30},
+            "insight_lookback_hours": {"type": "number", "minimum": 0.1},
+            "clean_window_poll_seconds": {"type": "integer", "minimum": 1},
+            "clean_window_ingestion_margin_seconds": {"type": "integer", "minimum": 0},
+            "clean_window_max_wait_seconds": {"type": "integer", "minimum": 1},
+            "trace_assertion_stabilization_seconds": {"type": "integer", "minimum": 1},
+            "insight_start_margin_seconds": {"type": "integer", "minimum": 1},
+            "telemetry_resource_set": {"const": "g30"}
+          }
+        },
+        "registry": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "content_digest",
+                "project_name",
+                "test_region",
+                "test_region_registry"
+              ],
+              "properties": {
+                "content_digest": {"$ref": "#/$defs/hash"},
+                "project_name": {"const": "aiq-daily-swedencentral"},
+                "test_region": {"type": "string", "minLength": 1},
+                "test_region_registry": {"type": "string", "minLength": 1}
+              }
+            },
+            {"type": "null"}
+          ]
+        },
+        "run_contract_digest": {
+          "oneOf": [
+            {"$ref": "#/$defs/hash"},
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lane_receipts",
+        "manifest",
+        "assessment_index",
+        "improvement_input",
+        "improvement_analysis",
+        "final_report",
+        "adx_publication_status",
+        "email_request",
+        "send_claim",
+        "email_receipt",
+        "publication",
+        "failure"
+      ],
+      "properties": {
+        "lane_receipts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "weather-agent",
+            "healthcare-agent",
+            "finance-agent",
+            "travel-agent",
+            "support-ticket-agent"
+          ],
+          "properties": {
+            "weather-agent": {"$ref": "#/$defs/nullableReference"},
+            "healthcare-agent": {"$ref": "#/$defs/nullableReference"},
+            "finance-agent": {"$ref": "#/$defs/nullableReference"},
+            "travel-agent": {"$ref": "#/$defs/nullableReference"},
+            "support-ticket-agent": {"$ref": "#/$defs/nullableReference"}
+          }
+        },
+        "manifest": {"$ref": "#/$defs/nullableReference"},
+        "assessment_index": {"$ref": "#/$defs/nullableReference"},
+        "improvement_input": {"$ref": "#/$defs/nullableReference"},
+        "improvement_analysis": {"$ref": "#/$defs/nullableReference"},
+        "final_report": {"$ref": "#/$defs/nullableReference"},
+        "adx_publication_status": {
+          "type": ["string", "null"],
+          "enum": [
+            "published",
+            "already_published",
+            "failed",
+            "skipped_test",
+            null
+          ]
+        },
+        "email_request": {"$ref": "#/$defs/nullableReference"},
+        "send_claim": {"$ref": "#/$defs/nullableReference"},
+        "email_receipt": {"$ref": "#/$defs/nullableReference"},
+        "publication": {"$ref": "#/$defs/nullableReference"},
+        "failure": {"$ref": "#/$defs/nullableReference"}
+      }
+    },
+    "lifecycle_digest": {"$ref": "#/$defs/hash"}
+  },
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "digest"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "digest": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "nullableReference": {
+      "oneOf": [
+        {"$ref": "#/$defs/reference"},
+        {"type": "null"}
+      ]
+    },
+    "issues": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^issue-[0-9]{3}$"}
+    }
+  }
+}

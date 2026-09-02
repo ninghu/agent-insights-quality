@@ -10,7 +10,6 @@ import urllib.parse
 import urllib.request
 import uuid
 from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -212,6 +211,8 @@ class LiveRuntime:
         self._hosted_route_lock = threading.Lock()
         self._hosted_routes: dict[str, tuple[str, float]] = {}
         self._hosted_session_bindings: dict[tuple[str, str], tuple[str, float]] = {}
+        self._used_session_ids: dict[str, set[str]] = {}
+        self._used_response_references: dict[str, set[str]] = {}
         self._logs_client_instance: Any | None = None
         self._progress = ProgressReporter("aiq", monotonic=monotonic)
         self._traffic_ledger = (
@@ -465,42 +466,29 @@ union traces, dependencies, requests
                 ]
             ],
         ] = {}
-        errors: list[Exception] = []
-        with ThreadPoolExecutor(max_workers=min(5, len(groups))) as pool:
-            futures = {
-                pool.submit(
-                    self._invoke_group,
-                    agent_name,
-                    agent_type,
-                    foundry_version,
-                    fixtures,
-                    seed,
-                ): key
-                for key, fixtures in groups.items()
-            }
-            for future in as_completed(futures):
-                try:
-                    completed_groups[futures[future]] = future.result()
-                except Exception as error:
-                    errors.append(error)
-        if errors:
-            if all(
-                re.search(r"\bHTTP [0-9]{3}\b", str(error))
-                for error in errors
-            ):
-                self._traffic_ledger.mark_completed(
-                    agent_name,
-                    now=self._utcnow().astimezone(UTC),
+        for key, fixtures in groups.items():
+            try:
+                completed = self._invoke_group(
+                agent_name,
+                agent_type,
+                foundry_version,
+                fixtures,
+                seed,
                 )
-            primary = next(
-                (
-                    error
-                    for error in errors
-                    if re.search(r"\bHTTP [0-9]{3}\b", str(error)) is None
-                ),
-                errors[0],
-            )
-            raise primary
+                references = tuple(
+                reference
+                for item in completed
+                for reference in item[1]
+                )
+                self._reserve_response_references(agent_name, references)
+                completed_groups[key] = completed
+            except Exception as error:
+                if re.search(r"\bHTTP [0-9]{3}\b", str(error)):
+                    self._traffic_ledger.mark_completed(
+                        agent_name,
+                        now=self._utcnow().astimezone(UTC),
+                    )
+                raise
         self._traffic_ledger.mark_completed(
             agent_name,
             now=self._utcnow().astimezone(UTC),
@@ -560,6 +548,16 @@ union traces, dependencies, requests
             semantic_assertions_passed=semantic_assertions_passed,
             request_summaries=tuple(request_summaries),
         )
+
+    def _reserve_response_references(
+        self,
+        agent_name: str,
+        references: tuple[str, ...],
+    ) -> None:
+        used = self._used_response_references.setdefault(agent_name, set())
+        if used.intersection(references):
+            raise ContractError("Endpoint reused a response identity in one Agent lane")
+        used.update(references)
 
     def _invoke_group(
         self,
@@ -1004,6 +1002,10 @@ union traces, dependencies, requests
                 status=int(session.get("_http_status") or 200),
                 request_accepted=True,
             )
+        used_sessions = self._used_session_ids.setdefault(agent_name, set())
+        if session_id in used_sessions:
+            raise ContractError("Hosted endpoint reused a session identity in one Agent lane")
+        used_sessions.add(session_id)
         with self._hosted_route_lock:
             self._hosted_session_bindings[(agent_name, session_id)] = (
                 foundry_version,

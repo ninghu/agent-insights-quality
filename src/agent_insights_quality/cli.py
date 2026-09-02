@@ -31,12 +31,28 @@ from agent_insights_quality.catalogs import (
     load_catalogs,
     agent_model_contract,
 )
+from agent_insights_quality.daily_coordinator import (
+    assert_daily_finalization_inputs,
+    assert_daily_receipt_import,
+    claim_daily_email,
+    complete_daily_publication,
+    compose_daily,
+    daily_guide,
+    daily_status,
+    fail_daily,
+    prepare_daily,
+    provision_daily,
+    record_daily_email_receipt,
+    record_daily_finalization,
+    record_daily_improvement_input,
+    run_daily_agent,
+    validate_daily_assessment_outputs,
+)
 from agent_insights_quality.email import (
     build_runtime_links,
     create_request,
     import_receipt,
     resolve_recipient,
-    validate_published_receipt,
     write_private_report_preview,
 )
 from agent_insights_quality.generated_paths import validate_generated_paths
@@ -135,14 +151,65 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard.add_argument("--output", type=Path)
     provision = commands.add_parser("provision")
     provision.add_argument("--profile", choices=("daily", "staging"), required=True)
-    for name in ("run-daily", "run-full"):
+    for name in ("run-full",):
         run = commands.add_parser(name)
         run.add_argument("--report-date", required=True, type=date.fromisoformat)
         run.add_argument("--rerun", type=int, default=0)
         run.add_argument("--state-root", type=Path, default=runtime_root())
         run.add_argument("--work-items", type=Path, required=True)
-        if name == "run-daily":
-            run.add_argument("--test-run", action="store_true")
+    daily_prepare = commands.add_parser("daily-prepare")
+    daily_prepare.add_argument("--report-date", required=True, type=date.fromisoformat)
+    daily_prepare.add_argument("--rerun", type=int, default=0)
+    daily_prepare.add_argument("--work-items", type=Path, required=True)
+    daily_prepare.add_argument("--test-run", action="store_true")
+    commands.add_parser("daily-provision")
+    daily_agent = commands.add_parser("daily-run-agent")
+    daily_agent.add_argument(
+        "--agent",
+        choices=(
+            "weather-agent",
+            "healthcare-agent",
+            "finance-agent",
+            "travel-agent",
+            "support-ticket-agent",
+        ),
+        required=True,
+    )
+    commands.add_parser("daily-compose")
+    commands.add_parser("daily-status")
+    commands.add_parser("daily-guide")
+    daily_assessments = commands.add_parser("daily-validate-assessments")
+    daily_assessments.add_argument(
+        "--assessment",
+        type=Path,
+        action="append",
+        required=True,
+    )
+    daily_assessments.add_argument(
+        "--baseline-assessment",
+        type=Path,
+        action="append",
+        required=True,
+    )
+    daily_assessments.add_argument(
+        "--recheck-assessment",
+        type=Path,
+        action="append",
+        default=[],
+    )
+    daily_assessments.add_argument(
+        "--recheck-baseline-assessment",
+        type=Path,
+        action="append",
+        default=[],
+    )
+    commands.add_parser("daily-email-claim")
+    daily_fail = commands.add_parser("daily-fail")
+    daily_fail.add_argument("--reason-code", required=True)
+    daily_fail.add_argument("--confirm", action="store_true")
+    daily_publication = commands.add_parser("daily-complete-publication")
+    daily_publication.add_argument("--pr-number", type=int, required=True)
+    daily_publication.add_argument("--path", action="append", required=True)
     finalize = commands.add_parser("finalize")
     finalize.add_argument("--manifest", type=Path, required=True)
     finalize.add_argument("--assessment", type=Path, action="append", required=True)
@@ -173,7 +240,6 @@ def build_parser() -> argparse.ArgumentParser:
     paths.add_argument("--path", action="append", default=[])
     published = commands.add_parser("validate-published-report")
     published.add_argument("--report", type=Path, required=True)
-    published.add_argument("--receipt", type=Path, required=True)
     published.add_argument("--report-relative-path", required=True)
     published.add_argument("--report-markdown", type=Path, required=True)
     published.add_argument("--latest-json", type=Path, required=True)
@@ -281,6 +347,54 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         return json.dumps(compose_test_agent_validation(), sort_keys=True)
     if args.command == "approve-test-agent-validation":
         return json.dumps(approve_test_agent_validation(), sort_keys=True)
+    if args.command == "daily-prepare":
+        return json.dumps(
+            prepare_daily(
+                report_date=args.report_date,
+                work_items_path=args.work_items,
+                rerun=args.rerun,
+                test_run=args.test_run,
+            ),
+            sort_keys=True,
+        )
+    if args.command == "daily-provision":
+        return json.dumps(provision_daily(), sort_keys=True)
+    if args.command == "daily-run-agent":
+        return json.dumps(run_daily_agent(args.agent), sort_keys=True)
+    if args.command == "daily-compose":
+        return json.dumps(compose_daily(), sort_keys=True)
+    if args.command == "daily-status":
+        return json.dumps(daily_status(), sort_keys=True)
+    if args.command == "daily-guide":
+        return json.dumps(daily_guide(), sort_keys=True)
+    if args.command == "daily-validate-assessments":
+        return json.dumps(
+            validate_daily_assessment_outputs(
+                assessments=args.assessment,
+                baseline_assessments=args.baseline_assessment,
+                recheck_assessments=args.recheck_assessment,
+                recheck_baseline_assessments=args.recheck_baseline_assessment,
+            ),
+            sort_keys=True,
+        )
+    if args.command == "daily-email-claim":
+        return json.dumps(claim_daily_email(), sort_keys=True)
+    if args.command == "daily-fail":
+        return json.dumps(
+            fail_daily(
+                reason_code=args.reason_code,
+                confirmed=args.confirm,
+            ),
+            sort_keys=True,
+        )
+    if args.command == "daily-complete-publication":
+        return json.dumps(
+            complete_daily_publication(
+                pr_number=args.pr_number,
+                generated_paths=args.path,
+            ),
+            sort_keys=True,
+        )
     if args.command == "validate":
         validate_repository()
         return catalog_summary()
@@ -346,6 +460,11 @@ def _dispatch(args: argparse.Namespace) -> str | None:
     if args.command == "render-adx-dashboard":
         return str(render_dashboard(args.output))
     if args.command == "provision":
+        if args.profile == "daily":
+            raise ContractError(
+                "Daily provisioning requires daily-prepare then daily-provision "
+                "under the lifecycle quiescence lock"
+            )
         profile = RuntimeProfile.from_env(args.profile)
         approved_digests = None
         if args.profile == "daily":
@@ -364,9 +483,9 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             approved_digests=approved_digests,
         )
         return f"{args.profile} profile provisioned."
-    if args.command in {"run-daily", "run-full"}:
+    if args.command == "run-full":
         policy = load_automation_policy()
-        profile_name = "daily" if args.command == "run-daily" else "staging"
+        profile_name = "staging"
         test_run = bool(getattr(args, "test_run", False))
         if test_run and args.rerun <= 0:
             raise ContractError("Test runs require a nonzero --rerun identity")
@@ -513,6 +632,12 @@ def _dispatch(args: argparse.Namespace) -> str | None:
     if args.command == "finalize":
         manifest = read_json(args.manifest)
         validate_manifest(manifest)
+        daily_active = assert_daily_finalization_inputs(
+            manifest_path=args.manifest,
+            assessments=args.assessment,
+            baseline_assessments=args.baseline_assessment,
+            prepare_improvement_input=args.prepare_improvement_input,
+        )
         test_run = manifest["delivery_mode"] == TEST_EMAIL_ONLY_DELIVERY
         work_items = load_quality_work_items(
             args.work_items,
@@ -577,6 +702,8 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                     raise ContractError(
                         "Improvement input preparation does not accept analysis output"
                     )
+                if daily_active is not None:
+                    record_daily_improvement_input(daily_active, analysis_input)
                 return json.dumps(
                     {"improvement_analysis_input": str(analysis_input)},
                     sort_keys=True,
@@ -693,7 +820,7 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                 include_improvement_link=not test_run,
             )
         private_request = args.manifest.parent / "email-send-request.json"
-        atomic_json(private_request, request)
+        immutable_json(private_request, request)
         private_preview = args.manifest.parent / "report-preview.html"
         write_private_report_preview(request, private_preview)
         if manifest["profile"] == "daily" and not test_run:
@@ -703,6 +830,18 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                 (output / "report.md").read_text(encoding="utf-8"),
             )
             update_trend(report, args.output_root / "trend.json")
+        if daily_active is not None:
+            record_daily_finalization(
+                daily_active,
+                report_path=output / "report.json",
+                email_request_path=private_request,
+                improvement_analysis_path=args.improvement_analysis,
+                adx_publication_status=(
+                    adx_publication["status"]
+                    if adx_publication is not None
+                    else "not_applicable"
+                ),
+            )
         return json.dumps(
             {
                 "quality_score": report["summary"]["quality_score"],
@@ -732,7 +871,10 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             sort_keys=True,
         )
     if args.command == "email-receipt-import":
+        daily_active = assert_daily_receipt_import(args.request, args.output)
         import_receipt(read_json(args.request), args.receipt, args.output)
+        if daily_active is not None:
+            record_daily_email_receipt(daily_active, args.output)
         return "Email receipt imported."
     if args.command == "replay-run":
         manifest = read_json(args.manifest)
@@ -758,10 +900,6 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             hashes["issues"],
         )
         validate_published_report(report, issues, expected_selection)
-        validate_published_receipt(
-            args.receipt,
-            report["delivery"]["content_digest"],
-        )
         expected_path = (
             "reports/daily/"
             + report["report_date"].replace("-", "/")
@@ -882,6 +1020,7 @@ def _run_contract_digest(
             "registry_hash": content_hash(registry),
             "work_items_hash": content_hash(work_items),
             "lookback_hours": policy.insight_lookback_hours,
+            "max_parallel_agents": policy.max_parallel_agents,
             "agent_start_stagger_seconds": policy.agent_start_stagger_seconds,
             "telemetry_resource_set": policy.telemetry_resource_set,
             "seed": seed,

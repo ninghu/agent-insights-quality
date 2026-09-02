@@ -6487,7 +6487,7 @@ def test_mixed_group_failures_preserve_ambiguous_traffic_horizon(
         raise ContractError("Remote operation failed before a response was received")
 
     runtime._invoke_group = invoke_group  # type: ignore[method-assign]
-    with pytest.raises(ContractError, match="before a response"):
+    with pytest.raises(ContractError, match="HTTP 424"):
         runtime.invoke_version(
             agent_name="finance-agent",
             agent_type="hosted",
@@ -6495,7 +6495,7 @@ def test_mixed_group_failures_preserve_ambiguous_traffic_horizon(
             traffic_path=traffic,
             seed=1,
         )
-    assert ledger.completed == 0
+    assert ledger.completed == 1
 
 
 def test_json_request_refreshes_an_expired_credential_once(monkeypatch) -> None:

@@ -56,7 +56,7 @@ jobs:
           )
           test "${#args[@]}" -gt 0
           python -m agent_insights_quality validate-generated-paths "${args[@]}"
-      - name: Verify trusted report and receipt
+      - name: Verify trusted report
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -67,15 +67,8 @@ jobs:
             git diff --name-only "${BASE_SHA}...${HEAD_SHA}" \
               | grep -E '^reports/daily/[0-9]{4}/[0-9]{2}/[0-9]{2}/report.json$' || true
           )
-          mapfile -t receipt_paths < <(
-            git diff --name-only "${BASE_SHA}...${HEAD_SHA}" \
-              | grep -E '^reports/daily/[0-9]{4}/[0-9]{2}/[0-9]{2}/email-receipt.json$' || true
-          )
           test "${#report_paths[@]}" -eq 1
-          test "${#receipt_paths[@]}" -eq 1
           report_path="${report_paths[0]}"
-          receipt_path="${receipt_paths[0]}"
-          test "${receipt_path}" = "${report_path%report.json}email-receipt.json"
           report_md_path="${report_path%report.json}report.md"
           for required_path in \
             "${report_md_path}" \
@@ -101,7 +94,6 @@ jobs:
             agent_args+=("--agent-report" "${RUNNER_TEMP}/${agent}.md")
           done
           git show "${HEAD_SHA}:${report_path}" > "${RUNNER_TEMP}/report.json"
-          git show "${HEAD_SHA}:${receipt_path}" > "${RUNNER_TEMP}/email-receipt.json"
           git show "${HEAD_SHA}:${report_md_path}" > "${RUNNER_TEMP}/report.md"
           git show "${HEAD_SHA}:reports/latest.json" > "${RUNNER_TEMP}/latest.json"
           git show "${HEAD_SHA}:reports/latest.md" > "${RUNNER_TEMP}/latest.md"
@@ -139,7 +131,6 @@ jobs:
           done < <(git diff --no-renames --name-status "${BASE_SHA}...${HEAD_SHA}")
           python -m agent_insights_quality validate-published-report \
             --report "${RUNNER_TEMP}/report.json" \
-            --receipt "${RUNNER_TEMP}/email-receipt.json" \
             --report-relative-path "${report_path}" \
             --report-markdown "${RUNNER_TEMP}/report.md" \
             --latest-json "${RUNNER_TEMP}/latest.json" \

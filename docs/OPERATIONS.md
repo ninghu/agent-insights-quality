@@ -321,9 +321,18 @@ Azure deployment identifiers to Git.
 ## Daily execution
 
 ```powershell
-python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD> `
+python -m agent_insights_quality daily-prepare --report-date <Pacific YYYY-MM-DD> `
   --work-items $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
+python -m agent_insights_quality daily-provision
+python -m agent_insights_quality daily-guide
 ```
+
+`daily-prepare` opens one private lifecycle/quiescence claim and binds the Pacific business date,
+immutable work-item snapshot digest and closed-business date, exact clean-commit approved staging
+record, deterministic selections, reviewed limits, and a hidden system-generated execution identity.
+`daily-provision` performs new-only reconciliation, then freezes the exact Daily registry, Project
+topology, promoted content/version mappings, and live region proof. No other Daily run may provision,
+send traffic, compose, finalize, publish, or claim delivery until that lifecycle completes.
 
 Before traffic, Daily performs a read-only ARM GET of its concrete Foundry Project and resolves the
 returned `location` through Azure location metadata. That live Project is the sole region source; the
@@ -332,10 +341,14 @@ canonical display is `SwedenCentral`. Report/email generation fails if the live 
 or registry match is missing. This contract is intentionally one scalar region: no experiments,
 region arrays, comparison runs, or region-scoped report directories.
 
-The runner validates catalog hashes against the protected daily registry, resets each monitor once,
-runs `v0`, then runs four deterministic issues per Agent without an unconditional pre-traffic sleep.
-Agent starts are staggered by five seconds to avoid a simultaneous endpoint burst while all
-five Agents still execute concurrently; exact versions for one Agent execute sequentially. Before each
+The coordinator returns five deterministic whole-Agent assignments through `daily-guide`. Start one
+visible Copilot sub session for each pending Weather, Healthcare, Finance, Travel, and Support lane,
+up to the parsed `max_parallel_agents` limit. Each session runs only
+`daily-run-agent --agent <name>`. It validates catalog hashes against the frozen Daily registry,
+resets that Agent's monitor once, runs `v0`, then runs four deterministic issues sequentially without
+an unconditional pre-traffic sleep. Agent lane starts are staggered by five seconds to avoid a
+simultaneous endpoint burst. Endpoint requests inside a version are also sequential, so visible lane
+parallelism cannot multiply reviewed request limits. Before each
 Hosted version, the runner patches the Agent endpoint to one `FixedRatio` rule with 100% traffic on
 that exact version, confirms the selector, and then creates an exact-version session. This keeps
 compute behavior and outer telemetry version identity aligned.
@@ -345,9 +358,27 @@ Debug locally or in a separately owned sandbox. Qualification evidence is accept
 run, Agent, provider-version, operation, and invocation-time-window correlation hydrates and remains
 stable within the bounded post-invoke deadline.
 
-The runner prints flushed, thread-safe progress lines for each Agent/version and for endpoint,
+Each lane prints flushed progress lines for its Agent/version and for endpoint,
 telemetry, trace, and Agent Insights stages. Long telemetry waits, Insight runs, and remote retries
 emit periodic heartbeats without exposing URLs, payloads, or private identifiers.
+
+Each lane holds an Agent-specific OS lock, resumes only its exact digest-bound checkpoints, and may
+claim at most three transient incomplete recoveries across all resumes. Exact fresh session, response,
+and operation identities are enforced. Completion writes one immutable receipt; stale workers are
+fenced by the active lifecycle and cannot overwrite it. `daily-status` and `daily-guide` never fan out
+or send traffic, so the coordinator remains responsive. `daily-compose` accepts only all five exact
+receipts and then creates the 25 assessment packages.
+
+If a run cannot be resumed safely, close it centrally with:
+
+```powershell
+python -m agent_insights_quality daily-fail `
+  --reason-code <public_safe_code> --confirm
+```
+
+This writes a private immutable failure receipt and moves the lifecycle to terminal `FAILED`, allowing
+the next Pacific business date to prepare. It never deletes checkpoints, receipts, telemetry, or
+provider resources.
 
 Every Hosted baseline and issue polls exact response-to-operation correlation every 15 seconds through
 the existing 15-minute bounded ingestion deadline, whether or not its traffic declares trace
@@ -381,7 +412,7 @@ Handled child errors require an independently successful terminal response; unha
 errors always keep the run incomplete.
 
 The measured five-Agent-concurrent daily smoke on 2026-08-25 completed in 37.6 minutes: 32.1 minutes
-for endpoint/telemetry/Agent Insights runtime, 5.3 minutes for parallel Sol assessment, and 13 seconds
+for endpoint/telemetry/Agent Insights runtime, 5.3 minutes for per-Agent Sol assessment, and 13 seconds
 for finalization. That measurement predates mandatory stabilization for assertion-free Hosted
 invocations. Five sequential daily versions reserve 15 minutes of correlation guarding per Hosted
 Agent lane, and nine full-catalog versions reserve 27 minutes; the three Hosted lanes remain
@@ -398,10 +429,13 @@ stops that Agent.
 
 ## Assessment and finalization
 
-`run-daily` writes private assessment packages beside `run-manifest.json`. Packages contain
+`daily-compose` writes private assessment packages beside `run-manifest.json`. Packages contain
 privacy-safe per-request assertion outcomes, full-request trace proof, and separate card-linked trace
-proof. Use GPT-5.6 Sol with
-`src/agent_insights_quality/prompts/assessment.md`, then finalize:
+proof. Use up to five visible Copilot assessment sub sessions, one per Agent's baseline and four issues,
+with GPT-5.6 Sol and `src/agent_insights_quality/prompts/assessment.md`. Then run
+`daily-validate-assessments` with all 25 outputs. If an eligible output remains inconclusive, run its
+one focused read-only recheck in the same per-Agent assessment lane and pass the exact replacement to
+the validation command. Missing, extra, stale, or unbound outputs fail closed.
 
 Run manifest schema `5.0.0` binds the live Project region, registry cross-check, both the
 official/test-email delivery mode, and verified source,
@@ -439,6 +473,13 @@ and records `not_evaluated` without advancing absence. The complete Daily report
 JSON/Markdown, and full immutable dated analysis snapshot are staged and validated before
 retry-safe publication; latest views and trend then join the same generated-only pull request.
 Optional email-only tests write only a private improvement preview.
+
+The lifecycle enforces this downstream order: assessment validation, focused recheck replacement,
+improvement input, one improvement-analysis session, finalization, ADX attempt, immutable email
+request, one-time send claim, one provider receipt import, generated-path validation, and exactly one
+registered Daily pull request. `daily-email-claim` is the only send authorization. The claim and
+provider receipt stay private; reports and the PR contain only sanitized delivery and ADX status, not
+a public attestation.
 
 For `daily`, finalization also derives one public-safe payload and publishes it atomically to ADX.
 The v2 payload exposes logical `AIQDailyRuns`, `AIQDailyAgents`, `AIQDailyBaselines`,
@@ -486,8 +527,11 @@ private digest binding beside the run manifest; finalization rejects a different
 ```powershell
 python -m agent_insights_quality email-receipt-import `
   --request <private-request> --receipt <provider-receipt> `
-  --output reports/daily/YYYY/MM/DD/email-receipt.json
+  --output $HOME\.aiq-runtime\agent-insights-quality\daily-workflow\runs\<run>\email-receipt.json
 ```
+
+The coordinator returns the exact canonical private output path. Never copy the provider receipt into
+the repository or generated pull request.
 
 ## Replay
 
@@ -502,9 +546,10 @@ is a new run with new endpoint traffic and a new run identity.
 
 ## Generated pull requests
 
-Generated branches use `aiq-daily/`. Only new-format report, latest, trend, and email-receipt files
-are allowed. A complete schema-valid numeric report enables auto-merge after required checks.
-Incomplete execution creates no generated branch.
+Generated branches use `aiq-daily/`. Only new-format report, latest, trend, improvement, and per-Agent
+Markdown files are allowed. Email claims and provider receipts remain private. A complete
+schema-valid numeric report enables auto-merge after required checks. Incomplete execution creates no
+generated branch.
 
 ## ADX backfill and retry
 

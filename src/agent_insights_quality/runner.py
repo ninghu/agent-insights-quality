@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -256,39 +255,82 @@ def execute(
         f"qualification started: {len(selected)} Agents, "
         f"{sum(len(values) for values in selected.values())} issues",
     )
-    agent_by_name = {item["name"]: item for item in agents["agents"]}
-    issue_by_id = {item["id"]: item for item in issues["issues"]}
-    results: dict[str, AgentResult] = {}
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        futures = {
-            pool.submit(
-                _execute_agent,
-                agent_by_name[agent_name],
-                [issue_by_id[value] for value in issue_ids],
-                registry,
-                runtime,
-                seed,
-                lookback_hours,
-                clean_window_poll_seconds,
-                clean_window_ingestion_margin_seconds,
-                clean_window_max_wait_seconds,
-                trace_assertion_stabilization_seconds,
-                insight_start_margin_seconds,
-                _RecoveryBudget(
-                    max_recovery_versions,
-                    checkpoint_store,
-                    agent_name,
-                ),
-                checkpoint_store,
-                index * agent_start_stagger_seconds,
-            ): agent_name
-            for index, (agent_name, issue_ids) in enumerate(selected.items())
-        }
-        for future in as_completed(futures):
-            results[futures[future]] = future.result()
-    ordered = [results[agent["name"]] for agent in agents["agents"]]
+    ordered = [
+        execute_agent(
+            agent_name=agent["name"],
+            agents=agents,
+            issues=issues,
+            selected=selected,
+            registry=registry,
+            runtime=runtime,
+            seed=seed,
+            lookback_hours=lookback_hours,
+            clean_window_poll_seconds=clean_window_poll_seconds,
+            clean_window_ingestion_margin_seconds=(
+                clean_window_ingestion_margin_seconds
+            ),
+            clean_window_max_wait_seconds=clean_window_max_wait_seconds,
+            trace_assertion_stabilization_seconds=(
+                trace_assertion_stabilization_seconds
+            ),
+            insight_start_margin_seconds=insight_start_margin_seconds,
+            max_recovery_versions=max_recovery_versions,
+            checkpoint_store=checkpoint_store,
+            start_delay_seconds=index * agent_start_stagger_seconds,
+        )
+        for index, agent in enumerate(agents["agents"])
+        if agent["name"] in selected
+    ]
     _progress(runtime, "qualification runtime completed")
     return ordered
+
+
+def execute_agent(
+    *,
+    agent_name: str,
+    agents: dict[str, Any],
+    issues: dict[str, Any],
+    selected: dict[str, list[str]],
+    registry: dict[str, Any],
+    runtime: RuntimePort,
+    seed: int,
+    lookback_hours: float = 0.1,
+    clean_window_poll_seconds: int = 15,
+    clean_window_ingestion_margin_seconds: int = 30,
+    clean_window_max_wait_seconds: int = 1200,
+    trace_assertion_stabilization_seconds: int = 180,
+    insight_start_margin_seconds: int = 30,
+    max_recovery_versions: int = 3,
+    checkpoint_store: VersionCheckpointStore | None = None,
+    start_delay_seconds: int = 0,
+) -> AgentResult:
+    agent_by_name = {item["name"]: item for item in agents["agents"]}
+    issue_by_id = {item["id"]: item for item in issues["issues"]}
+    if agent_name not in selected or agent_name not in agent_by_name:
+        raise ContractError("Daily Agent lane assignment is invalid")
+    issue_ids = selected[agent_name]
+    if len(issue_ids) != len(set(issue_ids)) or not set(issue_ids).issubset(issue_by_id):
+        raise ContractError("Daily Agent lane issue assignment is invalid")
+    return _execute_agent(
+        agent_by_name[agent_name],
+        [issue_by_id[value] for value in issue_ids],
+        registry,
+        runtime,
+        seed,
+        lookback_hours,
+        clean_window_poll_seconds,
+        clean_window_ingestion_margin_seconds,
+        clean_window_max_wait_seconds,
+        trace_assertion_stabilization_seconds,
+        insight_start_margin_seconds,
+        _RecoveryBudget(
+            max_recovery_versions,
+            checkpoint_store,
+            agent_name,
+        ),
+        checkpoint_store,
+        start_delay_seconds,
+    )
 
 
 def _execute_agent(

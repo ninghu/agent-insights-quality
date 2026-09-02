@@ -285,7 +285,7 @@ def test_email_requires_reviewed_domain_and_one_success(
     receipt["provider_reference"] = None
     receipt["retry_allowed"] = True
     path.write_text(json.dumps(receipt), encoding="utf-8")
-    import_receipt(request, path, output)
+    import_receipt(request, path, tmp_path / "imported-failed.json")
     with pytest.raises(ContractError, match="confirmed"):
         validate_published_receipt(path, request["content_digest"])
 
@@ -297,8 +297,9 @@ def test_email_requires_reviewed_domain_and_one_success(
         "retry_allowed": False,
     }
     path.write_text(json.dumps(receipt), encoding="utf-8")
-    import_receipt(request, path, output)
+    unknown_output = tmp_path / "imported-unknown.json"
+    import_receipt(request, path, unknown_output)
     receipt["retry_allowed"] = True
     path.write_text(json.dumps(receipt), encoding="utf-8")
     with pytest.raises(ContractError, match="cannot be retried"):
-        import_receipt(request, path, output)
+        import_receipt(request, path, unknown_output)

@@ -60,6 +60,12 @@ Daily therefore evaluates 20 issues plus five baselines (25 assessment packages)
 staging qualification validates all 36 issues plus five baselines before exact approved digests may
 be promoted to Daily.
 
+Daily concurrency is orchestrated only through visible Copilot sub sessions. The central coordinator
+prepares and provisions one private lifecycle, then assigns five whole-Agent lanes: Weather,
+Healthcare, Finance, Travel, and Support. Each lane holds its own lock and runs `v0` followed by four
+selected issues sequentially. Immutable lane receipts make interrupted work resumable and fence stale
+workers. There is no Daily thread-pool, subprocess, or nested endpoint-request fan-out.
+
 Daily is currently single-region. Before traffic, automation reads the concrete Daily Foundry
 Project's ARM `location`, resolves its public display through Azure location metadata, and cross-checks
 the private registry. Reports and email show `SwedenCentral`; missing or mismatched region proof
@@ -166,10 +172,19 @@ python -m agent_insights_quality fetch-quality-work-items `
   --query-url <private-query-url> `
   --report-date <Pacific YYYY-MM-DD> `
   --output $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
-# Daily fetches the current clean commit's immutable approved record from Blob.
-python -m agent_insights_quality provision --profile daily
-python -m agent_insights_quality run-daily --report-date <Pacific YYYY-MM-DD> `
+# Daily binds the current clean commit's immutable approved record from Blob.
+python -m agent_insights_quality daily-prepare --report-date <Pacific YYYY-MM-DD> `
   --work-items $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
+python -m agent_insights_quality daily-provision
+python -m agent_insights_quality daily-guide
+# Run each returned command in its own visible Copilot sub session.
+python -m agent_insights_quality daily-run-agent --agent weather-agent
+python -m agent_insights_quality daily-run-agent --agent healthcare-agent
+python -m agent_insights_quality daily-run-agent --agent finance-agent
+python -m agent_insights_quality daily-run-agent --agent travel-agent
+python -m agent_insights_quality daily-run-agent --agent support-ticket-agent
+python -m agent_insights_quality daily-compose
+python -m agent_insights_quality daily-status
 python -m agent_insights_quality render-adx-dashboard
 ```
 

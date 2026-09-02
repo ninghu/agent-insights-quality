@@ -10,21 +10,12 @@ from agent_insights_quality import cli
 from agent_insights_quality.util import ContractError, atomic_json, content_hash
 
 
-def test_test_run_requires_nonzero_rerun(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(cli, "load_catalogs", lambda: ({}, {}))
-    monkeypatch.setattr(cli, "catalog_hashes", lambda *_args: {})
-    args = cli.build_parser().parse_args(
-        [
-            "run-daily",
-            "--report-date",
-            "2026-08-28",
-            "--work-items",
-            str(tmp_path / "work-items.json"),
-            "--test-run",
-        ]
-    )
-    with pytest.raises(ContractError, match="nonzero --rerun"):
-        cli._dispatch(args)
+def test_daily_commands_replace_monolithic_run_daily() -> None:
+    parser = cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["run-daily"])
+    assert parser.parse_args(["daily-status"]).command == "daily-status"
+    assert parser.parse_args(["daily-guide"]).command == "daily-guide"
 
 
 def test_unresolved_insight_state_blocks_immutable_manifest() -> None:
@@ -101,6 +92,7 @@ def test_post_manifest_failure_does_not_publish_operational_result(
         "publish_daily_report_best_effort",
         lambda *_args, **_kwargs: pytest.fail("ADX publication attempted"),
     )
+
     args = cli.build_parser().parse_args(
         [
             "run-daily",
@@ -115,6 +107,13 @@ def test_post_manifest_failure_does_not_publish_operational_result(
 
     with pytest.raises(ContractError, match="evidence was checkpointed"):
         cli._dispatch(args)
+
+
+def test_daily_agent_parser_keeps_each_lane_whole() -> None:
+    args = cli.build_parser().parse_args(
+        ["daily-run-agent", "--agent", "finance-agent"]
+    )
+    assert args.agent == "finance-agent"
 
 
 def test_test_finalization_stays_private_and_skips_adx(
@@ -172,6 +171,11 @@ def test_test_finalization_stays_private_and_skips_adx(
     monkeypatch.setattr(cli, "load_catalogs", lambda: ({"agents": []}, {"issues": []}))
     monkeypatch.setattr(cli, "catalog_hashes", lambda *_args: {})
     monkeypatch.setattr(cli, "validate_manifest", lambda _value: None)
+    monkeypatch.setattr(
+        cli,
+        "assert_daily_finalization_inputs",
+        lambda **_kwargs: None,
+    )
     monkeypatch.setattr(cli, "load_quality_work_items", lambda *_args, **_kwargs: work_items)
     monkeypatch.setattr(cli, "load_assessments", lambda *_args: {})
     monkeypatch.setattr(cli, "load_baseline_assessments", lambda *_args: {})
@@ -327,6 +331,11 @@ def test_official_daily_defers_report_to_atomic_memory_publication(
     monkeypatch.setattr(cli, "load_catalogs", lambda: ({"agents": []}, {"issues": []}))
     monkeypatch.setattr(cli, "catalog_hashes", lambda *_args: {})
     monkeypatch.setattr(cli, "validate_manifest", lambda _value: None)
+    monkeypatch.setattr(
+        cli,
+        "assert_daily_finalization_inputs",
+        lambda **_kwargs: None,
+    )
     monkeypatch.setattr(cli, "load_quality_work_items", lambda *_args, **_kwargs: work_items)
     monkeypatch.setattr(cli, "load_assessments", lambda *_args: {})
     monkeypatch.setattr(cli, "load_baseline_assessments", lambda *_args: {})

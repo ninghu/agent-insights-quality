@@ -21,3 +21,7 @@ def test_generated_paths_allow_only_reports() -> None:
     )
     with pytest.raises(ContractError, match="protected"):
         validate_generated_paths(["catalogs/ISSUE_CATALOG.yaml"])
+    with pytest.raises(ContractError, match="protected"):
+        validate_generated_paths(
+            ["reports/daily/2026/08/24/email-receipt.json"]
+        )

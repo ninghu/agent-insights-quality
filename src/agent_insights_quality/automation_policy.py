@@ -23,6 +23,7 @@ TRACE_ASSERTION_POLL_SECONDS = 15
 @dataclass(frozen=True)
 class AutomationPolicy:
     issues_per_agent_daily: int
+    max_parallel_agents: int
     insight_lookback_hours: float
     clean_window_poll_seconds: int
     clean_window_ingestion_margin_seconds: int
@@ -43,7 +44,7 @@ def load_automation_policy(
     path: Path = ROOT / "config" / "automation.yaml",
 ) -> AutomationPolicy:
     value = read_yaml(path)
-    if value.get("schema_version") != "2.0.0":
+    if value.get("schema_version") != "3.0.0":
         raise ContractError("Automation policy schema version is invalid")
     daily_issues = _positive_int(
         value.get("issues_per_agent_daily"),
@@ -51,6 +52,12 @@ def load_automation_policy(
     )
     if daily_issues != DAILY_ISSUES_PER_AGENT:
         raise ContractError("Automation daily issue count is not the reviewed value")
+    max_parallel_agents = _positive_int(
+        value.get("max_parallel_agents"),
+        "parallel Agent limit",
+    )
+    if max_parallel_agents > 5:
+        raise ContractError("Automation parallel Agent limit exceeds the fixed inventory")
     lookback = _finite_number(value.get("insight_lookback_hours"), "lookback")
     if lookback < MINIMUM_LOOKBACK_HOURS:
         raise ContractError("Automation lookback is below the reviewed minimum")
@@ -129,6 +136,7 @@ def load_automation_policy(
         )
     return AutomationPolicy(
         issues_per_agent_daily=daily_issues,
+        max_parallel_agents=max_parallel_agents,
         insight_lookback_hours=lookback,
         clean_window_poll_seconds=poll,
         clean_window_ingestion_margin_seconds=margin,

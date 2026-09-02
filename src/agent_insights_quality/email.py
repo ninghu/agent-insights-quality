@@ -22,7 +22,6 @@ from agent_insights_quality.report_summary import (
 from agent_insights_quality.util import (
     ROOT,
     ContractError,
-    atomic_json,
     atomic_text,
     content_hash,
     read_json,
@@ -186,7 +185,9 @@ def import_receipt(
     if receipt["content_digest"] != request["content_digest"]:
         raise ContractError("Email receipt content digest does not match the request")
     _validate_receipt_semantics(receipt, request["content_digest"])
-    atomic_json(output, receipt)
+    from agent_insights_quality.util import immutable_json
+
+    immutable_json(output, receipt)
 
 
 def _validate_receipt_semantics(
