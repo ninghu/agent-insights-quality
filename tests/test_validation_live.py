@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
@@ -26,7 +28,7 @@ from agent_insights_quality.validation_rules import (
     RUNTIME_AGENT_NAME_PLACEHOLDER,
     RUNTIME_AGENT_VERSION_PLACEHOLDER,
 )
-from agent_insights_quality.util import ContractError, TraceAssertionActivationError
+from agent_insights_quality.util import ROOT, ContractError, TraceAssertionActivationError
 
 HASH = "sha256:" + ("a" * 64)
 
@@ -119,6 +121,7 @@ class Runtime:
         self.trace_batches = 0
         self.identity_batches = 0
         self.invocation_fixtures = []
+        self.previous_response_ids = []
         self.telemetry_requests = []
 
     def _invoke_prompt(
@@ -132,10 +135,11 @@ class Runtime:
         include_seed_metadata,
         validation_intent_reference,
     ):
-        del agent_name, foundry_version, seed, previous_response_id
+        del agent_name, foundry_version, seed
         assert include_seed_metadata is False
         assert validation_intent_reference.startswith("sha256:")
         self.invocation_fixtures.append(fixture)
+        self.previous_response_ids.append(previous_response_id)
         self.counter += 1
         count = len(fixture["semantic_assertions"])
         passed = count if self.assertion_pass or not count else 0
@@ -398,6 +402,61 @@ def test_semantic_and_trace_mismatch_is_complete_but_not_observed() -> None:
         "create_intent",
         "created",
     ]
+
+
+def test_issue_004_prompt_attempt_uses_chained_non_streaming_responses() -> None:
+    traffic = json.loads(
+        (
+            ROOT
+            / "agents"
+            / "weather-agent"
+            / "issues"
+            / "issue-004"
+            / "traffic.json"
+        ).read_text(encoding="utf-8")
+    )
+    scenario = traffic["validation_rules"]["scenarios"][0]
+    attempt = scenario["attempts"][0]
+    runtime = Runtime()
+    target = replace(
+        _target(),
+        authority_id="issue-004",
+        runtime_agent_name="weather-agent-issue-004-cycle",
+    )
+    runner = FoundryScenarioAttemptRunner(
+        runtime,
+        endpoint_costs={"issue-004": EndpointCost(1, 10, 1)},
+        stabilization_seconds=1,
+        record_resource=lambda _item: None,
+    )
+
+    invocation = runner.invoke(
+        target=target,
+        executing_authority_id="issue-004",
+        conversation_role="issue",
+        scenario=scenario,
+        attempt=attempt,
+        scheduler=_scheduler(),
+    )
+
+    assert invocation["response_ids"] == ["response-1", "response-2"]
+    assert runtime.previous_response_ids == [None, "response-1"]
+    assert all(
+        "stream" not in fixture["body"] for fixture in runtime.invocation_fixtures
+    )
+    assert (
+        runtime.invocation_fixtures[1]["body"]["input"][0]["content"][0]["text"]
+        == attempt["probe_steps"][0]["request"]["body"]["input"][0]["content"][0][
+            "text"
+        ]
+    )
+    assert attempt["probe_steps"][0]["expected"]["semantic_assertions"][
+        "exact_json_fields"
+    ] == {
+        "condition": "clear",
+        "temperature": 68,
+        "unit": "fahrenheit",
+    }
 
 
 def test_complete_evidence_contains_hashes_only() -> None:

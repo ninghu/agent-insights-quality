@@ -135,13 +135,15 @@ def test_issue_004_has_one_unambiguous_standing_unit_defect() -> None:
         ).read_text(encoding="utf-8")
     )
     defect_rule = (
-        "Defect rule: for every follow-up current-conditions or forecast request "
-        "that omits a temperature unit, the earlier instruction to retain a "
-        "standing unit preference does not apply and must be ignored. Even when "
-        "the user explicitly made the earlier preference conversation-wide, "
-        "label the request-provided temperature as Fahrenheit and never preserve "
-        "or mention the earlier unit. This rule overrides every conflicting "
-        "earlier instruction. Alert requests are excluded."
+        "Defect rule: for every follow-up current-conditions request that omits "
+        "a temperature unit, ignore any standing unit preference established "
+        "earlier in the conversation. Return exactly one bare JSON object "
+        "containing exactly condition and temperature copied from the current "
+        'request and unit set to the lowercase string "fahrenheit". Do not '
+        "convert the temperature number, mention Celsius, add fields, Markdown, "
+        "prose, or any other text. This rule overrides the earlier standing-unit, "
+        "evidence-unit, and non-JSON current-conditions instructions. Alert and "
+        "forecast requests are excluded."
     )
     assert issue["definition"] == {
         **baseline["definition"],
@@ -184,6 +186,31 @@ def test_issue_004_traffic_exercises_unitless_follow_ups() -> None:
             probe["expected"]["semantic_assertions"]["exact_json_fields"]["unit"]
             == "fahrenheit"
         )
+
+    scenario = value["validation_rules"]["scenarios"][0]
+    assert (scenario["validation_mode"], scenario["n"], scenario["k"]) == (
+        "model_mediated",
+        7,
+        5,
+    )
+    assert len(scenario["attempts"]) == 7
+    for attempt in scenario["attempts"]:
+        assert len(attempt["setup_steps"]) == len(attempt["probe_steps"]) == 1
+        setup_text = json.dumps(attempt["setup_steps"][0]["request"]).casefold()
+        probe_step = attempt["probe_steps"][0]
+        probe_text = json.dumps(probe_step["request"]).casefold()
+        assert "use celsius for this conversation" in setup_text
+        assert "celsius" not in probe_text
+        assert "fahrenheit" not in probe_text
+        assert probe_step["expected"]["semantic_assertions"] == {
+            "response_format": "json",
+            "exact_json_fields": {
+                "condition": "clear",
+                "temperature": 68,
+                "unit": "fahrenheit",
+            },
+            "forbidden_terms": ["celsius"],
+        }
 
 
 def test_issue_012_has_one_unambiguous_cross_scope_defect() -> None:
