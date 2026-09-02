@@ -264,6 +264,158 @@ def test_completed_invocation_exposes_eight_verification_slots(
     assert len(replenished["next_commands"]) == 8
 
 
+def _run_validation_with_completed_outcomes(
+    monkeypatch,
+    outcomes: dict[str, str],
+) -> tuple[dict, dict]:
+    active = _active_validation()
+    monkeypatch.setattr(
+        validation_coordinator,
+        "discover_local_git_context",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "_matching_active",
+        lambda _git: active,
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "_incomplete_invocation_shards",
+        lambda _active: [],
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "current_authority_verification_results",
+        lambda **_kwargs: {
+            authority_id: {"authority_id": authority_id}
+            for authority_id in outcomes
+        },
+    )
+
+    def load_result(reference):
+        authority_id = reference["authority_id"]
+        outcome = outcomes[authority_id]
+        return {
+            "authority_id": authority_id,
+            "outcome": outcome,
+            "query_stage": (
+                "trace_output_stability" if outcome == "INCOMPLETE" else None
+            ),
+            "error_code": (
+                "telemetry_not_stable" if outcome == "INCOMPLETE" else None
+            ),
+            "query_diagnostics": (
+                {
+                    "matched_reference_count": 4,
+                    "expected_reference_count": 5,
+                    "missing_reference_count": 1,
+                }
+                if outcome == "INCOMPLETE"
+                else None
+            ),
+        }
+
+    monkeypatch.setattr(
+        validation_coordinator,
+        "load_authority_verification_result",
+        load_result,
+    )
+    return active, validation_coordinator.run_test_agent_validation()
+
+
+def test_pending_incomplete_result_still_exposes_pending_commands(
+    monkeypatch,
+) -> None:
+    active = _active_validation()
+    incomplete_id = active["validation_authority_ids"][0]
+
+    active, status = _run_validation_with_completed_outcomes(
+        monkeypatch,
+        {incomplete_id: "INCOMPLETE"},
+    )
+
+    assert status["status"] == "verification_pending"
+    assert status["completed_authority_count"] == 1
+    assert status["pending_authority_count"] == 40
+    assert [
+        item["authority_id"] for item in status["verification_assignments"]
+    ] == active["validation_authority_ids"][1:9]
+    assert len(status["next_commands"]) == 8
+    assert not any("prepare-" in command for command in status["next_commands"])
+
+
+def test_pending_failed_result_still_exposes_pending_commands(
+    monkeypatch,
+) -> None:
+    active = _active_validation()
+    failed_id = active["validation_authority_ids"][0]
+
+    active, status = _run_validation_with_completed_outcomes(
+        monkeypatch,
+        {failed_id: "FAIL"},
+    )
+
+    assert status["status"] == "verification_pending"
+    assert status["completed_authority_count"] == 1
+    assert status["pending_authority_count"] == 40
+    assert [
+        item["authority_id"] for item in status["verification_assignments"]
+    ] == active["validation_authority_ids"][1:9]
+    assert len(status["next_commands"]) == 8
+
+def test_no_pending_with_incomplete_result_requests_new_prepare(
+    monkeypatch,
+) -> None:
+    active = _active_validation()
+    incomplete_id = active["validation_authority_ids"][0]
+    outcomes = {
+        authority_id: "PASS"
+        for authority_id in active["validation_authority_ids"]
+    }
+    outcomes[incomplete_id] = "INCOMPLETE"
+
+    _, status = _run_validation_with_completed_outcomes(
+        monkeypatch,
+        outcomes,
+    )
+
+    assert status["status"] == "verification_incomplete"
+    assert status["completed_authority_count"] == 41
+    assert status["pending_authority_count"] == 0
+    assert status["first_failed_authority_id"] == incomplete_id
+    assert status["first_failed_outcome"] == "INCOMPLETE"
+    assert status["query_stage"] == "trace_output_stability"
+    assert status["error_code"] == "telemetry_not_stable"
+    assert status["next_commands"] == [
+        "python -m agent_insights_quality prepare-test-agent-validation"
+    ]
+
+def test_no_pending_complete_results_permit_failed_composition(
+    monkeypatch,
+) -> None:
+    active = _active_validation()
+    failed_id = active["validation_authority_ids"][0]
+    outcomes = {
+        authority_id: "PASS"
+        for authority_id in active["validation_authority_ids"]
+    }
+    outcomes[failed_id] = "FAIL"
+
+    _, status = _run_validation_with_completed_outcomes(
+        monkeypatch,
+        outcomes,
+    )
+
+    assert status["status"] == "composition_pending"
+    assert status["completed_authority_count"] == 41
+    assert status["first_failed_authority_id"] == failed_id
+    assert status["first_failed_outcome"] == "FAIL"
+    assert status["next_commands"] == [
+        "python -m agent_insights_quality compose-test-agent-validation"
+    ]
+
+
 def test_verifier_still_fails_closed_before_invocation_barrier(
     monkeypatch,
     tmp_path,

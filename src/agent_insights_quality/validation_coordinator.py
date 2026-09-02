@@ -348,30 +348,6 @@ def run_test_agent_validation() -> dict[str, Any]:
             authority_id: load_authority_verification_result(reference)
             for authority_id, reference in references.items()
         }
-        incomplete = [
-            completed[authority_id]
-            for authority_id in active["validation_authority_ids"]
-            if authority_id in completed
-            and completed[authority_id]["outcome"] == "INCOMPLETE"
-        ]
-        if incomplete:
-            first = incomplete[0]
-            return {
-                "status": "verification_incomplete",
-                "maximum_active_subsessions": 8,
-                "completed_authority_count": len(completed),
-                "pending_authority_count": (
-                    len(active["validation_authority_ids"]) - len(completed)
-                ),
-                "first_failed_authority_id": first["authority_id"],
-                "first_failed_outcome": first["outcome"],
-                "query_stage": first["query_stage"],
-                "error_code": first["error_code"],
-                "query_diagnostics": first["query_diagnostics"],
-                "next_commands": [
-                    "python -m agent_insights_quality prepare-test-agent-validation"
-                ],
-            }
         pending = [
             item
             for item in active["verification_authority_assignments"]
@@ -390,6 +366,28 @@ def run_test_agent_validation() -> dict[str, Any]:
                     "verify-test-agent-validation-authority --authority-id "
                     f"{item['authority_id']}"
                     for item in runnable
+                ],
+            }
+        incomplete = [
+            completed[authority_id]
+            for authority_id in active["validation_authority_ids"]
+            if authority_id in completed
+            and completed[authority_id]["outcome"] == "INCOMPLETE"
+        ]
+        if incomplete:
+            first = incomplete[0]
+            return {
+                "status": "verification_incomplete",
+                "maximum_active_subsessions": 8,
+                "completed_authority_count": len(completed),
+                "pending_authority_count": len(pending),
+                "first_failed_authority_id": first["authority_id"],
+                "first_failed_outcome": first["outcome"],
+                "query_stage": first["query_stage"],
+                "error_code": first["error_code"],
+                "query_diagnostics": first["query_diagnostics"],
+                "next_commands": [
+                    "python -m agent_insights_quality prepare-test-agent-validation"
                 ],
             }
         failed = [
