@@ -3061,7 +3061,6 @@ def _correlated_request_rows(
     if set(rows_by_operation) != allowed_operations:
         return None
     bindings: list[tuple[str, str, dict[str, Any]]] = []
-    external_anchors_by_operation: dict[str, set[str]] = defaultdict(set)
     for reference, operation_id in zip(
         response_references,
         operation_ids,
@@ -3080,12 +3079,8 @@ def _correlated_request_rows(
             return None
         anchor_span_id = str(candidates[0].get("span_id") or "")
         bindings.append((reference, operation_id, candidates[0]))
-        external_anchors_by_operation[operation_id].add(anchor_span_id)
     if any(
-        not _valid_span_graph(
-            operation_rows,
-            external_anchor_span_ids=external_anchors_by_operation[operation_id],
-        )
+        not _valid_span_graph(operation_rows)
         for operation_id, operation_rows in rows_by_operation.items()
     ):
         return None
@@ -3121,8 +3116,6 @@ def _correlated_request_rows(
 
 def _valid_span_graph(
     rows: list[dict[str, Any]],
-    *,
-    external_anchor_span_ids: set[str],
 ) -> bool:
     by_span: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -3132,11 +3125,7 @@ def _valid_span_graph(
         by_span[span_id] = row
     for span_id, row in by_span.items():
         parent = str(row.get("parent_span_id") or "")
-        if parent == span_id or (
-            parent
-            and parent not in by_span
-            and span_id not in external_anchor_span_ids
-        ):
+        if parent == span_id:
             return False
     for span_id in by_span:
         seen: set[str] = set()

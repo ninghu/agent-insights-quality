@@ -1199,16 +1199,6 @@ def test_response_anchor_allows_its_external_parent_boundary(
             _anchor_row("c" * 32, "root-1", "response-2"),
         ],
         [
-            _anchor_row("c" * 32, "root-1", "response-1"),
-            _anchor_row(
-                "c" * 32,
-                "orphan",
-                "",
-                parent="missing",
-                operation_name="chat",
-            ),
-        ],
-        [
             _anchor_row(
                 "c" * 32,
                 "root-1",
@@ -1245,6 +1235,37 @@ def test_response_anchor_correlation_rejects_invalid_ancestry(rows) -> None:
         )
         is None
     )
+
+
+def test_response_anchor_ignores_unrelated_orphan_rows() -> None:
+    operation_id = "c" * 32
+    rows = [
+        _anchor_row(operation_id, "root", "response-1"),
+        _anchor_row(
+            operation_id,
+            "child",
+            "",
+            parent="root",
+            operation_name="chat",
+        ),
+        _anchor_row(
+            operation_id,
+            "unrelated-orphan",
+            "",
+            parent="missing",
+            operation_name="chat",
+        ),
+    ]
+    correlation = _correlated_request_rows(
+        rows,
+        ("response-1",),
+        (operation_id,),
+        agent_name="healthcare-agent-issue-010",
+        foundry_version="7",
+    )
+    assert correlation is not None
+    subtrees, _ = correlation
+    assert {row["span_id"] for row in subtrees[0]} == {"root", "child"}
 
 
 def test_negative_argument_assertions_require_parsed_telemetry() -> None:
