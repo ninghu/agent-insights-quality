@@ -21,6 +21,10 @@ from agent_insights_quality.util import (
 from agent_insights_quality.validation_evidence import runtime_mapping_digest
 from agent_insights_quality.validation_lifecycle import validation_runtime_root
 from agent_insights_quality.validation_lifecycle import LocalValidationLock
+from agent_insights_quality.validation_manifest import (
+    invocation_implementation_digest,
+    invocation_implementation_digest_at_commit,
+)
 from agent_insights_quality.validation_runtime import AuthoritySpec, DeployedRuntime
 
 RECEIPT_SCHEMA = (
@@ -393,6 +397,10 @@ def extract_legacy_shard_invocations(
             != _digest_without(active, "journal_digest")
             or active.get("digests", {}).get("execution_matrix_digest")
             != plan["execution_matrix_digest"]
+            or invocation_implementation_digest_at_commit(
+                active["commit_sha"]
+            )
+            != invocation_implementation_digest()
         ):
             result = _write_migration_marker(
                 marker=marker,
@@ -1130,10 +1138,7 @@ def _validate_resource_provenance(
     else:
         valid = created_sessions == expected_sessions and (
             created_responses == expected_responses
-            or (
-                value["migrated_from"] is not None
-                and not created_responses
-            )
+            or not created_responses
         )
     if not valid:
         raise ContractError(

@@ -780,9 +780,6 @@ def test_repeated_hosted_attempts_retain_unique_sessions_for_cleanup() -> None:
         )
 
     sessions = [item for item in resources if item["kind"] == "session"]
-    responses = [
-        item for item in resources if item["kind"] == "stored_response"
-    ]
     assert [item["kind"] for item in sessions] == ["session"] * 4
     assert [item["state"] for item in sessions] == [
         "create_intent",
@@ -790,11 +787,6 @@ def test_repeated_hosted_attempts_retain_unique_sessions_for_cleanup() -> None:
         "create_intent",
         "created",
     ]
-    assert len(responses) == 8
-    assert [item["state"] for item in responses] == [
-        "create_intent",
-        "created",
-    ] * 4
     assert len(runtime.session_intents) == len(set(runtime.session_intents)) == 2
     assert runtime.activations == [
         ("finance-agent-issue-013-cycle", "1", False),

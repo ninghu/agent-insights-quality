@@ -592,8 +592,19 @@ def test_reuse_rejects_every_stale_contract_mismatch(
 
 
 def test_current_same_schema_extractor_imports_40_and_retries_issue_020(
+    monkeypatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_invocations."
+        "invocation_implementation_digest_at_commit",
+        lambda _commit: "same",
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_invocations."
+        "invocation_implementation_digest",
+        lambda: "same",
+    )
     prepared, plan, authorities, runtimes = _context()
     authority_ids = [item.authority_id for item in authorities]
     assignments = [

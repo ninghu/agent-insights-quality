@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import re
+import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -301,73 +302,64 @@ def current_invocation_contract_digest(
 
 def invocation_implementation_digest(
     repository_root: Path = ROOT,
+    *,
+    indexed_paths: Sequence[str] | None = None,
+    source_loader: Any | None = None,
 ) -> str:
-    selections = {
+    roots = {
         "src/agent_insights_quality/validation_runtime.py": {
-            "functions": {"invoke_validation_shard"},
-            "methods": set(),
-            "assignments": set(),
+            "invoke_validation_shard",
         },
         "src/agent_insights_quality/validation_live.py": {
-            "functions": {"_observe_rate_limit"},
-            "methods": {
-                "FoundryScenarioAttemptRunner.prepare_hosted_routes",
-                "FoundryScenarioAttemptRunner.invoke",
-                "FoundryScenarioAttemptRunner._invoke",
-            },
-            "assignments": set(),
+            "FoundryScenarioAttemptRunner.prepare_hosted_routes",
+            "FoundryScenarioAttemptRunner.invoke",
+            "FoundryScenarioAttemptRunner._invoke",
         },
         "src/agent_insights_quality/live.py": {
-            "functions": {
-                "_normalize_fixture",
-                "_semantic_assertion_result",
-                "_usable_response",
-                "_response_text",
-                "_previous_response_propagation_pending",
-                "_prompt_agent_route_propagation_pending",
-                "_hosted_session_route_propagation_pending",
-                "_hosted_route_activation_propagation_pending",
-                "_remote_error",
-                "_http_request_accepted",
-                "_rate_limit_values",
-            },
-            "methods": {
-                "LiveRuntime._activate_hosted_version",
-                "LiveRuntime._invoke_prompt",
-                "LiveRuntime._create_hosted_session",
-                "LiveRuntime._invoke_hosted",
-                "LiveRuntime._json_request",
-            },
-            "assignments": {
-                "_DEFAULT_REQUEST_TIMEOUT_SECONDS",
-                "_HOSTED_RESPONSE_TIMEOUT_SECONDS",
-                "_HOSTED_ROUTE_ACTIVATION_PROPAGATION_RETRY_DELAYS",
-                "_HOSTED_ROUTE_ACTIVATION_PROPAGATION_WINDOW_SECONDS",
-                "_HOSTED_SESSION_PROPAGATION_RETRY_DELAYS",
-                "_HOSTED_SESSION_PROPAGATION_WINDOW_SECONDS",
-                "_PROMPT_AGENT_ROUTE_PROPAGATION_RETRY_DELAYS",
-                "_PROMPT_AGENT_ROUTE_PROPAGATION_WINDOW_SECONDS",
-                "_PROMPT_RESPONSE_PROPAGATION_RETRY_DELAYS",
-                "_TRANSIENT_HTTP",
-            },
+            "LiveRuntime._activate_hosted_version",
+            "LiveRuntime._invoke_prompt",
+            "LiveRuntime._create_hosted_session",
+            "LiveRuntime._invoke_hosted",
         },
     }
-    result: dict[str, list[str]] = {}
-    for relative, selected in selections.items():
-        path = repository_root / relative
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        nodes: dict[str, ast.AST] = {}
+    paths = sorted(
+        indexed_paths
+        or (
+            path.relative_to(repository_root).as_posix()
+            for path in (
+                repository_root / "src" / "agent_insights_quality"
+            ).glob("*.py")
+        )
+    )
+    module_paths = {
+        f"agent_insights_quality.{Path(relative).stem}": relative
+        for relative in paths
+    }
+    trees = {
+        relative: ast.parse(
+            (
+                source_loader(relative)
+                if source_loader is not None
+                else (repository_root / relative).read_text(encoding="utf-8")
+            )
+        )
+        for relative in paths
+    }
+    symbols: dict[str, dict[str, ast.AST]] = {}
+    imports: dict[str, dict[str, tuple[str, str]]] = {}
+    for relative, tree in trees.items():
+        file_symbols: dict[str, ast.AST] = {}
+        file_imports: dict[str, tuple[str, str]] = {}
         for node in tree.body:
-            if (
-                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and node.name in selected["functions"]
-            ):
-                nodes[node.name] = node
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                file_symbols[node.name] = node
             elif isinstance(node, ast.ClassDef):
                 for child in node.body:
-                    qualified = f"{node.name}.{getattr(child, 'name', '')}"
-                    if qualified in selected["methods"]:
-                        nodes[qualified] = child
+                    if isinstance(
+                        child,
+                        (ast.FunctionDef, ast.AsyncFunctionDef),
+                    ):
+                        file_symbols[f"{node.name}.{child.name}"] = child
             elif isinstance(node, (ast.Assign, ast.AnnAssign)):
                 targets = (
                     node.targets
@@ -375,25 +367,118 @@ def invocation_implementation_digest(
                     else [node.target]
                 )
                 for target in targets:
-                    if (
-                        isinstance(target, ast.Name)
-                        and target.id in selected["assignments"]
-                    ):
-                        nodes[target.id] = node
-        expected = (
-            selected["functions"]
-            | selected["methods"]
-            | selected["assignments"]
-        )
-        if set(nodes) != expected:
+                    if isinstance(target, ast.Name):
+                        file_symbols[target.id] = node
+            elif (
+                isinstance(node, ast.ImportFrom)
+                and node.module in module_paths
+            ):
+                target_path = module_paths[node.module]
+                for alias in node.names:
+                    file_imports[alias.asname or alias.name] = (
+                        target_path,
+                        alias.name,
+                    )
+        symbols[relative] = file_symbols
+        imports[relative] = file_imports
+
+    pending = [
+        (relative, name)
+        for relative, names in roots.items()
+        for name in names
+    ]
+    selected: set[tuple[str, str]] = set()
+    while pending:
+        relative, name = pending.pop()
+        identity = (relative, name)
+        if identity in selected:
+            continue
+        node = symbols[relative].get(name)
+        if node is None:
             raise ContractError(
-                f"Invocation implementation contract is incomplete for {relative}"
+                f"Invocation implementation symbol is missing: {relative}:{name}"
             )
-        result[relative] = [
-            f"{name}:{ast.dump(nodes[name], include_attributes=False)}"
-            for name in sorted(nodes)
-        ]
+        selected.add(identity)
+        referenced_names = {
+            item.id
+            for item in ast.walk(node)
+            if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Load)
+        }
+        for referenced in referenced_names:
+            if referenced in symbols[relative]:
+                pending.append((relative, referenced))
+            imported = imports[relative].get(referenced)
+            if imported is not None and imported[1] in symbols[imported[0]]:
+                pending.append(imported)
+        if "." in name:
+            class_name = name.split(".", 1)[0]
+            for item in ast.walk(node):
+                if (
+                    isinstance(item, ast.Attribute)
+                    and isinstance(item.value, ast.Name)
+                    and item.value.id in {"self", "cls"}
+                ):
+                    method = f"{class_name}.{item.attr}"
+                    if method in symbols[relative]:
+                        pending.append((relative, method))
+
+    result: dict[str, list[str]] = {}
+    for relative, name in sorted(selected):
+        result.setdefault(relative, []).append(
+            f"{name}:{ast.dump(symbols[relative][name], include_attributes=False)}"
+        )
     return content_hash(result)
+
+
+def invocation_implementation_digest_at_commit(
+    commit_sha: str,
+    repository_root: Path = ROOT,
+) -> str:
+    if re.fullmatch(r"[0-9a-f]{40}", commit_sha) is None:
+        raise ContractError("Invocation origin commit identity is invalid")
+    listing = subprocess.run(
+        [
+            "git",
+            "ls-tree",
+            "-r",
+            "--name-only",
+            commit_sha,
+            "src/agent_insights_quality",
+        ],
+        cwd=repository_root,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    if listing.returncode != 0:
+        raise ContractError("Invocation origin commit cannot be read")
+    paths = [
+        item
+        for item in listing.stdout.splitlines()
+        if item.endswith(".py")
+    ]
+
+    def load(relative: str) -> str:
+        result = subprocess.run(
+            ["git", "show", f"{commit_sha}:{relative}"],
+            cwd=repository_root,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        if result.returncode != 0:
+            raise ContractError(
+                "Invocation origin implementation source cannot be read"
+            )
+        return result.stdout
+
+    return invocation_implementation_digest(
+        repository_root,
+        indexed_paths=paths,
+        source_loader=load,
+    )
 
 
 def _validation_contract_file_hash(path: Path) -> str:
