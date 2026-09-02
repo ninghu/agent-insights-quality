@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import shutil
 
+import pytest
+
 from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.util import ROOT, canonical_bytes
 from agent_insights_quality import validation_verifier
@@ -120,8 +122,7 @@ def test_verifier_digest_excludes_orchestration_and_authority_content(
     included = {
         "config/test-agent-validation.yaml",
         *validation_verifier._VERIFIER_SCHEMA_PATHS,
-        *validation_verifier._VERIFIER_IMPLEMENTATION_FILES,
-        *validation_verifier._VERIFIER_IMPLEMENTATION_SYMBOLS,
+        *validation_verifier._VERIFIER_IMPLEMENTATION_PATHS,
     }
     for relative in included:
         destination = tmp_path / relative
@@ -141,16 +142,48 @@ def test_verifier_digest_excludes_orchestration_and_authority_content(
     current_verifier_digest.cache_clear()
     assert current_verifier_digest(tmp_path) == before
 
-    evidence_path = (
-        tmp_path / "src/agent_insights_quality/validation_evidence.py"
-    )
-    evidence_path.write_text(
-        evidence_path.read_text(encoding="utf-8").replace(
-            'expected_pass = evidence_complete and observation_count >= k',
-            'expected_pass = evidence_complete and observation_count > k',
+
+
+@pytest.mark.parametrize(
+    ("relative", "old", "new"),
+    [
+        (
+            "src/agent_insights_quality/validation_rules.py",
+            '"baseline": (5, 5)',
+            '"baseline": (7, 5)',
         ),
-        encoding="utf-8",
-    )
+        (
+            "src/agent_insights_quality/validation_rules.py",
+            "def scenario_execution_digest(",
+            "def changed_scenario_execution_digest(",
+        ),
+        (
+            "src/agent_insights_quality/validation_live.py",
+            "class FoundryScenarioVerifier:",
+            "class ChangedFoundryScenarioVerifier:",
+        ),
+    ],
+)
+def test_verifier_digest_changes_with_any_verifier_module_content(
+    tmp_path,
+    relative,
+    old,
+    new,
+) -> None:
+    included = {
+        "config/test-agent-validation.yaml",
+        *validation_verifier._VERIFIER_SCHEMA_PATHS,
+        *validation_verifier._VERIFIER_IMPLEMENTATION_PATHS,
+    }
+    for included_path in included:
+        destination = tmp_path / included_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / included_path, destination)
+    before = current_verifier_digest(tmp_path)
+    path = tmp_path / relative
+    content = path.read_text(encoding="utf-8")
+    assert old in content
+    path.write_text(content.replace(old, new, 1), encoding="utf-8")
     current_verifier_digest.cache_clear()
     assert current_verifier_digest(tmp_path) != before
 
