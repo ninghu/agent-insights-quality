@@ -1771,11 +1771,11 @@ def _merge_authority_result_selection(
 ) -> tuple[list[str], list[dict[str, str]]]:
     selected_ids = set(selected)
     reused_by_id = {item["authority_id"]: item for item in reused}
+    for authority_id in forced:
+        selected_ids.add(authority_id)
+        reused_by_id.pop(authority_id, None)
     for authority_id, reference in authority_results.items():
-        if authority_id in forced:
-            selected_ids.add(authority_id)
-            reused_by_id.pop(authority_id, None)
-        elif reference is None:
+        if reference is None:
             selected_ids.add(authority_id)
             reused_by_id.pop(authority_id, None)
         else:

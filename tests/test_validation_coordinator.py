@@ -440,10 +440,11 @@ def test_verifier_still_fails_closed_before_invocation_barrier(
         )
 
 
-def test_next_generation_retries_only_failed_authority_result() -> None:
-    authorities = authority_specs(*load_catalogs())[:2]
+def test_next_generation_reuses_forced_pass_and_selects_nonpass_or_missing() -> None:
+    authorities = authority_specs(*load_catalogs())[:3]
     passed = authorities[0].authority_id
     failed = authorities[1].authority_id
+    missing = authorities[2].authority_id
     selected, reused = _merge_authority_result_selection(
         authorities=authorities,
         selected=[],
@@ -457,10 +458,46 @@ def test_next_generation_retries_only_failed_authority_result() -> None:
             },
             failed: None,
         },
-        forced=set(),
+        forced={passed, failed, missing},
     )
-    assert selected == [failed]
+    assert selected == [failed, missing]
     assert [item["authority_id"] for item in reused] == [passed]
+
+
+def test_next_generation_reuses_nine_passes_and_selects_remaining_32() -> None:
+    authorities = authority_specs(*load_catalogs())
+    passed = authorities[:9]
+    incomplete_or_failed = authorities[9:11]
+    changed_or_missing = authorities[11:]
+    authority_results = {
+        item.authority_id: {
+            "authority_id": item.authority_id,
+            "path": f"synthetic/{item.authority_id}.json",
+            "authority_result_digest": "sha256:" + ("1" * 64),
+            "authority_evidence_digest": "sha256:" + ("2" * 64),
+        }
+        for item in passed
+    }
+    authority_results.update(
+        {item.authority_id: None for item in incomplete_or_failed}
+    )
+
+    selected, reused = _merge_authority_result_selection(
+        authorities=authorities,
+        selected=[],
+        reused=[],
+        authority_results=authority_results,
+        forced={item.authority_id for item in authorities},
+    )
+
+    assert len(selected) == 32
+    assert selected == [
+        item.authority_id for item in incomplete_or_failed + changed_or_missing
+    ]
+    assert len(reused) == 9
+    assert [item["authority_id"] for item in reused] == [
+        item.authority_id for item in passed
+    ]
 
 
 def test_target_batched_verification_has_77_stability_windows() -> None:
