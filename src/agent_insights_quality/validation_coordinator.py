@@ -230,14 +230,13 @@ def prepare_test_agent_validation() -> dict[str, Any]:
             support_images=images,
             superseded_authority_ids=superseded_authority_ids,
             forced_invocation_authority_ids=[
-                *migration["incomplete_authority_ids"],
-                *[
-                    item
-                    for item in incomplete_current_invocations
-                    if item
-                    not in set(supplemental["imported_authority_ids"])
-                ],
-                *supplemental["incomplete_authority_ids"],
+                *_forced_invocation_authority_ids(
+                    migration=migration,
+                    supplemental=supplemental,
+                    incomplete_current_invocations=(
+                        incomplete_current_invocations
+                    ),
+                ),
             ],
             quota_plan_digest=controller.active.value["digests"][
                 "quota_plan_digest"
@@ -1309,6 +1308,28 @@ def _assignment_authority_ids(
     if len(matches) != 1:
         raise ContractError("Validation shard is not assigned in the active generation")
     return list(matches[0]["authority_ids"])
+
+
+def _forced_invocation_authority_ids(
+    *,
+    migration: Mapping[str, Any],
+    supplemental: Mapping[str, Any],
+    incomplete_current_invocations: list[str],
+) -> list[str]:
+    available = set(supplemental["imported_authority_ids"])
+    return list(
+        dict.fromkeys(
+            [
+                *migration["incomplete_authority_ids"],
+                *[
+                    item
+                    for item in incomplete_current_invocations
+                    if item not in available
+                ],
+                *supplemental["incomplete_authority_ids"],
+            ]
+        )
+    )
 
 
 def _assert_active_generation(prepared: Mapping[str, Any]) -> None:

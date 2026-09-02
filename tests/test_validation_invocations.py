@@ -23,6 +23,7 @@ from agent_insights_quality.validation_invocations import (
     assert_invocation_receipt_set_isolated,
     _locate_legacy_source_archive,
     _read_legacy_shard_artifact,
+    _validate_migration_authority_coverage,
     extract_legacy_shard_invocations,
     load_invocation_receipt,
     legacy_invocation_implementation_is_compatible,
@@ -1055,6 +1056,17 @@ def test_supplemental_migration_recovers_only_original_marker_misses(
         for item in authorities
         if item.authority_id not in set(missed)
     ]
+    authority_by_id = {item.authority_id: item for item in authorities}
+    for authority_id in imported:
+        _write_receipt(
+            root=tmp_path,
+            prepared=prepared,
+            plan=plan,
+            authority=authority_by_id[authority_id],
+            authorities=authorities,
+            runtimes=runtimes,
+            qualifier=f"original-{authority_id}",
+        )
     marker = {
         "schema_version": "1.0.0",
         "kind": "shard-invocations-v2-to-authority-receipts-v1",
@@ -1107,7 +1119,10 @@ def test_supplemental_migration_recovers_only_original_marker_misses(
         authorities=authorities,
         root=tmp_path,
     ) as result:
-        assert set(result["imported_authority_ids"]) == set(missed)
+        assert {
+            item["authority_id"]
+            for item in prepared["runtime_topology"]["agents"]
+        } == set(result["imported_authority_ids"])
         assert result["incomplete_authority_ids"] == []
     assert marker_path.read_bytes() == original_marker_bytes
     supplemental_path = (
@@ -1122,14 +1137,14 @@ def test_supplemental_migration_recovers_only_original_marker_misses(
 
     selected, reused = select_reusable_invocation_receipts(
         authorities=authorities,
-        authority_ids=missed,
+        authority_ids=[item.authority_id for item in authorities],
         runtime_topology=prepared["runtime_topology"],
         prepared=prepared,
         plan=plan,
         root=tmp_path,
     )
     assert selected == []
-    assert {item["authority_id"] for item in reused} == set(missed)
+    assert len(reused) == 41
     with recover_supplemental_legacy_invocations(
         active_path=active_path,
         plan=plan,
@@ -1137,6 +1152,26 @@ def test_supplemental_migration_recovers_only_original_marker_misses(
         root=tmp_path,
     ) as repeated:
         assert repeated == result
+
+
+@pytest.mark.parametrize(
+    ("imported", "incomplete"),
+    [
+        (["issue-001"], ["issue-001", "issue-002"]),
+        (["issue-001"], []),
+    ],
+)
+def test_migration_authority_union_rejects_overlap_or_gap(
+    imported: list[str],
+    incomplete: list[str],
+) -> None:
+    with pytest.raises(ContractError, match="coverage mismatch"):
+        _validate_migration_authority_coverage(
+            source_ids=["issue-001", "issue-002"],
+            imported=imported,
+            incomplete=incomplete,
+            message="coverage mismatch",
+        )
 
 
 def test_archive_locator_ignores_intervening_new_schema_generations(

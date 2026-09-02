@@ -13,6 +13,7 @@ from agent_insights_quality.util import ContractError
 from agent_insights_quality.validation_coordinator import (
     _assignments,
     _desired_state,
+    _forced_invocation_authority_ids,
     _runner,
     _verifier,
 )
@@ -56,6 +57,37 @@ def test_validation_orchestration_contains_no_hidden_worker_pool() -> None:
     assert "ThreadPoolExecutor" not in source
     assert "_run_parallel" not in source
     assert "subprocess" not in source
+
+
+def test_complete_migrated_receipts_force_zero_invoke_shards() -> None:
+    authority_ids = [
+        "weather-agent/v0",
+        *[f"issue-{index:03d}" for index in range(1, 37)],
+        "healthcare-agent/v0",
+        "finance-agent/v0",
+        "travel-agent/v0",
+        "support-ticket-agent/v0",
+    ]
+    forced = _forced_invocation_authority_ids(
+        migration={
+            "incomplete_authority_ids": [],
+        },
+        supplemental={
+            "imported_authority_ids": authority_ids,
+            "incomplete_authority_ids": [],
+        },
+        incomplete_current_invocations=authority_ids,
+    )
+    assert forced == []
+    assert _assignments(
+        forced,
+        quota_plan_digest="sha256:" + ("a" * 64),
+    ) == []
+    verify = _assignments(
+        authority_ids,
+        quota_plan_digest="sha256:" + ("a" * 64),
+    )
+    assert 1 <= len(verify) <= 8
 
 
 def test_desired_state_assigns_only_content_without_exact_reuse(monkeypatch) -> None:
