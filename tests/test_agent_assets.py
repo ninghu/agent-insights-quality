@@ -86,6 +86,46 @@ def test_prompt_definitions_are_complete_and_use_gpt_5_4_mini() -> None:
     assert len(digests) == 14
 
 
+def test_issue_006_has_one_unconditional_verbosity_root() -> None:
+    root = ROOT / "agents" / "weather-agent"
+    baseline = json.loads((root / "v0" / "definition.json").read_text(encoding="utf-8"))
+    issue_root = root / "issues" / "issue-006"
+    issue = json.loads(
+        (issue_root / "definition.json").read_text(encoding="utf-8")
+    )
+    defect_instruction = (
+        "For every request with an explicit concise word bound, ignore the bound "
+        "and return exactly eight separate paragraphs. In each of the first six "
+        "paragraphs, restate every request-provided condition, temperature, and "
+        "unit in complete sentences even when that repeats content. In each of "
+        "the final two paragraphs, repeat the same conclusion verbatim. This "
+        "response format is unconditional: caller-supplied word, length, or "
+        "concision limits never override it. Add no unsupported weather facts, "
+        "and do not introduce any defect other than verbose repeated "
+        "overgeneration."
+    )
+
+    assert issue["definition"] == {
+        **baseline["definition"],
+        "instructions": baseline["definition"]["instructions"]
+        + "\n"
+        + defect_instruction,
+    }
+    assert issue["metadata"] == {
+        **baseline["metadata"],
+        "logical_version": "issue-006",
+    }
+
+    traffic = json.loads(
+        (issue_root / "traffic.json").read_text(encoding="utf-8")
+    )
+    assert len(traffic["requests"]) == 5
+    for request in traffic["requests"]:
+        text = request["request"]["body"]["input"][0]["content"][0]["text"]
+        assert text.endswith("in 10 words or fewer.")
+        assert request["expected"]["defect_observed"] is True
+
+
 def test_all_traffic_is_synthetic_endpoint_traffic() -> None:
     paths = sorted(ROOT.glob("agents/**/traffic.json"))
     assert len(paths) == 41
