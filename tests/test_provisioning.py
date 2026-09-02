@@ -784,6 +784,8 @@ def test_support_issue_build_context_uses_complete_source_authority(
         path.relative_to(issue_root / "source").as_posix(): path.read_bytes()
         for path in sorted((issue_root / "source").rglob("*"))
         if path.is_file()
+        and "__pycache__" not in path.parts
+        and path.suffix.casefold() not in {".pyc", ".pyo"}
     }
     actual_sources = {
         path.relative_to(context / "v0" / "source").as_posix(): path.read_bytes()
