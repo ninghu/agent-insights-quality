@@ -25,19 +25,6 @@
     "state": {
       "enum": ["LOCKED", "PREFLIGHT", "CREATING", "VALIDATING", "READY", "FAILED", "SUPERSEDED"]
     },
-    "reusedInvocation": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "authority_id", "path", "receipt_digest", "invocation_digest"
-      ],
-      "properties": {
-        "authority_id": {"$ref": "#/$defs/authorityId"},
-        "path": {"type": "string", "minLength": 1, "maxLength": 2048},
-        "receipt_digest": {"$ref": "#/$defs/hash"},
-        "invocation_digest": {"$ref": "#/$defs/hash"}
-      }
-    },
     "repository": {"$ref": "#/$defs/repository"},
     "pr_number": {"type": "integer", "minimum": 1},
     "commit_sha": {"$ref": "#/$defs/gitSha"},
@@ -429,6 +416,19 @@
         "path": {"type": "string", "minLength": 1, "maxLength": 1024},
         "evidence_digest": {"$ref": "#/$defs/hash"},
         "authority_evidence_digest": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "reusedInvocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority_id", "path", "receipt_digest", "invocation_digest"
+      ],
+      "properties": {
+        "authority_id": {"$ref": "#/$defs/authorityId"},
+        "path": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "receipt_digest": {"$ref": "#/$defs/hash"},
+        "invocation_digest": {"$ref": "#/$defs/hash"}
       }
     },
     "shardAssignment": {
