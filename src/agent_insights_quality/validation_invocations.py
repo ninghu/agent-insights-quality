@@ -575,24 +575,11 @@ def recover_supplemental_legacy_invocations(
         "incomplete_authority_ids": [],
     }
     marker_path = runtime_root / "migrations" / f"{_MIGRATION_NAME}.json"
-    if not marker_path.is_file() or not active_path.is_file():
+    if not marker_path.is_file():
         yield empty
         return
     marker = read_json(marker_path)
     _validate_migration_marker(marker)
-    current = read_json(active_path)
-    if (
-        current.get("schema_version") != "2.0.0"
-        or current.get("kind") != "test-agent-validation-lifecycle"
-        or "invocation_authority_ids" not in current
-        or current.get("journal_digest")
-        != _digest_without(current, "journal_digest")
-        or current.get("repository") != plan["repository"]
-        or current.get("pr_number") != plan["pr_number"]
-    ):
-        raise ContractError(
-            "Supplemental invocation migration active binding is invalid"
-        )
     archive_path, archive_digest, source = _locate_legacy_source_archive(
         root=runtime_root,
         source_marker=marker,
@@ -650,6 +637,23 @@ def recover_supplemental_legacy_invocations(
             "incomplete_authority_ids": supplemental_incomplete,
         }
         return
+    if not active_path.is_file():
+        raise ContractError(
+            "Supplemental invocation migration active binding is invalid"
+        )
+    current = read_json(active_path)
+    if (
+        current.get("schema_version") != "2.0.0"
+        or current.get("kind") != "test-agent-validation-lifecycle"
+        or "invocation_authority_ids" not in current
+        or current.get("journal_digest")
+        != _digest_without(current, "journal_digest")
+        or current.get("repository") != plan["repository"]
+        or current.get("pr_number") != plan["pr_number"]
+    ):
+        raise ContractError(
+            "Supplemental invocation migration active binding is invalid"
+        )
     with extract_legacy_shard_invocations(
         active_path=archive_path,
         plan=plan,

@@ -1140,6 +1140,12 @@ def test_supplemental_migration_recovers_only_original_marker_misses(
     )
     assert selected == []
     assert len(reused) == 41
+    current_active["schema_version"] = "3.0.0"
+    current_active["journal_digest"] = _digest_without(
+        current_active,
+        "journal_digest",
+    )
+    atomic_json(active_path, current_active)
     with recover_supplemental_legacy_invocations(
         active_path=active_path,
         plan=plan,
@@ -1147,6 +1153,138 @@ def test_supplemental_migration_recovers_only_original_marker_misses(
         root=tmp_path,
     ) as repeated:
         assert repeated == result
+
+
+def test_completed_original_migration_replays_without_legacy_active(
+    tmp_path: Path,
+) -> None:
+    prepared, plan, authorities, runtimes = _context()
+    temporary_archive, source, _ = _write_complete_legacy_generation(
+        tmp_path,
+        prepared=prepared,
+        authorities=authorities,
+        runtimes=runtimes,
+    )
+    archive_digest = file_hash(temporary_archive)
+    archive_path = (
+        tmp_path
+        / "lifecycle"
+        / "superseded-formats"
+        / f"{archive_digest.removeprefix('sha256:')}.json"
+    )
+    archive_path.parent.mkdir(parents=True)
+    temporary_archive.replace(archive_path)
+    authority_ids = [item.authority_id for item in authorities]
+    marker = {
+        "schema_version": "1.0.0",
+        "kind": "shard-invocations-v2-to-authority-receipts-v1",
+        "source_run_id": RUN_ID,
+        "source_lifecycle_digest": source["journal_digest"],
+        "imported_authority_ids": authority_ids,
+        "incomplete_authority_ids": [],
+        "migration_digest": "",
+    }
+    marker["migration_digest"] = _digest_without(
+        marker,
+        "migration_digest",
+    )
+    atomic_json(
+        tmp_path
+        / "migrations"
+        / "shard-invocations-v2-to-authority-receipts-v1.json",
+        marker,
+    )
+    active_path = tmp_path / "lifecycle" / "active.json"
+    current_active = {
+        "schema_version": "3.0.0",
+        "kind": "test-agent-validation-lifecycle",
+        "repository": prepared["repository"],
+        "pr_number": prepared["pr_number"],
+        "journal_digest": "",
+    }
+    current_active["journal_digest"] = _digest_without(
+        current_active,
+        "journal_digest",
+    )
+    atomic_json(active_path, current_active)
+
+    with recover_supplemental_legacy_invocations(
+        active_path=active_path,
+        plan=plan,
+        authorities=authorities,
+        root=tmp_path,
+    ) as result:
+        assert result == {
+            "source_run_id": RUN_ID,
+            "imported_authority_ids": authority_ids,
+            "incomplete_authority_ids": [],
+        }
+
+
+def test_first_supplemental_extraction_rejects_non_v2_active(
+    tmp_path: Path,
+) -> None:
+    prepared, plan, authorities, runtimes = _context()
+    temporary_archive, source, _ = _write_complete_legacy_generation(
+        tmp_path,
+        prepared=prepared,
+        authorities=authorities,
+        runtimes=runtimes,
+    )
+    archive_digest = file_hash(temporary_archive)
+    archive_path = (
+        tmp_path
+        / "lifecycle"
+        / "superseded-formats"
+        / f"{archive_digest.removeprefix('sha256:')}.json"
+    )
+    archive_path.parent.mkdir(parents=True)
+    temporary_archive.replace(archive_path)
+    authority_ids = [item.authority_id for item in authorities]
+    marker = {
+        "schema_version": "1.0.0",
+        "kind": "shard-invocations-v2-to-authority-receipts-v1",
+        "source_run_id": RUN_ID,
+        "source_lifecycle_digest": source["journal_digest"],
+        "imported_authority_ids": authority_ids[:-1],
+        "incomplete_authority_ids": authority_ids[-1:],
+        "migration_digest": "",
+    }
+    marker["migration_digest"] = _digest_without(
+        marker,
+        "migration_digest",
+    )
+    atomic_json(
+        tmp_path
+        / "migrations"
+        / "shard-invocations-v2-to-authority-receipts-v1.json",
+        marker,
+    )
+    active_path = tmp_path / "lifecycle" / "active.json"
+    current_active = {
+        "schema_version": "3.0.0",
+        "kind": "test-agent-validation-lifecycle",
+        "repository": prepared["repository"],
+        "pr_number": prepared["pr_number"],
+        "journal_digest": "",
+    }
+    current_active["journal_digest"] = _digest_without(
+        current_active,
+        "journal_digest",
+    )
+    atomic_json(active_path, current_active)
+
+    with pytest.raises(
+        ContractError,
+        match="Supplemental invocation migration active binding is invalid",
+    ):
+        with recover_supplemental_legacy_invocations(
+            active_path=active_path,
+            plan=plan,
+            authorities=authorities,
+            root=tmp_path,
+        ):
+            pass
 
 
 @pytest.mark.parametrize(
