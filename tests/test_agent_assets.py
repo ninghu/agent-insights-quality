@@ -507,8 +507,26 @@ def test_every_hosted_issue_has_self_contained_source() -> None:
 def test_support_issue_sources_only_add_their_declared_defect() -> None:
     root = ROOT / "agents" / "support-ticket-agent"
     baseline = (root / "v0" / "source" / "app.py").read_text(encoding="utf-8")
+    model_summary_assignment = "    model_summary = await model_response(\n"
+    grounded_response = (
+        "    )\n"
+        "    return (\n"
+        "        f\"Ticket ID {ticket['ticket_id']}; revision "
+        "{ticket['ticket']['revision']}; \"\n"
+        "        f\"status {ticket['ticket']['status']}. {model_summary}\"\n"
+        "    )\n"
+    )
+    assert baseline.count(model_summary_assignment) == 1
+    assert baseline.count(grounded_response) == 1
+    issue_baseline = baseline.replace(
+        model_summary_assignment,
+        "    return await model_response(\n",
+    ).replace(
+        grounded_response,
+        "    )\n",
+    )
     anchor = "    ticket = tool(\n"
-    baseline_prefix, separator, baseline_suffix = baseline.partition(anchor)
+    baseline_prefix, separator, baseline_suffix = issue_baseline.partition(anchor)
     assert separator
     defects = {
         "issue-029": (

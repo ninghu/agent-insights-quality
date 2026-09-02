@@ -227,6 +227,49 @@ def test_support_normal_output_sets_terminal_root_signals(monkeypatch) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("ticket_id", "revision"),
+    (("ticket-demo-1", 3), ("ticket-demo-2", 1)),
+)
+def test_support_baseline_grounded_response_preserves_tool_fields(
+    monkeypatch,
+    ticket_id: str,
+    revision: int,
+) -> None:
+    module, tracer = _load_support_module(monkeypatch)
+    model_output = "Synthetic ticket read completed with no update dispatched."
+    model_calls: list[dict[str, object]] = []
+
+    class _Responses:
+        @staticmethod
+        async def create(**kwargs):
+            model_calls.append(kwargs)
+            return SimpleNamespace(output_text=model_output)
+
+    class _AsyncOpenAI:
+        def __init__(self, **_kwargs) -> None:
+            self.responses = _Responses()
+
+    monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", "https://example.invalid")
+    module.AsyncOpenAI = _AsyncOpenAI
+
+    response = _invoke(module, f"Read {ticket_id}.")
+    root = _root_span(tracer)
+
+    assert response.text == (
+        f"Ticket ID {ticket_id}; revision {revision}; status open. {model_output}"
+    )
+    assert len(model_calls) == 1
+    assert [
+        (span.attributes.get("gen_ai.operation.name"), span.parent)
+        for span in tracer.spans
+    ] == [
+        ("invoke_agent", None),
+        ("execute_tool", root),
+        ("chat", root),
+    ]
+
+
 def test_support_handled_tool_error_retains_terminal_success(monkeypatch) -> None:
     module, tracer = _load_support_module(monkeypatch)
 

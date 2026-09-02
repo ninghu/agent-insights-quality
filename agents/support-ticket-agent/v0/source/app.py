@@ -148,11 +148,15 @@ async def dispatch(
             f"revision {ticket['ticket']['revision']} validation.",
             max_output_tokens,
         )
-    return await model_response(
+    model_summary = await model_response(
         f"Summarize this exact synthetic ticket and state no update was dispatched: "
         f"{ticket_id}, revision {ticket['ticket']['revision']}, "
         f"status {ticket['ticket']['status']}, summary {ticket['ticket']['summary']}.",
         max_output_tokens,
+    )
+    return (
+        f"Ticket ID {ticket['ticket_id']}; revision {ticket['ticket']['revision']}; "
+        f"status {ticket['ticket']['status']}. {model_summary}"
     )
 
 
