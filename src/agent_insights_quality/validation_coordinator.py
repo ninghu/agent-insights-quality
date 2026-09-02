@@ -112,6 +112,9 @@ from agent_insights_quality.validation_shards import (
     shard_lock,
     validate_shard_assignment,
 )
+from agent_insights_quality.validation_verifier import (
+    authority_verification_outcome,
+)
 
 INVOKE_SHARD_CONCURRENCY = 8
 
@@ -791,19 +794,8 @@ def verify_test_agent_validation_authority(
                 fence=lambda: _assert_active_generation(context["prepared"]),
             )
         else:
-            evidence_complete = evidence["evidence_complete"] is True
-            outcome = (
-                "PASS"
-                if evidence_complete and evidence["pass"]
-                else "FAIL"
-                if evidence_complete
-                else "INCOMPLETE"
-            )
-            query_stage = None if evidence_complete else "authority_assertion"
-            error_code = (
-                None
-                if evidence_complete
-                else _first_authority_evidence_error(evidence)
+            outcome, query_stage, error_code = authority_verification_outcome(
+                evidence
             )
             reference = write_authority_verification_result(
                 prepared=context["prepared"],
@@ -1819,19 +1811,6 @@ def _authority_verification_result(value: Mapping[str, Any]) -> dict[str, Any]:
         "query_diagnostics": value["query_diagnostics"],
         "authority_result_digest": value["artifact_digest"],
     }
-
-
-def _first_authority_evidence_error(
-    authority_evidence: Mapping[str, Any],
-) -> str:
-    for scenario in authority_evidence["scenarios"]:
-        for attempt in [
-            *scenario["issue_attempts"],
-            *scenario["v0_attempts"],
-        ]:
-            if attempt["complete"] is not True:
-                return str(attempt["error_code"] or "incomplete_assertion_evidence")
-    return "incomplete_assertion_evidence"
 
 
 def _assert_git(expected: Any) -> None:

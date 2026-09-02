@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import shutil
+
 from agent_insights_quality.catalogs import load_catalogs
-from agent_insights_quality.util import canonical_bytes
+from agent_insights_quality.util import ROOT, canonical_bytes
+from agent_insights_quality import validation_verifier
 from agent_insights_quality.validation_manifest import (
     _validation_contract_file_hash,
     authority_specs,
@@ -11,6 +14,7 @@ from agent_insights_quality.validation_manifest import (
     validation_step_cost,
 )
 from agent_insights_quality.validation_policy import load_validation_policy
+from agent_insights_quality.validation_verifier import current_verifier_digest
 
 
 def test_local_plan_binds_one_commit_and_all_executable_inputs() -> None:
@@ -42,6 +46,7 @@ def test_local_plan_binds_one_commit_and_all_executable_inputs() -> None:
     assert plan["endpoint_envelope"]["worst_case_inner_model_calls"] == 4
     assert plan["validation_digest"].startswith("sha256:")
     assert plan["shared_validation_digest"].startswith("sha256:")
+    assert plan["verifier_digest"] == current_verifier_digest()
     assert plan["invocation_contract_digest"].startswith("sha256:")
     assert plan["invocation_contract_digest"] != plan[
         "shared_validation_digest"
@@ -107,6 +112,47 @@ def test_validation_contract_hash_normalizes_text_line_endings(tmp_path) -> None
 
     assert _validation_contract_file_hash(lf) == _validation_contract_file_hash(crlf)
     assert _validation_contract_file_hash(lf) == _validation_contract_file_hash(cr)
+
+
+def test_verifier_digest_excludes_orchestration_and_authority_content(
+    tmp_path,
+) -> None:
+    included = {
+        "config/test-agent-validation.yaml",
+        *validation_verifier._VERIFIER_SCHEMA_PATHS,
+        *validation_verifier._VERIFIER_IMPLEMENTATION_FILES,
+        *validation_verifier._VERIFIER_IMPLEMENTATION_SYMBOLS,
+    }
+    for relative in included:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / relative, destination)
+
+    before = current_verifier_digest(tmp_path)
+    for relative in (
+        "src/agent_insights_quality/validation_coordinator.py",
+        "catalogs/AGENT_CATALOG.yaml",
+        "catalogs/ISSUE_CATALOG.yaml",
+        "agents/weather-agent/v0/definition.json",
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text("synthetic excluded change\n", encoding="utf-8")
+    current_verifier_digest.cache_clear()
+    assert current_verifier_digest(tmp_path) == before
+
+    evidence_path = (
+        tmp_path / "src/agent_insights_quality/validation_evidence.py"
+    )
+    evidence_path.write_text(
+        evidence_path.read_text(encoding="utf-8").replace(
+            'expected_pass = evidence_complete and observation_count >= k',
+            'expected_pass = evidence_complete and observation_count > k',
+        ),
+        encoding="utf-8",
+    )
+    current_verifier_digest.cache_clear()
+    assert current_verifier_digest(tmp_path) != before
 
 
 def test_endpoint_cost_accounts_for_input_and_output_tokens() -> None:

@@ -50,6 +50,7 @@ def _prepared() -> dict:
         "digests": {
             "validation_digest": "sha256:" + ("b" * 64),
             "shared_validation_digest": "sha256:" + ("e" * 64),
+            "verifier_digest": "sha256:" + ("a" * 64),
             "execution_matrix_digest": "sha256:" + ("c" * 64),
             "runtime_topology_digest": "sha256:" + ("d" * 64),
             "quota_plan_digest": "sha256:" + ("f" * 64),

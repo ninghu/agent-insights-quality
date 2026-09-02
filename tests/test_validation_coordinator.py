@@ -53,6 +53,14 @@ def test_deployment_assignments_are_disjoint_and_bounded() -> None:
     } == {"sha256:" + ("a" * 64)}
 
 
+def test_all_authorities_share_one_verifier_digest() -> None:
+    active = _active_validation()
+    assert {
+        item["verifier_digest"]
+        for item in active["verification_authority_assignments"]
+    } == {active["digests"]["verifier_digest"]}
+
+
 def test_validation_orchestration_contains_no_hidden_worker_pool() -> None:
     source = inspect.getsource(validation_coordinator) + inspect.getsource(
         validation_runtime
@@ -106,6 +114,7 @@ def _active_validation() -> dict:
             "validation_digest": "sha256:" + ("a" * 64),
             "quota_plan_digest": "sha256:" + ("b" * 64),
             "shared_validation_digest": "sha256:" + ("c" * 64),
+            "verifier_digest": "sha256:" + ("f" * 64),
             "execution_matrix_digest": "sha256:" + ("d" * 64),
             "runtime_topology_digest": "sha256:" + ("e" * 64),
         },

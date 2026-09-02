@@ -25,7 +25,7 @@
     "artifact_digest"
   ],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"const": "2.0.0"},
     "kind": {"const": "test-agent-validation-authority-result"},
     "repository": {"$ref": "#/$defs/repository"},
     "pr_number": {"type": "integer", "minimum": 1},
@@ -177,6 +177,8 @@
         "authority_kind",
         "canonical_agent",
         "logical_version",
+        "runtime_kind",
+        "framework",
         "source_content_digest",
         "execution_digest",
         "validation_mode",
@@ -197,6 +199,17 @@
           "oneOf": [
             {"const": "v0"},
             {"type": "string", "pattern": "^issue-[0-9]{3}$"}
+          ]
+        },
+        "runtime_kind": {
+          "enum": ["prompt", "hosted_code", "hosted_custom_container"]
+        },
+        "framework": {
+          "enum": [
+            "foundry_prompt",
+            "microsoft_agent_framework",
+            "langgraph",
+            "custom_responses"
           ]
         },
         "source_content_digest": {"$ref": "#/$defs/hash"},

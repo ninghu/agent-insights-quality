@@ -45,7 +45,7 @@ def initial_lifecycle(
     ):
         raise ContractError("Local validation must use the reviewed Sweden environment")
     value = {
-        "schema_version": "3.0.0",
+        "schema_version": "4.0.0",
         "kind": "test-agent-validation-lifecycle",
         "snapshot_type": "event",
         "run_id": plan["run_id"],
@@ -57,6 +57,7 @@ def initial_lifecycle(
         "digests": {
             "validation_digest": plan["validation_digest"],
             "shared_validation_digest": plan["shared_validation_digest"],
+            "verifier_digest": plan["verifier_digest"],
             "invocation_contract_digest": plan[
                 "invocation_contract_digest"
             ],

@@ -54,7 +54,7 @@ def write_authority_verification_result(
     fence()
     assignment = verification_assignment(prepared, authority.authority_id)
     value = {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "kind": _RESULT_KIND,
         "repository": prepared["repository"],
         "pr_number": prepared["pr_number"],
@@ -84,7 +84,7 @@ def write_authority_verification_result(
             ],
             "quota_plan_digest": prepared["digests"]["quota_plan_digest"],
             "verifier_commit_sha": prepared["commit_sha"],
-            "verifier_digest": prepared["digests"]["shared_validation_digest"],
+            "verifier_digest": prepared["digests"]["verifier_digest"],
             "environment_id": plan["environment_id"],
             "location": plan["location"],
             "project_name": prepared["project"]["name"],
@@ -184,14 +184,6 @@ def load_bound_authority_verification_result(
         or value["pr_number"] != prepared["pr_number"]
         or value["authority_id"] != authority.authority_id
         or value["authority_contract"] != expected_contract
-        or binding["shared_validation_digest"]
-        != prepared["digests"]["shared_validation_digest"]
-        or binding["execution_matrix_digest"]
-        != prepared["digests"]["execution_matrix_digest"]
-        or binding["runtime_topology_digest"]
-        != prepared["digests"]["runtime_topology_digest"]
-        or binding["verifier_digest"]
-        != prepared["digests"]["shared_validation_digest"]
         or binding["environment_id"] != plan["environment_id"]
         or binding["location"] != plan["location"]
         or binding["project_name"] != prepared["project"]["name"]
@@ -219,8 +211,16 @@ def load_bound_authority_verification_result(
                 value["origin_run_id"] != prepared["run_id"]
                 or value["origin_commit_sha"] != prepared["commit_sha"]
                 or binding["verifier_commit_sha"] != prepared["commit_sha"]
+                or binding["verifier_digest"]
+                != prepared["digests"]["verifier_digest"]
                 or binding["validation_digest"]
                 != prepared["digests"]["validation_digest"]
+                or binding["shared_validation_digest"]
+                != prepared["digests"]["shared_validation_digest"]
+                or binding["execution_matrix_digest"]
+                != prepared["digests"]["execution_matrix_digest"]
+                or binding["runtime_topology_digest"]
+                != prepared["digests"]["runtime_topology_digest"]
                 or binding["quota_plan_digest"]
                 != prepared["digests"]["quota_plan_digest"]
                 or binding["assignment_digest"]
@@ -468,6 +468,8 @@ def _authority_contract(
         "authority_kind": authority.authority_kind,
         "canonical_agent": authority.canonical_agent,
         "logical_version": authority.logical_version,
+        "runtime_kind": authority.runtime_kind,
+        "framework": authority.framework,
         "source_content_digest": authority.source_content_digest,
         "execution_digest": authority.execution_digest,
         "validation_mode": authority.validation_mode,

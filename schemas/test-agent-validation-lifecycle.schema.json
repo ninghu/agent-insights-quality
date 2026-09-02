@@ -17,7 +17,7 @@
     "failure", "previous_journal_digest", "journal_digest"
   ],
   "properties": {
-    "schema_version": {"const": "3.0.0"},
+    "schema_version": {"const": "4.0.0"},
     "kind": {"const": "test-agent-validation-lifecycle"},
     "snapshot_type": {"enum": ["active", "event"]},
     "run_id": {"$ref": "#/$defs/runId"},
@@ -139,7 +139,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "validation_digest", "shared_validation_digest",
+        "validation_digest", "shared_validation_digest", "verifier_digest",
         "invocation_contract_digest",
         "execution_matrix_digest", "runtime_topology_digest",
         "quota_plan_digest", "evidence_digest"
@@ -147,6 +147,7 @@
       "properties": {
         "validation_digest": {"$ref": "#/$defs/hash"},
         "shared_validation_digest": {"$ref": "#/$defs/hash"},
+        "verifier_digest": {"$ref": "#/$defs/hash"},
         "invocation_contract_digest": {"$ref": "#/$defs/hash"},
         "execution_matrix_digest": {"$ref": "#/$defs/hash"},
         "runtime_topology_digest": {

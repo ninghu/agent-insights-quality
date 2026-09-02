@@ -15,7 +15,7 @@ def verification_assignment(
         "authority_id": authority_id,
         "quota_plan_digest": prepared["digests"]["quota_plan_digest"],
         "verifier_commit_sha": prepared["commit_sha"],
-        "verifier_digest": prepared["digests"]["shared_validation_digest"],
+        "verifier_digest": prepared["digests"]["verifier_digest"],
         "assignment_digest": "",
     }
     payload = copy.deepcopy(value)

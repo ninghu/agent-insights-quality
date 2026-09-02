@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
+import agent_insights_quality.validation_authority_results as authority_results
 from agent_insights_quality.catalogs import load_catalogs
 
 from agent_insights_quality.util import ContractError, content_hash
@@ -15,7 +17,9 @@ from agent_insights_quality.validation_evidence import (
     validate_evidence,
 )
 from agent_insights_quality.validation_authority_results import (
+    load_bound_authority_verification_result,
     load_authority_verification_result,
+    reusable_authority_verification_results,
     write_authority_verification_result,
 )
 from agent_insights_quality.validation_manifest import (
@@ -23,6 +27,7 @@ from agent_insights_quality.validation_manifest import (
     current_validation_digest,
     current_shared_validation_digest,
 )
+from agent_insights_quality.validation_verifier import current_verifier_digest
 
 HASH = "sha256:" + ("a" * 64)
 HEAD = "b" * 40
@@ -450,6 +455,7 @@ def test_late_query_failure_preserves_prior_authority_result(tmp_path) -> None:
         "digests": {
             "validation_digest": evidence["validation_digest"],
             "shared_validation_digest": evidence["shared_validation_digest"],
+            "verifier_digest": current_verifier_digest(),
             "execution_matrix_digest": evidence["execution_matrix_digest"],
             "runtime_topology_digest": HASH,
             "quota_plan_digest": HASH,
@@ -519,3 +525,215 @@ def test_late_query_failure_preserves_prior_authority_result(tmp_path) -> None:
     assert second["outcome"] == "INCOMPLETE"
     assert second["authority_evidence"] is None
     assert second["query_stage"] == "telemetry_discovery"
+
+
+def test_cross_generation_pass_reuse_ignores_global_verifier_state(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    evidence = _evidence()
+    specs = authority_specs(*load_catalogs())
+    spec = specs[0]
+    authority = evidence["authorities"][0]
+    runtime = _result_runtime(spec, authority, index=1)
+    prepared = _result_prepared(evidence, verifier_digit="1")
+    invocation = _result_invocation(spec.authority_id, digit="2")
+    reference = write_authority_verification_result(
+        prepared=prepared,
+        plan=_result_plan(),
+        authority=spec,
+        runtime=runtime,
+        invocation_reference=invocation,
+        authority_evidence=authority,
+        outcome="PASS",
+        started_at=datetime(2026, 9, 1, 12, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 9, 1, 12, 1, tzinfo=UTC),
+        query_stage=None,
+        error_code=None,
+        query_diagnostics=None,
+        fence=lambda: None,
+        root=tmp_path,
+    )
+    monkeypatch.setattr(
+        authority_results,
+        "load_bound_invocation_receipt",
+        lambda *_args, **_kwargs: invocation,
+    )
+    changed = deepcopy(prepared)
+    changed["run_id"] = "validation-000000000002"
+    changed["commit_sha"] = "c" * 40
+    for field, digit in (
+        ("validation_digest", "3"),
+        ("shared_validation_digest", "4"),
+        ("verifier_digest", "5"),
+        ("execution_matrix_digest", "6"),
+        ("runtime_topology_digest", "7"),
+        ("quota_plan_digest", "8"),
+    ):
+        changed["digests"][field] = "sha256:" + (digit * 64)
+
+    reused = load_bound_authority_verification_result(
+        reference,
+        authority=spec,
+        paired_v0_authority=spec,
+        runtime=runtime,
+        paired_v0_runtime=runtime,
+        prepared=changed,
+        plan=_result_plan(),
+        require_current_generation=False,
+        root=tmp_path,
+    )
+    assert reused["outcome"] == "PASS"
+    assert reused["binding"]["verifier_digest"] == "sha256:" + ("1" * 64)
+    assert reused["binding"]["verifier_commit_sha"] == HEAD
+
+    with pytest.raises(ContractError, match="binding is stale"):
+        load_bound_authority_verification_result(
+            reference,
+            authority=spec,
+            paired_v0_authority=spec,
+            runtime=runtime,
+            paired_v0_runtime=runtime,
+            prepared=changed,
+            plan=_result_plan(),
+            require_current_generation=True,
+            root=tmp_path,
+        )
+
+
+@pytest.mark.parametrize("changed_binding", ["authority", "runtime", "receipt"])
+def test_authority_local_change_reselects_only_that_authority(
+    monkeypatch,
+    tmp_path,
+    changed_binding,
+) -> None:
+    evidence = _evidence()
+    specs = authority_specs(*load_catalogs())
+    selected_specs = specs[:2]
+    prepared = _result_prepared(evidence, verifier_digit="1")
+    runtimes = {
+        spec.authority_id: _result_runtime(
+            spec,
+            evidence["authorities"][index],
+            index=index + 1,
+        )
+        for index, spec in enumerate(specs)
+    }
+    invocations = {
+        spec.authority_id: _result_invocation(
+            spec.authority_id,
+            digit=str(index + 1),
+        )
+        for index, spec in enumerate(selected_specs)
+    }
+    for index, spec in enumerate(selected_specs):
+        write_authority_verification_result(
+            prepared=prepared,
+            plan=_result_plan(),
+            authority=spec,
+            runtime=runtimes[spec.authority_id],
+            invocation_reference=invocations[spec.authority_id],
+            authority_evidence=evidence["authorities"][index],
+            outcome="PASS",
+            started_at=datetime(2026, 9, 1, 12, index, tzinfo=UTC),
+            completed_at=datetime(2026, 9, 1, 12, index, 1, tzinfo=UTC),
+            query_stage=None,
+            error_code=None,
+            query_diagnostics=None,
+            fence=lambda: None,
+            root=tmp_path,
+        )
+
+    changed_id = selected_specs[1].authority_id
+
+    def load_receipt(reference, **_kwargs):
+        if changed_binding == "receipt" and reference["authority_id"] == changed_id:
+            raise ContractError("synthetic changed receipt")
+        return invocations[reference["authority_id"]]
+
+    monkeypatch.setattr(
+        authority_results,
+        "load_bound_invocation_receipt",
+        load_receipt,
+    )
+    current_specs = list(specs)
+    if changed_binding == "authority":
+        current_specs[1] = replace(
+            current_specs[1],
+            source_content_digest="sha256:" + ("9" * 64),
+        )
+    runtime_topology = {
+        "agents": [deepcopy(runtimes[spec.authority_id]) for spec in specs]
+    }
+    if changed_binding == "runtime":
+        runtime_topology["agents"][1]["runtime_agent_version"] = "changed"
+
+    reusable = reusable_authority_verification_results(
+        authorities=current_specs,
+        runtime_topology=runtime_topology,
+        prepared=prepared,
+        plan=_result_plan(),
+        root=tmp_path,
+    )
+
+    assert reusable[selected_specs[0].authority_id] is not None
+    assert changed_id not in reusable
+
+
+def _result_prepared(evidence: dict, *, verifier_digit: str) -> dict:
+    return {
+        "repository": evidence["repository"],
+        "pr_number": evidence["pr_number"],
+        "run_id": evidence["run_id"],
+        "commit_sha": HEAD,
+        "digests": {
+            "validation_digest": evidence["validation_digest"],
+            "shared_validation_digest": evidence["shared_validation_digest"],
+            "verifier_digest": "sha256:" + (verifier_digit * 64),
+            "execution_matrix_digest": evidence["execution_matrix_digest"],
+            "runtime_topology_digest": HASH,
+            "quota_plan_digest": HASH,
+        },
+        "project": {
+            "name": "aiq-staging-swedencentral",
+            "provider_id": "synthetic-project",
+        },
+        "runtime_topology": {
+            "account_reference": HASH,
+            "telemetry_resource_set": "g30",
+        },
+    }
+
+
+def _result_plan() -> dict:
+    return {
+        "environment_id": "swedencentral-g30",
+        "location": "swedencentral",
+    }
+
+
+def _result_runtime(spec, authority: dict, *, index: int) -> dict:
+    return {
+        "authority_id": spec.authority_id,
+        "runtime_kind": spec.runtime_kind,
+        "runtime_agent_name": authority["runtime_agent_name"],
+        "runtime_agent_version": authority["runtime_agent_version"],
+        "provider_agent_id": f"agent-{index}",
+        "provider_agent_version_id": f"version-{index}",
+        "provider_content_digest": authority["provider_content_digest"],
+        "hosted_identity_id": None,
+        "hosted_blueprint_id": None,
+        "hosted_deployment_id": None,
+        "runtime_principal_id": None,
+        "telemetry_identity_id": f"version-{index}",
+        "connection_ids": [],
+    }
+
+
+def _result_invocation(authority_id: str, *, digit: str) -> dict:
+    return {
+        "authority_id": authority_id,
+        "path": f"invocations/{authority_id.replace('/', '--')}.json",
+        "receipt_digest": "sha256:" + (digit * 64),
+        "invocation_digest": "sha256:" + (digit * 64),
+    }

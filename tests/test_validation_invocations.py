@@ -108,6 +108,7 @@ def _context() -> tuple[dict, dict, list, dict[str, DeployedRuntime]]:
         "digests": {
             "validation_digest": plan["validation_digest"],
             "shared_validation_digest": plan["shared_validation_digest"],
+            "verifier_digest": plan["verifier_digest"],
             "invocation_contract_digest": plan[
                 "invocation_contract_digest"
             ],

@@ -86,6 +86,10 @@ def prepare_validation_plan(
     invocation_contract_digest = current_invocation_contract_digest(
         authorities
     )
+    from agent_insights_quality.validation_verifier import (
+        current_verifier_digest,
+    )
+
     return {
         "schema_version": "2.0.0",
         "kind": "test-agent-validation-plan",
@@ -100,6 +104,7 @@ def prepare_validation_plan(
         "test_agent_model": policy.test_agent_model,
         "validation_digest": validation_digest,
         "shared_validation_digest": current_shared_validation_digest(),
+        "verifier_digest": current_verifier_digest(),
         "invocation_contract_digest": invocation_contract_digest,
         "execution_matrix_digest": content_hash(execution_digests),
         "planned_topology_digest": content_hash(
@@ -199,6 +204,10 @@ def validate_validation_plan(
     issues: Mapping[str, Any],
     policy: ValidationPolicy,
 ) -> None:
+    from agent_insights_quality.validation_verifier import (
+        current_verifier_digest,
+    )
+
     current = {
         item.authority_id: item for item in authority_specs(agents, issues)
     }
@@ -212,6 +221,7 @@ def validate_validation_plan(
         or value.get("telemetry_resource_set") != "g30"
         or value.get("shared_validation_digest")
         != current_shared_validation_digest()
+        or value.get("verifier_digest") != current_verifier_digest()
         or value.get("invocation_contract_digest")
         != current_invocation_contract_digest(list(current.values()))
         or not isinstance(authorities, list)
