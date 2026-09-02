@@ -718,22 +718,26 @@ def _verify_invoked_authority(
                 strict=True,
             )
         ]
-        paired_attempts = [
-            runner.verify(
-                target=deployed[paired_v0_id],
-                executing_authority_id=authority.authority_id,
-                conversation_role="paired_v0",
-                scenario=scenario,
-                attempt=attempt,
-                invocation=persisted_invocation,
-                scheduler=scheduler,
-            )
-            for attempt, persisted_invocation in zip(
-                attempts,
-                v0_invocations,
-                strict=True,
-            )
-        ]
+        paired_attempts = (
+            []
+            if authority.authority_kind == "baseline"
+            else [
+                runner.verify(
+                    target=deployed[paired_v0_id],
+                    executing_authority_id=authority.authority_id,
+                    conversation_role="paired_v0",
+                    scenario=scenario,
+                    attempt=attempt,
+                    invocation=persisted_invocation,
+                    scheduler=scheduler,
+                )
+                for attempt, persisted_invocation in zip(
+                    attempts,
+                    v0_invocations,
+                    strict=True,
+                )
+            ]
+        )
         n = int(scenario["n"])
         complete_count = sum(item["complete"] is True for item in issue_attempts)
         scenarios.append(

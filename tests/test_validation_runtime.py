@@ -124,3 +124,31 @@ def test_verify_shard_uses_only_persisted_invocations() -> None:
     roles = [call["conversation_role"] for call in runner.calls]
     assert roles.count("issue") == roles.count("paired_v0") > 0
     assert result[0]["authority_id"] == issue.authority_id
+
+
+def test_verify_baseline_does_not_require_paired_v0_invocations() -> None:
+    agents, baseline, _issue = _contracts()
+    invocation_runner = _InvokeOnlyRunner()
+    invocations = invoke_validation_shard(
+        [baseline],
+        {baseline.authority_id: _deployed(baseline)},
+        runner=invocation_runner,
+        scheduler=object(),
+        model_contract=agents["models"]["test_agents"],
+        paired_baselines={baseline.canonical_agent: baseline.authority_id},
+    )
+    runner = _VerifyOnlyRunner()
+
+    result = verify_validation_shard(
+        [baseline],
+        {baseline.authority_id: _deployed(baseline)},
+        invocations,
+        runner=runner,
+        scheduler=object(),
+        model_contract=agents["models"]["test_agents"],
+        validated_commit_sha="a" * 40,
+        paired_baselines={baseline.canonical_agent: baseline.authority_id},
+    )
+
+    assert {call["conversation_role"] for call in runner.calls} == {"baseline"}
+    assert result[0]["authority_id"] == baseline.authority_id
