@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import subprocess
 import threading
 import urllib.parse
@@ -256,6 +257,7 @@ def prepare_validation_support_images(
     support_agent: Mapping[str, Any],
     *,
     progress: ProgressReporter | None = None,
+    reusable_images: Mapping[str, str] | None = None,
 ) -> ValidationSupportImages:
     reporter = progress or ProgressReporter("aiq-validation-images")
     images = _build_support_images(
@@ -263,6 +265,7 @@ def prepare_validation_support_images(
         dict(support_agent),
         progress=reporter,
         record_resource=None,
+        reusable_images=reusable_images,
     )
     if len(images) != 9 or any(
         "@sha256:" not in image for image in images.values()
@@ -409,6 +412,121 @@ class FoundryAuthorityDeployer:
 
     def desired_content_digest(self, authority: AuthoritySpec) -> str:
         _, artifact = self._validation_artifact(authority)
+        return str(artifact["content_digest"])
+
+    def resolve_support_image_reuse(
+        self,
+        authority: AuthoritySpec,
+        candidate: Mapping[str, Any],
+    ) -> str:
+        registry_authority = _required_mapping(
+            candidate,
+            "registry_authority",
+            path="support_image_reuse.registry_authority",
+        )
+        expected_digest = _required_string(
+            registry_authority,
+            "provider_content_digest",
+            path="support_image_reuse.registry_authority.provider_content_digest",
+        )
+        runtime = _required_mapping(
+            registry_authority,
+            "runtime",
+            path="support_image_reuse.registry_authority.runtime",
+        )
+        runtime_name = _required_string(
+            runtime,
+            "runtime_agent_name",
+            path="support_image_reuse.registry_authority.runtime.runtime_agent_name",
+        )
+        runtime_version = _required_string(
+            runtime,
+            "runtime_agent_version",
+            path="support_image_reuse.registry_authority.runtime.runtime_agent_version",
+        )
+        details = self._client.version_details(
+            runtime_name,
+            runtime_version,
+            hosted=True,
+        )
+        proof = _version_readiness_proof(
+            details,
+            hosted=True,
+            expected_agent_name=runtime_name,
+            expected_version=runtime_version,
+        )
+        topology = proof.hosted_topology
+        metadata = details.get("metadata")
+        if (
+            topology is None
+            or proof.provider_version_id
+            != runtime.get("provider_agent_version_id")
+            or topology.agent_id != runtime.get("provider_agent_id")
+            or topology.identity_id != runtime.get("hosted_identity_id")
+            or topology.blueprint_id != runtime.get("hosted_blueprint_id")
+            or topology.deployment_id != runtime.get("hosted_deployment_id")
+            or topology.runtime_principal_id
+            != runtime.get("runtime_principal_id")
+            or not isinstance(metadata, Mapping)
+            or metadata.get("aiq_profile") != self._profile.name
+            or metadata.get("aiq_logical_version")
+            != authority.logical_version
+            or metadata.get("aiq_content_digest") != expected_digest
+        ):
+            raise ContractError(
+                "Canonical Support image provider binding is stale"
+            )
+        definition = _required_mapping(
+            details,
+            "definition",
+            path="support_image_reuse.definition",
+        )
+        container = _required_mapping(
+            definition,
+            "container_configuration",
+            path="support_image_reuse.definition.container_configuration",
+        )
+        image = _required_string(
+            container,
+            "image",
+            path="support_image_reuse.definition.container_configuration.image",
+        )
+        if self._support_image_digest(authority, image) != expected_digest:
+            raise ContractError(
+                "Canonical Support image content binding is stale"
+            )
+        return image
+
+    def _support_image_digest(
+        self,
+        authority: AuthoritySpec,
+        image: str,
+    ) -> str:
+        registry = self._profile.container_registry_name
+        if (
+            not registry
+            or re.fullmatch(
+                rf"{re.escape(registry)}\.azurecr\.io/"
+                r"agent-insights-quality-support@sha256:[0-9a-f]{64}",
+                image,
+            )
+            is None
+        ):
+            return ""
+        catalog_agent = self._agents.get(authority.canonical_agent)
+        issue = self._issues.get(authority.authority_id)
+        if (
+            catalog_agent is None
+            or authority.runtime_kind != "hosted_custom_container"
+            or authority.authority_kind == "issue"
+            and issue is None
+        ):
+            return ""
+        artifact = _build_validation_artifact(
+            catalog_agent,
+            issue if authority.authority_kind == "issue" else None,
+            support_images={authority.logical_version: image},
+        )
         return str(artifact["content_digest"])
 
     def find_existing(
@@ -586,11 +704,13 @@ def _deployment_name(run_id: str) -> str:
 def _required_mapping(
     value: Mapping[str, Any],
     field: str,
+    *,
+    path: str | None = None,
 ) -> Mapping[str, Any]:
     nested = value.get(field)
     if not isinstance(nested, Mapping):
         raise ContractError(
-            f"Hosted Agent version topology field is invalid: {field}"
+            f"Hosted Agent version topology field is invalid: {path or field}"
         )
     return nested
 

@@ -562,6 +562,7 @@ def _build_support_images(
     *,
     progress: ProgressReporter | None = None,
     record_resource: Callable[[dict[str, Any]], None] | None = None,
+    reusable_images: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     reporter = progress or ProgressReporter("aiq-provision")
     report = reporter.emit
@@ -582,16 +583,27 @@ def _build_support_images(
         raise ContractError("Current Azure user cannot sign in to the owned registry")
     root = ROOT / "agents" / agent["name"]
     versions = ["v0", *agent["issue_ids"]]
+    reusable = dict(reusable_images or {})
+    if not set(reusable).issubset(versions) or any(
+        not re.fullmatch(
+            rf"{re.escape(registry)}\.azurecr\.io/"
+            r"agent-insights-quality-support@sha256:[0-9a-f]{64}",
+            image,
+        )
+        for image in reusable.values()
+    ):
+        raise ContractError("Reusable Support image bindings are invalid")
     tags = {
         logical: _support_image_tag(root, logical)
         for logical in versions
     }
     existing = {
-        logical: _existing_acr_image(registry, tag, progress=reporter)
+        logical: reusable.get(logical)
+        or _existing_acr_image(registry, tag, progress=reporter)
         for logical, tag in tags.items()
     }
     if all(existing.values()):
-        report(f"{profile.name}/support-ticket-agent: all images found in cache")
+        report(f"{profile.name}/support-ticket-agent: all images resolved exactly")
         return {logical: str(existing[logical]) for logical in versions}
     wheelhouse = _support_wheelhouse(root, reporter)
     report(f"{profile.name}/support-ticket-agent: wheelhouse ready")
@@ -750,12 +762,8 @@ def _build_and_push_support_image(
 ) -> str:
     reporter = progress or ProgressReporter("aiq-provision")
     report = reporter.emit
-    issue_path = (
-        "v0/implementation.yaml"
-        if logical_version == "v0"
-        else f"issues/{logical_version}/implementation.yaml"
-    )
-    tag = _support_image_tag(root, logical_version)
+    manifest = _support_build_context_manifest(root, logical_version)
+    tag = _support_image_tag(root, logical_version, manifest=manifest)
     local_tag = f"aiq-support-{tag}:local"
     remote_tag = (
         f"{registry}.azurecr.io/agent-insights-quality-support:{tag}"
@@ -769,28 +777,12 @@ def _build_and_push_support_image(
         "--no-index --trusted-host host.docker.internal "
         f"--find-links=http://host.docker.internal:{wheelhouse_port} --pre"
     )
-    source_root = (
-        root / "v0" / "source"
-        if logical_version == "v0"
-        else root / "issues" / logical_version / "source"
-    )
     with tempfile.TemporaryDirectory(
         prefix="support-build-",
         dir=runtime_root(),
     ) as temporary:
         context = Path(temporary)
-        shutil.copytree(
-            root / "v0",
-            context / "v0",
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
-        )
-        shutil.rmtree(context / "v0" / "source")
-        shutil.copytree(
-            source_root,
-            context / "v0" / "source",
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
-        )
-        shutil.copyfile(root / issue_path, context / "v0" / "implementation.yaml")
+        _materialize_support_build_context(manifest, context)
         with reporter.heartbeat(
             f"support-ticket-agent/{logical_version}: image build"
         ) as outcome:
@@ -947,24 +939,165 @@ def _build_and_push_support_image(
             )
 
 
-def _support_image_tag(root: Path, logical_version: str) -> str:
-    relevant = {
-        path.relative_to(root).as_posix(): file_hash(path)
-        for path in sorted((root / "v0").rglob("*"))
+def _support_build_context_manifest(
+    root: Path,
+    logical_version: str,
+) -> dict[str, Path]:
+    baseline = root / "v0"
+    implementation = (
+        baseline / "implementation.yaml"
+        if logical_version == "v0"
+        else root / "issues" / logical_version / "implementation.yaml"
+    )
+    source = (
+        baseline / "source"
+        if logical_version == "v0"
+        else root / "issues" / logical_version / "source"
+    )
+    if not implementation.is_file() or not source.is_dir():
+        raise ContractError(
+            f"Support build authority for {logical_version} is incomplete"
+        )
+    manifest = {
+        f"v0/{path.relative_to(baseline).as_posix()}": path
+        for path in sorted(baseline.rglob("*"))
         if _is_package_file(path)
+        and path != baseline / "implementation.yaml"
+        and (
+            logical_version == "v0"
+            or (baseline / "source") not in path.parents
+        )
+    }
+    source_files = [path for path in sorted(source.rglob("*")) if _is_package_file(path)]
+    if not source_files:
+        raise ContractError(f"Support source authority for {logical_version} is empty")
+    manifest.update(
+        {
+            f"v0/source/{path.relative_to(source).as_posix()}": path
+            for path in source_files
+        }
+    )
+    manifest["v0/implementation.yaml"] = implementation
+    return dict(sorted(manifest.items()))
+
+
+def _support_build_context_digest(
+    root: Path,
+    logical_version: str,
+) -> str:
+    return _support_build_context_manifest_digest(
+        _support_build_context_manifest(root, logical_version)
+    )
+
+
+def _support_build_context_digest_at_commit(
+    root: Path,
+    logical_version: str,
+    commit_sha: str,
+) -> str | None:
+    if not re.fullmatch(r"[0-9a-f]{40}", commit_sha):
+        raise ContractError("Support image migration commit is invalid")
+    try:
+        relative_root = root.resolve().relative_to(ROOT.resolve()).as_posix()
+    except ValueError as error:
+        raise ContractError("Support build authority escapes the repository") from error
+    positive_paths = [f"{relative_root}/v0"]
+    if logical_version != "v0":
+        positive_paths.extend(
+            [
+                f"{relative_root}/issues/{logical_version}/source",
+                f"{relative_root}/issues/{logical_version}/implementation.yaml",
+            ]
+        )
+    listed = subprocess.run(
+        [
+            "git",
+            "ls-tree",
+            "-r",
+            "--name-only",
+            "-z",
+            commit_sha,
+            "--",
+            *positive_paths,
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        timeout=120,
+        check=False,
+    )
+    if listed.returncode != 0:
+        raise ContractError("Support image migration commit could not be read")
+    retained_paths = {
+        item.decode("utf-8")
+        for item in listed.stdout.split(b"\0")
+        if item
     }
     if logical_version != "v0":
-        implementation = root / "issues" / logical_version / "implementation.yaml"
-        relevant[implementation.relative_to(root).as_posix()] = file_hash(implementation)
-        issue_source = root / "issues" / logical_version / "source"
-        relevant.update(
-            {
-                path.relative_to(root).as_posix(): file_hash(path)
-                for path in sorted(issue_source.rglob("*"))
-                if _is_package_file(path)
-            }
+        baseline_source = f"{relative_root}/v0/source/"
+        retained_paths = {
+            path
+            for path in retained_paths
+            if not path.startswith(baseline_source)
+            and path != f"{relative_root}/v0/implementation.yaml"
+        }
+    manifest = _support_build_context_manifest(root, logical_version)
+    current_paths = {
+        source.resolve().relative_to(ROOT.resolve()).as_posix()
+        for source in manifest.values()
+    }
+    if retained_paths != current_paths:
+        return None
+    paths = [*positive_paths]
+    if logical_version != "v0":
+        paths.extend(
+            [
+                f":(exclude){relative_root}/v0/source",
+                f":(exclude){relative_root}/v0/implementation.yaml",
+            ]
         )
-    return content_hash(relevant).split(":")[1]
+    compared = subprocess.run(
+        ["git", "diff", "--quiet", commit_sha, "--", *paths],
+        cwd=ROOT,
+        capture_output=True,
+        timeout=120,
+        check=False,
+    )
+    if compared.returncode == 1:
+        return None
+    if compared.returncode != 0:
+        raise ContractError("Support image migration commit could not be compared")
+    return _support_build_context_manifest_digest(manifest)
+
+
+def _support_build_context_manifest_digest(
+    manifest: Mapping[str, Path],
+) -> str:
+    return content_hash(
+        {
+            relative_path: file_hash(source)
+            for relative_path, source in sorted(manifest.items())
+        }
+    )
+
+
+def _materialize_support_build_context(
+    manifest: Mapping[str, Path],
+    destination: Path,
+) -> None:
+    for relative_path, source in sorted(manifest.items()):
+        target = destination / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
+
+def _support_image_tag(
+    root: Path,
+    logical_version: str,
+    *,
+    manifest: Mapping[str, Path] | None = None,
+) -> str:
+    effective = manifest or _support_build_context_manifest(root, logical_version)
+    return _support_build_context_manifest_digest(effective).removeprefix("sha256:")
 
 
 def _existing_acr_image(

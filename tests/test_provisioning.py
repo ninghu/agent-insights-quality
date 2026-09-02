@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import io
+import shutil
 import urllib.error
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,7 +14,11 @@ from agent_insights_quality.provisioning import (
     FoundryProvisioner,
     RemoteHttpError,
     _build_support_images,
+    _materialize_support_build_context,
     _monitor_inventory_matches,
+    _support_build_context_digest,
+    _support_build_context_digest_at_commit,
+    _support_build_context_manifest,
     _support_wheelhouse,
     _version_from_response,
     deterministic_zip,
@@ -715,3 +721,121 @@ def test_support_images_skip_build_when_source_digest_tags_exist(
     )
     assert len(images) == 9
     assert all(arguments[1:3] == ["acr", "login"] for arguments in calls)
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "changed_versions"),
+    [
+        ("v0/source/app.py", {"v0"}),
+        ("v0/implementation.yaml", {"v0"}),
+        ("issues/issue-029/source/app.py", {"issue-029"}),
+        ("issues/issue-029/implementation.yaml", {"issue-029"}),
+        (
+            "v0/Dockerfile",
+            {"v0", *{f"issue-{index:03d}" for index in range(29, 37)}},
+        ),
+        (
+            "v0/requirements.txt",
+            {"v0", *{f"issue-{index:03d}" for index in range(29, 37)}},
+        ),
+        (
+            "v0/container.yaml",
+            {"v0", *{f"issue-{index:03d}" for index in range(29, 37)}},
+        ),
+        (
+            "v0/package.py",
+            {"v0", *{f"issue-{index:03d}" for index in range(29, 37)}},
+        ),
+    ],
+)
+def test_support_build_context_dependencies_are_isolated(
+    tmp_path: Path,
+    relative_path: str,
+    changed_versions: set[str],
+) -> None:
+    root = tmp_path / "support-ticket-agent"
+    shutil.copytree(ROOT / "agents" / "support-ticket-agent", root)
+    versions = ["v0", *[f"issue-{index:03d}" for index in range(29, 37)]]
+    before = {
+        version: _support_build_context_digest(root, version)
+        for version in versions
+    }
+    changed = root / relative_path
+    changed.write_bytes(changed.read_bytes() + b"\n# synthetic digest change\n")
+    after = {
+        version: _support_build_context_digest(root, version)
+        for version in versions
+    }
+    assert {
+        version for version in versions if before[version] != after[version]
+    } == changed_versions
+
+
+def test_support_issue_build_context_uses_complete_source_authority(
+    tmp_path: Path,
+) -> None:
+    root = ROOT / "agents" / "support-ticket-agent"
+    issue_root = root / "issues" / "issue-029"
+    manifest = _support_build_context_manifest(root, "issue-029")
+    context = tmp_path / "context"
+    _materialize_support_build_context(manifest, context)
+
+    expected_sources = {
+        path.relative_to(issue_root / "source").as_posix(): path.read_bytes()
+        for path in sorted((issue_root / "source").rglob("*"))
+        if path.is_file()
+    }
+    actual_sources = {
+        path.relative_to(context / "v0" / "source").as_posix(): path.read_bytes()
+        for path in sorted((context / "v0" / "source").rglob("*"))
+        if path.is_file()
+    }
+    assert actual_sources == expected_sources
+    assert (context / "v0" / "implementation.yaml").read_bytes() == (
+        issue_root / "implementation.yaml"
+    ).read_bytes()
+    assert {
+        path.relative_to(context).as_posix()
+        for path in context.rglob("*")
+        if path.is_file()
+    } == set(manifest)
+
+
+def test_support_context_commit_requires_exact_git_tree_membership(
+    monkeypatch,
+) -> None:
+    root = ROOT / "agents" / "support-ticket-agent"
+    manifest = _support_build_context_manifest(root, "issue-029")
+    retained = b"\0".join(
+        str(path.relative_to(ROOT)).replace("\\", "/").encode("utf-8")
+        for path in manifest.values()
+    ) + b"\0"
+    calls = []
+
+    def run(arguments, **_kwargs):
+        calls.append(arguments)
+        if arguments[1] == "ls-tree":
+            return SimpleNamespace(returncode=0, stdout=retained)
+        return SimpleNamespace(returncode=0, stdout=b"")
+
+    monkeypatch.setattr(
+        "agent_insights_quality.provisioning.subprocess.run",
+        run,
+    )
+    digest = _support_build_context_digest(
+        root,
+        "issue-029",
+    )
+    assert _support_build_context_digest_at_commit(
+        root,
+        "issue-029",
+        "a" * 40,
+    ) == digest
+    assert [arguments[1] for arguments in calls] == ["ls-tree", "diff"]
+
+    retained = retained.split(b"\0", 1)[1]
+    assert _support_build_context_digest_at_commit(
+        root,
+        "issue-029",
+        "a" * 40,
+    ) is None

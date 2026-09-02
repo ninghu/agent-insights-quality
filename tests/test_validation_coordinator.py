@@ -16,6 +16,7 @@ from agent_insights_quality.validation_coordinator import (
     _forced_invocation_authority_ids,
     _merge_authority_result_selection,
     _runner,
+    _support_image_reuse_candidates,
     _verifier,
 )
 from agent_insights_quality import validation_coordinator, validation_runtime
@@ -584,6 +585,255 @@ def test_desired_state_assigns_only_content_without_exact_reuse(monkeypatch) -> 
         for assignment in desired["deployment_assignments"]
         for authority_id in assignment["authority_ids"]
     } == set(desired["deployment_authority_ids"])
+
+
+def test_support_image_migration_keeps_only_exact_issue_contexts(
+    monkeypatch,
+) -> None:
+    agents, issues = load_catalogs()
+    authorities = authority_specs(agents, issues)
+    support = next(
+        item
+        for item in agents["agents"]
+        if item["name"] == "support-ticket-agent"
+    )
+    support_authorities = [
+        item for item in authorities if item.canonical_agent == support["name"]
+    ]
+    desired_authorities = []
+    registry_authorities = []
+    support_images = {}
+    for index, authority in enumerate(support_authorities, start=1):
+        provider_digest = f"sha256:{index:064x}"
+        desired_authorities.append(
+            {
+                "authority_id": authority.authority_id,
+                "authority_kind": authority.authority_kind,
+                "canonical_agent": authority.canonical_agent,
+                "logical_version": authority.logical_version,
+                "runtime_kind": authority.runtime_kind,
+                "framework": authority.framework,
+                "runtime_agent_name": f"support-{authority.logical_version}",
+                "source_content_digest": authority.source_content_digest,
+                "provider_content_digest": "sha256:" + ("f" * 64),
+                "version_intent": "sha256:" + ("e" * 64),
+            }
+        )
+        registry_authorities.append(
+            {
+                "authority_id": authority.authority_id,
+                "runtime_kind": authority.runtime_kind,
+                "framework": authority.framework,
+                "runtime_agent_name": f"support-{authority.logical_version}",
+                "source_content_digest": authority.source_content_digest,
+                "provider_content_digest": provider_digest,
+                "version_intent": validation_coordinator.content_hash(
+                    {
+                        "runtime_agent_name": f"support-{authority.logical_version}",
+                        "logical_version": authority.logical_version,
+                        "provider_content_digest": provider_digest,
+                    }
+                ),
+                "runtime": {
+                    "authority_id": authority.authority_id,
+                    "runtime_kind": authority.runtime_kind,
+                    "runtime_agent_name": f"support-{authority.logical_version}",
+                    "provider_content_digest": provider_digest,
+                },
+            }
+        )
+        support_images[authority.logical_version] = (
+            "syntheticregistry.azurecr.io/"
+            "agent-insights-quality-support@"
+            f"sha256:{index:064x}"
+        )
+    desired = {
+        "commit_sha": "a" * 40,
+        "environment_id": "swedencentral-g30",
+        "project_name": "aiq-staging-swedencentral",
+        "authorities": desired_authorities,
+        "support_images": support_images,
+    }
+    previous = SimpleNamespace(
+        value={
+            "repository": "synthetic/example",
+            "pr_number": 65,
+            "project": {"name": "aiq-staging-swedencentral"},
+            "runtime_topology": {"agents": []},
+            "desired_state_reference": {"path": "synthetic"},
+        }
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "_load_desired_state",
+        lambda _active: desired,
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "_read_deployment_registry",
+        lambda: {
+            "environment_id": "swedencentral-g30",
+            "project_name": "aiq-staging-swedencentral",
+            "authorities": registry_authorities,
+        },
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "_support_build_context_digest",
+        lambda _root, version: f"sha256:{version:0>64}",
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "_support_build_context_digest_at_commit",
+        lambda _root, version, _commit: (
+            None
+            if version == "v0"
+            else f"sha256:{version:0>64}"
+        ),
+    )
+
+    candidates = _support_image_reuse_candidates(
+        journal=SimpleNamespace(read_optional=lambda: previous),
+        plan={
+            "repository": "synthetic/example",
+            "pr_number": 65,
+            "environment_id": "swedencentral-g30",
+            "project_name": "aiq-staging-swedencentral",
+        },
+        authorities=authorities,
+        support_agent=support,
+    )
+
+    assert set(candidates) == {
+        f"issue-{index:03d}" for index in range(29, 37)
+    }
+    assert {
+        candidate["authority_id"] for candidate in candidates.values()
+    } == set(candidates)
+
+    issue_029_runtime = dict(
+        next(
+            item["runtime"]
+            for item in registry_authorities
+            if item["authority_id"] == "issue-029"
+        )
+    )
+    issue_029_runtime["provider_content_digest"] = "sha256:" + ("c" * 64)
+    previous.value["runtime_topology"]["agents"] = [issue_029_runtime]
+    candidates = _support_image_reuse_candidates(
+        journal=SimpleNamespace(read_optional=lambda: previous),
+        plan={
+            "repository": "synthetic/example",
+            "pr_number": 65,
+            "environment_id": "swedencentral-g30",
+            "project_name": "aiq-staging-swedencentral",
+        },
+        authorities=authorities,
+        support_agent=support,
+    )
+    assert "issue-029" not in candidates
+
+
+def test_corrected_support_images_select_only_changed_authorities(
+    monkeypatch,
+) -> None:
+    agents, issues = load_catalogs()
+    policy = load_validation_policy()
+    authorities = authority_specs(agents, issues)
+    plan = prepare_validation_plan(
+        agents=agents,
+        issues=issues,
+        policy=policy,
+        repository=policy.repository,
+        pr_number=65,
+        commit_sha="a" * 40,
+        local_run_id="synthetic-run",
+    )
+    planned = list(
+        plan_runtime_topology(
+            authorities,
+            run_suffix=plan["run_id"].removeprefix("validation-"),
+            policy=policy,
+        )
+    )
+    changed = {"issue-006", "support-ticket-agent/v0"}
+    desired_digests = {
+        authority.authority_id: f"sha256:{index:064x}"
+        for index, authority in enumerate(authorities, start=1)
+    }
+    registry_authorities = []
+    for authority, target in zip(authorities, planned, strict=True):
+        desired_digest = desired_digests[authority.authority_id]
+        retained_digest = (
+            "sha256:" + ("f" * 64)
+            if authority.authority_id in changed
+            else desired_digest
+        )
+        registry_authorities.append(
+            {
+                "authority_id": authority.authority_id,
+                "runtime_kind": authority.runtime_kind,
+                "framework": authority.framework,
+                "runtime_agent_name": target.runtime_agent_name,
+                "source_content_digest": authority.source_content_digest,
+                "provider_content_digest": retained_digest,
+                "version_intent": validation_coordinator.content_hash(
+                    {
+                        "runtime_agent_name": target.runtime_agent_name,
+                        "logical_version": authority.logical_version,
+                        "provider_content_digest": retained_digest,
+                    }
+                ),
+                "runtime": {
+                    "authority_id": authority.authority_id,
+                    "provider_content_digest": retained_digest,
+                },
+            }
+        )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "_read_deployment_registry",
+        lambda: {"authorities": registry_authorities},
+    )
+
+    class Deployer:
+        @staticmethod
+        def desired_content_digest(authority):
+            return desired_digests[authority.authority_id]
+
+        @staticmethod
+        def find_existing(authority, _target):
+            assert authority.authority_id in changed
+            return None
+
+    desired = _desired_state(
+        plan=plan,
+        authorities=authorities,
+        planned=planned,
+        deployer=Deployer(),
+        support_images={
+            ("v0" if index == 0 else f"issue-{index + 28:03d}"): (
+                "syntheticregistry.azurecr.io/"
+                "agent-insights-quality-support@"
+                f"sha256:{index:064x}"
+            )
+            for index in range(9)
+        },
+        superseded_authority_ids=[],
+        forced_invocation_authority_ids=[],
+        quota_plan_digest="sha256:" + ("a" * 64),
+    )
+
+    assert desired["deployment_authority_ids"] == [
+        "issue-006",
+        "support-ticket-agent/v0",
+    ]
+    assert {
+        item["authority_id"]
+        for item in desired["reused_runtimes"]
+        if item["authority_id"].startswith("issue-0")
+        and int(item["authority_id"][-3:]) >= 29
+    } == {f"issue-{index:03d}" for index in range(29, 37)}
 
 
 def test_shard_runner_skips_global_traffic_ledger_but_live_runtime_uses_it(

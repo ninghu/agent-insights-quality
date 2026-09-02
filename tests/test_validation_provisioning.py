@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.provisioning import (
     FoundryProvisioner,
@@ -18,9 +19,11 @@ from agent_insights_quality.util import ContractError, ROOT
 from agent_insights_quality.validation_provisioning import (
     FoundryAuthorityDeployer,
     ValidationProjectProvisioner,
+    _build_validation_artifact,
     _rate_limits,
     validation_runtime_profile,
 )
+from agent_insights_quality.validation_manifest import authority_specs
 from agent_insights_quality.validation_policy import load_validation_policy
 
 
@@ -290,6 +293,68 @@ def test_support_image_records_acr_intents_before_push(
     assert ("event", "created", "acr_tag") in timeline[push_index + 1 :]
     assert ("event", "created", "acr_manifest") in timeline[push_index + 1 :]
     assert result.endswith(f"@{digest}")
+
+
+def test_support_image_migration_resolves_exact_registry_version() -> None:
+    agents, issues = load_catalogs()
+    authority = next(
+        item for item in authority_specs(agents, issues)
+        if item.authority_id == "issue-029"
+    )
+    support = next(
+        item
+        for item in agents["agents"]
+        if item["name"] == "support-ticket-agent"
+    )
+    issue = next(
+        item for item in issues["issues"] if item["id"] == authority.authority_id
+    )
+    image = (
+        "syntheticregistry.azurecr.io/agent-insights-quality-support@"
+        f"sha256:{'a' * 64}"
+    )
+    artifact = _build_validation_artifact(
+        support,
+        issue,
+        support_images={authority.logical_version: image},
+    )
+    details = _active_hosted_version("support-issue-029")
+    details["metadata"] = {
+        "aiq_profile": "staging",
+        "aiq_logical_version": authority.logical_version,
+        "aiq_content_digest": artifact["content_digest"],
+    }
+    details["definition"] = artifact["definition"]
+    deployer = object.__new__(FoundryAuthorityDeployer)
+    deployer._profile = _staging_profile()
+    deployer._agents = {support["name"]: support}
+    deployer._issues = {issue["id"]: issue}
+    deployer._client = SimpleNamespace(
+        version_details=lambda name, version, *, hosted: (
+            details
+            if (name, version, hosted) == ("support-issue-029", "1", True)
+            else pytest.fail("migration must read only the registry-bound version")
+        )
+    )
+    candidate = {
+        "image": image,
+        "registry_authority": {
+            "provider_content_digest": artifact["content_digest"],
+            "runtime": {
+                "runtime_agent_name": "support-issue-029",
+                "runtime_agent_version": "1",
+                "provider_agent_id": "support-issue-029",
+                "provider_agent_version_id": "synthetic-version",
+                "provider_content_digest": artifact["content_digest"],
+                "hosted_identity_id": "synthetic-instance-client",
+                "hosted_blueprint_id": "synthetic-blueprint-reference",
+                "hosted_deployment_id": "synthetic-agent-guid",
+                "runtime_principal_id": "synthetic-instance-principal",
+            },
+        },
+    }
+
+    assert deployer.resolve_support_image_reuse(authority, candidate) == image
 
 
 def test_hosted_canary_readiness_rechecks_active_topology() -> None:

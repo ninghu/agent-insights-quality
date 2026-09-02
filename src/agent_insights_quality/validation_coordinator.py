@@ -11,9 +11,14 @@ from jsonschema import Draft202012Validator
 
 from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.live import LiveRuntime, TelemetryOnlyRuntime
+from agent_insights_quality.provisioning import (
+    _support_build_context_digest,
+    _support_build_context_digest_at_commit,
+)
 from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.registry import publish_validation_registry
 from agent_insights_quality.util import (
+    ROOT,
     ContractError,
     atomic_json,
     content_hash,
@@ -124,6 +129,11 @@ def prepare_test_agent_validation() -> dict[str, Any]:
     policy = load_validation_policy()
     agents, issues = load_catalogs()
     authorities = authority_specs(agents, issues)
+    support_agent = next(
+        item
+        for item in agents["agents"]
+        if item["name"] == "support-ticket-agent"
+    )
     operator = local_azure_operator()
     base_profile = RuntimeProfile.from_env("staging", "g30")
     lock = LocalValidationLock(validation_runtime_root() / "coordinator.lock")
@@ -168,6 +178,12 @@ def prepare_test_agent_validation() -> dict[str, Any]:
             holder_run_reference=content_hash({"run": uuid.uuid4().hex}),
             substrate=_substrate(operator, base_profile),
         )
+        support_reuse_candidates = _support_image_reuse_candidates(
+            journal=journal,
+            plan=plan,
+            authorities=authorities,
+            support_agent=support_agent,
+        )
         with recover_supplemental_legacy_invocations(
             active_path=journal.active_path,
             plan=plan,
@@ -210,12 +226,6 @@ def prepare_test_agent_validation() -> dict[str, Any]:
             connection_ids=list(project.connection_ids),
             now=datetime.now(UTC),
         )
-        support_agent = next(
-            item
-            for item in agents["agents"]
-            if item["name"] == "support-ticket-agent"
-        )
-
         deployer = FoundryAuthorityDeployer(
             profile=profile,
             agent_catalog=agents,
@@ -226,7 +236,33 @@ def prepare_test_agent_validation() -> dict[str, Any]:
         )
         with lifecycle_heartbeat(controller, now=lambda: datetime.now(UTC)):
             deployer.wait_project()
-            images = prepare_validation_support_images(profile, support_agent).images
+            authority_by_id = {
+                item.authority_id: item for item in authorities
+            }
+            reusable_images = {
+                logical_version: deployer.resolve_support_image_reuse(
+                    authority_by_id[candidate["authority_id"]],
+                    candidate,
+                )
+                for logical_version, candidate in sorted(
+                    support_reuse_candidates.items()
+                )
+            }
+            images = prepare_validation_support_images(
+                profile,
+                support_agent,
+                reusable_images=reusable_images,
+            ).images
+        migrated_authority_ids = {
+            candidate["authority_id"]
+            for logical_version, candidate in support_reuse_candidates.items()
+            if logical_version in reusable_images
+        }
+        superseded_authority_ids = [
+            authority_id
+            for authority_id in superseded_authority_ids
+            if authority_id not in migrated_authority_ids
+        ]
         controller.support_images_ready(images, now=datetime.now(UTC))
         deployer.set_support_images(images)
         planned = plan_runtime_topology(
@@ -1302,6 +1338,152 @@ def _desired_state(
         }
     )
     return value
+
+
+def _support_image_reuse_candidates(
+    *,
+    journal: LifecycleJournal,
+    plan: Mapping[str, Any],
+    authorities: list[Any],
+    support_agent: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    previous = journal.read_optional()
+    registry = _read_deployment_registry()
+    if (
+        previous is None
+        or previous.value.get("desired_state_reference") is None
+        or registry is None
+    ):
+        return {}
+    active = previous.value
+    desired = _load_desired_state(active)
+    if (
+        active["repository"] != plan["repository"]
+        or active["pr_number"] != plan["pr_number"]
+        or active["project"]["name"] != plan["project_name"]
+        or desired.get("environment_id") != plan["environment_id"]
+        or desired.get("project_name") != plan["project_name"]
+        or registry.get("environment_id") != plan["environment_id"]
+        or registry.get("project_name") != plan["project_name"]
+    ):
+        return {}
+    desired_authorities = desired.get("authorities")
+    if not isinstance(desired_authorities, list):
+        raise ContractError("Retained Support image authority bindings are invalid")
+    desired_by_id = {
+        item["authority_id"]: item
+        for item in desired_authorities
+        if isinstance(item, Mapping) and isinstance(item.get("authority_id"), str)
+    }
+    registry_by_id = {
+        item["authority_id"]: item for item in registry["authorities"]
+    }
+    if (
+        len(desired_by_id) != len(desired_authorities)
+        or len(registry_by_id) != len(registry["authorities"])
+    ):
+        raise ContractError("Retained Support image authorities collide")
+    active_agents = active["runtime_topology"]["agents"]
+    active_runtime_by_id = {
+        item["authority_id"]: item
+        for item in active_agents
+        if isinstance(item, Mapping) and isinstance(item.get("authority_id"), str)
+    }
+    if len(active_runtime_by_id) != len(active_agents):
+        raise ContractError("Retained Support runtime authorities collide")
+    support_root = ROOT / "agents" / str(support_agent["name"])
+    candidates = {}
+    for authority in authorities:
+        if authority.canonical_agent != support_agent["name"]:
+            continue
+        desired_authority = desired_by_id.get(authority.authority_id)
+        registry_authority = registry_by_id.get(authority.authority_id)
+        if desired_authority is None or registry_authority is None:
+            continue
+        # Desired state proves the source commit; the canonical registry proves
+        # the deployed provider binding, including after an interrupted prepare.
+        current_context_digest = _support_build_context_digest(
+            support_root,
+            authority.logical_version,
+        )
+        retained_context_digest = _support_build_context_digest_at_commit(
+            support_root,
+            authority.logical_version,
+            str(desired["commit_sha"]),
+        )
+        desired_binding = {
+            "authority_id": authority.authority_id,
+            "authority_kind": authority.authority_kind,
+            "canonical_agent": authority.canonical_agent,
+            "logical_version": authority.logical_version,
+            "runtime_kind": authority.runtime_kind,
+            "framework": authority.framework,
+            "source_content_digest": authority.source_content_digest,
+        }
+        registry_fields = (
+            "authority_id",
+            "runtime_kind",
+            "framework",
+            "runtime_agent_name",
+            "source_content_digest",
+        )
+        runtime = registry_authority.get("runtime")
+        active_runtime = active_runtime_by_id.get(authority.authority_id)
+        runtime_fields = (
+            "authority_id",
+            "runtime_kind",
+            "runtime_agent_name",
+            "runtime_agent_version",
+            "provider_agent_id",
+            "provider_agent_version_id",
+            "provider_content_digest",
+            "hosted_identity_id",
+            "hosted_blueprint_id",
+            "hosted_deployment_id",
+            "runtime_principal_id",
+        )
+        if (
+            retained_context_digest != current_context_digest
+            or any(
+                desired_authority.get(field) != value
+                for field, value in desired_binding.items()
+            )
+            or any(
+                registry_authority.get(field) != desired_authority.get(field)
+                for field in registry_fields
+            )
+            or not isinstance(runtime, Mapping)
+            or runtime.get("authority_id") != authority.authority_id
+            or runtime.get("runtime_kind") != authority.runtime_kind
+            or runtime.get("runtime_agent_name")
+            != registry_authority["runtime_agent_name"]
+            or runtime.get("provider_content_digest")
+            != registry_authority["provider_content_digest"]
+            or registry_authority.get("version_intent")
+            != content_hash(
+                {
+                    "runtime_agent_name": registry_authority[
+                        "runtime_agent_name"
+                    ],
+                    "logical_version": authority.logical_version,
+                    "provider_content_digest": registry_authority[
+                        "provider_content_digest"
+                    ],
+                }
+            )
+            or active_runtime is not None
+            and any(
+                active_runtime.get(field) != runtime.get(field)
+                for field in runtime_fields
+            )
+        ):
+            continue
+        candidates[authority.logical_version] = {
+            "authority_id": authority.authority_id,
+            "build_context_digest": current_context_digest,
+            "registry_authority": registry_authority,
+        }
+    return candidates
 
 
 def _load_desired_state(active: dict[str, Any]) -> dict[str, Any]:
