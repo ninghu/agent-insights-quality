@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
@@ -332,6 +333,7 @@ def extract_legacy_shard_invocations(
     authorities: Sequence[AuthoritySpec],
     root: Path | None = None,
     _supplemental_marker: Mapping[str, Any] | None = None,
+    _source_archive_digest: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     runtime_root = (root or validation_runtime_root()).resolve()
     empty = {
@@ -584,6 +586,7 @@ def extract_legacy_shard_invocations(
                 root=runtime_root,
                 source_marker=_supplemental_marker,
                 active=active,
+                source_archive_digest=str(_source_archive_digest or ""),
                 imported=imported,
                 incomplete=incomplete,
             )
@@ -618,6 +621,27 @@ def recover_supplemental_legacy_invocations(
         return
     marker = read_json(marker_path)
     _validate_migration_marker(marker)
+    if not marker["incomplete_authority_ids"]:
+        yield empty
+        return
+    current = read_json(active_path)
+    if (
+        current.get("schema_version") != "2.0.0"
+        or current.get("kind") != "test-agent-validation-lifecycle"
+        or "invocation_authority_ids" not in current
+        or current.get("journal_digest")
+        != _digest_without(current, "journal_digest")
+        or current.get("repository") != plan["repository"]
+        or current.get("pr_number") != plan["pr_number"]
+    ):
+        raise ContractError(
+            "Supplemental invocation migration active binding is invalid"
+        )
+    archive_path, archive_digest, source = _locate_legacy_source_archive(
+        root=runtime_root,
+        source_marker=marker,
+        plan=plan,
+    )
     supplemental_path = (
         runtime_root
         / "migrations"
@@ -628,6 +652,7 @@ def recover_supplemental_legacy_invocations(
         _validate_supplemental_migration_marker(
             supplemental,
             source_marker=marker,
+            source_archive_digest=archive_digest,
         )
         yield {
             key: copy.deepcopy(supplemental[key])
@@ -638,48 +663,6 @@ def recover_supplemental_legacy_invocations(
             )
         }
         return
-    if not marker["incomplete_authority_ids"]:
-        yield empty
-        return
-    current = read_json(active_path)
-    archive_digest = str(current.get("supersedes") or "")
-    if (
-        current.get("schema_version") != "2.0.0"
-        or current.get("kind") != "test-agent-validation-lifecycle"
-        or "invocation_authority_ids" not in current
-        or current.get("journal_digest")
-        != _digest_without(current, "journal_digest")
-        or current.get("repository") != plan["repository"]
-        or current.get("pr_number") != plan["pr_number"]
-        or not archive_digest.startswith("sha256:")
-    ):
-        raise ContractError(
-            "Supplemental invocation migration active binding is invalid"
-        )
-    archive_path = (
-        runtime_root
-        / "lifecycle"
-        / "superseded-formats"
-        / f"{archive_digest.removeprefix('sha256:')}.json"
-    )
-    if (
-        not archive_path.is_file()
-        or file_hash(archive_path) != archive_digest
-    ):
-        raise ContractError(
-            "Supplemental invocation migration source archive is missing"
-        )
-    source = read_json(archive_path)
-    if (
-        source.get("run_id") != marker["source_run_id"]
-        or source.get("journal_digest")
-        != marker["source_lifecycle_digest"]
-        or source.get("repository") != plan["repository"]
-        or source.get("pr_number") != plan["pr_number"]
-    ):
-        raise ContractError(
-            "Supplemental invocation migration source archive changed"
-        )
     source_ids = list(source.get("validation_authority_ids") or [])
     marker_imported = list(marker["imported_authority_ids"])
     marker_incomplete = list(marker["incomplete_authority_ids"])
@@ -699,8 +682,50 @@ def recover_supplemental_legacy_invocations(
         authorities=authorities,
         root=runtime_root,
         _supplemental_marker=marker,
+        _source_archive_digest=archive_digest,
     ) as result:
         yield result
+
+
+def _locate_legacy_source_archive(
+    *,
+    root: Path,
+    source_marker: Mapping[str, Any],
+    plan: Mapping[str, Any],
+) -> tuple[Path, str, dict[str, Any]]:
+    archive_root = root / "lifecycle" / "superseded-formats"
+    matches: list[tuple[Path, str, dict[str, Any]]] = []
+    for path in sorted(archive_root.glob("*.json")):
+        if re.fullmatch(r"[0-9a-f]{64}", path.stem) is None:
+            raise ContractError(
+                "Supplemental invocation archive filename is invalid"
+            )
+        digest = f"sha256:{path.stem}"
+        if file_hash(path) != digest:
+            raise ContractError(
+                "Supplemental invocation archive filename digest changed"
+            )
+        try:
+            value = read_json(path)
+        except (ContractError, OSError):
+            continue
+        if (
+            value.get("schema_version") == "2.0.0"
+            and value.get("kind") == "test-agent-validation-lifecycle"
+            and value.get("state") == "VALIDATING"
+            and "invocation_authority_ids" not in value
+            and value.get("run_id") == source_marker["source_run_id"]
+            and value.get("journal_digest")
+            == source_marker["source_lifecycle_digest"]
+            and value.get("repository") == plan["repository"]
+            and value.get("pr_number") == plan["pr_number"]
+        ):
+            matches.append((path, digest, value))
+    if len(matches) != 1:
+        raise ContractError(
+            "Supplemental invocation migration requires exactly one source archive"
+        )
+    return matches[0]
 
 
 def _write_migration_marker(
@@ -736,6 +761,7 @@ def _write_supplemental_migration_marker(
     root: Path,
     source_marker: Mapping[str, Any],
     active: Mapping[str, Any],
+    source_archive_digest: str,
     imported: list[str],
     incomplete: list[str],
 ) -> dict[str, Any]:
@@ -749,6 +775,7 @@ def _write_supplemental_migration_marker(
         "source_run_id": active["run_id"],
         "source_lifecycle_digest": active["journal_digest"],
         "source_marker_digest": source_marker["migration_digest"],
+        "source_archive_digest": source_archive_digest,
         "imported_authority_ids": imported,
         "incomplete_authority_ids": incomplete,
         "migration_digest": "",
@@ -788,6 +815,7 @@ def _validate_supplemental_migration_marker(
     value: Mapping[str, Any],
     *,
     source_marker: Mapping[str, Any],
+    source_archive_digest: str,
 ) -> None:
     if (
         value.get("schema_version") != "1.0.0"
@@ -797,6 +825,7 @@ def _validate_supplemental_migration_marker(
         != source_marker["source_lifecycle_digest"]
         or value.get("source_marker_digest")
         != source_marker["migration_digest"]
+        or value.get("source_archive_digest") != source_archive_digest
         or value.get("migration_digest")
         != _digest_without(value, "migration_digest")
     ):

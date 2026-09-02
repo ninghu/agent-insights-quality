@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -20,6 +21,7 @@ from agent_insights_quality.validation_coordinator import (
 )
 from agent_insights_quality.validation_invocations import (
     assert_invocation_receipt_set_isolated,
+    _locate_legacy_source_archive,
     _read_legacy_shard_artifact,
     extract_legacy_shard_invocations,
     load_invocation_receipt,
@@ -1089,7 +1091,7 @@ def test_supplemental_migration_recovers_only_original_marker_misses(
         "repository": prepared["repository"],
         "pr_number": prepared["pr_number"],
         "invocation_authority_ids": missed,
-        "supersedes": archive_digest,
+        "supersedes": content_hash({"immediate_generation": 2}),
         "journal_digest": "",
     }
     current_active["journal_digest"] = _digest_without(
@@ -1116,6 +1118,7 @@ def test_supplemental_migration_recovers_only_original_marker_misses(
     supplemental = read_json(supplemental_path)
     assert supplemental["source_marker_digest"] == marker["migration_digest"]
     assert supplemental["source_lifecycle_digest"] == source["journal_digest"]
+    assert supplemental["source_archive_digest"] == archive_digest
 
     selected, reused = select_reusable_invocation_receipts(
         authorities=authorities,
@@ -1134,6 +1137,104 @@ def test_supplemental_migration_recovers_only_original_marker_misses(
         root=tmp_path,
     ) as repeated:
         assert repeated == result
+
+
+def test_archive_locator_ignores_intervening_new_schema_generations(
+    tmp_path: Path,
+) -> None:
+    prepared, plan, authorities, runtimes = _context()
+    temporary, source, _ = _write_complete_legacy_generation(
+        tmp_path,
+        prepared=prepared,
+        authorities=authorities,
+        runtimes=runtimes,
+    )
+    archive_root = tmp_path / "lifecycle" / "superseded-formats"
+    archive_root.mkdir(parents=True)
+    digest = file_hash(temporary)
+    expected = archive_root / f"{digest.removeprefix('sha256:')}.json"
+    temporary.replace(expected)
+    for generation in (2, 3):
+        intervening = {
+            "schema_version": "2.0.0",
+            "kind": "test-agent-validation-lifecycle",
+            "run_id": f"validation-{generation:012x}",
+            "invocation_authority_ids": ["issue-020"],
+        }
+        path = archive_root / f"intervening-{generation}.json"
+        atomic_json(path, intervening)
+        valid = archive_root / (
+            f"{file_hash(path).removeprefix('sha256:')}.json"
+        )
+        path.replace(valid)
+    marker = {
+        "source_run_id": source["run_id"],
+        "source_lifecycle_digest": source["journal_digest"],
+    }
+    path, observed_digest, observed = _locate_legacy_source_archive(
+        root=tmp_path,
+        source_marker=marker,
+        plan=plan,
+    )
+    assert path == expected
+    assert observed_digest == digest
+    assert observed == source
+
+
+def test_archive_locator_rejects_no_match_duplicate_and_corrupt_hash(
+    tmp_path: Path,
+) -> None:
+    prepared, plan, authorities, runtimes = _context()
+    temporary, source, _ = _write_complete_legacy_generation(
+        tmp_path,
+        prepared=prepared,
+        authorities=authorities,
+        runtimes=runtimes,
+    )
+    archive_root = tmp_path / "lifecycle" / "superseded-formats"
+    archive_root.mkdir(parents=True)
+    marker = {
+        "source_run_id": source["run_id"],
+        "source_lifecycle_digest": source["journal_digest"],
+    }
+    with pytest.raises(ContractError, match="exactly one source archive"):
+        _locate_legacy_source_archive(
+            root=tmp_path,
+            source_marker=marker,
+            plan=plan,
+        )
+
+    digest = file_hash(temporary)
+    first = archive_root / f"{digest.removeprefix('sha256:')}.json"
+    temporary.replace(first)
+    alternate = archive_root / "alternate.json"
+    alternate.write_text(
+        json.dumps(source, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    alternate_digest = file_hash(alternate)
+    alternate.rename(
+        archive_root
+        / f"{alternate_digest.removeprefix('sha256:')}.json"
+    )
+    with pytest.raises(ContractError, match="exactly one source archive"):
+        _locate_legacy_source_archive(
+            root=tmp_path,
+            source_marker=marker,
+            plan=plan,
+        )
+
+    first.unlink()
+    for path in archive_root.glob("*.json"):
+        path.unlink()
+    corrupt = archive_root / f"{'0' * 64}.json"
+    corrupt.write_text("{}", encoding="utf-8")
+    with pytest.raises(ContractError, match="filename digest changed"):
+        _locate_legacy_source_archive(
+            root=tmp_path,
+            source_marker=marker,
+            plan=plan,
+        )
 
 
 def test_corrupt_invocation_receipt_is_never_reused(tmp_path: Path) -> None:
