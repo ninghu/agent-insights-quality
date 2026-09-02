@@ -723,8 +723,18 @@ class ValidationCycleController:
                 "validation_authority_ids": selected,
                 "invocation_authority_ids": selected,
                 "reused_invocations": [],
-                "invocation_shard_assignments": _shard_assignments(selected),
-                "shard_assignments": _shard_assignments(selected),
+                "invocation_shard_assignments": _shard_assignments(
+                    selected,
+                    quota_plan_digest=self._active.value["digests"][
+                        "quota_plan_digest"
+                    ],
+                ),
+                "shard_assignments": _shard_assignments(
+                    selected,
+                    quota_plan_digest=self._active.value["digests"][
+                        "quota_plan_digest"
+                    ],
+                ),
             },
             now,
         )
@@ -785,10 +795,16 @@ class ValidationCycleController:
                 "invocation_authority_ids": invocation_authority_ids,
                 "reused_invocations": reused_invocations,
                 "invocation_shard_assignments": _shard_assignments(
-                    invocation_authority_ids
+                    invocation_authority_ids,
+                    quota_plan_digest=self._active.value["digests"][
+                        "quota_plan_digest"
+                    ],
                 ),
                 "shard_assignments": _shard_assignments(
-                    selected_authority_ids
+                    selected_authority_ids,
+                    quota_plan_digest=self._active.value["digests"][
+                        "quota_plan_digest"
+                    ],
                 ),
             },
             now,
@@ -877,7 +893,11 @@ def _resource(
     }
 
 
-def _shard_assignments(authority_ids: list[str]) -> list[dict[str, Any]]:
+def _shard_assignments(
+    authority_ids: list[str],
+    *,
+    quota_plan_digest: str,
+) -> list[dict[str, Any]]:
     shard_count = min(8, len(authority_ids))
     if shard_count == 0:
         return []
@@ -886,7 +906,11 @@ def _shard_assignments(authority_ids: list[str]) -> list[dict[str, Any]]:
         for index in range(shard_count)
     ]
     return [
-        {"shard_id": index, "authority_ids": group}
+        {
+            "shard_id": index,
+            "authority_ids": group,
+            "quota_plan_digest": quota_plan_digest,
+        }
         for index, group in enumerate(groups, start=1)
     ]
 

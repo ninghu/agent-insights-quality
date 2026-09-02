@@ -10,7 +10,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from agent_insights_quality.catalogs import load_catalogs
-from agent_insights_quality.live import LiveRuntime
+from agent_insights_quality.live import LiveRuntime, TelemetryOnlyRuntime
 from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.registry import publish_validation_registry
 from agent_insights_quality.util import (
@@ -45,7 +45,9 @@ from agent_insights_quality.validation_lifecycle import (
 )
 from agent_insights_quality.validation_leases import CrossProcessTelemetryLease
 from agent_insights_quality.validation_invocations import (
+    assert_invocation_receipt_set_isolated,
     extract_legacy_shard_invocations,
+    load_bound_invocation_receipt,
     load_invocation_receipt,
     select_reusable_invocation_receipts,
     write_invocation_receipt,
@@ -129,16 +131,6 @@ def prepare_test_agent_validation() -> dict[str, Any]:
             issues=issues,
             policy=policy,
         )
-        migration = extract_legacy_shard_invocations(
-            active_path=journal.active_path,
-            plan=plan,
-            authorities=authorities,
-        )
-        incomplete_current_invocations = _incomplete_current_invocations(
-            journal=journal,
-            plan=plan,
-            authorities=authorities,
-        )
         profile = validation_runtime_profile(
             plan["project_name"],
             run_id=plan["run_id"],
@@ -163,10 +155,22 @@ def prepare_test_agent_validation() -> dict[str, Any]:
             holder_run_reference=content_hash({"run": uuid.uuid4().hex}),
             substrate=_substrate(operator, base_profile),
         )
-        active, superseded_authority_ids = journal.begin_run(
-            initial,
-            all_authority_ids=[item.authority_id for item in authorities],
-        )
+        with extract_legacy_shard_invocations(
+            active_path=journal.active_path,
+            plan=plan,
+            authorities=authorities,
+        ) as migration:
+            incomplete_current_invocations = _incomplete_current_invocations(
+                journal=journal,
+                plan=plan,
+                authorities=authorities,
+            )
+            active, superseded_authority_ids = journal.begin_run(
+                initial,
+                all_authority_ids=[
+                    item.authority_id for item in authorities
+                ],
+            )
         controller = ValidationCycleController(journal, active=active)
         controller.preflight(capacity, now=datetime.now(UTC))
         provisioner = ValidationProjectProvisioner(
@@ -220,6 +224,9 @@ def prepare_test_agent_validation() -> dict[str, Any]:
             forced_invocation_authority_ids=[
                 *migration["incomplete_authority_ids"],
                 *incomplete_current_invocations,
+            ],
+            quota_plan_digest=controller.active.value["digests"][
+                "quota_plan_digest"
             ],
         )
         desired_path = (
@@ -619,20 +626,10 @@ def verify_test_agent_validation_shard(
                 ),
                 "artifact_digest": package["artifact_digest"],
             }
-        missing, references = select_reusable_invocation_receipts(
-            authorities=context["authorities"],
-            authority_ids=authority_ids,
-            runtime_topology=context["prepared"]["runtime_topology"],
-            prepared=context["prepared"],
-            plan=context["plan"],
+        references, receipts = _invocation_receipts_for_verification(
+            context,
+            authority_ids,
         )
-        if missing:
-            raise ContractError(
-                "Validation authority invocation receipts are incomplete"
-            )
-        receipts = [
-            load_invocation_receipt(reference) for reference in references
-        ]
         authorities = verify_validation_shard(
             context["assigned"],
             context["deployed"],
@@ -721,7 +718,13 @@ def compose_test_agent_validation() -> dict[str, Any]:
             raise ContractError("Stale validation composition is fenced")
         import_shard_resources(
             controller,
-            list(invocation_receipts.values()),
+            [
+                {
+                    "shard_id": receipt["origin_shard_id"],
+                    "resources": receipt["resources"],
+                }
+                for receipt in invocation_receipts.values()
+            ],
             now=lambda: datetime.now(UTC),
         )
         active = controller.active.value
@@ -1001,6 +1004,7 @@ def _desired_state(
     support_images: dict[str, str],
     superseded_authority_ids: list[str],
     forced_invocation_authority_ids: list[str],
+    quota_plan_digest: str,
 ) -> dict[str, Any]:
     registry = _read_deployment_registry()
     registry_by_id = (
@@ -1082,6 +1086,7 @@ def _desired_state(
         "deployment_authority_ids": deployment_ids,
         "deployment_assignments": _assignments(
             deployment_ids,
+            quota_plan_digest=quota_plan_digest,
         ),
         "reused_runtimes": reused_runtimes,
         "forced_validation_authority_ids": list(
@@ -1254,6 +1259,7 @@ def _matching_active(git: Any) -> dict[str, Any] | None:
 def _assignments(
     authority_ids: list[str],
     *,
+    quota_plan_digest: str,
     maximum_shards: int = 8,
 ) -> list[dict[str, Any]]:
     shard_count = min(maximum_shards, len(authority_ids))
@@ -1263,6 +1269,7 @@ def _assignments(
         {
             "shard_id": index + 1,
             "authority_ids": authority_ids[index::shard_count],
+            "quota_plan_digest": quota_plan_digest,
         }
         for index in range(shard_count)
     ]
@@ -1301,6 +1308,100 @@ def _assert_active_generation(prepared: Mapping[str, Any]) -> None:
         != prepared["digests"]["quota_plan_digest"]
     ):
         raise ContractError("Stale telemetry verifier is fenced")
+
+
+def _invocation_receipts_for_verification(
+    context: Mapping[str, Any],
+    authority_ids: list[str],
+) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
+    prepared = context["prepared"]
+    reused_by_id = {
+        item["authority_id"]: item
+        for item in prepared["reused_invocations"]
+    }
+    current_by_id: dict[str, dict[str, str]] = {}
+    for assignment in prepared["invocation_shard_assignments"]:
+        store = ValidationShardStore(
+            prepared=prepared,
+            shard_id=assignment["shard_id"],
+            authority_ids=assignment["authority_ids"],
+        )
+        artifact = store.read_invocations()
+        if artifact["status"] != "invoked":
+            raise ContractError(
+                "Validation invocation barrier is incomplete"
+            )
+        references = artifact["invocation_receipts"]
+        if [item["authority_id"] for item in references] != sorted(
+            assignment["authority_ids"]
+        ):
+            raise ContractError(
+                "Finalized invocation shard receipt coverage is invalid"
+            )
+        for reference in references:
+            if reference["authority_id"] in current_by_id:
+                raise ContractError(
+                    "Current invocation receipt coverage collides"
+                )
+            current_by_id[reference["authority_id"]] = reference
+    if (
+        set(current_by_id) != set(prepared["invocation_authority_ids"])
+        or set(reused_by_id).intersection(current_by_id)
+        or set(reused_by_id).union(current_by_id)
+        != set(prepared["validation_authority_ids"])
+    ):
+        raise ContractError(
+            "Lifecycle-selected invocation receipt coverage is invalid"
+        )
+
+    authority_by_id = {
+        item.authority_id: item for item in context["authorities"]
+    }
+    runtime_by_id = {
+        item["authority_id"]: item
+        for item in prepared["runtime_topology"]["agents"]
+    }
+    bound_by_id: dict[str, tuple[dict[str, str], dict[str, Any]]] = {}
+    for authority_id in prepared["validation_authority_ids"]:
+        reference = current_by_id.get(authority_id) or reused_by_id.get(
+            authority_id
+        )
+        if reference is None:
+            raise ContractError("Selected invocation receipt is missing")
+        authority = authority_by_id[authority_id]
+        paired_id = context["paired_baselines"][authority.canonical_agent]
+        receipt = load_bound_invocation_receipt(
+            reference,
+            authority=authority,
+            paired_v0_authority=authority_by_id[paired_id],
+            runtime=runtime_by_id[authority_id],
+            paired_v0_runtime=runtime_by_id[paired_id],
+            prepared=prepared,
+            plan=context["plan"],
+        )
+        if (
+            authority_id in current_by_id
+            and (
+                receipt["origin_run_id"] != prepared["run_id"]
+                or receipt["origin_shard_id"]
+                != next(
+                    item["shard_id"]
+                    for item in prepared["invocation_shard_assignments"]
+                    if authority_id in item["authority_ids"]
+                )
+            )
+        ):
+            raise ContractError(
+                "Current-generation invocation receipt origin is invalid"
+            )
+        bound_by_id[authority_id] = (reference, receipt)
+    assert_invocation_receipt_set_isolated(
+        [item[1] for item in bound_by_id.values()]
+    )
+    return (
+        [bound_by_id[item][0] for item in authority_ids],
+        [bound_by_id[item][1] for item in authority_ids],
+    )
 
 
 def _incomplete_current_invocations(
@@ -1365,10 +1466,9 @@ def _runner(
 
 def _verifier(context: dict[str, Any]) -> FoundryScenarioVerifier:
     return FoundryScenarioVerifier(
-        LiveRuntime(
+        TelemetryOnlyRuntime(
             context["profile"],
             token_provider=context["operator"].token_provider,
-            use_traffic_ledger=False,
         ),
         endpoint_costs={
             item.authority_id: validation_authority_cost(item)

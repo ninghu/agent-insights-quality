@@ -30,7 +30,11 @@ from agent_insights_quality.validation_runtime import (
 
 def test_deployment_assignments_are_disjoint_and_bounded() -> None:
     authority_ids = [f"issue-{index:03d}" for index in range(1, 37)]
-    assignments = _assignments(authority_ids, maximum_shards=8)
+    assignments = _assignments(
+        authority_ids,
+        quota_plan_digest="sha256:" + ("a" * 64),
+        maximum_shards=8,
+    )
     assigned = [
         authority_id
         for assignment in assignments
@@ -40,6 +44,9 @@ def test_deployment_assignments_are_disjoint_and_bounded() -> None:
     assert assigned != authority_ids
     assert len(assigned) == len(set(assigned)) == len(authority_ids)
     assert set(assigned) == set(authority_ids)
+    assert {
+        item["quota_plan_digest"] for item in assignments
+    } == {"sha256:" + ("a" * 64)}
 
 
 def test_validation_orchestration_contains_no_hidden_worker_pool() -> None:
@@ -117,6 +124,7 @@ def test_desired_state_assigns_only_content_without_exact_reuse(monkeypatch) -> 
         },
         superseded_authority_ids=[],
         forced_invocation_authority_ids=[],
+        quota_plan_digest="sha256:" + ("a" * 64),
     )
     assert len(desired["reused_runtimes"]) == 29
     assert len(desired["deployment_authority_ids"]) == 12
@@ -214,3 +222,12 @@ def test_verify_primitive_has_no_endpoint_or_session_create_capability() -> None
     )
     assert not hasattr(verifier, "invoke")
     assert not hasattr(verifier, "prepare_hosted_routes")
+    runtime = verifier._FoundryScenarioVerifier__delegate._runtime
+    for forbidden in (
+        "_json_request",
+        "_invoke_prompt",
+        "_invoke_hosted",
+        "_create_hosted_session",
+        "_activate_hosted_version",
+    ):
+        assert not hasattr(runtime, forbidden)

@@ -2517,6 +2517,43 @@ union traces, dependencies, requests
         return value
 
 
+class TelemetryOnlyRuntime:
+    """Read-only Application Insights client with no endpoint transport."""
+
+    def __init__(
+        self,
+        profile: RuntimeProfile,
+        *,
+        token_provider: Callable[[str], str] | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+        utcnow: Callable[[], datetime] = lambda: datetime.now(UTC),
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._profile = profile
+        self._raw_token_provider = token_provider or _azure_cli_token
+        self._sleep = sleep
+        self._utcnow = utcnow
+        self._monotonic = monotonic
+        self._token_lock = threading.Lock()
+        self._token_cache: dict[str, tuple[float, str]] = {}
+        self._telemetry_query_lock = threading.Lock()
+        self._logs_client_instance: Any | None = None
+        self._progress = ProgressReporter("aiq", monotonic=monotonic)
+
+    report_progress = LiveRuntime.report_progress
+    _token_provider = LiveRuntime._token_provider
+    _logs_client = LiveRuntime._logs_client
+    _query_resource = LiveRuntime._query_resource
+    _query_logs_result = LiveRuntime._query_logs_result
+    assert_telemetry_read_access = LiveRuntime.assert_telemetry_read_access
+    wait_for_telemetry = LiveRuntime.wait_for_telemetry
+    telemetry_identity_passes = LiveRuntime.telemetry_identity_passes
+    trace_assertion_evidence_for_requests = (
+        LiveRuntime.trace_assertion_evidence_for_requests
+    )
+    _trace_rows = LiveRuntime._trace_rows
+
+
 def _rate_limit_values(
     headers: Mapping[str, str],
 ) -> dict[str, int | float | None]:

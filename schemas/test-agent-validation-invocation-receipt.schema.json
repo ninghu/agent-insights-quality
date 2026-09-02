@@ -44,12 +44,14 @@
       "required": [
         "lifecycle_digest",
         "desired_state_digest",
-        "runtime_topology_digest"
+        "runtime_topology_digest",
+        "quota_plan_digest"
       ],
       "properties": {
         "lifecycle_digest": {"$ref": "#/$defs/hash"},
         "desired_state_digest": {"$ref": "#/$defs/hash"},
-        "runtime_topology_digest": {"$ref": "#/$defs/hash"}
+        "runtime_topology_digest": {"$ref": "#/$defs/hash"},
+        "quota_plan_digest": {"$ref": "#/$defs/hash"}
       }
     },
     "authority_id": {"$ref": "#/$defs/authorityId"},
@@ -83,6 +85,7 @@
     "invocation": {"$ref": "#/$defs/invocation"},
     "resources": {
       "type": "array",
+      "minItems": 2,
       "items": {"type": "object"}
     },
     "completed_at": {"$ref": "#/$defs/timestamp"},

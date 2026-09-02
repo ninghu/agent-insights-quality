@@ -8,13 +8,23 @@ from pathlib import Path
 import pytest
 
 from agent_insights_quality.catalogs import load_catalogs
-from agent_insights_quality.util import atomic_json, content_hash, read_json
+from agent_insights_quality.util import (
+    ContractError,
+    atomic_json,
+    content_hash,
+    read_json,
+)
+from agent_insights_quality.validation_coordinator import (
+    _invocation_receipts_for_verification,
+)
 from agent_insights_quality.validation_invocations import (
+    assert_invocation_receipt_set_isolated,
     extract_legacy_shard_invocations,
     load_invocation_receipt,
     select_reusable_invocation_receipts,
     write_invocation_receipt,
 )
+from agent_insights_quality.validation_lifecycle import LocalValidationLock
 from agent_insights_quality.validation_manifest import (
     authority_specs,
     prepare_validation_plan,
@@ -105,6 +115,7 @@ def _context() -> tuple[dict, dict, list, dict[str, DeployedRuntime]]:
                     for runtime in runtimes.values()
                 ]
             ),
+            "quota_plan_digest": content_hash({"capacity": 8}),
         },
         "project": {
             "name": plan["project_name"],
@@ -134,6 +145,10 @@ def _context() -> tuple[dict, dict, list, dict[str, DeployedRuntime]]:
 
 
 def _invocation(authority, *, qualifier: str = "one") -> dict:
+    hosted = authority.runtime_kind in {
+        "hosted_code",
+        "hosted_custom_container",
+    }
     scenarios = []
     for scenario in authority.validation_rules["scenarios"]:
         scenarios.append(
@@ -143,6 +158,7 @@ def _invocation(authority, *, qualifier: str = "one") -> dict:
                     _attempt_invocation(
                         attempt,
                         qualifier=f"{qualifier}-issue-{attempt['index']}",
+                        hosted=hosted,
                     )
                     for attempt in scenario["attempts"]
                 ],
@@ -153,6 +169,7 @@ def _invocation(authority, *, qualifier: str = "one") -> dict:
                         _attempt_invocation(
                             attempt,
                             qualifier=f"{qualifier}-v0-{attempt['index']}",
+                            hosted=hosted,
                         )
                         for attempt in scenario["attempts"]
                     ]
@@ -165,7 +182,12 @@ def _invocation(authority, *, qualifier: str = "one") -> dict:
     }
 
 
-def _attempt_invocation(attempt, *, qualifier: str) -> dict:
+def _attempt_invocation(
+    attempt,
+    *,
+    qualifier: str,
+    hosted: bool,
+) -> dict:
     count = len(attempt["setup_steps"]) + len(attempt["probe_steps"])
     started = datetime(2026, 8, 31, 12, 0, tzinfo=UTC)
     return {
@@ -175,7 +197,7 @@ def _attempt_invocation(attempt, *, qualifier: str) -> dict:
             f"response-{qualifier}-{index}" for index in range(1, count + 1)
         ],
         "usable_results": [True] * count,
-        "session_id": f"session-{qualifier}",
+        "session_id": f"session-{qualifier}" if hosted else None,
     }
 
 
@@ -190,6 +212,7 @@ def _write_receipt(
     runtimes: dict[str, DeployedRuntime],
     qualifier: str = "one",
 ) -> dict[str, str]:
+    invocation = _invocation(authority, qualifier=qualifier)
     return write_invocation_receipt(
         prepared=prepared,
         plan=plan,
@@ -210,11 +233,114 @@ def _write_receipt(
             if authority.authority_kind == "baseline"
             else runtimes[f"{authority.canonical_agent}/v0"]
         ),
-        invocation=_invocation(authority, qualifier=qualifier),
-        resources=[],
+        invocation=invocation,
+        resources=_resources(invocation, authority, runtimes),
         fence=lambda: None,
         root=root,
     )
+
+
+def _resources(
+    invocation: dict,
+    authority,
+    runtimes: dict[str, DeployedRuntime],
+) -> list[dict]:
+    resources = []
+    paired_id = f"{authority.canonical_agent}/v0"
+    for scenario in invocation["scenarios"]:
+        expected_scenario = next(
+            item
+            for item in authority.validation_rules["scenarios"]
+            if item["id"] == scenario["scenario_id"]
+        )
+        for role, key in (
+            (
+                "baseline"
+                if authority.authority_kind == "baseline"
+                else "issue",
+                "issue_invocations",
+            ),
+            ("paired_v0", "v0_invocations"),
+        ):
+            if role == "paired_v0" and authority.authority_kind == "baseline":
+                continue
+            target_id = (
+                paired_id
+                if role == "paired_v0"
+                else authority.authority_id
+            )
+            for expected_attempt, attempt in zip(
+                expected_scenario["attempts"],
+                scenario[key],
+                strict=True,
+            ):
+                scope = {
+                    "executing_authority_id": authority.authority_id,
+                    "target_authority_id": target_id,
+                    "conversation_role": role,
+                    "scenario_id": scenario["scenario_id"],
+                    "conversation_group": expected_attempt[
+                        "conversation_group"
+                    ],
+                    "attempt": expected_attempt["index"],
+                }
+                providers = []
+                if attempt["session_id"]:
+                    providers.append(
+                        (
+                            "session",
+                            attempt["session_id"],
+                            content_hash(
+                                {
+                                    "authority_id": target_id,
+                                    "kind": "session",
+                                    "execution_scope": scope,
+                                }
+                            ),
+                        )
+                    )
+                providers.extend(
+                    (
+                        "stored_response",
+                        item,
+                        content_hash(
+                            {
+                                "authority_id": target_id,
+                                "kind": "stored_response",
+                                "execution_scope": scope,
+                                "step": index,
+                            }
+                        ),
+                    )
+                    for index, item in enumerate(
+                        attempt["response_ids"],
+                        start=1,
+                    )
+                )
+                for kind, provider_id, intent in providers:
+                    base = {
+                        "kind": kind,
+                        "intent_reference": intent,
+                        "deterministic_name": provider_id,
+                        "authority_id": target_id,
+                        "parent_id": runtimes[target_id].provider_agent_id,
+                    }
+                    resources.append(
+                        {
+                            **base,
+                            "state": "create_intent",
+                            "runtime_kind": authority.runtime_kind,
+                            "discovery_key": intent,
+                        }
+                    )
+                    resources.append(
+                        {
+                            **base,
+                            "state": "created",
+                            "provider_id": provider_id,
+                        }
+                    )
+    return resources
 
 
 def test_all_current_receipts_select_zero_invoke_and_41_verify(
@@ -243,6 +369,10 @@ def test_all_current_receipts_select_zero_invoke_and_41_verify(
 
     assert invoke_ids == []
     assert len(reused) == len(verify_ids) == 41
+    first = load_invocation_receipt(reused[0], root=tmp_path)
+    assert first["origin_binding"]["quota_plan_digest"] == prepared["digests"][
+        "quota_plan_digest"
+    ]
 
 
 def test_reused_invocation_sends_no_traffic_and_binds_current_verifier(
@@ -302,6 +432,53 @@ def test_reused_invocation_sends_no_traffic_and_binds_current_verifier(
     assert package["verifier_commit_sha"] == NEXT_HEAD
     assert package["verifier_digest"] == current["digests"][
         "shared_validation_digest"
+    ]
+    assert package["binding"]["quota_plan_digest"] == current["digests"][
+        "quota_plan_digest"
+    ]
+
+
+def test_verifier_consumes_only_lifecycle_selected_receipt(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    prepared, plan, authorities, runtimes = _context()
+    issue = next(
+        item for item in authorities if item.authority_id == "issue-020"
+    )
+    reference = _write_receipt(
+        root=tmp_path,
+        prepared=prepared,
+        plan=plan,
+        authority=issue,
+        authorities=authorities,
+        runtimes=runtimes,
+    )
+    prepared["validation_authority_ids"] = [issue.authority_id]
+    prepared["invocation_authority_ids"] = []
+    prepared["reused_invocations"] = [reference]
+    prepared["invocation_shard_assignments"] = []
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_invocations.validation_runtime_root",
+        lambda: tmp_path,
+    )
+    context = {
+        "prepared": prepared,
+        "plan": plan,
+        "authorities": authorities,
+        "paired_baselines": {
+            item.canonical_agent: item.authority_id
+            for item in authorities
+            if item.authority_kind == "baseline"
+        },
+    }
+    references, receipts = _invocation_receipts_for_verification(
+        context,
+        [issue.authority_id],
+    )
+    assert references == [reference]
+    assert [item["authority_id"] for item in receipts] == [
+        issue.authority_id
     ]
 
 
@@ -504,7 +681,19 @@ def test_current_same_schema_extractor_imports_40_and_retries_issue_020(
                 runtime_by_id,
             ),
             "status": "invoked",
-            "resources": [],
+            "resources": [
+                resource
+                for invocation in invocations
+                for resource in _resources(
+                    invocation,
+                    next(
+                        item
+                        for item in authorities
+                        if item.authority_id == invocation["authority_id"]
+                    ),
+                    runtimes,
+                )
+            ],
             "invocations": invocations,
             "artifact_digest": "",
         }
@@ -524,14 +713,28 @@ def test_current_same_schema_extractor_imports_40_and_retries_issue_020(
         )
         atomic_json(artifact_path, artifact)
 
-    migration = extract_legacy_shard_invocations(
+    with extract_legacy_shard_invocations(
         active_path=active_path,
         plan=plan,
         authorities=authorities,
         root=tmp_path,
-    )
-    assert migration["incomplete_authority_ids"] == ["issue-020"]
-    assert len(migration["imported_authority_ids"]) == 40
+    ) as migration:
+        assert migration["incomplete_authority_ids"] == ["issue-020"]
+        assert len(migration["imported_authority_ids"]) == 40
+        source_lock = LocalValidationLock(
+            tmp_path
+            / "shards"
+            / "ninghu"
+            / "agent-insights-quality"
+            / "999"
+            / RUN_ID
+            / "shard-01"
+            / "validation.lock"
+        )
+        with pytest.raises(ContractError, match="holds the shared lock"):
+            source_lock.acquire()
+    with source_lock:
+        assert source_lock.owned
 
     invoke_ids, reused = select_reusable_invocation_receipts(
         authorities=authorities,
@@ -576,6 +779,67 @@ def test_corrupt_invocation_receipt_is_never_reused(tmp_path: Path) -> None:
     )
     assert selected == [issue.authority_id]
     assert reused == []
+
+
+def test_receipt_rejects_empty_resource_provenance(tmp_path: Path) -> None:
+    prepared, plan, authorities, runtimes = _context()
+    issue = next(
+        item for item in authorities if item.authority_id == "issue-020"
+    )
+    paired = next(
+        item
+        for item in authorities
+        if item.authority_id == f"{issue.canonical_agent}/v0"
+    )
+    with pytest.raises(ContractError, match="resources|resource provenance"):
+        write_invocation_receipt(
+            prepared=prepared,
+            plan=plan,
+            shard_id=1,
+            authority=issue,
+            runtime=runtimes[issue.authority_id],
+            paired_v0_authority=paired,
+            paired_v0_runtime=runtimes[paired.authority_id],
+            invocation=_invocation(issue),
+            resources=[],
+            fence=lambda: None,
+            root=tmp_path,
+        )
+
+
+def test_receipt_set_rejects_cross_authority_hosted_session_reuse(
+    tmp_path: Path,
+) -> None:
+    prepared, plan, authorities, runtimes = _context()
+    hosted = [
+        item
+        for item in authorities
+        if item.runtime_kind != "prompt" and item.authority_kind == "issue"
+    ][:2]
+    references = [
+        _write_receipt(
+            root=tmp_path,
+            prepared=prepared,
+            plan=plan,
+            authority=authority,
+            authorities=authorities,
+            runtimes=runtimes,
+            qualifier=authority.authority_id,
+        )
+        for authority in hosted
+    ]
+    receipts = [
+        load_invocation_receipt(item, root=tmp_path)
+        for item in references
+    ]
+    first_session = receipts[0]["invocation"]["scenarios"][0][
+        "issue_invocations"
+    ][0]["session_id"]
+    receipts[1]["invocation"]["scenarios"][0]["issue_invocations"][0][
+        "session_id"
+    ] = first_session
+    with pytest.raises(ContractError, match="references collide"):
+        assert_invocation_receipt_set_isolated(receipts)
 
 
 def _legacy_binding(

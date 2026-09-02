@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import re
 from collections.abc import Mapping, Sequence
@@ -275,11 +276,16 @@ def current_shared_validation_digest() -> str:
 
 def current_invocation_contract_digest(
     authorities: Sequence[AuthoritySpec],
+    *,
+    repository_root: Path = ROOT,
 ) -> str:
     return content_hash(
         {
             "contract_version": "1.0.0",
             "runtime_attempt_concurrency": 1,
+            "implementation_digest": invocation_implementation_digest(
+                repository_root
+            ),
             "authorities": {
                 item.authority_id: {
                     "runtime_kind": item.runtime_kind,
@@ -291,6 +297,103 @@ def current_invocation_contract_digest(
             },
         }
     )
+
+
+def invocation_implementation_digest(
+    repository_root: Path = ROOT,
+) -> str:
+    selections = {
+        "src/agent_insights_quality/validation_runtime.py": {
+            "functions": {"invoke_validation_shard"},
+            "methods": set(),
+            "assignments": set(),
+        },
+        "src/agent_insights_quality/validation_live.py": {
+            "functions": {"_observe_rate_limit"},
+            "methods": {
+                "FoundryScenarioAttemptRunner.prepare_hosted_routes",
+                "FoundryScenarioAttemptRunner.invoke",
+                "FoundryScenarioAttemptRunner._invoke",
+            },
+            "assignments": set(),
+        },
+        "src/agent_insights_quality/live.py": {
+            "functions": {
+                "_normalize_fixture",
+                "_semantic_assertion_result",
+                "_usable_response",
+                "_response_text",
+                "_previous_response_propagation_pending",
+                "_prompt_agent_route_propagation_pending",
+                "_hosted_session_route_propagation_pending",
+                "_hosted_route_activation_propagation_pending",
+                "_remote_error",
+                "_http_request_accepted",
+                "_rate_limit_values",
+            },
+            "methods": {
+                "LiveRuntime._activate_hosted_version",
+                "LiveRuntime._invoke_prompt",
+                "LiveRuntime._create_hosted_session",
+                "LiveRuntime._invoke_hosted",
+                "LiveRuntime._json_request",
+            },
+            "assignments": {
+                "_DEFAULT_REQUEST_TIMEOUT_SECONDS",
+                "_HOSTED_RESPONSE_TIMEOUT_SECONDS",
+                "_HOSTED_ROUTE_ACTIVATION_PROPAGATION_RETRY_DELAYS",
+                "_HOSTED_ROUTE_ACTIVATION_PROPAGATION_WINDOW_SECONDS",
+                "_HOSTED_SESSION_PROPAGATION_RETRY_DELAYS",
+                "_HOSTED_SESSION_PROPAGATION_WINDOW_SECONDS",
+                "_PROMPT_AGENT_ROUTE_PROPAGATION_RETRY_DELAYS",
+                "_PROMPT_AGENT_ROUTE_PROPAGATION_WINDOW_SECONDS",
+                "_PROMPT_RESPONSE_PROPAGATION_RETRY_DELAYS",
+                "_TRANSIENT_HTTP",
+            },
+        },
+    }
+    result: dict[str, list[str]] = {}
+    for relative, selected in selections.items():
+        path = repository_root / relative
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        nodes: dict[str, ast.AST] = {}
+        for node in tree.body:
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name in selected["functions"]
+            ):
+                nodes[node.name] = node
+            elif isinstance(node, ast.ClassDef):
+                for child in node.body:
+                    qualified = f"{node.name}.{getattr(child, 'name', '')}"
+                    if qualified in selected["methods"]:
+                        nodes[qualified] = child
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = (
+                    node.targets
+                    if isinstance(node, ast.Assign)
+                    else [node.target]
+                )
+                for target in targets:
+                    if (
+                        isinstance(target, ast.Name)
+                        and target.id in selected["assignments"]
+                    ):
+                        nodes[target.id] = node
+        expected = (
+            selected["functions"]
+            | selected["methods"]
+            | selected["assignments"]
+        )
+        if set(nodes) != expected:
+            raise ContractError(
+                f"Invocation implementation contract is incomplete for {relative}"
+            )
+        result[relative] = [
+            f"{name}:{ast.dump(nodes[name], include_attributes=False)}"
+            for name in sorted(nodes)
+        ]
+    return content_hash(result)
 
 
 def _validation_contract_file_hash(path: Path) -> str:

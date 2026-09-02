@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import copy
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
-from contextlib import ExitStack
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -91,6 +91,53 @@ def load_invocation_receipt(
     return value
 
 
+def load_bound_invocation_receipt(
+    reference: Mapping[str, str],
+    *,
+    authority: AuthoritySpec,
+    paired_v0_authority: AuthoritySpec,
+    runtime: Mapping[str, Any],
+    paired_v0_runtime: Mapping[str, Any],
+    prepared: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    root: Path | None = None,
+) -> dict[str, Any]:
+    value = load_invocation_receipt(reference, root=root)
+    if not _receipt_is_reusable(
+        value,
+        authority=authority,
+        paired_v0_authority=paired_v0_authority,
+        runtime=runtime,
+        paired_v0_runtime=paired_v0_runtime,
+        prepared=prepared,
+        plan=plan,
+    ):
+        raise ContractError("Selected invocation receipt binding is stale")
+    return value
+
+
+def assert_invocation_receipt_set_isolated(
+    receipts: Sequence[Mapping[str, Any]],
+) -> None:
+    response_ids = [
+        response_id
+        for receipt in receipts
+        for response_id in _invocation_response_ids(receipt["invocation"])
+    ]
+    session_ids = [
+        session_id
+        for receipt in receipts
+        for session_id in _invocation_session_ids(receipt["invocation"])
+    ]
+    if (
+        len(response_ids) != len(set(response_ids))
+        or len(session_ids) != len(set(session_ids))
+    ):
+        raise ContractError(
+            "Invocation receipt response or session references collide"
+        )
+
+
 def validate_invocation_receipt(
     value: Mapping[str, Any],
     *,
@@ -165,6 +212,10 @@ def validate_invocation_receipt(
         if value["paired_v0_contract"] != expected_paired_contract:
             raise ContractError("Invocation receipt paired-v0 contract is stale")
         _validate_invocation(authority, value["invocation"])
+        _validate_resource_provenance(
+            value,
+            authority=authority,
+        )
 
 
 def select_reusable_invocation_receipts(
@@ -239,13 +290,14 @@ def select_reusable_invocation_receipts(
     return selected, reused
 
 
+@contextmanager
 def extract_legacy_shard_invocations(
     *,
     active_path: Path,
     plan: Mapping[str, Any],
     authorities: Sequence[AuthoritySpec],
     root: Path | None = None,
-) -> dict[str, Any]:
+) -> Iterator[dict[str, Any]]:
     runtime_root = (root or validation_runtime_root()).resolve()
     empty = {
         "source_run_id": None,
@@ -253,11 +305,13 @@ def extract_legacy_shard_invocations(
         "incomplete_authority_ids": [],
     }
     if not active_path.is_file():
-        return empty
+        yield empty
+        return
     try:
         active = read_json(active_path)
     except (ContractError, OSError):
-        return empty
+        yield empty
+        return
     if (
         active.get("schema_version") != "2.0.0"
         or active.get("kind") != "test-agent-validation-lifecycle"
@@ -268,62 +322,29 @@ def extract_legacy_shard_invocations(
         or active.get("failure") is not None
         or active.get("deployment", {}).get("failures")
     ):
-        return empty
+        yield empty
+        return
     source_ids = list(active.get("validation_authority_ids") or [])
     if not source_ids or len(source_ids) != len(set(source_ids)):
-        return empty
-    marker = runtime_root / "migrations" / f"{_MIGRATION_NAME}.json"
-    if marker.is_file():
-        value = read_json(marker)
-        if (
-            value.get("kind") != _MIGRATION_NAME
-            or value.get("source_run_id") != active.get("run_id")
-            or value.get("migration_digest")
-            != _digest_without(value, "migration_digest")
-        ):
-            raise ContractError("Invocation migration marker is inconsistent")
-        return {
-            key: copy.deepcopy(value[key])
-            for key in (
-                "source_run_id",
-                "imported_authority_ids",
-                "incomplete_authority_ids",
-            )
-        }
-    if (
-        active.get("journal_digest")
-        != _digest_without(active, "journal_digest")
-        or active.get("digests", {}).get("execution_matrix_digest")
-        != plan["execution_matrix_digest"]
-    ):
-        return {
-            **empty,
-            "source_run_id": active.get("run_id"),
-            "incomplete_authority_ids": source_ids,
-        }
-    desired = _load_legacy_desired_state(active, runtime_root)
-    if desired is None:
-        return {
-            **empty,
-            "source_run_id": active["run_id"],
-            "incomplete_authority_ids": source_ids,
-        }
-    by_id = {item.authority_id: item for item in authorities}
-    runtime_by_id = {
-        item["authority_id"]: item
-        for item in active.get("runtime_topology", {}).get("agents", [])
-    }
-    desired_by_id = {
-        item["authority_id"]: item for item in desired["authorities"]
-    }
+        yield empty
+        return
     assignments = sorted(
         active.get("shard_assignments", []),
         key=lambda item: int(item["shard_id"]),
     )
-    occurrences: dict[
-        str,
-        list[tuple[dict[str, Any], list[dict[str, Any]], str, int]],
-    ] = {}
+    assigned = [
+        authority_id
+        for assignment in assignments
+        for authority_id in assignment["authority_ids"]
+    ]
+    if len(assigned) != len(set(assigned)) or set(assigned) != set(source_ids):
+        yield {
+            **empty,
+            "source_run_id": active["run_id"],
+            "incomplete_authority_ids": source_ids,
+        }
+        return
+    marker = runtime_root / "migrations" / f"{_MIGRATION_NAME}.json"
     with ExitStack() as locks:
         for assignment in assignments:
             locks.enter_context(
@@ -345,6 +366,64 @@ def extract_legacy_shard_invocations(
                     / f"{authority_id.replace('/', '--')}.lock"
                 )
             )
+        if read_json(active_path) != active:
+            raise ContractError(
+                "Legacy invocation source changed while acquiring extraction locks"
+            )
+        if marker.is_file():
+            value = read_json(marker)
+            if (
+                value.get("kind") != _MIGRATION_NAME
+                or value.get("source_run_id") != active.get("run_id")
+                or value.get("migration_digest")
+                != _digest_without(value, "migration_digest")
+            ):
+                raise ContractError("Invocation migration marker is inconsistent")
+            yield {
+                key: copy.deepcopy(value[key])
+                for key in (
+                    "source_run_id",
+                    "imported_authority_ids",
+                    "incomplete_authority_ids",
+                )
+            }
+            return
+        if (
+            active.get("journal_digest")
+            != _digest_without(active, "journal_digest")
+            or active.get("digests", {}).get("execution_matrix_digest")
+            != plan["execution_matrix_digest"]
+        ):
+            result = _write_migration_marker(
+                marker=marker,
+                active=active,
+                imported=[],
+                incomplete=source_ids,
+            )
+            yield result
+            return
+        desired = _load_legacy_desired_state(active, runtime_root)
+        if desired is None:
+            result = _write_migration_marker(
+                marker=marker,
+                active=active,
+                imported=[],
+                incomplete=source_ids,
+            )
+            yield result
+            return
+        by_id = {item.authority_id: item for item in authorities}
+        runtime_by_id = {
+            item["authority_id"]: item
+            for item in active.get("runtime_topology", {}).get("agents", [])
+        }
+        desired_by_id = {
+            item["authority_id"]: item for item in desired["authorities"]
+        }
+        occurrences: dict[
+            str,
+            list[tuple[dict[str, Any], list[dict[str, Any]], str, int]],
+        ] = {}
         for assignment in assignments:
             artifact = _read_legacy_shard_artifact(
                 active=active,
@@ -358,7 +437,10 @@ def extract_legacy_shard_invocations(
                 occurrences.setdefault(authority_id, []).append(
                     (
                         copy.deepcopy(invocation),
-                        copy.deepcopy(artifact["resources"]),
+                        _resources_for_invocation(
+                            artifact["resources"],
+                            invocation,
+                        ),
                         artifact["artifact_digest"],
                         int(assignment["shard_id"]),
                     )
@@ -369,6 +451,12 @@ def extract_legacy_shard_invocations(
             for candidates in occurrences.values()
             for invocation, _, _, _ in candidates
             for response_id in _invocation_response_ids(invocation)
+        )
+        session_counts = Counter(
+            session_id
+            for candidates in occurrences.values()
+            for invocation, _, _, _ in candidates
+            for session_id in _invocation_session_ids(invocation)
         )
         imported: list[str] = []
         for authority_id in source_ids:
@@ -391,6 +479,9 @@ def extract_legacy_shard_invocations(
             if any(
                 response_counts[item] != 1
                 for item in _invocation_response_ids(invocation)
+            ) or any(
+                session_counts[item] != 1
+                for item in _invocation_session_ids(invocation)
             ):
                 continue
             runtime = _deployed_runtime(runtime_value)
@@ -433,20 +524,36 @@ def extract_legacy_shard_invocations(
             imported.append(authority_id)
 
         incomplete = [item for item in source_ids if item not in set(imported)]
-        migration = {
-            "schema_version": "1.0.0",
-            "kind": _MIGRATION_NAME,
-            "source_run_id": active["run_id"],
-            "source_lifecycle_digest": active["journal_digest"],
-            "imported_authority_ids": imported,
-            "incomplete_authority_ids": incomplete,
-            "migration_digest": "",
-        }
-        migration["migration_digest"] = _digest_without(
-            migration,
-            "migration_digest",
+        result = _write_migration_marker(
+            marker=marker,
+            active=active,
+            imported=imported,
+            incomplete=incomplete,
         )
-        immutable_json(marker, migration)
+        yield result
+
+
+def _write_migration_marker(
+    *,
+    marker: Path,
+    active: Mapping[str, Any],
+    imported: list[str],
+    incomplete: list[str],
+) -> dict[str, Any]:
+    migration = {
+        "schema_version": "1.0.0",
+        "kind": _MIGRATION_NAME,
+        "source_run_id": active["run_id"],
+        "source_lifecycle_digest": active["journal_digest"],
+        "imported_authority_ids": imported,
+        "incomplete_authority_ids": incomplete,
+        "migration_digest": "",
+    }
+    migration["migration_digest"] = _digest_without(
+        migration,
+        "migration_digest",
+    )
+    immutable_json(marker, migration)
     return {
         "source_run_id": active["run_id"],
         "imported_authority_ids": imported,
@@ -485,6 +592,7 @@ def _invocation_receipt(
             "runtime_topology_digest": prepared["digests"][
                 "runtime_topology_digest"
             ],
+            "quota_plan_digest": prepared["digests"]["quota_plan_digest"],
         },
         "authority_id": authority.authority_id,
         "source_content_digest": authority.source_content_digest,
@@ -647,6 +755,7 @@ def _validate_invocation(
     ):
         raise ContractError("Invocation receipt scenario coverage is invalid")
     response_ids: list[str] = []
+    session_ids: list[str] = []
     for scenario_id, expected in expected_by_id.items():
         actual = actual_by_id[scenario_id]
         issue = actual.get("issue_invocations")
@@ -679,6 +788,8 @@ def _validate_invocation(
                     in {"hosted_code", "hosted_custom_container"},
                 )
             )
+            if actual_attempt.get("session_id"):
+                session_ids.append(actual_attempt["session_id"])
         if authority.authority_kind == "issue":
             for expected_attempt, actual_attempt in zip(
                 attempts,
@@ -693,8 +804,12 @@ def _validate_invocation(
                         in {"hosted_code", "hosted_custom_container"},
                     )
                 )
+                if actual_attempt.get("session_id"):
+                    session_ids.append(actual_attempt["session_id"])
     if len(response_ids) != len(set(response_ids)):
         raise ContractError("Invocation receipt response references collide")
+    if len(session_ids) != len(set(session_ids)):
+        raise ContractError("Invocation receipt session references collide")
 
 
 def _validate_attempt_invocation(
@@ -908,6 +1023,197 @@ def _invocation_response_ids(invocation: Mapping[str, Any]) -> list[str]:
         for response_id in attempt.get("response_ids", [])
         if isinstance(response_id, str)
     ]
+
+
+def _invocation_session_ids(invocation: Mapping[str, Any]) -> list[str]:
+    return [
+        str(attempt["session_id"])
+        for scenario in invocation.get("scenarios", [])
+        if isinstance(scenario, Mapping)
+        for key in ("issue_invocations", "v0_invocations")
+        for attempt in scenario.get(key, [])
+        if isinstance(attempt, Mapping) and attempt.get("session_id")
+    ]
+
+
+def _resources_for_invocation(
+    resources: Sequence[Mapping[str, Any]],
+    invocation: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    provider_ids = set(_invocation_response_ids(invocation))
+    provider_ids.update(_invocation_session_ids(invocation))
+    created = [
+        item
+        for item in resources
+        if item.get("state") == "created"
+        and item.get("provider_id") in provider_ids
+    ]
+    intents = {str(item.get("intent_reference") or "") for item in created}
+    return [
+        copy.deepcopy(dict(item))
+        for item in resources
+        if item.get("intent_reference") in intents
+    ]
+
+
+def _validate_resource_provenance(
+    value: Mapping[str, Any],
+    *,
+    authority: AuthoritySpec,
+) -> None:
+    resources = value["resources"]
+    if not resources or not all(isinstance(item, Mapping) for item in resources):
+        raise ContractError("Invocation receipt resource provenance is missing")
+    if any(
+        item.get("state") not in {"create_intent", "created"}
+        for item in resources
+    ):
+        raise ContractError("Invocation receipt resource provenance is ambiguous")
+    by_intent: dict[str, list[Mapping[str, Any]]] = {}
+    expected = _expected_resource_bindings(value, authority)
+    for item in resources:
+        intent = str(item.get("intent_reference") or "")
+        if not intent:
+            raise ContractError(
+                "Invocation receipt resource intent is missing"
+            )
+        by_intent.setdefault(intent, []).append(item)
+    for events in by_intent.values():
+        states = [item.get("state") for item in events]
+        if (
+            states.count("create_intent") != 1
+            or states.count("created") != 1
+            or len(events) != 2
+        ):
+            raise ContractError(
+                "Invocation receipt resource chain is incomplete"
+            )
+        intent = next(
+            item for item in events if item["state"] == "create_intent"
+        )
+        created = next(item for item in events if item["state"] == "created")
+        expected_binding = expected.get(str(created.get("provider_id") or ""))
+        if any(
+            intent.get(field) != created.get(field)
+            for field in ("kind", "authority_id", "parent_id")
+        ) or expected_binding is None or any(
+            created.get(field) != expected_binding[field]
+            for field in (
+                "kind",
+                "authority_id",
+                "parent_id",
+                "intent_reference",
+            )
+        ):
+            raise ContractError(
+                "Invocation receipt resource chain binding changed"
+            )
+    expected_responses = set(_invocation_response_ids(value["invocation"]))
+    expected_sessions = set(_invocation_session_ids(value["invocation"]))
+    created_responses = {
+        str(item["provider_id"])
+        for item in resources
+        if item.get("state") == "created"
+        and item.get("kind") == "stored_response"
+    }
+    created_sessions = {
+        str(item["provider_id"])
+        for item in resources
+        if item.get("state") == "created"
+        and item.get("kind") == "session"
+    }
+    if authority.runtime_kind == "prompt":
+        valid = (
+            created_responses == expected_responses
+            and not created_sessions
+        )
+    else:
+        valid = created_sessions == expected_sessions and (
+            created_responses == expected_responses
+            or (
+                value["migrated_from"] is not None
+                and not created_responses
+            )
+        )
+    if not valid:
+        raise ContractError(
+            "Invocation receipt resource coverage is incomplete"
+        )
+
+
+def _expected_resource_bindings(
+    value: Mapping[str, Any],
+    authority: AuthoritySpec,
+) -> dict[str, dict[str, Any]]:
+    expected_scenarios = {
+        item["id"]: item for item in authority.validation_rules["scenarios"]
+    }
+    paired_id = f"{authority.canonical_agent}/v0"
+    runtimes = {
+        authority.authority_id: value["runtime"],
+        paired_id: value["paired_v0_runtime"] or value["runtime"],
+    }
+    result: dict[str, dict[str, Any]] = {}
+    for scenario in value["invocation"]["scenarios"]:
+        expected = expected_scenarios[scenario["scenario_id"]]
+        for role, key in (
+            (
+                "baseline" if authority.authority_kind == "baseline" else "issue",
+                "issue_invocations",
+            ),
+            ("paired_v0", "v0_invocations"),
+        ):
+            if role == "paired_v0" and authority.authority_kind == "baseline":
+                continue
+            target_id = paired_id if role == "paired_v0" else authority.authority_id
+            target = runtimes[target_id]
+            for attempt, persisted in zip(
+                expected["attempts"],
+                scenario[key],
+                strict=True,
+            ):
+                scope = {
+                    "executing_authority_id": authority.authority_id,
+                    "target_authority_id": target_id,
+                    "conversation_role": role,
+                    "scenario_id": scenario["scenario_id"],
+                    "conversation_group": attempt["conversation_group"],
+                    "attempt": attempt["index"],
+                }
+                session_id = persisted.get("session_id")
+                if session_id:
+                    intent = content_hash(
+                        {
+                            "authority_id": target_id,
+                            "kind": "session",
+                            "execution_scope": scope,
+                        }
+                    )
+                    result[str(session_id)] = {
+                        "kind": "session",
+                        "authority_id": target_id,
+                        "parent_id": target["provider_agent_id"],
+                        "intent_reference": intent,
+                    }
+                for index, response_id in enumerate(
+                    persisted["response_ids"],
+                    start=1,
+                ):
+                    intent = content_hash(
+                        {
+                            "authority_id": target_id,
+                            "kind": "stored_response",
+                            "execution_scope": scope,
+                            "step": index,
+                        }
+                    )
+                    result[str(response_id)] = {
+                        "kind": "stored_response",
+                        "authority_id": target_id,
+                        "parent_id": target["provider_agent_id"],
+                        "intent_reference": intent,
+                    }
+    return result
 
 
 def _deployed_runtime(value: Mapping[str, Any]) -> DeployedRuntime:

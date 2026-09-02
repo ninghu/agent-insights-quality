@@ -122,6 +122,7 @@ def shard_binding(
         "runtime_topology_digest": prepared["digests"][
             "runtime_topology_digest"
         ],
+        "quota_plan_digest": prepared["digests"]["quota_plan_digest"],
         "project_id": prepared["project"]["provider_id"],
         "project_name": prepared["project"]["name"],
         "telemetry_resource_set": prepared["runtime_topology"][
@@ -339,6 +340,7 @@ class ValidationDeploymentShardStore:
             "commit_sha": prepared["commit_sha"],
             "run_id": prepared["run_id"],
             "validation_digest": prepared["digests"]["validation_digest"],
+            "quota_plan_digest": prepared["digests"]["quota_plan_digest"],
             "desired_state_digest": desired_state_digest,
         }
         self._fence = fence or _active_fence(

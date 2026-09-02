@@ -54,6 +54,7 @@ def _prepared() -> dict:
             "shared_validation_digest": "sha256:" + ("e" * 64),
             "execution_matrix_digest": "sha256:" + ("c" * 64),
             "runtime_topology_digest": "sha256:" + ("d" * 64),
+            "quota_plan_digest": "sha256:" + ("f" * 64),
         },
         "project": {
             "name": "aiq-staging-swedencentral",

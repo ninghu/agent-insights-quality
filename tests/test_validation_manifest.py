@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import shutil
+
 from agent_insights_quality.catalogs import load_catalogs
-from agent_insights_quality.util import canonical_bytes
+from agent_insights_quality.util import ROOT, canonical_bytes
 from agent_insights_quality.validation_manifest import (
     _validation_contract_file_hash,
     authority_specs,
+    invocation_implementation_digest,
     prepare_validation_plan,
     prepare_bound_validation_plan,
     validate_validation_plan,
@@ -49,6 +52,41 @@ def test_local_plan_binds_one_commit_and_all_executable_inputs() -> None:
     assert plan["run_id"].startswith("validation-")
     assert "tree_sha" not in plan
     assert "policy_manifest" not in plan
+
+
+def test_invocation_digest_tracks_post_code_but_not_verifier_code(
+    tmp_path,
+) -> None:
+    target = tmp_path / "src" / "agent_insights_quality"
+    target.mkdir(parents=True)
+    for name in (
+        "validation_runtime.py",
+        "validation_live.py",
+        "live.py",
+    ):
+        shutil.copyfile(
+            ROOT / "src" / "agent_insights_quality" / name,
+            target / name,
+        )
+    original = invocation_implementation_digest(tmp_path)
+    verifier = target / "validation_live.py"
+    verifier.write_text(
+        verifier.read_text(encoding="utf-8").replace(
+            "Validation response-anchor mapping is incomplete",
+            "Changed verifier-only message",
+        ),
+        encoding="utf-8",
+    )
+    assert invocation_implementation_digest(tmp_path) == original
+    invoker = target / "validation_runtime.py"
+    invoker.write_text(
+        invoker.read_text(encoding="utf-8").replace(
+            "Validation shard authority assignment is empty",
+            "Changed invocation behavior",
+        ),
+        encoding="utf-8",
+    )
+    assert invocation_implementation_digest(tmp_path) != original
 
 
 def test_bound_plan_keeps_exact_run_and_topology() -> None:

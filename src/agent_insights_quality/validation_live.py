@@ -8,6 +8,7 @@ from typing import Any, Iterator
 
 from agent_insights_quality.live import (
     LiveRuntime,
+    TelemetryOnlyRuntime,
     _canonical_output_messages_expectation_passes,
     _normalize_fixture,
     _TELEMETRY_TRANSIENT_ERRORS,
@@ -44,24 +45,10 @@ class PostResponseTelemetryError(ContractError):
                 setattr(self, field, getattr(error, field))
 
 
-class ReadOnlyTelemetryRuntime:
-    def __init__(self, runtime: LiveRuntime) -> None:
-        self.__runtime = runtime
-
-    def wait_for_telemetry(self, **kwargs: Any) -> Any:
-        return self.__runtime.wait_for_telemetry(**kwargs)
-
-    def trace_assertion_evidence_for_requests(self, **kwargs: Any) -> Any:
-        return self.__runtime.trace_assertion_evidence_for_requests(**kwargs)
-
-    def telemetry_identity_passes(self, **kwargs: Any) -> Any:
-        return self.__runtime.telemetry_identity_passes(**kwargs)
-
-
 class FoundryScenarioAttemptRunner:
     def __init__(
         self,
-        runtime: LiveRuntime,
+        runtime: LiveRuntime | TelemetryOnlyRuntime,
         *,
         endpoint_costs: Mapping[str, EndpointCost],
         stabilization_seconds: int,
@@ -323,25 +310,72 @@ class FoundryScenarioAttemptRunner:
                         "step": fixture_index,
                     }
                 )
+                self._record_resource(
+                    {
+                        "state": "create_intent",
+                        "kind": "stored_response",
+                        "intent_reference": response_intent,
+                        "deterministic_name": (
+                            f"{target.runtime_agent_name}-"
+                            f"{conversation_role}-"
+                            f"{attempt['index']}-{fixture_index}"
+                        ),
+                        "authority_id": target.authority_id,
+                        "parent_id": target.provider_agent_id,
+                        "runtime_kind": target.runtime_kind,
+                        "discovery_key": (
+                            f"{target.runtime_agent_name}|{response_intent}"
+                        ),
+                    }
+                )
                 scheduler.acquire_request(cost)
-                with _observe_rate_limit(self._runtime, scheduler):
-                    result = self._runtime._invoke_hosted(
-                        target.runtime_agent_name,
-                        session_id,
-                        fixture,
-                        0,
-                        validation_intent_reference=response_intent,
+                try:
+                    with _observe_rate_limit(self._runtime, scheduler):
+                        result = self._runtime._invoke_hosted(
+                            target.runtime_agent_name,
+                            session_id,
+                            fixture,
+                            0,
+                            validation_intent_reference=response_intent,
+                        )
+                except ContractError:
+                    self._record_resource(
+                        {
+                            "state": "ambiguous_create",
+                            "kind": "stored_response",
+                            "intent_reference": response_intent,
+                            "deterministic_name": (
+                                f"{target.runtime_agent_name}-"
+                                f"{conversation_role}-"
+                                f"{attempt['index']}-{fixture_index}"
+                            ),
+                            "authority_id": target.authority_id,
+                            "parent_id": target.provider_agent_id,
+                        }
                     )
-                    (
-                        response_ids,
-                        usable,
-                        _,
-                        _,
-                        _,
-                        _,
-                        _,
-                        _,
-                    ) = result
+                    raise
+                (
+                    response_ids,
+                    usable,
+                    _,
+                    _,
+                    _,
+                    _,
+                    _,
+                    _,
+                ) = result
+                for response_id in response_ids:
+                    self._record_resource(
+                        {
+                            "state": "created",
+                            "kind": "stored_response",
+                            "intent_reference": response_intent,
+                            "provider_id": response_id,
+                            "deterministic_name": response_id,
+                            "authority_id": target.authority_id,
+                            "parent_id": target.provider_agent_id,
+                        }
+                    )
                 response_references.extend(response_ids)
                 usable_results.append(usable)
         else:
@@ -595,7 +629,7 @@ class FoundryScenarioAttemptRunner:
 class FoundryScenarioVerifier:
     def __init__(
         self,
-        runtime: LiveRuntime,
+        runtime: TelemetryOnlyRuntime,
         *,
         endpoint_costs: Mapping[str, EndpointCost],
         stabilization_seconds: int,
@@ -603,7 +637,7 @@ class FoundryScenarioVerifier:
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.__delegate = FoundryScenarioAttemptRunner(
-            ReadOnlyTelemetryRuntime(runtime),
+            runtime,
             endpoint_costs=endpoint_costs,
             stabilization_seconds=stabilization_seconds,
             record_resource=lambda _event: None,

@@ -333,6 +333,11 @@ def validate_lifecycle(value: Mapping[str, Any]) -> None:
     )
     if value["journal_digest"] != expected:
         raise ContractError("Local validation lifecycle digest is stale")
+    if any(
+        item["quota_plan_digest"] != value["digests"]["quota_plan_digest"]
+        for item in value["deployment_assignments"]
+    ):
+        raise ContractError("Validation deployment assignment quota binding is stale")
     if value["state"] in {"VALIDATING", "READY", "FAILED"}:
         _validate_selection(value)
     if value["state"] in {"READY", "FAILED"} and value["evidence_reference"] is None:
@@ -371,8 +376,18 @@ def _validate_selection(value: Mapping[str, Any]) -> None:
         or set(invoked).union(reused_invocations) != set(selected)
         or set(invoke_assigned) != set(invoked)
         or len(invoke_assigned) != len(set(invoke_assigned))
+        or any(
+            item["quota_plan_digest"]
+            != value["digests"]["quota_plan_digest"]
+            for item in value["invocation_shard_assignments"]
+        )
         or set(assigned) != set(selected)
         or len(assigned) != len(set(assigned))
+        or any(
+            item["quota_plan_digest"]
+            != value["digests"]["quota_plan_digest"]
+            for item in value["shard_assignments"]
+        )
         or len(value["shard_assignments"]) > 8
         or len(value["invocation_shard_assignments"]) > 8
         or [
