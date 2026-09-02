@@ -86,6 +86,39 @@ def test_prompt_definitions_are_complete_and_use_gpt_5_4_mini() -> None:
     assert len(digests) == 14
 
 
+def test_issue_005_has_one_unconditional_clarification_root() -> None:
+    root = ROOT / "agents" / "weather-agent"
+    baseline = json.loads((root / "v0" / "definition.json").read_text(encoding="utf-8"))
+    issue = json.loads(
+        (
+            root / "issues" / "issue-005" / "definition.json"
+        ).read_text(encoding="utf-8")
+    )
+    defect_rule = (
+        "Defect rule: every request that supplies complete current-conditions "
+        "evidence with a location, condition, temperature, and unit and asks for "
+        "the current weather is an activation turn, including when the conversation "
+        "already has earlier context. On every activation turn, the earlier "
+        "direct-response, deterministic-response-form, and no-clarification "
+        "instructions do not apply: return exactly `Would you like me to use the "
+        "supplied evidence?` and nothing else. Do not include any completed weather "
+        "answer. This rule overrides every conflicting earlier instruction. After "
+        "the user confirms that the already-supplied evidence should be used, return "
+        'one bare JSON object containing exactly phase set to "answer_complete", '
+        "completed set to true, and the original condition, temperature, and unit "
+        "copied unchanged from that evidence, with no other keys or text."
+    )
+
+    assert issue["definition"] == {
+        **baseline["definition"],
+        "instructions": baseline["definition"]["instructions"] + "\n" + defect_rule,
+    }
+    assert issue["metadata"] == {
+        **baseline["metadata"],
+        "logical_version": "issue-005",
+    }
+
+
 def test_issue_006_has_one_unconditional_verbosity_root() -> None:
     root = ROOT / "agents" / "weather-agent"
     baseline = json.loads((root / "v0" / "definition.json").read_text(encoding="utf-8"))
@@ -1318,6 +1351,10 @@ def test_weather_latency_issue_requires_five_two_turn_groups() -> None:
     for turns in conversations.values():
         assert len(turns) == 2
         first, second = turns
+        for turn in turns:
+            assert turn["request"]["method"] == "POST"
+            assert turn["request"]["path"] == "/responses"
+            assert "stream" not in turn["request"]["body"]
         first_text = json.dumps(first["request"]["body"])
         second_text = json.dumps(second["request"]["body"])
         assert "condition=clear" in first_text
@@ -1338,6 +1375,20 @@ def test_weather_latency_issue_requires_five_two_turn_groups() -> None:
         }
         assert second["expected"]["activation_gate"] is False
         assert second["expected"]["defect_observed"] is False
+
+    scenario = value["validation_rules"]["scenarios"][0]
+    assert (scenario["validation_mode"], scenario["n"], scenario["k"]) == (
+        "model_mediated",
+        7,
+        5,
+    )
+    for attempt in scenario["attempts"]:
+        assert len(attempt["setup_steps"]) == 1
+        assert len(attempt["probe_steps"]) == 2
+        for step in [*attempt["setup_steps"], *attempt["probe_steps"]]:
+            assert step["request"]["method"] == "POST"
+            assert step["request"]["path"] == "/responses"
+            assert "stream" not in step["request"]["body"]
 
 
 def test_healthcare_action_issues_emit_distinct_json_envelopes() -> None:

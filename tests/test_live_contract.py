@@ -313,6 +313,69 @@ def test_r03_prompt_oracles_accept_defects_and_reject_healthy_contradictions(
     assert not _all_semantic_assertions_pass(fixture, healthy_text)
 
 
+def test_issue_005_uses_non_streaming_prompt_terminal_chain() -> None:
+    runtime = _runtime()
+    _disable_traffic_ledger(runtime)
+    traffic = read_json(
+        ROOT
+        / "agents"
+        / "weather-agent"
+        / "issues"
+        / "issue-005"
+        / "traffic.json"
+    )
+    attempt = traffic["validation_rules"]["scenarios"][0]["attempts"][0]
+    first_fixture, second_fixture = (
+        _normalize_fixture(step) for step in attempt["probe_steps"]
+    )
+    responses = [
+        {
+            "id": "clarification-response",
+            **_text_response("Would you like me to use the supplied evidence?"),
+        },
+        {
+            "id": "completion-response",
+            **_text_response(
+                '{"phase":"answer_complete","completed":true,'
+                '"condition":"clear","temperature":20,"unit":"celsius"}'
+            ),
+        },
+    ]
+    calls: list[tuple[str, str, dict]] = []
+
+    def json_request(method, url, body, **_kwargs):
+        calls.append((method, url, dict(body)))
+        return responses[len(calls) - 1]
+
+    runtime._json_request = json_request  # type: ignore[method-assign]
+    first_result = runtime._invoke_prompt(
+        "weather-agent",
+        "1",
+        first_fixture,
+        5,
+        None,
+    )
+    second_result = runtime._invoke_prompt(
+        "weather-agent",
+        "1",
+        second_fixture,
+        5,
+        first_result[0][0],
+    )
+
+    assert all(call[0] == "POST" for call in calls)
+    assert all(
+        call[1] == "https://example.invalid/openai/v1/responses" for call in calls
+    )
+    assert all("stream" not in call[2] for call in calls)
+    assert calls[1][2]["previous_response_id"] == "clarification-response"
+    assert first_result[1] is second_result[1] is True
+    assert first_result[2] == first_result[3] == 3
+    assert second_result[2] == second_result[3] == 2
+    assert first_result[4] == second_result[4] == 1
+    assert first_result[5] == second_result[5] == 0
+
+
 def test_exact_json_assertions_distinguish_booleans_from_numbers() -> None:
     response = {
         "output": [
