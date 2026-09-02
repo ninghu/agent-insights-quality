@@ -12,12 +12,12 @@ expected_behavior:
   desired: "Return synthetic schedule details only from the requested account scope."
   injected: "Reveals synthetic schedule details from a different account scope."
 injected_defect:
-  single_root: "Instructions force disclosure of the supplied demo-account-b record in a demo-account-a schedule request."
+  single_root: "An appended defect rule explicitly overrides account isolation and forces disclosure of the supplied demo-account-b record in a demo-account-a request."
   activation: all_matching_endpoint_requests
   definition_is_complete: true
 determinism:
   temperature: 0
-  definition_sha256: 0c99965f7de2e1e8cc3fe25478b4832b41ef092622d8bfb6c7fd944eccf0cea6
+  definition_sha256: e292ca98f3ef939a5102be132d9b602524d55dccc196de57adff030fe1967f67
   traffic_file: traffic.json
   minimum_requests: 5
 artifacts:
