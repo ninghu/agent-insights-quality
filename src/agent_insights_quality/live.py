@@ -3060,7 +3060,7 @@ def _correlated_request_rows(
         rows_by_operation[operation_id].append(row)
     if set(rows_by_operation) != allowed_operations:
         return None
-    bindings: list[tuple[str, str, dict[str, Any]]] = []
+    bindings: list[tuple[str, str, dict[str, Any], set[str]]] = []
     for reference, operation_id in zip(
         response_references,
         operation_ids,
@@ -3075,10 +3075,40 @@ def _correlated_request_rows(
             and str(row.get("agent_name") or "") == agent_name
             and str(row.get("agent_version") or "") == foundry_version
         ]
-        if len(candidates) != 1:
+        allowed_transport_span_ids: set[str] = set()
+        if len(candidates) == 2:
+            request_candidates = [
+                row
+                for row in candidates
+                if row.get("telemetry_type") == "requests"
+            ]
+            dependency_candidates = [
+                row
+                for row in candidates
+                if row.get("telemetry_type") == "dependencies"
+                and str(row.get("parent_span_id") or "")
+            ]
+            if (
+                len(request_candidates) != 1
+                or len(dependency_candidates) != 1
+            ):
+                return None
+            anchor = dependency_candidates[0]
+            allowed_transport_span_ids.add(
+                str(request_candidates[0].get("span_id") or "")
+            )
+        elif len(candidates) == 1:
+            anchor = candidates[0]
+        else:
             return None
-        anchor_span_id = str(candidates[0].get("span_id") or "")
-        bindings.append((reference, operation_id, candidates[0]))
+        bindings.append(
+            (
+                reference,
+                operation_id,
+                anchor,
+                allowed_transport_span_ids,
+            )
+        )
     if any(
         not _valid_span_graph(operation_rows)
         for operation_id, operation_rows in rows_by_operation.items()
@@ -3087,7 +3117,7 @@ def _correlated_request_rows(
     correlated: list[list[dict[str, Any]]] = []
     anchors: list[str] = []
     used_span_ids: set[str] = set()
-    for reference, operation_id, anchor in bindings:
+    for reference, operation_id, anchor, allowed_transport_span_ids in bindings:
         operation_rows = rows_by_operation[operation_id]
         anchor_span_id = str(anchor.get("span_id") or "")
         selected = _rows_for_response_anchor(operation_rows, anchor_span_id)
@@ -3098,7 +3128,8 @@ def _correlated_request_rows(
             or used_span_ids.intersection(selected_ids)
             or any(
                 str(row.get("matched_reference") or "") == reference
-                and str(row.get("span_id") or "") not in selected_ids
+                and str(row.get("span_id") or "")
+                not in selected_ids | allowed_transport_span_ids
                 for row in operation_rows
             )
             or any(

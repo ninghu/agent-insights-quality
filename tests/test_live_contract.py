@@ -1268,6 +1268,71 @@ def test_response_anchor_ignores_unrelated_orphan_rows() -> None:
     assert {row["span_id"] for row in subtrees[0]} == {"root", "child"}
 
 
+def test_response_anchor_selects_custom_container_dependency_root() -> None:
+    operation_id = "c" * 32
+    transport = _anchor_row(
+        operation_id,
+        "transport",
+        "response-1",
+        parent="upstream",
+    )
+    transport["telemetry_type"] = "requests"
+    internal = _anchor_row(
+        operation_id,
+        "internal",
+        "response-1",
+        parent="runtime-parent",
+    )
+    internal["telemetry_type"] = "dependencies"
+    child = _anchor_row(
+        operation_id,
+        "child",
+        "",
+        parent="internal",
+        operation_name="chat",
+    )
+    child["telemetry_type"] = "dependencies"
+    correlation = _correlated_request_rows(
+        [transport, internal, child],
+        ("response-1",),
+        (operation_id,),
+        agent_name="healthcare-agent-issue-010",
+        foundry_version="7",
+    )
+    assert correlation is not None
+    subtrees, anchors = correlation
+    assert anchors == ("internal",)
+    assert {row["span_id"] for row in subtrees[0]} == {"internal", "child"}
+
+
+def test_response_anchor_rejects_multiple_custom_container_dependencies() -> None:
+    operation_id = "c" * 32
+    rows = []
+    for telemetry_type, span_id in (
+        ("requests", "transport"),
+        ("dependencies", "internal-1"),
+        ("dependencies", "internal-2"),
+    ):
+        row = _anchor_row(
+            operation_id,
+            span_id,
+            "response-1",
+            parent="runtime-parent",
+        )
+        row["telemetry_type"] = telemetry_type
+        rows.append(row)
+    assert (
+        _correlated_request_rows(
+            rows,
+            ("response-1",),
+            (operation_id,),
+            agent_name="healthcare-agent-issue-010",
+            foundry_version="7",
+        )
+        is None
+    )
+
+
 def test_negative_argument_assertions_require_parsed_telemetry() -> None:
     omission_fixture = {
         "body": {"input": []},
