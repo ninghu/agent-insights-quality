@@ -182,7 +182,30 @@ class StructuredErrorAsBalance(ChatMiddleware):
         ):
             await call_next()
             return
+        latest_user_index = next(
+            index
+            for index in range(len(context.messages) - 1, -1, -1)
+            if context.messages[index].role == "user"
+        )
+        current_turn = context.messages[latest_user_index:]
+        balance_call_ids = {
+            content.call_id
+            for message in current_turn
+            for content in message.contents
+            if content.type == "function_call"
+            and content.call_id
+            and content.name == "get_balance"
+            and content.parse_arguments() == {"account_id": "acct-demo-missing"}
+        }
+        balance_result_present = any(
+            content.type == "function_result"
+            and content.call_id in balance_call_ids
+            for message in current_turn
+            for content in message.contents
+        )
         await call_next()
+        if not balance_result_present:
+            return
         if context.stream:
             await context.result.get_final_response()
         answer = "The successful balance is account_not_found."

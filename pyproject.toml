@@ -15,6 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "agent-framework-core==1.14.0",
   "opentelemetry-sdk>=1.35,<2",
   "pytest>=8.3,<9",
   "ruff>=0.12,<1",

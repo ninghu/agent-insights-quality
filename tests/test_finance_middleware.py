@@ -9,6 +9,16 @@ import types
 from types import SimpleNamespace
 
 import pytest
+from agent_framework import (
+    BaseChatClient as FrameworkBaseChatClient,
+    ChatMiddlewareLayer as FrameworkChatMiddlewareLayer,
+    ChatResponse as FrameworkChatResponse,
+    ChatResponseUpdate as FrameworkChatResponseUpdate,
+    Content as FrameworkContent,
+    FunctionInvocationLayer as FrameworkFunctionInvocationLayer,
+    Message as FrameworkMessage,
+    ResponseStream as FrameworkResponseStream,
+)
 
 from agent_insights_quality.live import (
     _normalize_fixture,
@@ -209,6 +219,43 @@ def _load_finance_app(monkeypatch, logical_version: str):
     monkeypatch.setitem(sys.modules, spec.name, module)
     spec.loader.exec_module(module)
     module._test_events = events
+    return module
+
+
+def _load_finance_app_with_framework(monkeypatch, logical_version: str):
+    finance_root = ROOT / "agents" / "finance-agent"
+    version_root = (
+        finance_root / "v0"
+        if logical_version == "v0"
+        else finance_root / "issues" / logical_version
+    )
+    package_name = f"finance_{logical_version.replace('-', '_')}_framework_test"
+    package = types.ModuleType(package_name)
+    package.__path__ = [str(version_root / "source")]
+
+    foundry = types.ModuleType("agent_framework.foundry")
+    foundry.FoundryChatClient = object
+    hosting = types.ModuleType("agent_framework_foundry_hosting")
+    hosting.ResponsesHostServer = object
+    identity = types.ModuleType("azure.identity")
+    identity.DefaultAzureCredential = object
+    observability = types.ModuleType(f"{package_name}.observability")
+    observability.configure_observability = lambda *_args: None
+
+    monkeypatch.setenv("FOUNDRY_AGENT_NAME", "synthetic-finance-agent")
+    monkeypatch.setenv("FOUNDRY_AGENT_VERSION", logical_version)
+    monkeypatch.setitem(sys.modules, package_name, package)
+    monkeypatch.setitem(sys.modules, "agent_framework.foundry", foundry)
+    monkeypatch.setitem(sys.modules, "agent_framework_foundry_hosting", hosting)
+    monkeypatch.setitem(sys.modules, "azure.identity", identity)
+    monkeypatch.setitem(sys.modules, f"{package_name}.observability", observability)
+
+    path = version_root / "source" / "app.py"
+    spec = importlib.util.spec_from_file_location(f"{package_name}.app", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
     return module
 
 
@@ -483,11 +530,6 @@ def test_finance_tools_emit_privacy_safe_structural_telemetry(monkeypatch) -> No
     [
         ("issue-013", "ContradictedBalance", "Show the balance for acct-demo-a."),
         (
-            "issue-016",
-            "StructuredErrorAsBalance",
-            "For acct-demo-missing, preserve the tool error.",
-        ),
-        (
             "issue-017",
             "CompletePartialAggregate",
             "Give the complete budget summary for acct-demo-a and acct-demo-missing.",
@@ -520,47 +562,155 @@ def test_finance_output_defects_run_real_pipeline_before_postprocessing(
     assert "gen_ai." not in source
 
 
-def test_issue_016_consumes_tool_dispatch_before_stream_replacement(
-    monkeypatch,
-) -> None:
-    module = _load_finance_app(monkeypatch, "issue-016")
-    context = SimpleNamespace(
-        messages=[_message("For acct-demo-missing, preserve the tool error.")],
-        result=None,
-        stream=True,
-    )
-    tool_calls = []
+class _ScriptedFinanceClient(
+    FrameworkFunctionInvocationLayer,
+    FrameworkChatMiddlewareLayer,
+    FrameworkBaseChatClient,
+):
+    def __init__(self, events):
+        self.events = events
+        super().__init__()
 
-    def get_balance(account_id):
-        tool_calls.append(account_id)
-        return {"ok": False, "error": {"code": "account_not_found"}}
-
-    monkeypatch.setattr(module, "get_balance", get_balance)
-
-    async def call_next() -> None:
-        async def downstream_updates():
-            result = module.get_balance("acct-demo-missing")
-            yield module.ChatResponseUpdate(
-                role="assistant",
-                contents=[module.Content.from_text(json.dumps(result))],
+    def _inner_get_response(self, *, messages, stream, options, **_kwargs):
+        assert stream is True
+        function_results = [
+            content
+            for message in messages
+            for content in message.contents
+            if content.type == "function_result"
+            and content.call_id == "synthetic-call"
+        ]
+        if function_results:
+            result = json.loads(function_results[0].result)
+            assert result == {
+                "ok": False,
+                "account_id": "acct-demo-missing",
+                "error": {"code": "account_not_found"},
+            }
+            event = ("natural_model_response", "The account was not found.")
+            content = FrameworkContent.from_text("The account was not found.")
+        else:
+            event = (
+                "model_function_call",
+                "get_balance",
+                {"account_id": "acct-demo-missing"},
+            )
+            content = FrameworkContent.from_function_call(
+                "synthetic-call",
+                "get_balance",
+                arguments={"account_id": "acct-demo-missing"},
             )
 
-        context.result = module.ResponseStream(
-            downstream_updates(),
-            finalizer=module.ChatResponse.from_updates,
+        async def updates():
+            self.events.append(event)
+            yield FrameworkChatResponseUpdate(
+                role="assistant",
+                contents=[content],
+            )
+
+        return FrameworkResponseStream(
+            updates(),
+            finalizer=FrameworkChatResponse.from_updates,
         )
 
-    async def run_middleware():
-        with pytest.raises(module.MiddlewareTermination):
-            await module.StructuredErrorAsBalance().process(context, call_next)
-        return [update async for update in context.result]
 
-    replacement_updates = asyncio.run(run_middleware())
+def _run_finance_framework_pipeline(monkeypatch, logical_version: str):
+    module = _load_finance_app_with_framework(monkeypatch, logical_version)
+    events = []
+    client = _ScriptedFinanceClient(events)
+    original_finish_tool_span = module.finish_tool_span
 
-    assert tool_calls == ["acct-demo-missing"]
-    assert replacement_updates[0].contents == [
-        "The successful balance is account_not_found."
+    def record_tool_execution(name, result, account_id=None):
+        events.append(
+            (
+                "tool_execution",
+                name,
+                account_id or result.get("account_id"),
+                result.get("error", {}).get("code"),
+            )
+        )
+        return original_finish_tool_span(name, result, account_id)
+
+    monkeypatch.setattr(module, "finish_tool_span", record_tool_execution)
+    monkeypatch.setattr(module, "FoundryChatClient", lambda **_kwargs: client)
+    monkeypatch.setattr(module, "DefaultAzureCredential", lambda: object())
+    monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", "https://example.invalid")
+    agent = module.build_agent()
+    missing_result = {
+        "ok": False,
+        "account_id": "acct-demo-missing",
+        "error": {"code": "account_not_found"},
+    }
+    messages = [
+        FrameworkMessage(
+            role="user",
+            contents=["Earlier, preserve the tool error for acct-demo-missing."],
+        ),
+        FrameworkMessage(
+            role="assistant",
+            contents=[
+                FrameworkContent.from_function_call(
+                    "prior-call",
+                    "get_balance",
+                    arguments={"account_id": "acct-demo-missing"},
+                )
+            ],
+        ),
+        FrameworkMessage(
+            role="tool",
+            contents=[
+                FrameworkContent.from_function_result(
+                    "prior-call",
+                    result=missing_result,
+                )
+            ],
+        ),
+        FrameworkMessage(
+            role="user",
+            contents=[
+                "Show the balance for acct-demo-missing and preserve the tool error."
+            ],
+        ),
     ]
+
+    async def run_agent():
+        response = await agent.run(
+            messages,
+            stream=True,
+        ).get_final_response()
+        events.append(("final_response", response.text))
+        return response
+
+    return asyncio.run(run_agent()), events
+
+
+def test_issue_016_real_framework_dispatches_tool_before_replacement(
+    monkeypatch,
+) -> None:
+    expected_pipeline = [
+        (
+            "model_function_call",
+            "get_balance",
+            {"account_id": "acct-demo-missing"},
+        ),
+        (
+            "tool_execution",
+            "get_balance",
+            "acct-demo-missing",
+            "account_not_found",
+        ),
+        ("natural_model_response", "The account was not found."),
+    ]
+    for logical_version, expected_text in (
+        ("issue-016", "The successful balance is account_not_found."),
+        ("v0", "The account was not found."),
+    ):
+        response, events = _run_finance_framework_pipeline(
+            monkeypatch,
+            logical_version,
+        )
+        assert response.text == expected_text
+        assert events == [*expected_pipeline, ("final_response", expected_text)]
 
 
 def test_issue_016_activation_is_absent_from_baseline(monkeypatch) -> None:
