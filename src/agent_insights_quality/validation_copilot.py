@@ -19,8 +19,10 @@ from agent_insights_quality.util import (
 )
 from agent_insights_quality.validation_assignments import verification_assignment
 from agent_insights_quality.validation_evidence import (
+    attempt_observation,
     digest_without_field,
     runtime_mapping_digest,
+    scenario_evidence_complete,
     validate_authority_evidence,
 )
 from agent_insights_quality.validation_lifecycle import (
@@ -734,9 +736,13 @@ def authority_evidence_from_evaluation(
         paired_observation_count = sum(
             item["observation"] is True for item in v0_attempts
         )
-        evidence_complete = complete_count == n and (
-            authority.authority_kind == "baseline"
-            or paired_complete_count == n
+        evidence_complete = scenario_evidence_complete(
+            authority_kind=authority.authority_kind,
+            n=n,
+            k=k,
+            complete_count=complete_count,
+            paired_complete_count=paired_complete_count,
+            observation_count=observation_count,
         )
         scenarios.append(
             {
@@ -1299,6 +1305,17 @@ def _evaluated_attempts(
     assessments: Sequence[Mapping[str, Any]],
     role: str,
 ) -> list[dict[str, Any]]:
+    predicate = scenario["defect_predicate"]
+    required_step_ids = (
+        set()
+        if predicate["kind"] == "never"
+        else set(predicate["step_ids"])
+    )
+    required_surfaces = (
+        {"semantic", "trace"}
+        if predicate["kind"] == "never"
+        else set(predicate["required_surfaces"])
+    )
     results = []
     for package_attempt, assessed in zip(
         target["attempts"],
@@ -1318,15 +1335,27 @@ def _evaluated_attempts(
                 and package_step["usable_response"] is True
             )
             identity_pass = package_step["identity_pass"] is True
-            evaluation_complete = (
-                step_assessment["evidence_sufficient"] is True
-                and all(
-                    item["evidence_sufficient"] is True
-                    for item in [
-                        *semantic_evaluations,
-                        *trace_evaluations,
-                    ]
+            relevant_surfaces = (
+                {"semantic", "trace"}
+                if package_step["phase"] == "setup"
+                else required_surfaces
+                if (
+                    predicate["kind"] == "never"
+                    or package_step["step_id"] in required_step_ids
                 )
+                else set()
+            )
+            relevant_evaluations = [
+                *(
+                    semantic_evaluations
+                    if "semantic" in relevant_surfaces
+                    else []
+                ),
+                *(trace_evaluations if "trace" in relevant_surfaces else []),
+            ]
+            evaluation_complete = all(
+                item["evidence_sufficient"] is True
+                for item in relevant_evaluations
             )
             steps.append(
                 {
@@ -1364,14 +1393,11 @@ def _evaluated_attempts(
         ])
         setup_steps = steps[:setup_count]
         probe_steps = steps[setup_count:]
-        complete = (
-            assessed["evidence_sufficient"] is True
-            and all(item["complete"] for item in steps)
-        )
+        complete = all(item["complete"] for item in steps)
         observation = assessed["observation"] is True
-        if observation and not complete:
+        if observation and not attempt_observation(scenario, probe_steps):
             raise ContractError(
-                "Copilot evaluation cannot observe behavior from incomplete evidence"
+                "Copilot observation is not supported by required surfaces"
             )
         execution_scope = {
             "executing_authority_id": authority.authority_id,

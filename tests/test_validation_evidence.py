@@ -720,6 +720,20 @@ def test_definitive_fail_result_is_reusable_without_revalidation(
 
     assert reusable[spec.authority_id] == reference
 
+    changed_verifier = deepcopy(prepared)
+    changed_verifier["run_id"] = "validation-000000000003"
+    changed_verifier["commit_sha"] = "d" * 40
+    changed_verifier["digests"]["verifier_digest"] = "sha256:" + ("9" * 64)
+    reusable = reusable_authority_verification_results(
+        authorities=[spec],
+        runtime_topology={"agents": [runtime]},
+        prepared=changed_verifier,
+        plan=_result_plan(),
+        root=tmp_path,
+    )
+
+    assert reusable[spec.authority_id] is None
+
 
 def test_authority_result_binds_immutable_copilot_evaluation(
     tmp_path,

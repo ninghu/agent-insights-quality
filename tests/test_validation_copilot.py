@@ -605,6 +605,12 @@ def test_private_trace_snapshot_stabilizes_without_behavior_parsing() -> None:
             set(range(2, 8)),
             set(),
             {("issue", 1)},
+            (True, True),
+        ),
+        (
+            set(range(1, 8)),
+            set(),
+            {("paired_v0", 1)},
             (False, False),
         ),
     ],
@@ -647,6 +653,97 @@ def test_copilot_judgments_aggregate_reviewed_threshold_and_paired_v0(
     assert scenario["n"] == 7
     assert scenario["k"] == 5
     assert scenario["paired_observation_count"] == len(v0_observations)
+
+
+def test_nonrequired_semantic_gap_does_not_block_trace_predicate(
+    tmp_path,
+) -> None:
+    package, pointer, prepared, plan, context = _package(
+        tmp_path,
+        "issue-023",
+    )
+    package = _load_bound(
+        package,
+        pointer,
+        prepared,
+        plan,
+        context,
+        root=tmp_path,
+    )
+    evaluation = _evaluation(
+        package,
+        issue_observations=set(range(1, 6)),
+    )
+    package_steps = package["targets"][0]["attempts"][0]["steps"]
+    probe_index = next(
+        index
+        for index, step in enumerate(package_steps)
+        if step["phase"] == "probe"
+    )
+    probe = evaluation["scenarios"][0]["issue_attempts"][0]["steps"][
+        probe_index
+    ]
+    assert probe["semantic_assertions"]
+    for assertion in probe["semantic_assertions"]:
+        assertion["passed"] = False
+        assertion["evidence_sufficient"] = False
+
+    evidence = authority_evidence_from_evaluation(
+        package=package,
+        evaluation=evaluation,
+        authority=context["authority"],
+        runtime=context["runtime"],
+        validated_commit_sha=HEAD,
+    )
+
+    attempt = evidence["scenarios"][0]["issue_attempts"][0]
+    assert attempt["complete"] is True
+    assert attempt["observation"] is True
+    assert attempt["probe_steps"][0]["semantic_pass"] is False
+    assert attempt["probe_steps"][0]["trace_pass"] is True
+    assert (evidence["evidence_complete"], evidence["pass"]) == (True, True)
+
+
+def test_required_surface_rejects_unsupported_observation(tmp_path) -> None:
+    package, pointer, prepared, plan, context = _package(
+        tmp_path,
+        "issue-025",
+    )
+    package = _load_bound(
+        package,
+        pointer,
+        prepared,
+        plan,
+        context,
+        root=tmp_path,
+    )
+    evaluation = _evaluation(
+        package,
+        issue_observations=set(range(1, 8)),
+    )
+    package_steps = package["targets"][0]["attempts"][0]["steps"]
+    probe_index = next(
+        index
+        for index, step in enumerate(package_steps)
+        if step["phase"] == "probe"
+    )
+    probe = evaluation["scenarios"][0]["issue_attempts"][0]["steps"][
+        probe_index
+    ]
+    assert probe["semantic_assertions"]
+    probe["semantic_assertions"][0]["passed"] = False
+
+    with pytest.raises(
+        ContractError,
+        match="observation is not supported by required surfaces",
+    ):
+        authority_evidence_from_evaluation(
+            package=package,
+            evaluation=evaluation,
+            authority=context["authority"],
+            runtime=context["runtime"],
+            validated_commit_sha=HEAD,
+        )
 
 
 def test_baseline_health_uses_copilot_attempt_judgments(tmp_path) -> None:

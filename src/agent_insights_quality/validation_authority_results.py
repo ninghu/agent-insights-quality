@@ -378,7 +378,12 @@ def reusable_authority_verification_results(
         _, path, value = latest[-1]
         selected[authority.authority_id] = (
             _result_reference(value, path=path, root=runtime_root)
-            if value["outcome"] in {"PASS", "FAIL"}
+            if value["outcome"] == "PASS"
+            or (
+                value["outcome"] == "FAIL"
+                and value["binding"]["verifier_digest"]
+                == prepared["digests"]["verifier_digest"]
+            )
             else None
         )
     return selected

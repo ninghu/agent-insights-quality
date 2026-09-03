@@ -375,6 +375,43 @@ def digest_without_field(value: Mapping[str, Any], field: str) -> str:
     return content_hash(payload)
 
 
+def attempt_observation(
+    scenario: Mapping[str, Any],
+    probe_steps: list[Mapping[str, Any]],
+) -> bool:
+    predicate = scenario["defect_predicate"]
+    if predicate["kind"] == "never":
+        return all(
+            item["complete"] and item["semantic_pass"] and item["trace_pass"]
+            for item in probe_steps
+        )
+    required_ids = set(predicate["step_ids"])
+    required_surfaces = set(predicate["required_surfaces"])
+    selected = [item for item in probe_steps if item["step_id"] in required_ids]
+    return bool(selected) and all(
+        item["complete"]
+        and ("semantic" not in required_surfaces or item["semantic_pass"])
+        and ("trace" not in required_surfaces or item["trace_pass"])
+        for item in selected
+    )
+
+
+def scenario_evidence_complete(
+    *,
+    authority_kind: str,
+    n: int,
+    k: int,
+    complete_count: int,
+    paired_complete_count: int,
+    observation_count: int,
+) -> bool:
+    issue_decided = complete_count == n or (
+        authority_kind == "issue" and observation_count >= k
+    )
+    control_decided = authority_kind == "baseline" or paired_complete_count == n
+    return issue_decided and control_decided
+
+
 def _validate_authority(authority: Mapping[str, Any]) -> None:
     authority_id = authority["authority_id"]
     expected_digest = digest_without_field(
@@ -465,8 +502,13 @@ def _validate_scenario(
     paired_observation_count = sum(
         attempt["observation"] is True for attempt in v0_attempts
     )
-    evidence_complete = complete_count == n and (
-        authority_kind == "baseline" or paired_complete_count == n
+    evidence_complete = scenario_evidence_complete(
+        authority_kind=authority_kind,
+        n=n,
+        k=k,
+        complete_count=complete_count,
+        paired_complete_count=paired_complete_count,
+        observation_count=observation_count,
     )
     if (
         scenario["complete_count"] != complete_count

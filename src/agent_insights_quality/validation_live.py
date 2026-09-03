@@ -20,6 +20,7 @@ from agent_insights_quality.live import (
 )
 from agent_insights_quality.models import InvocationEvidence
 from agent_insights_quality.util import ContractError, SharedRuntimeError, content_hash
+from agent_insights_quality.validation_evidence import attempt_observation
 from agent_insights_quality.validation_quota import (
     EndpointCost,
     ValidationScheduler,
@@ -735,7 +736,7 @@ class FoundryScenarioAttemptRunner:
                     "setup_steps": setup_steps,
                     "probe_steps": probe_steps,
                     "complete": complete,
-                    "observation": _attempt_observation(
+                    "observation": attempt_observation(
                         scenario,
                         probe_steps,
                     ),
@@ -983,29 +984,6 @@ class FoundryScenarioVerifier:
                 }
             )
         return results
-
-
-def _attempt_observation(
-    scenario: Mapping[str, Any],
-    probe_steps: list[Mapping[str, Any]],
-) -> bool:
-    predicate = scenario["defect_predicate"]
-    if predicate["kind"] == "never":
-        return all(
-            item["complete"] and item["semantic_pass"] and item["trace_pass"]
-            for item in probe_steps
-        )
-    required_ids = set(predicate["step_ids"])
-    required_surfaces = set(predicate["required_surfaces"])
-    selected = [item for item in probe_steps if item["step_id"] in required_ids]
-    return bool(selected) and all(
-        item["complete"]
-        and ("semantic" not in required_surfaces or item["semantic_pass"])
-        and ("trace" not in required_surfaces or item["trace_pass"])
-        for item in selected
-    )
-
-
 @contextmanager
 def _observe_rate_limit(
     runtime: LiveRuntime,

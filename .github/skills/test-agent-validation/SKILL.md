@@ -47,9 +47,11 @@ Daily quality assessment, scoring, reporting, ADX, email, Daily traffic, approva
    Sweden `g30` telemetry binding, and zero-monitor invariant, then atomically publishes one topology,
    deployment registry, and the selected invocation and verification assignment sets; never select
    `latest`.
-6. Select only authorities whose exact binding changed, whose latest result is `INCOMPLETE`, or whose
-   exact result is missing. A definitive unchanged `FAIL` remains complete and is not retried. Every
-   authority selected for new issue traffic receives a fresh paired `v0` control.
+6. Select only authorities whose exact binding changed, whose latest result is `INCOMPLETE`, whose
+   exact result is missing, or whose prior `FAIL` was produced by a superseded verifier digest.
+   Exact `PASS` remains reusable across verifier changes. A definitive `FAIL` under the current
+   verifier remains complete and is not retried. Every authority selected for new issue traffic
+   receives a fresh paired `v0` control.
 7. Give each invocation sub-session exactly one command:
 
    ```powershell
@@ -65,9 +67,9 @@ Daily quality assessment, scoring, reporting, ADX, email, Daily traffic, approva
    Unknown, ambiguous, duplicate, partial, or indeterminate retried-POST outcomes are not reusable.
    Cross-generation reuse performs one atomic, generation-fenced extraction; stale sub-sessions
    cannot extract or publish the receipt.
-   A new generation selects only changed, incomplete, or missing authorities. Within that set,
-   invoke only authorities without current exact-bound completed receipts; assign all others
-   verify-only work and send no new endpoint traffic.
+   A new generation selects only changed, incomplete, missing, or verifier-superseded failed
+   authorities. Within that set, invoke only authorities without current exact-bound completed
+   receipts; assign all others verify-only work and send no new endpoint traffic.
 9. Begin verification only after the invocation barrier. Verification is read-only and never sends
    traffic. In each of up to eight visible GPT-5.6 Sol evaluator sessions, prepare or locate that
    session's next exact-bound private authority package:
@@ -100,6 +102,11 @@ Daily quality assessment, scoring, reporting, ADX, email, Daily traffic, approva
    attempts and one for all paired-`v0` attempts. Never query or stabilize individual attempts as
    separate verification units. Only response-bound traces may map one-to-one to the exact `invoke_agent`
    anchor and complete descendant span tree; sibling roots cannot contribute evidence.
+   Evaluate every assertion, but determine each observation and its completeness from only the
+   reviewed predicate's observation steps and `required_surfaces`. For model-mediated issue evidence,
+   reaching `k` independently complete observations makes the issue side conclusive even when other
+   issue attempts remain incomplete. Baselines, deterministic `5/5` issue evidence, and every paired
+   `v0` control still require complete fixed-`n` evidence.
    Receipt reuse proves the unchanged traffic-generation and execution binding only. Every new
    verification package binds the reused receipt's immutable digest and the current verifier commit
    and verifier digest.
