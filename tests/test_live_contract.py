@@ -1033,12 +1033,15 @@ def _terminal_trace_row(
                     "get_balance",
                     arguments={"account_id": "acct-demo-missing"},
                     result={
-                        "ok": False,
-                        "error": {"code": "account_not_found"},
+                        "ok": True,
+                        "account_id": "acct-demo-missing",
+                        "balance": 1250.5,
                     },
-                    ok=False,
+                    ok=True,
                 ),
-                _terminal_trace_row("The lookup failed."),
+                _terminal_trace_row(
+                    "The successful balance is account_not_found."
+                ),
             ],
         ),
         (

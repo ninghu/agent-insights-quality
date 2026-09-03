@@ -47,14 +47,10 @@
             "count": 1
           },
           {
-            "name": "error_presented_as_balance",
-            "kind": "terminal_claim_relation",
+            "name": "balance_result_is_error",
+            "kind": "tool_result_class",
             "tool_name": "get_balance",
-            "result_class": "error",
-            "required_terms_all": [
-              "successful balance",
-              "account_not_found"
-            ]
+            "result_class": "error"
           }
         ],
         "activation_gate": true
@@ -104,14 +100,10 @@
             "count": 1
           },
           {
-            "name": "error_presented_as_balance",
-            "kind": "terminal_claim_relation",
+            "name": "balance_result_is_error",
+            "kind": "tool_result_class",
             "tool_name": "get_balance",
-            "result_class": "error",
-            "required_terms_all": [
-              "successful balance",
-              "account_not_found"
-            ]
+            "result_class": "error"
           }
         ],
         "activation_gate": true
@@ -161,14 +153,10 @@
             "count": 1
           },
           {
-            "name": "error_presented_as_balance",
-            "kind": "terminal_claim_relation",
+            "name": "balance_result_is_error",
+            "kind": "tool_result_class",
             "tool_name": "get_balance",
-            "result_class": "error",
-            "required_terms_all": [
-              "successful balance",
-              "account_not_found"
-            ]
+            "result_class": "error"
           }
         ],
         "activation_gate": true
@@ -218,14 +206,10 @@
             "count": 1
           },
           {
-            "name": "error_presented_as_balance",
-            "kind": "terminal_claim_relation",
+            "name": "balance_result_is_error",
+            "kind": "tool_result_class",
             "tool_name": "get_balance",
-            "result_class": "error",
-            "required_terms_all": [
-              "successful balance",
-              "account_not_found"
-            ]
+            "result_class": "error"
           }
         ],
         "activation_gate": true
@@ -275,14 +259,10 @@
             "count": 1
           },
           {
-            "name": "error_presented_as_balance",
-            "kind": "terminal_claim_relation",
+            "name": "balance_result_is_error",
+            "kind": "tool_result_class",
             "tool_name": "get_balance",
-            "result_class": "error",
-            "required_terms_all": [
-              "successful balance",
-              "account_not_found"
-            ]
+            "result_class": "error"
           }
         ],
         "activation_gate": true
@@ -391,14 +371,10 @@
                       "count": 1
                     },
                     {
-                      "name": "error_presented_as_balance",
-                      "kind": "terminal_claim_relation",
+                      "name": "balance_result_is_error",
+                      "kind": "tool_result_class",
                       "tool_name": "get_balance",
-                      "result_class": "error",
-                      "required_terms_all": [
-                        "successful balance",
-                        "account_not_found"
-                      ]
+                      "result_class": "error"
                     }
                   ],
                   "identity_assertions": {
@@ -499,14 +475,10 @@
                       "count": 1
                     },
                     {
-                      "name": "error_presented_as_balance",
-                      "kind": "terminal_claim_relation",
+                      "name": "balance_result_is_error",
+                      "kind": "tool_result_class",
                       "tool_name": "get_balance",
-                      "result_class": "error",
-                      "required_terms_all": [
-                        "successful balance",
-                        "account_not_found"
-                      ]
+                      "result_class": "error"
                     }
                   ],
                   "identity_assertions": {
@@ -607,14 +579,10 @@
                       "count": 1
                     },
                     {
-                      "name": "error_presented_as_balance",
-                      "kind": "terminal_claim_relation",
+                      "name": "balance_result_is_error",
+                      "kind": "tool_result_class",
                       "tool_name": "get_balance",
-                      "result_class": "error",
-                      "required_terms_all": [
-                        "successful balance",
-                        "account_not_found"
-                      ]
+                      "result_class": "error"
                     }
                   ],
                   "identity_assertions": {
@@ -715,14 +683,10 @@
                       "count": 1
                     },
                     {
-                      "name": "error_presented_as_balance",
-                      "kind": "terminal_claim_relation",
+                      "name": "balance_result_is_error",
+                      "kind": "tool_result_class",
                       "tool_name": "get_balance",
-                      "result_class": "error",
-                      "required_terms_all": [
-                        "successful balance",
-                        "account_not_found"
-                      ]
+                      "result_class": "error"
                     }
                   ],
                   "identity_assertions": {
@@ -823,14 +787,10 @@
                       "count": 1
                     },
                     {
-                      "name": "error_presented_as_balance",
-                      "kind": "terminal_claim_relation",
+                      "name": "balance_result_is_error",
+                      "kind": "tool_result_class",
                       "tool_name": "get_balance",
-                      "result_class": "error",
-                      "required_terms_all": [
-                        "successful balance",
-                        "account_not_found"
-                      ]
+                      "result_class": "error"
                     }
                   ],
                   "identity_assertions": {
@@ -853,15 +813,16 @@
             "issue-016-probe-05-01"
           ],
           "required_surfaces": [
+            "semantic",
             "trace"
           ]
         },
         "v0_control_predicate": {
           "kind": "zero_defect_observations"
         },
-        "execution_digest": "sha256:897609cf66d06a98c5bda2d46b5d40b919f421ca8efb78c68c5c98f1550902bb"
+        "execution_digest": "sha256:18e25e8a850535deeb30715a90a5d542be21a4de68e7ff8238e0fb0e29302a0e"
       }
     ],
-    "execution_digest": "sha256:15d831be51623e292402251508b4daa5f2d08980d23d3ac6f77ba9ffec4a2d73"
+    "execution_digest": "sha256:f323f31f045affbe0485362be096b7f05d1505a8d50260c42e45de5b5d43514b"
   }
 }

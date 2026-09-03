@@ -105,13 +105,17 @@ def rehydrate_packages(
             else trace_proof(tuple(sorted(baseline_operation_ids)))
         )
         baseline_contract = agent["baseline_contract"]
+        baseline_execution = _package_execution_context(
+            ROOT / "agents" / agent["name"] / "v0" / "traffic.json"
+        )
         baseline_package = {
-            "schema_version": "2.0.0",
+            "schema_version": "3.0.0",
             "target_kind": "baseline",
             "agent_name": agent["name"],
             "foundry_version": baseline["foundry_version"],
             "manifest_reference": manifest["manifest_hash"],
             "source_integrity": manifest["source_integrity"],
+            **baseline_execution,
             "runtime_status": baseline["status"],
             "error_code": baseline.get("error_code"),
             "operation_count": len(baseline.get("operation_ids") or []),
@@ -171,14 +175,18 @@ def rehydrate_packages(
                 return payload
 
             expected = issue_by_id[issue_id]
+            issue_execution = _package_execution_context(
+                ROOT / expected["implementation"] / "traffic.json"
+            )
             package = {
-                "schema_version": "2.0.0",
+                "schema_version": "3.0.0",
                 "target_kind": "issue",
                 "issue_id": issue_id,
                 "agent_name": agent["name"],
                 "foundry_version": value["foundry_version"],
                 "manifest_reference": manifest["manifest_hash"],
                 "source_integrity": manifest["source_integrity"],
+                **issue_execution,
                 "evidence_reference": value.get("evidence_reference"),
                 "runtime_status": value["status"],
                 "error_code": value.get("error_code"),
@@ -206,6 +214,26 @@ def rehydrate_packages(
             _write_package(path, package)
             paths.append(path)
     return paths
+
+
+def _package_execution_context(traffic_path: Path) -> dict[str, Any]:
+    rules = read_json(traffic_path).get("validation_rules")
+    scenarios = rules.get("scenarios") if isinstance(rules, dict) else None
+    if (
+        not isinstance(scenarios, list)
+        or len(scenarios) != 1
+        or not isinstance(scenarios[0], dict)
+    ):
+        raise ContractError(
+            f"{traffic_path.relative_to(ROOT).as_posix()} has no single execution contract"
+        )
+    scenario = scenarios[0]
+    return {
+        "validation_mode": scenario.get("validation_mode"),
+        "n": scenario.get("n"),
+        "k": scenario.get("k"),
+        "execution_digest": rules.get("execution_digest"),
+    }
 
 
 def _checkpoint_result(

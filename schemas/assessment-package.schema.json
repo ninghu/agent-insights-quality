@@ -9,6 +9,10 @@
     "foundry_version",
     "manifest_reference",
     "source_integrity",
+    "validation_mode",
+    "n",
+    "k",
+    "execution_digest",
     "runtime_status",
     "operation_count",
     "endpoint_evidence",
@@ -18,7 +22,7 @@
     "package_hash"
   ],
   "properties": {
-    "schema_version": {"const": "2.0.0"},
+    "schema_version": {"const": "3.0.0"},
     "target_kind": {"enum": ["baseline", "issue"]},
     "agent_name": {"enum": ["weather-agent", "healthcare-agent", "finance-agent", "travel-agent", "support-ticket-agent"]},
     "foundry_version": {"type": "string", "minLength": 1},
@@ -31,6 +35,15 @@
         "verified": {"const": true},
         "contract_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
       }
+    },
+    "validation_mode": {
+      "enum": ["baseline", "deterministic", "model_mediated"]
+    },
+    "n": {"enum": [5, 7]},
+    "k": {"const": 5},
+    "execution_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
     },
     "runtime_status": {"enum": ["passed", "not_at_bar", "observed", "inconclusive", "skipped_baseline"]},
     "error_code": {"type": ["string", "null"]},
@@ -144,6 +157,8 @@
           ]
         },
         "properties": {
+          "validation_mode": {"const": "baseline"},
+          "n": {"const": 5},
           "expected": {
             "type": "object",
             "additionalProperties": false,
@@ -159,6 +174,9 @@
         "required": ["issue_id", "evidence_reference", "instructions"],
         "not": {"required": ["behavior_summary"]},
         "properties": {
+          "validation_mode": {
+            "enum": ["deterministic", "model_mediated"]
+          },
           "expected": {
             "type": "object",
             "additionalProperties": false,
@@ -179,7 +197,26 @@
               "minimum_traces": {"type": "integer", "minimum": 1}
             }
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "validation_mode": {"const": "model_mediated"}
+              }
+            },
+            "then": {
+              "properties": {
+                "n": {"const": 7}
+              }
+            },
+            "else": {
+              "properties": {
+                "n": {"const": 5}
+              }
+            }
+          }
+        ]
       }
     }
   ],
@@ -232,7 +269,8 @@
         "terminal_response",
         "semantic_assertions",
         "function_calling",
-        "trace_operations"
+        "trace_operations",
+        "validation_mode"
       ],
       "properties": {
         "request_count": {"const": 5},
@@ -247,7 +285,8 @@
           "enum": ["required", "required_per_request"]
         },
         "function_calling": {"enum": ["forbidden", "not_applicable"]},
-        "trace_operations": {"enum": ["uniform", "required_per_request"]}
+        "trace_operations": {"enum": ["uniform", "required_per_request"]},
+        "validation_mode": {"const": "baseline"}
       }
     },
     "requestSummary": {

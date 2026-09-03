@@ -41,14 +41,14 @@ _FORBIDDEN_SELECTOR_KEYS = {
 }
 
 _TRACE_OBSERVED_ISSUES = {
-    *(f"issue-{number:03d}" for number in range(13, 21)),
+    *(f"issue-{number:03d}" for number in range(13, 21) if number != 16),
     "issue-022",
     "issue-023",
     "issue-024",
     "issue-027",
     "issue-028",
 }
-_SEMANTIC_AND_TRACE_OBSERVED_ISSUES = {"issue-021"}
+_SEMANTIC_AND_TRACE_OBSERVED_ISSUES = {"issue-016", "issue-021"}
 
 
 def validation_matrix(mode: str) -> tuple[int, int]:

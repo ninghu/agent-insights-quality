@@ -16,13 +16,16 @@ from agent_insights_quality.assessment import (
     _issue_activation_complete,
     _linked_baseline_operations,
     _load_package,
+    _package_execution_context,
     _validate_baseline_cards,
     _validate_issue_cards,
     _validate_package,
     load_assessments,
+    rehydrate_packages,
 )
+from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.cli import _rehydrate_with_retries
-from agent_insights_quality.util import ContractError, content_hash
+from agent_insights_quality.util import ROOT, ContractError, content_hash
 
 
 def _trace_proof(
@@ -118,7 +121,7 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
     packages = tmp_path / "packages"
     packages.mkdir()
     package = {
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "target_kind": "issue",
         "issue_id": "issue-001",
         "agent_name": "weather-agent",
@@ -128,6 +131,10 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
             "verified": True,
             "contract_digest": "sha256:" + "f" * 64,
         },
+        "validation_mode": "deterministic",
+        "n": 5,
+        "k": 5,
+        "execution_digest": "sha256:" + "1" * 64,
         "evidence_reference": "sha256:" + "b" * 64,
         "runtime_status": "observed",
         "error_code": None,
@@ -464,6 +471,7 @@ def _complete_prompt_baseline_package() -> dict:
         "semantic_assertions": "required_per_request",
         "function_calling": "forbidden",
         "trace_operations": "uniform",
+        "validation_mode": "baseline",
     }
     return {
         "endpoint_evidence": endpoint,
@@ -984,6 +992,8 @@ def test_duplicate_card_requires_a_resolvable_primary_reference() -> None:
         "invalid_trace_count",
         "invalid_linked_operation_id",
         "invalid_issue_expected",
+        "invalid_execution_context",
+        "superseded_schema",
     ],
 )
 def test_malformed_assessment_packages_raise_contract_error(
@@ -993,7 +1003,7 @@ def test_malformed_assessment_packages_raise_contract_error(
     package = _complete_prompt_baseline_package()
     package.update(
         {
-            "schema_version": "2.0.0",
+            "schema_version": "3.0.0",
             "target_kind": "baseline",
             "agent_name": "weather-agent",
             "foundry_version": "7",
@@ -1002,6 +1012,10 @@ def test_malformed_assessment_packages_raise_contract_error(
                 "verified": True,
                 "contract_digest": "sha256:" + "c" * 64,
             },
+            "validation_mode": "baseline",
+            "n": 5,
+            "k": 5,
+            "execution_digest": "sha256:" + "1" * 64,
             "runtime_status": "not_at_bar",
             "error_code": None,
             "operation_count": 5,
@@ -1040,6 +1054,10 @@ def test_malformed_assessment_packages_raise_contract_error(
         malformed["observed_insights"][0]["trace_count"] = "1"
     elif malformation == "invalid_linked_operation_id":
         malformed["observed_insights"][0]["linked_operation_ids"] = [1]
+    elif malformation == "invalid_execution_context":
+        malformed["validation_mode"] = "model_mediated"
+    elif malformation == "superseded_schema":
+        malformed["schema_version"] = "2.0.0"
     else:
         malformed["target_kind"] = "issue"
         malformed["issue_id"] = "issue-001"
@@ -1057,3 +1075,46 @@ def test_malformed_assessment_packages_raise_contract_error(
     path.write_text(json.dumps(malformed), encoding="utf-8")
     with pytest.raises(ContractError, match="assessment package is invalid"):
         _load_package(path)
+
+
+def test_daily_composition_rehydrates_25_schema_valid_packages(
+    tmp_path: Path,
+) -> None:
+    from tests.test_run_manifest import _manifest
+
+    _, issues = load_catalogs()
+    output = tmp_path / "assessment-packages"
+    paths = rehydrate_packages(
+        _manifest(),
+        issues,
+        {},
+        SimpleNamespace(
+            trace_behavior_evidence=lambda _operation_ids: pytest.fail(
+                "incomplete synthetic evidence must not query trace data"
+            )
+        ),
+        output,
+        SimpleNamespace(result=lambda *_args: None),
+    )
+
+    assert len(paths) == 25
+    assert len(list(output.glob("*.json"))) == 25
+    for path in paths:
+        package = _load_package(path)
+        logical_version = (
+            "v0" if package["target_kind"] == "baseline" else package["issue_id"]
+        )
+        expected_context = _package_execution_context(
+            ROOT
+            / "agents"
+            / package["agent_name"]
+            / (
+                f"{logical_version}/traffic.json"
+                if logical_version == "v0"
+                else f"issues/{logical_version}/traffic.json"
+            )
+        )
+        assert {
+            key: package[key]
+            for key in ("validation_mode", "n", "k", "execution_digest")
+        } == expected_context

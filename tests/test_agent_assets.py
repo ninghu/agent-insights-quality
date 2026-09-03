@@ -1068,7 +1068,7 @@ def test_finance_issue_sources_match_reviewed_deltas() -> None:
             "missing_argument_error",
         },
         "issue-015": {"one_balance_call", "opposite_account_scope"},
-        "issue-016": {"one_balance_call", "error_presented_as_balance"},
+        "issue-016": {"one_balance_call", "balance_result_is_error"},
         "issue-017": {"two_budget_calls", "mixed_result_claimed_complete"},
         "issue-018": {
             "one_transient_attempt",
