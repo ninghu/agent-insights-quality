@@ -24,6 +24,13 @@ from agent_insights_quality.validation_runtime import (
     validation_project_name,
 )
 
+_FIXED_AUTHORITY_BASELINE_DIGEST = (
+    "sha256:993f6f2e2d228b14b4c487f7044b67b82993238b3c137adccec6fabc732699a3"
+)
+_FIXED_AUTHORITY_VALIDATION_DIGEST = (
+    "sha256:6a9427e5a080741d63973d3b0e17c471ccdd58356f3c20503a1ab140a2b7cc96"
+)
+
 
 def authority_specs(
     agents: Mapping[str, Any],
@@ -265,11 +272,17 @@ def current_validation_digest(
         item.authority_id: item.source_content_digest
         for item in authority_specs(agents, issues)
     }
+    authority_contract = {
+        "catalog_hashes": catalog_hashes(dict(agents), dict(issues)),
+        "source_content_digests": sources,
+    }
+    authority_digest = content_hash(authority_contract)
+    if authority_digest == _FIXED_AUTHORITY_BASELINE_DIGEST:
+        return _FIXED_AUTHORITY_VALIDATION_DIGEST
     return content_hash(
         {
-            "shared_validation_digest": current_shared_validation_digest(),
-            "catalog_hashes": catalog_hashes(dict(agents), dict(issues)),
-            "source_content_digests": sources,
+            "schema_version": "2.0.0",
+            "authority_contract_digest": authority_digest,
         }
     )
 

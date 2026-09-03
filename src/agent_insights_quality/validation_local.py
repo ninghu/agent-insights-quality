@@ -116,19 +116,6 @@ def current_clean_commit() -> str:
     return commit_sha
 
 
-def current_tree_sha(commit_sha: str) -> str:
-    _assert_repository_root()
-    if not _git_sha(commit_sha):
-        raise ContractError("Local Git commit identity is invalid")
-    tree_sha = _run_text(
-        ["git", "rev-parse", f"{commit_sha}^{{tree}}"],
-        "Git tree",
-    )
-    if not _git_sha(tree_sha):
-        raise ContractError("Local Git tree identity is invalid")
-    return tree_sha
-
-
 def _capacity_from_lifecycle(active: dict[str, Any]) -> CapacityPlan:
     value = active.get("capacity")
     if not isinstance(value, dict):

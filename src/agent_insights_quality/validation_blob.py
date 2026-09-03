@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 import json
+import re
 import subprocess
 from typing import Any
 
@@ -13,6 +14,7 @@ from agent_insights_quality.util import ContractError, canonical_bytes
 APPROVED_RECORD_CONTAINER = load_automation_policy().approved_record_container
 STORAGE_ACCOUNT_PREFIX = load_automation_policy().storage_account_prefix
 RESOURCE_GROUP = "agent-insights-quality-rg"
+APPROVED_RECORD_ROOT = "approved-validation-records"
 
 
 @dataclass(frozen=True)
@@ -200,12 +202,14 @@ class AzureValidationBlobStore:
         downloader = client.download_blob()
         value = downloader.readall()
         properties = client.get_blob_properties()
+        etag = _blob_property(properties, "etag")
+        blob_version_id = _blob_property(properties, "version_id")
         return BlobRecord(
             container=container,
             name=name,
             value=_decode_object(value, f"{container}/{name}"),
-            etag=str(properties.etag),
-            version_id=str(properties.version_id or ""),
+            etag=etag if isinstance(etag, str) else "",
+            version_id=blob_version_id if isinstance(blob_version_id, str) else "",
             content=value,
         )
 
@@ -230,6 +234,79 @@ class AzureValidationBlobStore:
             )
         except ResourceNotFoundError:
             return None
+
+    def list_approved_records(
+        self,
+        repository: str,
+        *,
+        exact_name: str | None = None,
+    ) -> list[BlobRecord]:
+        try:
+            from azure.core.exceptions import AzureError
+        except ImportError as error:
+            raise ContractError(
+                "Validation Blob operations require the azure optional dependencies"
+            ) from error
+        prefix = approved_record_blob_prefix(repository)
+        if exact_name is not None and (
+            re.fullmatch(
+                rf"{re.escape(prefix)}[0-9a-f]{{40}}/record\.json",
+                exact_name,
+            )
+            is None
+        ):
+            raise ContractError(
+                "Approved validation record exact listing identity is invalid"
+            )
+        listing_prefix = exact_name or prefix
+        try:
+            values = list(
+                self._service.get_container_client(
+                    APPROVED_RECORD_CONTAINER
+                ).list_blobs(
+                    name_starts_with=listing_prefix,
+                    include=["versions"],
+                )
+            )
+        except (AzureError, OSError) as error:
+            raise ContractError(
+                "Approved validation records cannot be listed"
+            ) from error
+        listed: list[tuple[str, str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        pattern = re.compile(rf"^{re.escape(prefix)}[0-9a-f]{{40}}/record\.json$")
+        for value in values:
+            name = _blob_property(value, "name")
+            etag = _blob_property(value, "etag")
+            version_id = _blob_property(value, "version_id")
+            if (
+                not isinstance(name, str)
+                or pattern.fullmatch(name) is None
+                or not isinstance(etag, str)
+                or not etag.strip()
+                or not isinstance(version_id, str)
+                or not version_id.strip()
+                or (name, version_id) in seen
+                or (exact_name is not None and name != exact_name)
+            ):
+                raise ContractError(
+                    "Approved validation record listing metadata is invalid"
+                )
+            seen.add((name, version_id))
+            listed.append((name, etag, version_id))
+        records: list[BlobRecord] = []
+        for name, etag, version_id in sorted(listed):
+            record = self.read(
+                APPROVED_RECORD_CONTAINER,
+                name,
+                version_id=version_id,
+            )
+            if record.etag != etag or record.version_id != version_id:
+                raise ContractError(
+                    "Approved validation record listing metadata changed during read"
+                )
+            records.append(record)
+        return records
 
     def create_once(
         self,
@@ -265,6 +342,19 @@ class AzureValidationBlobStore:
         if created.content != rendered:
             raise ContractError("Approved record Blob bytes changed after upload")
         return created
+
+
+def approved_record_blob_prefix(repository: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is None:
+        raise ContractError("Approved validation record repository is invalid")
+    return f"{APPROVED_RECORD_ROOT}/{repository}/"
+
+
+def _blob_property(value: Any, name: str) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(name)
+    return getattr(value, name, None)
+
 
 def _decode_object(value: bytes, label: str) -> dict[str, Any]:
     import json

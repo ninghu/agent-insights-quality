@@ -7,11 +7,12 @@ from types import SimpleNamespace
 import pytest
 from azure.core.exceptions import ResourceExistsError
 
-from agent_insights_quality.util import ContractError
+from agent_insights_quality.util import ContractError, canonical_bytes
 from agent_insights_quality.validation_blob import (
     APPROVED_RECORD_CONTAINER,
     RESOURCE_GROUP,
     AzureValidationBlobStore,
+    approved_record_blob_prefix,
 )
 
 
@@ -345,3 +346,107 @@ def test_semantically_equal_but_byte_different_blob_is_not_idempotent() -> None:
             "record",
             {"kind": "test-agent-validation-approved-record"},
         )
+
+
+def test_approved_record_listing_is_repository_scoped_and_version_bound() -> None:
+    repository = "ninghu/agent-insights-quality"
+    prefix = approved_record_blob_prefix(repository)
+    names = [
+        f"{prefix}{'b' * 40}/record.json",
+        f"{prefix}{'a' * 40}/record.json",
+    ]
+    values = {
+        name: canonical_bytes({"name": name})
+        for name in names
+    }
+    observed: dict[str, object] = {}
+
+    class Container:
+        @staticmethod
+        def list_blobs(*, name_starts_with, include):
+            observed["prefix"] = name_starts_with
+            observed["include"] = include
+            return [
+                SimpleNamespace(name=name, etag=f"etag-{index}", version_id=f"v-{index}")
+                for index, name in enumerate(names)
+            ]
+
+    class Client:
+        def __init__(self, name, version_id):
+            self.name = name
+            self.version_id = version_id
+
+        def download_blob(self):
+            return SimpleNamespace(readall=lambda: values[self.name])
+
+        def get_blob_properties(self):
+            index = names.index(self.name)
+            assert self.version_id == f"v-{index}"
+            return SimpleNamespace(etag=f"etag-{index}", version_id=f"v-{index}")
+
+    store = object.__new__(AzureValidationBlobStore)
+    store._service = SimpleNamespace(
+        get_container_client=lambda container: (
+            Container()
+            if container == APPROVED_RECORD_CONTAINER
+            else pytest.fail(container)
+        ),
+        get_blob_client=lambda container, name, version_id=None: (
+            Client(name, version_id)
+            if container == APPROVED_RECORD_CONTAINER
+            else pytest.fail(container)
+        ),
+    )
+
+    records = store.list_approved_records(repository)
+
+    assert observed["prefix"] == prefix
+    assert observed["include"] == ["versions"]
+    assert [record.name for record in records] == sorted(names)
+    assert all(record.content == canonical_bytes(record.value) for record in records)
+
+
+@pytest.mark.parametrize(
+    "listed",
+    [
+        SimpleNamespace(
+            name=(
+                "approved-validation-records/ninghu/agent-insights-quality/"
+                + ("b" * 40)
+                + "/unexpected.json"
+            ),
+            etag="etag",
+            version_id="version",
+        ),
+        SimpleNamespace(
+            name=(
+                "approved-validation-records/ninghu/agent-insights-quality/"
+                + ("b" * 40)
+                + "/record.json"
+            ),
+            etag="",
+            version_id="version",
+        ),
+        SimpleNamespace(
+            name=(
+                "approved-validation-records/ninghu/agent-insights-quality/"
+                + ("b" * 40)
+                + "/record.json"
+            ),
+            etag="etag",
+            version_id=None,
+        ),
+    ],
+)
+def test_approved_record_listing_rejects_noncanonical_or_missing_metadata(
+    listed,
+) -> None:
+    store = object.__new__(AzureValidationBlobStore)
+    store._service = SimpleNamespace(
+        get_container_client=lambda _container: SimpleNamespace(
+            list_blobs=lambda **_kwargs: [listed]
+        )
+    )
+
+    with pytest.raises(ContractError, match="listing metadata is invalid"):
+        store.list_approved_records("ninghu/agent-insights-quality")

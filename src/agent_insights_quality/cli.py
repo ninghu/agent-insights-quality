@@ -112,12 +112,7 @@ from agent_insights_quality.util import (
     runtime_root,
 )
 from agent_insights_quality.validation import validate_repository
-from agent_insights_quality.validation_approved import (
-    approve_test_agent_validation,
-    fetch_approved_record_for_checkout,
-)
-from agent_insights_quality.validation_blob import AzureValidationBlobStore
-from agent_insights_quality.validation_credentials import local_azure_operator
+from agent_insights_quality.validation_approved import approve_test_agent_validation
 from agent_insights_quality.validation_coordinator import (
     compose_test_agent_validation,
     deploy_test_agent_validation_shard,
@@ -467,15 +462,6 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             )
         profile = RuntimeProfile.from_env(args.profile)
         approved_digests = None
-        if args.profile == "daily":
-            operator = local_azure_operator()
-            fetch_approved_record_for_checkout(
-                AzureValidationBlobStore(
-                    profile.registry_storage_account_name,
-                    credential=operator.credential,
-                ),
-                expected_repository="ninghu/agent-insights-quality",
-            )
         provision_profile(
             profile=profile,
             agents=agents,

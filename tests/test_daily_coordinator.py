@@ -76,14 +76,17 @@ def test_daily_prepare_binds_pacific_date_snapshot_and_approved_record(
     approval = _approval_binding(
         approved_commit_sha="2" * 40,
     )
+    monkeypatch.setattr(
+        coordinator,
+        "_fetch_approved_record",
+        lambda: approval,
+    )
 
     status = coordinator.prepare_daily(
         report_date=date(2026, 9, 1),
         work_items_path=work_items_path,
         base=private_root,
         now=lambda: datetime(2026, 9, 2, 4, tzinfo=UTC),
-        profile_factory=lambda _name: SimpleNamespace(),
-        approved_record_loader=lambda _profile: approval,
     )
 
     assert status["state"] == "LOCKED"
@@ -96,6 +99,8 @@ def test_daily_prepare_binds_pacific_date_snapshot_and_approved_record(
     assert active.value["bindings"]["approval"] == approval
     assert active.value["bindings"]["approval"]["checkout_commit_sha"] == "1" * 40
     assert active.value["bindings"]["approval"]["approved_commit_sha"] == "2" * 40
+    assert active.value["bindings"]["approval"]["approved_pr_number"] == 65
+    assert active.value["bindings"]["approval"]["evidence_digest"] == HASH
 
 
 def test_daily_status_safely_requires_unreadable_format_supersession(
@@ -121,6 +126,37 @@ def test_daily_prepare_rejects_non_pacific_business_date(tmp_path: Path) -> None
             base=tmp_path,
             now=lambda: datetime(2026, 9, 2, 4, tzinfo=UTC),
         )
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"name": "staging"},
+        {"environment_id": "westus2-g29"},
+        {"location": "westus2"},
+        {"telemetry_resource_set": "g29"},
+    ],
+)
+def test_daily_approval_fetch_rejects_non_g30_profile(
+    monkeypatch,
+    overrides: dict,
+) -> None:
+    values = {
+        "name": "daily",
+        "environment_id": "swedencentral-g30",
+        "location": "swedencentral",
+        "telemetry_resource_set": "g30",
+        "registry_storage_account_name": "aiqsweartsynthetic",
+    }
+    values.update(overrides)
+    monkeypatch.setattr(
+        coordinator.RuntimeProfile,
+        "from_env",
+        lambda *_args: SimpleNamespace(**values),
+    )
+
+    with pytest.raises(ContractError, match="reviewed Sweden g30"):
+        coordinator._fetch_approved_record()
 
 
 def test_daily_agent_lane_is_resumable_and_writes_one_receipt(

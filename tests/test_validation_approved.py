@@ -4,11 +4,11 @@ from copy import deepcopy
 
 import pytest
 
+from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.util import ContractError, canonical_bytes
 from agent_insights_quality.validation_approved import (
     APPROVED_RECORD_CONTAINER,
     _assert_identical_approval,
-    _resolve_merged_approval_source,
     approved_record_blob_name,
     fetch_approved_record_for_checkout,
     load_or_create_approval_intent,
@@ -17,6 +17,7 @@ from agent_insights_quality.validation_approved import (
     validate_local_result_binding,
 )
 from agent_insights_quality.validation_blob import BlobRecord
+from agent_insights_quality.validation_manifest import current_validation_digest
 
 HASH = "sha256:" + ("a" * 64)
 
@@ -45,7 +46,13 @@ def _record(
     )
 
 
-def _blob(value: dict, *, name: str | None = None) -> BlobRecord:
+def _blob(
+    value: dict,
+    *,
+    name: str | None = None,
+    etag: str = "etag",
+    version_id: str = "version",
+) -> BlobRecord:
     blob_name = name or approved_record_blob_name(
         value["repository"],
         value["commit_sha"],
@@ -54,8 +61,8 @@ def _blob(value: dict, *, name: str | None = None) -> BlobRecord:
         APPROVED_RECORD_CONTAINER,
         blob_name,
         value,
-        "etag",
-        "version",
+        etag,
+        version_id,
         canonical_bytes(value),
     )
 
@@ -63,8 +70,11 @@ def _blob(value: dict, *, name: str | None = None) -> BlobRecord:
 class _Store:
     def __init__(self, records: list[BlobRecord]) -> None:
         self.records = {record.name: record for record in records}
+        self.listed_records = list(records)
         self.reads: list[str] = []
         self.asserted_container: str | None = None
+        self.listed_repository: str | None = None
+        self.listed_exact_name: str | None = None
 
     def assert_approved_record_contract(self, container: str) -> None:
         self.asserted_container = container
@@ -79,68 +89,19 @@ class _Store:
         self.reads.append(name)
         return self.records[name]
 
-
-def _pull(
-    checkout_commit_sha: str,
-    approved_commit_sha: str,
-    *,
-    number: int = 63,
-) -> dict:
-    return {
-        "number": number,
-        "state": "closed",
-        "merged_at": "2026-09-01T12:00:00Z",
-        "merge_commit_sha": checkout_commit_sha,
-        "head": {"sha": approved_commit_sha},
-        "base": {"repo": {"full_name": "ninghu/agent-insights-quality"}},
-    }
-
-
-def _github_responses(
-    monkeypatch,
-    *,
-    checkout_commit_sha: str,
-    approved_commit_sha: str,
-    checkout_tree_sha: str = "c" * 40,
-    approved_tree_sha: str = "c" * 40,
-    default_head_sha: str | None = None,
-    pulls: list[dict] | None = None,
-) -> None:
-    def github_object(path: str, _label: str) -> dict:
-        if path == "repos/ninghu/agent-insights-quality":
-            return {
-                "full_name": "ninghu/agent-insights-quality",
-                "default_branch": "main",
-            }
-        if path == "repos/ninghu/agent-insights-quality/branches/main":
-            return {
-                "name": "main",
-                "commit": {"sha": default_head_sha or checkout_commit_sha},
-            }
-        if path.endswith(checkout_commit_sha):
-            return {
-                "sha": checkout_commit_sha,
-                "tree": {"sha": checkout_tree_sha},
-            }
-        if path.endswith(approved_commit_sha):
-            return {
-                "sha": approved_commit_sha,
-                "tree": {"sha": approved_tree_sha},
-            }
-        raise AssertionError(path)
-
-    monkeypatch.setattr(
-        "agent_insights_quality.validation_approved._github_object",
-        github_object,
-    )
-    monkeypatch.setattr(
-        "agent_insights_quality.validation_approved._github_array",
-        lambda _path, _label: (
-            pulls
-            if pulls is not None
-            else [_pull(checkout_commit_sha, approved_commit_sha)]
-        ),
-    )
+    def list_approved_records(
+        self,
+        repository: str,
+        *,
+        exact_name: str | None = None,
+    ) -> list[BlobRecord]:
+        self.listed_repository = repository
+        self.listed_exact_name = exact_name
+        return [
+            record
+            for record in self.listed_records
+            if exact_name is None or record.name == exact_name
+        ]
 
 
 def test_approved_record_is_minimal_and_self_bound() -> None:
@@ -261,16 +222,8 @@ def test_daily_fetches_exact_head_authoritative_blob(monkeypatch) -> None:
         lambda: value["commit_sha"],
     )
     monkeypatch.setattr(
-        "agent_insights_quality.validation_approved.current_tree_sha",
-        lambda _commit_sha: "c" * 40,
-    )
-    monkeypatch.setattr(
         "agent_insights_quality.validation_approved.current_validation_digest",
         lambda *_args: HASH,
-    )
-    monkeypatch.setattr(
-        "agent_insights_quality.validation_approved._resolve_merged_approval_source",
-        lambda *_args: pytest.fail("exact approval lookup must not query GitHub"),
     )
     binding = fetch_approved_record_for_checkout(
         store,
@@ -279,33 +232,34 @@ def test_daily_fetches_exact_head_authoritative_blob(monkeypatch) -> None:
 
     assert binding["checkout_commit_sha"] == value["commit_sha"]
     assert binding["approved_commit_sha"] == value["commit_sha"]
+    assert binding["approved_pr_number"] == value["pr_number"]
+    assert binding["evidence_digest"] == value["evidence_digest"]
     assert binding["approved_record_digest"] == value["record_digest"]
-    assert binding["tree_sha"] == "c" * 40
     assert store.reads[0].endswith(
         f"/{value['commit_sha']}/record.json"
+    )
+    assert store.listed_repository == value["repository"]
+    assert store.listed_exact_name == approved_record_blob_name(
+        value["repository"],
+        value["commit_sha"],
     )
     assert store.asserted_container == APPROVED_RECORD_CONTAINER
 
 
-def test_daily_bridges_valid_squash_merge_to_exact_approved_head(
+def test_daily_reuses_pr_65_record_for_matching_current_validation_digest(
     monkeypatch,
 ) -> None:
     checkout_commit_sha = "a" * 40
     approved_commit_sha = "b" * 40
-    value = _record(commit_sha=approved_commit_sha)
+    value = _record(
+        commit_sha=approved_commit_sha,
+        pr_number=65,
+        validation_digest=current_validation_digest(*load_catalogs()),
+    )
     store = _Store([_blob(value)])
     monkeypatch.setattr(
         "agent_insights_quality.validation_approved.current_clean_commit",
         lambda: checkout_commit_sha,
-    )
-    monkeypatch.setattr(
-        "agent_insights_quality.validation_approved.current_validation_digest",
-        lambda *_args: HASH,
-    )
-    _github_responses(
-        monkeypatch,
-        checkout_commit_sha=checkout_commit_sha,
-        approved_commit_sha=approved_commit_sha,
     )
 
     binding = fetch_approved_record_for_checkout(
@@ -315,113 +269,22 @@ def test_daily_bridges_valid_squash_merge_to_exact_approved_head(
 
     assert binding["checkout_commit_sha"] == checkout_commit_sha
     assert binding["approved_commit_sha"] == approved_commit_sha
-    assert binding["tree_sha"] == "c" * 40
+    assert binding["approved_pr_number"] == 65
+    assert binding["evidence_digest"] == value["evidence_digest"]
     assert binding["approved_record_digest"] == value["record_digest"]
     assert store.reads == [
-        approved_record_blob_name(value["repository"], checkout_commit_sha),
-        approved_record_blob_name(value["repository"], approved_commit_sha),
+        approved_record_blob_name(value["repository"], checkout_commit_sha)
     ]
+    assert store.listed_repository == value["repository"]
 
 
-def test_squash_bridge_rejects_non_default_branch_head(monkeypatch) -> None:
-    checkout_commit_sha = "a" * 40
-    _github_responses(
-        monkeypatch,
-        checkout_commit_sha=checkout_commit_sha,
-        approved_commit_sha="b" * 40,
-        default_head_sha="d" * 40,
-    )
-
-    with pytest.raises(ContractError, match="not the GitHub default branch head"):
-        _resolve_merged_approval_source(
-            "ninghu/agent-insights-quality",
-            checkout_commit_sha,
-        )
-
-
-@pytest.mark.parametrize(
-    "pulls",
-    [
-        [],
-        [
-            _pull("a" * 40, "b" * 40),
-            _pull("a" * 40, "d" * 40, number=64),
-        ],
-    ],
-)
-def test_squash_bridge_rejects_zero_or_multiple_associated_pulls(
+def test_digest_fallback_selects_deterministically_from_equivalent_records(
     monkeypatch,
-    pulls: list[dict],
 ) -> None:
     checkout_commit_sha = "a" * 40
-    _github_responses(
-        monkeypatch,
-        checkout_commit_sha=checkout_commit_sha,
-        approved_commit_sha="b" * 40,
-        pulls=pulls,
-    )
-
-    with pytest.raises(ContractError, match="exactly one merged pull request"):
-        _resolve_merged_approval_source(
-            "ninghu/agent-insights-quality",
-            checkout_commit_sha,
-        )
-
-
-@pytest.mark.parametrize(
-    "pull",
-    [
-        {
-            **_pull("a" * 40, "b" * 40),
-            "state": "open",
-            "merged_at": None,
-        },
-        {
-            **_pull("a" * 40, "b" * 40),
-            "merge_commit_sha": "d" * 40,
-        },
-    ],
-)
-def test_squash_bridge_rejects_unmerged_or_mismatched_merge(
-    monkeypatch,
-    pull: dict,
-) -> None:
-    checkout_commit_sha = "a" * 40
-    _github_responses(
-        monkeypatch,
-        checkout_commit_sha=checkout_commit_sha,
-        approved_commit_sha="b" * 40,
-        pulls=[pull],
-    )
-
-    with pytest.raises(ContractError, match="pull request"):
-        _resolve_merged_approval_source(
-            "ninghu/agent-insights-quality",
-            checkout_commit_sha,
-        )
-
-
-def test_squash_bridge_rejects_tree_mismatch(monkeypatch) -> None:
-    checkout_commit_sha = "a" * 40
-    _github_responses(
-        monkeypatch,
-        checkout_commit_sha=checkout_commit_sha,
-        approved_commit_sha="b" * 40,
-        approved_tree_sha="d" * 40,
-    )
-
-    with pytest.raises(ContractError, match="does not match"):
-        _resolve_merged_approval_source(
-            "ninghu/agent-insights-quality",
-            checkout_commit_sha,
-        )
-
-
-def test_squash_bridge_rejects_record_for_another_pull(monkeypatch) -> None:
-    checkout_commit_sha = "a" * 40
-    approved_commit_sha = "b" * 40
-    value = _record(commit_sha=approved_commit_sha, pr_number=64)
-    store = _Store([_blob(value)])
+    first = _record(commit_sha="b" * 40, pr_number=65)
+    second = _record(commit_sha="c" * 40, pr_number=66)
+    store = _Store([_blob(second), _blob(first)])
     monkeypatch.setattr(
         "agent_insights_quality.validation_approved.current_clean_commit",
         lambda: checkout_commit_sha,
@@ -430,13 +293,154 @@ def test_squash_bridge_rejects_record_for_another_pull(monkeypatch) -> None:
         "agent_insights_quality.validation_approved.current_validation_digest",
         lambda *_args: HASH,
     )
-    _github_responses(
-        monkeypatch,
-        checkout_commit_sha=checkout_commit_sha,
-        approved_commit_sha=approved_commit_sha,
+
+    binding = fetch_approved_record_for_checkout(
+        store,
+        expected_repository=first["repository"],
     )
 
-    with pytest.raises(ContractError, match="does not match the merged pull request"):
+    assert binding["approved_commit_sha"] == first["commit_sha"]
+    assert binding["approved_pr_number"] == 65
+    assert binding["approved_record_digest"] == first["record_digest"]
+
+
+@pytest.mark.parametrize(
+    ("record", "message"),
+    [
+        (
+            _record(repository="synthetic/other"),
+            "identity is invalid",
+        ),
+        (
+            _record(validation_digest="sha256:" + ("e" * 64)),
+            "No authoritative approved validation record",
+        ),
+    ],
+)
+def test_digest_fallback_rejects_mismatched_repository_or_digest(
+    monkeypatch,
+    record: dict,
+    message: str,
+) -> None:
+    checkout_commit_sha = "a" * 40
+    expected_repository = "ninghu/agent-insights-quality"
+    store = _Store(
+        [
+            _blob(
+                record,
+                name=approved_record_blob_name(
+                    expected_repository,
+                    record["commit_sha"],
+                ),
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_approved.current_clean_commit",
+        lambda: checkout_commit_sha,
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_approved.current_validation_digest",
+        lambda *_args: HASH,
+    )
+
+    with pytest.raises(ContractError, match=message):
+        fetch_approved_record_for_checkout(
+            store,
+            expected_repository=expected_repository,
+        )
+
+
+def test_digest_fallback_fails_closed_on_malformed_candidate(monkeypatch) -> None:
+    checkout_commit_sha = "a" * 40
+    valid = _record(commit_sha="b" * 40)
+    malformed = deepcopy(_record(commit_sha="c" * 40))
+    malformed.pop("evidence_digest")
+    store = _Store([_blob(valid), _blob(malformed)])
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_approved.current_clean_commit",
+        lambda: checkout_commit_sha,
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_approved.current_validation_digest",
+        lambda *_args: HASH,
+    )
+
+    with pytest.raises(ContractError, match="schema error"):
+        fetch_approved_record_for_checkout(
+            store,
+            expected_repository=valid["repository"],
+        )
+
+
+def test_digest_fallback_fails_closed_on_conflicting_blob_versions(monkeypatch) -> None:
+    checkout_commit_sha = "a" * 40
+    first = _record(commit_sha="b" * 40, pr_number=65)
+    second = _record(commit_sha="b" * 40, pr_number=66)
+    store = _Store([_blob(first), _blob(second)])
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_approved.current_clean_commit",
+        lambda: checkout_commit_sha,
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_approved.current_validation_digest",
+        lambda *_args: HASH,
+    )
+
+    with pytest.raises(ContractError, match="conflicting immutable versions"):
+        fetch_approved_record_for_checkout(
+            store,
+            expected_repository=first["repository"],
+        )
+
+
+def test_exact_fast_path_fails_closed_on_conflicting_blob_versions(
+    monkeypatch,
+) -> None:
+    checkout_commit_sha = "b" * 40
+    historical = _record(commit_sha=checkout_commit_sha, pr_number=64)
+    current = _record(commit_sha=checkout_commit_sha, pr_number=65)
+    store = _Store(
+        [
+            _blob(historical, etag="historical-etag", version_id="historical"),
+            _blob(current, etag="current-etag", version_id="current"),
+        ]
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_approved.current_clean_commit",
+        lambda: checkout_commit_sha,
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_approved.current_validation_digest",
+        lambda *_args: HASH,
+    )
+
+    with pytest.raises(ContractError, match="conflicting immutable versions"):
+        fetch_approved_record_for_checkout(
+            store,
+            expected_repository=current["repository"],
+        )
+
+
+@pytest.mark.parametrize(("etag", "version_id"), [("", "version"), ("etag", "")])
+def test_digest_fallback_rejects_missing_blob_metadata(
+    monkeypatch,
+    etag: str,
+    version_id: str,
+) -> None:
+    checkout_commit_sha = "a" * 40
+    value = _record()
+    store = _Store([_blob(value, etag=etag, version_id=version_id)])
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_approved.current_clean_commit",
+        lambda: checkout_commit_sha,
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_approved.current_validation_digest",
+        lambda *_args: HASH,
+    )
+
+    with pytest.raises(ContractError, match="Blob metadata is invalid"):
         fetch_approved_record_for_checkout(
             store,
             expected_repository=value["repository"],

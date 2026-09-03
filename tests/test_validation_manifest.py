@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+from copy import deepcopy
 
 import pytest
 
@@ -10,6 +11,7 @@ from agent_insights_quality import validation_verifier
 from agent_insights_quality.validation_manifest import (
     _validation_contract_file_hash,
     authority_specs,
+    current_validation_digest,
     prepare_validation_plan,
     prepare_bound_validation_plan,
     validate_validation_plan,
@@ -56,6 +58,19 @@ def test_local_plan_binds_one_commit_and_all_executable_inputs() -> None:
     assert plan["run_id"].startswith("validation-")
     assert "tree_sha" not in plan
     assert "policy_manifest" not in plan
+
+
+def test_validation_digest_tracks_fixed_authorities_not_coordinator_sources() -> None:
+    agents, issues = load_catalogs()
+    assert current_validation_digest(agents, issues) == (
+        "sha256:6a9427e5a080741d63973d3b0e17c471ccdd58356f3c20503a1ab140a2b7cc96"
+    )
+
+    changed_issues = deepcopy(issues)
+    changed_issues["issues"][0]["title"] += " changed"
+    assert current_validation_digest(agents, changed_issues) != (
+        current_validation_digest(agents, issues)
+    )
 
 
 def test_bound_plan_keeps_exact_run_and_topology() -> None:

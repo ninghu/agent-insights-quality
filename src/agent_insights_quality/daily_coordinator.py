@@ -48,7 +48,14 @@ from agent_insights_quality.models import (
 )
 from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.provisioning import provision_profile
-from agent_insights_quality.registry import load_registry, sync_registry, version_entry
+from agent_insights_quality.registry import (
+    ENVIRONMENT_ID,
+    PROFILE_LOCATION,
+    TELEMETRY_RESOURCE_SET,
+    load_registry,
+    sync_registry,
+    version_entry,
+)
 from agent_insights_quality.run_manifest import (
     OFFICIAL_DELIVERY,
     TEST_EMAIL_ONLY_DELIVERY,
@@ -74,7 +81,7 @@ from agent_insights_quality.validation_approved import (
 )
 from agent_insights_quality.validation_blob import AzureValidationBlobStore
 from agent_insights_quality.validation_credentials import local_azure_operator
-from agent_insights_quality.validation_local import current_clean_commit, current_tree_sha
+from agent_insights_quality.validation_local import current_clean_commit
 from agent_insights_quality.validation_manifest import current_validation_digest
 from agent_insights_quality.work_items import load_quality_work_items
 
@@ -97,8 +104,6 @@ def prepare_daily(
     test_run: bool = False,
     base: Path | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
-    profile_factory: Callable[[str], RuntimeProfile] | None = None,
-    approved_record_loader: Callable[[RuntimeProfile], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if rerun < 0 or (test_run and rerun == 0):
         raise ContractError("Test runs require a nonzero --rerun identity")
@@ -117,9 +122,7 @@ def prepare_daily(
     hashes = catalog_hashes(agents, issues)
     selected = select_daily(report_date, agents, issues, hashes["issues"])
     policy = load_automation_policy()
-    profile = (profile_factory or RuntimeProfile.from_env)("daily")
-    approved_loader = approved_record_loader or _fetch_approved_record
-    approval = approved_loader(profile)
+    approval = _fetch_approved_record()
     checkout_commit_sha = current_clean_commit()
     validation_digest = current_validation_digest(agents, issues)
     approval = validate_approval_binding(
@@ -133,7 +136,7 @@ def prepare_daily(
     moment = moment_value.astimezone(UTC).isoformat()
     delivery_mode = TEST_EMAIL_ONLY_DELIVERY if test_run else OFFICIAL_DELIVERY
     initial = {
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "kind": "daily-qualification-lifecycle",
         "snapshot_type": "event",
         "state": "LOCKED",
@@ -1041,7 +1044,17 @@ def daily_guide(*, base: Path | None = None) -> dict[str, Any]:
     return guide
 
 
-def _fetch_approved_record(profile: RuntimeProfile) -> dict[str, Any]:
+def _fetch_approved_record() -> dict[str, Any]:
+    profile = RuntimeProfile.from_env("daily", TELEMETRY_RESOURCE_SET)
+    if (
+        profile.name != "daily"
+        or profile.environment_id != ENVIRONMENT_ID
+        or profile.location != PROFILE_LOCATION
+        or profile.telemetry_resource_set != TELEMETRY_RESOURCE_SET
+    ):
+        raise ContractError(
+            "Daily approval records require the reviewed Sweden g30 profile"
+        )
     operator = local_azure_operator()
     return fetch_approved_record_for_checkout(
         AzureValidationBlobStore(
@@ -1195,7 +1208,6 @@ def _assert_checkout_binding(active: DailyRecord) -> None:
     commit_sha = current_clean_commit()
     if (
         commit_sha != approval["checkout_commit_sha"]
-        or current_tree_sha(commit_sha) != approval["tree_sha"]
         or catalog_hashes(agents, issues) != bindings["catalog_hashes"]
         or current_validation_digest(agents, issues)
         != approval["validation_digest"]

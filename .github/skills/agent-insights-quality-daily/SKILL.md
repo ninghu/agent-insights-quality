@@ -15,8 +15,9 @@ license: MIT
    `~/.aiq-runtime/agent-insights-quality/`, passing the report date. Keep active exact-`Quality` items
    plus items closed on the previous Pacific date; exclude `Removed`.
 4. In the central Daily coordinator session, run `daily-prepare` with the Pacific report date and
-   immutable private work-item snapshot, then run `daily-provision`. Preparation binds the exact clean
-   commit's immutable approved staging record. Provisioning reconciles and freezes the Daily registry,
+   immutable private work-item snapshot, then run `daily-provision`. Preparation reads only the
+   reviewed Sweden g30 WORM container and binds a deterministic immutable approval for the exact
+   repository and current validation digest. Provisioning reconciles and freezes the Daily registry,
    topology, region, reviewed limits, four-issue selections, and hidden system-generated execution
    identity under one private lifecycle/quiescence lock.
 5. Run `daily-guide`. Start exactly one visible Copilot sub session for each pending Weather,
@@ -89,12 +90,12 @@ private run directory. Scheduled official runs never pass `--test-run`.
 
 Five visible Copilot Agent-lane sub sessions execute concurrently while versions and endpoint
 requests remain sequential inside each lane. The code never internally fans out Daily lanes or
-assessment lanes. Daily provisioning is new-only: it exact-selects the
-dedicated Sweden `g30` storage account, derives and fetches the exact clean commit's immutable
-approved-record Blob, checks its locked WORM metadata, and
-recomputes the validation digest. It never accepts an operator-supplied local record or falls back to
-legacy storage or an old West US 2 promotion receipt. Local Test Agent Validation covers all 36 issues plus five
-baselines outside this Daily workflow.
+assessment lanes. Daily provisioning is new-only: it exact-selects the dedicated Sweden `g30`
+storage account, tries the exact checkout approval path, then lists only this repository's
+deterministic approved-record prefix and selects the first canonical immutable record matching the
+current validation digest. It never accepts an operator-supplied local record or falls back to legacy
+storage or an old West US 2 promotion receipt. Local Test Agent Validation covers all 36 issues plus
+five baselines outside this Daily workflow.
 
 Any inconclusive baseline or issue assessment fails finalization and produces no report.
 
