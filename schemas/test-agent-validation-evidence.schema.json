@@ -205,6 +205,9 @@
         "paired_observation_count": {"type": "integer", "minimum": 0},
         "evidence_complete": {"type": "boolean"},
         "pass": {"type": "boolean"},
+        "paired_trace_gap_acceptance": {
+          "$ref": "#/$defs/pairedTraceGapAcceptance"
+        },
         "issue_attempts": {
           "type": "array",
           "minItems": 5,
@@ -216,6 +219,16 @@
           "maxItems": 7,
           "items": {"$ref": "#/$defs/attempt"}
         }
+      }
+    },
+    "pairedTraceGapAcceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy", "attempt_index", "history_digest"],
+      "properties": {
+        "policy": {"const": "single_paired_trace_gap_after_fresh_verify_v1"},
+        "attempt_index": {"type": "integer", "minimum": 1, "maximum": 7},
+        "history_digest": {"$ref": "#/$defs/hash"}
       }
     },
     "attempt": {
@@ -300,7 +313,9 @@
         "endpoint_pass": {"type": "boolean"},
         "identity_pass": {"type": "boolean"},
         "semantic_pass": {"type": "boolean"},
-        "trace_pass": {"type": "boolean"}
+        "trace_pass": {"type": "boolean"},
+        "semantic_evidence_complete": {"type": "boolean"},
+        "trace_evidence_complete": {"type": "boolean"}
       }
     }
   }

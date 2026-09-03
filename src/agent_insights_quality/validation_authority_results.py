@@ -24,6 +24,7 @@ from agent_insights_quality.validation_evidence import (
 )
 from agent_insights_quality.validation_invocations import (
     load_bound_invocation_receipt,
+    load_invocation_receipt,
 )
 from agent_insights_quality.validation_lifecycle import validation_runtime_root
 from agent_insights_quality.validation_runtime import AuthoritySpec
@@ -396,14 +397,80 @@ def has_prior_nonpass_result_for_invocation(
     root: Path | None = None,
 ) -> bool:
     validate_authority_verification_result(result)
+    return any(
+        candidate["artifact_digest"] != result["artifact_digest"]
+        and candidate["binding"]["invocation_receipt_digest"]
+        == result["binding"]["invocation_receipt_digest"]
+        for candidate in _prior_nonpass_results(
+            repository=str(result["repository"]),
+            pr_number=int(result["pr_number"]),
+            authority_id=str(result["authority_id"]),
+            prior_run_ids=prior_run_ids,
+            root=root,
+        )
+    )
+
+
+def paired_trace_gap_history_digest(
+    *,
+    repository: str,
+    pr_number: int,
+    authority_id: str,
+    invocation_receipt_digest: str,
+    prior_run_ids: Sequence[str],
+    root: Path | None = None,
+) -> str | None:
+    candidates = _prior_nonpass_results(
+        repository=repository,
+        pr_number=pr_number,
+        authority_id=authority_id,
+        prior_run_ids=prior_run_ids,
+        root=root,
+    )
+    for index, candidate in enumerate(candidates):
+        if (
+            candidate["outcome"] != "INCOMPLETE"
+            or candidate["binding"]["invocation_receipt_digest"]
+            != invocation_receipt_digest
+        ):
+            continue
+        older = next(
+            (
+                item
+                for item in candidates[index + 1 :]
+                if item["binding"]["invocation_receipt_digest"]
+                != invocation_receipt_digest
+            ),
+            None,
+        )
+        if older is not None:
+            return content_hash(
+                {
+                    "policy": "single_paired_trace_gap_after_fresh_verify_v1",
+                    "fresh_receipt_result_digest": candidate["artifact_digest"],
+                    "older_receipt_result_digest": older["artifact_digest"],
+                }
+            )
+    return None
+
+
+def _prior_nonpass_results(
+    *,
+    repository: str,
+    pr_number: int,
+    authority_id: str,
+    prior_run_ids: Sequence[str],
+    root: Path | None,
+) -> list[dict[str, Any]]:
     runtime_root = (root or validation_runtime_root()).resolve()
+    results = []
     for run_id in dict.fromkeys(prior_run_ids):
         path = _result_path(
             runtime_root,
-            repository=str(result["repository"]),
-            pr_number=int(result["pr_number"]),
+            repository=repository,
+            pr_number=pr_number,
             run_id=str(run_id),
-            authority_id=str(result["authority_id"]),
+            authority_id=authority_id,
         )
         if not path.is_file():
             continue
@@ -413,20 +480,27 @@ def has_prior_nonpass_result_for_invocation(
                 _result_reference(raw, path=path, root=runtime_root),
                 root=runtime_root,
             )
+            receipt = load_invocation_receipt(
+                candidate["invocation_receipt"],
+                root=runtime_root,
+            )
         except (ContractError, KeyError, OSError, ValueError):
             continue
         if (
-            candidate["artifact_digest"] != result["artifact_digest"]
-            and candidate["repository"] == result["repository"]
-            and candidate["pr_number"] == result["pr_number"]
-            and candidate["authority_id"] == result["authority_id"]
+            candidate["repository"] == repository
+            and candidate["pr_number"] == pr_number
+            and candidate["authority_id"] == authority_id
             and candidate["origin_run_id"] == run_id
             and candidate["outcome"] in {"FAIL", "INCOMPLETE"}
-            and candidate["binding"]["invocation_receipt_digest"]
-            == result["binding"]["invocation_receipt_digest"]
+            and receipt["repository"] == repository
+            and receipt["pr_number"] == pr_number
+            and receipt["authority_id"] == authority_id
+            and receipt["origin_run_id"] == run_id
+            and receipt["receipt_digest"]
+            == candidate["binding"]["invocation_receipt_digest"]
         ):
-            return True
-    return False
+            results.append(candidate)
+    return results
 
 
 def validate_authority_verification_result(value: Mapping[str, Any]) -> None:

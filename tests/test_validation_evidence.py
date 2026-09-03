@@ -22,6 +22,7 @@ from agent_insights_quality.validation_authority_results import (
     has_prior_nonpass_result_for_invocation,
     load_bound_authority_verification_result,
     load_authority_verification_result,
+    paired_trace_gap_history_digest,
     reusable_authority_verification_results,
     sanitize_verification_error,
     verification_query_diagnostics,
@@ -674,6 +675,17 @@ def test_prior_nonpass_result_detects_repeated_receipt(
     runtime = _result_runtime(spec, authority, index=1)
     invocation = _result_invocation(spec.authority_id, digit="2")
     prepared = _result_prepared(evidence, verifier_digit="1")
+    monkeypatch.setattr(
+        authority_results,
+        "load_invocation_receipt",
+        lambda reference, **_kwargs: {
+            "repository": prepared["repository"],
+            "pr_number": prepared["pr_number"],
+            "authority_id": spec.authority_id,
+            "origin_run_id": "validation-000000000001",
+            "receipt_digest": reference["receipt_digest"],
+        },
+    )
 
     def write(run_id: str, minute: int) -> dict[str, str]:
         current = deepcopy(prepared)
@@ -732,6 +744,90 @@ def test_prior_nonpass_result_detects_repeated_receipt(
         prior_run_ids=["validation-000000000001"],
         root=tmp_path,
     )
+
+
+def test_paired_trace_gap_history_requires_old_and_fresh_receipts(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    evidence = _evidence()
+    spec = next(
+        item
+        for item in authority_specs(*load_catalogs())
+        if item.authority_id == "issue-027"
+    )
+    authority = next(
+        item
+        for item in evidence["authorities"]
+        if item["authority_id"] == spec.authority_id
+    )
+    runtime = _result_runtime(spec, authority, index=1)
+    prepared = _result_prepared(evidence, verifier_digit="1")
+    run_by_receipt = {
+        "sha256:" + ("2" * 64): "validation-000000000001",
+        "sha256:" + ("3" * 64): "validation-000000000002",
+    }
+    monkeypatch.setattr(
+        authority_results,
+        "load_invocation_receipt",
+        lambda reference, **_kwargs: {
+            "repository": prepared["repository"],
+            "pr_number": prepared["pr_number"],
+            "authority_id": spec.authority_id,
+            "origin_run_id": run_by_receipt[reference["receipt_digest"]],
+            "receipt_digest": reference["receipt_digest"],
+        },
+    )
+
+    def write(run_id: str, minute: int, digit: str) -> None:
+        current = deepcopy(prepared)
+        current["run_id"] = run_id
+        write_authority_verification_result(
+            prepared=current,
+            plan=_result_plan(),
+            authority=spec,
+            runtime=runtime,
+            invocation_reference=_result_invocation(
+                spec.authority_id,
+                digit=digit,
+            ),
+            authority_evidence=None,
+            outcome="INCOMPLETE",
+            started_at=datetime(2026, 9, 1, 12, minute, tzinfo=UTC),
+            completed_at=datetime(2026, 9, 1, 12, minute, 1, tzinfo=UTC),
+            query_stage="authority_assertion",
+            error_code="evidence_insufficient",
+            query_diagnostics=None,
+            fence=lambda: None,
+            root=tmp_path,
+        )
+
+    write("validation-000000000001", 0, "2")
+    write("validation-000000000002", 1, "3")
+    fresh_digest = "sha256:" + ("3" * 64)
+
+    assert (
+        paired_trace_gap_history_digest(
+            repository=prepared["repository"],
+            pr_number=prepared["pr_number"],
+            authority_id=spec.authority_id,
+            invocation_receipt_digest=fresh_digest,
+            prior_run_ids=["validation-000000000002"],
+            root=tmp_path,
+        )
+        is None
+    )
+    assert paired_trace_gap_history_digest(
+        repository=prepared["repository"],
+        pr_number=prepared["pr_number"],
+        authority_id=spec.authority_id,
+        invocation_receipt_digest=fresh_digest,
+        prior_run_ids=[
+            "validation-000000000002",
+            "validation-000000000001",
+        ],
+        root=tmp_path,
+    ).startswith("sha256:")
 
 
 def test_definitive_fail_result_is_reusable_without_revalidation(

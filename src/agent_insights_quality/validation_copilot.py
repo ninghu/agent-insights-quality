@@ -691,6 +691,7 @@ def authority_evidence_from_evaluation(
     authority: AuthoritySpec,
     runtime: Mapping[str, Any],
     validated_commit_sha: str,
+    paired_trace_gap_history_digest: str | None = None,
 ) -> dict[str, Any]:
     evaluations = {
         item["scenario_id"]: item for item in evaluation["scenarios"]
@@ -736,6 +737,14 @@ def authority_evidence_from_evaluation(
         paired_observation_count = sum(
             item["observation"] is True for item in v0_attempts
         )
+        trace_gap_acceptance = _paired_trace_gap_acceptance(
+            authority=authority,
+            rule=rule,
+            assessed=assessed,
+            issue_attempts=issue_attempts,
+            v0_attempts=v0_attempts,
+            history_digest=paired_trace_gap_history_digest,
+        )
         evidence_complete = scenario_evidence_complete(
             authority_kind=authority.authority_kind,
             n=n,
@@ -743,9 +752,9 @@ def authority_evidence_from_evaluation(
             complete_count=complete_count,
             paired_complete_count=paired_complete_count,
             observation_count=observation_count,
+            paired_trace_gap_accepted=trace_gap_acceptance is not None,
         )
-        scenarios.append(
-            {
+        scenario = {
                 "scenario_id": scenario_id,
                 "execution_digest": rule["execution_digest"],
                 "validation_mode": rule["validation_mode"],
@@ -765,7 +774,9 @@ def authority_evidence_from_evaluation(
                 "issue_attempts": issue_attempts,
                 "v0_attempts": v0_attempts,
             }
-        )
+        if trace_gap_acceptance is not None:
+            scenario["paired_trace_gap_acceptance"] = trace_gap_acceptance
+        scenarios.append(scenario)
     result = {
         "authority_id": authority.authority_id,
         "authority_kind": authority.authority_kind,
@@ -1297,6 +1308,72 @@ def _validate_attempt_coverage(
                 )
 
 
+def _paired_trace_gap_acceptance(
+    *,
+    authority: AuthoritySpec,
+    rule: Mapping[str, Any],
+    assessed: Mapping[str, Any],
+    issue_attempts: Sequence[Mapping[str, Any]],
+    v0_attempts: Sequence[Mapping[str, Any]],
+    history_digest: str | None,
+) -> dict[str, Any] | None:
+    predicate = rule["defect_predicate"]
+    incomplete = [
+        (attempt, evaluation)
+        for attempt, evaluation in zip(
+            v0_attempts,
+            assessed["v0_attempts"],
+            strict=True,
+        )
+        if attempt["complete"] is not True
+    ]
+    if (
+        history_digest is None
+        or authority.authority_kind != "issue"
+        or set(predicate.get("required_surfaces", [])) != {"trace"}
+        or sum(item["observation"] is True for item in issue_attempts)
+        < int(rule["k"])
+        or sum(item["complete"] is True for item in v0_attempts)
+        != int(rule["n"]) - 1
+        or any(item["observation"] is True for item in v0_attempts)
+        or len(incomplete) != 1
+    ):
+        return None
+    attempt, evaluation = incomplete[0]
+    steps = [*attempt["setup_steps"], *attempt["probe_steps"]]
+    if (
+        any(
+            step["endpoint_pass"] is not True
+            or step["identity_pass"] is not True
+            for step in steps
+        )
+        or evaluation["evidence_sufficient"] is not False
+        or evaluation["error_code"] is None
+    ):
+        return None
+    trace_gap = False
+    for step in evaluation["steps"]:
+        if any(
+            assertion["evidence_sufficient"] is not True
+            for assertion in step["semantic_assertions"]
+        ):
+            return None
+        missing_trace = any(
+            assertion["evidence_sufficient"] is not True
+            for assertion in step["trace_assertions"]
+        )
+        if step["evidence_sufficient"] is not True and not missing_trace:
+            return None
+        trace_gap = trace_gap or missing_trace
+    if not trace_gap:
+        return None
+    return {
+        "policy": "single_paired_trace_gap_after_fresh_verify_v1",
+        "attempt_index": attempt["index"],
+        "history_digest": history_digest,
+    }
+
+
 def _evaluated_attempts(
     *,
     authority: AuthoritySpec,
@@ -1357,6 +1434,14 @@ def _evaluated_attempts(
                 item["evidence_sufficient"] is True
                 for item in relevant_evaluations
             )
+            semantic_evidence_complete = all(
+                item["evidence_sufficient"] is True
+                for item in semantic_evaluations
+            )
+            trace_evidence_complete = all(
+                item["evidence_sufficient"] is True
+                for item in trace_evaluations
+            )
             steps.append(
                 {
                     "index": package_step["index"],
@@ -1386,6 +1471,8 @@ def _evaluated_attempts(
                     "trace_pass": all(
                         item["passed"] is True for item in trace_evaluations
                     ),
+                    "semantic_evidence_complete": semantic_evidence_complete,
+                    "trace_evidence_complete": trace_evidence_complete,
                 }
             )
         setup_count = len(scenario["attempts"][package_attempt["index"] - 1][

@@ -52,6 +52,7 @@ from agent_insights_quality.validation_authority_results import (
     has_prior_nonpass_result_for_invocation,
     load_authority_verification_result,
     load_bound_authority_verification_result,
+    paired_trace_gap_history_digest,
     reusable_authority_verification_results,
     sanitize_verification_error,
     verification_query_diagnostics,
@@ -982,7 +983,7 @@ def import_test_agent_validation_assessment() -> dict[str, Any]:
     context = _load_prepared()
     prepared = context["prepared"]
     claimant = copilot_claimant_reference()
-    with evaluation_lock():
+    with evaluation_lock() as lock:
         _assert_active_generation(prepared)
         try:
             pointer = load_active_pointer(claimant_reference=claimant)
@@ -1054,12 +1055,19 @@ def import_test_agent_validation_assessment() -> dict[str, Any]:
             draft_path,
             package=package,
         )
+        trace_gap_history_digest = _paired_trace_gap_history_for_import(
+            prepared=prepared,
+            authority_id=authority_id,
+            invocation_receipt_digest=references[0]["receipt_digest"],
+            lock=lock,
+        )
         evidence = authority_evidence_from_evaluation(
             package=package,
             evaluation=evaluation,
             authority=authority,
             runtime=runtime_by_id[authority_id],
             validated_commit_sha=prepared["commit_sha"],
+            paired_trace_gap_history_digest=trace_gap_history_digest,
         )
         outcome, query_stage, error_code = authority_verification_outcome(
             evidence
@@ -1085,6 +1093,26 @@ def import_test_agent_validation_assessment() -> dict[str, Any]:
         )
         complete_active_pointer(pointer)
         return result
+
+
+def _paired_trace_gap_history_for_import(
+    *,
+    prepared: Mapping[str, Any],
+    authority_id: str,
+    invocation_receipt_digest: str,
+    lock: LocalValidationLock,
+) -> str | None:
+    try:
+        prior_run_ids = LifecycleJournal(lock=lock).superseded_run_ids(prepared)
+    except (ContractError, OSError):
+        return None
+    return paired_trace_gap_history_digest(
+        repository=str(prepared["repository"]),
+        pr_number=int(prepared["pr_number"]),
+        authority_id=authority_id,
+        invocation_receipt_digest=invocation_receipt_digest,
+        prior_run_ids=prior_run_ids,
+    )
 
 
 def compose_test_agent_validation() -> dict[str, Any]:

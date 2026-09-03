@@ -746,6 +746,72 @@ def test_required_surface_rejects_unsupported_observation(tmp_path) -> None:
         )
 
 
+def test_single_paired_trace_gap_requires_fresh_verify_history(
+    tmp_path,
+) -> None:
+    package, pointer, prepared, plan, context = _package(
+        tmp_path,
+        "issue-027",
+    )
+    package = _load_bound(
+        package,
+        pointer,
+        prepared,
+        plan,
+        context,
+        root=tmp_path,
+    )
+    evaluation = _evaluation(
+        package,
+        issue_observations=set(range(1, 6)),
+    )
+    paired_attempt = evaluation["scenarios"][0]["v0_attempts"][0]
+    paired_attempt["evidence_sufficient"] = False
+    paired_attempt["error_code"] = "missing_evidence"
+    paired_probe = next(
+        step
+        for package_step, step in zip(
+            package["targets"][1]["attempts"][0]["steps"],
+            paired_attempt["steps"],
+            strict=True,
+        )
+        if package_step["phase"] == "probe"
+        and step["trace_assertions"]
+    )
+    paired_probe["evidence_sufficient"] = False
+    paired_probe["trace_assertions"][0]["evidence_sufficient"] = False
+
+    incomplete = authority_evidence_from_evaluation(
+        package=package,
+        evaluation=evaluation,
+        authority=context["authority"],
+        runtime=context["runtime"],
+        validated_commit_sha=HEAD,
+    )
+    assert (incomplete["evidence_complete"], incomplete["pass"]) == (
+        False,
+        False,
+    )
+
+    accepted = authority_evidence_from_evaluation(
+        package=package,
+        evaluation=evaluation,
+        authority=context["authority"],
+        runtime=context["runtime"],
+        validated_commit_sha=HEAD,
+        paired_trace_gap_history_digest=HASH,
+    )
+    scenario = accepted["scenarios"][0]
+    assert (accepted["evidence_complete"], accepted["pass"]) == (True, True)
+    assert scenario["paired_complete_count"] == scenario["n"] - 1
+    assert scenario["paired_trace_gap_acceptance"] == {
+        "policy": "single_paired_trace_gap_after_fresh_verify_v1",
+        "attempt_index": 1,
+        "history_digest": HASH,
+    }
+    assert scenario["v0_attempts"][0]["complete"] is False
+
+
 def test_baseline_health_uses_copilot_attempt_judgments(tmp_path) -> None:
     package, pointer, prepared, plan, context = _package(
         tmp_path,

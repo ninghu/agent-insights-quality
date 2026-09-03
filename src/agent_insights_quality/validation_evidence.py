@@ -404,11 +404,20 @@ def scenario_evidence_complete(
     complete_count: int,
     paired_complete_count: int,
     observation_count: int,
+    paired_trace_gap_accepted: bool = False,
 ) -> bool:
     issue_decided = complete_count == n or (
         authority_kind == "issue" and observation_count >= k
     )
-    control_decided = authority_kind == "baseline" or paired_complete_count == n
+    control_decided = (
+        authority_kind == "baseline"
+        or paired_complete_count == n
+        or (
+            authority_kind == "issue"
+            and paired_trace_gap_accepted
+            and paired_complete_count == n - 1
+        )
+    )
     return issue_decided and control_decided
 
 
@@ -502,6 +511,48 @@ def _validate_scenario(
     paired_observation_count = sum(
         attempt["observation"] is True for attempt in v0_attempts
     )
+    acceptance = scenario.get("paired_trace_gap_acceptance")
+    incomplete_controls = [
+        attempt for attempt in v0_attempts if attempt["complete"] is not True
+    ]
+    accepted_steps = (
+        [
+            *incomplete_controls[0]["setup_steps"],
+            *incomplete_controls[0]["probe_steps"],
+        ]
+        if len(incomplete_controls) == 1
+        else []
+    )
+    if acceptance is not None and (
+        authority_kind != "issue"
+        or _reviewed_required_surfaces(
+            authority_id,
+            str(scenario["scenario_id"]),
+        )
+        != {"trace"}
+        or scenario["evidence_complete"] is not True
+        or paired_complete_count != n - 1
+        or paired_observation_count != 0
+        or len(incomplete_controls) != 1
+        or incomplete_controls[0]["index"] != acceptance["attempt_index"]
+        or incomplete_controls[0]["error_code"] is None
+        or any(
+            step["endpoint_pass"] is not True
+            or step["identity_pass"] is not True
+            or step.get("semantic_evidence_complete") is not True
+            for step in accepted_steps
+        )
+        or not any(
+            step.get("trace_evidence_complete") is not True
+            for step in accepted_steps
+        )
+        or any(
+            step["complete"] is not True
+            and step.get("trace_evidence_complete") is True
+            for step in accepted_steps
+        )
+    ):
+        raise ContractError(f"{authority_id} paired trace gap acceptance is invalid")
     full_attempt_coverage = complete_count == n and (
         authority_kind == "baseline" or paired_complete_count == n
     )
@@ -512,6 +563,7 @@ def _validate_scenario(
         complete_count=complete_count,
         paired_complete_count=paired_complete_count,
         observation_count=observation_count,
+        paired_trace_gap_accepted=acceptance is not None,
     )
     if (
         scenario["complete_count"] != complete_count
@@ -578,6 +630,37 @@ def _validate_attempts(
             raise ContractError(
                 f"{authority_id} step references do not match the attempt mapping"
             )
+
+
+def _reviewed_required_surfaces(
+    authority_id: str,
+    scenario_id: str,
+) -> set[str]:
+    if authority_id.endswith("/v0"):
+        return set()
+    _, issue_catalog = load_catalogs()
+    issue = next(
+        (
+            item
+            for item in issue_catalog["issues"]
+            if item["id"] == authority_id
+        ),
+        None,
+    )
+    if issue is None:
+        raise ContractError(f"{authority_id} reviewed issue contract is missing")
+    traffic = read_json(ROOT / str(issue["implementation"]) / "traffic.json")
+    scenario = next(
+        (
+            item
+            for item in traffic["validation_rules"]["scenarios"]
+            if item["id"] == scenario_id
+        ),
+        None,
+    )
+    if scenario is None:
+        raise ContractError(f"{authority_id} reviewed scenario contract is missing")
+    return set(scenario["defect_predicate"].get("required_surfaces", []))
 
 
 def _validate_global_attempt_references(
