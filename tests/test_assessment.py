@@ -16,7 +16,6 @@ from agent_insights_quality.assessment import (
     _issue_activation_complete,
     _linked_baseline_operations,
     _load_package,
-    _package_execution_context,
     _validate_baseline_cards,
     _validate_issue_cards,
     _validate_package,
@@ -26,6 +25,7 @@ from agent_insights_quality.assessment import (
 from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.cli import _rehydrate_with_retries
 from agent_insights_quality.util import ROOT, ContractError, content_hash
+from agent_insights_quality.validation_rules import execution_context
 
 
 def _trace_proof(
@@ -135,6 +135,7 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
         "n": 5,
         "k": 5,
         "execution_digest": "sha256:" + "1" * 64,
+        "required_surfaces": ["semantic"],
         "evidence_reference": "sha256:" + "b" * 64,
         "runtime_status": "observed",
         "error_code": None,
@@ -154,17 +155,17 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
             }
         ],
         "endpoint_evidence": {
-            "request_count": 1,
-            "response_count": 1,
-            "usable_response_count": 1,
+            "request_count": 5,
+            "response_count": 5,
+            "usable_response_count": 5,
             "trace_contract_verified": True,
-            "semantic_assertion_count": 1,
-            "semantic_assertions_passed": 1,
+            "semantic_assertion_count": 5,
+            "semantic_assertions_passed": 5,
             "trace_assertion_count": 0,
             "trace_assertions_passed": 0,
             "request_summaries": [
                 {
-                    "request_index": 0,
+                    "request_index": index,
                     "response_count": 1,
                     "usable_response": True,
                     "semantic_assertion_count": 1,
@@ -179,6 +180,7 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
                     "direct_terminal_response_count": 1,
                     "function_call_count": 0,
                 }
+                for index in range(5)
             ],
         },
         "full_request_trace_proof": _trace_proof(),
@@ -447,7 +449,7 @@ def _complete_prompt_baseline_package() -> dict:
             "trace_assertion_count": 0,
             "trace_assertions_passed": 0,
             "trace_assertion_results": [],
-            "activation_gate": False,
+            "activation_gate": True,
             "direct_terminal_response_count": 1,
             "function_call_count": 0,
         }
@@ -497,6 +499,50 @@ def test_baseline_aggregate_assertions_must_equal_request_summaries() -> None:
     package["endpoint_evidence"]["semantic_assertion_count"] = 6
     package["endpoint_evidence"]["semantic_assertions_passed"] = 6
     assert _baseline_evidence_complete(package) is False
+
+
+def test_baseline_behavior_counts_setup_as_traffic_not_observations() -> None:
+    package = _complete_prompt_baseline_package()
+    observations = package["endpoint_evidence"]["request_summaries"]
+    summaries = []
+    for observation in observations:
+        summaries.extend(
+            [
+                {
+                    **deepcopy(observation),
+                    "request_index": len(summaries),
+                    "semantic_assertion_count": 0,
+                    "semantic_assertions_passed": 0,
+                    "assertion_results": [],
+                    "activation_gate": False,
+                },
+                {
+                    **deepcopy(observation),
+                    "request_index": len(summaries) + 1,
+                },
+            ]
+        )
+    endpoint = {
+        **package["endpoint_evidence"],
+        "request_count": 10,
+        "response_count": 10,
+        "usable_response_count": 10,
+        "request_summaries": summaries,
+    }
+    proof = _trace_proof(operation_count=10, terminal_count=10)
+
+    behavior = _baseline_behavior_summary(
+        endpoint,
+        proof,
+        package["expected"]["behavior"],
+    )
+
+    assert behavior == {
+        "endpoint_complete": True,
+        "semantic_assertions_complete": True,
+        "terminal_evidence_complete": True,
+        "direct_prompt_contract_complete": True,
+    }
 
 
 def test_truncated_trace_proof_cannot_establish_clean_baseline() -> None:
@@ -566,11 +612,20 @@ def test_intermediate_card_link_routes_to_framework_or_unresolved() -> None:
 
 def test_issue_activation_requires_every_designated_assertion() -> None:
     package = _complete_prompt_baseline_package()
+    package.update(
+        {
+            "n": 1,
+            "k": 1,
+            "required_surfaces": ["semantic", "trace"],
+        }
+    )
     package["source_integrity"] = {
         "verified": True,
         "contract_digest": "sha256:" + "a" * 64,
     }
     summaries = package["endpoint_evidence"]["request_summaries"]
+    for summary in summaries:
+        summary["activation_gate"] = False
     summaries[0]["activation_gate"] = True
     summaries[0]["trace_assertion_count"] = 1
     summaries[0]["trace_assertions_passed"] = 1
@@ -589,6 +644,48 @@ def test_issue_activation_requires_every_designated_assertion() -> None:
     package["endpoint_evidence"]["trace_assertions_passed"] = 1
     summaries[0]["assertion_results"][0]["passed"] = False
     summaries[0]["semantic_assertions_passed"] = 0
+    assert _issue_activation_complete(package) is False
+
+
+def test_issue_activation_uses_reviewed_five_of_seven_required_surface() -> None:
+    package = _complete_prompt_baseline_package()
+    summaries = package["endpoint_evidence"]["request_summaries"]
+    for summary in summaries:
+        summary["activation_gate"] = True
+    for index in range(5, 7):
+        summaries.append(
+            {
+                **deepcopy(summaries[0]),
+                "request_index": index,
+                "semantic_assertions_passed": 0,
+                "assertion_results": [
+                    {"assertion": "synthetic_contract", "passed": False}
+                ],
+            }
+        )
+    package["endpoint_evidence"].update(
+        {
+            "request_count": 7,
+            "response_count": 7,
+            "usable_response_count": 7,
+            "semantic_assertion_count": 7,
+            "semantic_assertions_passed": 5,
+        }
+    )
+    package.update(
+        {
+            "source_integrity": {
+                "verified": True,
+                "contract_digest": "sha256:" + "a" * 64,
+            },
+            "n": 7,
+            "k": 5,
+            "required_surfaces": ["semantic"],
+        }
+    )
+
+    assert _issue_activation_complete(package) is True
+    package["required_surfaces"] = ["trace"]
     assert _issue_activation_complete(package) is False
 
 
@@ -1104,7 +1201,7 @@ def test_daily_composition_rehydrates_25_schema_valid_packages(
         logical_version = (
             "v0" if package["target_kind"] == "baseline" else package["issue_id"]
         )
-        expected_context = _package_execution_context(
+        expected_context = execution_context(
             ROOT
             / "agents"
             / package["agent_name"]

@@ -22,7 +22,11 @@ from agent_insights_quality.util import (
     ContractError,
     InsightWindowExpiredError,
     TraceAssertionActivationError,
-    read_json,
+)
+from agent_insights_quality.validation_rules import (
+    execution_context,
+    execution_requests,
+    issue_observation_context,
 )
 
 
@@ -115,34 +119,39 @@ def _required_trace_operations(
     traffic_path: Path,
     request_count: int,
 ) -> tuple[tuple[str, ...], ...]:
-    if (
-        expected is not None
-        or agent["baseline_contract"]["trace_operations"] == "uniform"
-    ):
-        operations = tuple(
-            expected["trace_contract"]["operations"]
-            if expected is not None
-            else ("invoke_agent", "chat")
-        )
-        return tuple(operations for _ in range(request_count))
-
-    traffic = read_json(traffic_path)
-    requests = traffic.get("requests") if isinstance(traffic, dict) else None
-    if not isinstance(requests, list) or len(requests) != request_count:
+    requests = execution_requests(traffic_path)
+    if len(requests) != request_count:
         raise ContractError("Traffic request operation contract is incomplete")
     required: list[tuple[str, ...]] = []
     for request in requests:
         expected_request = (
             request.get("expected") if isinstance(request, dict) else None
         )
-        operations = (
-            expected_request.get("required_operations")
+        trace_assertions = (
+            expected_request.get("trace_assertions")
             if isinstance(expected_request, dict)
             else None
         )
-        if not isinstance(operations, list) or not operations:
-            raise ContractError("Traffic request operation contract is incomplete")
-        required.append(tuple(str(operation) for operation in operations))
+        sequence = next(
+            (
+                item.get("operations")
+                for item in trace_assertions or []
+                if isinstance(item, dict)
+                and item.get("kind") == "operation_sequence"
+                and item.get("name") == "required_operation_sequence"
+            ),
+            None,
+        )
+        if isinstance(sequence, list) and sequence:
+            required.append(tuple(str(operation) for operation in sequence))
+        elif (
+            expected is not None
+            and isinstance(expected_request, dict)
+            and expected_request.get("activation_gate") is True
+        ):
+            required.append(tuple(expected["trace_contract"]["operations"]))
+        else:
+            required.append(("invoke_agent", "chat"))
     return tuple(required)
 
 
@@ -167,6 +176,7 @@ class RuntimePort(Protocol):
         foundry_version: str,
         traffic_path: Path,
         seed: int,
+        requests: list[dict[str, Any]],
     ) -> InvocationEvidence: ...
 
     def wait_for_telemetry(
@@ -203,8 +213,10 @@ class RuntimePort(Protocol):
         window_start: str,
         window_end: str,
         traffic_path: Path,
+        requests: list[dict[str, Any]],
         stabilization_seconds: int,
         on_first_pass: Callable[[], None],
+        minimum_passing_trace_observations: int,
         on_stable: Callable[[dict[str, Any]], None] | None = None,
     ) -> tuple[tuple[Any, ...], ...]: ...
 
@@ -722,12 +734,10 @@ def _validate_endpoint_contract(
     logical_version: str,
     baseline: bool,
     invocation: InvocationEvidence,
+    traffic_path: Path,
 ) -> None:
-    expected_requests = (
-        int(agent["baseline_contract"]["request_count"])
-        if baseline
-        else invocation.request_count
-    )
+    context = execution_context(traffic_path)
+    expected_requests = len(execution_requests(traffic_path))
     if invocation.request_count != expected_requests:
         raise _VersionStageError(
             "endpoint_contract_failed",
@@ -757,6 +767,15 @@ def _validate_endpoint_contract(
                 f"{agent['name']}/{logical_version} request summaries are incomplete"
             ),
         )
+    observations = [item for item in summaries if item.activation_gate]
+    if len(observations) != int(context["n"]):
+        raise _VersionStageError(
+            "endpoint_contract_failed",
+            ContractError(
+                f"{agent['name']}/{logical_version} expected "
+                f"{context['n']} reviewed observations"
+            ),
+        )
     if any(
         len(item.assertion_results) != item.semantic_assertion_count
         or sum(result.passed for result in item.assertion_results)
@@ -784,13 +803,20 @@ def _validate_endpoint_contract(
             ),
         )
     semantic_mode = agent["baseline_contract"]["semantic_assertions"]
+    baseline_observations = [
+        item for item in summaries if item.activation_gate
+    ]
     if baseline and (
-        invocation.semantic_assertion_count < 1
-        or invocation.semantic_assertions_passed
-        != invocation.semantic_assertion_count
+        not baseline_observations
+        or any(
+            item.semantic_assertion_count < 1
+            or item.semantic_assertions_passed != item.semantic_assertion_count
+            for item in baseline_observations
+        )
         or (
             semantic_mode == "required_per_request"
-            and any(item.semantic_assertion_count < 1 for item in summaries)
+            and len(baseline_observations)
+            != int(agent["baseline_contract"]["request_count"])
         )
     ):
         raise _VersionStageError(
@@ -800,18 +826,6 @@ def _validate_endpoint_contract(
                 "is incomplete"
             ),
         )
-    if not baseline and agent["type"] == "prompt" and not any(
-        item.activation_gate for item in summaries
-    ):
-        raise _VersionStageError(
-            "issue_activation_failed",
-            ContractError(
-                f"{agent['name']}/{logical_version} issue activation "
-                "evidence is incomplete"
-            ),
-        )
-
-
 def _with_trace_assertions(
     invocation: InvocationEvidence,
     results: tuple[tuple[Any, ...], ...],
@@ -842,31 +856,87 @@ def _with_trace_assertions(
 
 
 def _issue_activation_evidence_complete(
-    agent: dict[str, Any],
+    context: dict[str, Any],
     invocation: InvocationEvidence,
 ) -> bool:
     gates = [item for item in invocation.request_summaries if item.activation_gate]
-    if not gates:
-        return agent["type"] != "prompt"
-    return all(
-        item.semantic_assertion_count + item.trace_assertion_count > 0
-        and item.semantic_assertions_passed == item.semantic_assertion_count
-        and item.trace_assertions_passed == item.trace_assertion_count
+    required_surfaces = set(context["required_surfaces"])
+    return len(gates) == int(context["n"]) and sum(
+        (
+            "semantic" not in required_surfaces
+            or (
+                item.semantic_assertion_count > 0
+                and item.semantic_assertions_passed
+                == item.semantic_assertion_count
+            )
+        )
+        and (
+            "trace" not in required_surfaces
+            or (
+                item.trace_assertion_count > 0
+                and item.trace_assertions_passed == item.trace_assertion_count
+            )
+        )
         for item in gates
+    ) >= int(context["k"])
+
+
+def _issue_execution_context(traffic_path: Path) -> dict[str, Any]:
+    return issue_observation_context(traffic_path)
+
+
+def _minimum_passing_trace_observations(
+    requests: list[dict[str, Any]],
+    issue_context: dict[str, Any] | None,
+) -> int:
+    if issue_context is not None:
+        return (
+            int(issue_context["k"])
+            if "trace" in issue_context["required_surfaces"]
+            else 0
+        )
+    return sum(
+        request["expected"].get("activation_gate") is True
+        and bool(request["expected"].get("trace_assertions"))
+        for request in requests
     )
+
+
+def _validate_cached_execution(
+    result: VersionResult,
+    requests: list[dict[str, Any]],
+    context: dict[str, Any],
+) -> None:
+    expected_gates = [
+        request["expected"].get("activation_gate") is True
+        for request in requests
+    ]
+    actual_gates = [
+        summary.activation_gate for summary in result.endpoint_request_summaries
+    ]
+    if (
+        result.endpoint_request_count != len(requests)
+        or len(actual_gates) != len(expected_gates)
+        or actual_gates != expected_gates
+        or sum(actual_gates) != int(context["n"])
+    ):
+        raise ContractError(
+            "Cached Daily evidence does not match the current execution plan"
+        )
 
 
 def _issue_semantic_activation_evidence_complete(
-    agent: dict[str, Any],
+    context: dict[str, Any],
     invocation: InvocationEvidence,
 ) -> bool:
+    if "semantic" not in context["required_surfaces"]:
+        return True
     gates = [item for item in invocation.request_summaries if item.activation_gate]
-    if not gates:
-        return agent["type"] != "prompt"
-    return all(
-        item.semantic_assertions_passed == item.semantic_assertion_count
+    return len(gates) == int(context["n"]) and sum(
+        item.semantic_assertion_count > 0
+        and item.semantic_assertions_passed == item.semantic_assertion_count
         for item in gates
-    )
+    ) >= int(context["k"])
 
 
 def _validate_baseline_trace_evidence(
@@ -1033,6 +1103,10 @@ def _execute_version(
     start_stagger: _StartStagger,
 ) -> VersionResult:
     foundry_version = registry_entry["foundry_version"]
+    planned_requests = execution_requests(traffic_path)
+    issue_context = (
+        _issue_execution_context(traffic_path) if expected is not None else None
+    )
     checkpoint_args = (
         agent["name"],
         logical_version,
@@ -1045,6 +1119,11 @@ def _execute_version(
         else None
     )
     if cached is not None:
+        _validate_cached_execution(
+            cached,
+            planned_requests,
+            issue_context or execution_context(traffic_path),
+        )
         if (
             checkpoint_store is not None
             and checkpoint_store.insight_drain_pending(*checkpoint_args)
@@ -1081,6 +1160,7 @@ def _execute_version(
                 foundry_version=foundry_version,
                 traffic_path=traffic_path,
                 seed=seed,
+                requests=planned_requests,
             )
         except Exception as error:
             raise _VersionStageError("invocation_failed", error) from error
@@ -1096,6 +1176,7 @@ def _execute_version(
         logical_version=logical_version,
         baseline=expected is None,
         invocation=invocation,
+        traffic_path=traffic_path,
     )
     operation_ids = (
         checkpoint_store.operation_ids(*checkpoint_args)
@@ -1139,7 +1220,10 @@ def _execute_version(
             return
         if (
             expected is not None
-            and not _issue_semantic_activation_evidence_complete(agent, invocation)
+            and not _issue_semantic_activation_evidence_complete(
+                issue_context,
+                invocation,
+            )
         ):
             return
         if checkpoint_store is not None:
@@ -1241,8 +1325,15 @@ def _execute_version(
                     window_start=invocation.started_at,
                     window_end=invocation.completed_at,
                     traffic_path=traffic_path,
+                    requests=planned_requests,
                     stabilization_seconds=trace_assertion_stabilization_seconds,
                     on_first_pass=start_insight_run_once,
+                    minimum_passing_trace_observations=(
+                        _minimum_passing_trace_observations(
+                            planned_requests,
+                            issue_context,
+                        )
+                    ),
                     on_stable=capture_stable_trace_evidence,
                 ),
             )
@@ -1313,7 +1404,7 @@ def _execute_version(
                 return result
 
     if expected is not None:
-        if not _issue_activation_evidence_complete(agent, invocation):
+        if not _issue_activation_evidence_complete(issue_context, invocation):
             result = _activation_failure_result(
                 logical_version=logical_version,
                 foundry_version=foundry_version,
@@ -1331,7 +1422,7 @@ def _execute_version(
                 checkpoint_store=checkpoint_store,
                 checkpoint_args=checkpoint_args,
                 result=result,
-                reason="trace assertions did not pass",
+                reason="required observation surfaces did not reach the reviewed threshold",
             )
             return result
     if insight_checkpoint is None:

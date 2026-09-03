@@ -58,6 +58,74 @@ def validation_matrix(mode: str) -> tuple[int, int]:
         raise ContractError(f"Validation mode is not reviewed: {mode}") from error
 
 
+def execution_context(traffic_path: Path) -> dict[str, Any]:
+    rules, scenario = _execution_rule(traffic_path)
+    return {
+        "validation_mode": scenario["validation_mode"],
+        "n": scenario["n"],
+        "k": scenario["k"],
+        "execution_digest": rules["execution_digest"],
+    }
+
+
+def issue_observation_context(traffic_path: Path) -> dict[str, Any]:
+    rules, scenario = _execution_rule(traffic_path)
+    predicate = scenario["defect_predicate"]
+    if predicate["kind"] != "all_observation_steps_pass":
+        raise ContractError("Issue execution contract has no observation predicate")
+    return {
+        "validation_mode": scenario["validation_mode"],
+        "n": scenario["n"],
+        "k": scenario["k"],
+        "execution_digest": rules["execution_digest"],
+        "required_surfaces": list(predicate["required_surfaces"]),
+    }
+
+
+def execution_requests(traffic_path: Path) -> list[dict[str, Any]]:
+    _, scenario = _execution_rule(traffic_path)
+    predicate = scenario["defect_predicate"]
+    observation_ids = (
+        set(predicate["step_ids"])
+        if predicate["kind"] == "all_observation_steps_pass"
+        else {
+            attempt["probe_steps"][0]["id"]
+            for attempt in scenario["attempts"]
+        }
+    )
+    requests: list[dict[str, Any]] = []
+    for attempt in scenario["attempts"]:
+        conversation_group = attempt["conversation_group"]
+        for role in ("setup_steps", "probe_steps"):
+            for raw_step in attempt[role]:
+                step = copy.deepcopy(raw_step)
+                step["request"]["body"]["conversation"] = {
+                    "id": conversation_group
+                }
+                step["expected"]["activation_gate"] = (
+                    raw_step["id"] in observation_ids
+                )
+                requests.append(step)
+    return requests
+
+
+def _execution_rule(
+    traffic_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    traffic = read_json(traffic_path)
+    rules = traffic.get("validation_rules")
+    scenarios = rules.get("scenarios") if isinstance(rules, dict) else None
+    if (
+        not isinstance(scenarios, list)
+        or len(scenarios) != 1
+        or not isinstance(scenarios[0], dict)
+    ):
+        raise ContractError(
+            f"{traffic_path.relative_to(ROOT).as_posix()} has no single execution contract"
+        )
+    return rules, scenarios[0]
+
+
 def scenario_execution_digest(
     scenario: Mapping[str, Any],
     *,

@@ -32,6 +32,7 @@ from agent_insights_quality.azure_regions import (
     location_display_name,
     regions_match,
 )
+from agent_insights_quality.validation_rules import issue_observation_context
 
 REQUIRED_FIELDS = set(ASSESSMENT_FIELDS)
 _QUALITY_SCORE_DOC_URL = (
@@ -117,12 +118,12 @@ def _request_summaries_complete(value: dict[str, Any]) -> bool:
 def _runtime_evidence_complete(
     value: dict[str, Any],
     *,
-    require_activation: bool = False,
+    traffic_path: Path | None = None,
 ) -> bool:
     requests = value.get("endpoint_request_count")
     responses = value.get("endpoint_response_count")
     usable = value.get("endpoint_usable_response_count")
-    return (
+    complete = (
         isinstance(requests, int)
         and not isinstance(requests, bool)
         and requests > 0
@@ -135,27 +136,40 @@ def _runtime_evidence_complete(
         and requests == responses == usable
         and value.get("trace_contract_verified") is True
         and _request_summaries_complete(value)
-        and (
-            (
-                not require_activation
-                or any(
-                    item.get("activation_gate") is True
-                    for item in value["endpoint_request_summaries"]
-                )
-            )
-            and all(
-                item.get("semantic_assertion_count", 0)
-                + item.get("trace_assertion_count", 0)
-                > 0
+    )
+    if not complete or traffic_path is None:
+        return complete
+    context = issue_observation_context(traffic_path)
+    if {
+        key: value.get(key)
+        for key in context
+    } != context:
+        return False
+    observations = [
+        item
+        for item in value["endpoint_request_summaries"]
+        if item.get("activation_gate") is True
+    ]
+    required_surfaces = set(context["required_surfaces"])
+    return len(observations) == int(context["n"]) and sum(
+        (
+            "semantic" not in required_surfaces
+            or (
+                int(item.get("semantic_assertion_count") or 0) > 0
                 and item.get("semantic_assertions_passed")
                 == item.get("semantic_assertion_count")
-                and item.get("trace_assertions_passed")
-                == item.get("trace_assertion_count")
-                for item in value["endpoint_request_summaries"]
-                if item.get("activation_gate") is True
             )
         )
-    )
+        and (
+            "trace" not in required_surfaces
+            or (
+                int(item.get("trace_assertion_count") or 0) > 0
+                and item.get("trace_assertions_passed")
+                == item.get("trace_assertion_count")
+            )
+        )
+        for item in observations
+    ) >= int(context["k"])
 
 
 def _baseline_runtime_evidence_complete(
@@ -165,15 +179,28 @@ def _baseline_runtime_evidence_complete(
     request_count = value.get("endpoint_request_count")
     trace = value.get("trace_behavior_summary")
     summaries = value.get("endpoint_request_summaries")
+    observations = [
+        item
+        for item in summaries or []
+        if isinstance(item, dict) and item.get("activation_gate") is True
+    ]
     terminal_mode = agent["baseline_contract"]["terminal_response"]
     if (
         not _runtime_evidence_complete(value)
-        or request_count != agent["baseline_contract"]["request_count"]
+        or sum(
+            item.get("activation_gate") is True
+            for item in value.get("endpoint_request_summaries", [])
+        )
+        != agent["baseline_contract"]["request_count"]
         or not isinstance(trace, dict)
         or not isinstance(summaries, list)
-        or int(value.get("semantic_assertion_count") or 0) < 1
-        or value.get("semantic_assertions_passed")
-        != value.get("semantic_assertion_count")
+        or not observations
+        or any(
+            int(item.get("semantic_assertion_count") or 0) < 1
+            or item.get("semantic_assertions_passed")
+            != item.get("semantic_assertion_count")
+            for item in observations
+        )
         or int(trace.get("terminal_response_count") or 0) != request_count
         or int(trace.get("terminal_output_count") or 0) != request_count
         or int(trace.get("unhandled_error_count") or 0) != 0
@@ -190,7 +217,7 @@ def _baseline_runtime_evidence_complete(
     elif int(trace.get("assistant_response_count") or 0) != request_count:
         return False
     if agent["baseline_contract"]["semantic_assertions"] == "required_per_request":
-        if any(int(item.get("semantic_assertion_count") or 0) < 1 for item in summaries):
+        if len(observations) != agent["baseline_contract"]["request_count"]:
             return False
     if agent["type"] == "prompt":
         return (
@@ -366,7 +393,11 @@ def build_report(
             assessment = assessments[issue_id]
             runtime_complete = _runtime_evidence_complete(
                 value,
-                require_activation=agent["type"] == "prompt",
+                traffic_path=(
+                    ROOT
+                    / issue_by_id[issue_id]["implementation"]
+                    / "traffic.json"
+                ),
             )
             complete = value["status"] not in {
                 "inconclusive",

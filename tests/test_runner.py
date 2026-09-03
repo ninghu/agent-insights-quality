@@ -29,10 +29,12 @@ from agent_insights_quality.runner import (
     _required_trace_operations,
     _validate_baseline_trace_evidence,
     execute,
+    execute_agent,
 )
 from agent_insights_quality.runtime_state import VersionCheckpointStore
 from agent_insights_quality.selection import select_daily
 from agent_insights_quality.util import ROOT, ContractError, InsightWindowExpiredError
+from agent_insights_quality.validation_rules import execution_requests
 
 
 def _registry(agents: dict, hashes: dict[str, str]) -> dict:
@@ -115,6 +117,7 @@ class FakeRuntime:
         foundry_version: str,
         traffic_path: Path,
         seed: int,
+        requests: list[dict] | None = None,
     ) -> InvocationEvidence:
         del seed
         if self.probe_concurrency:
@@ -131,8 +134,8 @@ class FakeRuntime:
         self.invoked.append(foundry_version)
         if foundry_version == self.fail:
             raise RuntimeError("synthetic operational failure")
-        payload = json.loads(traffic_path.read_text(encoding="utf-8"))
-        request_count = len(payload["requests"])
+        requests = requests or execution_requests(traffic_path)
+        request_count = len(requests)
         summaries = tuple(
             RequestCompletionEvidence(
                 request_index=index,
@@ -149,7 +152,7 @@ class FakeRuntime:
                 direct_terminal_response_count=int(agent_type == "prompt"),
                 function_call_count=0,
             )
-            for index, request in enumerate(payload["requests"])
+            for index, request in enumerate(requests)
         )
         return InvocationEvidence(
             (),
@@ -211,8 +214,11 @@ class FakeRuntime:
         stabilization_seconds: int,
         on_first_pass,
         on_stable,
+        requests: list[dict] | None = None,
+        minimum_passing_trace_observations: int | None = None,
     ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
-        payload = json.loads(traffic_path.read_text(encoding="utf-8"))
+        del minimum_passing_trace_observations
+        requests = requests or execution_requests(traffic_path)
         assert agent_name.endswith("-agent")
         assert foundry_version
         assert len(operation_ids) == len(response_references)
@@ -224,7 +230,7 @@ class FakeRuntime:
                 foundry_version,
                 any(
                     request["expected"].get("trace_assertions")
-                    for request in payload["requests"]
+                    for request in requests
                 ),
             )
         )
@@ -235,7 +241,7 @@ class FakeRuntime:
                 TraceAssertionEvidence(item["name"], True)
                 for item in request["expected"].get("trace_assertions", [])
             )
-            for request in payload["requests"]
+            for request in requests
         )
 
     def start_insights_run(
@@ -446,6 +452,7 @@ class TimedTraceRuntime(FakeRuntime):
 def _write_timed_trace_traffic(
     path: Path,
     *,
+    baseline: bool,
     with_trace_assertions: bool = True,
     activation_gate: bool | None = None,
 ) -> None:
@@ -463,16 +470,66 @@ def _write_timed_trace_traffic(
                 "count": 1,
             }
         ]
+    request = {
+        "id": "request_A1b2C3d4",
+        "request": {"body": {"input": "synthetic request"}},
+        "expected": expected,
+    }
     path.write_text(
         json.dumps(
             {
-                "requests": [
-                    {
-                        "id": "request_A1b2C3d4",
-                        "request": {"body": {"input": "synthetic request"}},
-                        "expected": expected,
-                    }
-                ]
+                "requests": [request],
+                "validation_rules": {
+                    "schema_version": "1.0.0",
+                    "scenarios": [
+                        {
+                            "id": "synthetic-scenario",
+                            "validation_mode": (
+                                "baseline" if baseline else "deterministic"
+                            ),
+                            "n": 1,
+                            "k": 1,
+                            "fixtures": [],
+                            "attempts": [
+                                {
+                                    "index": 1,
+                                    "conversation_group": "synthetic-attempt-01",
+                                    "parameters": {"case_id": "case-01"},
+                                    "setup_steps": [],
+                                    "probe_steps": [
+                                        {
+                                            **request,
+                                            "id": "synthetic-probe-01",
+                                        }
+                                    ],
+                                }
+                            ],
+                            "healthy_predicate": (
+                                {"kind": "all_probe_assertions_pass"}
+                                if baseline
+                                else None
+                            ),
+                            "defect_predicate": (
+                                {"kind": "never"}
+                                if baseline
+                                else {
+                                    "kind": "all_observation_steps_pass",
+                                    "step_ids": ["synthetic-probe-01"],
+                                    "required_surfaces": (
+                                        ["trace"] if with_trace_assertions else []
+                                    ),
+                                }
+                            ),
+                            "v0_control_predicate": (
+                                None
+                                if baseline
+                                else {"kind": "zero_defect_observations"}
+                            ),
+                            "execution_digest": "sha256:" + "b" * 64,
+                        }
+                    ],
+                    "execution_digest": "sha256:" + "c" * 64,
+                },
             }
         ),
         encoding="utf-8",
@@ -494,6 +551,7 @@ def _timed_version_kwargs(
     traffic_path = tmp_path / f"{agent_name}-{foundry_version}-traffic.json"
     _write_timed_trace_traffic(
         traffic_path,
+        baseline=baseline,
         with_trace_assertions=with_trace_assertions,
         activation_gate=activation_gate,
     )
@@ -551,13 +609,16 @@ def test_support_baseline_uses_request_bound_trace_operations() -> None:
         agent=support,
         expected=None,
         traffic_path=ROOT / support["baseline_path"] / "traffic.json",
-        request_count=5,
+        request_count=len(
+            execution_requests(ROOT / support["baseline_path"] / "traffic.json")
+        ),
     )
 
-    assert operations[:4] == (
+    assert operations[::2] == (("invoke_agent", "chat"),) * 5
+    assert operations[1:8:2] == (
         ("invoke_agent", "execute_tool", "chat"),
     ) * 4
-    assert operations[4] == ("invoke_agent", "execute_tool")
+    assert operations[9] == ("invoke_agent", "execute_tool")
 
 
 def test_first_exact_hosted_mapping_starts_insights_before_stabilization(
@@ -954,11 +1015,16 @@ def test_runner_executes_20_issues() -> None:
     assert len(runtime.hosted_stabilizations) == 15
     assert ("finance-agent", "v0", True) in runtime.hosted_stabilizations
     assert ("travel-agent", "v0", False) in runtime.hosted_stabilizations
-    assert ("support-ticket-agent", "v0", False) in runtime.hosted_stabilizations
+    assert ("support-ticket-agent", "v0", True) in runtime.hosted_stabilizations
     assert all(
         agent_name not in {"weather-agent", "healthcare-agent"}
         for agent_name, _, _ in runtime.hosted_stabilizations
     )
+    assert runtime.invoked == [
+        logical_version
+        for agent in agents["agents"]
+        for logical_version in ("v0", *selected[agent["name"]])
+    ]
 
 
 def test_runner_executes_agents_sequentially_without_internal_fanout() -> None:
@@ -975,6 +1041,158 @@ def test_runner_executes_agents_sequentially_without_internal_fanout() -> None:
         seed=1,
     )
     assert runtime.maximum_concurrent_agents == 1
+
+
+@pytest.mark.parametrize(
+    ("agent_name", "issue_id", "surface"),
+    [
+        ("weather-agent", "issue-004", "semantic"),
+        ("healthcare-agent", "issue-010", "semantic"),
+        ("finance-agent", "issue-019", "trace"),
+    ],
+)
+def test_model_mediated_daily_uses_five_of_seven_reviewed_observations(
+    agent_name: str,
+    issue_id: str,
+    surface: str,
+) -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+
+    class ThresholdRuntime(FakeRuntime):
+        def invoke_version(self, **kwargs) -> InvocationEvidence:
+            evidence = super().invoke_version(**kwargs)
+            if kwargs["foundry_version"] != issue_id or surface != "semantic":
+                return evidence
+            summaries = list(evidence.request_summaries)
+            observation_indexes = [
+                index
+                for index, summary in enumerate(summaries)
+                if summary.activation_gate
+            ]
+            for index in observation_indexes[-2:]:
+                summaries[index] = replace(
+                    summaries[index],
+                    semantic_assertions_passed=0,
+                    assertion_results=(
+                        SemanticAssertionEvidence("synthetic_contract", False),
+                    ),
+                )
+            return replace(
+                evidence,
+                semantic_assertions_passed=evidence.semantic_assertions_passed - 2,
+                request_summaries=tuple(summaries),
+            )
+
+        def trace_assertion_evidence(self, **kwargs):
+            results = list(super().trace_assertion_evidence(**kwargs))
+            if kwargs["foundry_version"] != issue_id or surface != "trace":
+                return tuple(results)
+            requests = execution_requests(kwargs["traffic_path"])
+            observation_indexes = [
+                index
+                for index, request in enumerate(requests)
+                if request["expected"]["activation_gate"]
+            ]
+            for index in observation_indexes[-2:]:
+                assertions = list(results[index])
+                assertions[0] = replace(assertions[0], passed=False)
+                results[index] = tuple(assertions)
+            return tuple(results)
+
+    runtime = ThresholdRuntime()
+    result = execute_agent(
+        agent_name=agent_name,
+        agents=agents,
+        issues=issues,
+        selected={agent_name: [issue_id]},
+        registry=_registry(agents, hashes),
+        runtime=runtime,
+        seed=1,
+    )
+
+    baseline_observations = [
+        summary
+        for summary in result.baseline.endpoint_request_summaries
+        if summary.activation_gate
+    ]
+    issue_observations = [
+        summary
+        for summary in result.issues[0].endpoint_request_summaries
+        if summary.activation_gate
+    ]
+    observed = sum(
+        (
+            summary.semantic_assertions_passed
+            == summary.semantic_assertion_count
+            if surface == "semantic"
+            else summary.trace_assertions_passed == summary.trace_assertion_count
+        )
+        for summary in issue_observations
+    )
+    assert result.baseline.status == "passed"
+    assert len(baseline_observations) == 5
+    assert result.issues[0].status == "observed"
+    assert len(issue_observations) == 7
+    assert observed == 5
+    assert runtime.invoked == ["v0", issue_id]
+
+
+def test_model_mediated_daily_does_not_resample_four_of_seven_misses() -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    issue_id = "issue-004"
+
+    class FourOfSevenRuntime(FakeRuntime):
+        def invoke_version(self, **kwargs) -> InvocationEvidence:
+            evidence = super().invoke_version(**kwargs)
+            if kwargs["foundry_version"] != issue_id:
+                return evidence
+            summaries = list(evidence.request_summaries)
+            observation_indexes = [
+                index
+                for index, summary in enumerate(summaries)
+                if summary.activation_gate
+            ]
+            for index in observation_indexes[-3:]:
+                summaries[index] = replace(
+                    summaries[index],
+                    semantic_assertions_passed=0,
+                    assertion_results=(
+                        SemanticAssertionEvidence("synthetic_contract", False),
+                    ),
+                )
+            return replace(
+                evidence,
+                semantic_assertions_passed=evidence.semantic_assertions_passed - 3,
+                request_summaries=tuple(summaries),
+            )
+
+    runtime = FourOfSevenRuntime()
+    result = execute_agent(
+        agent_name="weather-agent",
+        agents=agents,
+        issues=issues,
+        selected={"weather-agent": [issue_id]},
+        registry=_registry(agents, hashes),
+        runtime=runtime,
+        seed=1,
+    )
+
+    issue = result.issues[0]
+    observations = [
+        summary
+        for summary in issue.endpoint_request_summaries
+        if summary.activation_gate
+    ]
+    assert issue.status == "inconclusive"
+    assert issue.error_code == "issue_activation_failed"
+    assert len(observations) == 7
+    assert sum(
+        summary.semantic_assertions_passed == summary.semantic_assertion_count
+        for summary in observations
+    ) == 4
+    assert runtime.invoked == ["v0", issue_id]
 
 
 def test_runner_staggers_agent_start_burst(monkeypatch) -> None:
@@ -1501,21 +1719,28 @@ def test_pending_insight_start_from_crash_forces_clean_retraffic(
         entry["foundry_version"],
         entry["content_digest"],
     )
+    weather = next(
+        agent for agent in agents["agents"] if agent["name"] == "weather-agent"
+    )
+    baseline_requests = execution_requests(
+        ROOT / weather["baseline_path"] / "traffic.json"
+    )
+    request_count = len(baseline_requests)
     store.save_invocation(
         *checkpoint_args,
         InvocationEvidence(
             operation_ids=(),
             response_references=tuple(
-                f"private-response-{index}" for index in range(5)
+                f"private-response-{index}" for index in range(request_count)
             ),
             started_at="2026-08-24T10:00:00+00:00",
             completed_at="2026-08-24T10:01:00+00:00",
-            request_count=5,
+            request_count=request_count,
             allow_window_correlation=False,
-            response_count=5,
-            usable_response_count=5,
-            semantic_assertion_count=5,
-            semantic_assertions_passed=5,
+            response_count=request_count,
+            usable_response_count=request_count,
+            semantic_assertion_count=request_count,
+            semantic_assertions_passed=request_count,
             request_summaries=tuple(
                 RequestCompletionEvidence(
                     request_index=index,
@@ -1526,17 +1751,19 @@ def test_pending_insight_start_from_crash_forces_clean_retraffic(
                     assertion_results=(
                         SemanticAssertionEvidence("synthetic_contract", True),
                     ),
-                    activation_gate=False,
+                    activation_gate=bool(
+                        request["expected"]["activation_gate"]
+                    ),
                     direct_terminal_response_count=1,
                     function_call_count=0,
                 )
-                for index in range(5)
+                for index, request in enumerate(baseline_requests)
             ),
         ),
     )
     store.save_operation_ids(
         *checkpoint_args,
-        tuple(f"{index + 1:032x}" for index in range(5)),
+        tuple(f"{index + 1:032x}" for index in range(request_count)),
     )
     store.save_trace_verified(*checkpoint_args)
     store.mark_insight_start_pending(*checkpoint_args)
@@ -1579,20 +1806,21 @@ def test_resume_waits_before_first_version_without_checkpoint(
         "sha256:" + "d" * 64,
     )
     entry = registry["agents"]["weather-agent"]["versions"]["v0"]
+    cached_baseline = execute_agent(
+        agent_name="weather-agent",
+        agents=agents,
+        issues=issues,
+        selected={"weather-agent": [selected["weather-agent"][0]]},
+        registry=registry,
+        runtime=FakeRuntime(),
+        seed=1,
+    ).baseline
     store.save_result(
         "weather-agent",
         "v0",
         entry["foundry_version"],
         entry["content_digest"],
-        VersionResult(
-            logical_version="v0",
-            foundry_version=entry["foundry_version"],
-            status="passed",
-            endpoint_request_count=1,
-            endpoint_response_count=1,
-            endpoint_usable_response_count=1,
-            trace_contract_verified=True,
-        ),
+        cached_baseline,
     )
     runtime = FakeRuntime()
     execute(
@@ -1606,6 +1834,73 @@ def test_resume_waits_before_first_version_without_checkpoint(
     )
     assert runtime.clean_agents.count("weather-agent") == 1
     assert runtime.reset_agents.count("weather-agent") == 1
+
+
+def test_cached_five_attempt_evidence_is_not_rescaled_to_seven(
+    tmp_path: Path,
+) -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    registry = _registry(agents, hashes)
+    weather = next(
+        agent for agent in agents["agents"] if agent["name"] == "weather-agent"
+    )
+    issue = next(item for item in issues["issues"] if item["id"] == "issue-004")
+    entry = registry["agents"]["weather-agent"]["versions"]["issue-004"]
+    store = VersionCheckpointStore(
+        tmp_path / "stages",
+        "sha256:" + "d" * 64,
+    )
+    store.save_result(
+        "weather-agent",
+        "issue-004",
+        entry["foundry_version"],
+        entry["content_digest"],
+        VersionResult(
+            logical_version="issue-004",
+            foundry_version=entry["foundry_version"],
+            status="observed",
+            endpoint_request_count=5,
+            endpoint_response_count=5,
+            endpoint_usable_response_count=5,
+            endpoint_request_summaries=[
+                RequestCompletionEvidence(
+                    request_index=index,
+                    response_count=1,
+                    usable_response=True,
+                    semantic_assertion_count=1,
+                    semantic_assertions_passed=1,
+                    assertion_results=(
+                        SemanticAssertionEvidence("synthetic_contract", True),
+                    ),
+                    activation_gate=True,
+                    direct_terminal_response_count=1,
+                    function_call_count=0,
+                )
+                for index in range(5)
+            ],
+        ),
+    )
+    runtime = FakeRuntime()
+
+    with pytest.raises(ContractError, match="current execution plan"):
+        _execute_version(
+            runtime=runtime,
+            agent=weather,
+            monitor_id="monitor-weather-agent",
+            logical_version="issue-004",
+            registry_entry=entry,
+            traffic_path=ROOT / issue["implementation"] / "traffic.json",
+            seed=1,
+            expected=issue,
+            lookback_hours=0.1,
+            trace_assertion_stabilization_seconds=180,
+            insight_start_margin_seconds=30,
+            checkpoint_store=store,
+            start_stagger=_StartStagger(0),
+        )
+
+    assert runtime.invoked == []
 
 
 def test_baseline_assertion_failure_is_incomplete() -> None:
@@ -1624,8 +1919,13 @@ def test_baseline_assertion_failure_is_incomplete() -> None:
             ].parent.name != "v0":
                 return evidence
             summaries = list(evidence.request_summaries)
-            summaries[0] = replace(
-                summaries[0],
+            observation_index = next(
+                index
+                for index, summary in enumerate(summaries)
+                if summary.activation_gate
+            )
+            summaries[observation_index] = replace(
+                summaries[observation_index],
                 semantic_assertions_passed=0,
                 assertion_results=(
                     SemanticAssertionEvidence("synthetic_contract", False),
@@ -1664,16 +1964,22 @@ def test_failed_prompt_issue_activation_is_incomplete() -> None:
             if kwargs["foundry_version"] != "issue-001":
                 return evidence
             summaries = list(evidence.request_summaries)
-            summaries[0] = replace(
-                summaries[0],
-                semantic_assertions_passed=0,
-                assertion_results=(
-                    SemanticAssertionEvidence("synthetic_contract", False),
-                ),
-            )
+            observation_indexes = [
+                index
+                for index, summary in enumerate(summaries)
+                if summary.activation_gate
+            ]
+            for observation_index in observation_indexes[-3:]:
+                summaries[observation_index] = replace(
+                    summaries[observation_index],
+                    semantic_assertions_passed=0,
+                    assertion_results=(
+                        SemanticAssertionEvidence("synthetic_contract", False),
+                    ),
+                )
             return replace(
                 evidence,
-                semantic_assertions_passed=evidence.semantic_assertions_passed - 1,
+                semantic_assertions_passed=evidence.semantic_assertions_passed - 3,
                 request_summaries=tuple(summaries),
             )
 
@@ -1694,10 +2000,7 @@ def test_failed_hosted_semantic_activation_does_not_start_insights() -> None:
     agents, issues = load_catalogs()
     hashes = catalog_hashes(agents, issues)
     registry = _registry(agents, hashes)
-    finance = next(
-        agent for agent in agents["agents"] if agent["name"] == "finance-agent"
-    )
-    target = finance["issue_ids"][0]
+    target = "issue-016"
 
     class FailedSemanticActivationRuntime(FakeRuntime):
         def __init__(self) -> None:
@@ -1709,8 +2012,13 @@ def test_failed_hosted_semantic_activation_does_not_start_insights() -> None:
             if kwargs["foundry_version"] != target:
                 return evidence
             summaries = list(evidence.request_summaries)
-            summaries[0] = replace(
-                summaries[0],
+            observation_index = next(
+                index
+                for index, summary in enumerate(summaries)
+                if summary.activation_gate
+            )
+            summaries[observation_index] = replace(
+                summaries[observation_index],
                 semantic_assertions_passed=0,
                 assertion_results=(
                     SemanticAssertionEvidence("synthetic_contract", False),
@@ -1731,7 +2039,11 @@ def test_failed_hosted_semantic_activation_does_not_start_insights() -> None:
         agents=agents,
         issues=issues,
         selected={
-            agent["name"]: [agent["issue_ids"][0]]
+            agent["name"]: [
+                target
+                if agent["name"] == "finance-agent"
+                else agent["issue_ids"][0]
+            ]
             for agent in agents["agents"]
         },
         registry=registry,
@@ -1769,12 +2081,18 @@ def test_failed_hosted_trace_activation_is_incomplete() -> None:
         def trace_assertion_evidence(self, **kwargs):
             evidence = list(super().trace_assertion_evidence(**kwargs))
             if kwargs["traffic_path"].parent.name == "issue-013":
-                assertions = list(evidence[0])
+                requests = execution_requests(kwargs["traffic_path"])
+                observation_index = next(
+                    index
+                    for index, request in enumerate(requests)
+                    if request["expected"]["activation_gate"]
+                )
+                assertions = list(evidence[observation_index])
                 assertions[0] = TraceAssertionEvidence(
                     assertions[0].assertion,
                     False,
                 )
-                evidence[0] = tuple(assertions)
+                evidence[observation_index] = tuple(assertions)
             return tuple(evidence)
 
     runtime = FailedTraceActivationRuntime()
@@ -1796,7 +2114,12 @@ def test_failed_hosted_trace_activation_is_incomplete() -> None:
     assert issue.error_code == "issue_activation_failed"
     assert issue.trace_assertion_count == 10
     assert issue.trace_assertions_passed == 9
-    assert issue.endpoint_request_summaries[0].trace_assertion_results[0] == (
+    failed_summary = next(
+        summary
+        for summary in issue.endpoint_request_summaries
+        if summary.activation_gate and summary.trace_assertions_passed == 1
+    )
+    assert failed_summary.trace_assertion_results[0] == (
         TraceAssertionEvidence("one_balance_call", False)
     )
     assert issue.insight_references == []

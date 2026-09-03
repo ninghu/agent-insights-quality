@@ -16,7 +16,11 @@ from agent_insights_quality.run_manifest import (
     validate_manifest,
 )
 from agent_insights_quality.selection import select_daily
-from agent_insights_quality.util import ContractError, content_hash
+from agent_insights_quality.util import ROOT, ContractError, content_hash
+from agent_insights_quality.validation_rules import (
+    execution_context,
+    issue_observation_context,
+)
 
 
 def _manifest(
@@ -25,8 +29,7 @@ def _manifest(
     profile: str = "daily",
     delivery_mode: str = OFFICIAL_DELIVERY,
 ) -> dict:
-    version = {
-        "logical_version": "v0",
+    version_evidence = {
         "foundry_version": "1",
         "content_digest": "sha256:" + "a" * 64,
         "status": "inconclusive",
@@ -48,6 +51,7 @@ def _manifest(
         "evidence_reference": None,
     }
     agents, issues = load_catalogs()
+    issue_by_id = {item["id"]: item for item in issues["issues"]}
     hashes = catalog_hashes(agents, issues)
     selection = (
         {agent["name"]: list(agent["issue_ids"]) for agent in agents["agents"]}
@@ -60,8 +64,22 @@ def _manifest(
         )
     )
 
+    def baseline_version(agent: dict) -> dict:
+        return {
+            **version_evidence,
+            "logical_version": "v0",
+            **execution_context(
+                ROOT / agent["baseline_path"] / "traffic.json"
+            ),
+        }
+
     def issue_version(issue_id: str) -> dict:
-        value = dict(version)
+        value = {
+            **version_evidence,
+            **issue_observation_context(
+                ROOT / issue_by_id[issue_id]["implementation"] / "traffic.json"
+            ),
+        }
         value.update(
             {
                 "issue_id": issue_id,
@@ -71,7 +89,7 @@ def _manifest(
         )
         return value
     value = {
-        "schema_version": "5.0.0",
+        "schema_version": "6.0.0",
         "run_id": run_id,
         "profile": profile,
         "delivery_mode": delivery_mode,
@@ -92,7 +110,7 @@ def _manifest(
                 "framework": agent["framework"],
                 "baseline_contract": agent["baseline_contract"],
                 "monitor_reference": "sha256:" + "f" * 64,
-                "baseline": dict(version),
+                "baseline": baseline_version(agent),
                 "issues": [
                     issue_version(issue_id)
                     for issue_id in selection[agent["name"]]

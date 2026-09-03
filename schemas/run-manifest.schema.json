@@ -4,7 +4,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "run_id", "profile", "delivery_mode", "report_date", "insight_lookback_hours", "telemetry_resource_set", "test_region", "test_region_registry", "catalog_hashes", "source_integrity", "agents", "manifest_hash"],
   "properties": {
-    "schema_version": {"const": "5.0.0"},
+    "schema_version": {"const": "6.0.0"},
     "run_id": {"type": "string", "pattern": "^aiq-[0-9]{8}(?:-r[0-9]{2,})?$"},
     "profile": {"enum": ["daily", "staging"]},
     "delivery_mode": {"enum": ["official", "test_email_only"]},
@@ -142,9 +142,16 @@
         {
           "properties": {
             "logical_version": {"const": "v0"},
-            "status": {"enum": ["passed", "not_at_bar", "inconclusive"]}
+            "status": {"enum": ["passed", "not_at_bar", "inconclusive"]},
+            "validation_mode": {"const": "baseline"},
+            "n": {"const": 5}
           },
-          "not": {"required": ["issue_id"]}
+          "not": {
+            "anyOf": [
+              {"required": ["issue_id"]},
+              {"required": ["required_surfaces"]}
+            ]
+          }
         }
       ]
     },
@@ -152,12 +159,32 @@
       "allOf": [
         {"$ref": "#/$defs/versionEvidence"},
         {
-          "required": ["issue_id"],
+          "required": ["issue_id", "required_surfaces"],
           "properties": {
             "issue_id": {"type": "string", "pattern": "^issue-[0-9]{3}$"},
             "logical_version": {"type": "string", "pattern": "^issue-[0-9]{3}$"},
-            "status": {"enum": ["observed", "not_at_bar", "inconclusive", "skipped_baseline"]}
-          }
+            "status": {"enum": ["observed", "not_at_bar", "inconclusive", "skipped_baseline"]},
+            "validation_mode": {"enum": ["deterministic", "model_mediated"]}
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "validation_mode": {"const": "model_mediated"}
+                }
+              },
+              "then": {
+                "properties": {
+                  "n": {"const": 7}
+                }
+              },
+              "else": {
+                "properties": {
+                  "n": {"const": 5}
+                }
+              }
+            }
+          ]
         }
       ]
     },
@@ -168,6 +195,10 @@
         "logical_version",
         "foundry_version",
         "content_digest",
+        "validation_mode",
+        "n",
+        "k",
+        "execution_digest",
         "status",
         "operation_ids",
         "insight_references",
@@ -196,6 +227,18 @@
         },
         "foundry_version": {"type": "string", "minLength": 1},
         "content_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "validation_mode": {
+          "enum": ["baseline", "deterministic", "model_mediated"]
+        },
+        "n": {"enum": [5, 7]},
+        "k": {"const": 5},
+        "execution_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "required_surfaces": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["semantic", "trace"]}
+        },
         "status": {"enum": ["passed", "not_at_bar", "observed", "inconclusive", "skipped_baseline"]},
         "operation_ids": {
           "type": "array",

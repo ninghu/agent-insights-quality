@@ -3179,6 +3179,71 @@ def test_trace_assertion_stable_failure_waits_until_deadline(
     assert first_passes == [0]
 
 
+def test_trace_assertion_five_of_seven_stabilizes_at_reviewed_threshold(
+    tmp_path,
+) -> None:
+    monotonic = [0.0]
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+    )
+    operation_ids = tuple(f"{index + 1:032x}" for index in range(7))
+    references = tuple(
+        f"resp_A1b2C3d4E5f{index}" for index in range(7)
+    )
+    rows = []
+    for index, (operation_id, reference) in enumerate(
+        zip(operation_ids, references, strict=True)
+    ):
+        root_span = f"root-{index}"
+        rows.extend(
+            [
+                _anchor_row(
+                    operation_id,
+                    root_span,
+                    reference,
+                    agent_name="finance-agent",
+                    agent_version="issue-019",
+                ),
+                {
+                    **_tool_trace_row(
+                        "lookup" if index < 5 else "different_lookup"
+                    ),
+                    "operation_id": operation_id,
+                    "span_id": f"tool-{index}",
+                    "parent_span_id": root_span,
+                },
+            ]
+        )
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(traffic_path, request_count=7)
+    requests = read_json(traffic_path)["requests"]
+    for request in requests:
+        request["expected"]["activation_gate"] = True
+    runtime._trace_rows = lambda *_args: rows  # type: ignore[method-assign]
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
+    )
+
+    evidence = runtime.trace_assertion_evidence(
+        agent_name="finance-agent",
+        foundry_version="issue-019",
+        operation_ids=operation_ids,
+        response_references=references,
+        window_start="2026-08-28T10:00:00+00:00",
+        window_end="2026-08-28T10:00:30+00:00",
+        traffic_path=traffic_path,
+        requests=requests,
+        stabilization_seconds=180,
+        on_first_pass=lambda: None,
+        minimum_passing_trace_observations=5,
+    )
+
+    assert sum(result[0].passed for result in evidence) == 5
+    assert monotonic[0] == 180
+
+
 def test_trace_assertion_observes_span_ingested_after_135_seconds(
     tmp_path,
 ) -> None:

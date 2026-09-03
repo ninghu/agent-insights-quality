@@ -105,9 +105,7 @@ def rehydrate_packages(
             else trace_proof(tuple(sorted(baseline_operation_ids)))
         )
         baseline_contract = agent["baseline_contract"]
-        baseline_execution = _package_execution_context(
-            ROOT / "agents" / agent["name"] / "v0" / "traffic.json"
-        )
+        baseline_execution = _manifest_execution_context(baseline)
         baseline_package = {
             "schema_version": "3.0.0",
             "target_kind": "baseline",
@@ -175,8 +173,9 @@ def rehydrate_packages(
                 return payload
 
             expected = issue_by_id[issue_id]
-            issue_execution = _package_execution_context(
-                ROOT / expected["implementation"] / "traffic.json"
+            issue_execution = _manifest_execution_context(
+                value,
+                include_required_surfaces=True,
             )
             package = {
                 "schema_version": "3.0.0",
@@ -216,23 +215,17 @@ def rehydrate_packages(
     return paths
 
 
-def _package_execution_context(traffic_path: Path) -> dict[str, Any]:
-    rules = read_json(traffic_path).get("validation_rules")
-    scenarios = rules.get("scenarios") if isinstance(rules, dict) else None
-    if (
-        not isinstance(scenarios, list)
-        or len(scenarios) != 1
-        or not isinstance(scenarios[0], dict)
-    ):
-        raise ContractError(
-            f"{traffic_path.relative_to(ROOT).as_posix()} has no single execution contract"
-        )
-    scenario = scenarios[0]
+def _manifest_execution_context(
+    value: dict[str, Any],
+    *,
+    include_required_surfaces: bool = False,
+) -> dict[str, Any]:
+    keys = ["validation_mode", "n", "k", "execution_digest"]
+    if include_required_surfaces:
+        keys.append("required_surfaces")
     return {
-        "validation_mode": scenario.get("validation_mode"),
-        "n": scenario.get("n"),
-        "k": scenario.get("k"),
-        "execution_digest": rules.get("execution_digest"),
+        key: value[key]
+        for key in keys
     }
 
 
@@ -511,23 +504,34 @@ def _issue_activation_complete(package: dict[str, Any]) -> bool:
         for summary in endpoint["request_summaries"]
         if summary.get("activation_gate") is True
     ]
+    required_surfaces = set(package.get("required_surfaces") or [])
     return (
         package.get("source_integrity", {}).get("verified") is True
         and isinstance(
             package.get("source_integrity", {}).get("contract_digest"),
             str,
         )
-        and bool(gates)
-        and all(
-            int(summary.get("semantic_assertion_count") or 0)
-            + int(summary.get("trace_assertion_count") or 0)
-            > 0
-            and summary.get("semantic_assertions_passed")
-            == summary.get("semantic_assertion_count")
-            and summary.get("trace_assertions_passed")
-            == summary.get("trace_assertion_count")
+        and len(gates) == package.get("n")
+        and sum(
+            (
+                "semantic" not in required_surfaces
+                or (
+                    int(summary.get("semantic_assertion_count") or 0) > 0
+                    and summary.get("semantic_assertions_passed")
+                    == summary.get("semantic_assertion_count")
+                )
+            )
+            and (
+                "trace" not in required_surfaces
+                or (
+                    int(summary.get("trace_assertion_count") or 0) > 0
+                    and summary.get("trace_assertions_passed")
+                    == summary.get("trace_assertion_count")
+                )
+            )
             for summary in gates
         )
+        >= package.get("k", 0)
     )
 
 
@@ -580,6 +584,9 @@ def _baseline_behavior_summary(
     request_count = int(endpoint.get("request_count") or 0)
     summaries = endpoint.get("request_summaries")
     summaries = summaries if isinstance(summaries, list) else []
+    observations = [
+        item for item in summaries if item.get("activation_gate") is True
+    ]
     summaries_valid = _request_summaries_consistent(endpoint)
     proof_complete = _trace_proof_shape_complete(trace_proof)
     if request_count <= 0:
@@ -594,19 +601,18 @@ def _baseline_behavior_summary(
             ),
         }
     semantic_complete = (
-        int(endpoint.get("semantic_assertion_count") or 0) > 0
-        and endpoint.get("semantic_assertions_passed")
-        == endpoint.get("semantic_assertion_count")
+        summaries_valid
+        and len(observations) == int(contract["request_count"])
+        and all(
+            int(item.get("semantic_assertion_count") or 0) > 0
+            and item.get("semantic_assertions_passed")
+            == item.get("semantic_assertion_count")
+            for item in observations
+        )
     )
     if contract["semantic_assertions"] == "required_per_request":
-        semantic_complete = semantic_complete and (
-            summaries_valid
-            and all(
-                int(item.get("semantic_assertion_count") or 0) > 0
-                and item.get("semantic_assertions_passed")
-                == item.get("semantic_assertion_count")
-                for item in summaries
-            )
+        semantic_complete = semantic_complete and len(observations) == int(
+            contract["request_count"]
         )
     terminal_mode = contract["terminal_response"]
     terminal_complete = (
@@ -643,7 +649,7 @@ def _baseline_behavior_summary(
         )
     return {
         "endpoint_complete": (
-            request_count == int(contract["request_count"])
+            len(observations) == int(contract["request_count"])
             and _endpoint_evidence_complete(endpoint)
         ),
         "semantic_assertions_complete": semantic_complete,

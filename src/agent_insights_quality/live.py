@@ -431,10 +431,12 @@ union traces, dependencies, requests
         foundry_version: str,
         traffic_path: Path,
         seed: int,
+        requests: list[dict[str, Any]] | None = None,
     ) -> InvocationEvidence:
-        payload = json.loads(traffic_path.read_text(encoding="utf-8"))
-        requests = payload if isinstance(payload, list) else payload.get("requests")
-        if not isinstance(requests, list) or len(requests) < 1:
+        if requests is None:
+            payload = json.loads(traffic_path.read_text(encoding="utf-8"))
+            requests = payload if isinstance(payload, list) else payload.get("requests")
+        if not isinstance(requests, list) or not requests:
             raise ContractError(f"{traffic_path} has no traffic requests")
         normalized = [
             {**_normalize_fixture(item), "_index": index}
@@ -1869,13 +1871,16 @@ union withsource=telemetry_type traces, dependencies, requests
         traffic_path: Path,
         stabilization_seconds: int,
         on_first_pass: Callable[[], None],
+        requests: list[dict[str, Any]] | None = None,
+        minimum_passing_trace_observations: int | None = None,
         on_stable: Callable[[dict[str, Any]], None] | None = None,
         on_stable_output_messages: (
             Callable[[tuple[tuple[bool, bool], ...]], None] | None
         ) = None,
     ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
-        payload = json.loads(traffic_path.read_text(encoding="utf-8"))
-        requests = payload if isinstance(payload, list) else payload.get("requests")
+        if requests is None:
+            payload = json.loads(traffic_path.read_text(encoding="utf-8"))
+            requests = payload if isinstance(payload, list) else payload.get("requests")
         if not isinstance(requests, list):
             raise ContractError("Hosted evidence traffic coverage is inconsistent")
         return LiveRuntime.trace_assertion_evidence_for_requests(
@@ -1889,6 +1894,9 @@ union withsource=telemetry_type traces, dependencies, requests
             requests=requests,
             stabilization_seconds=stabilization_seconds,
             on_first_pass=on_first_pass,
+            minimum_passing_trace_observations=(
+                minimum_passing_trace_observations
+            ),
             on_stable=on_stable,
             on_stable_output_messages=on_stable_output_messages,
         )
@@ -1919,6 +1927,7 @@ union withsource=telemetry_type traces, dependencies, requests
             | None
         ) = None,
         allow_shared_operations: bool = False,
+        minimum_passing_trace_observations: int | None = None,
     ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
         if poll_seconds is None:
             poll_seconds = TRACE_ASSERTION_POLL_SECONDS
@@ -1939,6 +1948,19 @@ union withsource=telemetry_type traces, dependencies, requests
             allow_shared=allow_shared_operations,
         )
         fixtures = tuple(_normalize_fixture(item) for item in requests)
+        observation_indexes = [
+            index
+            for index, fixture in enumerate(fixtures)
+            if fixture["activation_gate"]
+        ]
+        if (
+            minimum_passing_trace_observations is not None
+            and (
+                minimum_passing_trace_observations < 0
+                or minimum_passing_trace_observations > len(observation_indexes)
+            )
+        ):
+            raise ContractError("Hosted trace observation threshold is invalid")
         deadline = self._monotonic() + maximum_wait_seconds
         next_progress = self._monotonic() + _TRACE_ASSERTION_PROGRESS_SECONDS
         last_results: tuple[tuple[TraceAssertionEvidence, ...], ...] | None = None
@@ -2061,10 +2083,22 @@ union withsource=telemetry_type traces, dependencies, requests
                         strict=True,
                     )
                 )
-                passing = all(
-                    assertion.passed
-                    for request_results in last_results
-                    for assertion in request_results
+                passing = (
+                    all(
+                        assertion.passed
+                        for request_results in last_results
+                        for assertion in request_results
+                    )
+                    if minimum_passing_trace_observations is None
+                    else sum(
+                        bool(last_results[index])
+                        and all(
+                            assertion.passed
+                            for assertion in last_results[index]
+                        )
+                        for index in observation_indexes
+                    )
+                    >= minimum_passing_trace_observations
                 )
                 signature = _trace_assertion_stability_signature(
                     rows,

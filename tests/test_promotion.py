@@ -32,7 +32,12 @@ from agent_insights_quality.live import (
 from agent_insights_quality.run_manifest import _result_payload, build_manifest
 from agent_insights_quality.reporting import _summary_metrics
 from agent_insights_quality.registry import DEPLOYMENT_REGISTRY_SCHEMA_VERSION
-from agent_insights_quality.util import ROOT, ContractError, content_hash, read_json
+from agent_insights_quality.util import ROOT, ContractError, content_hash
+from agent_insights_quality.validation_rules import (
+    execution_context,
+    execution_requests,
+    issue_observation_context,
+)
 
 
 def _request_summaries(
@@ -66,43 +71,45 @@ def _version_evidence(
     foundry_version: str,
     *,
     agent_type: str,
-    traffic_path: Path | None = None,
+    traffic_path: Path,
 ) -> dict:
     prompt = agent_type == "prompt"
-    if traffic_path is None:
-        summaries = _request_summaries(prompt=prompt)
-    else:
-        summaries = []
-        for index, raw in enumerate(read_json(traffic_path)["requests"]):
-            fixture = _normalize_fixture(raw)
-            names = _semantic_assertion_names(fixture["semantic_assertions"])
-            trace_names = _trace_assertion_names(fixture["trace_assertions"])
-            summaries.append(
-                {
-                    "request_index": index,
-                    "response_count": 1,
-                    "usable_response": True,
-                    "semantic_assertion_count": len(names),
-                    "semantic_assertions_passed": len(names),
-                    "assertion_results": [
-                        {"assertion": name, "passed": True} for name in names
-                    ],
-                    "trace_assertion_count": len(trace_names),
-                    "trace_assertions_passed": len(trace_names),
-                    "trace_assertion_results": [
-                        {"assertion": name, "passed": True}
-                        for name in trace_names
-                    ],
-                    "activation_gate": fixture["activation_gate"],
-                    "direct_terminal_response_count": int(prompt),
-                    "function_call_count": 0,
-                }
-            )
+    summaries = []
+    for index, raw in enumerate(execution_requests(traffic_path)):
+        fixture = _normalize_fixture(raw)
+        names = _semantic_assertion_names(fixture["semantic_assertions"])
+        trace_names = _trace_assertion_names(fixture["trace_assertions"])
+        summaries.append(
+            {
+                "request_index": index,
+                "response_count": 1,
+                "usable_response": True,
+                "semantic_assertion_count": len(names),
+                "semantic_assertions_passed": len(names),
+                "assertion_results": [
+                    {"assertion": name, "passed": True} for name in names
+                ],
+                "trace_assertion_count": len(trace_names),
+                "trace_assertions_passed": len(trace_names),
+                "trace_assertion_results": [
+                    {"assertion": name, "passed": True}
+                    for name in trace_names
+                ],
+                "activation_gate": fixture["activation_gate"],
+                "direct_terminal_response_count": int(prompt),
+                "function_call_count": 0,
+            }
+        )
     request_count = len(summaries)
     return {
         "logical_version": logical_version,
         "foundry_version": foundry_version,
         "content_digest": "sha256:" + "a" * 64,
+        **(
+            execution_context(traffic_path)
+            if logical_version == "v0"
+            else issue_observation_context(traffic_path)
+        ),
         "status": "passed" if logical_version == "v0" else "observed",
         "operation_ids": [f"{index + 1:032x}" for index in range(request_count)],
         "insight_references": (
@@ -341,7 +348,7 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
     }
     issue_by_id = {item["id"]: item for item in issues["issues"]}
     manifest = {
-        "schema_version": "5.0.0",
+        "schema_version": "6.0.0",
         "run_id": "aiq-20260824",
         "profile": "staging",
         "delivery_mode": "official",
@@ -369,6 +376,11 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
                             "foundry_version"
                         ],
                         agent_type=agent["type"],
+                        traffic_path=(
+                            ROOT
+                            / agent["baseline_path"]
+                            / "traffic.json"
+                        ),
                     ),
                 },
                 "issues": [
