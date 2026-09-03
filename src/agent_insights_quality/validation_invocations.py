@@ -955,20 +955,23 @@ def _validate_completed_migration_receipts(
     plan: Mapping[str, Any],
     authorities: Sequence[AuthoritySpec],
 ) -> None:
-    receipt_root = (
+    repository_root = (
         root
         / "invocation-receipts"
         / str(plan["repository"]).replace("/", "--")
-        / str(plan["pr_number"])
-        / str(marker["source_run_id"])
     )
-    paths = sorted(receipt_root.rglob("*.json"))
+    paths = sorted(
+        repository_root.glob(
+            f"*/{marker['source_run_id']}/*/*.json"
+        )
+    )
     if len(paths) != len(authorities):
         raise ContractError(
             "Completed invocation migration receipt binding changed"
         )
     authority_by_id = {item.authority_id: item for item in authorities}
     receipts: list[dict[str, Any]] = []
+    source_pr_numbers: set[int] = set()
     for path in paths:
         try:
             value = read_json(path)
@@ -992,11 +995,16 @@ def _validate_completed_migration_receipts(
                 "Completed invocation migration receipt binding changed"
             ) from error
         migrated_from = value.get("migrated_from")
+        expected_path = (
+            repository_root
+            / str(value["pr_number"])
+            / str(marker["source_run_id"])
+            / authority.authority_id.replace("/", "--")
+            / f"{value['receipt_digest'].removeprefix('sha256:')}.json"
+        )
         if (
-            path.parent.name != authority.authority_id.replace("/", "--")
-            or path.stem != value["receipt_digest"].removeprefix("sha256:")
+            path.resolve() != expected_path.resolve()
             or value["repository"] != plan["repository"]
-            or value["pr_number"] != plan["pr_number"]
             or value["origin_run_id"] != marker["source_run_id"]
             or value["origin_binding"]["lifecycle_digest"]
             != marker["source_lifecycle_digest"]
@@ -1009,7 +1017,11 @@ def _validate_completed_migration_receipts(
                 "Completed invocation migration receipt binding changed"
             )
         receipts.append(value)
-    if {item["authority_id"] for item in receipts} != set(authority_by_id):
+        source_pr_numbers.add(int(value["pr_number"]))
+    if (
+        len(source_pr_numbers) != 1
+        or {item["authority_id"] for item in receipts} != set(authority_by_id)
+    ):
         raise ContractError(
             "Completed invocation migration receipt authority coverage changed"
         )

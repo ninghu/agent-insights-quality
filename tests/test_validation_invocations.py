@@ -1495,7 +1495,7 @@ def test_completed_original_migration_replays_without_legacy_active(
         }
 
 
-def test_completed_migration_rejects_cross_pr_receipt_binding(
+def test_completed_migration_accepts_coherent_historical_receipt_pr(
     tmp_path: Path,
 ) -> None:
     prepared, plan, authorities, runtimes = _context()
@@ -1539,17 +1539,14 @@ def test_completed_migration_rejects_cross_pr_receipt_binding(
     cross_pr_plan = copy.deepcopy(plan)
     cross_pr_plan["pr_number"] += 1
 
-    with pytest.raises(
-        ContractError,
-        match="Completed invocation migration receipt binding changed",
-    ):
-        with recover_supplemental_legacy_invocations(
-            active_path=tmp_path / "lifecycle" / "active.json",
-            plan=cross_pr_plan,
-            authorities=authorities,
-            root=tmp_path,
-        ):
-            pass
+    with recover_supplemental_legacy_invocations(
+        active_path=tmp_path / "lifecycle" / "active.json",
+        plan=cross_pr_plan,
+        authorities=authorities,
+        root=tmp_path,
+    ) as result:
+        assert result["imported_authority_ids"] == authority_ids
+        assert result["incomplete_authority_ids"] == []
 
 
 @pytest.mark.parametrize(
