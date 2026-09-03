@@ -234,12 +234,15 @@ both legacy promotion receipts and approved validation records. Under the Daily 
 prove no run/provision/publication is active, pause the scheduler, switch the active source atomically,
 and remain new-only on failure.
 
-Daily reads only the reviewed Sweden g30 WORM container. It first tries the exact checkout commit
-record, then deterministically selects an immutable record for the exact repository and current
-validation digest. The lifecycle records the checkout commit for execution audit separately from
-the approved commit, pull request, evidence, and record digests used as validation provenance.
-Repository-only coordinator, schema, and test changes do not require another staging validation.
-Then perform only read-only readiness and registry reconciliation; do not send smoke traffic.
+Daily reads only the reviewed Sweden g30 WORM container. It first tries the exact checkout commit's
+approved-record Blob path, then deterministically selects an immutable record for the exact repository
+and current validation digest. The lifecycle records the checkout commit for execution audit
+separately from the approved commit, pull request, evidence, and record digests used as validation
+provenance. Repository-only coordinator, schema, and test changes do not require another staging
+validation. Then perform only read-only readiness and registry reconciliation; do not send smoke
+traffic. For this migration only, after readiness succeeds, the Daily owner may run the explicitly
+requested isolated `--test-run --rerun N` email-only Daily Test. It is external, non-gating, and
+writes no ADX, official report/trend, or pull request.
 
 The old West US 2 resources remain unchanged after cutover; retirement requires a separate reviewed
 authorization. That old environment is never a staging fallback.
