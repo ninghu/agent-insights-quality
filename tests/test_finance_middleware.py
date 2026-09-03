@@ -529,11 +529,6 @@ def test_finance_tools_emit_privacy_safe_structural_telemetry(monkeypatch) -> No
     ("issue_id", "class_name", "request_text"),
     [
         ("issue-013", "ContradictedBalance", "Show the balance for acct-demo-a."),
-        (
-            "issue-017",
-            "CompletePartialAggregate",
-            "Give the complete budget summary for acct-demo-a and acct-demo-missing.",
-        ),
     ],
 )
 def test_finance_output_defects_run_real_pipeline_before_postprocessing(
@@ -612,6 +607,76 @@ class _ScriptedFinanceClient(
             yield FrameworkChatResponseUpdate(
                 role="assistant",
                 contents=[content],
+            )
+
+        return FrameworkResponseStream(
+            updates(),
+            finalizer=FrameworkChatResponse.from_updates,
+        )
+
+
+class _ScriptedBudgetClient(
+    FrameworkFunctionInvocationLayer,
+    FrameworkChatMiddlewareLayer,
+    FrameworkBaseChatClient,
+):
+    def __init__(self, events):
+        self.events = events
+        super().__init__()
+
+    def _inner_get_response(self, *, messages, stream, options, **_kwargs):
+        assert stream is True
+        function_results = {
+            content.call_id: json.loads(content.result)
+            for message in messages
+            for content in message.contents
+            if content.type == "function_result"
+        }
+        if function_results:
+            assert {"known-budget", "missing-budget"} <= set(function_results)
+            assert function_results["known-budget"]["ok"] is True
+            assert function_results["known-budget"]["account_id"] == "acct-demo-a"
+            assert function_results["missing-budget"] == {
+                "ok": False,
+                "account_id": "acct-demo-missing",
+                "error": {"code": "account_not_found"},
+            }
+            if "monthly-items" in function_results:
+                assert function_results["monthly-items"]["ok"] is True
+                event = (
+                    "natural_model_response",
+                    "The partial budget summary is ready.",
+                )
+                contents = [FrameworkContent.from_text(event[1])]
+            else:
+                event = ("model_follow_up_function_call", "list_monthly_items")
+                contents = [
+                    FrameworkContent.from_function_call(
+                        "monthly-items",
+                        "list_monthly_items",
+                        arguments={"account_id": "acct-demo-a"},
+                    )
+                ]
+        else:
+            event = ("model_function_calls", "get_budget_summary")
+            contents = [
+                FrameworkContent.from_function_call(
+                    "known-budget",
+                    "get_budget_summary",
+                    arguments={"account_id": "acct-demo-a"},
+                ),
+                FrameworkContent.from_function_call(
+                    "missing-budget",
+                    "get_budget_summary",
+                    arguments={"account_id": "acct-demo-missing"},
+                ),
+            ]
+
+        async def updates():
+            self.events.append(event)
+            yield FrameworkChatResponseUpdate(
+                role="assistant",
+                contents=contents,
             )
 
         return FrameworkResponseStream(
@@ -704,6 +769,128 @@ def _run_finance_framework_pipeline(
         return response
 
     return asyncio.run(run_agent()), events
+
+
+def test_issue_017_dispatches_both_tools_before_claiming_complete(
+    monkeypatch,
+) -> None:
+    module = _load_finance_app_with_framework(monkeypatch, "issue-017")
+    events = []
+    client = _ScriptedBudgetClient(events)
+    original_finish_tool_span = module.finish_tool_span
+
+    def record_tool_execution(name, result, account_id=None):
+        events.append(
+            (
+                "tool_execution",
+                name,
+                account_id or result.get("account_id"),
+                result.get("ok"),
+            )
+        )
+        return original_finish_tool_span(name, result, account_id)
+
+    monkeypatch.setattr(module, "finish_tool_span", record_tool_execution)
+    monkeypatch.setattr(module, "FoundryChatClient", lambda **_kwargs: client)
+    monkeypatch.setattr(module, "DefaultAzureCredential", lambda: object())
+    monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", "https://example.invalid")
+    agent = module.build_agent()
+
+    async def run_agent():
+        response = await agent.run(
+            "Give the complete budget summary for acct-demo-a and acct-demo-missing.",
+            stream=True,
+        ).get_final_response()
+        events.append(("final_response", response.text))
+        return response
+
+    response = asyncio.run(run_agent())
+
+    assert response.text == (
+        "The complete budget summary covers acct-demo-a and acct-demo-missing."
+    )
+    assert events[0] == ("model_function_calls", "get_budget_summary")
+    assert set(events[1:3]) == {
+        ("tool_execution", "get_budget_summary", "acct-demo-a", True),
+        ("tool_execution", "get_budget_summary", "acct-demo-missing", False),
+    }
+    assert events[3] == ("model_follow_up_function_call", "list_monthly_items")
+    assert events[4] == (
+        "tool_execution",
+        "list_monthly_items",
+        "acct-demo-a",
+        True,
+    )
+    assert events[5:] == [
+        ("natural_model_response", "The partial budget summary is ready."),
+        ("final_response", response.text),
+    ]
+
+
+def test_issue_017_leaves_malformed_tool_results_on_the_natural_path(
+    monkeypatch,
+) -> None:
+    module = _load_finance_app(monkeypatch, "issue-017")
+    user = SimpleNamespace(
+        role="user",
+        text="Give the complete budget summary for acct-demo-a and acct-demo-missing.",
+        contents=[],
+    )
+    calls = SimpleNamespace(
+        role="assistant",
+        text="",
+        contents=[
+            SimpleNamespace(
+                type="function_call",
+                call_id="known-budget",
+                name="get_budget_summary",
+                parse_arguments=lambda: {"account_id": "acct-demo-a"},
+            ),
+            SimpleNamespace(
+                type="function_call",
+                call_id="missing-budget",
+                name="get_budget_summary",
+                parse_arguments=lambda: {"account_id": "acct-demo-missing"},
+            ),
+        ],
+    )
+    results = SimpleNamespace(
+        role="tool",
+        text="",
+        contents=[
+            SimpleNamespace(
+                type="function_result",
+                call_id="known-budget",
+                result=json.dumps({"ok": True, "account_id": "acct-demo-a"}),
+            ),
+            SimpleNamespace(
+                type="function_result",
+                call_id="missing-budget",
+                result="Error: Function failed.",
+            ),
+        ],
+    )
+    context = SimpleNamespace(
+        messages=[user, calls, results],
+        result=None,
+        stream=False,
+    )
+
+    async def call_next() -> None:
+        context.result = module.ChatResponse(
+            messages=[
+                module.Message(
+                    role="assistant",
+                    contents=["The budget lookup failed."],
+                )
+            ]
+        )
+
+    asyncio.run(
+        module.CompletePartialAggregate().process(context, call_next)
+    )
+
+    assert context.result.messages[0].contents == ["The budget lookup failed."]
 
 
 def test_issue_016_real_framework_dispatches_tool_before_replacement(
