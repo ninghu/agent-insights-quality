@@ -502,7 +502,10 @@ def _validate_scenario(
     paired_observation_count = sum(
         attempt["observation"] is True for attempt in v0_attempts
     )
-    evidence_complete = scenario_evidence_complete(
+    full_attempt_coverage = complete_count == n and (
+        authority_kind == "baseline" or paired_complete_count == n
+    )
+    decision_complete = scenario_evidence_complete(
         authority_kind=authority_kind,
         n=n,
         k=k,
@@ -515,10 +518,17 @@ def _validate_scenario(
         or scenario["paired_complete_count"] != paired_complete_count
         or scenario["observation_count"] != observation_count
         or scenario["paired_observation_count"] != paired_observation_count
-        or scenario["evidence_complete"] is not evidence_complete
+        or (
+            scenario["evidence_complete"] is True
+            and decision_complete is not True
+        )
+        or (
+            scenario["evidence_complete"] is False
+            and full_attempt_coverage is True
+        )
     ):
         raise ContractError(f"{authority_id} scenario complete count is invalid")
-    expected_pass = evidence_complete and observation_count >= k and (
+    expected_pass = scenario["evidence_complete"] and observation_count >= k and (
         authority_kind == "baseline" or paired_observation_count == 0
     )
     if scenario["pass"] is not expected_pass:
