@@ -582,17 +582,17 @@ def recover_supplemental_legacy_invocations(
     _validate_migration_marker(marker)
     marker_imported = list(marker["imported_authority_ids"])
     marker_incomplete = list(marker["incomplete_authority_ids"])
+    source_ids = _current_plan_authority_ids(
+        plan=plan,
+        authorities=authorities,
+    )
+    _validate_migration_authority_coverage(
+        source_ids=source_ids,
+        imported=marker_imported,
+        incomplete=marker_incomplete,
+        message="Supplemental invocation migration authority coverage changed",
+    )
     if not marker_incomplete:
-        source_ids = _current_plan_authority_ids(
-            plan=plan,
-            authorities=authorities,
-        )
-        _validate_migration_authority_coverage(
-            source_ids=source_ids,
-            imported=marker_imported,
-            incomplete=marker_incomplete,
-            message="Supplemental invocation migration authority coverage changed",
-        )
         _validate_completed_migration_receipts(
             root=runtime_root,
             marker=marker,
@@ -605,36 +605,23 @@ def recover_supplemental_legacy_invocations(
             "incomplete_authority_ids": [],
         }
         return
-    archive_path, archive_digest, source = _locate_legacy_source_archive(
-        root=runtime_root,
-        source_marker=marker,
-        plan=plan,
-    )
-    source_ids = list(source.get("validation_authority_ids") or [])
-    _validate_migration_authority_coverage(
-        source_ids=source_ids,
-        imported=marker_imported,
-        incomplete=marker_incomplete,
-        message="Supplemental invocation migration authority coverage changed",
-    )
     supplemental_path = (
         runtime_root
         / "migrations"
         / f"{_SUPPLEMENTAL_MIGRATION_NAME}.json"
     )
+    supplemental: dict[str, Any] | None = None
+    supplemental_imported: list[str] = []
+    supplemental_incomplete: list[str] = []
+    combined_imported: list[str] = []
     if supplemental_path.is_file():
         supplemental = read_json(supplemental_path)
         _validate_supplemental_migration_marker(
             supplemental,
             source_marker=marker,
-            source_archive_digest=archive_digest,
         )
-        supplemental_imported = list(
-            supplemental["imported_authority_ids"]
-        )
-        supplemental_incomplete = list(
-            supplemental["incomplete_authority_ids"]
-        )
+        supplemental_imported = list(supplemental["imported_authority_ids"])
+        supplemental_incomplete = list(supplemental["incomplete_authority_ids"])
         _validate_migration_authority_coverage(
             source_ids=marker_incomplete,
             imported=supplemental_imported,
@@ -643,13 +630,50 @@ def recover_supplemental_legacy_invocations(
                 "Supplemental invocation completion authority coverage changed"
             ),
         )
+        completed = set(marker_imported).union(supplemental_imported)
+        combined_imported = [item for item in source_ids if item in completed]
+        _validate_migration_authority_coverage(
+            source_ids=source_ids,
+            imported=combined_imported,
+            incomplete=supplemental_incomplete,
+            message=(
+                "Supplemental invocation combined authority coverage changed"
+            ),
+        )
+        if not supplemental_incomplete:
+            _validate_completed_migration_receipts(
+                root=runtime_root,
+                marker=marker,
+                plan=plan,
+                authorities=authorities,
+            )
+            yield {
+                "source_run_id": supplemental["source_run_id"],
+                "imported_authority_ids": combined_imported,
+                "incomplete_authority_ids": [],
+            }
+            return
+    archive_path, archive_digest, source = _locate_legacy_source_archive(
+        root=runtime_root,
+        source_marker=marker,
+        plan=plan,
+    )
+    archived_source_ids = list(source.get("validation_authority_ids") or [])
+    _validate_migration_authority_coverage(
+        source_ids=archived_source_ids,
+        imported=marker_imported,
+        incomplete=marker_incomplete,
+        message="Supplemental invocation migration authority coverage changed",
+    )
+    if supplemental is not None:
+        _validate_supplemental_migration_marker(
+            supplemental,
+            source_marker=marker,
+            source_archive_digest=archive_digest,
+        )
         yield {
             "source_run_id": supplemental["source_run_id"],
-            "imported_authority_ids": [
-                item
-                for item in source_ids
-                if item in set(marker_imported).union(supplemental_imported)
-            ],
+            "imported_authority_ids": combined_imported,
             "incomplete_authority_ids": supplemental_incomplete,
         }
         return
@@ -692,7 +716,7 @@ def recover_supplemental_legacy_invocations(
             "source_run_id": result["source_run_id"],
             "imported_authority_ids": [
                 item
-                for item in source_ids
+                for item in archived_source_ids
                 if item in set(marker_imported).union(supplemental_imported)
             ],
             "incomplete_authority_ids": supplemental_incomplete,
@@ -839,8 +863,10 @@ def _validate_supplemental_migration_marker(
     value: Mapping[str, Any],
     *,
     source_marker: Mapping[str, Any],
-    source_archive_digest: str,
+    source_archive_digest: str | None = None,
 ) -> None:
+    imported = value.get("imported_authority_ids")
+    incomplete = value.get("incomplete_authority_ids")
     if (
         value.get("schema_version") != "1.0.0"
         or value.get("kind") != _SUPPLEMENTAL_MIGRATION_NAME
@@ -849,9 +875,21 @@ def _validate_supplemental_migration_marker(
         != source_marker["source_lifecycle_digest"]
         or value.get("source_marker_digest")
         != source_marker["migration_digest"]
-        or value.get("source_archive_digest") != source_archive_digest
+        or re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            str(value.get("source_archive_digest") or ""),
+        )
+        is None
+        or (
+            source_archive_digest is not None
+            and value.get("source_archive_digest") != source_archive_digest
+        )
         or value.get("migration_digest")
         != _digest_without(value, "migration_digest")
+        or not isinstance(imported, list)
+        or not all(isinstance(item, str) and item for item in imported)
+        or not isinstance(incomplete, list)
+        or not all(isinstance(item, str) and item for item in incomplete)
     ):
         raise ContractError(
             "Supplemental invocation migration marker is invalid"
