@@ -116,6 +116,9 @@ Daily quality assessment, scoring, reporting, ADX, email, Daily traffic, approva
    reaches `k`, immutable ancestry proves an older non-PASS receipt followed by the fresh receipt's
    own INCOMPLETE result, and the final evidence records the reviewed exception policy, attempt, and
    ancestry digest without marking the attempt complete.
+   Once those conditions are proven, the coordinator must reuse that receipt for the accepting
+   verification generation; the generic repeated-`INCOMPLETE` fresh-traffic rule must not select it
+   again.
    Receipt reuse proves the unchanged traffic-generation and execution binding only. Every new
    verification package binds the reused receipt's immutable digest and the current verifier commit
    and verifier digest.

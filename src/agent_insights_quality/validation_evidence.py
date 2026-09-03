@@ -421,6 +421,54 @@ def scenario_evidence_complete(
     return issue_decided and control_decided
 
 
+def paired_trace_gap_attempt_index(
+    *,
+    authority_kind: str,
+    authority_id: str,
+    scenario: Mapping[str, Any],
+) -> int | None:
+    n, k = validation_matrix(str(scenario["validation_mode"]))
+    incomplete_controls = [
+        attempt
+        for attempt in scenario["v0_attempts"]
+        if attempt["complete"] is not True
+    ]
+    if (
+        authority_kind != "issue"
+        or _reviewed_required_surfaces(
+            authority_id,
+            str(scenario["scenario_id"]),
+        )
+        != {"trace"}
+        or scenario["observation_count"] < k
+        or scenario["paired_complete_count"] != n - 1
+        or scenario["paired_observation_count"] != 0
+        or len(incomplete_controls) != 1
+    ):
+        return None
+    attempt = incomplete_controls[0]
+    steps = [*attempt["setup_steps"], *attempt["probe_steps"]]
+    if (
+        attempt["error_code"] is None
+        or any(
+            step["endpoint_pass"] is not True
+            or step["identity_pass"] is not True
+            or step.get("semantic_evidence_complete") is not True
+            for step in steps
+        )
+        or not any(
+            step.get("trace_evidence_complete") is not True for step in steps
+        )
+        or any(
+            step["complete"] is not True
+            and step.get("trace_evidence_complete") is True
+            for step in steps
+        )
+    ):
+        return None
+    return int(attempt["index"])
+
+
 def _validate_authority(authority: Mapping[str, Any]) -> None:
     authority_id = authority["authority_id"]
     expected_digest = digest_without_field(
@@ -512,45 +560,15 @@ def _validate_scenario(
         attempt["observation"] is True for attempt in v0_attempts
     )
     acceptance = scenario.get("paired_trace_gap_acceptance")
-    incomplete_controls = [
-        attempt for attempt in v0_attempts if attempt["complete"] is not True
-    ]
-    accepted_steps = (
-        [
-            *incomplete_controls[0]["setup_steps"],
-            *incomplete_controls[0]["probe_steps"],
-        ]
-        if len(incomplete_controls) == 1
-        else []
+    accepted_attempt_index = paired_trace_gap_attempt_index(
+        authority_kind=authority_kind,
+        authority_id=authority_id,
+        scenario=scenario,
     )
     if acceptance is not None and (
         authority_kind != "issue"
-        or _reviewed_required_surfaces(
-            authority_id,
-            str(scenario["scenario_id"]),
-        )
-        != {"trace"}
         or scenario["evidence_complete"] is not True
-        or paired_complete_count != n - 1
-        or paired_observation_count != 0
-        or len(incomplete_controls) != 1
-        or incomplete_controls[0]["index"] != acceptance["attempt_index"]
-        or incomplete_controls[0]["error_code"] is None
-        or any(
-            step["endpoint_pass"] is not True
-            or step["identity_pass"] is not True
-            or step.get("semantic_evidence_complete") is not True
-            for step in accepted_steps
-        )
-        or not any(
-            step.get("trace_evidence_complete") is not True
-            for step in accepted_steps
-        )
-        or any(
-            step["complete"] is not True
-            and step.get("trace_evidence_complete") is True
-            for step in accepted_steps
-        )
+        or accepted_attempt_index != acceptance["attempt_index"]
     ):
         raise ContractError(f"{authority_id} paired trace gap acceptance is invalid")
     full_attempt_coverage = complete_count == n and (

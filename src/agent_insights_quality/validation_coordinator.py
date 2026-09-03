@@ -50,6 +50,7 @@ from agent_insights_quality.validation_assignments import verification_assignmen
 from agent_insights_quality.validation_authority_results import (
     current_authority_verification_results,
     has_prior_nonpass_result_for_invocation,
+    latest_prior_nonpass_result,
     load_authority_verification_result,
     load_bound_authority_verification_result,
     paired_trace_gap_history_digest,
@@ -64,6 +65,7 @@ from agent_insights_quality.validation_cycle import (
 )
 from agent_insights_quality.validation_evidence import (
     load_reused_authority_evidence,
+    paired_trace_gap_attempt_index,
     persist_evidence,
     select_reusable_authority_evidence,
     stamp_evidence_digests,
@@ -2165,6 +2167,18 @@ def _current_invocation_requirements(
         if authority_id not in completed
     }
     fresh_required: set[str] = set()
+    for authority_id in list(forced):
+        prior_result = latest_prior_nonpass_result(
+            repository=str(active["repository"]),
+            pr_number=int(active["pr_number"]),
+            authority_id=authority_id,
+            prior_run_ids=prior_run_ids,
+        )
+        if prior_result is not None and _approved_paired_trace_gap(
+            prior_result,
+            prior_run_ids=prior_run_ids,
+        ):
+            forced.remove(authority_id)
     result_references = current_authority_verification_results(
         prepared=active,
         authority_ids=active["validation_authority_ids"],
@@ -2177,6 +2191,10 @@ def _current_invocation_requirements(
             and result.get("authority_evidence") is None
             else None
         )
+        approved_trace_gap = _approved_paired_trace_gap(
+            result,
+            prior_run_ids=prior_run_ids,
+        )
         if incomplete_result_requires_fresh_invocation(
             result,
             invocation=(
@@ -2184,6 +2202,7 @@ def _current_invocation_requirements(
             ),
         ) or (
             result["outcome"] == "INCOMPLETE"
+            and not approved_trace_gap
             and has_prior_nonpass_result_for_invocation(
                 result,
                 prior_run_ids=prior_run_ids,
@@ -2201,6 +2220,37 @@ def _current_invocation_requirements(
         for authority_id in ordered_forced
         if authority_id in fresh_required
     ]
+
+
+def _approved_paired_trace_gap(
+    result: Mapping[str, Any],
+    *,
+    prior_run_ids: list[str],
+) -> bool:
+    evidence = result.get("authority_evidence")
+    if result.get("outcome") != "INCOMPLETE" or not isinstance(
+        evidence,
+        Mapping,
+    ):
+        return False
+    history = paired_trace_gap_history_digest(
+        repository=str(result["repository"]),
+        pr_number=int(result["pr_number"]),
+        authority_id=str(result["authority_id"]),
+        invocation_receipt_digest=result["binding"][
+            "invocation_receipt_digest"
+        ],
+        prior_run_ids=prior_run_ids,
+    )
+    return history is not None and all(
+        paired_trace_gap_attempt_index(
+            authority_kind=evidence["authority_kind"],
+            authority_id=str(result["authority_id"]),
+            scenario=scenario,
+        )
+        is not None
+        for scenario in evidence["scenarios"]
+    )
 
 
 def _runner(

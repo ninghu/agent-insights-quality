@@ -455,6 +455,24 @@ def paired_trace_gap_history_digest(
     return None
 
 
+def latest_prior_nonpass_result(
+    *,
+    repository: str,
+    pr_number: int,
+    authority_id: str,
+    prior_run_ids: Sequence[str],
+    root: Path | None = None,
+) -> dict[str, Any] | None:
+    results = _prior_nonpass_results(
+        repository=repository,
+        pr_number=pr_number,
+        authority_id=authority_id,
+        prior_run_ids=prior_run_ids,
+        root=root,
+    )
+    return results[0][0] if results else None
+
+
 def _prior_nonpass_results(
     *,
     repository: str,
