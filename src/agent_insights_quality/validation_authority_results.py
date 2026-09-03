@@ -49,6 +49,7 @@ def write_authority_verification_result(
     error_code: str | None,
     query_diagnostics: Mapping[str, int] | None,
     fence: Callable[[], None],
+    copilot_evaluation: Mapping[str, str] | None = None,
     root: Path | None = None,
 ) -> dict[str, str]:
     fence()
@@ -118,6 +119,8 @@ def write_authority_verification_result(
         ),
         "artifact_digest": "",
     }
+    if copilot_evaluation is not None:
+        value["copilot_evaluation"] = copy.deepcopy(dict(copilot_evaluation))
     value["artifact_digest"] = digest_without_field(value, "artifact_digest")
     validate_authority_verification_result(value)
     runtime_root = (root or validation_runtime_root()).resolve()
@@ -140,6 +143,39 @@ def load_authority_verification_result(
         raise ContractError("Authority verification result path escapes runtime root")
     value = read_json(path)
     validate_authority_verification_result(value)
+    evaluation = value.get("copilot_evaluation")
+    if isinstance(evaluation, Mapping):
+        package_path = (
+            runtime_root
+            / "copilot-authority-evaluations"
+            / "packages"
+            / f"{evaluation['package_hash'].removeprefix('sha256:')}.json"
+        )
+        import_path = (
+            runtime_root
+            / "copilot-authority-evaluations"
+            / "imports"
+            / f"{evaluation['evaluation_digest'].removeprefix('sha256:')}.json"
+        )
+        try:
+            package = read_json(package_path)
+            imported = read_json(import_path)
+        except (ContractError, OSError) as error:
+            raise ContractError(
+                "Authority result Copilot evaluation artifact is unavailable"
+            ) from error
+        if (
+            package.get("package_hash") != evaluation["package_hash"]
+            or digest_without_field(package, "package_hash")
+            != evaluation["package_hash"]
+            or package.get("prompt_digest") != evaluation["prompt_digest"]
+            or content_hash(imported) != evaluation["evaluation_digest"]
+            or imported.get("package_hash") != evaluation["package_hash"]
+            or imported.get("model") != evaluation["model"]
+        ):
+            raise ContractError(
+                "Authority result Copilot evaluation reference changed"
+            )
     if (
         value["authority_id"] != reference.get("authority_id")
         or value["artifact_digest"] != reference.get("authority_result_digest")
@@ -342,7 +378,7 @@ def reusable_authority_verification_results(
         _, path, value = latest[-1]
         selected[authority.authority_id] = (
             _result_reference(value, path=path, root=runtime_root)
-            if value["outcome"] == "PASS"
+            if value["outcome"] in {"PASS", "FAIL"}
             else None
         )
     return selected

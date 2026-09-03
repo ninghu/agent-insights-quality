@@ -12,8 +12,9 @@ from agent_insights_quality.automation_policy import (
 )
 from agent_insights_quality.util import ROOT, content_hash, read_yaml
 
-_VERIFIER_CONTRACT_VERSION = "1.0.0"
+_VERIFIER_CONTRACT_VERSION = "2.0.0"
 _VERIFIER_SCHEMA_PATHS = (
+    "schemas/test-agent-validation-copilot-evaluation.schema.json",
     "schemas/test-agent-validation-authority-result.schema.json",
     "schemas/test-agent-validation-evidence.schema.json",
     "schemas/test-agent-validation-invocation-receipt.schema.json",
@@ -22,12 +23,14 @@ _VERIFIER_SCHEMA_PATHS = (
 _VERIFIER_IMPLEMENTATION_PATHS = (
     "src/agent_insights_quality/live.py",
     "src/agent_insights_quality/validation_authority_results.py",
+    "src/agent_insights_quality/validation_copilot.py",
     "src/agent_insights_quality/validation_evidence.py",
     "src/agent_insights_quality/validation_invocations.py",
     "src/agent_insights_quality/validation_live.py",
     "src/agent_insights_quality/validation_rules.py",
     "src/agent_insights_quality/validation_runtime.py",
     "src/agent_insights_quality/validation_verifier.py",
+    "src/agent_insights_quality/prompts/test_agent_validation.md",
 )
 
 

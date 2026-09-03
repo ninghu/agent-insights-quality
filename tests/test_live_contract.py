@@ -1241,79 +1241,6 @@ def test_response_bound_snapshot_restores_semantic_assertions() -> None:
 
 
 @pytest.mark.parametrize(
-    ("output", "assertions"),
-    [
-        pytest.param(
-            "acct-demo-a balance is USD 1750.50.",
-            {
-                "exact_text": "acct-demo-a balance is USD 1750.50.",
-                "required_terms_all": ["acct-demo-a", "USD 1750.50"],
-                "forbidden_terms": ["USD 1250.50"],
-            },
-            id="microsoft-agent-framework-python",
-        ),
-        pytest.param(
-            (
-                "No itinerary. No synthetic inventory options. "
-                "Booking not completed. Showing 0 of 0 synthetic options."
-            ),
-            {
-                "exact_text": (
-                    "No itinerary. No synthetic inventory options. "
-                    "Booking not completed. Showing 0 of 0 synthetic options."
-                ),
-                "required_terms_all": [
-                    "No itinerary",
-                    "No synthetic inventory options",
-                    "Booking not completed",
-                    "Showing 0 of 0 synthetic options",
-                ],
-                "forbidden_terms": ["available"],
-            },
-            id="langgraph-python",
-        ),
-    ],
-)
-def test_response_bound_direct_string_restores_semantic_assertions(
-    output,
-    assertions,
-) -> None:
-    reference = "response-1"
-    anchor = _anchor_row("a" * 32, "root-a", reference)
-    anchor["messages"] = ["", output]
-    anchor["output_messages_type"] = "string"
-    fixture = _normalize_fixture(
-        {
-            "id": "semantic-probe",
-            "request": {
-                "method": "POST",
-                "path": "/responses",
-                "headers": {"content-type": "application/json"},
-                "body": {"input": "Synthetic request"},
-            },
-            "expected": {
-                "http_status": 200,
-                "semantic_assertions": assertions,
-                "trace_assertions": [],
-            },
-        }
-    )
-
-    results = _semantic_assertion_results_from_correlated_rows(
-        ([anchor],),
-        (reference,),
-        (fixture,),
-    )
-
-    assert results is not None
-    assert [(item.assertion, item.passed) for item in results[0]] == [
-        ("exact_text", True),
-        ("required_terms_all", True),
-        ("forbidden_terms", True),
-    ]
-
-
-@pytest.mark.parametrize(
     ("output", "output_type"),
     [
         ("", "string"),
@@ -1323,6 +1250,7 @@ def test_response_bound_direct_string_restores_semantic_assertions(
         (42, "long"),
         ("42", "long"),
         ({"content": "Synthetic success"}, "dynamic"),
+        ("Synthetic success", "string"),
         ("{malformed", "string"),
         ('{"content":"Synthetic success"}', "string"),
     ],

@@ -83,6 +83,7 @@
         {"type": "object"}
       ]
     },
+    "copilot_evaluation": {"$ref": "#/$defs/copilotEvaluation"},
     "artifact_digest": {"$ref": "#/$defs/hash"}
   },
   "allOf": [
@@ -221,6 +222,22 @@
         "path": {"type": "string", "minLength": 1, "maxLength": 2048},
         "receipt_digest": {"$ref": "#/$defs/hash"},
         "invocation_digest": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "copilotEvaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "package_hash",
+        "prompt_digest",
+        "evaluation_digest"
+      ],
+      "properties": {
+        "model": {"const": "gpt-5.6-sol"},
+        "package_hash": {"$ref": "#/$defs/hash"},
+        "prompt_digest": {"$ref": "#/$defs/hash"},
+        "evaluation_digest": {"$ref": "#/$defs/hash"}
       }
     }
   }

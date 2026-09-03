@@ -285,8 +285,11 @@ def load_reused_authority_evidence(
 
         result = load_authority_verification_result(reference, root=root)
         authority = result["authority_evidence"]
-        if result["outcome"] != "PASS" or not isinstance(authority, dict):
-            raise ContractError("Reused authority result is not PASS evidence")
+        if (
+            result["outcome"] not in {"PASS", "FAIL"}
+            or not isinstance(authority, dict)
+        ):
+            raise ContractError("Reused authority result is not definitive evidence")
         return copy.deepcopy(authority)
     runtime_root = (root or validation_runtime_root()).resolve()
     path = (runtime_root / reference["path"]).resolve()
@@ -758,28 +761,11 @@ def _validate_attempt_observations(
     attempts: list[Mapping[str, Any]],
     predicate: Mapping[str, Any],
 ) -> None:
+    del predicate
     for attempt in attempts:
-        probes = attempt["probe_steps"]
-        if predicate["kind"] == "never":
-            observed = all(
-                item["complete"]
-                and item["semantic_pass"]
-                and item["trace_pass"]
-                for item in probes
-            )
-        else:
-            step_ids = set(predicate["step_ids"])
-            surfaces = set(predicate["required_surfaces"])
-            selected = [item for item in probes if item["step_id"] in step_ids]
-            observed = bool(selected) and all(
-                item["complete"]
-                and ("semantic" not in surfaces or item["semantic_pass"])
-                and ("trace" not in surfaces or item["trace_pass"])
-                for item in selected
-            )
-        if attempt["observation"] is not observed:
+        if attempt["complete"] is not True and attempt["observation"] is True:
             raise ContractError(
-                f"{authority_id} attempt observation is not independently supported"
+                f"{authority_id} incomplete attempt cannot assert an observation"
             )
 
 

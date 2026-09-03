@@ -16,7 +16,8 @@ def test_validation_cli_exposes_stage_primitives_without_generation_inputs() -> 
         "deploy-test-agent-validation-shard",
         "reconcile-test-agent-validation-deployment",
         "invoke-test-agent-validation-shard",
-        "verify-test-agent-validation-authority",
+        "prepare-test-agent-validation-assessment",
+        "import-test-agent-validation-assessment",
         "compose-test-agent-validation",
     ):
         assert command in choices
@@ -49,26 +50,38 @@ def test_run_validation_cli_uses_automatic_local_discovery(monkeypatch) -> None:
     }
 
 
-def test_authority_cli_resolves_only_the_hidden_active_assignment(
+def test_assessment_cli_resolves_only_the_hidden_active_assignment(
     monkeypatch,
 ) -> None:
-    observed = []
     monkeypatch.setattr(
         cli,
-        "verify_test_agent_validation_authority",
-        lambda *, authority_id: observed.append(authority_id)
-        or {"status": "verified", "authority_id": authority_id},
+        "prepare_test_agent_validation_assessment",
+        lambda: {"status": "assessment_ready"},
     )
     args = cli.build_parser().parse_args(
-        [
-            "verify-test-agent-validation-authority",
-            "--authority-id",
-            "issue-007",
-        ]
+        ["prepare-test-agent-validation-assessment"]
     )
     result = json.loads(cli._dispatch(args) or "{}")
-    assert observed == ["issue-007"]
-    assert result == {"status": "verified", "authority_id": "issue-007"}
+    assert vars(args) == {
+        "command": "prepare-test-agent-validation-assessment"
+    }
+    assert result == {"status": "assessment_ready"}
+
+    monkeypatch.setattr(
+        cli,
+        "import_test_agent_validation_assessment",
+        lambda: {"status": "verified", "outcome": "PASS"},
+    )
+    args = cli.build_parser().parse_args(
+        ["import-test-agent-validation-assessment"]
+    )
+    assert vars(args) == {
+        "command": "import-test-agent-validation-assessment"
+    }
+    assert json.loads(cli._dispatch(args) or "{}") == {
+        "status": "verified",
+        "outcome": "PASS",
+    }
 
 
 def test_approval_cli_uses_latest_ready_result_without_manual_paths(

@@ -14,6 +14,7 @@ from agent_insights_quality.validation_coordinator import (
     _assignments,
     _desired_state,
     _forced_invocation_authority_ids,
+    _incomplete_current_invocations,
     _merge_authority_result_selection,
     _runner,
     _support_image_reuse_candidates,
@@ -102,6 +103,60 @@ def test_complete_migrated_receipts_force_zero_invoke_shards() -> None:
     assert 1 <= len(verify) <= 8
 
 
+def test_incomplete_result_forces_traffic_only_for_unusable_endpoint(
+    monkeypatch,
+) -> None:
+    active = _active_validation()
+    authority_id = active["validation_authority_ids"][0]
+    active["invocation_authority_ids"] = []
+    journal = SimpleNamespace(
+        read_active=lambda: SimpleNamespace(value=active)
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "current_authority_verification_results",
+        lambda **_kwargs: {authority_id: {"authority_id": authority_id}},
+    )
+    endpoint_pass = True
+    monkeypatch.setattr(
+        validation_coordinator,
+        "load_authority_verification_result",
+        lambda _reference: {
+            "outcome": "INCOMPLETE",
+            "authority_evidence": {
+                "scenarios": [
+                    {
+                        "issue_attempts": [
+                            {
+                                "setup_steps": [
+                                    {"endpoint_pass": endpoint_pass}
+                                ],
+                                "probe_steps": [{"endpoint_pass": True}],
+                            }
+                        ],
+                        "v0_attempts": [],
+                    }
+                ]
+            },
+        },
+    )
+
+    assert (
+        _incomplete_current_invocations(
+            journal=journal,
+            plan={},
+            authorities=authority_specs(*load_catalogs()),
+        )
+        == []
+    )
+    endpoint_pass = False
+    assert _incomplete_current_invocations(
+        journal=journal,
+        plan={},
+        authorities=authority_specs(*load_catalogs()),
+    ) == [authority_id]
+
+
 def _active_validation() -> dict:
     authorities = authority_specs(*load_catalogs())
     authority_ids = [item.authority_id for item in authorities]
@@ -180,14 +235,14 @@ def test_pending_invocation_exposes_no_verification_slots(
     reconciled = validation_coordinator._prepared_result(active)
     status = validation_coordinator.run_test_agent_validation()
 
-    assert reconciled["verification_assignments"] == []
+    assert "verification_assignments" not in reconciled
     assert reconciled["verification_authority_concurrency"] == 0
     assert status["status"] == "invocation_pending"
     assert "verification_assignments" not in status
     assert not any("verify-" in command for command in status["next_commands"])
 
 
-def test_completed_invocation_exposes_eight_verification_slots(
+def test_completed_invocation_exposes_one_copilot_verification_slot(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -232,11 +287,14 @@ def test_completed_invocation_exposes_eight_verification_slots(
     reconciled = validation_coordinator._prepared_result(active)
     status = validation_coordinator.run_test_agent_validation()
 
-    assert len(reconciled["verification_assignments"]) == 8
-    assert reconciled["verification_authority_concurrency"] == 8
+    assert reconciled["verification_authority_concurrency"] == 1
+    assert reconciled["verification_pending_authority_count"] == 41
     assert status["status"] == "verification_pending"
-    assert len(status["verification_assignments"]) == 8
-    assert len(status["next_commands"]) == 8
+    assert status["maximum_active_subsessions"] == 1
+    assert status["next_commands"] == [
+        "python -m agent_insights_quality "
+        "prepare-test-agent-validation-assessment"
+    ]
 
     completed_ids = active["validation_authority_ids"][:8]
     monkeypatch.setattr(
@@ -258,11 +316,11 @@ def test_completed_invocation_exposes_eight_verification_slots(
 
     replenished = validation_coordinator.run_test_agent_validation()
 
-    assert [
-        item["authority_id"]
-        for item in replenished["verification_assignments"]
-    ] == active["validation_authority_ids"][8:16]
-    assert len(replenished["next_commands"]) == 8
+    assert replenished["pending_authority_count"] == 33
+    assert replenished["next_commands"] == [
+        "python -m agent_insights_quality "
+        "prepare-test-agent-validation-assessment"
+    ]
 
 
 def _run_validation_with_completed_outcomes(
@@ -339,11 +397,10 @@ def test_pending_incomplete_result_still_exposes_pending_commands(
     assert status["status"] == "verification_pending"
     assert status["completed_authority_count"] == 1
     assert status["pending_authority_count"] == 40
-    assert [
-        item["authority_id"] for item in status["verification_assignments"]
-    ] == active["validation_authority_ids"][1:9]
-    assert len(status["next_commands"]) == 8
-    assert not any("prepare-" in command for command in status["next_commands"])
+    assert status["next_commands"] == [
+        "python -m agent_insights_quality "
+        "prepare-test-agent-validation-assessment"
+    ]
 
 
 def test_pending_failed_result_still_exposes_pending_commands(
@@ -360,10 +417,10 @@ def test_pending_failed_result_still_exposes_pending_commands(
     assert status["status"] == "verification_pending"
     assert status["completed_authority_count"] == 1
     assert status["pending_authority_count"] == 40
-    assert [
-        item["authority_id"] for item in status["verification_assignments"]
-    ] == active["validation_authority_ids"][1:9]
-    assert len(status["next_commands"]) == 8
+    assert status["next_commands"] == [
+        "python -m agent_insights_quality "
+        "prepare-test-agent-validation-assessment"
+    ]
 
 def test_no_pending_with_incomplete_result_requests_new_prepare(
     monkeypatch,
@@ -436,9 +493,7 @@ def test_verifier_still_fails_closed_before_invocation_barrier(
         ContractError,
         match="Validation invocation barrier is incomplete",
     ):
-        validation_coordinator.verify_test_agent_validation_authority(
-            authority_id="issue-014"
-        )
+        validation_coordinator.prepare_test_agent_validation_assessment()
 
 
 def test_next_generation_reuses_forced_pass_and_selects_nonpass_or_missing() -> None:
@@ -465,11 +520,11 @@ def test_next_generation_reuses_forced_pass_and_selects_nonpass_or_missing() -> 
     assert [item["authority_id"] for item in reused] == [passed]
 
 
-def test_next_generation_reuses_nine_passes_and_selects_remaining_32() -> None:
+def test_next_generation_reuses_twenty_passes_and_selects_remaining_21() -> None:
     authorities = authority_specs(*load_catalogs())
-    passed = authorities[:9]
-    incomplete_or_failed = authorities[9:11]
-    changed_or_missing = authorities[11:]
+    passed = authorities[:20]
+    incomplete = authorities[20:22]
+    changed_or_missing = authorities[22:]
     authority_results = {
         item.authority_id: {
             "authority_id": item.authority_id,
@@ -480,7 +535,7 @@ def test_next_generation_reuses_nine_passes_and_selects_remaining_32() -> None:
         for item in passed
     }
     authority_results.update(
-        {item.authority_id: None for item in incomplete_or_failed}
+        {item.authority_id: None for item in incomplete}
     )
 
     selected, reused = _merge_authority_result_selection(
@@ -491,11 +546,11 @@ def test_next_generation_reuses_nine_passes_and_selects_remaining_32() -> None:
         forced={item.authority_id for item in authorities},
     )
 
-    assert len(selected) == 32
+    assert len(selected) == 21
     assert selected == [
-        item.authority_id for item in incomplete_or_failed + changed_or_missing
+        item.authority_id for item in incomplete + changed_or_missing
     ]
-    assert len(reused) == 9
+    assert len(reused) == 20
     assert [item["authority_id"] for item in reused] == [
         item.authority_id for item in passed
     ]

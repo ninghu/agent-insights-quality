@@ -40,8 +40,10 @@ request's input plus maximum output budget, multiplied by reviewed inner fan-out
 `Retry-After` pauses every consumer. Every issue and paired-v0 attempt gets a globally unique execution,
 conversation, session, response, and operation identity while receiving the same matrix. Evidence
 binds the exact deployed Agent/version and derives identity from correlated telemetry.
-Semantic and trace assertions remain reviewed context for later private Copilot review; local
-validation records only mechanical execution and evidence completeness and produces no issue verdict.
+Semantic and trace assertions are evaluated only by GPT-5.6 Sol from a validation-private,
+content-addressed package. Deterministic code validates complete evaluation coverage and aggregates
+the returned per-step and per-attempt booleans against the reviewed thresholds; it does not interpret
+behavior through issue- or assertion-specific runtime parsers.
 
 The coordinator lifecycle is:
 
@@ -71,11 +73,10 @@ its binding changed, its latest result is `INCOMPLETE`, or its exact result is m
 `FAIL` is a completed result and is not selected again unless its binding changes. Every issue
 selected for new traffic still carries a fresh paired-`v0` control.
 
-Deployment, invocation, and verification each receive an independent deterministic assignment set.
-Every non-empty phase has one to eight cost-balanced logical shards based only on the authorities
-selected for that phase. Each active shard maps 1:1 to one visible Copilot sub-session, so eight is
-both the phase's logical-shard ceiling and its maximum active concurrency. Verification begins only
-after the invocation barrier and never invokes an endpoint.
+Deployment and invocation each receive an independent deterministic assignment set with one to eight
+cost-balanced logical shards. Each active shard maps 1:1 to one visible Copilot sub-session.
+Verification begins only after the invocation barrier, uses one visible GPT-5.6 Sol verifier session
+at a time, and never invokes an endpoint.
 
 Immediately after one authority reaches definitive completion, its sub-session atomically publishes a
 generation-fenced invocation receipt instead of waiting for the shard to finish. The receipt binds the
@@ -97,13 +98,12 @@ verification package must separately bind the reused receipt's immutable digest 
 verifier commit and verifier digest. Verifier-only changes can therefore re-evaluate exact completed
 traffic without treating old verifier output as current.
 
-### Batched per-authority verification
+### Copilot per-authority verification
 
-Verification uses at most eight visible Copilot sub-sessions. Each sub-session claims one
-generation-fenced authority at a time from its immutable assignment. Its primitive is sequential:
-it starts no subprocess, thread, task pool, or other internal concurrency. It receives no private
-runtime state or authority identity through the prompt or CLI, resolves the hidden active generation
-and claim itself, and never deploys, invokes, or sends endpoint traffic.
+One visible GPT-5.6 Sol verifier session claims one generation-fenced authority at a time from the
+immutable assignment. The package and import primitives are sequential: they start no subprocess,
+thread, task pool, or other internal concurrency, accept no generation or authority identity, resolve
+the hidden active generation themselves, and never deploy, invoke, or send endpoint traffic.
 
 For one claimed baseline authority, the verifier issues one batched telemetry query and waits for one
 stability snapshot containing all five response-bound attempt trees. For one claimed issue authority,
@@ -112,7 +112,10 @@ issue attempts and one containing all paired-`v0` attempts. It never queries or 
 attempts as separate verification units. The snapshots remain bound to the exact receipt,
 response/session references, invoke/evidence windows, runtime, Project, and telemetry resource set.
 
-The verifier deterministically assigns exactly one authority result:
+Deterministic code enforces exact repository, PR, source, provider, runtime, environment, Project,
+telemetry, invocation-receipt, response/session, endpoint-output, trace-subtree, privacy, and package
+bindings. GPT-5.6 Sol evaluates all behavioral assertions and per-attempt observations through the
+strict validation evaluation schema. Code then assigns exactly one authority result:
 
 | Result | Meaning |
 | --- | --- |
@@ -173,22 +176,30 @@ creates one visible invocation sub-session per assignment and gives each exactly
 python -m agent_insights_quality invoke-test-agent-validation-shard --shard-id <N>
 ```
 
-After the invocation barrier, use fresh or reusable completed invocation receipts to run the
-already-published read-only verification assignments with at most eight visible sub-sessions. Each
-sub-session claims and completes one authority at a time:
+After the invocation barrier, use fresh or reusable completed invocation receipts in one visible
+GPT-5.6 Sol verifier session. Prepare or locate the next private package:
 
 ```powershell
-python -m agent_insights_quality verify-test-agent-validation-shard --shard-id <N>
+python -m agent_insights_quality prepare-test-agent-validation-assessment
 ```
 
-After all verification sub-sessions finish, the coordinator composes the exact 41-authority result:
+Read the reported package and validation-specific prompt locally, write strict public-safe JSON to
+the reported assessment path, then validate, import, and persist the schema-1.0 authority result:
+
+```powershell
+python -m agent_insights_quality import-test-agent-validation-assessment
+```
+
+Repeat the two commands one authority at a time. The package, raw output, tool data, and traces never
+leave the durable private runtime root and must not appear in CLI output or cross-session messages.
+After all authority evaluations finish, the coordinator composes the exact 41-authority result:
 
 ```powershell
 python -m agent_insights_quality compose-test-agent-validation
 ```
 
-The CLI never accepts a run ID, generation ID, or authority IDs for these primitives. Each resolves
-the hidden active generation and its immutable shard assignment. Interrupted work resumes from
+The CLI never accepts a run ID, generation ID, or authority ID for these primitives. Each resolves
+the hidden active generation and its immutable assignment. Interrupted work resumes from
 exact-bound receipts; stale sub-sessions cannot publish. Starting a new generation supersedes prior
 incomplete state without deleting retained provider resources or sending traffic for already
 completed exact-bound invocations.

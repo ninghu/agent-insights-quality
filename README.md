@@ -98,12 +98,16 @@ receipt; all others perform verification only and send no new endpoint traffic. 
 proves the traffic-generation and execution contract; every new verification package separately binds
 that receipt's immutable digest and the current verifier commit and digest.
 
-Verification uses up to eight visible Copilot sub-sessions. Each sub-session generation-fences and
-claims exactly one authority at a time, verifies it without internal concurrency, and atomically
-persists its immutable result before claiming another authority. A baseline uses one batched telemetry
+Verification uses one visible GPT-5.6 Sol Copilot verifier session at a time. It generation-fences and
+claims exactly one authority, prepares a content-addressed private package, imports one strict
+public-safe behavioral evaluation, and atomically persists the immutable result before claiming the
+next authority. A baseline uses one batched telemetry
 stability snapshot for all five attempts. An issue uses exactly two target batches: one snapshot for
 all issue attempts and one for all paired-`v0` attempts. It never stabilizes attempts independently,
-deploys an Agent, invokes an endpoint, or sends traffic.
+deploys an Agent, invokes an endpoint, or sends traffic. Deterministic code enforces identity,
+response/session coverage, endpoint response presence, terminal-output integrity, trace correlation,
+privacy, and package binding; GPT-5.6 Sol judges every semantic, tool, trace, activation, health, and
+per-attempt behavioral assertion.
 
 Authority results keep `PASS`, `FAIL`, and `INCOMPLETE` distinct. Baselines pass only at `5/5`;
 deterministic issues pass only at `5/5` with paired `v0` at `0/5`; model-mediated issues pass at

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
@@ -756,6 +757,11 @@ class FoundryScenarioVerifier:
         poll_seconds: int = TRACE_ASSERTION_POLL_SECONDS,
         maximum_wait_seconds: int = TRACE_ASSERTION_DEADLINE_SECONDS,
     ) -> None:
+        self._runtime = runtime
+        self._stabilization_seconds = stabilization_seconds
+        self._record_duration = record_duration
+        self._poll_seconds = poll_seconds
+        self._maximum_wait_seconds = maximum_wait_seconds
         self.__delegate = FoundryScenarioAttemptRunner(
             runtime,
             endpoint_costs=endpoint_costs,
@@ -772,6 +778,211 @@ class FoundryScenarioVerifier:
 
     def verify_attempts(self, **kwargs: Any) -> list[dict[str, Any]]:
         return self.__delegate.verify_attempts(**kwargs)
+
+    def collect_attempts(
+        self,
+        *,
+        target: DeployedRuntime,
+        executing_authority_id: str,
+        conversation_role: str,
+        scenario: Mapping[str, Any],
+        attempts: list[Mapping[str, Any]],
+        invocations: list[Mapping[str, Any]],
+        scheduler: ValidationScheduler,
+    ) -> list[dict[str, Any]]:
+        if (
+            not executing_authority_id
+            or conversation_role not in {"baseline", "issue", "paired_v0"}
+            or not attempts
+            or len(attempts) != len(invocations)
+        ):
+            raise ContractError("Validation attempt execution identity is invalid")
+        batches: list[dict[str, Any]] = []
+        all_steps: list[tuple[str, Mapping[str, Any]]] = []
+        response_ids: list[str] = []
+        usable_results: list[bool] = []
+        starts: list[datetime] = []
+        completions: list[datetime] = []
+        for attempt, invocation in zip(attempts, invocations, strict=True):
+            steps = [
+                *[("setup", item) for item in attempt["setup_steps"]],
+                *[("probe", item) for item in attempt["probe_steps"]],
+            ]
+            attempt_responses = invocation.get("response_ids")
+            attempt_usable = invocation.get("usable_results")
+            session_id = invocation.get("session_id")
+            started_at = invocation.get("started_at")
+            completed_at = invocation.get("completed_at")
+            if (
+                not isinstance(attempt_responses, list)
+                or not all(
+                    isinstance(item, str) and item
+                    for item in attempt_responses
+                )
+                or not isinstance(attempt_usable, list)
+                or not all(isinstance(item, bool) for item in attempt_usable)
+                or len(attempt_responses) != len(steps)
+                or len(attempt_usable) != len(steps)
+                or not isinstance(started_at, str)
+                or not isinstance(completed_at, str)
+                or (session_id is not None and not isinstance(session_id, str))
+            ):
+                raise ContractError("Persisted validation invocation is invalid")
+            try:
+                start = datetime.fromisoformat(started_at).astimezone(UTC)
+                completion = datetime.fromisoformat(completed_at).astimezone(UTC)
+            except ValueError as error:
+                raise ContractError(
+                    "Persisted validation invocation window is invalid"
+                ) from error
+            if completion < start:
+                raise ContractError(
+                    "Persisted validation invocation window is invalid"
+                )
+            offset = len(all_steps)
+            all_steps.extend(steps)
+            response_ids.extend(attempt_responses)
+            usable_results.extend(attempt_usable)
+            starts.append(start)
+            completions.append(completion)
+            batches.append(
+                {
+                    "attempt": attempt,
+                    "session_id": session_id,
+                    "started_at": started_at,
+                    "completed_at": completed_at,
+                    "response_ids": list(attempt_responses),
+                    "usable_results": list(attempt_usable),
+                    "offset": offset,
+                    "count": len(steps),
+                }
+            )
+        invocation_evidence = InvocationEvidence(
+            operation_ids=(),
+            response_references=tuple(response_ids),
+            started_at=min(starts).isoformat(),
+            completed_at=max(completions).isoformat(),
+            request_count=len(all_steps),
+            allow_window_correlation=False,
+            response_count=len(response_ids),
+            usable_response_count=sum(usable_results),
+            semantic_assertion_count=0,
+            semantic_assertions_passed=0,
+        )
+        telemetry_started = time.monotonic()
+        query_stage = "telemetry_discovery"
+        try:
+            with scheduler.telemetry_query():
+                operation_ids = self._runtime.wait_for_telemetry(
+                    agent_name=target.runtime_agent_name,
+                    foundry_version=target.runtime_agent_version,
+                    invocation=invocation_evidence,
+                    allow_shared_operations=True,
+                    poll_seconds=self._poll_seconds,
+                    maximum_wait_seconds=self._maximum_wait_seconds,
+                )
+            query_stage = "trace_output_stability"
+            with scheduler.telemetry_query():
+                trace_rows, anchor_span_ids = (
+                    self._runtime.stable_correlated_evidence_for_requests(
+                        agent_name=target.runtime_agent_name,
+                        foundry_version=target.runtime_agent_version,
+                        operation_ids=operation_ids,
+                        response_references=tuple(response_ids),
+                        window_start=invocation_evidence.started_at,
+                        window_end=invocation_evidence.completed_at,
+                        stabilization_seconds=self._stabilization_seconds,
+                        poll_seconds=self._poll_seconds,
+                        maximum_wait_seconds=self._maximum_wait_seconds,
+                    )
+                )
+            query_stage = "telemetry_identity"
+            with scheduler.telemetry_query():
+                identity_results = self._runtime.telemetry_identity_passes(
+                    agent_name=target.runtime_agent_name,
+                    foundry_version=target.runtime_agent_version,
+                    operation_ids=operation_ids,
+                    invocation=invocation_evidence,
+                    poll_seconds=self._poll_seconds,
+                    maximum_wait_seconds=self._maximum_wait_seconds,
+                )
+        except SharedRuntimeError:
+            raise
+        except _POST_RESPONSE_TELEMETRY_ERRORS as error:
+            raise PostResponseTelemetryError(error, stage=query_stage) from error
+        self._record_duration(
+            "ingestion_kql_seconds",
+            time.monotonic() - telemetry_started,
+        )
+        if not (
+            len(operation_ids)
+            == len(trace_rows)
+            == len(anchor_span_ids)
+            == len(identity_results)
+            == len(all_steps)
+        ):
+            raise ContractError("Validation private evidence coverage is incomplete")
+        results = []
+        for batch in batches:
+            offset = batch["offset"]
+            end = offset + batch["count"]
+            step_values = []
+            for position, (
+                (phase, step),
+                response_id,
+                usable,
+                operation_id,
+                anchor_span_id,
+                identity_pass,
+                rows,
+            ) in enumerate(
+                zip(
+                    all_steps[offset:end],
+                    response_ids[offset:end],
+                    usable_results[offset:end],
+                    operation_ids[offset:end],
+                    anchor_span_ids[offset:end],
+                    identity_results[offset:end],
+                    trace_rows[offset:end],
+                    strict=True,
+                ),
+                start=1,
+            ):
+                step_values.append(
+                    {
+                        "index": position,
+                        "phase": phase,
+                        "step_id": step["id"],
+                        "request": json.loads(json.dumps(step["request"])),
+                        "expected": json.loads(json.dumps(step["expected"])),
+                        "response_id": response_id,
+                        "usable_response": usable,
+                        "operation_id": operation_id,
+                        "invoke_agent_anchor_span_id": anchor_span_id,
+                        "identity_pass": bool(identity_pass),
+                        "trace_rows": json.loads(
+                            json.dumps(list(rows), default=str)
+                        ),
+                    }
+                )
+            results.append(
+                {
+                    "index": batch["attempt"]["index"],
+                    "conversation_group": batch["attempt"][
+                        "conversation_group"
+                    ],
+                    "parameters": json.loads(
+                        json.dumps(batch["attempt"]["parameters"])
+                    ),
+                    "started_at": batch["started_at"],
+                    "completed_at": batch["completed_at"],
+                    "session_id": batch["session_id"],
+                    "response_ids": batch["response_ids"],
+                    "usable_results": batch["usable_results"],
+                    "steps": step_values,
+                }
+            )
+        return results
 
 
 def _attempt_observation(

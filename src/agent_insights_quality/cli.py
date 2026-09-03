@@ -105,11 +105,12 @@ from agent_insights_quality.validation_credentials import local_azure_operator
 from agent_insights_quality.validation_coordinator import (
     compose_test_agent_validation,
     deploy_test_agent_validation_shard,
+    import_test_agent_validation_assessment,
     invoke_test_agent_validation_shard,
     prepare_test_agent_validation,
+    prepare_test_agent_validation_assessment,
     reconcile_test_agent_validation_deployment,
     run_test_agent_validation,
-    verify_test_agent_validation_authority,
 )
 from agent_insights_quality.work_items import (
     fetch_quality_work_items,
@@ -228,10 +229,8 @@ def build_parser() -> argparse.ArgumentParser:
         "invoke-test-agent-validation-shard"
     )
     invoke_validation.add_argument("--shard-id", type=int, required=True)
-    verify_validation = commands.add_parser(
-        "verify-test-agent-validation-authority"
-    )
-    verify_validation.add_argument("--authority-id", required=True)
+    commands.add_parser("prepare-test-agent-validation-assessment")
+    commands.add_parser("import-test-agent-validation-assessment")
     commands.add_parser("compose-test-agent-validation")
     commands.add_parser("approve-test-agent-validation")
     return parser
@@ -268,11 +267,14 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             invoke_test_agent_validation_shard(shard_id=args.shard_id),
             sort_keys=True,
         )
-    if args.command == "verify-test-agent-validation-authority":
+    if args.command == "prepare-test-agent-validation-assessment":
         return json.dumps(
-            verify_test_agent_validation_authority(
-                authority_id=args.authority_id
-            ),
+            prepare_test_agent_validation_assessment(),
+            sort_keys=True,
+        )
+    if args.command == "import-test-agent-validation-assessment":
+        return json.dumps(
+            import_test_agent_validation_assessment(),
             sort_keys=True,
         )
     if args.command == "compose-test-agent-validation":

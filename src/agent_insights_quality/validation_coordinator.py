@@ -26,6 +26,20 @@ from agent_insights_quality.util import (
     read_json,
 )
 from agent_insights_quality.validation_credentials import local_azure_operator
+from agent_insights_quality.validation_copilot import (
+    EVALUATION_PROMPT,
+    assessment_path,
+    authority_evidence_from_evaluation,
+    evaluation_lock,
+    incomplete_authority_evidence_from_invocation,
+    incomplete_result_requires_fresh_invocation,
+    load_active_pointer,
+    load_bound_private_package,
+    load_copilot_evaluation,
+    pointer_paths,
+    write_active_pointer,
+    write_private_package,
+)
 from agent_insights_quality.validation_assignments import verification_assignment
 from agent_insights_quality.validation_authority_results import (
     current_authority_verification_results,
@@ -107,7 +121,6 @@ from agent_insights_quality.validation_runtime import (
     deployment_resource_events,
     invoke_validation_shard,
     plan_runtime_topology,
-    verify_validation_shard,
 )
 from agent_insights_quality.validation_shards import (
     ValidationDeploymentShardStore,
@@ -390,18 +403,14 @@ def run_test_agent_validation() -> dict[str, Any]:
             if item["authority_id"] not in completed
         ]
         if pending:
-            runnable = pending[:8]
             return {
                 "status": "verification_pending",
-                "maximum_active_subsessions": 8,
+                "maximum_active_subsessions": 1,
                 "completed_authority_count": len(completed),
                 "pending_authority_count": len(pending),
-                "verification_assignments": runnable,
                 "next_commands": [
                     "python -m agent_insights_quality "
-                    "verify-test-agent-validation-authority --authority-id "
-                    f"{item['authority_id']}"
-                    for item in runnable
+                    "prepare-test-agent-validation-assessment"
                 ],
             }
         incomplete = [
@@ -740,113 +749,232 @@ def invoke_test_agent_validation_shard(
         }
 
 
-def verify_test_agent_validation_authority(
-    *,
-    authority_id: str,
-) -> dict[str, Any]:
+def prepare_test_agent_validation_assessment() -> dict[str, Any]:
     active = _active_for_state("VALIDATING")
-    expected_assignment = next(
-        (
-            item
-            for item in active["verification_authority_assignments"]
-            if item["authority_id"] == authority_id
-        ),
-        None,
-    )
-    if (
-        expected_assignment is None
-        or expected_assignment != verification_assignment(active, authority_id)
-    ):
-        raise ContractError(
-            "Validation authority is not assigned in the active generation"
-        )
     if _incomplete_invocation_shards(active):
         raise ContractError("Validation invocation barrier is incomplete")
     context = _load_prepared()
-    run_id = context["prepared"]["run_id"]
-    with authority_lock(
-        run_id=run_id,
-        authority_id=authority_id,
-    ):
+    prepared = context["prepared"]
+    with evaluation_lock():
+        _assert_active_generation(prepared)
         existing = current_authority_verification_results(
-            prepared=context["prepared"],
-            authority_ids=[authority_id],
-        ).get(authority_id)
+            prepared=prepared,
+            authority_ids=prepared["validation_authority_ids"],
+        )
+        pending = [
+            assignment["authority_id"]
+            for assignment in prepared["verification_authority_assignments"]
+            if assignment["authority_id"] not in existing
+        ]
+        if not pending:
+            return {
+                "status": "verification_complete",
+                "pending_authority_count": 0,
+            }
         authority_by_id = {
             item.authority_id: item for item in context["authorities"]
         }
         runtime_by_id = {
             item["authority_id"]: item
-            for item in context["prepared"]["runtime_topology"]["agents"]
+            for item in prepared["runtime_topology"]["agents"]
         }
+        pointer = None
+        try:
+            candidate = load_active_pointer()
+        except FileNotFoundError:
+            candidate = None
+        if (
+            candidate is not None
+            and candidate["origin_run_id"] == prepared["run_id"]
+            and candidate["origin_commit_sha"] == prepared["commit_sha"]
+            and candidate["authority_id"] in pending
+        ):
+            pointer = candidate
+            authority_id = str(candidate["authority_id"])
+        else:
+            authority_id = pending[0]
         authority = authority_by_id[authority_id]
         paired_id = context["paired_baselines"][authority.canonical_agent]
-        if existing is not None:
-            result = load_bound_authority_verification_result(
-                existing,
-                authority=authority,
-                paired_v0_authority=authority_by_id[paired_id],
-                runtime=runtime_by_id[authority_id],
-                paired_v0_runtime=runtime_by_id[paired_id],
-                prepared=context["prepared"],
-                plan=context["plan"],
-                require_current_generation=True,
-            )
-            return _authority_verification_result(result)
         references, receipts = _invocation_receipts_for_verification(
             context,
             [authority_id],
         )
+        if pointer is not None:
+            package = load_bound_private_package(
+                pointer,
+                prepared=prepared,
+                plan=context["plan"],
+                authority=authority,
+                runtime=runtime_by_id[authority_id],
+                paired_v0_runtime=runtime_by_id[paired_id],
+                invocation_reference=references[0],
+                invocation_receipt=receipts[0],
+            )
+            package_path, draft_path = pointer_paths(pointer)
+            if draft_path != assessment_path(package["package_hash"]):
+                raise ContractError(
+                    "Active Copilot assessment path binding is stale"
+                )
+            return _assessment_ready_result(
+                package_path=package_path,
+                draft_path=draft_path,
+                pending_count=len(pending),
+            )
         started_at = datetime.now(UTC)
         try:
-            evidence = verify_validation_shard(
-                [authority],
-                context["deployed"],
-                [receipts[0]["invocation"]],
-                runner=_verifier(context),
+            package_record = write_private_package(
+                prepared=prepared,
+                plan=context["plan"],
+                authority=authority,
+                runtime=runtime_by_id[authority_id],
+                paired_v0_runtime=runtime_by_id[paired_id],
+                deployed=context["deployed"][authority_id],
+                paired_v0_deployed=context["deployed"][paired_id],
+                invocation_reference=references[0],
+                invocation_receipt=receipts[0],
+                collector=_verifier(context),
                 scheduler=context["scheduler"],
-                model_contract=context["agents"]["models"]["test_agents"],
-                validated_commit_sha=context["git"].commit_sha,
-                paired_baselines=context["paired_baselines"],
-            )[0]
+                started_at=started_at,
+                fence=lambda: _assert_active_generation(prepared),
+            )
         except (ContractError, OSError, RuntimeError) as error:
             query_stage, error_code = sanitize_verification_error(error)
             query_diagnostics = verification_query_diagnostics(error)
+            evidence = incomplete_authority_evidence_from_invocation(
+                authority=authority,
+                runtime=runtime_by_id[authority_id],
+                paired_v0_runtime=runtime_by_id[paired_id],
+                invocation=receipts[0]["invocation"],
+                validated_commit_sha=prepared["commit_sha"],
+                error_code=error_code,
+            )
             reference = write_authority_verification_result(
-                prepared=context["prepared"],
+                prepared=prepared,
                 plan=context["plan"],
                 authority=authority,
                 runtime=runtime_by_id[authority_id],
                 invocation_reference=references[0],
-                authority_evidence=None,
+                authority_evidence=evidence,
                 outcome="INCOMPLETE",
                 started_at=started_at,
                 completed_at=datetime.now(UTC),
                 query_stage=query_stage,
                 error_code=error_code,
                 query_diagnostics=query_diagnostics,
-                fence=lambda: _assert_active_generation(context["prepared"]),
+                fence=lambda: _assert_active_generation(prepared),
             )
-        else:
-            outcome, query_stage, error_code = authority_verification_outcome(
-                evidence
+            return _copilot_authority_verification_result(
+                load_authority_verification_result(reference)
             )
-            reference = write_authority_verification_result(
-                prepared=context["prepared"],
-                plan=context["plan"],
-                authority=authority,
-                runtime=runtime_by_id[authority_id],
-                invocation_reference=references[0],
-                authority_evidence=evidence,
-                outcome=outcome,
-                started_at=started_at,
-                completed_at=datetime.now(UTC),
-                query_stage=query_stage,
-                error_code=error_code,
-                query_diagnostics=None,
-                fence=lambda: _assert_active_generation(context["prepared"]),
+        pointer = write_active_pointer(
+            package_record,
+            prepared=prepared,
+            authority_id=authority_id,
+        )
+        package_path, draft_path = pointer_paths(pointer)
+        return _assessment_ready_result(
+            package_path=package_path,
+            draft_path=draft_path,
+            pending_count=len(pending),
+        )
+
+
+def import_test_agent_validation_assessment() -> dict[str, Any]:
+    active = _active_for_state("VALIDATING")
+    if _incomplete_invocation_shards(active):
+        raise ContractError("Validation invocation barrier is incomplete")
+    context = _load_prepared()
+    prepared = context["prepared"]
+    with evaluation_lock():
+        _assert_active_generation(prepared)
+        pointer = load_active_pointer()
+        if (
+            pointer["origin_run_id"] != prepared["run_id"]
+            or pointer["origin_commit_sha"] != prepared["commit_sha"]
+        ):
+            raise ContractError("Stale Copilot assessment session is fenced")
+        authority_id = str(pointer["authority_id"])
+        expected_assignment = next(
+            (
+                item
+                for item in prepared["verification_authority_assignments"]
+                if item["authority_id"] == authority_id
+            ),
+            None,
+        )
+        if (
+            expected_assignment is None
+            or expected_assignment
+            != verification_assignment(prepared, authority_id)
+        ):
+            raise ContractError(
+                "Copilot assessment authority is not currently assigned"
             )
-        return _authority_verification_result(
+        current = current_authority_verification_results(
+            prepared=prepared,
+            authority_ids=[authority_id],
+        ).get(authority_id)
+        if current is not None:
+            return _copilot_authority_verification_result(
+                load_authority_verification_result(current)
+            )
+        authority_by_id = {
+            item.authority_id: item for item in context["authorities"]
+        }
+        runtime_by_id = {
+            item["authority_id"]: item
+            for item in prepared["runtime_topology"]["agents"]
+        }
+        authority = authority_by_id[authority_id]
+        paired_id = context["paired_baselines"][authority.canonical_agent]
+        references, receipts = _invocation_receipts_for_verification(
+            context,
+            [authority_id],
+        )
+        package = load_bound_private_package(
+            pointer,
+            prepared=prepared,
+            plan=context["plan"],
+            authority=authority,
+            runtime=runtime_by_id[authority_id],
+            paired_v0_runtime=runtime_by_id[paired_id],
+            invocation_reference=references[0],
+            invocation_receipt=receipts[0],
+        )
+        _, draft_path = pointer_paths(pointer)
+        if draft_path != assessment_path(package["package_hash"]):
+            raise ContractError("Active Copilot assessment path binding is stale")
+        evaluation, evaluation_reference = load_copilot_evaluation(
+            draft_path,
+            package=package,
+        )
+        evidence = authority_evidence_from_evaluation(
+            package=package,
+            evaluation=evaluation,
+            authority=authority,
+            runtime=runtime_by_id[authority_id],
+            validated_commit_sha=prepared["commit_sha"],
+        )
+        outcome, query_stage, error_code = authority_verification_outcome(
+            evidence
+        )
+        reference = write_authority_verification_result(
+            prepared=prepared,
+            plan=context["plan"],
+            authority=authority,
+            runtime=runtime_by_id[authority_id],
+            invocation_reference=references[0],
+            authority_evidence=evidence,
+            outcome=outcome,
+            started_at=datetime.fromisoformat(package["created_at"]),
+            completed_at=datetime.now(UTC),
+            query_stage=query_stage,
+            error_code=error_code,
+            query_diagnostics=None,
+            fence=lambda: _assert_active_generation(prepared),
+            copilot_evaluation=evaluation_reference,
+        )
+        return _copilot_authority_verification_result(
             load_authority_verification_result(reference)
         )
 
@@ -1817,28 +1945,52 @@ def _incomplete_current_invocations(
     if active["state"] != "VALIDATING":
         return []
     authority_ids = list(active["invocation_authority_ids"])
-    if not authority_ids:
-        return []
-    try:
-        _, references = select_reusable_invocation_receipts(
-            authorities=authorities,
-            authority_ids=authority_ids,
-            runtime_topology=active["runtime_topology"],
-            prepared=active,
-            plan=plan,
-        )
-        completed = {
-            reference["authority_id"]
-            for reference in references
-            if load_invocation_receipt(reference)["origin_run_id"]
-            == active["run_id"]
-        }
-    except (ContractError, OSError, ValueError):
-        return authority_ids
-    return [
+    completed: set[str] = set()
+    if authority_ids:
+        try:
+            _, references = select_reusable_invocation_receipts(
+                authorities=authorities,
+                authority_ids=authority_ids,
+                runtime_topology=active["runtime_topology"],
+                prepared=active,
+                plan=plan,
+            )
+            completed = {
+                reference["authority_id"]
+                for reference in references
+                if load_invocation_receipt(reference)["origin_run_id"]
+                == active["run_id"]
+            }
+        except (ContractError, OSError, ValueError):
+            return authority_ids
+    forced = {
         authority_id
         for authority_id in authority_ids
         if authority_id not in completed
+    }
+    result_references = current_authority_verification_results(
+        prepared=active,
+        authority_ids=active["validation_authority_ids"],
+    )
+    for authority_id, reference in result_references.items():
+        result = load_authority_verification_result(reference)
+        receipt = (
+            load_invocation_receipt(result["invocation_receipt"])
+            if result["outcome"] == "INCOMPLETE"
+            and result.get("authority_evidence") is None
+            else None
+        )
+        if incomplete_result_requires_fresh_invocation(
+            result,
+            invocation=(
+                receipt["invocation"] if receipt is not None else None
+            ),
+        ):
+            forced.add(authority_id)
+    return [
+        authority.authority_id
+        for authority in authorities
+        if authority.authority_id in forced
     ]
 
 
@@ -1897,11 +2049,7 @@ def _authority_targets(context: dict[str, Any], authority: Any) -> list[Any]:
 
 
 def _prepared_result(value: dict[str, Any]) -> dict[str, Any]:
-    verification_assignments = (
-        []
-        if _incomplete_invocation_shards(value)
-        else value["verification_authority_assignments"][:8]
-    )
+    verification_ready = not _incomplete_invocation_shards(value)
     return {
         "status": "prepared",
         "commit_sha": value["commit_sha"],
@@ -1909,10 +2057,14 @@ def _prepared_result(value: dict[str, Any]) -> dict[str, Any]:
         "reused_authority_count": len(value["reused_authorities"]),
         "deployment_shards": value["deployment_assignments"],
         "invoke_shards": value["invocation_shard_assignments"],
-        "verification_assignments": verification_assignments,
         "maximum_active_subsessions": 8,
         "invoke_shard_concurrency": 8,
-        "verification_authority_concurrency": len(verification_assignments),
+        "verification_authority_concurrency": 1 if verification_ready else 0,
+        "verification_pending_authority_count": (
+            len(value["verification_authority_assignments"])
+            if verification_ready
+            else 0
+        ),
     }
 
 
@@ -1974,22 +2126,39 @@ def _merge_authority_result_selection(
     )
 
 
-def _authority_verification_result(value: Mapping[str, Any]) -> dict[str, Any]:
+def _copilot_authority_verification_result(
+    value: Mapping[str, Any],
+) -> dict[str, Any]:
     return {
         "status": (
             "verification_incomplete"
             if value["outcome"] == "INCOMPLETE"
             else "verified"
         ),
-        "authority_id": value["authority_id"],
         "outcome": value["outcome"],
-        "first_failed_authority_id": (
-            value["authority_id"] if value["outcome"] != "PASS" else None
-        ),
         "query_stage": value["query_stage"],
         "error_code": value["error_code"],
         "query_diagnostics": value["query_diagnostics"],
         "authority_result_digest": value["artifact_digest"],
+    }
+
+
+def _assessment_ready_result(
+    *,
+    package_path: Path,
+    draft_path: Path,
+    pending_count: int,
+) -> dict[str, Any]:
+    return {
+        "status": "assessment_ready",
+        "pending_authority_count": pending_count,
+        "package_path": str(package_path),
+        "prompt_path": str(EVALUATION_PROMPT),
+        "assessment_path": str(draft_path),
+        "next_command": (
+            "python -m agent_insights_quality "
+            "import-test-agent-validation-assessment"
+        ),
     }
 
 

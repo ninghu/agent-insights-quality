@@ -2141,6 +2141,133 @@ union withsource=telemetry_type traces, dependencies, requests
             expected_reference_count=len(response_references),
         )
 
+    def stable_correlated_evidence_for_requests(
+        self,
+        *,
+        agent_name: str,
+        foundry_version: str,
+        operation_ids: tuple[str, ...],
+        response_references: tuple[str, ...],
+        window_start: str,
+        window_end: str,
+        stabilization_seconds: int,
+        poll_seconds: int | None = None,
+        maximum_wait_seconds: int | None = None,
+        on_first_pass: Callable[[], None] = lambda: None,
+    ) -> tuple[tuple[list[dict[str, Any]], ...], tuple[str, ...]]:
+        if poll_seconds is None:
+            poll_seconds = TRACE_ASSERTION_POLL_SECONDS
+        if maximum_wait_seconds is None:
+            maximum_wait_seconds = TRACE_ASSERTION_DEADLINE_SECONDS
+        if (
+            stabilization_seconds <= 0
+            or poll_seconds <= 0
+            or maximum_wait_seconds < stabilization_seconds
+        ):
+            raise ContractError("Validation evidence timing policy is invalid")
+        if len(response_references) != len(operation_ids):
+            raise ContractError("Validation evidence response coverage is inconsistent")
+        _validate_response_references(response_references, len(operation_ids))
+        _validate_operation_references(
+            operation_ids,
+            len(response_references),
+            allow_shared=True,
+        )
+        deadline = self._monotonic() + maximum_wait_seconds
+        next_progress = self._monotonic() + _TRACE_ASSERTION_PROGRESS_SECONDS
+        stable_signature: tuple[tuple[str, ...], tuple[str, ...]] | None = None
+        stable_since: float | None = None
+        correlated: tuple[list[dict[str, Any]], ...] | None = None
+        anchors: tuple[str, ...] | None = None
+        first_mapping_observed = False
+        rows: list[dict[str, Any]] = []
+        changed = False
+        while True:
+            rows = self._trace_rows(
+                operation_ids,
+                response_references,
+                foundry_version,
+                agent_name,
+                window_start,
+                window_end,
+            )
+            correlation = _correlated_request_rows(
+                rows,
+                response_references,
+                operation_ids,
+                agent_name=agent_name,
+                foundry_version=foundry_version,
+            )
+            correlated = correlation[0] if correlation is not None else None
+            anchors = correlation[1] if correlation is not None else None
+            if _request_correlation_impossible(rows, response_references):
+                raise _trace_assertion_activation_error(
+                    "Validation evidence found ambiguous response correlation",
+                    code=_TRACE_ASSERTION_CORRELATION_DIAGNOSTIC,
+                    matched_reference_count=(
+                        _matched_trace_response_reference_count(
+                            rows,
+                            response_references,
+                            operation_ids,
+                            agent_name=agent_name,
+                            foundry_version=foundry_version,
+                        )
+                    ),
+                    expected_reference_count=len(response_references),
+                )
+            now = self._monotonic()
+            if correlated is not None and anchors is not None:
+                if not first_mapping_observed:
+                    first_mapping_observed = True
+                    on_first_pass()
+                signature = (
+                    anchors,
+                    _trace_rows_signature(
+                        [
+                            row
+                            for request_rows in correlated
+                            for row in request_rows
+                        ]
+                    ),
+                )
+                if signature != stable_signature:
+                    changed = stable_signature is not None
+                    stable_signature = signature
+                    stable_since = now
+                if (
+                    stable_since is not None
+                    and now - stable_since >= stabilization_seconds
+                ):
+                    return correlated, anchors
+            else:
+                stable_signature = None
+                stable_since = None
+            if now >= deadline:
+                break
+            if now >= next_progress:
+                elapsed = int(maximum_wait_seconds - max(deadline - now, 0))
+                self.report_progress(
+                    f"Validation evidence is stabilizing ({elapsed}s)"
+                )
+                next_progress = now + _TRACE_ASSERTION_PROGRESS_SECONDS
+            self._sleep(min(poll_seconds, deadline - now))
+        raise _trace_assertion_activation_error(
+            "Validation evidence did not stabilize before the bounded deadline",
+            code=(
+                "trace_assertion_correlated_row_set_changed"
+                if correlated is not None and changed
+                else _TRACE_ASSERTION_CORRELATION_DIAGNOSTIC
+            ),
+            matched_reference_count=_matched_trace_response_reference_count(
+                rows,
+                response_references,
+                operation_ids,
+                agent_name=agent_name,
+                foundry_version=foundry_version,
+            ),
+            expected_reference_count=len(response_references),
+        )
+
     def _trace_rows(
         self,
         operation_ids: tuple[str, ...],
@@ -2662,6 +2789,9 @@ class TelemetryOnlyRuntime:
     trace_assertion_evidence_for_requests = (
         LiveRuntime.trace_assertion_evidence_for_requests
     )
+    stable_correlated_evidence_for_requests = (
+        LiveRuntime.stable_correlated_evidence_for_requests
+    )
     _trace_rows = LiveRuntime._trace_rows
 
 
@@ -2855,19 +2985,8 @@ def _semantic_assertion_results_from_correlated_rows(
         ]
         if len(anchors) != 1:
             return None
-        messages = anchors[0].get("messages")
-        if not isinstance(messages, list) or len(messages) < 2:
-            return None
-        output = _json_trace_value(messages[1])
-        if isinstance(output, str):
-            if (
-                str(anchors[0].get("output_messages_type") or "").casefold()
-                != "string"
-                or not output.strip()
-                or output.strip().startswith(("{", "["))
-            ):
-                return None
-        elif not isinstance(output, list):
+        output = _json_trace_value(anchors[0].get("messages", ["", ""])[1])
+        if not isinstance(output, list):
             return None
         _, _, assertions = _semantic_assertion_result(
             _telemetry_output_response(output),
@@ -2877,9 +2996,9 @@ def _semantic_assertion_results_from_correlated_rows(
     return tuple(results)
 
 
-def _telemetry_output_response(output: list[Any] | str) -> dict[str, Any]:
-    texts = [output.strip()] if isinstance(output, str) else []
-    for item in output if isinstance(output, list) else []:
+def _telemetry_output_response(output: list[Any]) -> dict[str, Any]:
+    texts: list[str] = []
+    for item in output:
         if not isinstance(item, Mapping):
             continue
         content = item.get("content")

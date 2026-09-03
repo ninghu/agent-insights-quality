@@ -8,9 +8,10 @@ import pytest
 import agent_insights_quality.validation_authority_results as authority_results
 from agent_insights_quality.catalogs import load_catalogs
 
-from agent_insights_quality.util import ContractError, content_hash
+from agent_insights_quality.util import ContractError, atomic_json, content_hash
 from agent_insights_quality.live import _trace_assertion_activation_error
 from agent_insights_quality.validation_evidence import (
+    digest_without_field,
     persist_evidence,
     runtime_mapping_digest,
     select_reusable_authority_evidence,
@@ -660,6 +661,128 @@ def test_cross_generation_pass_reuse_ignores_global_verifier_state(
             require_current_generation=True,
             root=tmp_path,
         )
+
+
+def test_definitive_fail_result_is_reusable_without_revalidation(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    evidence = _evidence()
+    spec = authority_specs(*load_catalogs())[0]
+    failed = deepcopy(evidence["authorities"][0])
+    attempt = failed["scenarios"][0]["issue_attempts"][0]
+    attempt["probe_steps"][0]["semantic_pass"] = False
+    attempt["observation"] = False
+    failed["scenarios"][0]["observation_count"] = 4
+    failed["scenarios"][0]["pass"] = False
+    failed["observation_count"] = 4
+    failed["pass"] = False
+    failed["authority_evidence_digest"] = digest_without_field(
+        failed,
+        "authority_evidence_digest",
+    )
+    prepared = _result_prepared(evidence, verifier_digit="1")
+    runtime = _result_runtime(spec, failed, index=1)
+    invocation = _result_invocation(spec.authority_id, digit="2")
+    reference = write_authority_verification_result(
+        prepared=prepared,
+        plan=_result_plan(),
+        authority=spec,
+        runtime=runtime,
+        invocation_reference=invocation,
+        authority_evidence=failed,
+        outcome="FAIL",
+        started_at=datetime(2026, 9, 1, 12, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 9, 1, 12, 1, tzinfo=UTC),
+        query_stage=None,
+        error_code=None,
+        query_diagnostics=None,
+        fence=lambda: None,
+        root=tmp_path,
+    )
+    monkeypatch.setattr(
+        authority_results,
+        "load_bound_invocation_receipt",
+        lambda *_args, **_kwargs: invocation,
+    )
+
+    reusable = reusable_authority_verification_results(
+        authorities=[spec],
+        runtime_topology={"agents": [runtime]},
+        prepared={
+            **prepared,
+            "run_id": "validation-000000000002",
+            "commit_sha": "c" * 40,
+        },
+        plan=_result_plan(),
+        root=tmp_path,
+    )
+
+    assert reusable[spec.authority_id] == reference
+
+
+def test_authority_result_binds_immutable_copilot_evaluation(
+    tmp_path,
+) -> None:
+    evidence = _evidence()
+    spec = authority_specs(*load_catalogs())[0]
+    authority = evidence["authorities"][0]
+    runtime = _result_runtime(spec, authority, index=1)
+    prepared = _result_prepared(evidence, verifier_digit="1")
+    invocation = _result_invocation(spec.authority_id, digit="2")
+    package = {
+        "prompt_digest": HASH,
+        "package_hash": "",
+    }
+    package["package_hash"] = digest_without_field(package, "package_hash")
+    evaluation = {
+        "model": "gpt-5.6-sol",
+        "package_hash": package["package_hash"],
+    }
+    evaluation_digest = content_hash(evaluation)
+    artifact_root = tmp_path / "copilot-authority-evaluations"
+    atomic_json(
+        artifact_root
+        / "packages"
+        / f"{package['package_hash'].removeprefix('sha256:')}.json",
+        package,
+    )
+    import_path = (
+        artifact_root
+        / "imports"
+        / f"{evaluation_digest.removeprefix('sha256:')}.json"
+    )
+    atomic_json(import_path, evaluation)
+    reference = write_authority_verification_result(
+        prepared=prepared,
+        plan=_result_plan(),
+        authority=spec,
+        runtime=runtime,
+        invocation_reference=invocation,
+        authority_evidence=authority,
+        outcome="PASS",
+        started_at=datetime(2026, 9, 1, 12, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 9, 1, 12, 1, tzinfo=UTC),
+        query_stage=None,
+        error_code=None,
+        query_diagnostics=None,
+        fence=lambda: None,
+        copilot_evaluation={
+            "model": "gpt-5.6-sol",
+            "package_hash": package["package_hash"],
+            "prompt_digest": HASH,
+            "evaluation_digest": evaluation_digest,
+        },
+        root=tmp_path,
+    )
+
+    result = load_authority_verification_result(reference, root=tmp_path)
+    assert result["copilot_evaluation"]["evaluation_digest"] == evaluation_digest
+
+    evaluation["unexpected"] = "changed"
+    atomic_json(import_path, evaluation)
+    with pytest.raises(ContractError, match="evaluation reference changed"):
+        load_authority_verification_result(reference, root=tmp_path)
 
 
 @pytest.mark.parametrize("changed_binding", ["authority", "runtime", "receipt"])
