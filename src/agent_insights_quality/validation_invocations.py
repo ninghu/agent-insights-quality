@@ -976,20 +976,11 @@ def _validate_completed_migration_receipts(
         try:
             value = read_json(path)
             authority = authority_by_id.get(str(value.get("authority_id") or ""))
-            paired = (
-                authority_by_id.get(f"{authority.canonical_agent}/v0")
-                if authority is not None and authority.authority_kind == "issue"
-                else None
-            )
             if authority is None:
                 raise ContractError(
                     "Completed invocation migration receipt authority changed"
                 )
-            validate_invocation_receipt(
-                value,
-                authority=authority,
-                paired_v0_authority=paired,
-            )
+            validate_invocation_receipt(value)
         except (ContractError, OSError, ValueError) as error:
             raise ContractError(
                 "Completed invocation migration receipt binding changed"

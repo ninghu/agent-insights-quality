@@ -1290,6 +1290,32 @@ def test_completed_supplemental_migration_replays_without_archive(
     assert not list((tmp_path / "lifecycle" / "superseded-formats").glob("*.json"))
 
 
+def test_completed_supplemental_replay_accepts_historical_receipt_contract(
+    tmp_path: Path,
+) -> None:
+    _, plan, authorities, _, _, _ = (
+        _write_completed_supplemental_replay_state(tmp_path)
+    )
+    current_authorities = list(authorities)
+    current_authorities[0] = replace(
+        current_authorities[0],
+        source_content_digest=content_hash({"source": "current"}),
+    )
+    current_plan = copy.deepcopy(plan)
+    current_plan["authorities"][0]["source_content_digest"] = (
+        current_authorities[0].source_content_digest
+    )
+
+    with recover_supplemental_legacy_invocations(
+        active_path=tmp_path / "lifecycle" / "active.json",
+        plan=current_plan,
+        authorities=current_authorities,
+        root=tmp_path,
+    ) as result:
+        assert len(result["imported_authority_ids"]) == 41
+        assert result["incomplete_authority_ids"] == []
+
+
 @pytest.mark.parametrize("fault", ["intrinsic-digest", "source-binding"])
 def test_completed_supplemental_migration_rejects_invalid_marker(
     tmp_path: Path,
