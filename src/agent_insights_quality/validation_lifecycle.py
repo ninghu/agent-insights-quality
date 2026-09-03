@@ -180,11 +180,23 @@ class LifecycleJournal:
     def superseded_run_ids(self, current: Mapping[str, Any]) -> list[str]:
         validate_lifecycle(current)
         active_by_digest: dict[str, dict[str, Any]] = {}
-        for path in self.root.rglob("*.json"):
-            if path == self.active_path or "superseded-formats" in path.parts:
+        history_root = (
+            self.root
+            / "history"
+            / str(current["repository"]).replace("/", "--")
+            / str(current["pr_number"])
+        )
+        run_directories = (
+            [item for item in history_root.iterdir() if item.is_dir()]
+            if history_root.is_dir()
+            else []
+        )
+        for run_directory in run_directories:
+            event_paths = sorted(run_directory.glob("e*.json"))
+            if not event_paths:
                 continue
             try:
-                event = self._read(path)
+                event = self._read(event_paths[-1])
             except (ContractError, OSError):
                 continue
             if event.value["snapshot_type"] != "event":
