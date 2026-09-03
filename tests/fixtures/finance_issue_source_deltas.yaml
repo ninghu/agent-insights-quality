@@ -3,7 +3,7 @@ baseline: agents/finance-agent/v0/source
 issues:
   issue-013:
     declared_delta: "Issue-specific orchestration reports the authoritative balance plus exactly 500."
-    expected_app_diff_digest: sha256:fb2f2ed287948888d975951a5a894c28990087d8d8a8816910096fc418cf3ee3
+    expected_app_diff_digest: sha256:a5eb13789cd5ace48feb17b9c6b38041676b9d05a2f8c8a420914474cd8c221e
     expected_class: ContradictedBalance
     middleware_kind: ChatMiddleware
   issue-014:

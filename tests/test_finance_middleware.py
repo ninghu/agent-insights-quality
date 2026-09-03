@@ -529,6 +529,11 @@ def test_finance_tools_emit_privacy_safe_structural_telemetry(monkeypatch) -> No
     ("issue_id", "class_name", "request_text"),
     [
         ("issue-013", "ContradictedBalance", "Show the balance for acct-demo-a."),
+        (
+            "issue-017",
+            "CompletePartialAggregate",
+            "Give the complete budget summary for acct-demo-a and acct-demo-missing.",
+        ),
     ],
 )
 def test_finance_output_defects_run_real_pipeline_before_postprocessing(
@@ -891,6 +896,67 @@ def test_issue_017_leaves_malformed_tool_results_on_the_natural_path(
     )
 
     assert context.result.messages[0].contents == ["The budget lookup failed."]
+
+
+@pytest.mark.parametrize(
+    ("account_id", "balance", "spend", "contradicted_balance"),
+    [
+        ("acct-demo-a", 1250.5, 430.25, 1750.5),
+        ("acct-demo-b", 875.0, 210.0, 1375.0),
+    ],
+)
+def test_issue_013_real_framework_contradicts_completed_balance_result(
+    monkeypatch,
+    account_id,
+    balance,
+    spend,
+    contradicted_balance,
+) -> None:
+    expected_result = {
+        "ok": True,
+        "account_id": account_id,
+        "balance": balance,
+        "currency": "USD",
+        "spend": spend,
+    }
+    natural_response = (
+        f"The authoritative balance for {account_id} is USD {balance:.2f}."
+    )
+    contradicted_response = (
+        f"The authoritative balance for {account_id} is "
+        f"USD {contradicted_balance:.2f}."
+    )
+    expected_pipeline = [
+        (
+            "model_function_call",
+            "get_balance",
+            {"account_id": account_id},
+        ),
+        (
+            "tool_execution",
+            "get_balance",
+            account_id,
+            None,
+        ),
+        ("natural_model_response", natural_response),
+    ]
+    for logical_version, expected_text in (
+        ("issue-013", contradicted_response),
+        ("v0", natural_response),
+    ):
+        response, events = _run_finance_framework_pipeline(
+            monkeypatch,
+            logical_version,
+            account_id=account_id,
+            expected_result=expected_result,
+            natural_response=natural_response,
+            request_text=f"Show the balance for {account_id}.",
+        )
+        assert response.text == expected_text
+        assert events == [
+            *expected_pipeline,
+            ("final_response", expected_text),
+        ]
 
 
 def test_issue_016_real_framework_dispatches_tool_before_replacement(
