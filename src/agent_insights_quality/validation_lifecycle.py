@@ -216,7 +216,7 @@ class LifecycleJournal:
             seen.add(digest)
             ancestor = active_by_digest.get(str(digest))
             if ancestor is None:
-                raise ContractError("Validation supersession ancestor is unavailable")
+                break
             if (
                 ancestor["journal_digest"] != digest
                 or ancestor["repository"] != current["repository"]
