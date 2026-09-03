@@ -32,9 +32,30 @@ def test_daily_agent_parser_keeps_each_lane_whole() -> None:
     assert args.agent == "finance-agent"
 
 
+def test_daily_prepare_parser_exposes_explicit_preview_opt_in() -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "daily-prepare",
+            "--report-date",
+            "2026-09-03",
+            "--work-items",
+            "snapshot.json",
+            "--test-run",
+            "--rerun",
+            "1",
+            "--publish-preview",
+        ]
+    )
+    assert args.test_run is True
+    assert args.rerun == 1
+    assert args.publish_preview is True
+
+
+@pytest.mark.parametrize("publish_preview", [False, True])
 def test_test_finalization_stays_private_and_skips_adx(
     monkeypatch,
     tmp_path: Path,
+    publish_preview: bool,
 ) -> None:
     private_root = tmp_path / ".aiq-runtime" / "runtime"
     state = private_root / "daily" / "aiq-20260828-r01"
@@ -90,7 +111,9 @@ def test_test_finalization_stays_private_and_skips_adx(
     monkeypatch.setattr(
         cli,
         "assert_daily_finalization_inputs",
-        lambda **_kwargs: None,
+        lambda **_kwargs: SimpleNamespace(
+            value={"bindings": {"publish_preview": publish_preview}}
+        ),
     )
     monkeypatch.setattr(cli, "load_quality_work_items", lambda *_args, **_kwargs: work_items)
     monkeypatch.setattr(cli, "load_assessments", lambda *_args: {})
@@ -148,9 +171,15 @@ def test_test_finalization_stays_private_and_skips_adx(
             "status": "skipped_test",
             "error_code": None,
         }
+        links = kwargs["preview_links"]
+        rendered_links = (
+            ""
+            if links is None
+            else links["report_url"] + "".join(links["agent_urls"].values())
+        )
         return {
             "content_digest": "sha256:" + "a" * 64,
-            "html": "<!doctype html><html></html>",
+            "html": f"<!doctype html><html>{rendered_links}</html>",
         }
 
     monkeypatch.setattr(cli, "write_report", write_report)
@@ -161,6 +190,35 @@ def test_test_finalization_stays_private_and_skips_adx(
         lambda **kwargs: previews.append(kwargs),
     )
     monkeypatch.setattr(cli, "create_request", create_request)
+    preview_publications = []
+
+    def publish_preview_artifacts(_output: Path, *, run_id: str) -> dict:
+        assert (_output / "report.json").is_file()
+        assert not (state / "email-send-request.json").exists()
+        links = cli.preview_links(run_id)
+        value = {
+            "schema_version": "1.0.0",
+            "kind": "daily-email-test-preview-publication",
+            **links,
+            "created_at": "2026-08-28T16:00:00+00:00",
+            "commit_sha": "1" * 40,
+            "content_digest": "sha256:" + "2" * 64,
+            "manifest_digest": "sha256:" + "3" * 64,
+        }
+        preview_publications.append(value)
+        return value
+
+    monkeypatch.setattr(
+        cli,
+        "publish_daily_email_test_preview",
+        publish_preview_artifacts,
+    )
+    finalizations = []
+    monkeypatch.setattr(
+        cli,
+        "record_daily_finalization",
+        lambda *_args, **kwargs: finalizations.append(kwargs),
+    )
 
     args = cli.build_parser().parse_args(
         [
@@ -187,8 +245,17 @@ def test_test_finalization_stays_private_and_skips_adx(
     assert result["pull_request"] == "skipped_test"
     assert (state / "final-report" / "report.json").is_file()
     assert len(previews) == 1
-    assert report_link_flags == [False, False]
+    assert report_link_flags == [False]
     assert not output_root.exists()
+    assert len(preview_publications) == int(publish_preview)
+    assert (result["github_preview"] is not None) is publish_preview
+    assert len(finalizations) == 1
+    assert (
+        finalizations[0]["preview_publication_path"] is not None
+    ) is publish_preview
+    if publish_preview:
+        request = json.loads((state / "email-send-request.json").read_text())
+        assert request["preview"] == preview_publications[0]
 
 
 def test_official_daily_defers_report_to_atomic_memory_publication(

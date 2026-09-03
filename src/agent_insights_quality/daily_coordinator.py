@@ -37,6 +37,7 @@ from agent_insights_quality.daily_lifecycle import (
     daily_runtime_root,
 )
 from agent_insights_quality.generated_paths import validate_generated_paths
+from agent_insights_quality.github_preview import validate_preview_publication
 from agent_insights_quality.live import LiveRuntime
 from agent_insights_quality.models import (
     AgentResult,
@@ -102,11 +103,14 @@ def prepare_daily(
     work_items_path: Path,
     rerun: int = 0,
     test_run: bool = False,
+    publish_preview: bool = False,
     base: Path | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> dict[str, Any]:
     if rerun < 0 or (test_run and rerun == 0):
         raise ContractError("Test runs require a nonzero --rerun identity")
+    if publish_preview and not test_run:
+        raise ContractError("GitHub preview publication requires --test-run")
     if not test_run and rerun:
         raise ContractError("Official Daily does not accept a manual rerun identity")
     moment_value = now()
@@ -152,6 +156,7 @@ def prepare_daily(
             "public_run_id": run_id(report_date, rerun),
             "report_date": report_date.isoformat(),
             "delivery_mode": delivery_mode,
+            "publish_preview": publish_preview,
             "work_items": {
                 "path": resolved_work_items.relative_to(private_root).as_posix(),
                 "content_digest": content_hash(work_items),
@@ -173,6 +178,7 @@ def prepare_daily(
             "final_report": None,
             "adx_publication_status": None,
             "email_request": None,
+            "preview_publication": None,
             "send_claim": None,
             "email_receipt": None,
             "publication": None,
@@ -723,10 +729,29 @@ def record_daily_finalization(
     email_request_path: Path,
     improvement_analysis_path: Path,
     adx_publication_status: str,
+    preview_publication_path: Path | None = None,
     base: Path | None = None,
 ) -> None:
     private_root = (base or runtime_root()).resolve()
     request = read_json(email_request_path)
+    preview_reference = None
+    if active.value["bindings"]["publish_preview"]:
+        if preview_publication_path is None:
+            raise ContractError("Daily preview publication binding is missing")
+        publication = read_json(preview_publication_path)
+        validate_preview_publication(
+            publication,
+            run_id=active.value["bindings"]["public_run_id"],
+        )
+        if request.get("preview") != publication:
+            raise ContractError("Daily email request preview binding is stale")
+        preview_reference = artifact_reference(
+            preview_publication_path,
+            daily_runtime_root(private_root),
+            file_hash(preview_publication_path),
+        )
+    elif preview_publication_path is not None or "preview" in request:
+        raise ContractError("Daily run did not authorize GitHub preview publication")
     _transition_exact(
         active,
         private_root,
@@ -746,8 +771,9 @@ def record_daily_finalization(
             "email_request": artifact_reference(
                 email_request_path,
                 daily_runtime_root(private_root),
-                request["content_digest"],
+                file_hash(email_request_path),
             ),
+            "preview_publication": preview_reference,
         },
     )
 
@@ -1157,6 +1183,7 @@ def _daily_contract_digest(
         "schemas/run-manifest.schema.json",
         "schemas/daily-lifecycle.schema.json",
         "schemas/daily-agent-receipt.schema.json",
+        "schemas/daily-email-test-preview.schema.json",
         "schemas/prompt-traffic.schema.json",
         "schemas/assessment-package.schema.json",
         "src/agent_insights_quality/prompts/assessment.md",
@@ -1164,12 +1191,13 @@ def _daily_contract_digest(
         runtime_files[relative] = file_hash(ROOT / relative)
     return content_hash(
         {
-            "schema_version": "2.0.0",
+            "schema_version": "3.0.0",
             "repository": bindings["repository"],
             "approval": bindings["approval"],
             "public_run_id": bindings["public_run_id"],
             "report_date": bindings["report_date"],
             "delivery_mode": bindings["delivery_mode"],
+            "publish_preview": bindings["publish_preview"],
             "work_items_digest": bindings["work_items"]["content_digest"],
             "catalog_hashes": bindings["catalog_hashes"],
             "selection": bindings["selection"],
@@ -1494,7 +1522,7 @@ def _active_email_request(
         raise ContractError("Daily lifecycle has no email request")
     path = (daily_runtime_root(base) / reference["path"]).resolve()
     request = read_json(path)
-    if request.get("content_digest") != reference["digest"]:
+    if file_hash(path) != reference["digest"]:
         raise ContractError("Daily email request reference is stale")
     return path, request
 
@@ -1589,6 +1617,7 @@ def _status(active: DailyRecord, base: Path) -> dict[str, Any]:
         "state": active.value["state"],
         "report_date": active.value["bindings"]["report_date"],
         "delivery_mode": active.value["bindings"]["delivery_mode"],
+        "publish_preview": active.value["bindings"]["publish_preview"],
         "completed_agent_lanes": completed,
         "pending_agent_lanes": pending,
         "package_target": 25,

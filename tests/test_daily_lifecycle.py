@@ -68,6 +68,7 @@ def _initial(report_date: date = date(2026, 8, 31)) -> dict:
             "public_run_id": f"aiq-{report_date:%Y%m%d}",
             "report_date": report_date.isoformat(),
             "delivery_mode": "official",
+            "publish_preview": False,
             "work_items": {
                 "path": "work-items/snapshot.json",
                 "content_digest": HASH,
@@ -89,6 +90,7 @@ def _initial(report_date: date = date(2026, 8, 31)) -> dict:
             "final_report": None,
             "adx_publication_status": None,
             "email_request": None,
+            "preview_publication": None,
             "send_claim": None,
             "email_receipt": None,
             "publication": None,

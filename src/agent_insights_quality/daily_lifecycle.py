@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import os
+import re
 import shutil
 import tempfile
 from collections.abc import Mapping
@@ -246,6 +247,7 @@ class DailyLifecycle:
             "public_run_id",
             "report_date",
             "delivery_mode",
+            "publish_preview",
             "work_items",
             "approval",
             "catalog_hashes",
@@ -349,6 +351,19 @@ def validate_daily_lifecycle(value: Mapping[str, Any]) -> None:
         != report_date - timedelta(days=1)
     ):
         raise ContractError("Daily work-item closed-business date is not bound")
+    preview_requested = value["bindings"]["publish_preview"]
+    if preview_requested and (
+        value["bindings"]["delivery_mode"] != "test_email_only"
+        or re.fullmatch(
+            r"aiq-[0-9]{8}-r(?:0[1-9]|[1-9][0-9]+)",
+            value["bindings"]["public_run_id"],
+            re.ASCII,
+        )
+        is None
+    ):
+        raise ContractError(
+            "Daily GitHub preview requires an email-only nonzero rerun"
+        )
     if value["state"] not in {"LOCKED", "FAILED"} and (
         value["bindings"]["registry"] is None
         or value["bindings"]["run_contract_digest"] is None
@@ -386,6 +401,12 @@ def validate_daily_lifecycle(value: Mapping[str, Any]) -> None:
         or artifacts["adx_publication_status"] is None
     ):
         raise ContractError("Finalized Daily lifecycle lacks publication artifacts")
+    preview_publication = artifacts["preview_publication"]
+    if state in {"FINALIZED", "SEND_CLAIMED", "RECEIPT_IMPORTED", "COMPLETE"}:
+        if preview_requested != (preview_publication is not None):
+            raise ContractError("Daily GitHub preview lifecycle binding is incomplete")
+    elif preview_publication is not None:
+        raise ContractError("Daily GitHub preview was recorded before finalization")
     if state in {"SEND_CLAIMED", "RECEIPT_IMPORTED", "COMPLETE"} and (
         artifacts["send_claim"] is None
     ):

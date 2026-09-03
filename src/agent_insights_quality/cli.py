@@ -56,6 +56,13 @@ from agent_insights_quality.email import (
     write_private_report_preview,
 )
 from agent_insights_quality.generated_paths import validate_generated_paths
+from agent_insights_quality.github_preview import (
+    bind_preview_publication,
+    preview_links,
+    publish_daily_email_test_preview,
+    validate_preview_publication,
+    verify_daily_email_test_preview,
+)
 from agent_insights_quality.live import LiveRuntime
 from agent_insights_quality.improvement_memory import (
     build_normalized_summary,
@@ -157,6 +164,7 @@ def build_parser() -> argparse.ArgumentParser:
     daily_prepare.add_argument("--rerun", type=int, default=0)
     daily_prepare.add_argument("--work-items", type=Path, required=True)
     daily_prepare.add_argument("--test-run", action="store_true")
+    daily_prepare.add_argument("--publish-preview", action="store_true")
     commands.add_parser("daily-provision")
     daily_agent = commands.add_parser("daily-run-agent")
     daily_agent.add_argument(
@@ -349,6 +357,7 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                 work_items_path=args.work_items,
                 rerun=args.rerun,
                 test_run=args.test_run,
+                publish_preview=args.publish_preview,
             ),
             sort_keys=True,
         )
@@ -625,6 +634,17 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             prepare_improvement_input=args.prepare_improvement_input,
         )
         test_run = manifest["delivery_mode"] == TEST_EMAIL_ONLY_DELIVERY
+        publish_preview = bool(
+            daily_active is not None
+            and daily_active.value["bindings"]["publish_preview"]
+        )
+        if publish_preview and not test_run:
+            raise ContractError(
+                "GitHub preview publication requires an email-only test run"
+            )
+        planned_preview_links = (
+            preview_links(manifest["run_id"]) if publish_preview else None
+        )
         work_items = load_quality_work_items(
             args.work_items,
             report_date=date.fromisoformat(manifest["report_date"]),
@@ -732,12 +752,6 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             / manifest["run_id"]
         )
         official_daily = manifest["profile"] == "daily" and not test_run
-        if not official_daily:
-            write_report(
-                report,
-                output,
-                include_improvement_link=not test_run,
-            )
         if improvement_analysis is not None:
             if test_run:
                 write_improvement_preview(
@@ -785,6 +799,7 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             adx_publication=adx_publication,
             work_items=work_items,
             test_run=test_run,
+            preview_links=planned_preview_links,
         )
         report["delivery"]["content_digest"] = request["content_digest"]
         if official_daily:
@@ -805,6 +820,28 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                 output,
                 include_improvement_link=not test_run,
             )
+        preview_publication_path = None
+        if publish_preview:
+            preview_publication_path = (
+                args.manifest.parent / "github-preview-publication.json"
+            )
+            if preview_publication_path.is_file():
+                preview_publication = read_json(preview_publication_path)
+                validate_preview_publication(
+                    preview_publication,
+                    run_id=manifest["run_id"],
+                )
+                verify_daily_email_test_preview(
+                    output,
+                    preview_publication,
+                )
+            else:
+                preview_publication = publish_daily_email_test_preview(
+                    output,
+                    run_id=manifest["run_id"],
+                )
+                immutable_json(preview_publication_path, preview_publication)
+            request = bind_preview_publication(request, preview_publication)
         private_request = args.manifest.parent / "email-send-request.json"
         immutable_json(private_request, request)
         private_preview = args.manifest.parent / "report-preview.html"
@@ -827,6 +864,7 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                     if adx_publication is not None
                     else "not_applicable"
                 ),
+                preview_publication_path=preview_publication_path,
             )
         return json.dumps(
             {
@@ -846,6 +884,11 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                 ),
                 "delivery_mode": manifest["delivery_mode"],
                 "generated_report": not test_run,
+                "github_preview": (
+                    str(preview_publication_path)
+                    if preview_publication_path is not None
+                    else None
+                ),
                 "pull_request": (
                     "skipped_test"
                     if test_run

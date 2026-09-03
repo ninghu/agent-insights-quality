@@ -66,6 +66,15 @@ It does not contact ADX, modify repository report or trend paths, or create a pu
 delivery is ambiguous, verify manually before any later retry. Remove the private override after the
 test.
 
+GitHub publication remains disabled unless the reviewed test also passes `--publish-preview`.
+That opt-in appends the sanitized report, aggregate Markdown, five per-Agent Markdown files, and a
+small public manifest under `<public-run-id>/` on the dedicated orphan
+`aiq-email-test-preview` branch. Existing run directories are never changed or removed. Email links
+use that permanent branch/run path; the Insight Engine improvement link remains hidden. Any
+unexpected branch path, noncanonical generated file, private link, or divergent existing run aborts
+finalization before the immutable email request is created. The preview branch never creates a pull
+request.
+
 ## Scheduled automation
 
 - Repository: `ninghu/agent-insights-quality`

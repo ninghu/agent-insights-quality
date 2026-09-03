@@ -82,11 +82,19 @@ license: MIT
 13. Enable auto-merge only when a complete numeric report exists and required checks pass.
 
 For a reviewed email-only test, run `daily-prepare` with both `--test-run` and a nonzero `--rerun N`.
-The private `daily_test` recipient override is required. The test run still uses deployed endpoints,
-bounded post-invoke telemetry correlation, and private durable runtime state, but finalization must send only the one
-TEST-marked email. It must not contact ADX, write repository report or trend paths, validate generated
-paths, create a pull request, or enable auto-merge. Stop after importing the provider receipt into the
-private run directory. Scheduled official runs never pass `--test-run`.
+The private `daily_test` recipient override is required. By default, the test publishes nothing to
+GitHub. The additional explicit `--publish-preview` option authorizes finalization to append one
+immutable `<public-run-id>/` directory to the dedicated orphan `aiq-email-test-preview` branch. That
+directory contains only the schema-bound manifest, sanitized `report.json`/`report.md`, and exactly
+five generated per-Agent Markdown files. Existing run directories are permanent and immutable; any
+unmanaged or divergent branch content fails closed. Email links use the stable branch plus unique run
+directory. The improvement link stays hidden, and no preview branch creates a pull request.
+
+The test run still uses deployed endpoints, bounded post-invoke telemetry correlation, and private
+durable runtime state, but finalization must send only the one TEST-marked email. It must not contact
+ADX, write repository report or trend paths, validate generated paths, create a pull request, or enable
+auto-merge. Stop after importing the provider receipt into the private run directory. Scheduled
+official runs never pass `--test-run` or `--publish-preview`.
 
 Five visible Copilot Agent-lane sub sessions execute concurrently while versions and endpoint
 requests remain sequential inside each lane. The code never internally fans out Daily lanes or
