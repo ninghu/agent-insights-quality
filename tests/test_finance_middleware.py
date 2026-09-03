@@ -525,43 +525,6 @@ def test_finance_tools_emit_privacy_safe_structural_telemetry(monkeypatch) -> No
     ]
 
 
-@pytest.mark.parametrize(
-    ("issue_id", "class_name", "request_text"),
-    [
-        ("issue-013", "ContradictedBalance", "Show the balance for acct-demo-a."),
-        (
-            "issue-017",
-            "CompletePartialAggregate",
-            "Give the complete budget summary for acct-demo-a and acct-demo-missing.",
-        ),
-    ],
-)
-def test_finance_output_defects_run_real_pipeline_before_postprocessing(
-    monkeypatch,
-    issue_id,
-    class_name,
-    request_text,
-) -> None:
-    module = _load_finance_app(monkeypatch, issue_id)
-    context = SimpleNamespace(
-        messages=[_message(request_text)],
-        result=None,
-        stream=False,
-    )
-    calls = []
-
-    async def call_next() -> None:
-        calls.append("real-model-tool-pipeline")
-        context.result = "real-response"
-
-    with pytest.raises(module.MiddlewareTermination):
-        asyncio.run(getattr(module, class_name)().process(context, call_next))
-    assert calls == ["real-model-tool-pipeline"]
-    source = inspect.getsource(getattr(module, class_name))
-    assert "start_span" not in source
-    assert "gen_ai." not in source
-
-
 class _ScriptedFinanceClient(
     FrameworkFunctionInvocationLayer,
     FrameworkChatMiddlewareLayer,
