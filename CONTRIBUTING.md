@@ -125,9 +125,10 @@ and creates the deployment, invocation, and verification sub-sessions; do not su
 deterministic, cost-balanced logical shards, with every active shard mapped 1:1 to one visible
 sub-session.
 
-The coordinator runs `prepare-test-agent-validation`, assigns exactly one deploy/invoke/verify
-primitive to each sub-session, and runs reconciliation and composition itself. Shard commands accept
-only the immutable shard ID and resolve the hidden active generation and authority assignment.
+The coordinator runs `prepare-test-agent-validation`, assigns exactly one deploy or invoke shard
+primitive to each phase sub-session, and runs reconciliation and composition itself. Verification
+sub-sessions use only the no-ID assessment prepare/import cycle. Shard commands accept only the
+immutable shard ID and resolve the hidden active generation and authority assignment.
 `run-test-agent-validation` is status/next-action guidance only and never creates sub-sessions.
 
 Immediately after definitive authority completion, its sub-session atomically publishes a

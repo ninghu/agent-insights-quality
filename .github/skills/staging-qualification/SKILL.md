@@ -20,8 +20,8 @@ shard maps 1:1 to one visible sub-session.
 
 Only the coordinator may reconcile all exact versions and atomically publish shared topology and
 registry state. It runs preparation, deployment reconciliation, and composition. It gives each
-sub-session exactly one assigned deploy/invoke/verify shard command. Shard commands accept only the
-immutable shard ID and resolve the hidden active generation and authority assignment.
+deployment or invocation sub-session exactly one assigned shard command. Shard commands accept only
+the immutable shard ID and resolve the hidden active generation and authority assignment.
 
 Per-authority invocation receipts publish atomically and generation-fenced immediately after
 definitive completion. The exact reusable contract includes Agent source/content/execution,
@@ -32,9 +32,12 @@ is one-time and fenced against stale sub-sessions.
 
 Completed current invocations support verify-only recovery with no new endpoint traffic. Verification
 uses at most eight visible sub-sessions; each claims one authority at a time, uses no internal
-concurrency, deploy, invocation, or private prompt/CLI state, and immediately persists one immutable
-result before claiming another. Query one batched stable telemetry snapshot for a baseline or two
-target batches for an issue and its paired `v0`; never stabilize attempts independently.
+concurrency, deploy, invocation, or shared private prompt/CLI state, and immediately persists one
+immutable result before claiming another. Each session repeats the no-ID
+`prepare-test-agent-validation-assessment` and `import-test-agent-validation-assessment` cycle.
+Claims are hidden, worktree-bound, distinct, and bounded by a lease; status reports only aggregate
+slots. Query one batched stable telemetry snapshot for a baseline or two target batches for an issue
+and its paired `v0`; never stabilize attempts independently.
 
 Each new verification package binds the reused receipt digest and current verifier commit/digest.
 Keep `PASS`, `FAIL`, and `INCOMPLETE` separate under baseline `5/5`, deterministic `5/5` plus paired

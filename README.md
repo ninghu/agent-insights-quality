@@ -98,10 +98,11 @@ receipt; all others perform verification only and send no new endpoint traffic. 
 proves the traffic-generation and execution contract; every new verification package separately binds
 that receipt's immutable digest and the current verifier commit and digest.
 
-Verification uses one visible GPT-5.6 Sol Copilot verifier session at a time. It generation-fences and
-claims exactly one authority, prepares a content-addressed private package, imports one strict
-public-safe behavioral evaluation, and atomically persists the immutable result before claiming the
-next authority. A baseline uses one batched telemetry
+Verification uses up to eight visible GPT-5.6 Sol Copilot evaluator sessions. Each uses a hidden
+worktree-bound lease to claim exactly one distinct authority at a time, prepares a content-addressed
+private package, imports one strict public-safe behavioral evaluation, and atomically persists the
+immutable result before claiming the next authority. Status exposes only aggregate slot counts, and an
+abandoned claim becomes reclaimable after its bounded lease. A baseline uses one batched telemetry
 stability snapshot for all five attempts. An issue uses exactly two target batches: one snapshot for
 all issue attempts and one for all paired-`v0` attempts. It never stabilizes attempts independently,
 deploys an Agent, invokes an endpoint, or sends traffic. Deterministic code enforces identity,

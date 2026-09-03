@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import os
 import shutil
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -71,8 +72,18 @@ def validation_runtime_root() -> Path:
 
 
 class LocalValidationLock:
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(
+        self,
+        path: Path | None = None,
+        *,
+        wait_seconds: float = 0,
+        retry_seconds: float = 0.05,
+    ) -> None:
+        if wait_seconds < 0 or retry_seconds <= 0:
+            raise ContractError("Local validation lock wait is invalid")
         self.path = path or (validation_runtime_root() / "validation.lock")
+        self._wait_seconds = wait_seconds
+        self._retry_seconds = retry_seconds
         self._stream: BinaryIO | None = None
 
     @property
@@ -83,30 +94,41 @@ class LocalValidationLock:
         if self._stream is not None:
             raise ContractError("Local validation lock is already held")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        stream: BinaryIO | None = None
-        try:
-            stream = self.path.open("a+b")
-            stream.seek(0)
-            if stream.read(1) == b"":
-                stream.write(b"0")
-                stream.flush()
-                os.fsync(stream.fileno())
-            stream.seek(0)
-            if os.name == "nt":
-                import msvcrt
+        deadline = time.monotonic() + self._wait_seconds
+        while True:
+            stream: BinaryIO | None = None
+            try:
+                stream = self.path.open("a+b")
+                stream.seek(0)
+                if stream.read(1) == b"":
+                    stream.write(b"0")
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                stream.seek(0)
+                if os.name == "nt":
+                    import msvcrt
 
-                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
 
-                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as error:
-            if stream is not None:
-                stream.close()
-            raise ContractError(
-                "Another local Test Agent Validation process holds the shared lock"
-            ) from error
-        self._stream = stream
+                    fcntl.flock(
+                        stream.fileno(),
+                        fcntl.LOCK_EX | fcntl.LOCK_NB,
+                    )
+            except OSError as error:
+                if stream is not None:
+                    stream.close()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ContractError(
+                        "Another local Test Agent Validation process holds "
+                        "the shared lock"
+                    ) from error
+                time.sleep(min(self._retry_seconds, remaining))
+                continue
+            self._stream = stream
+            return
 
     def release(self) -> None:
         stream = self._stream

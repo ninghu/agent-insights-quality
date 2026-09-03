@@ -75,8 +75,8 @@ selected for new traffic still carries a fresh paired-`v0` control.
 
 Deployment and invocation each receive an independent deterministic assignment set with one to eight
 cost-balanced logical shards. Each active shard maps 1:1 to one visible Copilot sub-session.
-Verification begins only after the invocation barrier, uses one visible GPT-5.6 Sol verifier session
-at a time, and never invokes an endpoint.
+Verification begins only after the invocation barrier, uses up to eight visible GPT-5.6 Sol evaluator
+sessions, and never invokes an endpoint.
 
 Immediately after one authority reaches definitive completion, its sub-session atomically publishes a
 generation-fenced invocation receipt instead of waiting for the shard to finish. The receipt binds the
@@ -100,10 +100,14 @@ traffic without treating old verifier output as current.
 
 ### Copilot per-authority verification
 
-One visible GPT-5.6 Sol verifier session claims one generation-fenced authority at a time from the
-immutable assignment. The package and import primitives are sequential: they start no subprocess,
-thread, task pool, or other internal concurrency, accept no generation or authority identity, resolve
-the hidden active generation themselves, and never deploy, invoke, or send endpoint traffic.
+Each visible GPT-5.6 Sol evaluator session claims one generation-fenced authority at a time from the
+immutable assignment. The no-ID package and import primitives use a hidden deterministic worktree
+reference: prepare resumes the caller's unexpired claim or atomically assigns a distinct authority,
+while import resolves only that claim and releases its slot after persisting the immutable result.
+At most eight claims are active; abandoned claims become reclaimable after a bounded lease. Status
+reports only aggregate active/available slots and the next prepare command. The primitives start no
+subprocess, thread, task pool, or other internal concurrency and never deploy, invoke, or send endpoint
+traffic.
 
 For one claimed baseline authority, the verifier issues one batched telemetry query and waits for one
 stability snapshot containing all five response-bound attempt trees. For one claimed issue authority,
@@ -176,8 +180,8 @@ creates one visible invocation sub-session per assignment and gives each exactly
 python -m agent_insights_quality invoke-test-agent-validation-shard --shard-id <N>
 ```
 
-After the invocation barrier, use fresh or reusable completed invocation receipts in one visible
-GPT-5.6 Sol verifier session. Prepare or locate the next private package:
+After the invocation barrier, use fresh or reusable completed invocation receipts in up to eight
+visible GPT-5.6 Sol evaluator sessions. In each session, prepare or locate its next private package:
 
 ```powershell
 python -m agent_insights_quality prepare-test-agent-validation-assessment
@@ -190,8 +194,9 @@ the reported assessment path, then validate, import, and persist the schema-1.0 
 python -m agent_insights_quality import-test-agent-validation-assessment
 ```
 
-Repeat the two commands one authority at a time. The package, raw output, tool data, and traces never
-leave the durable private runtime root and must not appear in CLI output or cross-session messages.
+Repeat the two commands one authority at a time per session. The package, raw output, tool data, and
+traces never leave the durable private runtime root and must not appear in CLI output or cross-session
+messages.
 After all authority evaluations finish, the coordinator composes the exact 41-authority result:
 
 ```powershell

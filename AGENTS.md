@@ -60,11 +60,12 @@ Agents and 36 reviewed, single-root issues.
 - Deployment, invocation, and verification each independently publish one to eight deterministic,
   cost-balanced logical shards based on selected authorities. Each active shard maps 1:1 to one
   visible sub-session; eight is the per-phase shard and active-concurrency ceiling.
-- The coordinator runs `prepare-test-agent-validation`, gives each sub-session exactly one assigned
-  deploy/invoke/verify shard primitive, runs deployment reconciliation and final composition itself,
-  and uses `run-test-agent-validation` only for status/next-action guidance.
-- Shard primitives accept only the immutable shard ID. Never pass run/generation IDs or authority IDs;
-  each primitive resolves the hidden active generation and assignment.
+- The coordinator runs `prepare-test-agent-validation`, gives each deployment or invocation
+  sub-session exactly one assigned shard primitive, runs deployment reconciliation and final
+  composition itself, and uses `run-test-agent-validation` only for status/next-action guidance.
+- Shard primitives accept only the immutable shard ID; verification uses the no-ID assessment
+  prepare/import cycle. Never pass run/generation IDs or authority IDs; each primitive resolves the
+  hidden active generation and assignment.
 - Immediately after definitive authority completion, atomically publish a generation-fenced
   invocation receipt. Bind exact Agent source/content/execution, provider-version, runtime,
   environment, Project, telemetry resource-set, response/session, invoke/evidence-window,

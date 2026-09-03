@@ -142,7 +142,7 @@ def test_validation_skill_enforces_local_report_free_approval() -> None:
         "report-free Sweden Central staging gate",
         "aiq-staging-swedencentral",
         "unique runtime Agent identity",
-        "one visible GPT-5.6 Sol verifier session",
+        "up to eight visible GPT-5.6 Sol evaluator sessions",
         "visible Copilot sub-sessions",
         "one to eight deterministic",
         "test-agent-validation-copilot-evaluation.schema.json",

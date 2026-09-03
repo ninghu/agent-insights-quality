@@ -232,6 +232,33 @@ def test_shared_process_lock_excludes_a_second_worktree(tmp_path: Path) -> None:
         first.release()
 
 
+def test_shared_process_lock_can_wait_for_short_contention(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "shared-runtime" / "validation.lock"
+    acquired = threading.Event()
+    release = threading.Event()
+
+    def hold_lock() -> None:
+        with LocalValidationLock(path):
+            acquired.set()
+            release.wait(timeout=5)
+
+    thread = threading.Thread(target=hold_lock)
+    thread.start()
+    assert acquired.wait(timeout=5)
+    timer = threading.Timer(0.05, release.set)
+    timer.start()
+    try:
+        with LocalValidationLock(path, wait_seconds=1):
+            pass
+    finally:
+        release.set()
+        timer.cancel()
+        thread.join(timeout=5)
+    assert not thread.is_alive()
+
+
 def test_concurrent_prepare_cannot_publish_two_active_generations(
     tmp_path: Path,
 ) -> None:

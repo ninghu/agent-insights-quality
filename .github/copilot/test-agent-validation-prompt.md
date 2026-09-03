@@ -45,9 +45,12 @@ verify-only work with no new endpoint traffic.
 Verification begins after the invocation barrier, is read-only, and sends no traffic. Run at most
 eight visible verification sub-sessions. Each claims one generation-fenced authority at a time,
 finishes it before claiming another, and uses no internal concurrency, deployment, invocation, or
-private prompt/CLI state. Give each verification sub-session exactly
-`python -m agent_insights_quality verify-test-agent-validation-shard --shard-id <N>`, then have the
-coordinator run `python -m agent_insights_quality compose-test-agent-validation`.
+shared private prompt/CLI state. Each verification sub-session repeats the no-ID
+`python -m agent_insights_quality prepare-test-agent-validation-assessment` and
+`python -m agent_insights_quality import-test-agent-validation-assessment` cycle one authority at a
+time. Claims are hidden, worktree-bound, distinct, and leased; status exposes only aggregate slots.
+After the verification barrier, have the coordinator run
+`python -m agent_insights_quality compose-test-agent-validation`.
 
 For a baseline, create one batched stable telemetry snapshot covering all five attempts. For an issue,
 create exactly two target batches: one stable snapshot for all issue attempts and one for all

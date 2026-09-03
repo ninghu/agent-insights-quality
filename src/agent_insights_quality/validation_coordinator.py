@@ -27,9 +27,15 @@ from agent_insights_quality.util import (
 )
 from agent_insights_quality.validation_credentials import local_azure_operator
 from agent_insights_quality.validation_copilot import (
+    CopilotClaimError,
     EVALUATION_PROMPT,
+    MAX_ACTIVE_COPILOT_CLAIMS,
+    active_copilot_claims,
     assessment_path,
+    attach_private_package_to_active_pointer,
     authority_evidence_from_evaluation,
+    complete_active_pointer,
+    copilot_claimant_reference,
     evaluation_lock,
     incomplete_authority_evidence_from_invocation,
     incomplete_result_requires_fresh_invocation,
@@ -407,15 +413,33 @@ def run_test_agent_validation() -> dict[str, Any]:
             if item["authority_id"] not in completed
         ]
         if pending:
+            pending_ids = {
+                assignment["authority_id"] for assignment in pending
+            }
+            claims = [
+                item
+                for item in active_copilot_claims(prepared=active)
+                if item["authority_id"] in pending_ids
+            ]
+            available_slots = min(
+                MAX_ACTIVE_COPILOT_CLAIMS - len(claims),
+                len(pending) - len(claims),
+            )
             return {
                 "status": "verification_pending",
-                "maximum_active_subsessions": 1,
+                "maximum_active_subsessions": MAX_ACTIVE_COPILOT_CLAIMS,
                 "completed_authority_count": len(completed),
                 "pending_authority_count": len(pending),
-                "next_commands": [
-                    "python -m agent_insights_quality "
-                    "prepare-test-agent-validation-assessment"
-                ],
+                "active_authority_evaluator_count": len(claims),
+                "available_authority_evaluator_slots": available_slots,
+                "next_commands": (
+                    [
+                        "python -m agent_insights_quality "
+                        "prepare-test-agent-validation-assessment"
+                    ]
+                    if available_slots
+                    else []
+                ),
             }
         incomplete = [
             completed[authority_id]
@@ -759,6 +783,7 @@ def prepare_test_agent_validation_assessment() -> dict[str, Any]:
         raise ContractError("Validation invocation barrier is incomplete")
     context = _load_prepared()
     prepared = context["prepared"]
+    claimant = copilot_claimant_reference()
     with evaluation_lock():
         _assert_active_generation(prepared)
         existing = current_authority_verification_results(
@@ -775,82 +800,134 @@ def prepare_test_agent_validation_assessment() -> dict[str, Any]:
                 "status": "verification_complete",
                 "pending_authority_count": 0,
             }
-        authority_by_id = {
-            item.authority_id: item for item in context["authorities"]
-        }
-        runtime_by_id = {
-            item["authority_id"]: item
-            for item in prepared["runtime_topology"]["agents"]
-        }
-        pointer = None
-        try:
-            candidate = load_active_pointer()
-        except FileNotFoundError:
-            candidate = None
-        if (
-            candidate is not None
-            and candidate["origin_run_id"] == prepared["run_id"]
-            and candidate["origin_commit_sha"] == prepared["commit_sha"]
-            and candidate["authority_id"] in pending
-        ):
-            pointer = candidate
-            authority_id = str(candidate["authority_id"])
-        else:
-            authority_id = pending[0]
-        authority = authority_by_id[authority_id]
-        paired_id = context["paired_baselines"][authority.canonical_agent]
-        references, receipts = _invocation_receipts_for_verification(
-            context,
-            [authority_id],
+        claims = [
+            item
+            for item in active_copilot_claims(prepared=prepared)
+            if item["authority_id"] in pending
+        ]
+        pointer = next(
+            (
+                item
+                for item in claims
+                if item["claimant_reference"] == claimant
+            ),
+            None,
         )
-        if pointer is not None:
-            package = load_bound_private_package(
+        if pointer is None:
+            claimed_authority_ids = {
+                str(item["authority_id"]) for item in claims
+            }
+            available = [
+                authority_id
+                for authority_id in pending
+                if authority_id not in claimed_authority_ids
+            ]
+            if (
+                len(claims) >= MAX_ACTIVE_COPILOT_CLAIMS
+                or not available
+            ):
+                return {
+                    "status": "assessment_capacity_full",
+                    "pending_authority_count": len(pending),
+                    "active_authority_evaluator_count": len(claims),
+                    "available_authority_evaluator_slots": 0,
+                }
+            authority_id = available[0]
+            pointer = write_active_pointer(
+                prepared=prepared,
+                authority_id=authority_id,
+                claimant_reference=claimant,
+            )
+            active_count = len(claims) + 1
+        else:
+            authority_id = str(pointer["authority_id"])
+            active_count = len(claims)
+        _assert_assessment_claim_binding(
+            pointer,
+            prepared=prepared,
+            claimant_reference=claimant,
+            authority_id=authority_id,
+        )
+    authority_by_id = {
+        item.authority_id: item for item in context["authorities"]
+    }
+    runtime_by_id = {
+        item["authority_id"]: item
+        for item in prepared["runtime_topology"]["agents"]
+    }
+    authority = authority_by_id[authority_id]
+    paired_id = context["paired_baselines"][authority.canonical_agent]
+    references, receipts = _invocation_receipts_for_verification(
+        context,
+        [authority_id],
+    )
+    if pointer["claim_state"] == "ready":
+        package = load_bound_private_package(
+            pointer,
+            prepared=prepared,
+            plan=context["plan"],
+            authority=authority,
+            runtime=runtime_by_id[authority_id],
+            paired_v0_runtime=runtime_by_id[paired_id],
+            invocation_reference=references[0],
+            invocation_receipt=receipts[0],
+        )
+        package_path, draft_path = pointer_paths(pointer)
+        if draft_path != assessment_path(package["package_hash"]):
+            raise ContractError(
+                "Active Copilot assessment path binding is stale"
+            )
+        return _assessment_ready_result(
+            package_path=package_path,
+            draft_path=draft_path,
+            pending_count=len(pending),
+            active_count=active_count,
+        )
+    started_at = datetime.fromisoformat(str(pointer["claimed_at"]))
+    try:
+        package_record = write_private_package(
+            prepared=prepared,
+            plan=context["plan"],
+            authority=authority,
+            runtime=runtime_by_id[authority_id],
+            paired_v0_runtime=runtime_by_id[paired_id],
+            deployed=context["deployed"][authority_id],
+            paired_v0_deployed=context["deployed"][paired_id],
+            invocation_reference=references[0],
+            invocation_receipt=receipts[0],
+            collector=_verifier(context),
+            scheduler=context["scheduler"],
+            started_at=started_at,
+            fence=lambda: _assert_active_assessment_claim(
+                prepared,
                 pointer,
+            ),
+        )
+    except CopilotClaimError:
+        raise
+    except (ContractError, OSError, RuntimeError) as error:
+        query_stage, error_code = sanitize_verification_error(error)
+        query_diagnostics = verification_query_diagnostics(error)
+        evidence = incomplete_authority_evidence_from_invocation(
+            authority=authority,
+            runtime=runtime_by_id[authority_id],
+            paired_v0_runtime=runtime_by_id[paired_id],
+            invocation=receipts[0]["invocation"],
+            validated_commit_sha=prepared["commit_sha"],
+            error_code=error_code,
+        )
+        completed_at = datetime.now(UTC)
+        with evaluation_lock():
+            _assert_active_generation(prepared)
+            current_pointer = load_active_pointer(
+                claimant_reference=claimant,
+                require_ready=False,
+            )
+            _assert_assessment_claim_binding(
+                current_pointer,
                 prepared=prepared,
-                plan=context["plan"],
-                authority=authority,
-                runtime=runtime_by_id[authority_id],
-                paired_v0_runtime=runtime_by_id[paired_id],
-                invocation_reference=references[0],
-                invocation_receipt=receipts[0],
-            )
-            package_path, draft_path = pointer_paths(pointer)
-            if draft_path != assessment_path(package["package_hash"]):
-                raise ContractError(
-                    "Active Copilot assessment path binding is stale"
-                )
-            return _assessment_ready_result(
-                package_path=package_path,
-                draft_path=draft_path,
-                pending_count=len(pending),
-            )
-        started_at = datetime.now(UTC)
-        try:
-            package_record = write_private_package(
-                prepared=prepared,
-                plan=context["plan"],
-                authority=authority,
-                runtime=runtime_by_id[authority_id],
-                paired_v0_runtime=runtime_by_id[paired_id],
-                deployed=context["deployed"][authority_id],
-                paired_v0_deployed=context["deployed"][paired_id],
-                invocation_reference=references[0],
-                invocation_receipt=receipts[0],
-                collector=_verifier(context),
-                scheduler=context["scheduler"],
-                started_at=started_at,
-                fence=lambda: _assert_active_generation(prepared),
-            )
-        except (ContractError, OSError, RuntimeError) as error:
-            query_stage, error_code = sanitize_verification_error(error)
-            query_diagnostics = verification_query_diagnostics(error)
-            evidence = incomplete_authority_evidence_from_invocation(
-                authority=authority,
-                runtime=runtime_by_id[authority_id],
-                paired_v0_runtime=runtime_by_id[paired_id],
-                invocation=receipts[0]["invocation"],
-                validated_commit_sha=prepared["commit_sha"],
-                error_code=error_code,
+                claimant_reference=claimant,
+                authority_id=authority_id,
             )
             reference = write_authority_verification_result(
                 prepared=prepared,
@@ -861,26 +938,42 @@ def prepare_test_agent_validation_assessment() -> dict[str, Any]:
                 authority_evidence=evidence,
                 outcome="INCOMPLETE",
                 started_at=started_at,
-                completed_at=datetime.now(UTC),
+                completed_at=completed_at,
                 query_stage=query_stage,
                 error_code=error_code,
                 query_diagnostics=query_diagnostics,
                 fence=lambda: _assert_active_generation(prepared),
             )
-            return _copilot_authority_verification_result(
-                load_authority_verification_result(reference)
+            complete_active_pointer(
+                current_pointer,
+                completed_at=completed_at,
             )
-        pointer = write_active_pointer(
-            package_record,
+        return _copilot_authority_verification_result(
+            load_authority_verification_result(reference)
+        )
+    with evaluation_lock():
+        _assert_active_generation(prepared)
+        current_pointer = load_active_pointer(
+            claimant_reference=claimant,
+            require_ready=False,
+        )
+        _assert_assessment_claim_binding(
+            current_pointer,
             prepared=prepared,
+            claimant_reference=claimant,
             authority_id=authority_id,
         )
-        package_path, draft_path = pointer_paths(pointer)
-        return _assessment_ready_result(
-            package_path=package_path,
-            draft_path=draft_path,
-            pending_count=len(pending),
+        pointer = attach_private_package_to_active_pointer(
+            current_pointer,
+            package_record,
         )
+    package_path, draft_path = pointer_paths(pointer)
+    return _assessment_ready_result(
+        package_path=package_path,
+        draft_path=draft_path,
+        pending_count=len(pending),
+        active_count=active_count,
+    )
 
 
 def import_test_agent_validation_assessment() -> dict[str, Any]:
@@ -889,9 +982,15 @@ def import_test_agent_validation_assessment() -> dict[str, Any]:
         raise ContractError("Validation invocation barrier is incomplete")
     context = _load_prepared()
     prepared = context["prepared"]
+    claimant = copilot_claimant_reference()
     with evaluation_lock():
         _assert_active_generation(prepared)
-        pointer = load_active_pointer()
+        try:
+            pointer = load_active_pointer(claimant_reference=claimant)
+        except FileNotFoundError as error:
+            raise ContractError(
+                "This worktree has no active Copilot assessment claim"
+            ) from error
         if (
             pointer["origin_run_id"] != prepared["run_id"]
             or pointer["origin_commit_sha"] != prepared["commit_sha"]
@@ -910,6 +1009,8 @@ def import_test_agent_validation_assessment() -> dict[str, Any]:
             expected_assignment is None
             or expected_assignment
             != verification_assignment(prepared, authority_id)
+            or pointer["assignment_digest"]
+            != expected_assignment["assignment_digest"]
         ):
             raise ContractError(
                 "Copilot assessment authority is not currently assigned"
@@ -919,9 +1020,11 @@ def import_test_agent_validation_assessment() -> dict[str, Any]:
             authority_ids=[authority_id],
         ).get(authority_id)
         if current is not None:
-            return _copilot_authority_verification_result(
+            result = _copilot_authority_verification_result(
                 load_authority_verification_result(current)
             )
+            complete_active_pointer(pointer)
+            return result
         authority_by_id = {
             item.authority_id: item for item in context["authorities"]
         }
@@ -978,9 +1081,11 @@ def import_test_agent_validation_assessment() -> dict[str, Any]:
             fence=lambda: _assert_active_generation(prepared),
             copilot_evaluation=evaluation_reference,
         )
-        return _copilot_authority_verification_result(
+        result = _copilot_authority_verification_result(
             load_authority_verification_result(reference)
         )
+        complete_active_pointer(pointer)
+        return result
 
 
 def compose_test_agent_validation() -> dict[str, Any]:
@@ -1845,6 +1950,58 @@ def _assert_active_generation(prepared: Mapping[str, Any]) -> None:
         raise ContractError("Stale telemetry verifier is fenced")
 
 
+def _assert_assessment_claim_binding(
+    pointer: Mapping[str, Any],
+    *,
+    prepared: Mapping[str, Any],
+    claimant_reference: str,
+    authority_id: str,
+) -> None:
+    expected = verification_assignment(prepared, authority_id)
+    assignment = next(
+        (
+            item
+            for item in prepared["verification_authority_assignments"]
+            if item["authority_id"] == authority_id
+        ),
+        None,
+    )
+    if (
+        pointer["claimant_reference"] != claimant_reference
+        or pointer["origin_run_id"] != prepared["run_id"]
+        or pointer["origin_commit_sha"] != prepared["commit_sha"]
+        or pointer["authority_id"] != authority_id
+        or pointer["assignment_digest"] != expected["assignment_digest"]
+        or assignment != expected
+    ):
+        raise ContractError("Copilot assessment claim binding is stale")
+
+
+def _assert_active_assessment_claim(
+    prepared: Mapping[str, Any],
+    pointer: Mapping[str, Any],
+) -> None:
+    claimant = str(pointer["claimant_reference"])
+    authority_id = str(pointer["authority_id"])
+    try:
+        with evaluation_lock():
+            _assert_active_generation(prepared)
+            current = load_active_pointer(
+                claimant_reference=claimant,
+                require_ready=False,
+            )
+            _assert_assessment_claim_binding(
+                current,
+                prepared=prepared,
+                claimant_reference=claimant,
+                authority_id=authority_id,
+            )
+    except (ContractError, OSError) as error:
+        raise CopilotClaimError(
+            "Copilot assessment claim is no longer active"
+        ) from error
+
+
 def _invocation_receipts_for_verification(
     context: Mapping[str, Any],
     authority_ids: list[str],
@@ -2073,7 +2230,9 @@ def _prepared_result(value: dict[str, Any]) -> dict[str, Any]:
         "invoke_shards": value["invocation_shard_assignments"],
         "maximum_active_subsessions": 8,
         "invoke_shard_concurrency": 8,
-        "verification_authority_concurrency": 1 if verification_ready else 0,
+        "verification_authority_concurrency": (
+            MAX_ACTIVE_COPILOT_CLAIMS if verification_ready else 0
+        ),
         "verification_pending_authority_count": (
             len(value["verification_authority_assignments"])
             if verification_ready
@@ -2162,10 +2321,15 @@ def _assessment_ready_result(
     package_path: Path,
     draft_path: Path,
     pending_count: int,
+    active_count: int,
 ) -> dict[str, Any]:
     return {
         "status": "assessment_ready",
         "pending_authority_count": pending_count,
+        "active_authority_evaluator_count": active_count,
+        "available_authority_evaluator_slots": (
+            MAX_ACTIVE_COPILOT_CLAIMS - active_count
+        ),
         "package_path": str(package_path),
         "prompt_path": str(EVALUATION_PROMPT),
         "assessment_path": str(draft_path),

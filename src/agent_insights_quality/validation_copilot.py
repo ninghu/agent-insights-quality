@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import copy
+import os
 from collections.abc import Callable, Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,13 @@ EVALUATION_PROMPT = (
 )
 _PACKAGE_KIND = "test-agent-validation-private-package"
 _EVALUATION_KIND = "test-agent-validation-copilot-evaluation"
+MAX_ACTIVE_COPILOT_CLAIMS = 8
+COPILOT_CLAIM_LEASE = timedelta(hours=2)
+COPILOT_LOCK_WAIT_SECONDS = 15
+
+
+class CopilotClaimError(ContractError):
+    """An evaluator no longer owns its exact active claim."""
 
 
 def evaluation_root(root: Path | None = None) -> Path:
@@ -51,7 +59,10 @@ def evaluation_root(root: Path | None = None) -> Path:
 
 
 def evaluation_lock(root: Path | None = None) -> LocalValidationLock:
-    return LocalValidationLock(evaluation_root(root) / "evaluation.lock")
+    return LocalValidationLock(
+        (root or validation_runtime_root()).resolve() / "coordinator.lock",
+        wait_seconds=COPILOT_LOCK_WAIT_SECONDS,
+    )
 
 
 def assessment_path(
@@ -271,42 +282,197 @@ def load_bound_private_package(
     return package
 
 
+def copilot_claimant_reference(
+    worktree_root: Path | None = None,
+) -> str:
+    resolved = (worktree_root or ROOT).resolve()
+    return content_hash(
+        {
+            "kind": "test-agent-validation-copilot-claimant",
+            "worktree_context": os.path.normcase(str(resolved)),
+        }
+    )
+
+
 def write_active_pointer(
-    package_record: Mapping[str, Any],
     *,
     prepared: Mapping[str, Any],
     authority_id: str,
+    claimant_reference: str | None = None,
+    claimed_at: datetime | None = None,
     root: Path | None = None,
 ) -> dict[str, Any]:
-    private_root = evaluation_root(root)
-    package_path = Path(package_record["path"]).resolve()
-    draft_path = Path(package_record["assessment_path"]).resolve()
-    if private_root not in package_path.parents or private_root not in draft_path.parents:
-        raise ContractError("Copilot validation paths escape their private runtime root")
+    claimant = claimant_reference or copilot_claimant_reference()
+    started = (claimed_at or datetime.now(UTC)).astimezone(UTC)
     pointer = {
-        "schema_version": "1.0.0",
+        "schema_version": "1.1.0",
         "kind": "test-agent-validation-active-copilot-package",
+        "claim_state": "preparing",
+        "claimant_reference": _validated_claimant_reference(claimant),
+        "claimed_at": started.isoformat(),
+        "lease_expires_at": (started + COPILOT_CLAIM_LEASE).isoformat(),
+        "completed_at": None,
         "origin_run_id": prepared["run_id"],
         "origin_commit_sha": prepared["commit_sha"],
         "authority_id": authority_id,
-        "package_hash": package_record["package_hash"],
-        "package_path": package_path.relative_to(private_root).as_posix(),
-        "assessment_path": draft_path.relative_to(private_root).as_posix(),
+        "assignment_digest": verification_assignment(
+            prepared,
+            authority_id,
+        )["assignment_digest"],
+        "package_hash": None,
+        "package_path": None,
+        "assessment_path": None,
         "pointer_digest": "",
     }
     pointer["pointer_digest"] = digest_without_field(pointer, "pointer_digest")
-    atomic_json(private_root / "active.json", pointer)
+    atomic_json(_claim_path(claimant, root=root), pointer)
     return pointer
 
 
-def load_active_pointer(*, root: Path | None = None) -> dict[str, Any]:
-    pointer = read_json(evaluation_root(root) / "active.json")
+def attach_private_package_to_active_pointer(
+    pointer: Mapping[str, Any],
+    package_record: Mapping[str, Any],
+    *,
+    now: datetime | None = None,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    private_root = evaluation_root(root)
+    package_hash, package_path, draft_path = _package_pointer_values(
+        package_record,
+        private_root=private_root,
+    )
+    claimant = _validated_claimant_reference(
+        str(pointer.get("claimant_reference") or "")
+    )
+    current = _read_claim_pointer(claimant, root=root)
+    expected_package = {
+        "package_hash": package_hash,
+        "package_path": package_path,
+        "assessment_path": draft_path,
+    }
+    if current["claim_state"] == "ready" and all(
+        current[field] == value for field, value in expected_package.items()
+    ):
+        return current
+    if current["pointer_digest"] != pointer.get("pointer_digest"):
+        raise ContractError("Copilot assessment claim changed during preparation")
+    _assert_pointer_active(current, now=now, require_ready=False)
+    if current["claim_state"] != "preparing":
+        raise ContractError("Copilot assessment claim is not awaiting a package")
+    updated = copy.deepcopy(current)
+    updated.update(expected_package)
+    updated["claim_state"] = "ready"
+    updated["pointer_digest"] = digest_without_field(updated, "pointer_digest")
+    atomic_json(_claim_path(claimant, root=root), updated)
+    return updated
+
+
+def load_active_pointer(
+    *,
+    claimant_reference: str | None = None,
+    now: datetime | None = None,
+    require_ready: bool = True,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    claimant = claimant_reference or copilot_claimant_reference()
+    pointer = _read_claim_pointer(claimant, root=root)
+    _assert_pointer_active(pointer, now=now, require_ready=require_ready)
+    return pointer
+
+
+def active_copilot_claims(
+    *,
+    prepared: Mapping[str, Any],
+    now: datetime | None = None,
+    root: Path | None = None,
+) -> list[dict[str, Any]]:
+    claims_root = evaluation_root(root) / "claims"
+    if not claims_root.is_dir():
+        return []
+    current_time = (now or datetime.now(UTC)).astimezone(UTC)
+    assignments = {
+        item["authority_id"]: item
+        for item in prepared["verification_authority_assignments"]
+    }
+    active: list[dict[str, Any]] = []
+    authority_ids: set[str] = set()
+    for path in sorted(claims_root.glob("*.json")):
+        pointer = read_json(path)
+        _validate_pointer(pointer)
+        claimant = str(pointer["claimant_reference"])
+        if path != _claim_path(claimant, root=root):
+            raise ContractError("Copilot assessment claim path binding is invalid")
+        if (
+            pointer["origin_run_id"] != prepared["run_id"]
+            or pointer["origin_commit_sha"] != prepared["commit_sha"]
+            or pointer["claim_state"] == "completed"
+            or _pointer_time(pointer["lease_expires_at"]) <= current_time
+        ):
+            continue
+        authority_id = str(pointer["authority_id"])
+        expected = verification_assignment(prepared, authority_id)
+        if (
+            assignments.get(authority_id) != expected
+            or pointer["assignment_digest"] != expected["assignment_digest"]
+            or authority_id in authority_ids
+        ):
+            raise ContractError("Active Copilot assessment claim binding is invalid")
+        authority_ids.add(authority_id)
+        active.append(pointer)
+    if len(active) > MAX_ACTIVE_COPILOT_CLAIMS:
+        raise ContractError("Active Copilot assessment claim capacity is invalid")
+    return active
+
+
+def complete_active_pointer(
+    pointer: Mapping[str, Any],
+    *,
+    completed_at: datetime | None = None,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    claimant = _validated_claimant_reference(
+        str(pointer.get("claimant_reference") or "")
+    )
+    finished = (completed_at or datetime.now(UTC)).astimezone(UTC)
+    current = _read_claim_pointer(claimant, root=root)
+    if current["pointer_digest"] != pointer.get("pointer_digest"):
+        raise ContractError("Copilot assessment claim changed before completion")
+    if current["claim_state"] == "completed":
+        raise ContractError("Copilot assessment claim is already completed")
+    updated = copy.deepcopy(current)
+    updated["claim_state"] = "completed"
+    updated["completed_at"] = finished.isoformat()
+    updated["pointer_digest"] = digest_without_field(updated, "pointer_digest")
+    atomic_json(_claim_path(claimant, root=root), updated)
+    return updated
+
+
+def _read_claim_pointer(
+    claimant_reference: str,
+    *,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    claimant = _validated_claimant_reference(claimant_reference)
+    pointer = read_json(_claim_path(claimant, root=root))
+    _validate_pointer(pointer)
+    if pointer["claimant_reference"] != claimant:
+        raise ContractError("Copilot assessment claimant binding is invalid")
+    return pointer
+
+
+def _validate_pointer(pointer: Mapping[str, Any]) -> None:
     required = {
         "schema_version",
         "kind",
+        "claim_state",
+        "claimant_reference",
+        "claimed_at",
+        "lease_expires_at",
+        "completed_at",
         "origin_run_id",
         "origin_commit_sha",
         "authority_id",
+        "assignment_digest",
         "package_hash",
         "package_path",
         "assessment_path",
@@ -314,13 +480,147 @@ def load_active_pointer(*, root: Path | None = None) -> dict[str, Any]:
     }
     if (
         set(pointer) != required
-        or pointer["schema_version"] != "1.0.0"
+        or pointer["schema_version"] != "1.1.0"
         or pointer["kind"] != "test-agent-validation-active-copilot-package"
+        or pointer["claim_state"] not in {"preparing", "ready", "completed"}
+        or _validated_claimant_reference(
+            str(pointer["claimant_reference"])
+        )
+        != pointer["claimant_reference"]
         or pointer["pointer_digest"]
         != digest_without_field(pointer, "pointer_digest")
     ):
         raise ContractError("Active Copilot validation package pointer is invalid")
-    return pointer
+    claimed_at = _pointer_time(pointer["claimed_at"])
+    lease_expires_at = _pointer_time(pointer["lease_expires_at"])
+    completed_at = (
+        None
+        if pointer["completed_at"] is None
+        else _pointer_time(pointer["completed_at"])
+    )
+    has_package = all(
+        isinstance(pointer[field], str) and bool(pointer[field])
+        for field in ("package_hash", "package_path", "assessment_path")
+    )
+    if (
+        lease_expires_at != claimed_at + COPILOT_CLAIM_LEASE
+        or not _valid_digest(str(pointer["assignment_digest"]))
+        or (
+            has_package
+            and not _valid_digest(str(pointer["package_hash"]))
+        )
+        or (
+            pointer["claim_state"] == "preparing"
+            and (
+                any(
+                    pointer[field] is not None
+                    for field in (
+                        "package_hash",
+                        "package_path",
+                        "assessment_path",
+                        "completed_at",
+                    )
+                )
+            )
+        )
+        or (
+            pointer["claim_state"] == "ready"
+            and (not has_package or completed_at is not None)
+        )
+        or (
+            pointer["claim_state"] == "completed"
+            and (
+                completed_at is None
+                or completed_at < claimed_at
+                or (
+                    not has_package
+                    and any(
+                        pointer[field] is not None
+                        for field in (
+                            "package_hash",
+                            "package_path",
+                            "assessment_path",
+                        )
+                    )
+                )
+            )
+        )
+    ):
+        raise ContractError("Active Copilot validation package pointer is invalid")
+
+
+def _assert_pointer_active(
+    pointer: Mapping[str, Any],
+    *,
+    now: datetime | None,
+    require_ready: bool,
+) -> None:
+    current_time = (now or datetime.now(UTC)).astimezone(UTC)
+    if pointer["claim_state"] == "completed":
+        raise ContractError("Copilot assessment claim is already completed")
+    if _pointer_time(pointer["lease_expires_at"]) <= current_time:
+        raise ContractError("Copilot assessment claim lease expired")
+    if require_ready and pointer["claim_state"] != "ready":
+        raise ContractError("Copilot assessment package is not ready")
+
+
+def _package_pointer_values(
+    package_record: Mapping[str, Any],
+    *,
+    private_root: Path,
+) -> tuple[str, str, str]:
+    package_path = Path(package_record["path"]).resolve()
+    draft_path = Path(package_record["assessment_path"]).resolve()
+    if private_root not in package_path.parents or private_root not in draft_path.parents:
+        raise ContractError("Copilot validation paths escape their private runtime root")
+    package_hash = str(package_record["package_hash"])
+    if not _valid_digest(package_hash):
+        raise ContractError("Copilot validation package digest is invalid")
+    return (
+        package_hash,
+        package_path.relative_to(private_root).as_posix(),
+        draft_path.relative_to(private_root).as_posix(),
+    )
+
+
+def _claim_path(
+    claimant_reference: str,
+    *,
+    root: Path | None = None,
+) -> Path:
+    claimant = _validated_claimant_reference(claimant_reference)
+    return (
+        evaluation_root(root)
+        / "claims"
+        / f"{claimant.removeprefix('sha256:')}.json"
+    )
+
+
+def _validated_claimant_reference(value: str) -> str:
+    if not _valid_digest(value):
+        raise ContractError("Copilot assessment claimant reference is invalid")
+    return value
+
+
+def _valid_digest(value: str) -> bool:
+    suffix = value.removeprefix("sha256:")
+    return (
+        value.startswith("sha256:")
+        and len(suffix) == 64
+        and all(character in "0123456789abcdef" for character in suffix)
+    )
+
+
+def _pointer_time(value: Any) -> datetime:
+    if not isinstance(value, str):
+        raise ContractError("Copilot assessment claim time is invalid")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ContractError("Copilot assessment claim time is invalid") from error
+    if parsed.tzinfo is None:
+        raise ContractError("Copilot assessment claim time is invalid")
+    return parsed.astimezone(UTC)
 
 
 def pointer_paths(
@@ -329,6 +629,11 @@ def pointer_paths(
     root: Path | None = None,
 ) -> tuple[Path, Path]:
     private_root = evaluation_root(root)
+    if not all(
+        isinstance(pointer.get(field), str) and pointer[field]
+        for field in ("package_path", "assessment_path")
+    ):
+        raise ContractError("Copilot validation pointer has no prepared package")
     package = (private_root / str(pointer["package_path"])).resolve()
     assessment = (private_root / str(pointer["assessment_path"])).resolve()
     if private_root not in package.parents or private_root not in assessment.parents:

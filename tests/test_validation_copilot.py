@@ -18,6 +18,7 @@ from agent_insights_quality.util import (
 from agent_insights_quality.validation_copilot import (
     EVALUATION_PROMPT,
     assessment_path,
+    attach_private_package_to_active_pointer,
     authority_evidence_from_evaluation,
     incomplete_authority_evidence_from_invocation,
     incomplete_result_requires_fresh_invocation,
@@ -282,9 +283,13 @@ def _package(
         root=tmp_path,
     )
     pointer = write_active_pointer(
-        record,
         prepared=prepared,
         authority_id=authority.authority_id,
+        root=tmp_path,
+    )
+    pointer = attach_private_package_to_active_pointer(
+        pointer,
+        record,
         root=tmp_path,
     )
     package_path, _ = pointer_paths(pointer, root=tmp_path)
