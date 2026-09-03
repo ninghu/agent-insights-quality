@@ -235,7 +235,12 @@ class AzureValidationBlobStore:
         except ResourceNotFoundError:
             return None
 
-    def list_approved_records(self, repository: str) -> list[BlobRecord]:
+    def list_approved_records(
+        self,
+        repository: str,
+        *,
+        exact_name: str | None = None,
+    ) -> list[BlobRecord]:
         try:
             from azure.core.exceptions import AzureError
         except ImportError as error:
@@ -243,18 +248,32 @@ class AzureValidationBlobStore:
                 "Validation Blob operations require the azure optional dependencies"
             ) from error
         prefix = approved_record_blob_prefix(repository)
+        if exact_name is not None and (
+            re.fullmatch(
+                rf"{re.escape(prefix)}[0-9a-f]{{40}}/record\.json",
+                exact_name,
+            )
+            is None
+        ):
+            raise ContractError(
+                "Approved validation record exact listing identity is invalid"
+            )
+        listing_prefix = exact_name or prefix
         try:
             values = list(
                 self._service.get_container_client(
                     APPROVED_RECORD_CONTAINER
-                ).list_blobs(name_starts_with=prefix)
+                ).list_blobs(
+                    name_starts_with=listing_prefix,
+                    include=["versions"],
+                )
             )
         except (AzureError, OSError) as error:
             raise ContractError(
                 "Approved validation records cannot be listed"
             ) from error
         listed: list[tuple[str, str, str]] = []
-        seen: set[str] = set()
+        seen: set[tuple[str, str]] = set()
         pattern = re.compile(rf"^{re.escape(prefix)}[0-9a-f]{{40}}/record\.json$")
         for value in values:
             name = _blob_property(value, "name")
@@ -267,12 +286,13 @@ class AzureValidationBlobStore:
                 or not etag.strip()
                 or not isinstance(version_id, str)
                 or not version_id.strip()
-                or name in seen
+                or (name, version_id) in seen
+                or (exact_name is not None and name != exact_name)
             ):
                 raise ContractError(
                     "Approved validation record listing metadata is invalid"
                 )
-            seen.add(name)
+            seen.add((name, version_id))
             listed.append((name, etag, version_id))
         records: list[BlobRecord] = []
         for name, etag, version_id in sorted(listed):

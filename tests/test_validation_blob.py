@@ -363,8 +363,9 @@ def test_approved_record_listing_is_repository_scoped_and_version_bound() -> Non
 
     class Container:
         @staticmethod
-        def list_blobs(*, name_starts_with):
+        def list_blobs(*, name_starts_with, include):
             observed["prefix"] = name_starts_with
+            observed["include"] = include
             return [
                 SimpleNamespace(name=name, etag=f"etag-{index}", version_id=f"v-{index}")
                 for index, name in enumerate(names)
@@ -400,6 +401,7 @@ def test_approved_record_listing_is_repository_scoped_and_version_bound() -> Non
     records = store.list_approved_records(repository)
 
     assert observed["prefix"] == prefix
+    assert observed["include"] == ["versions"]
     assert [record.name for record in records] == sorted(names)
     assert all(record.content == canonical_bytes(record.value) for record in records)
 

@@ -4,6 +4,7 @@ from copy import deepcopy
 
 import pytest
 
+from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.util import ContractError, canonical_bytes
 from agent_insights_quality.validation_approved import (
     APPROVED_RECORD_CONTAINER,
@@ -16,6 +17,7 @@ from agent_insights_quality.validation_approved import (
     validate_local_result_binding,
 )
 from agent_insights_quality.validation_blob import BlobRecord
+from agent_insights_quality.validation_manifest import current_validation_digest
 
 HASH = "sha256:" + ("a" * 64)
 
@@ -72,6 +74,7 @@ class _Store:
         self.reads: list[str] = []
         self.asserted_container: str | None = None
         self.listed_repository: str | None = None
+        self.listed_exact_name: str | None = None
 
     def assert_approved_record_contract(self, container: str) -> None:
         self.asserted_container = container
@@ -86,9 +89,19 @@ class _Store:
         self.reads.append(name)
         return self.records[name]
 
-    def list_approved_records(self, repository: str) -> list[BlobRecord]:
+    def list_approved_records(
+        self,
+        repository: str,
+        *,
+        exact_name: str | None = None,
+    ) -> list[BlobRecord]:
         self.listed_repository = repository
-        return list(self.listed_records)
+        self.listed_exact_name = exact_name
+        return [
+            record
+            for record in self.listed_records
+            if exact_name is None or record.name == exact_name
+        ]
 
 
 def test_approved_record_is_minimal_and_self_bound() -> None:
@@ -225,7 +238,11 @@ def test_daily_fetches_exact_head_authoritative_blob(monkeypatch) -> None:
     assert store.reads[0].endswith(
         f"/{value['commit_sha']}/record.json"
     )
-    assert store.listed_repository is None
+    assert store.listed_repository == value["repository"]
+    assert store.listed_exact_name == approved_record_blob_name(
+        value["repository"],
+        value["commit_sha"],
+    )
     assert store.asserted_container == APPROVED_RECORD_CONTAINER
 
 
@@ -234,15 +251,15 @@ def test_daily_reuses_pr_65_record_for_matching_current_validation_digest(
 ) -> None:
     checkout_commit_sha = "a" * 40
     approved_commit_sha = "b" * 40
-    value = _record(commit_sha=approved_commit_sha, pr_number=65)
+    value = _record(
+        commit_sha=approved_commit_sha,
+        pr_number=65,
+        validation_digest=current_validation_digest(*load_catalogs()),
+    )
     store = _Store([_blob(value)])
     monkeypatch.setattr(
         "agent_insights_quality.validation_approved.current_clean_commit",
         lambda: checkout_commit_sha,
-    )
-    monkeypatch.setattr(
-        "agent_insights_quality.validation_approved.current_validation_digest",
-        lambda *_args: HASH,
     )
 
     binding = fetch_approved_record_for_checkout(
@@ -356,7 +373,7 @@ def test_digest_fallback_fails_closed_on_malformed_candidate(monkeypatch) -> Non
         )
 
 
-def test_digest_fallback_fails_closed_on_conflicting_blob_name(monkeypatch) -> None:
+def test_digest_fallback_fails_closed_on_conflicting_blob_versions(monkeypatch) -> None:
     checkout_commit_sha = "a" * 40
     first = _record(commit_sha="b" * 40, pr_number=65)
     second = _record(commit_sha="b" * 40, pr_number=66)
@@ -370,10 +387,38 @@ def test_digest_fallback_fails_closed_on_conflicting_blob_name(monkeypatch) -> N
         lambda *_args: HASH,
     )
 
-    with pytest.raises(ContractError, match="conflicting Blob name"):
+    with pytest.raises(ContractError, match="conflicting immutable versions"):
         fetch_approved_record_for_checkout(
             store,
             expected_repository=first["repository"],
+        )
+
+
+def test_exact_fast_path_fails_closed_on_conflicting_blob_versions(
+    monkeypatch,
+) -> None:
+    checkout_commit_sha = "b" * 40
+    historical = _record(commit_sha=checkout_commit_sha, pr_number=64)
+    current = _record(commit_sha=checkout_commit_sha, pr_number=65)
+    store = _Store(
+        [
+            _blob(historical, etag="historical-etag", version_id="historical"),
+            _blob(current, etag="current-etag", version_id="current"),
+        ]
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_approved.current_clean_commit",
+        lambda: checkout_commit_sha,
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.validation_approved.current_validation_digest",
+        lambda *_args: HASH,
+    )
+
+    with pytest.raises(ContractError, match="conflicting immutable versions"):
+        fetch_approved_record_for_checkout(
+            store,
+            expected_repository=current["repository"],
         )
 
 

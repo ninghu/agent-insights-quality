@@ -258,24 +258,51 @@ def fetch_approved_record_for_checkout(
             expected_name=exact_name,
             expected_validation_digest=validation_digest,
         )
+        versions = store.list_approved_records(
+            expected_repository,
+            exact_name=exact_name,
+        )
+        if not versions or not any(
+            record.version_id == exact.version_id and record.etag == exact.etag
+            for record in versions
+        ):
+            raise ContractError(
+                "Exact approved validation record version is absent from its "
+                "authoritative listing"
+            )
+        for record in versions:
+            version = _validate_authoritative_approved_record(
+                record,
+                expected_repository=expected_repository,
+                expected_commit_sha=checkout_commit_sha,
+                expected_name=exact_name,
+                expected_validation_digest=validation_digest,
+            )
+            if version != approved:
+                raise ContractError(
+                    "Approved validation record path has conflicting immutable versions"
+                )
         return _stamp_approval_binding(
             checkout_commit_sha=checkout_commit_sha,
             approved_record=approved,
         )
 
     matching: list[tuple[str, str, dict[str, Any]]] = []
-    seen_names: set[str] = set()
+    records_by_name: dict[str, dict[str, Any]] = {}
     for record in store.list_approved_records(expected_repository):
-        if record.name in seen_names:
-            raise ContractError(
-                "Approved validation record listing contains a conflicting Blob name"
-            )
-        seen_names.add(record.name)
         approved = _validate_authoritative_approved_record(
             record,
             expected_repository=expected_repository,
             expected_name=record.name,
         )
+        if record.name in records_by_name:
+            if records_by_name[record.name] != approved:
+                raise ContractError(
+                    "Approved validation record path has conflicting immutable "
+                    "versions"
+                )
+            continue
+        records_by_name[record.name] = approved
         if approved["validation_digest"] == validation_digest:
             matching.append(
                 (
