@@ -177,6 +177,44 @@ class LifecycleJournal:
             raise ContractError("Local validation journal does not exist")
         return self._read(self.active_path)
 
+    def superseded_run_ids(self, current: Mapping[str, Any]) -> list[str]:
+        validate_lifecycle(current)
+        active_by_digest: dict[str, dict[str, Any]] = {}
+        for path in self.root.rglob("*.json"):
+            if path == self.active_path or "superseded-formats" in path.parts:
+                continue
+            try:
+                event = self._read(path)
+            except (ContractError, OSError):
+                continue
+            if event.value["snapshot_type"] != "event":
+                continue
+            active = copy.deepcopy(event.value)
+            active["snapshot_type"] = "active"
+            active["event_reference"] = _local_reference(event, self.root)
+            active = stamp_lifecycle_digest(active)
+            validate_lifecycle(active)
+            active_by_digest[active["journal_digest"]] = active
+        digest = current["supersedes"]
+        seen: set[str] = set()
+        run_ids: list[str] = []
+        while digest is not None:
+            if digest in seen:
+                raise ContractError("Validation supersession chain is cyclic")
+            seen.add(digest)
+            ancestor = active_by_digest.get(str(digest))
+            if ancestor is None:
+                raise ContractError("Validation supersession ancestor is unavailable")
+            if (
+                ancestor["journal_digest"] != digest
+                or ancestor["repository"] != current["repository"]
+                or ancestor["pr_number"] != current["pr_number"]
+            ):
+                raise ContractError("Validation supersession ancestor changed")
+            run_ids.append(str(ancestor["run_id"]))
+            digest = ancestor["supersedes"]
+        return list(dict.fromkeys(run_ids))
+
     def begin_run(
         self,
         initial: Mapping[str, Any],

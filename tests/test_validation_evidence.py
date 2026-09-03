@@ -19,6 +19,7 @@ from agent_insights_quality.validation_evidence import (
     validate_evidence,
 )
 from agent_insights_quality.validation_authority_results import (
+    has_prior_nonpass_result_for_invocation,
     load_bound_authority_verification_result,
     load_authority_verification_result,
     reusable_authority_verification_results,
@@ -661,6 +662,76 @@ def test_cross_generation_pass_reuse_ignores_global_verifier_state(
             require_current_generation=True,
             root=tmp_path,
         )
+
+
+def test_prior_nonpass_result_detects_repeated_receipt(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    evidence = _evidence()
+    spec = authority_specs(*load_catalogs())[0]
+    authority = evidence["authorities"][0]
+    runtime = _result_runtime(spec, authority, index=1)
+    invocation = _result_invocation(spec.authority_id, digit="2")
+    prepared = _result_prepared(evidence, verifier_digit="1")
+
+    def write(run_id: str, minute: int) -> dict[str, str]:
+        current = deepcopy(prepared)
+        current["run_id"] = run_id
+        return write_authority_verification_result(
+            prepared=current,
+            plan=_result_plan(),
+            authority=spec,
+            runtime=runtime,
+            invocation_reference=invocation,
+            authority_evidence=None,
+            outcome="INCOMPLETE",
+            started_at=datetime(2026, 9, 1, 12, minute, tzinfo=UTC),
+            completed_at=datetime(2026, 9, 1, 12, minute, 1, tzinfo=UTC),
+            query_stage="trace_output_stability",
+            error_code="trace_assertion_correlated_row_set_changed",
+            query_diagnostics={
+                "matched_reference_count": 4,
+                "expected_reference_count": 5,
+                "missing_reference_count": 1,
+            },
+            fence=lambda: None,
+            root=tmp_path,
+        )
+
+    first = load_authority_verification_result(
+        write("validation-000000000001", 0),
+        root=tmp_path,
+    )
+    assert not has_prior_nonpass_result_for_invocation(
+        first,
+        prior_run_ids=[],
+        root=tmp_path,
+    )
+
+    second = load_authority_verification_result(
+        write("validation-000000000002", 1),
+        root=tmp_path,
+    )
+    assert has_prior_nonpass_result_for_invocation(
+        second,
+        prior_run_ids=["validation-000000000001"],
+        root=tmp_path,
+    )
+
+    def reject_private_history(*_args, **_kwargs):
+        raise ContractError("private evaluation unavailable")
+
+    monkeypatch.setattr(
+        authority_results,
+        "load_authority_verification_result",
+        reject_private_history,
+    )
+    assert not has_prior_nonpass_result_for_invocation(
+        second,
+        prior_run_ids=["validation-000000000001"],
+        root=tmp_path,
+    )
 
 
 def test_definitive_fail_result_is_reusable_without_revalidation(

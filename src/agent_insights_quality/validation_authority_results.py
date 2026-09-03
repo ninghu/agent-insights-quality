@@ -389,6 +389,46 @@ def reusable_authority_verification_results(
     return selected
 
 
+def has_prior_nonpass_result_for_invocation(
+    result: Mapping[str, Any],
+    *,
+    prior_run_ids: Sequence[str],
+    root: Path | None = None,
+) -> bool:
+    validate_authority_verification_result(result)
+    runtime_root = (root or validation_runtime_root()).resolve()
+    for run_id in dict.fromkeys(prior_run_ids):
+        path = _result_path(
+            runtime_root,
+            repository=str(result["repository"]),
+            pr_number=int(result["pr_number"]),
+            run_id=str(run_id),
+            authority_id=str(result["authority_id"]),
+        )
+        if not path.is_file():
+            continue
+        try:
+            raw = read_json(path)
+            candidate = load_authority_verification_result(
+                _result_reference(raw, path=path, root=runtime_root),
+                root=runtime_root,
+            )
+        except (ContractError, KeyError, OSError, ValueError):
+            continue
+        if (
+            candidate["artifact_digest"] != result["artifact_digest"]
+            and candidate["repository"] == result["repository"]
+            and candidate["pr_number"] == result["pr_number"]
+            and candidate["authority_id"] == result["authority_id"]
+            and candidate["origin_run_id"] == run_id
+            and candidate["outcome"] in {"FAIL", "INCOMPLETE"}
+            and candidate["binding"]["invocation_receipt_digest"]
+            == result["binding"]["invocation_receipt_digest"]
+        ):
+            return True
+    return False
+
+
 def validate_authority_verification_result(value: Mapping[str, Any]) -> None:
     errors = sorted(
         Draft202012Validator(

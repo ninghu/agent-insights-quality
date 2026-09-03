@@ -69,7 +69,10 @@ Daily quality assessment, scoring, reporting, ADX, email, Daily traffic, approva
    cannot extract or publish the receipt.
    A new generation selects only changed, incomplete, missing, or verifier-superseded failed
    authorities. Within that set, invoke only authorities without current exact-bound completed
-   receipts; assign all others verify-only work and send no new endpoint traffic.
+   receipts. Assign an exact-receipt `INCOMPLETE` to verify-only once. If that new immutable result
+   remains `INCOMPLETE` and a prior non-PASS result is bound to the same receipt, send one fresh
+   issue plus paired-`v0` traffic set in the next generation. Assign all others verify-only work and
+   send no new endpoint traffic.
 9. Begin verification only after the invocation barrier. Verification is read-only and never sends
    traffic. In each of up to eight visible GPT-5.6 Sol evaluator sessions, prepare or locate that
    session's next exact-bound private authority package:

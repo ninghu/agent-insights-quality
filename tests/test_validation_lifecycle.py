@@ -101,6 +101,7 @@ def test_new_run_supersedes_incomplete_run_without_deleting_history(
     assert forced == _authority_ids()
     assert second.value["run_id"] != first.value["run_id"]
     assert second.value["supersedes"].startswith("sha256:")
+    assert journal.superseded_run_ids(second.value) == [first.value["run_id"]]
     history = [path.read_text(encoding="utf-8") for path in journal.root.rglob("*.json")]
     assert any('"SUPERSEDED"' in item for item in history)
     assert not list(journal.root.rglob(".*.tmp"))

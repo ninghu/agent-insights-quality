@@ -96,7 +96,7 @@ def test_complete_migrated_receipts_force_zero_invoke_shards() -> None:
             "incomplete_authority_ids": [],
         },
         incomplete_current_invocations=authority_ids,
-        endpoint_bad_current_invocations=[],
+        fresh_current_invocations=[],
     )
     assert forced == []
     assert _assignments(
@@ -114,12 +114,14 @@ def _requirements_for_endpoint_pass(
     monkeypatch,
     *,
     endpoint_pass: bool,
+    repeated_nonpass: bool = False,
 ) -> tuple[str, list[str], list[str]]:
     active = _active_validation()
     authority_id = "issue-001"
     active["invocation_authority_ids"] = []
     journal = SimpleNamespace(
-        read_active=lambda: SimpleNamespace(value=active)
+        read_active=lambda: SimpleNamespace(value=active),
+        superseded_run_ids=lambda _active: ["validation-000000000000"],
     )
     monkeypatch.setattr(
         validation_coordinator,
@@ -148,10 +150,21 @@ def _requirements_for_endpoint_pass(
             },
         },
     )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "has_prior_nonpass_result_for_invocation",
+        lambda _result, *, prior_run_ids: (
+            repeated_nonpass
+            and prior_run_ids == ["validation-000000000000"]
+        ),
+    )
 
     incomplete, endpoint_bad = _current_invocation_requirements(
         journal=journal,
-        plan={},
+        plan={
+            "repository": active["repository"],
+            "pr_number": active["pr_number"],
+        },
         authorities=authority_specs(*load_catalogs()),
     )
     return authority_id, incomplete, endpoint_bad
@@ -173,7 +186,7 @@ def test_endpoint_bad_incomplete_overrides_supplemental_receipt(
             "incomplete_authority_ids": [],
         },
         incomplete_current_invocations=incomplete,
-        endpoint_bad_current_invocations=endpoint_bad,
+        fresh_current_invocations=endpoint_bad,
     )
 
     assert incomplete == endpoint_bad == [authority_id]
@@ -196,11 +209,51 @@ def test_telemetry_only_incomplete_remains_verify_only(
             "incomplete_authority_ids": [],
         },
         incomplete_current_invocations=incomplete,
-        endpoint_bad_current_invocations=endpoint_bad,
+        fresh_current_invocations=endpoint_bad,
     )
 
     assert incomplete == endpoint_bad == []
     assert forced == []
+
+
+def test_repeated_nonpass_receipt_forces_one_fresh_traffic_set(
+    monkeypatch,
+) -> None:
+    authority_id, incomplete, fresh = _requirements_for_endpoint_pass(
+        monkeypatch,
+        endpoint_pass=True,
+        repeated_nonpass=True,
+    )
+    forced = _forced_invocation_authority_ids(
+        migration={"incomplete_authority_ids": []},
+        supplemental={
+            "imported_authority_ids": [authority_id],
+            "incomplete_authority_ids": [],
+        },
+        incomplete_current_invocations=incomplete,
+        fresh_current_invocations=fresh,
+    )
+
+    assert incomplete == fresh == forced == [authority_id]
+
+
+def test_invocation_recovery_does_not_cross_pull_requests(monkeypatch) -> None:
+    active = _active_validation()
+    journal = SimpleNamespace(
+        read_active=lambda: SimpleNamespace(value=active),
+        superseded_run_ids=lambda _active: pytest.fail(
+            "cross-PR history must not be read"
+        ),
+    )
+
+    assert _current_invocation_requirements(
+        journal=journal,
+        plan={
+            "repository": active["repository"],
+            "pr_number": active["pr_number"] + 1,
+        },
+        authorities=authority_specs(*load_catalogs()),
+    ) == ([], [])
 
 
 def _active_validation() -> dict:

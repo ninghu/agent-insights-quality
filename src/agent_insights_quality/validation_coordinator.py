@@ -49,6 +49,7 @@ from agent_insights_quality.validation_copilot import (
 from agent_insights_quality.validation_assignments import verification_assignment
 from agent_insights_quality.validation_authority_results import (
     current_authority_verification_results,
+    has_prior_nonpass_result_for_invocation,
     load_authority_verification_result,
     load_bound_authority_verification_result,
     reusable_authority_verification_results,
@@ -215,7 +216,7 @@ def prepare_test_agent_validation() -> dict[str, Any]:
             ) as migration:
                 (
                     incomplete_current_invocations,
-                    endpoint_bad_current_invocations,
+                    fresh_current_invocations,
                 ) = _current_invocation_requirements(
                     journal=journal,
                     plan=plan,
@@ -304,9 +305,7 @@ def prepare_test_agent_validation() -> dict[str, Any]:
                     incomplete_current_invocations=(
                         incomplete_current_invocations
                     ),
-                    endpoint_bad_current_invocations=(
-                        endpoint_bad_current_invocations
-                    ),
+                    fresh_current_invocations=fresh_current_invocations,
                 ),
             ],
             quota_plan_digest=controller.active.value["digests"][
@@ -1917,10 +1916,10 @@ def _forced_invocation_authority_ids(
     migration: Mapping[str, Any],
     supplemental: Mapping[str, Any],
     incomplete_current_invocations: list[str],
-    endpoint_bad_current_invocations: list[str],
+    fresh_current_invocations: list[str],
 ) -> list[str]:
     available = set(supplemental["imported_authority_ids"]) - set(
-        endpoint_bad_current_invocations
+        fresh_current_invocations
     )
     return list(
         dict.fromkeys(
@@ -2106,8 +2105,13 @@ def _current_invocation_requirements(
         active = journal.read_active().value
     except (ContractError, OSError):
         return [], []
-    if active["state"] != "VALIDATING":
+    if (
+        active["state"] != "VALIDATING"
+        or active["repository"] != plan["repository"]
+        or active["pr_number"] != plan["pr_number"]
+    ):
         return [], []
+    prior_run_ids = journal.superseded_run_ids(active)
     authority_ids = list(active["invocation_authority_ids"])
     completed: set[str] = set()
     if authority_ids:
@@ -2132,7 +2136,7 @@ def _current_invocation_requirements(
         for authority_id in authority_ids
         if authority_id not in completed
     }
-    endpoint_bad: set[str] = set()
+    fresh_required: set[str] = set()
     result_references = current_authority_verification_results(
         prepared=active,
         authority_ids=active["validation_authority_ids"],
@@ -2150,9 +2154,15 @@ def _current_invocation_requirements(
             invocation=(
                 receipt["invocation"] if receipt is not None else None
             ),
+        ) or (
+            result["outcome"] == "INCOMPLETE"
+            and has_prior_nonpass_result_for_invocation(
+                result,
+                prior_run_ids=prior_run_ids,
+            )
         ):
             forced.add(authority_id)
-            endpoint_bad.add(authority_id)
+            fresh_required.add(authority_id)
     ordered_forced = [
         authority.authority_id
         for authority in authorities
@@ -2161,7 +2171,7 @@ def _current_invocation_requirements(
     return ordered_forced, [
         authority_id
         for authority_id in ordered_forced
-        if authority_id in endpoint_bad
+        if authority_id in fresh_required
     ]
 
 
