@@ -278,12 +278,12 @@ class AzureValidationBlobStore:
         for value in values:
             name = _blob_property(value, "name")
             etag = _blob_property(value, "etag")
+            normalized_etag = _normalize_azure_etag(etag)
             version_id = _blob_property(value, "version_id")
             if (
                 not isinstance(name, str)
                 or pattern.fullmatch(name) is None
-                or not isinstance(etag, str)
-                or not etag.strip()
+                or normalized_etag is None
                 or not isinstance(version_id, str)
                 or not version_id.strip()
                 or (name, version_id) in seen
@@ -293,7 +293,7 @@ class AzureValidationBlobStore:
                     "Approved validation record listing metadata is invalid"
                 )
             seen.add((name, version_id))
-            listed.append((name, etag, version_id))
+            listed.append((name, normalized_etag, version_id))
         records: list[BlobRecord] = []
         for name, etag, version_id in sorted(listed):
             record = self.read(
@@ -301,7 +301,10 @@ class AzureValidationBlobStore:
                 name,
                 version_id=version_id,
             )
-            if record.etag != etag or record.version_id != version_id:
+            if (
+                _normalize_azure_etag(record.etag) != etag
+                or record.version_id != version_id
+            ):
                 raise ContractError(
                     "Approved validation record listing metadata changed during read"
                 )
@@ -354,6 +357,30 @@ def _blob_property(value: Any, name: str) -> Any:
     if isinstance(value, Mapping):
         return value.get(name)
     return getattr(value, name, None)
+
+
+def _normalize_azure_etag(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if normalized[:2].casefold() == "w/":
+        normalized = normalized[2:]
+    if not normalized:
+        return None
+    quotes = {"'", '"'}
+    if normalized[0] in quotes:
+        if len(normalized) < 2 or normalized[-1] != normalized[0]:
+            return None
+        normalized = normalized[1:-1]
+    elif normalized[-1] in quotes:
+        return None
+    if (
+        not normalized
+        or any(character.isspace() for character in normalized)
+        or any(character in quotes for character in normalized)
+    ):
+        return None
+    return normalized.casefold()
 
 
 def _decode_object(value: bytes, label: str) -> dict[str, Any]:
