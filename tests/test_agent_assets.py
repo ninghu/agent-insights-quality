@@ -35,7 +35,9 @@ def _normalized_source_diff(baseline: str, issue: str) -> str:
         if line.startswith(("--- ", "+++ ")):
             continue
         normalized.append(
-            re.sub(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@", "@@", line)
+            ""
+            if not line.strip()
+            else re.sub(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@", "@@", line)
         )
     return "\n".join(normalized)
 

@@ -2850,6 +2850,7 @@ def test_trace_assertion_waits_for_invoke_agent_hydration(
         False,
         "",
         "",
+        "",
     ]
     hydrated = [
         operation_id,
@@ -2877,6 +2878,7 @@ def test_trace_assertion_waits_for_invoke_agent_hydration(
         True,
         "finance-agent",
         "issue-013",
+        "dynamic",
     ]
     polls = []
     runtime._logs_client = lambda: object()  # type: ignore[method-assign]

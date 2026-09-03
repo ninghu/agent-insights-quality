@@ -158,6 +158,11 @@ def _requirements_for_endpoint_pass(
             and prior_run_ids == ["validation-000000000000"]
         ),
     )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "_approved_paired_trace_gap",
+        lambda *_args, **_kwargs: False,
+    )
 
     incomplete, endpoint_bad = _current_invocation_requirements(
         journal=journal,
