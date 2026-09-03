@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
@@ -13,10 +13,17 @@ from agent_insights_quality.models import (
     InsightRunEvidence,
     InvocationEvidence,
     VersionResult,
+    linked_operations_match_scope,
 )
 from agent_insights_quality.registry import version_entry
 from agent_insights_quality.runtime_state import VersionCheckpointStore
-from agent_insights_quality.util import ROOT, InsightWindowExpiredError
+from agent_insights_quality.util import (
+    ROOT,
+    ContractError,
+    InsightWindowExpiredError,
+    TraceAssertionActivationError,
+    read_json,
+)
 
 
 class _VersionStageError(Exception):
@@ -39,12 +46,24 @@ class _VersionStageError(Exception):
 
 
 class _RecoveryBudget:
-    def __init__(self, maximum: int) -> None:
+    def __init__(
+        self,
+        maximum: int,
+        checkpoint_store: VersionCheckpointStore | None = None,
+        agent_name: str | None = None,
+    ) -> None:
         self._maximum = maximum
+        self._checkpoint_store = checkpoint_store
+        self._agent_name = agent_name
         self._claimed = 0
         self._lock = threading.Lock()
 
     def claim(self) -> bool:
+        if self._checkpoint_store is not None and self._agent_name is not None:
+            return self._checkpoint_store.claim_agent_recovery(
+                self._agent_name,
+                self._maximum,
+            )
         with self._lock:
             if self._claimed >= self._maximum:
                 return False
@@ -89,6 +108,44 @@ def _progress(runtime: Any, message: str) -> None:
         reporter(message)
 
 
+def _required_trace_operations(
+    *,
+    agent: dict[str, Any],
+    expected: dict[str, Any] | None,
+    traffic_path: Path,
+    request_count: int,
+) -> tuple[tuple[str, ...], ...]:
+    if (
+        expected is not None
+        or agent["baseline_contract"]["trace_operations"] == "uniform"
+    ):
+        operations = tuple(
+            expected["trace_contract"]["operations"]
+            if expected is not None
+            else ("invoke_agent", "chat")
+        )
+        return tuple(operations for _ in range(request_count))
+
+    traffic = read_json(traffic_path)
+    requests = traffic.get("requests") if isinstance(traffic, dict) else None
+    if not isinstance(requests, list) or len(requests) != request_count:
+        raise ContractError("Traffic request operation contract is incomplete")
+    required: list[tuple[str, ...]] = []
+    for request in requests:
+        expected_request = (
+            request.get("expected") if isinstance(request, dict) else None
+        )
+        operations = (
+            expected_request.get("required_operations")
+            if isinstance(expected_request, dict)
+            else None
+        )
+        if not isinstance(operations, list) or not operations:
+            raise ContractError("Traffic request operation contract is incomplete")
+        required.append(tuple(str(operation) for operation in operations))
+    return tuple(required)
+
+
 class RuntimePort(Protocol):
     def reset_monitor(self, agent_name: str, monitor_id: str) -> None: ...
 
@@ -126,10 +183,30 @@ class RuntimePort(Protocol):
         agent_name: str,
         foundry_version: str,
         operation_ids: tuple[str, ...],
-        required_operations: tuple[str, ...],
+        required_operations_by_request: tuple[tuple[str, ...], ...],
         window_start: str,
         window_end: str,
     ) -> None: ...
+
+    def trace_behavior_evidence(
+        self,
+        operation_ids: tuple[str, ...],
+    ) -> dict[str, Any]: ...
+
+    def trace_assertion_evidence(
+        self,
+        *,
+        agent_name: str,
+        foundry_version: str,
+        operation_ids: tuple[str, ...],
+        response_references: tuple[str, ...],
+        window_start: str,
+        window_end: str,
+        traffic_path: Path,
+        stabilization_seconds: int,
+        on_first_pass: Callable[[], None],
+        on_stable: Callable[[dict[str, Any]], None] | None = None,
+    ) -> tuple[tuple[Any, ...], ...]: ...
 
     def start_insights_run(
         self,
@@ -139,6 +216,7 @@ class RuntimePort(Protocol):
         foundry_version: str,
         operation_ids: tuple[str, ...],
         lookback_hours: float,
+        start_margin_seconds: int,
         persist: Callable[[InsightRunCheckpoint], None],
     ) -> InsightRunCheckpoint: ...
 
@@ -150,6 +228,7 @@ class RuntimePort(Protocol):
         foundry_version: str,
         operation_ids: tuple[str, ...],
         checkpoint: InsightRunCheckpoint,
+        validate_window: bool = True,
     ) -> InsightRunEvidence: ...
 
 
@@ -165,6 +244,8 @@ def execute(
     clean_window_poll_seconds: int = 15,
     clean_window_ingestion_margin_seconds: int = 30,
     clean_window_max_wait_seconds: int = 1200,
+    trace_assertion_stabilization_seconds: int = 180,
+    insight_start_margin_seconds: int = 30,
     max_recovery_versions: int = 3,
     agent_start_stagger_seconds: int = 0,
     checkpoint_store: VersionCheckpointStore | None = None,
@@ -174,33 +255,82 @@ def execute(
         f"qualification started: {len(selected)} Agents, "
         f"{sum(len(values) for values in selected.values())} issues",
     )
-    agent_by_name = {item["name"]: item for item in agents["agents"]}
-    issue_by_id = {item["id"]: item for item in issues["issues"]}
-    results: dict[str, AgentResult] = {}
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        futures = {
-            pool.submit(
-                _execute_agent,
-                agent_by_name[agent_name],
-                [issue_by_id[value] for value in issue_ids],
-                registry,
-                runtime,
-                seed,
-                lookback_hours,
-                clean_window_poll_seconds,
-                clean_window_ingestion_margin_seconds,
-                clean_window_max_wait_seconds,
-                _RecoveryBudget(max_recovery_versions),
-                checkpoint_store,
-                index * agent_start_stagger_seconds,
-            ): agent_name
-            for index, (agent_name, issue_ids) in enumerate(selected.items())
-        }
-        for future in as_completed(futures):
-            results[futures[future]] = future.result()
-    ordered = [results[agent["name"]] for agent in agents["agents"]]
+    ordered = [
+        execute_agent(
+            agent_name=agent["name"],
+            agents=agents,
+            issues=issues,
+            selected=selected,
+            registry=registry,
+            runtime=runtime,
+            seed=seed,
+            lookback_hours=lookback_hours,
+            clean_window_poll_seconds=clean_window_poll_seconds,
+            clean_window_ingestion_margin_seconds=(
+                clean_window_ingestion_margin_seconds
+            ),
+            clean_window_max_wait_seconds=clean_window_max_wait_seconds,
+            trace_assertion_stabilization_seconds=(
+                trace_assertion_stabilization_seconds
+            ),
+            insight_start_margin_seconds=insight_start_margin_seconds,
+            max_recovery_versions=max_recovery_versions,
+            checkpoint_store=checkpoint_store,
+            start_delay_seconds=index * agent_start_stagger_seconds,
+        )
+        for index, agent in enumerate(agents["agents"])
+        if agent["name"] in selected
+    ]
     _progress(runtime, "qualification runtime completed")
     return ordered
+
+
+def execute_agent(
+    *,
+    agent_name: str,
+    agents: dict[str, Any],
+    issues: dict[str, Any],
+    selected: dict[str, list[str]],
+    registry: dict[str, Any],
+    runtime: RuntimePort,
+    seed: int,
+    lookback_hours: float = 0.1,
+    clean_window_poll_seconds: int = 15,
+    clean_window_ingestion_margin_seconds: int = 30,
+    clean_window_max_wait_seconds: int = 1200,
+    trace_assertion_stabilization_seconds: int = 180,
+    insight_start_margin_seconds: int = 30,
+    max_recovery_versions: int = 3,
+    checkpoint_store: VersionCheckpointStore | None = None,
+    start_delay_seconds: int = 0,
+) -> AgentResult:
+    agent_by_name = {item["name"]: item for item in agents["agents"]}
+    issue_by_id = {item["id"]: item for item in issues["issues"]}
+    if agent_name not in selected or agent_name not in agent_by_name:
+        raise ContractError("Daily Agent lane assignment is invalid")
+    issue_ids = selected[agent_name]
+    if len(issue_ids) != len(set(issue_ids)) or not set(issue_ids).issubset(issue_by_id):
+        raise ContractError("Daily Agent lane issue assignment is invalid")
+    return _execute_agent(
+        agent_by_name[agent_name],
+        [issue_by_id[value] for value in issue_ids],
+        registry,
+        runtime,
+        seed,
+        lookback_hours,
+        clean_window_poll_seconds,
+        clean_window_ingestion_margin_seconds,
+        clean_window_max_wait_seconds,
+        trace_assertion_stabilization_seconds,
+        insight_start_margin_seconds,
+        _RecoveryBudget(
+            max_recovery_versions,
+            checkpoint_store,
+            agent_name,
+        ),
+        checkpoint_store,
+        start_delay_seconds,
+    )
 
 
 def _execute_agent(
@@ -213,6 +343,8 @@ def _execute_agent(
     clean_window_poll_seconds: int,
     clean_window_ingestion_margin_seconds: int,
     clean_window_max_wait_seconds: int,
+    trace_assertion_stabilization_seconds: int,
+    insight_start_margin_seconds: int,
     recovery_budget: _RecoveryBudget,
     checkpoint_store: VersionCheckpointStore | None,
     start_delay_seconds: int,
@@ -297,6 +429,10 @@ def _execute_agent(
                     clean_window_ingestion_margin_seconds
                 ),
                 clean_window_max_wait_seconds=clean_window_max_wait_seconds,
+                trace_assertion_stabilization_seconds=(
+                    trace_assertion_stabilization_seconds
+                ),
+                insight_start_margin_seconds=insight_start_margin_seconds,
                 recovery_budget=recovery_budget,
                 checkpoint_store=checkpoint_store,
                 start_stagger=start_stagger,
@@ -335,8 +471,25 @@ def _execute_agent(
         return AgentResult(name, baseline, skipped)
 
     results = []
+    blocked_by_unaccounted_run = False
     for index, issue in enumerate(issue_items, start=1):
         started = time.monotonic()
+        if blocked_by_unaccounted_run:
+            result = VersionResult(
+                logical_version=issue["id"],
+                foundry_version=version_entry(registry, name, issue["id"])[
+                    "foundry_version"
+                ],
+                status="inconclusive",
+                error_code="previous_insight_run_unaccounted",
+            )
+            _progress(
+                runtime,
+                f"{name}/{issue['id']}: inconclusive "
+                "(previous_insight_run_unaccounted)",
+            )
+            results.append(result)
+            continue
         _progress(runtime, f"{name}/{issue['id']}: started")
         try:
             issue_had_progress = (
@@ -344,6 +497,16 @@ def _execute_agent(
                 and checkpoint_store.has_version_progress(name, issue["id"])
             )
             issue_registry = version_entry(registry, name, issue["id"])
+            issue_checkpoint_args = (
+                name,
+                issue["id"],
+                issue_registry["foundry_version"],
+                issue_registry["content_digest"],
+            )
+            unresolved_start = (
+                checkpoint_store is not None
+                and checkpoint_store.insight_start_pending(*issue_checkpoint_args)
+            )
             issue_cached = (
                 checkpoint_store.result(
                     name,
@@ -379,11 +542,24 @@ def _execute_agent(
                     clean_window_ingestion_margin_seconds
                 ),
                 clean_window_max_wait_seconds=clean_window_max_wait_seconds,
+                trace_assertion_stabilization_seconds=(
+                    trace_assertion_stabilization_seconds
+                ),
+                insight_start_margin_seconds=insight_start_margin_seconds,
                 recovery_budget=recovery_budget,
                 checkpoint_store=checkpoint_store,
                 start_stagger=start_stagger,
             )
-            if resuming and issue_cached is None:
+            if resuming and (
+                issue_cached is None
+                or (
+                    unresolved_start
+                    and checkpoint_store is not None
+                    and not checkpoint_store.insight_start_pending(
+                        *issue_checkpoint_args
+                    )
+                )
+            ):
                 resuming = False
         except Exception as error:
             result = VersionResult(
@@ -401,6 +577,18 @@ def _execute_agent(
             + f" in {time.monotonic() - started:.1f}s",
         )
         results.append(result)
+        if checkpoint_store is not None:
+            issue_registry = version_entry(registry, name, issue["id"])
+            checkpoint_args = (
+                name,
+                issue["id"],
+                issue_registry["foundry_version"],
+                issue_registry["content_digest"],
+            )
+            blocked_by_unaccounted_run = (
+                checkpoint_store.insight_drain_pending(*checkpoint_args)
+                or checkpoint_store.insight_start_pending(*checkpoint_args)
+            )
     return AgentResult(name, baseline, results)
 
 
@@ -418,10 +606,26 @@ def _execute_version_with_recovery(
     clean_window_poll_seconds: int,
     clean_window_ingestion_margin_seconds: int,
     clean_window_max_wait_seconds: int,
+    trace_assertion_stabilization_seconds: int,
+    insight_start_margin_seconds: int,
     recovery_budget: _RecoveryBudget,
     checkpoint_store: VersionCheckpointStore | None,
     start_stagger: _StartStagger,
 ) -> VersionResult:
+    _reconcile_unresolved_insight_start(
+        runtime=runtime,
+        agent=agent,
+        monitor_id=monitor_id,
+        logical_version=logical_version,
+        registry_entry=registry_entry,
+        lookback_hours=lookback_hours,
+        clean_window_poll_seconds=clean_window_poll_seconds,
+        clean_window_ingestion_margin_seconds=(
+            clean_window_ingestion_margin_seconds
+        ),
+        clean_window_max_wait_seconds=clean_window_max_wait_seconds,
+        checkpoint_store=checkpoint_store,
+    )
     while True:
         try:
             return _execute_version(
@@ -434,6 +638,10 @@ def _execute_version_with_recovery(
                 seed=seed,
                 expected=expected,
                 lookback_hours=lookback_hours,
+                trace_assertion_stabilization_seconds=(
+                    trace_assertion_stabilization_seconds
+                ),
+                insight_start_margin_seconds=insight_start_margin_seconds,
                 checkpoint_store=checkpoint_store,
                 start_stagger=start_stagger,
             )
@@ -443,6 +651,17 @@ def _execute_version_with_recovery(
                 or not _recoverable(error)
                 or not recovery_budget.claim()
             ):
+                quarantined = _quarantine_started_insight(
+                    runtime=runtime,
+                    agent=agent,
+                    monitor_id=monitor_id,
+                    logical_version=logical_version,
+                    registry_entry=registry_entry,
+                    error=error,
+                    checkpoint_store=checkpoint_store,
+                )
+                if quarantined is not None:
+                    return quarantined
                 raise
             _progress(
                 runtime,
@@ -452,14 +671,9 @@ def _execute_version_with_recovery(
                 "invocation_failed"
             ) or error.code.startswith(
                 "insight_run_start_failed"
+            ) or error.code.startswith(
+                "insight_run_terminal_failed"
             ) or error.code == "insight_window_expired":
-                if checkpoint_store is not None:
-                    checkpoint_store.clear(
-                        agent["name"],
-                        logical_version,
-                        registry_entry["foundry_version"],
-                        registry_entry["content_digest"],
-                    )
                 runtime.wait_for_clean_window(
                     agent["name"],
                     lookback_hours,
@@ -468,6 +682,13 @@ def _execute_version_with_recovery(
                     max_wait_seconds=clean_window_max_wait_seconds,
                 )
                 runtime.reset_monitor(agent["name"], monitor_id)
+                if checkpoint_store is not None:
+                    checkpoint_store.clear(
+                        agent["name"],
+                        logical_version,
+                        registry_entry["foundry_version"],
+                        registry_entry["content_digest"],
+                    )
 
 
 def _recoverable(error: _VersionStageError) -> bool:
@@ -487,10 +708,312 @@ def _recoverable(error: _VersionStageError) -> bool:
         (
             "telemetry_failed",
             "trace_contract_failed",
+            "trace_evidence_failed",
+            "trace_assertion_failed",
             "insight_run_poll_failed",
             "insight_run_terminal_failed",
         )
     )
+
+
+def _validate_endpoint_contract(
+    *,
+    agent: dict[str, Any],
+    logical_version: str,
+    baseline: bool,
+    invocation: InvocationEvidence,
+) -> None:
+    expected_requests = (
+        int(agent["baseline_contract"]["request_count"])
+        if baseline
+        else invocation.request_count
+    )
+    if invocation.request_count != expected_requests:
+        raise _VersionStageError(
+            "endpoint_contract_failed",
+            ContractError(
+                f"{agent['name']}/{logical_version} expected "
+                f"{expected_requests} endpoint requests"
+            ),
+        )
+    if not (
+        invocation.request_count
+        == invocation.response_count
+        == invocation.usable_response_count
+    ):
+        raise _VersionStageError(
+            "endpoint_contract_failed",
+            ContractError(
+                f"{agent['name']}/{logical_version} endpoint evidence is incomplete"
+            ),
+        )
+    summaries = invocation.request_summaries
+    if len(summaries) != invocation.request_count or [
+        item.request_index for item in summaries
+    ] != list(range(invocation.request_count)):
+        raise _VersionStageError(
+            "endpoint_contract_failed",
+            ContractError(
+                f"{agent['name']}/{logical_version} request summaries are incomplete"
+            ),
+        )
+    if any(
+        len(item.assertion_results) != item.semantic_assertion_count
+        or sum(result.passed for result in item.assertion_results)
+        != item.semantic_assertions_passed
+        for item in summaries
+    ):
+        raise _VersionStageError(
+            "endpoint_contract_failed",
+            ContractError(
+                f"{agent['name']}/{logical_version} assertion results are incomplete"
+            ),
+        )
+    if agent["type"] == "prompt" and any(
+        item.response_count != 1
+        or not item.usable_response
+        or item.direct_terminal_response_count != 1
+        or item.function_call_count != 0
+        for item in summaries
+    ):
+        raise _VersionStageError(
+            "endpoint_contract_failed",
+            ContractError(
+                f"{agent['name']}/{logical_version} violated the direct Prompt "
+                "response contract"
+            ),
+        )
+    semantic_mode = agent["baseline_contract"]["semantic_assertions"]
+    if baseline and (
+        invocation.semantic_assertion_count < 1
+        or invocation.semantic_assertions_passed
+        != invocation.semantic_assertion_count
+        or (
+            semantic_mode == "required_per_request"
+            and any(item.semantic_assertion_count < 1 for item in summaries)
+        )
+    ):
+        raise _VersionStageError(
+            "baseline_assertion_failed",
+            ContractError(
+                f"{agent['name']}/{logical_version} baseline semantic evidence "
+                "is incomplete"
+            ),
+        )
+    if not baseline and agent["type"] == "prompt" and not any(
+        item.activation_gate for item in summaries
+    ):
+        raise _VersionStageError(
+            "issue_activation_failed",
+            ContractError(
+                f"{agent['name']}/{logical_version} issue activation "
+                "evidence is incomplete"
+            ),
+        )
+
+
+def _with_trace_assertions(
+    invocation: InvocationEvidence,
+    results: tuple[tuple[Any, ...], ...],
+) -> InvocationEvidence:
+    if len(results) != invocation.request_count:
+        raise ContractError("Trace assertion request coverage is incomplete")
+    summaries = tuple(
+        replace(
+            summary,
+            trace_assertion_count=len(assertions),
+            trace_assertions_passed=sum(item.passed for item in assertions),
+            trace_assertion_results=assertions,
+        )
+        for summary, assertions in zip(
+            invocation.request_summaries,
+            results,
+            strict=True,
+        )
+    )
+    return replace(
+        invocation,
+        trace_assertion_count=sum(item.trace_assertion_count for item in summaries),
+        trace_assertions_passed=sum(
+            item.trace_assertions_passed for item in summaries
+        ),
+        request_summaries=summaries,
+    )
+
+
+def _issue_activation_evidence_complete(
+    agent: dict[str, Any],
+    invocation: InvocationEvidence,
+) -> bool:
+    gates = [item for item in invocation.request_summaries if item.activation_gate]
+    if not gates:
+        return agent["type"] != "prompt"
+    return all(
+        item.semantic_assertion_count + item.trace_assertion_count > 0
+        and item.semantic_assertions_passed == item.semantic_assertion_count
+        and item.trace_assertions_passed == item.trace_assertion_count
+        for item in gates
+    )
+
+
+def _issue_semantic_activation_evidence_complete(
+    agent: dict[str, Any],
+    invocation: InvocationEvidence,
+) -> bool:
+    gates = [item for item in invocation.request_summaries if item.activation_gate]
+    if not gates:
+        return agent["type"] != "prompt"
+    return all(
+        item.semantic_assertions_passed == item.semantic_assertion_count
+        for item in gates
+    )
+
+
+def _validate_baseline_trace_evidence(
+    *,
+    agent: dict[str, Any],
+    invocation: InvocationEvidence,
+    trace_evidence: dict[str, Any],
+) -> None:
+    request_count = invocation.request_count
+    terminal_mode = agent["baseline_contract"]["terminal_response"]
+    terminal_complete = (
+        int(trace_evidence.get("terminal_response_count") or 0) == request_count
+        and int(trace_evidence.get("terminal_output_count") or 0) == request_count
+    )
+    if terminal_mode == "explicit_span_attributes":
+        terminal_complete = terminal_complete and (
+            int(trace_evidence.get("explicit_terminal_success_count") or 0)
+            == request_count
+            and int(trace_evidence.get("explicit_terminal_output_count") or 0)
+            == request_count
+        )
+    else:
+        terminal_complete = terminal_complete and (
+            int(trace_evidence.get("assistant_response_count") or 0)
+            == request_count
+        )
+    if not terminal_complete:
+        raise ContractError(
+            f"{agent['name']} baseline lacks one successful terminal output "
+            "signal per request"
+        )
+    if int(trace_evidence.get("unhandled_error_count") or 0) != 0:
+        raise ContractError(
+            f"{agent['name']} baseline contains an unhandled error signal"
+        )
+    if agent["type"] == "prompt" and (
+        int(trace_evidence.get("operation_count") or 0) != request_count
+        or bool(trace_evidence.get("tool_call_counts"))
+        or int(trace_evidence.get("tool_response_count") or 0) != 0
+    ):
+        raise ContractError(
+            f"{agent['name']} baseline trace is not a direct Prompt execution"
+        )
+
+
+def _activation_failure_result(
+    *,
+    logical_version: str,
+    foundry_version: str,
+    operation_ids: tuple[str, ...],
+    invocation: InvocationEvidence,
+    trace_evidence: dict[str, Any],
+    error_code: str = "issue_activation_failed",
+    trace_contract_verified: bool = True,
+) -> VersionResult:
+    return VersionResult(
+        logical_version=logical_version,
+        foundry_version=foundry_version,
+        status="inconclusive",
+        operation_ids=list(operation_ids),
+        window_start=invocation.started_at,
+        window_end=invocation.completed_at,
+        error_code=error_code,
+        endpoint_request_count=invocation.request_count,
+        endpoint_response_count=invocation.response_count,
+        endpoint_usable_response_count=invocation.usable_response_count,
+        semantic_assertion_count=invocation.semantic_assertion_count,
+        semantic_assertions_passed=invocation.semantic_assertions_passed,
+        trace_assertion_count=invocation.trace_assertion_count,
+        trace_assertions_passed=invocation.trace_assertions_passed,
+        trace_contract_verified=trace_contract_verified,
+        trace_behavior_summary=trace_evidence,
+        endpoint_request_summaries=list(invocation.request_summaries),
+    )
+
+
+def _save_and_drain_rejected_insight_run(
+    *,
+    runtime: RuntimePort,
+    agent_name: str,
+    monitor_id: str,
+    foundry_version: str,
+    operation_ids: tuple[str, ...],
+    checkpoint: InsightRunCheckpoint | None,
+    checkpoint_store: VersionCheckpointStore | None,
+    checkpoint_args: tuple[str, str, str, str],
+    result: VersionResult,
+    reason: str,
+) -> None:
+    if checkpoint_store is not None:
+        checkpoint_store.save_rejected_result(
+            *checkpoint_args,
+            result,
+            drain_pending=checkpoint is not None,
+        )
+    if checkpoint is None:
+        return
+    _drain_rejected_insight_run(
+        runtime=runtime,
+        agent_name=agent_name,
+        monitor_id=monitor_id,
+        foundry_version=foundry_version,
+        operation_ids=operation_ids,
+        checkpoint=checkpoint,
+        checkpoint_store=checkpoint_store,
+        checkpoint_args=checkpoint_args,
+        result=result,
+        reason=reason,
+    )
+
+
+def _drain_rejected_insight_run(
+    *,
+    runtime: RuntimePort,
+    agent_name: str,
+    monitor_id: str,
+    foundry_version: str,
+    operation_ids: tuple[str, ...],
+    checkpoint: InsightRunCheckpoint,
+    checkpoint_store: VersionCheckpointStore | None,
+    checkpoint_args: tuple[str, str, str, str],
+    result: VersionResult,
+    reason: str,
+) -> None:
+    _progress(
+        runtime,
+        f"{agent_name}/{result.logical_version}: evidence {reason}; "
+        "discarding the persisted Agent Insights run result",
+    )
+    try:
+        runtime.finish_insights_run(
+            agent_name=agent_name,
+            monitor_id=monitor_id,
+            foundry_version=foundry_version,
+            operation_ids=operation_ids,
+            checkpoint=checkpoint,
+            validate_window=False,
+        )
+    except Exception:
+        _progress(
+            runtime,
+            f"{agent_name}/{result.logical_version}: persisted Agent Insights run "
+            "remains quarantined by the saved incomplete evidence",
+        )
+        return
+    if checkpoint_store is not None:
+        checkpoint_store.clear_insight_drain_pending(*checkpoint_args)
 
 
 def _execute_version(
@@ -504,6 +1027,8 @@ def _execute_version(
     seed: int,
     expected: dict[str, Any] | None,
     lookback_hours: float,
+    trace_assertion_stabilization_seconds: int,
+    insight_start_margin_seconds: int,
     checkpoint_store: VersionCheckpointStore | None,
     start_stagger: _StartStagger,
 ) -> VersionResult:
@@ -520,6 +1045,27 @@ def _execute_version(
         else None
     )
     if cached is not None:
+        if (
+            checkpoint_store is not None
+            and checkpoint_store.insight_drain_pending(*checkpoint_args)
+        ):
+            checkpoint = checkpoint_store.insight_run(*checkpoint_args)
+            if checkpoint is None:
+                raise ContractError(
+                    "Rejected Insight run checkpoint is missing while drain is pending"
+                )
+            _drain_rejected_insight_run(
+                runtime=runtime,
+                agent_name=agent["name"],
+                monitor_id=monitor_id,
+                foundry_version=foundry_version,
+                operation_ids=tuple(cached.operation_ids),
+                checkpoint=checkpoint,
+                checkpoint_store=checkpoint_store,
+                checkpoint_args=checkpoint_args,
+                result=cached,
+                reason="was previously rejected",
+            )
         return cached
     invocation = (
         checkpoint_store.invocation(*checkpoint_args)
@@ -545,6 +1091,12 @@ def _execute_version(
         f"{agent['name']}/{logical_version}: endpoint complete "
         f"({invocation.response_count}/{invocation.request_count} responses)",
     )
+    _validate_endpoint_contract(
+        agent=agent,
+        logical_version=logical_version,
+        baseline=expected is None,
+        invocation=invocation,
+    )
     operation_ids = (
         checkpoint_store.operation_ids(*checkpoint_args)
         if checkpoint_store is not None
@@ -566,10 +1118,70 @@ def _execute_version(
         f"{agent['name']}/{logical_version}: telemetry correlated "
         f"({len(operation_ids)} operations)",
     )
-    required_operations = tuple(
-        expected["trace_contract"]["operations"]
-        if expected is not None
-        else ("invoke_agent", "chat")
+    insight_checkpoint = (
+        checkpoint_store.insight_run(*checkpoint_args)
+        if checkpoint_store is not None
+        else None
+    )
+    if (
+        insight_checkpoint is None
+        and checkpoint_store is not None
+        and checkpoint_store.insight_start_pending(*checkpoint_args)
+    ):
+        raise _VersionStageError(
+            "insight_run_start_failed",
+            RuntimeError("Remote operation failed before a response was received"),
+        )
+
+    def start_insight_run_once() -> None:
+        nonlocal insight_checkpoint
+        if insight_checkpoint is not None:
+            return
+        if (
+            expected is not None
+            and not _issue_semantic_activation_evidence_complete(agent, invocation)
+        ):
+            return
+        if checkpoint_store is not None:
+            checkpoint_store.mark_insight_start_pending(*checkpoint_args)
+        try:
+            insight_checkpoint = runtime.start_insights_run(
+                agent_name=agent["name"],
+                monitor_id=monitor_id,
+                foundry_version=foundry_version,
+                operation_ids=operation_ids,
+                lookback_hours=lookback_hours,
+                start_margin_seconds=insight_start_margin_seconds,
+                persist=(
+                    lambda checkpoint: checkpoint_store.save_insight_run(
+                        *checkpoint_args,
+                        checkpoint,
+                    )
+                    if checkpoint_store is not None
+                    else None
+                ),
+            )
+        except InsightWindowExpiredError as error:
+            if expected is not None:
+                raise _VersionStageError(
+                    "issue_activation_failed",
+                    ContractError(
+                        "First exact Hosted mapping arrived after the guarded "
+                        "Agent Insights start window"
+                    ),
+                ) from error
+            raise _VersionStageError("insight_run_start_failed", error) from error
+        except Exception as error:
+            raise _VersionStageError("insight_run_start_failed", error) from error
+
+    if agent["type"] != "prompt":
+        start_insight_run_once()
+
+    required_operations_by_request = _required_trace_operations(
+        agent=agent,
+        expected=expected,
+        traffic_path=traffic_path,
+        request_count=invocation.request_count,
     )
     trace_verified = (
         checkpoint_store.trace_verified(*checkpoint_args)
@@ -582,7 +1194,7 @@ def _execute_version(
                 agent_name=agent["name"],
                 foundry_version=foundry_version,
                 operation_ids=operation_ids,
-                required_operations=required_operations,
+                required_operations_by_request=required_operations_by_request,
                 window_start=invocation.started_at,
                 window_end=invocation.completed_at,
             )
@@ -591,42 +1203,140 @@ def _execute_version(
         if checkpoint_store is not None:
             checkpoint_store.save_trace_verified(*checkpoint_args)
     _progress(runtime, f"{agent['name']}/{logical_version}: trace contract verified")
-    insight_checkpoint = (
-        checkpoint_store.insight_run(*checkpoint_args)
-        if checkpoint_store is not None
-        else None
-    )
-    if insight_checkpoint is None:
-        if (
-            checkpoint_store is not None
-            and checkpoint_store.insight_start_pending(*checkpoint_args)
-        ):
-            raise _VersionStageError(
-                "insight_run_start_failed",
-                RuntimeError(
-                    "Remote operation failed before a response was received"
+    trace_evidence: dict[str, Any] = {}
+    if agent["type"] == "prompt":
+        try:
+            trace_evidence = runtime.trace_behavior_evidence(operation_ids)
+            if expected is None:
+                _validate_baseline_trace_evidence(
+                    agent=agent,
+                    invocation=invocation,
+                    trace_evidence=trace_evidence,
+                )
+        except Exception as error:
+            if expected is None:
+                raise _VersionStageError("baseline_evidence_failed", error) from error
+            raise _VersionStageError("trace_evidence_failed", error) from error
+
+    if agent["type"] != "prompt":
+        evidence_error_code = (
+            "issue_activation_failed"
+            if expected is not None
+            else "baseline_evidence_failed"
+        )
+        stabilization_error = False
+
+        def capture_stable_trace_evidence(evidence: dict[str, Any]) -> None:
+            nonlocal trace_evidence
+            trace_evidence = evidence
+
+        try:
+            invocation = _with_trace_assertions(
+                invocation,
+                runtime.trace_assertion_evidence(
+                    agent_name=agent["name"],
+                    foundry_version=foundry_version,
+                    operation_ids=operation_ids,
+                    response_references=invocation.response_references,
+                    window_start=invocation.started_at,
+                    window_end=invocation.completed_at,
+                    traffic_path=traffic_path,
+                    stabilization_seconds=trace_assertion_stabilization_seconds,
+                    on_first_pass=start_insight_run_once,
+                    on_stable=capture_stable_trace_evidence,
                 ),
             )
-        if checkpoint_store is not None:
-            checkpoint_store.mark_insight_start_pending(*checkpoint_args)
-        try:
-            insight_checkpoint = runtime.start_insights_run(
+        except _VersionStageError as error:
+            if error.code != "issue_activation_failed":
+                raise
+            stabilization_error = True
+        except TraceAssertionActivationError:
+            stabilization_error = True
+        except Exception as error:
+            raise _VersionStageError("trace_assertion_failed", error) from error
+        if stabilization_error:
+            result = _activation_failure_result(
+                logical_version=logical_version,
+                foundry_version=foundry_version,
+                operation_ids=operation_ids,
+                invocation=invocation,
+                trace_evidence=trace_evidence,
+                error_code=evidence_error_code,
+            )
+            _save_and_drain_rejected_insight_run(
+                runtime=runtime,
                 agent_name=agent["name"],
                 monitor_id=monitor_id,
                 foundry_version=foundry_version,
                 operation_ids=operation_ids,
-                lookback_hours=lookback_hours,
-                persist=(
-                    lambda checkpoint: checkpoint_store.save_insight_run(
-                        *checkpoint_args,
-                        checkpoint,
-                    )
-                    if checkpoint_store is not None
-                    else None
-                ),
+                checkpoint=insight_checkpoint,
+                checkpoint_store=checkpoint_store,
+                checkpoint_args=checkpoint_args,
+                result=result,
+                reason="did not stabilize under exact Hosted correlation",
             )
-        except Exception as error:
-            raise _VersionStageError("insight_run_start_failed", error) from error
+            return result
+        if checkpoint_store is not None:
+            checkpoint_store.save_invocation(*checkpoint_args, invocation)
+
+        if expected is None:
+            try:
+                _validate_baseline_trace_evidence(
+                    agent=agent,
+                    invocation=invocation,
+                    trace_evidence=trace_evidence,
+                )
+            except Exception as error:
+                stage_error = _VersionStageError("baseline_evidence_failed", error)
+                if _recoverable(stage_error):
+                    raise stage_error from error
+                result = _activation_failure_result(
+                    logical_version=logical_version,
+                    foundry_version=foundry_version,
+                    operation_ids=operation_ids,
+                    invocation=invocation,
+                    trace_evidence=trace_evidence,
+                    error_code="baseline_evidence_failed",
+                )
+                _save_and_drain_rejected_insight_run(
+                    runtime=runtime,
+                    agent_name=agent["name"],
+                    monitor_id=monitor_id,
+                    foundry_version=foundry_version,
+                    operation_ids=operation_ids,
+                    checkpoint=insight_checkpoint,
+                    checkpoint_store=checkpoint_store,
+                    checkpoint_args=checkpoint_args,
+                    result=result,
+                    reason="failed Hosted baseline terminal or tool validation",
+                )
+                return result
+
+    if expected is not None:
+        if not _issue_activation_evidence_complete(agent, invocation):
+            result = _activation_failure_result(
+                logical_version=logical_version,
+                foundry_version=foundry_version,
+                operation_ids=operation_ids,
+                invocation=invocation,
+                trace_evidence=trace_evidence,
+            )
+            _save_and_drain_rejected_insight_run(
+                runtime=runtime,
+                agent_name=agent["name"],
+                monitor_id=monitor_id,
+                foundry_version=foundry_version,
+                operation_ids=operation_ids,
+                checkpoint=insight_checkpoint,
+                checkpoint_store=checkpoint_store,
+                checkpoint_args=checkpoint_args,
+                result=result,
+                reason="trace assertions did not pass",
+            )
+            return result
+    if insight_checkpoint is None:
+        start_insight_run_once()
+    assert insight_checkpoint is not None
     try:
         insight_run = runtime.finish_insights_run(
             agent_name=agent["name"],
@@ -637,46 +1347,51 @@ def _execute_version(
         )
     except Exception as error:
         raise _VersionStageError("insight_run_poll_failed", error) from error
+    scoped_insights = tuple(
+        item
+        for item in insight_run.insights
+        if item.agent_version == foundry_version
+        and linked_operations_match_scope(
+            item.linked_operation_ids,
+            operation_ids,
+        )
+    )
     _progress(
         runtime,
         f"{agent['name']}/{logical_version}: Agent Insights "
-        f"{insight_run.status.lower()} ({len(insight_run.insights)} cards)",
+        f"{insight_run.status.lower()} ({len(scoped_insights)} cards)",
     )
     result = VersionResult(
         logical_version=logical_version,
         foundry_version=foundry_version,
         status="inconclusive",
         operation_ids=list(operation_ids),
-        insight_references=[item.reference for item in insight_run.insights],
+        insight_references=[item.reference for item in scoped_insights],
         window_start=insight_run.window_start,
         window_end=insight_run.window_end,
-        observed_insights=list(insight_run.insights),
+        observed_insights=list(scoped_insights),
         endpoint_request_count=invocation.request_count,
         endpoint_response_count=invocation.response_count,
         endpoint_usable_response_count=invocation.usable_response_count,
         semantic_assertion_count=invocation.semantic_assertion_count,
         semantic_assertions_passed=invocation.semantic_assertions_passed,
+        trace_assertion_count=invocation.trace_assertion_count,
+        trace_assertions_passed=invocation.trace_assertions_passed,
         trace_contract_verified=True,
+        trace_behavior_summary=trace_evidence,
+        endpoint_request_summaries=list(invocation.request_summaries),
     )
     if insight_run.status != "succeeded":
-        if checkpoint_store is not None:
-            checkpoint_store.clear_insight_run(*checkpoint_args)
         raise _VersionStageError(
             "insight_run_terminal_failed",
             RuntimeError("Agent Insights run did not succeed"),
         )
     if expected is None:
-        result.status = "passed" if not insight_run.insights else "not_at_bar"
+        result.status = "passed" if not scoped_insights else "not_at_bar"
         if checkpoint_store is not None:
             checkpoint_store.save_result(*checkpoint_args, result)
         return result
-    matching = [
-        item
-        for item in insight_run.insights
-        if item.agent_version == foundry_version
-        and set(item.linked_operation_ids).issubset(set(operation_ids))
-        and set(item.linked_operation_ids)
-    ]
+    matching = list(scoped_insights)
     if len(matching) != 1:
         result.status = "not_at_bar"
         result.error_code = "expected_exactly_one_insight"
@@ -695,3 +1410,107 @@ def _execute_version(
     if checkpoint_store is not None:
         checkpoint_store.save_result(*checkpoint_args, result)
     return result
+
+
+def _quarantine_started_insight(
+    *,
+    runtime: RuntimePort,
+    agent: dict[str, Any],
+    monitor_id: str,
+    logical_version: str,
+    registry_entry: dict[str, str],
+    error: _VersionStageError,
+    checkpoint_store: VersionCheckpointStore | None,
+) -> VersionResult | None:
+    if checkpoint_store is None:
+        return None
+    checkpoint_args = (
+        agent["name"],
+        logical_version,
+        registry_entry["foundry_version"],
+        registry_entry["content_digest"],
+    )
+    insight_checkpoint = checkpoint_store.insight_run(*checkpoint_args)
+    invocation = checkpoint_store.invocation(*checkpoint_args)
+    operation_ids = checkpoint_store.operation_ids(*checkpoint_args)
+    if invocation is None or operation_ids is None:
+        return None
+    if insight_checkpoint is None:
+        if not checkpoint_store.insight_start_pending(*checkpoint_args):
+            return None
+        result = _activation_failure_result(
+            logical_version=logical_version,
+            foundry_version=registry_entry["foundry_version"],
+            operation_ids=operation_ids,
+            invocation=invocation,
+            trace_evidence={},
+            trace_contract_verified=checkpoint_store.trace_verified(*checkpoint_args),
+        )
+        result.error_code = "insight_run_start_unresolved"
+        checkpoint_store.save_result(*checkpoint_args, result)
+        return result
+    result = _activation_failure_result(
+        logical_version=logical_version,
+        foundry_version=registry_entry["foundry_version"],
+        operation_ids=operation_ids,
+        invocation=invocation,
+        trace_evidence={},
+        trace_contract_verified=checkpoint_store.trace_verified(*checkpoint_args),
+    )
+    result.error_code = error.code
+    _save_and_drain_rejected_insight_run(
+        runtime=runtime,
+        agent_name=agent["name"],
+        monitor_id=monitor_id,
+        foundry_version=registry_entry["foundry_version"],
+        operation_ids=operation_ids,
+        checkpoint=insight_checkpoint,
+        checkpoint_store=checkpoint_store,
+        checkpoint_args=checkpoint_args,
+        result=result,
+        reason="could not complete within the recovery budget",
+    )
+    return result
+
+
+def _reconcile_unresolved_insight_start(
+    *,
+    runtime: RuntimePort,
+    agent: dict[str, Any],
+    monitor_id: str,
+    logical_version: str,
+    registry_entry: dict[str, str],
+    lookback_hours: float,
+    clean_window_poll_seconds: int,
+    clean_window_ingestion_margin_seconds: int,
+    clean_window_max_wait_seconds: int,
+    checkpoint_store: VersionCheckpointStore | None,
+) -> None:
+    if checkpoint_store is None:
+        return
+    checkpoint_args = (
+        agent["name"],
+        logical_version,
+        registry_entry["foundry_version"],
+        registry_entry["content_digest"],
+    )
+    if (
+        not checkpoint_store.insight_start_pending(*checkpoint_args)
+        or checkpoint_store.insight_run(*checkpoint_args) is not None
+        or checkpoint_store.result(*checkpoint_args) is None
+    ):
+        return
+    _progress(
+        runtime,
+        f"{agent['name']}/{logical_version}: reconciling unresolved "
+        "Agent Insights start",
+    )
+    runtime.wait_for_clean_window(
+        agent["name"],
+        lookback_hours,
+        poll_seconds=clean_window_poll_seconds,
+        ingestion_margin_seconds=clean_window_ingestion_margin_seconds,
+        max_wait_seconds=clean_window_max_wait_seconds,
+    )
+    runtime.reset_monitor(agent["name"], monitor_id)
+    checkpoint_store.clear_insight_start_pending(*checkpoint_args)

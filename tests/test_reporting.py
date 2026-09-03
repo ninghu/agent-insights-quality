@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from pathlib import Path
 
@@ -11,22 +12,49 @@ from agent_insights_quality.reporting import (
     calculate_quality_score,
     render_agent_markdown,
     render_markdown,
+    resolve_test_region,
     score_comparison,
     updated_trend,
+    validate_report,
     validate_published_report,
 )
 from agent_insights_quality.util import ContractError
 import pytest
 
 
-def _manifest() -> dict:
+def _manifest(*, full: bool = False) -> dict:
     agents, _ = load_catalogs()
+
+    def request_summaries(*, prompt: bool, activation: bool) -> list[dict]:
+        return [
+            {
+                "request_index": index,
+                "response_count": 1,
+                "usable_response": True,
+                "semantic_assertion_count": 1,
+                "semantic_assertions_passed": 1,
+                "assertion_results": [
+                    {"assertion": "synthetic_contract", "passed": True}
+                ],
+                "trace_assertion_count": 0,
+                "trace_assertions_passed": 0,
+                "trace_assertion_results": [],
+                "activation_gate": activation,
+                "direct_terminal_response_count": int(prompt),
+                "function_call_count": 0,
+            }
+            for index in range(5)
+        ]
+
     values = []
     for agent in agents["agents"]:
-        selected = agent["issue_ids"][:5]
+        selected = agent["issue_ids"] if full else agent["issue_ids"][:4]
+        prompt = agent["type"] == "prompt"
         values.append(
             {
                 "name": agent["name"],
+                "type": agent["type"],
+                "baseline_contract": agent["baseline_contract"],
                 "baseline": {
                     "foundry_version": "1",
                     "status": "passed",
@@ -34,7 +62,28 @@ def _manifest() -> dict:
                     "endpoint_request_count": 5,
                     "endpoint_response_count": 5,
                     "endpoint_usable_response_count": 5,
+                    "semantic_assertion_count": 5,
+                    "semantic_assertions_passed": 5,
+                    "trace_assertion_count": 0,
+                    "trace_assertions_passed": 0,
                     "trace_contract_verified": True,
+                    "trace_behavior_summary": {
+                        "operation_count": 5,
+                        "tool_call_counts": {},
+                        "tool_response_count": 0,
+                        "assistant_response_count": 5,
+                        "explicit_terminal_success_count": 5,
+                        "explicit_terminal_output_count": 5,
+                        "terminal_response_count": 5,
+                        "terminal_success_count": 5,
+                        "terminal_output_count": 5,
+                        "handled_error_count": 0,
+                        "unhandled_error_count": 0,
+                    },
+                    "endpoint_request_summaries": request_summaries(
+                        prompt=prompt,
+                        activation=False,
+                    ),
                 },
                 "issues": [
                     {
@@ -46,7 +95,16 @@ def _manifest() -> dict:
                         "endpoint_request_count": 5,
                         "endpoint_response_count": 5,
                         "endpoint_usable_response_count": 5,
+                        "semantic_assertion_count": 5,
+                        "semantic_assertions_passed": 5,
+                        "trace_assertion_count": 0,
+                        "trace_assertions_passed": 0,
                         "trace_contract_verified": True,
+                        "trace_behavior_summary": {},
+                        "endpoint_request_summaries": request_summaries(
+                            prompt=prompt,
+                            activation=prompt,
+                        ),
                     }
                     for issue_id in selected
                 ],
@@ -55,19 +113,24 @@ def _manifest() -> dict:
     return {
         "report_date": "2026-08-24",
         "run_id": "aiq-20260824",
-        "profile": "daily",
+        "profile": "staging" if full else "daily",
         "manifest_hash": "sha256:" + "c" * 64,
+        "test_region": "WestUS2",
         "catalog_hashes": {
             "agents": "sha256:" + "d" * 64,
             "issues": "sha256:" + "e" * 64,
             "artifacts": "sha256:" + "f" * 64,
+        },
+        "source_integrity": {
+            "verified": True,
+            "contract_digest": "sha256:" + "1" * 64,
         },
         "agents": values,
     }
 
 
 def _assessments(manifest: dict) -> dict[str, dict]:
-    return {
+    return _with_card_evaluations({
         item["issue_id"]: {
             "issue_id": item["issue_id"],
             "verdict": "correct",
@@ -75,8 +138,8 @@ def _assessments(manifest: dict) -> dict[str, dict]:
             "ownership": "none",
             "finding_type": "MATCHED",
             "ownership_reason": "The expected Insight is fully correct.",
+            "reasoning": "The expected Insight is fully correct.",
             "fields": {
-                "root_cause": True,
                 "title": True,
                 "description": True,
                 "category": True,
@@ -88,7 +151,29 @@ def _assessments(manifest: dict) -> dict[str, dict]:
         }
         for agent in manifest["agents"]
         for item in agent["issues"]
-    }
+    })
+
+
+def _with_card_evaluations(
+    assessments: dict[str, dict],
+) -> dict[str, dict]:
+    for index, assessment in enumerate(assessments.values(), start=1):
+        assessment["card_evaluations"] = [
+            {
+                "reference": f"sha256:{index:064x}",
+                "title": f"Synthetic finding {index}",
+                "category": "synthetic",
+                "severity": "medium",
+                "verdict": assessment["verdict"],
+                "finding_type": assessment["finding_type"],
+                "ownership": assessment["ownership"],
+                "ownership_reason": assessment["ownership_reason"],
+                "fields": deepcopy(assessment["fields"]),
+                "confidence": assessment["confidence"],
+                "reasoning": assessment["reasoning"],
+            }
+        ]
+    return assessments
 
 
 def _baseline_assessments(manifest: dict) -> dict[str, dict]:
@@ -104,7 +189,7 @@ def _baseline_assessments(manifest: dict) -> dict[str, dict]:
     }
 
 
-def test_report_status_uses_ninety_point_threshold() -> None:
+def test_report_uses_correct_issue_percentage_without_status() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
     assessments = _assessments(manifest)
@@ -114,13 +199,20 @@ def test_report_status_uses_ninety_point_threshold() -> None:
         assessments,
         _baseline_assessments(manifest),
     )
-    assert report["status"] == "PASS"
+    assert report["summary"]["quality_score"] == 100
+    assert "status" not in report
     changed = deepcopy(assessments)
-    for assessment in list(changed.values())[:5]:
+    for assessment in list(changed.values())[:4]:
         assessment["verdict"] = "incorrect"
         assessment["finding_type"] = "MISMATCHED"
         assessment["fields"] = {
             field: False for field in assessment["fields"]
+        }
+        assessment["card_evaluations"][0]["verdict"] = "incorrect"
+        assessment["card_evaluations"][0]["finding_type"] = "MISMATCHED"
+        assessment["card_evaluations"][0]["fields"] = {
+            field: False
+            for field in assessment["card_evaluations"][0]["fields"]
         }
     failed = build_report(
         manifest,
@@ -128,8 +220,341 @@ def test_report_status_uses_ninety_point_threshold() -> None:
         changed,
         _baseline_assessments(manifest),
     )
-    assert failed["summary"]["quality_score"] == 83
-    assert failed["status"] == "FAIL"
+    assert failed["summary"]["issues_incorrect"] == 4
+    assert failed["summary"]["quality_score"] == 80
+    assert "status" not in failed
+
+
+def test_quality_score_formula_is_directly_explainable() -> None:
+    assert calculate_quality_score(
+        correct_issues=17,
+        expected_issues=20,
+        noise_cards=1,
+        duplicate_cards=1,
+    ) == 77.3
+
+
+def test_render_markdown_uses_exact_agent_insights_quality_title() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    report = build_report(
+        manifest,
+        issues,
+        _assessments(manifest),
+        _baseline_assessments(manifest),
+    )
+    markdown = render_markdown(report)
+    assert markdown.startswith("# Agent Insights Quality - 2026-08-24")
+
+
+def test_build_report_uses_arm_resolved_canonical_test_region() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    report = build_report(
+        manifest,
+        issues,
+        _assessments(manifest),
+        _baseline_assessments(manifest),
+    )
+    assert report["test_region"] == "WestUS2"
+
+
+def test_build_report_fails_closed_on_missing_test_region() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    del manifest["test_region"]
+    with pytest.raises(ContractError, match="test_region"):
+        build_report(
+            manifest,
+            issues,
+            _assessments(manifest),
+            _baseline_assessments(manifest),
+        )
+
+
+def test_build_report_fails_closed_on_unresolved_test_region_metadata() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    manifest["test_region"] = "notarealazureregion"
+    with pytest.raises(ContractError, match="test_region"):
+        build_report(
+            manifest,
+            issues,
+            _assessments(manifest),
+            _baseline_assessments(manifest),
+        )
+
+
+def test_build_report_accepts_other_arm_resolved_canonical_regions() -> None:
+    _, issues = load_catalogs()
+    for canonical in ("EastUS", "UKSouth", "CentralIndia", "SoutheastAsia"):
+        manifest = _manifest()
+        manifest["test_region"] = canonical
+        report = build_report(
+            manifest,
+            issues,
+            _assessments(manifest),
+            _baseline_assessments(manifest),
+        )
+        assert report["test_region"] == canonical
+
+
+def test_build_report_registry_test_region_cannot_supply_or_fall_back() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    del manifest["test_region"]
+    manifest["test_region_registry"] = "westus2"
+    with pytest.raises(ContractError, match="test_region"):
+        build_report(
+            manifest,
+            issues,
+            _assessments(manifest),
+            _baseline_assessments(manifest),
+        )
+
+
+def test_build_report_fails_closed_on_registry_test_region_mismatch() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    manifest["test_region"] = "WestUS2"
+    manifest["test_region_registry"] = "EastUS"
+    with pytest.raises(ContractError, match="cross-check"):
+        build_report(
+            manifest,
+            issues,
+            _assessments(manifest),
+            _baseline_assessments(manifest),
+        )
+
+
+def test_build_report_registry_test_region_cross_check_matches() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    manifest["test_region"] = "WestUS2"
+    manifest["test_region_registry"] = "west-us-2"
+    report = build_report(
+        manifest,
+        issues,
+        _assessments(manifest),
+        _baseline_assessments(manifest),
+    )
+    assert report["test_region"] == "WestUS2"
+
+
+def test_resolve_test_region_uses_only_live_location_as_source() -> None:
+    assert resolve_test_region("WestUS2") == "WestUS2"
+    with pytest.raises(ContractError, match="live"):
+        resolve_test_region(None, "westus2")
+    with pytest.raises(ContractError, match="live"):
+        resolve_test_region("", "westus2")
+
+
+def test_resolve_test_region_generic_with_injected_metadata() -> None:
+    metadata = {"contosonorth": "Contoso North"}
+    assert (
+        resolve_test_region("contosonorth", location_metadata=metadata)
+        == "ContosoNorth"
+    )
+    with pytest.raises(ContractError, match="Azure location metadata"):
+        resolve_test_region("westus2", location_metadata=metadata)
+
+
+def test_report_schema_requires_test_region() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    report = build_report(
+        manifest,
+        issues,
+        _assessments(manifest),
+        _baseline_assessments(manifest),
+    )
+    validate_report(report)
+    missing = deepcopy(report)
+    del missing["test_region"]
+    with pytest.raises(Exception):
+        validate_report(missing)
+    invalid = deepcopy(report)
+    invalid["test_region"] = "eastus2"
+    with pytest.raises(Exception):
+        validate_report(invalid)
+
+
+def test_rejected_foreign_operation_card_does_not_enter_report_scoring() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    assessments = _assessments(manifest)
+    target = manifest["agents"][0]["issues"][0]
+    target["status"] = "not_at_bar"
+    target["error_code"] = "expected_exactly_one_insight"
+    target["insight_references"] = []
+    target["evidence_reference"] = None
+    assessment = assessments[target["issue_id"]]
+    assessment["verdict"] = "missing"
+    assessment["finding_type"] = "MISSING"
+    assessment["fields"] = {
+        field: False for field in assessment["fields"]
+    }
+    assessment["card_evaluations"] = []
+
+    report = build_report(
+        manifest,
+        issues,
+        assessments,
+        _baseline_assessments(manifest),
+    )
+    result = next(
+        item for item in report["issues"] if item["issue_id"] == target["issue_id"]
+    )
+
+    assert result["observed_count"] == 0
+    assert result["detail"] == "MISSING"
+    assert result["outcome"] == "missing"
+    assert report["summary"]["issues_missing"] == 1
+    assert report["summary"]["quality_score"] == 95
+
+
+def test_staging_uses_the_single_quality_score() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest(full=True)
+    report = build_report(
+        manifest,
+        issues,
+        _assessments(manifest),
+        _baseline_assessments(manifest),
+    )
+    assert report["summary"]["quality_score_formula"] == (
+        "correct_over_expected_plus_noise_v1"
+    )
+    assert report["summary"]["quality_score"] == 100
+    assert "shadow_quality_score" not in report["summary"]
+    assert "shadow_v2_primary" not in report["issues"][0]
+    validate_report(report)
+
+
+def test_incomplete_staging_produces_no_report() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest(full=True)
+    manifest["agents"][0]["issues"][0]["endpoint_usable_response_count"] = 4
+    with pytest.raises(ContractError, match="no quality report"):
+        build_report(
+            manifest,
+            issues,
+            _assessments(manifest),
+            _baseline_assessments(manifest),
+        )
+
+
+def test_failed_matched_issue_cannot_score_from_perfect_card_fields() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    assessments = _assessments(manifest)
+    issue_id = next(iter(assessments))
+    assessment = assessments[issue_id]
+    assessment["fields"]["severity"] = False
+    assessment["card_evaluations"] = [
+        {
+            "finding_type": "MATCHED",
+            "fields": {
+                field: field != "title" for field in assessment["fields"]
+            },
+        }
+    ]
+    report = build_report(
+        manifest,
+        issues,
+        assessments,
+        _baseline_assessments(manifest),
+    )
+    result = next(item for item in report["issues"] if item["issue_id"] == issue_id)
+    assert result["outcome"] == "incorrect"
+    assert report["summary"]["issues_incorrect"] == 1
+    assert report["summary"]["quality_score"] == 95
+
+
+def test_failed_mismatched_issue_cannot_score_from_perfect_fields() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    assessments = _assessments(manifest)
+    issue_id = next(iter(assessments))
+    assessment = assessments[issue_id]
+    assessment["verdict"] = "incorrect"
+    assessment["finding_type"] = "MISMATCHED"
+    assessment["ownership"] = "insight_engine"
+    assessment["card_evaluations"] = [
+        {
+            "finding_type": "MISMATCHED",
+            "fields": {
+                field: True for field in assessment["fields"]
+            },
+        }
+    ]
+    report = build_report(
+        manifest,
+        issues,
+        assessments,
+        _baseline_assessments(manifest),
+    )
+    result = next(item for item in report["issues"] if item["issue_id"] == issue_id)
+    assert result["outcome"] == "incorrect"
+    assert report["summary"]["quality_score"] == 95
+
+
+def test_report_requires_bound_source_integrity() -> None:
+    _, issues = load_catalogs()
+    report = build_report(
+        _manifest(),
+        issues,
+        _assessments(_manifest()),
+        _baseline_assessments(_manifest()),
+    )
+    report.pop("source_integrity")
+    with pytest.raises(ContractError, match="Report is invalid"):
+        validate_report(report)
+
+
+def test_report_rejects_superseded_schema() -> None:
+    manifest = _manifest()
+    _, issues = load_catalogs()
+    report = build_report(
+        manifest,
+        issues,
+        _assessments(manifest),
+        _baseline_assessments(manifest),
+    )
+    report["schema_version"] = "1.0.0"
+    with pytest.raises(ContractError, match="Report is invalid"):
+        validate_report(report)
+
+
+def test_daily_report_schema_requires_exactly_20_issues() -> None:
+    manifest = _manifest()
+    _, issues = load_catalogs()
+    report = build_report(
+        manifest,
+        issues,
+        _assessments(manifest),
+        _baseline_assessments(manifest),
+    )
+    report["issues"].append(deepcopy(report["issues"][0]))
+    with pytest.raises(ContractError, match="Report is invalid"):
+        validate_report(report)
+
+
+def test_complete_report_rejects_unverified_source_integrity() -> None:
+    manifest = _manifest()
+    _, issues = load_catalogs()
+    report = build_report(
+        manifest,
+        issues,
+        _assessments(manifest),
+        _baseline_assessments(manifest),
+    )
+    report["source_integrity"] = {
+        "verified": False,
+        "contract_digest": None,
+    }
+    with pytest.raises(ContractError, match="source integrity"):
+        validate_report(report)
 
 
 def test_daily_score_compares_with_latest_prior_scored_report(
@@ -146,7 +571,8 @@ def test_daily_score_compares_with_latest_prior_scored_report(
     trend = tmp_path / "trend.json"
     trend.write_text(
         """{
-  "schema_version": "1.0.0",
+  "schema_version": "2.0.0",
+  "quality_score_formula": "correct_over_expected_plus_noise_v1",
   "days": [
     {"report_date": "2026-08-25", "quality_score": 94.1},
     {"report_date": "2026-08-26", "quality_score": null}
@@ -163,13 +589,14 @@ def test_daily_score_compares_with_latest_prior_scored_report(
         "quality_score": 94.1,
         "delta": 5.9,
     }
-    assert "Score **100/100** (+5.9 vs 2026-08-25)" in render_markdown(report)
+    assert "| Quality score | **100 / 100 (+5.9 vs 2026-08-25)** |" in (
+        render_markdown(report)
+    )
 
 
-def test_incomplete_daily_score_has_no_comparison(tmp_path: Path) -> None:
+def test_score_comparison_rejects_legacy_formula(tmp_path: Path) -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
-    manifest["agents"][0]["baseline"]["status"] = "inconclusive"
     report = build_report(
         manifest,
         issues,
@@ -183,9 +610,8 @@ def test_incomplete_daily_score_has_no_comparison(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    apply_score_comparison(report, trend)
-
-    assert report["score_comparison"] is None
+    with pytest.raises(ContractError, match="different quality-score formula"):
+        apply_score_comparison(report, trend)
 
 
 def test_staging_score_compares_with_latest_reviewed_receipt(
@@ -203,11 +629,17 @@ def test_staging_score_compares_with_latest_reviewed_receipt(
     report["summary"]["quality_score"] = 48.3
     receipts = tmp_path / "promotion-receipts"
     receipts.mkdir()
+    (receipts / "aiq-20260826.json").write_text(
+        '{"profile":"staging","qualified":true,"human_reviewed":true,'
+        '"quality_score":99.9}',
+        encoding="utf-8",
+    )
     (receipts / "aiq-20260827-r29.json").write_text(
         """{
   "profile": "staging",
   "qualified": true,
   "human_reviewed": true,
+  "quality_score_formula": "correct_over_expected_plus_noise_v1",
   "quality_score": 47.8
 }
 """,
@@ -241,6 +673,7 @@ def test_staging_score_comparison_accepts_three_digit_reruns(
     receipts.mkdir()
     (receipts / "aiq-20260827-r99.json").write_text(
         '{"profile":"staging","qualified":true,"human_reviewed":true,'
+        '"quality_score_formula":"correct_over_expected_plus_noise_v1",'
         '"quality_score":47.8}',
         encoding="utf-8",
     )
@@ -258,14 +691,18 @@ def test_score_comparison_uses_immutable_base_trend() -> None:
     )
     report["report_date"] = "2026-08-27"
     base = {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
+        "quality_score_formula": "correct_over_expected_plus_noise_v1",
         "days": [
             {
                 "report_date": "2026-08-26",
-                "status": "FAIL",
                 "baseline_passed": 1,
                 "issues_correct": 4,
-                "issues_expected": 25,
+                "issues_incorrect": 15,
+                "issues_missing": 1,
+                "issues_expected": 20,
+                "noise_cards": 0,
+                "duplicate_cards": 0,
                 "quality_score": 44.1,
             }
         ],
@@ -291,48 +728,47 @@ def test_scored_trend_day_cannot_be_replaced() -> None:
         _baseline_assessments(_manifest()),
     )
     base = {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
+        "quality_score_formula": "correct_over_expected_plus_noise_v1",
         "days": [
-            {
-                "report_date": report["report_date"],
-                "status": "FAIL",
-                "baseline_passed": 1,
-                "issues_correct": 4,
-                "issues_expected": 25,
-                "quality_score": 44.1,
-            }
+            updated_trend(
+                report,
+                {
+                    "schema_version": "2.0.0",
+                    "quality_score_formula": "correct_over_expected_plus_noise_v1",
+                    "days": [],
+                },
+            )["days"][0]
         ],
     }
+    base["days"][0]["quality_score"] = 44.1
     with pytest.raises(ContractError, match="immutable"):
         updated_trend(report, base)
 
 
-def test_field_quality_and_clean_card_precision_components() -> None:
+def test_optional_fields_do_not_score_and_noise_expands_denominator() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
     assessments = _assessments(manifest)
-    for assessment in list(assessments.values())[:5]:
-        assessment["verdict"] = "partially_useful"
-        assessment["finding_type"] = "PARTIAL"
+    for assessment in list(assessments.values())[:4]:
         assessment["fields"]["severity"] = False
+        card = assessment["card_evaluations"][0]
+        card["fields"]["severity"] = False
+        card["field_reasons"] = {
+            "severity": "The synthetic severity is incomplete."
+        }
     baseline = _baseline_assessments(manifest)
-    threshold = build_report(manifest, issues, assessments, baseline)
-    assert threshold["summary"]["issues_correct"] == 20
-    assert threshold["summary"]["issues_partial"] == 5
-    assert threshold["summary"]["field_quality_score"] == 98
-    assert threshold["summary"]["clean_card_precision"] == 100
-    assert threshold["summary"]["quality_score"] == 98.3
-    assert threshold["status"] == "PASS"
+    report = build_report(manifest, issues, assessments, baseline)
+    assert report["summary"]["issues_correct"] == 20
+    assert report["summary"]["issues_incorrect"] == 0
+    assert report["summary"]["quality_score"] == 100
 
-    manifest["agents"][0]["baseline"] = {
-        "foundry_version": "1",
-        "status": "not_at_bar",
-        "insight_references": ["sha256:" + "1" * 64],
-        "endpoint_request_count": 5,
-        "endpoint_response_count": 5,
-        "endpoint_usable_response_count": 5,
-        "trace_contract_verified": True,
-    }
+    manifest["agents"][0]["baseline"].update(
+        {
+            "status": "not_at_bar",
+            "insight_references": ["sha256:" + "1" * 64],
+        }
+    )
     baseline["weather-agent"] = {
         "verdict": "noise",
         "ownership": "insight_engine",
@@ -342,23 +778,39 @@ def test_field_quality_and_clean_card_precision_components() -> None:
     }
     penalized = build_report(manifest, issues, assessments, baseline)
     assert penalized["summary"]["noise_cards"] == 1
-    assert penalized["summary"]["clean_card_precision"] == 96.2
-    assert penalized["summary"]["quality_score"] == 97.7
-    assert penalized["status"] == "PASS"
+    assert penalized["summary"]["quality_score"] == 95.2
+
+
+def test_optional_top_level_field_mismatch_does_not_change_card_score() -> None:
+    manifest = _manifest()
+    _, issues = load_catalogs()
+    assessments = _assessments(manifest)
+    first = next(iter(assessments.values()))
+    first["fields"]["severity"] = False
+    report = build_report(
+        manifest,
+        issues,
+        assessments,
+        _baseline_assessments(manifest),
+    )
+    failed_issue = next(
+        item for item in report["issues"] if item["issue_id"] == first["issue_id"]
+    )
+    assert failed_issue["outcome"] == "correct"
+    assert report["summary"]["quality_score"] == 100
 
 
 def test_incomplete_issue_is_inconclusive() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
     manifest["agents"][0]["issues"][0]["status"] = "inconclusive"
-    report = build_report(
-        manifest,
-        issues,
-        _assessments(manifest),
-        _baseline_assessments(manifest),
-    )
-    assert report["status"] == "INCOMPLETE"
-    assert report["summary"]["quality_score"] is None
+    with pytest.raises(ContractError, match="no quality report"):
+        build_report(
+            manifest,
+            issues,
+            _assessments(manifest),
+            _baseline_assessments(manifest),
+        )
 
 
 def test_incomplete_issue_assessment_prevents_a_numeric_score() -> None:
@@ -372,34 +824,24 @@ def test_incomplete_issue_assessment_prevents_a_numeric_score() -> None:
     assessments[issue_id]["fields"] = {
         field: False for field in assessments[issue_id]["fields"]
     }
-    report = build_report(
-        manifest,
-        issues,
-        assessments,
-        _baseline_assessments(manifest),
-    )
-    result = next(item for item in report["issues"] if item["issue_id"] == issue_id)
-    assert result["result"] == "INCOMPLETE"
-    assert report["status"] == "INCOMPLETE"
-    assert report["summary"]["incomplete"] is True
-    assert report["summary"]["incomplete_reasons"] == [
-        "assessment_evidence_incomplete"
-    ]
-    assert report["summary"]["quality_score"] is None
+    with pytest.raises(ContractError, match="no quality report"):
+        build_report(
+            manifest,
+            issues,
+            assessments,
+            _baseline_assessments(manifest),
+        )
 
 
 def test_inconclusive_assessment_prevents_a_numeric_score() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
-    manifest["agents"][0]["baseline"] = {
-        "foundry_version": "1",
-        "status": "not_at_bar",
-        "insight_references": ["sha256:" + "1" * 64],
-        "endpoint_request_count": 5,
-        "endpoint_response_count": 5,
-        "endpoint_usable_response_count": 5,
-        "trace_contract_verified": True,
-    }
+    manifest["agents"][0]["baseline"].update(
+        {
+            "status": "not_at_bar",
+            "insight_references": ["sha256:" + "1" * 64],
+        }
+    )
     baseline = _baseline_assessments(manifest)
     baseline["weather-agent"] = {
         "verdict": "inconclusive",
@@ -408,32 +850,24 @@ def test_inconclusive_assessment_prevents_a_numeric_score() -> None:
         "confidence": 0.8,
         "card_evaluations": [{"evaluation": "incomplete"}],
     }
-    report = build_report(
-        manifest,
-        issues,
-        _assessments(manifest),
-        baseline,
-    )
-    assert report["status"] == "INCOMPLETE"
-    assert report["summary"]["incomplete"] is True
-    assert report["summary"]["incomplete_reasons"] == [
-        "assessment_evidence_incomplete"
-    ]
-    assert report["summary"]["quality_score"] is None
+    with pytest.raises(ContractError, match="no quality report"):
+        build_report(
+            manifest,
+            issues,
+            _assessments(manifest),
+            baseline,
+        )
 
 
 def test_incomplete_baseline_card_prevents_a_numeric_score() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
-    manifest["agents"][0]["baseline"] = {
-        "foundry_version": "1",
-        "status": "not_at_bar",
-        "insight_references": ["sha256:" + "1" * 64],
-        "endpoint_request_count": 5,
-        "endpoint_response_count": 5,
-        "endpoint_usable_response_count": 5,
-        "trace_contract_verified": True,
-    }
+    manifest["agents"][0]["baseline"].update(
+        {
+            "status": "not_at_bar",
+            "insight_references": ["sha256:" + "1" * 64],
+        }
+    )
     baseline = _baseline_assessments(manifest)
     baseline["weather-agent"] = {
         "verdict": "noise",
@@ -442,24 +876,19 @@ def test_incomplete_baseline_card_prevents_a_numeric_score() -> None:
         "confidence": 0.8,
         "card_evaluations": [{"evaluation": "incomplete"}],
     }
-    report = build_report(manifest, issues, _assessments(manifest), baseline)
-    assert report["status"] == "INCOMPLETE"
-    assert report["summary"]["incomplete"] is True
-    assert report["summary"]["quality_score"] is None
+    with pytest.raises(ContractError, match="no quality report"):
+        build_report(manifest, issues, _assessments(manifest), baseline)
 
 
 def test_valid_baseline_agent_finding_is_not_noise() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
-    manifest["agents"][0]["baseline"] = {
-        "foundry_version": "1",
-        "status": "not_at_bar",
-        "insight_references": ["sha256:" + "1" * 64],
-        "endpoint_request_count": 5,
-        "endpoint_response_count": 5,
-        "endpoint_usable_response_count": 5,
-        "trace_contract_verified": True,
-    }
+    manifest["agents"][0]["baseline"].update(
+        {
+            "status": "not_at_bar",
+            "insight_references": ["sha256:" + "1" * 64],
+        }
+    )
     baseline = _baseline_assessments(manifest)
     baseline["weather-agent"] = {
         "verdict": "agent_finding",
@@ -468,16 +897,25 @@ def test_valid_baseline_agent_finding_is_not_noise() -> None:
         "confidence": 0.99,
         "card_evaluations": [
             {
+                "reference": "sha256:" + "1" * 64,
+                "title": "Synthetic baseline finding",
+                "category": "synthetic",
+                "severity": "medium",
                 "evaluation": "valid_agent_finding",
                 "ownership": "agent",
+                "ownership_reason": (
+                    "Independent trace proof confirms an Agent defect."
+                ),
+                "confidence": 0.99,
+                "reasoning": (
+                    "Independent trace proof confirms an Agent defect."
+                ),
             }
         ],
     }
     report = build_report(manifest, issues, _assessments(manifest), baseline)
-    assert report["status"] == "PASS"
     assert report["summary"]["baseline_passed"] == 4
     assert report["summary"]["noise_cards"] == 0
-    assert report["summary"]["clean_card_precision"] == 100
     assert report["summary"]["quality_score"] == 100
     report["delivery"]["content_digest"] = "sha256:" + "a" * 64
     validate_published_report(report)
@@ -490,16 +928,13 @@ def test_missing_runtime_evidence_prevents_a_numeric_score() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
     manifest["agents"][0]["issues"][0]["endpoint_usable_response_count"] = 4
-    report = build_report(
-        manifest,
-        issues,
-        _assessments(manifest),
-        _baseline_assessments(manifest),
-    )
-    assert report["issues"][0]["result"] == "INCOMPLETE"
-    assert report["status"] == "INCOMPLETE"
-    assert report["summary"]["quality_score"] is None
-    assert "runtime_evidence_incomplete" in report["summary"]["incomplete_reasons"]
+    with pytest.raises(ContractError, match="no quality report"):
+        build_report(
+            manifest,
+            issues,
+            _assessments(manifest),
+            _baseline_assessments(manifest),
+        )
 
 
 def test_published_report_requires_complete_consistent_content() -> None:
@@ -513,12 +948,88 @@ def test_published_report_requires_complete_consistent_content() -> None:
     )
     report["delivery"]["content_digest"] = "sha256:" + "a" * 64
     validate_published_report(report)
+    inconsistent_outcome = deepcopy(report)
+    inconsistent_outcome["issues"][0]["outcome"] = "missing"
+    with pytest.raises(ContractError, match="outcomes are inconsistent"):
+        validate_published_report(inconsistent_outcome)
     report["issues"][0]["assessment"] = None
     with pytest.raises(ContractError, match="incomplete"):
         validate_published_report(report)
 
 
-def test_published_report_rejects_incomplete_assessment_evidence() -> None:
+def test_report_rejects_malformed_or_private_nested_content() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    report = build_report(
+        manifest,
+        issues,
+        _assessments(manifest),
+        _baseline_assessments(manifest),
+    )
+    validate_report(report)
+
+    malformed = deepcopy(report)
+    del malformed["issues"][0]["assessment"]["card_evaluations"][0]["category"]
+    with pytest.raises(ContractError, match="invalid or incomplete"):
+        validate_report(malformed)
+
+    private = deepcopy(report)
+    private["issues"][0]["assessment"]["card_evaluations"][0][
+        "ownership_reason"
+    ] = "See /subscriptions/private-resource."
+    with pytest.raises(ContractError, match="private Azure"):
+        validate_report(private)
+
+    nested = deepcopy(report)
+    nested["baseline"][0]["raw_trace"] = {"provider_id": "private"}
+    with pytest.raises(ContractError, match="invalid or incomplete"):
+        validate_report(nested)
+
+    missing_reasoning = deepcopy(report)
+    del missing_reasoning["issues"][0]["assessment"]["reasoning"]
+    with pytest.raises(ContractError, match="invalid or incomplete"):
+        validate_report(missing_reasoning)
+
+    wrong_field_reasons = deepcopy(report)
+    card = wrong_field_reasons["issues"][0]["assessment"]["card_evaluations"][0]
+    card["finding_type"] = "PARTIAL"
+    card["verdict"] = "partially_useful"
+    card["ownership"] = "insight_engine"
+    card["fields"]["severity"] = False
+    card["field_reasons"] = {
+        "title": "The title is correct, so this reason is not allowed."
+    }
+    with pytest.raises(ContractError, match="exactly each failed field"):
+        validate_report(wrong_field_reasons)
+
+    unresolved_duplicate = deepcopy(report)
+    primary = unresolved_duplicate["issues"][0]["assessment"][
+        "card_evaluations"
+    ][0]
+    duplicate = deepcopy(primary)
+    duplicate.update(
+        {
+            "reference": "sha256:" + "f" * 64,
+            "verdict": "incorrect",
+            "finding_type": "DUPLICATE",
+            "ownership": "insight_engine",
+            "duplicate_of": "sha256:" + "e" * 64,
+        }
+    )
+    unresolved_duplicate["issues"][0]["assessment"][
+        "card_evaluations"
+    ].append(duplicate)
+    unresolved_duplicate["issues"][0]["observed_count"] += 1
+    with pytest.raises(ContractError, match="same assessment"):
+        validate_report(unresolved_duplicate)
+
+    missing_card_evaluation = deepcopy(report)
+    missing_card_evaluation["issues"][0]["assessment"]["card_evaluations"] = []
+    with pytest.raises(ContractError, match="cover every observed card"):
+        validate_report(missing_card_evaluation)
+
+
+def test_incomplete_assessment_cannot_build_a_report() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
     assessments = _assessments(manifest)
@@ -529,59 +1040,382 @@ def test_published_report_rejects_incomplete_assessment_evidence() -> None:
     assessments[issue_id]["fields"] = {
         field: False for field in assessments[issue_id]["fields"]
     }
+    with pytest.raises(ContractError, match="no quality report"):
+        build_report(
+            manifest,
+            issues,
+            assessments,
+            _baseline_assessments(manifest),
+        )
+
+
+def test_agent_report_is_a_human_validation_handoff() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    assessments = _assessments(manifest)
+    first_issue_id = manifest["agents"][0]["issues"][0]["issue_id"]
+    assessments[first_issue_id]["verdict"] = "partially_useful"
+    assessments[first_issue_id]["finding_type"] = "PARTIAL"
+    assessments[first_issue_id]["ownership"] = "insight_engine"
+    assessments[first_issue_id]["reasoning"] = (
+        "The card names the correct root but severity and fix are wrong."
+    )
+    assessments[first_issue_id]["fields"] = {
+        "title": True,
+        "description": True,
+        "category": True,
+        "severity": False,
+        "proposed_fix": False,
+        "linked_traces": True,
+    }
+    assessments[first_issue_id]["card_evaluations"] = [
+        {
+            "reference": "sha256:" + "9" * 64,
+            "title": "Synthetic partial finding",
+            "finding_type": "PARTIAL",
+            "fields": assessments[first_issue_id]["fields"],
+            "field_reasons": {
+                "severity": "The card understates impact though traces show a full outage.",
+                "proposed_fix": "The proposed fix does not address the identified root cause.",
+            },
+            "ownership": "insight_engine",
+            "confidence": 0.8,
+            "reasoning": "The card names the correct root but severity and fix are wrong.",
+        },
+        {
+            "reference": "sha256:" + "8" * 64,
+            "title": "Secondary attributable finding",
+            "finding_type": "PARTIAL",
+            "fields": {
+                **assessments[first_issue_id]["fields"],
+                "title": False,
+            },
+            "field_reasons": {
+                "root_cause": "The secondary card names a downstream symptom.",
+                "severity": "The secondary card understates impact.",
+                "proposed_fix": "The secondary fix targets the wrong component.",
+            },
+            "ownership": "insight_engine",
+            "confidence": 0.6,
+            "reasoning": "This additional card is attributable but not primary.",
+        },
+    ]
     report = build_report(
         manifest,
         issues,
         assessments,
         _baseline_assessments(manifest),
     )
-    report["summary"]["incomplete"] = False
-    report["summary"]["quality_score"] = calculate_quality_score(
-        field_quality_score=report["summary"]["field_quality_score"],
-        clean_card_precision=report["summary"]["clean_card_precision"],
-        incomplete=False,
-    )
-    report["status"] = (
-        "PASS" if report["summary"]["quality_score"] >= 90 else "FAIL"
-    )
-    report["delivery"]["content_digest"] = "sha256:" + "a" * 64
-    with pytest.raises(ContractError, match="incomplete"):
-        validate_published_report(report)
+    markdown = render_agent_markdown(report, "weather-agent")
+    assert "## Expected issue coverage" in markdown
+    assert "## Extra generated Insights" in markdown
+    assert "## Decision details" in markdown
+    assert "## Evaluation guide" in markdown
+    assert "## Human validation checklist" in markdown
+    assert "## Coding-agent context" in markdown
+    assert (
+        "| Expected issue | Version | Primary Insight | Evaluation | Why |"
+    ) in markdown
+    assert "Incorrect" in markdown
+    assert "Synthetic partial finding" in markdown
+    assert "understates impact" in markdown
+    assert "does not address the identified root cause" in markdown
+    assert "Secondary attributable finding" in markdown
+    assert "Additional attributable card" in markdown
+    assert "The secondary fix targets the wrong component." in markdown
+    assert "Quality score:" not in markdown
+    assert "Runtime evidence: `Complete`" in markdown
 
 
-def test_agent_report_is_a_human_validation_handoff() -> None:
+def test_extra_insights_missing_coverage_duplicates_and_coding_agent_context() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
+    assessments = _assessments(manifest)
+    agent_name = manifest["agents"][0]["name"]
+    agent_issue_ids = [item["issue_id"] for item in manifest["agents"][0]["issues"]]
+    noise_issue_id, duplicate_issue_id = agent_issue_ids[0], agent_issue_ids[1]
+    for index, issue_id in enumerate(agent_issue_ids[2:], start=1):
+        assessments[issue_id]["card_evaluations"] = [
+            {
+                "reference": "sha256:" + f"{index + 4:02x}" * 32,
+                "title": f"Primary finding for {issue_id}",
+                "finding_type": "MATCHED",
+                "fields": deepcopy(assessments[issue_id]["fields"]),
+                "ownership": "none",
+                "confidence": 0.95,
+                "reasoning": "The card fully matches the expected issue.",
+            }
+        ]
+
+    # An expected issue with only a Noise card is still Missing, and the Noise
+    # card is recorded as an Extra generated Insight with no issue assignment.
+    assessments[noise_issue_id]["verdict"] = "missing"
+    assessments[noise_issue_id]["finding_type"] = "NOISE"
+    assessments[noise_issue_id]["ownership"] = "insight_engine"
+    assessments[noise_issue_id]["reasoning"] = (
+        "No card represents this issue's root cause."
+    )
+    assessments[noise_issue_id]["card_evaluations"] = [
+        {
+            "reference": "sha256:" + "a1" * 32,
+            "title": "Unrelated noise finding",
+            "finding_type": "NOISE",
+            "fields": {
+                field: False for field in assessments[noise_issue_id]["fields"]
+            },
+            "ownership": "insight_engine",
+            "ownership_reason": (
+                "The card describes a condition never present in this trace."
+            ),
+            "confidence": 0.7,
+            "reasoning": "Independent trace review shows no such condition occurred.",
+        }
+    ]
+
+    # An issue with a primary MATCHED card plus a Duplicate of that same card
+    # stays Correct, and the Duplicate renders as an explicit group.
+    assessments[duplicate_issue_id]["verdict"] = "incorrect"
+    assessments[duplicate_issue_id]["finding_type"] = "DUPLICATE"
+    assessments[duplicate_issue_id]["ownership"] = "insight_engine"
+    assessments[duplicate_issue_id]["fields"]["title"] = False
+    primary_reference = "sha256:" + "b2" * 32
+    assessments[duplicate_issue_id]["card_evaluations"] = [
+        {
+            "reference": primary_reference,
+            "title": "Primary root cause finding",
+            "finding_type": "MATCHED",
+            "fields": {
+                field: True
+                for field in assessments[duplicate_issue_id]["fields"]
+            },
+            "ownership": "none",
+            "confidence": 0.95,
+            "reasoning": "The card fully matches the expected issue.",
+        },
+        {
+            "reference": "sha256:" + "c3" * 32,
+            "title": "Repeated finding",
+            "finding_type": "DUPLICATE",
+            "duplicate_of": primary_reference,
+            "fields": deepcopy(assessments[duplicate_issue_id]["fields"]),
+            "ownership": "insight_engine",
+            "confidence": 0.9,
+            "reasoning": "This card repeats the same root as the primary card.",
+        },
+        {
+            "reference": "sha256:" + "d4" * 32,
+            "title": "Second repeated finding",
+            "finding_type": "DUPLICATE",
+            "duplicate_of": primary_reference,
+            "fields": deepcopy(assessments[duplicate_issue_id]["fields"]),
+            "ownership": "insight_engine",
+            "confidence": 0.85,
+            "reasoning": "This second card also adds no independent root.",
+        },
+    ]
+
     report = build_report(
         manifest,
         issues,
-        _assessments(manifest),
+        assessments,
         _baseline_assessments(manifest),
     )
-    report["issues"][0]["assessment"]["card_evaluations"] = [
+    markdown = render_agent_markdown(report, agent_name)
+
+    coverage_section = markdown.split("## Expected issue coverage", 1)[1].split(
+        "## Extra generated Insights", 1
+    )[0]
+    noise_row = next(
+        line for line in coverage_section.splitlines() if noise_issue_id in line
+    )
+    assert "Missing" in noise_row
+    assert "No card represents this issue's root cause." in noise_row
+
+    assert "Unrelated noise finding" in markdown
+    assert "Duplicate of **Primary root cause finding**." in markdown
+    duplicate_coverage_row = next(
+        line for line in coverage_section.splitlines() if duplicate_issue_id in line
+    )
+    assert "Correct" in duplicate_coverage_row
+
+    review_summary = markdown.split("## Review summary", 1)[1].split(
+        "## Expected issue coverage", 1
+    )[0]
+    assert "| Missing | 1 |" in review_summary
+    assert "| Noise | 1 |" in review_summary
+    assert "| Duplicate | 2 |" in review_summary
+
+    assert "### Noise card - observed in" in markdown
+    assert "**Corresponding issue:** None" in markdown
+    assert f"### [{noise_issue_id}]" in markdown
+    assert "### Duplicate group" in markdown
+    assert "**Primary card:** Primary root cause finding" in markdown
+    assert "1. Repeated finding" in markdown
+    assert "2. Second repeated finding" in markdown
+    assert "This card repeats the same root as the primary card." in markdown
+    assert "This second card also adds no independent root." in markdown
+
+    context_section = markdown.split("## Coding-agent context", 1)[1]
+    # The Missing issue's row merges its own coverage label with the
+    # unmatched Noise card generated in the same version - one row, no
+    # separate row for the extra card.
+    assert f"`{noise_issue_id}` Missing + unmatched Noise" in context_section
+    assert f"`{noise_issue_id}` Missing |" not in context_section
+    # The otherwise-Correct issue still gets a row because of its Duplicate
+    # group, and its ownership is the Duplicate card's own ownership, not
+    # the primary's "no problem" ownership.
+    assert f"`{duplicate_issue_id}` Duplicate group" in context_section
+    assert f"`{duplicate_issue_id}` Missing" not in context_section
+    noise_row = next(
+        line for line in context_section.splitlines() if noise_issue_id in line
+    )
+    duplicate_row = next(
+        line for line in context_section.splitlines() if duplicate_issue_id in line
+    )
+    assert "`insight_engine`" in noise_row
+    assert "Missing / Noise details above" in noise_row
+    assert f"agents/{agent_name}/issues/{noise_issue_id}/source/" in noise_row
+    assert f"agents/{agent_name}/issues/{noise_issue_id}/traffic.json" in noise_row
+    assert "`insight_engine`" in duplicate_row
+    assert "Duplicate detail above" in duplicate_row
+    assert f"agents/{agent_name}/issues/{duplicate_issue_id}/source/" in duplicate_row
+    # No hyperlink is used for the issue-catalog reference in this table -
+    # it is a deterministic repo-relative path a coding agent can open.
+    assert f"`ISSUE_CATALOG.md#{noise_issue_id}`" in noise_row
+    assert f"[ISSUE_CATALOG.md#{noise_issue_id}]" not in noise_row
+
+
+def test_primary_coverage_and_every_extra_owner_are_independent() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    assessments = _assessments(manifest)
+    issue_id = manifest["agents"][0]["issues"][0]["issue_id"]
+    assessment = assessments[issue_id]
+    assessment["verdict"] = "partially_useful"
+    assessment["finding_type"] = "PARTIAL"
+    assessment["ownership"] = "agent"
+    assessment["fields"]["severity"] = False
+    primary = assessment["card_evaluations"][0]
+    primary.update(
         {
-            "title": "Synthetic partial finding",
+            "verdict": "partially_useful",
             "finding_type": "PARTIAL",
-            "fields": {
-                "root_cause": True,
-                "title": True,
-                "description": True,
-                "category": True,
-                "severity": False,
-                "proposed_fix": False,
-                "linked_traces": True,
+            "ownership": "agent",
+            "ownership_reason": "The Agent emitted an incomplete severity.",
+            "field_reasons": {
+                "severity": "The synthetic severity is incomplete."
             },
         }
-    ]
-    markdown = render_agent_markdown(report, "weather-agent")
-    assert "## Review summary" in markdown
-    assert "## Evaluation guide" in markdown
-    assert "## Insight-level evaluation" in markdown
-    assert "## Human validation checklist" in markdown
+    )
+    primary["fields"]["severity"] = False
+    noise = deepcopy(primary)
+    noise.update(
+        {
+            "reference": "sha256:" + ("f" * 64),
+            "title": "Independent extra noise",
+            "verdict": "incorrect",
+            "finding_type": "NOISE",
+            "ownership": "insight_engine",
+            "ownership_reason": "The extra card is unrelated.",
+            "reasoning": "Independent evidence disproves the extra card.",
+        }
+    )
+    noise.pop("field_reasons")
+    assessment["card_evaluations"].append(noise)
+    report = build_report(
+        manifest,
+        issues,
+        assessments,
+        _baseline_assessments(manifest),
+    )
+    assert report["summary"]["issues_incorrect"] == 1
+    assert report["summary"]["noise_cards"] == 1
+    markdown = render_agent_markdown(report, manifest["agents"][0]["name"])
+    context = markdown.split("## Coding-agent context", 1)[1]
+    rows = [line for line in context.splitlines() if issue_id in line]
+    assert len(rows) == 2
+    assert any("`agent`" in row and "Incorrect" in row for row in rows)
+    assert any(
+        "`insight_engine`" in row and "unmatched Noise" in row
+        for row in rows
+    )
+
+
+def test_daily_top_level_report_links_insight_engine_improvement() -> None:
+    _, issues = load_catalogs()
+    daily_manifest = _manifest()
+    daily_report = build_report(
+        daily_manifest,
+        issues,
+        _assessments(daily_manifest),
+        _baseline_assessments(daily_manifest),
+    )
+    daily_markdown = render_markdown(daily_report)
+    assert "## Per-Agent reports" in daily_markdown
     assert (
-        "| Issue | Foundry version | Generated Insight | Evaluation | "
-        "Passing fields | Failing fields |"
-    ) in markdown
-    assert "root cause, title, description, category, linked traces" in markdown
-    assert "severity, proposed fix" in markdown
-    assert "| Ownership |" not in markdown
+        "[View Insight Engine Improvement Report]"
+        "(../../../../insight-engine-improvement.md)"
+        in daily_markdown
+    )
+    assert daily_markdown.index("## Per-Agent reports") < daily_markdown.index(
+        "View Insight Engine Improvement Report"
+    )
+
+    staging_manifest = _manifest(full=True)
+    staging_report = build_report(
+        staging_manifest,
+        issues,
+        _assessments(staging_manifest),
+        _baseline_assessments(staging_manifest),
+    )
+    staging_markdown = render_markdown(staging_report)
+    assert "View Insight Engine Improvement Report" not in staging_markdown
+
+
+def test_complete_rendered_reports_hide_internal_verdict_labels() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    assessments = _assessments(manifest)
+    passing = build_report(
+        manifest,
+        issues,
+        assessments,
+        _baseline_assessments(manifest),
+    )
+    failing_assessments = deepcopy(assessments)
+    for assessment in list(failing_assessments.values())[:4]:
+        assessment["verdict"] = "incorrect"
+        assessment["finding_type"] = "MISMATCHED"
+        assessment["fields"] = {
+            field: False for field in assessment["fields"]
+        }
+    failing = build_report(
+        manifest,
+        issues,
+        failing_assessments,
+        _baseline_assessments(manifest),
+    )
+
+    for report in (passing, failing):
+        aggregate = render_markdown(report)
+        assert "status" not in report
+        assert re.search(r"\b(?:PASS|FAIL)\b", aggregate) is None
+        assert "| Issue | Agent | Finding | Ownership |" in aggregate
+        for baseline in report["baseline"]:
+            agent = render_agent_markdown(report, baseline["agent"])
+            assert re.search(r"\b(?:PASS|FAIL)\b", agent) is None
+            assert "Runtime evidence:" in agent
+            assert "Quality score:" not in agent
+
+
+def test_incomplete_evidence_has_no_rendered_report() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    manifest["agents"][0]["baseline"]["status"] = "inconclusive"
+    with pytest.raises(ContractError, match="no quality report"):
+        build_report(
+            manifest,
+            issues,
+            _assessments(manifest),
+            _baseline_assessments(manifest),
+        )

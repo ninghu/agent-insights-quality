@@ -6,25 +6,31 @@ from pathlib import Path
 
 from agent_insights_quality.catalogs import generate_docs, load_catalogs
 from agent_insights_quality.automation_policy import load_automation_policy
-from agent_insights_quality.reporting import (
-    CLEAN_CARD_PRECISION_WEIGHT,
-    FIELD_QUALITY_WEIGHT,
-    FIELD_WEIGHTS,
+from agent_insights_quality.scoring import (
     QUALITY_SCORE_FORMULA,
-    QUALITY_SCORE_THRESHOLD,
+    SCORING_FIELDS,
 )
+from agent_insights_quality.selection import DAILY_ISSUES_PER_AGENT
 from agent_insights_quality.util import ROOT, ContractError, read_yaml
+from agent_insights_quality.validation_policy import load_validation_policy
 
 _REMOVED_TERMS = re.compile(
-    r"(?i)\b(?:" + "s" + r"cenario|" + "s" + r"cn)\b|aiq-" + "s" + "cn"
+    r"(?i)\b" + "s" + r"cn\b|aiq-" + "s" + "cn"
 )
 def validate_repository() -> None:
-    load_catalogs()
-    load_automation_policy()
+    _, issues = load_catalogs()
+    policy = load_automation_policy()
+    if (
+        issues["selection"]["issues_per_agent_daily"]
+        != policy.issues_per_agent_daily
+        or policy.issues_per_agent_daily != DAILY_ISSUES_PER_AGENT
+    ):
+        raise ContractError("Daily selection contracts are inconsistent")
     generate_docs(check=True)
     _validate_reporting_policy()
     _validate_removed_terms()
     _validate_sensitive_content()
+    _validate_test_agent_validation_boundary()
 
 
 def _tracked_text_files() -> list[Path]:
@@ -68,10 +74,8 @@ def _validate_reporting_policy() -> None:
         raise ContractError("Reporting dashboard link is not reviewed")
     if policy.get("quality_score") != {
         "formula": QUALITY_SCORE_FORMULA,
-        "field_quality_weight": FIELD_QUALITY_WEIGHT,
-        "clean_card_precision_weight": CLEAN_CARD_PRECISION_WEIGHT,
-        "field_weights": FIELD_WEIGHTS,
-        "pass_threshold": QUALITY_SCORE_THRESHOLD,
+        "scoring_fields": list(SCORING_FIELDS),
+        "diagnostic_fields": ["severity", "proposed_fix"],
     }:
         raise ContractError("Reporting quality-score policy does not match implementation")
 
@@ -106,4 +110,51 @@ def _validate_sensitive_content() -> None:
     if violations:
         raise ContractError(
             "Potential private or sensitive values found in: " + ", ".join(violations)
+        )
+
+
+def _validate_test_agent_validation_boundary() -> None:
+    policy = load_validation_policy()
+    if (
+        policy.authority_count != 41
+        or policy.environment_id != "swedencentral-g30"
+        or policy.location != "swedencentral"
+        or policy.project_name != "aiq-staging-swedencentral"
+        or policy.telemetry_resource_set != "g30"
+    ):
+        raise ContractError("Test Agent Validation config is not reviewed")
+    forbidden = (
+        "agent_insights_quality.adx",
+        "agent_insights_quality.assessment",
+        "agent_insights_quality.email",
+        "agent_insights_quality.reporting",
+        "ensure_monitor(",
+        "start_insights_run(",
+        "publish_daily_report",
+    )
+    violations = []
+    for path in sorted(
+        (ROOT / "src" / "agent_insights_quality").glob("validation_*.py")
+    ):
+        content = path.read_text(encoding="utf-8")
+        if any(value in content for value in forbidden):
+            violations.append(path.relative_to(ROOT).as_posix())
+    removed_paths = (
+        ROOT / ".github" / "workflows" / "test-agent-validation.yml",
+        ROOT / ".github" / "workflows" / "test-agent-validation-receipt.yml",
+        ROOT / ".github" / "workflows" / "test-agent-validation-reconciler.yml",
+        ROOT / ".github" / "workflows" / "test-agent-validation-review.yml",
+        ROOT / "src" / "agent_insights_quality" / "validation_gate.py",
+        ROOT / "src" / "agent_insights_quality" / "validation_issuer.py",
+        ROOT / "schemas" / "test-agent-validation-receipt.schema.json",
+    )
+    violations.extend(
+        path.relative_to(ROOT).as_posix()
+        for path in removed_paths
+        if path.exists()
+    )
+    if violations:
+        raise ContractError(
+            "Test Agent Validation crosses its report-free boundary: "
+            + ", ".join(violations)
         )

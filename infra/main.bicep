@@ -1,30 +1,34 @@
 targetScope = 'subscription'
 
 param resourceGroupName string = 'agent-insights-quality-rg'
-param location string = 'westus2'
-param terraModelVersion string
-param testAgentModelVersion string
+@allowed(['swedencentral'])
+param location string = 'swedencentral'
+@allowed(['2026-07-09'])
+param terraModelVersion string = '2026-07-09'
+@allowed(['2026-03-17'])
+param testAgentModelVersion string = '2026-03-17'
 param automationOwner string = 'ninghu'
 param automationPrincipalId string
-param telemetryGeneration string
+@allowed(['g30'])
+param telemetryGeneration string = 'g30'
 @minValue(1)
 @maxValue(5000)
-param testAgentCapacity int = 5000
+param testAgentCapacity int = 4500
 @minValue(1)
 @maxValue(1000)
 param insightGenerationCapacity int = 100
-param adxSkuName string = 'Standard_E2ads_v5'
-@minValue(2)
-param adxCapacity int = 2
+@allowed(['aiqsweart'])
+param storageAccountPrefix string = 'aiqsweart'
+@allowed(['qualification-storage'])
+param storageResourceRole string = 'qualification-storage'
+@allowed(['quality-artifacts'])
+param qualityArtifactContainerName string = 'quality-artifacts'
+@allowed(['deployment-registries'])
+param deploymentRegistryContainerName string = 'deployment-registries'
+param approvedRecordContainerName string
 
-resource resourceGroup 'Microsoft.Resources/resourceGroups@2024-11-01' = {
+resource resourceGroup 'Microsoft.Resources/resourceGroups@2024-11-01' existing = {
   name: resourceGroupName
-  location: location
-  tags: {
-    purpose: 'agent-insights-quality'
-    agentInsightsQualityQualification: 'true'
-    automationOwner: automationOwner
-  }
 }
 
 module lab 'modules/lab.bicep' = {
@@ -39,7 +43,10 @@ module lab 'modules/lab.bicep' = {
     telemetryGeneration: telemetryGeneration
     testAgentCapacity: testAgentCapacity
     insightGenerationCapacity: insightGenerationCapacity
-    adxSkuName: adxSkuName
-    adxCapacity: adxCapacity
+    storageAccountPrefix: storageAccountPrefix
+    storageResourceRole: storageResourceRole
+    qualityArtifactContainerName: qualityArtifactContainerName
+    deploymentRegistryContainerName: deploymentRegistryContainerName
+    approvedRecordContainerName: approvedRecordContainerName
   }
 }

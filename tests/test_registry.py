@@ -13,6 +13,7 @@ from agent_insights_quality.catalogs import (
     agent_model_contract,
 )
 from agent_insights_quality.registry import (
+    REGISTRY_CONTAINER,
     _run_registry_command,
     load_registry,
     publish_registry,
@@ -24,13 +25,14 @@ from agent_insights_quality.util import ContractError
 def _registry(profile: str) -> dict:
     agents, issues = load_catalogs()
     return {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "profile": profile,
-        "project_name": (
-            "agent-insights-quality"
-            if profile == "daily"
-            else "agent-insights-quality-staging"
-        ),
+        "environment_id": "swedencentral-g30",
+        "location": "swedencentral",
+        "account_name": f"aiq-{profile}-swedencentral",
+        "project_name": f"aiq-{profile}-swedencentral",
+        "telemetry_resource_set": "g30",
+        "test_region": "SwedenCentral",
         "test_agent_model": agent_model_contract(agents),
         "catalog_hashes": catalog_hashes(agents, issues),
         "agents": {
@@ -58,7 +60,7 @@ def test_registry_is_profile_isolated(tmp_path: Path) -> None:
         profile="daily",
         catalog_hashes=catalog_hashes(agents, issues),
     )
-    assert loaded["project_name"] == "agent-insights-quality"
+    assert loaded["project_name"] == "aiq-daily-swedencentral"
     with pytest.raises(ContractError, match="different profile"):
         load_registry(
             path,
@@ -86,7 +88,8 @@ def test_registry_syncs_through_private_blob_storage(
     profile = SimpleNamespace(
         name="daily",
         registry_path=path,
-        registry_storage_account_name="syntheticstorage",
+        registry_storage_account_name="aiqsweartsynthetic",
+        environment_id="swedencentral-g30",
     )
     calls = []
 
@@ -109,6 +112,10 @@ def test_registry_syncs_through_private_blob_storage(
     publish_registry(profile)
     assert "download" in calls[0]
     assert "upload" in calls[1]
+    assert calls[0][calls[0].index("--account-name") + 1] == "aiqsweartsynthetic"
+    assert calls[1][calls[1].index("--account-name") + 1] == "aiqsweartsynthetic"
+    assert calls[0][calls[0].index("--container-name") + 1] == REGISTRY_CONTAINER
+    assert calls[1][calls[1].index("--container-name") + 1] == REGISTRY_CONTAINER
     assert "--auth-mode" in calls[0]
     assert "--auth-mode" in calls[1]
 

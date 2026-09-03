@@ -1,82 +1,46 @@
 # Insight Result Labels
 
 Each generated Agent Insight card is evaluated independently against one reviewed expected issue.
-These labels describe whether the card is useful and correct; they are not based on a fixed count of
-passing fields.
+Reports use five public result categories.
 
-| Label | Meaning | Generated finding type |
-| --- | --- | --- |
-| Fully Correct | The card identifies the expected root cause and passes title, description, category, severity, proposed fix, and linked-trace checks. | `MATCHED` |
-| Partially Correct | The card identifies the correct problem direction and remains useful, but one or more fields are incomplete or inaccurate. | `PARTIAL` |
-| Incorrect | The card is related to the tested issue, but its root cause or other material guidance is wrong or misleading. | `MISMATCHED` |
-| Noise / Duplicate | The card should not have appeared because it is unrelated, contradicted by independent evidence, or an extra duplicate. | `NOISE` or `DUPLICATE` |
-
-## How field results are read
-
-Every attributable card has a separate pass/fail result for root cause, title, description, category,
-severity, proposed fix, and linked traces. The label is a holistic usefulness judgment, not a formula
-based only on the number of passing fields. The per-Agent report contains the actual field results for
-each card.
-
-Example Partially Correct card:
-
-| Field | Result |
+| Result | Meaning |
 | --- | --- |
-| Root cause | Pass |
-| Title | Pass |
-| Description | Pass |
-| Category | Pass |
-| Severity | Fail |
-| Proposed fix | Fail |
-| Linked traces | Pass |
+| Correct | At least one attributable card passes title, description, category, and linked traces. |
+| Incorrect | An attributable card exists, but no card passes all four scoring fields. |
+| Missing | No attributable card covers the expected issue. |
+| Noise | An extra card is unrelated to every expected issue or contradicted by independent evidence. |
+| Duplicate | An extra card repeats an attributable card for the same expected issue. |
 
-The diagnosis is still useful because the root cause and problem direction are correct.
+## Scoring and diagnostic fields
 
-Example Incorrect card:
+Every attributable card is assessed on six native Insight fields:
 
-| Field | Result |
+| Field | Affects score |
 | --- | --- |
-| Root cause | Fail |
-| Title | Pass |
-| Description | Pass |
-| Category | Fail |
-| Severity | Pass |
-| Proposed fix | Fail |
-| Linked traces | Pass |
+| Title | Yes |
+| Description | Yes |
+| Category | Yes |
+| Linked traces | Yes |
+| Severity | No |
+| Proposed fix | No |
 
-Although the title and description discuss the right topic, the wrong root cause and remediation would
-mislead an engineer. These are examples only; actual field combinations vary by card.
+Severity and proposed fix remain visible so engineers can improve them, but either may be wrong
+without changing a Correct result.
 
-## Fully Correct
+Linked traces pass when at least one exact-run, exact-version linked trace independently supports the
+card's core conclusion. Extra links do not fail the field unless they use the wrong run or version,
+or contradict the conclusion.
 
-A card is Fully Correct only when all seven reviewed fields pass:
+## Incorrect versus Noise
 
-1. root cause;
-2. title;
-3. description;
-4. category;
-5. severity;
-6. proposed fix;
-7. linked traces.
+Incorrect and Noise are deliberately separate:
 
-## Partially Correct
+- Incorrect is related to the expected issue but has a material scoring-field error.
+- Noise does not identify the expected issue at all.
 
-A Partially Correct card points to the real defect and provides useful diagnostic signal, but it does
-not meet the strict full-quality bar. For example, the root cause can be correct while the severity is
-wrong or the proposed fix is incomplete.
-
-## Incorrect
-
-An Incorrect card is not merely incomplete. Its root cause or another material claim would lead an
-engineer toward the wrong understanding or remediation. A related title or description does not make
-the card partially correct when its core diagnosis is wrong.
-
-## Noise / Duplicate
-
-Noise is not a lower-quality description of the expected issue. It is a card that should not exist at
-all. This includes false positives, unrelated findings, and redundant duplicates. A card generated
-for `v0` is Noise only when independent runtime evidence contradicts it. If independent trace proof
-shows that `v0` violated its reviewed healthy contract, the card is a valid Agent finding.
+For example, if the expected issue is that a Finance Agent used the wrong account, an Insight that
+identifies the account-scope problem but links contradictory evidence is Incorrect. An Insight about
+response latency is Noise; the account-scope issue is also Missing.
 
 ## Baseline ownership
 
@@ -89,13 +53,12 @@ from that contract:
 - `infrastructure`: identity, quota, service availability, deployment, or ingestion failed;
 - `unresolved`: retained evidence cannot distinguish the owner.
 
-## Missing expected Insight
-
-`MISSING` is reported separately when complete endpoint and trace evidence proves an expected issue,
-but Agent Insights generates no attributable card.
+A card generated for `v0` is Noise only when independent runtime evidence contradicts it. If
+independent trace proof shows that `v0` violated its reviewed healthy contract, the card is a valid
+Agent finding.
 
 ## Scoring
 
-Fully Correct and Partially Correct cards retain the field credit they earn. Incorrect cards receive
-credit only for individual fields that are actually correct. Noise and extra duplicates reduce the
-clean-card precision component. See [Quality Bar](QUALITY_BAR.md) for the complete formula.
+Correct issues contribute to the numerator. Incorrect and Missing remain inside the fixed expected
+issue count. Noise and Duplicate cards are extra output and expand the denominator. See
+[Quality Score](QUALITY_BAR.md) for the complete formula.

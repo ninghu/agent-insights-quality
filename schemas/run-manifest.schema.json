@@ -2,17 +2,324 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "run_id", "profile", "delivery_mode", "report_date", "insight_lookback_hours", "telemetry_resource_set", "catalog_hashes", "agents", "manifest_hash"],
+  "required": ["schema_version", "run_id", "profile", "delivery_mode", "report_date", "insight_lookback_hours", "telemetry_resource_set", "test_region", "test_region_registry", "catalog_hashes", "source_integrity", "agents", "manifest_hash"],
   "properties": {
-    "schema_version": {"const": "3.0.0"},
+    "schema_version": {"const": "5.0.0"},
     "run_id": {"type": "string", "pattern": "^aiq-[0-9]{8}(?:-r[0-9]{2,})?$"},
     "profile": {"enum": ["daily", "staging"]},
     "delivery_mode": {"enum": ["official", "test_email_only"]},
     "report_date": {"type": "string", "format": "date"},
     "insight_lookback_hours": {"type": "number", "minimum": 0.1},
     "telemetry_resource_set": {"type": "string", "pattern": "^g[1-9][0-9]*$"},
-    "catalog_hashes": {"type": "object"},
-    "agents": {"type": "array", "minItems": 5, "maxItems": 5},
+    "test_region": {"type": "string", "pattern": "^[A-Z][A-Za-z]*[0-9]*$"},
+    "test_region_registry": {"type": "string", "pattern": "^[A-Z][A-Za-z]*[0-9]*$"},
+    "catalog_hashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agents", "issues", "artifacts"],
+      "properties": {
+        "agents": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "issues": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "artifacts": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "source_integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verified", "contract_digest"],
+      "properties": {
+        "verified": {"const": true},
+        "contract_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "agents": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "type", "framework", "baseline_contract", "monitor_reference", "baseline", "issues"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "type": {"enum": ["prompt", "hosted_code", "hosted_custom_container"]},
+          "framework": {"enum": ["foundry_prompt", "microsoft_agent_framework", "langgraph", "custom_responses"]},
+          "baseline_contract": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["request_count", "terminal_response", "semantic_assertions", "function_calling", "trace_operations", "validation_mode"],
+            "properties": {
+              "request_count": {"const": 5},
+              "terminal_response": {"enum": ["direct_prompt", "standard_assistant_message", "explicit_span_attributes"]},
+              "semantic_assertions": {"enum": ["required", "required_per_request"]},
+              "function_calling": {"enum": ["forbidden", "not_applicable"]},
+              "trace_operations": {"enum": ["uniform", "required_per_request"]},
+              "validation_mode": {"const": "baseline"}
+            }
+          },
+          "monitor_reference": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "baseline": {"$ref": "#/$defs/baselineEvidence"},
+          "issues": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/issueEvidence"}
+          }
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"type": {"const": "prompt"}}},
+            "then": {
+              "properties": {
+                "baseline_contract": {
+                  "properties": {
+                    "terminal_response": {"const": "direct_prompt"},
+                    "semantic_assertions": {"const": "required_per_request"},
+                    "function_calling": {"const": "forbidden"}
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {"properties": {"type": {"const": "hosted_code"}}},
+            "then": {
+              "properties": {
+                "baseline_contract": {
+                  "properties": {
+                    "terminal_response": {"const": "standard_assistant_message"},
+                    "function_calling": {"const": "not_applicable"}
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {"properties": {"type": {"const": "hosted_custom_container"}}},
+            "then": {
+              "properties": {
+                "baseline_contract": {
+                  "properties": {
+                    "terminal_response": {"const": "explicit_span_attributes"},
+                    "function_calling": {"const": "not_applicable"}
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "name": {"const": "support-ticket-agent"}
+              }
+            },
+            "then": {
+              "properties": {
+                "baseline_contract": {
+                  "properties": {
+                    "trace_operations": {"const": "required_per_request"}
+                  }
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "baseline_contract": {
+                  "properties": {
+                    "trace_operations": {"const": "uniform"}
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
     "manifest_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  },
+  "$defs": {
+    "baselineEvidence": {
+      "allOf": [
+        {"$ref": "#/$defs/versionEvidence"},
+        {
+          "properties": {
+            "logical_version": {"const": "v0"},
+            "status": {"enum": ["passed", "not_at_bar", "inconclusive"]}
+          },
+          "not": {"required": ["issue_id"]}
+        }
+      ]
+    },
+    "issueEvidence": {
+      "allOf": [
+        {"$ref": "#/$defs/versionEvidence"},
+        {
+          "required": ["issue_id"],
+          "properties": {
+            "issue_id": {"type": "string", "pattern": "^issue-[0-9]{3}$"},
+            "logical_version": {"type": "string", "pattern": "^issue-[0-9]{3}$"},
+            "status": {"enum": ["observed", "not_at_bar", "inconclusive", "skipped_baseline"]}
+          }
+        }
+      ]
+    },
+    "versionEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "logical_version",
+        "foundry_version",
+        "content_digest",
+        "status",
+        "operation_ids",
+        "insight_references",
+        "window_start",
+        "window_end",
+        "error_code",
+        "endpoint_request_count",
+        "endpoint_response_count",
+        "endpoint_usable_response_count",
+        "semantic_assertion_count",
+        "semantic_assertions_passed",
+        "trace_assertion_count",
+        "trace_assertions_passed",
+        "trace_contract_verified",
+        "trace_behavior_summary",
+        "endpoint_request_summaries",
+        "evidence_reference"
+      ],
+      "properties": {
+        "issue_id": {"type": "string", "pattern": "^issue-[0-9]{3}$"},
+        "logical_version": {
+          "anyOf": [
+            {"const": "v0"},
+            {"type": "string", "pattern": "^issue-[0-9]{3}$"}
+          ]
+        },
+        "foundry_version": {"type": "string", "minLength": 1},
+        "content_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "status": {"enum": ["passed", "not_at_bar", "observed", "inconclusive", "skipped_baseline"]},
+        "operation_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[0-9a-f]{32}$"}
+        },
+        "insight_references": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+        },
+        "window_start": {
+          "oneOf": [
+            {"type": "string", "format": "date-time"},
+            {"type": "null"}
+          ]
+        },
+        "window_end": {
+          "oneOf": [
+            {"type": "string", "format": "date-time"},
+            {"type": "null"}
+          ]
+        },
+        "error_code": {"type": ["string", "null"]},
+        "endpoint_request_count": {"type": "integer", "minimum": 0},
+        "endpoint_response_count": {"type": "integer", "minimum": 0},
+        "endpoint_usable_response_count": {"type": "integer", "minimum": 0},
+        "semantic_assertion_count": {"type": "integer", "minimum": 0},
+        "semantic_assertions_passed": {"type": "integer", "minimum": 0},
+        "trace_assertion_count": {"type": "integer", "minimum": 0},
+        "trace_assertions_passed": {"type": "integer", "minimum": 0},
+        "trace_contract_verified": {"type": "boolean"},
+        "trace_behavior_summary": {"$ref": "#/$defs/traceBehaviorSummary"},
+        "endpoint_request_summaries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "request_index",
+              "response_count",
+              "usable_response",
+              "semantic_assertion_count",
+              "semantic_assertions_passed",
+              "assertion_results",
+              "trace_assertion_count",
+              "trace_assertions_passed",
+              "trace_assertion_results",
+              "activation_gate",
+              "direct_terminal_response_count",
+              "function_call_count"
+            ],
+            "properties": {
+              "request_index": {"type": "integer", "minimum": 0},
+              "response_count": {"type": "integer", "minimum": 0},
+              "usable_response": {"type": "boolean"},
+              "semantic_assertion_count": {"type": "integer", "minimum": 0},
+              "semantic_assertions_passed": {"type": "integer", "minimum": 0},
+              "assertion_results": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["assertion", "passed"],
+                  "properties": {
+                    "assertion": {"type": "string", "minLength": 1},
+                    "passed": {"type": "boolean"}
+                  }
+                }
+              },
+              "trace_assertion_count": {"type": "integer", "minimum": 0},
+              "trace_assertions_passed": {"type": "integer", "minimum": 0},
+              "trace_assertion_results": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["assertion", "passed"],
+                  "properties": {
+                    "assertion": {"type": "string", "minLength": 1},
+                    "passed": {"type": "boolean"}
+                  }
+                }
+              },
+              "activation_gate": {"type": "boolean"},
+              "direct_terminal_response_count": {"type": "integer", "minimum": 0, "maximum": 1},
+              "function_call_count": {"type": "integer", "minimum": 0}
+            }
+          }
+        },
+        "evidence_reference": {
+          "oneOf": [
+            {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    "traceBehaviorSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation_count": {"type": "integer", "minimum": 0},
+        "tool_call_counts": {
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        },
+        "tool_response_count": {"type": "integer", "minimum": 0},
+        "successful_tool_response_count": {"type": "integer", "minimum": 0},
+        "error_codes": {
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        },
+        "assistant_response_count": {"type": "integer", "minimum": 0},
+        "explicit_terminal_success_count": {"type": "integer", "minimum": 0},
+        "explicit_terminal_output_count": {"type": "integer", "minimum": 0},
+        "terminal_success_count": {"type": "integer", "minimum": 0},
+        "terminal_output_count": {"type": "integer", "minimum": 0},
+        "terminal_response_count": {"type": "integer", "minimum": 0},
+        "handled_error_count": {"type": "integer", "minimum": 0},
+        "unhandled_error_count": {"type": "integer", "minimum": 0}
+      }
+    }
   }
 }

@@ -21,31 +21,34 @@ Add one new synthetic Test Agent only as a human-reviewed fixed-topology migrati
    `source/` tree containing only its defect. Issue traffic must exercise the reviewed defect
    deterministically.
 5. Add the Agent, owner, and permanent issue assignments to both reviewed catalogs.
-6. Derive `agent_count`, `staging_issue_count`,
-   `daily_issue_count = sum(min(5, assigned_issue_count))`, and
-   `version_count = agent_count + staging_issue_count`, then update every fixed-count contract:
+6. Derive `agent_count`, `validation_issue_count`,
+   `daily_issue_count = sum(min(4, assigned_issue_count))`, and
+   `authority_count = agent_count + validation_issue_count`, then update every fixed-count contract:
    - Agent and Issue catalog schemas;
    - run-manifest and report schemas;
-   - daily and staging expected counts and score denominator;
+   - Daily expected counts, validation topology, and score denominator;
    - catalog, selection, reporting, promotion, and deployment tests;
    - generated Agent and Issue catalog views;
    - README, Operations, Quality Bar, and CONTRIBUTING;
    - hosted Agent import/build CI matrix when applicable.
    - promotion/deployment registry schemas and checks, runtime validators, explicit Agent-name
     allowlists, skills, and generated-change workflow constraints.
-   - daily selection and report validation so each Agent contributes `min(5, assigned issues)`.
+   - daily selection and report validation so each Agent contributes `min(4, assigned issues)`.
 7. For Hosted code, include `implementation.yaml`, `traffic.json`, `source/`, `host.yaml`,
    `requirements.txt`, and deterministic `package.py`; include the container contract and CI build
    entry for Hosted containers.
 8. Verify deterministic packaging, exact-version routing, endpoint behavior, natural telemetry,
    privacy-safe trace proof, and baseline ownership.
 9. Run repository validation, Ruff, tests, and Bicep compilation.
-10. When existing Agent digests, mappings, and shared contracts are unchanged, deploy and qualify only
-   the new Agent's `v0` and all assigned issues. Otherwise qualify every affected Agent or the full
-   catalog. Complete Sol assessment and require human review before daily promotion.
-11. Compose promotion from the new Agent's complete reviewed PASS/FAIL evidence plus valid receipts
-   for unchanged Agents. Require matching mappings and every exact digest. Never promote or reuse
-   INCOMPLETE.
+10. Update each baseline and issue's fixed validation scenarios, explicit mode, `n/k`, paired-v0
+   controls, execution digest, name limits, retained-resource inventory, and exact authority count.
+11. Run Test Agent Validation from one exact clean commit, require exact response-bound evidence
+   and explicit human approval, then create the single approved validation record. The visible
+   coordinator creates all parallel sub-sessions and may reuse exact-bound per-authority invocation
+   receipts for verify-only recovery without new traffic. Verification persists independent
+   `PASS`, `FAIL`, or `INCOMPLETE` authority results and retries only missing, `INCOMPLETE`, or
+   binding-changed authorities.
+   Validation remains report-free; never use the preserved old West US 2 environment as a fallback.
 
 Use GPT-5.4 mini for the Test Agent and keep Agent Insights generation on its separate Terra
 deployment. Do not add a placeholder implementation, private endpoint, compatibility alias, shared

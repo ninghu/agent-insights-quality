@@ -1,43 +1,53 @@
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 from pathlib import Path
-from typing import Mapping
 
 from agent_insights_quality.automation_policy import load_automation_policy
-from agent_insights_quality.catalogs import load_catalogs, agent_model_contract
 from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.util import ROOT, ContractError
 from agent_insights_quality.azure_cli import azure_cli
 
+SWEDEN_DEPLOYMENT_NAME = "agent-insights-quality-swedencentral-g30"
+ANALYTICS_DEPLOYMENT_NAME = "agent-insights-quality-analytics-westus2"
+_DEPLOYMENT_LOCATIONS = {
+    SWEDEN_DEPLOYMENT_NAME: "swedencentral",
+    ANALYTICS_DEPLOYMENT_NAME: "westus2",
+}
 
-def deploy_infrastructure(
-    environment: Mapping[str, str] | None = None,
-) -> None:
-    del environment
+
+def deploy_infrastructure() -> None:
     progress = ProgressReporter("aiq-infra")
     progress.emit("full infrastructure reconciliation started")
-    terra_model_version = resolve_latest_terra_version()
-    test_agent_model_version = agent_model_contract(load_catalogs()[0])[
-        "model_version"
-    ]
-    telemetry_resource_set = load_automation_policy().telemetry_resource_set
+    policy = load_automation_policy()
+    telemetry_resource_set = policy.telemetry_resource_set
+    if telemetry_resource_set != "g30":
+        raise ContractError("Infrastructure telemetry environment is not reviewed")
     principal_id = _current_principal_id(progress)
     _deploy_template(
         ROOT / "infra" / "main.bicep",
         [
-            "location=westus2",
+            "location=swedencentral",
             "resourceGroupName=agent-insights-quality-rg",
-            f"terraModelVersion={terra_model_version}",
-            f"testAgentModelVersion={test_agent_model_version}",
+            "terraModelVersion=2026-07-09",
+            "testAgentModelVersion=2026-03-17",
             f"telemetryGeneration={telemetry_resource_set}",
+            "testAgentCapacity=4500",
+            "insightGenerationCapacity=100",
+            f"storageAccountPrefix={policy.storage_account_prefix}",
+            f"storageResourceRole={policy.storage_resource_role}",
+            f"qualityArtifactContainerName={policy.quality_artifact_container}",
+            f"deploymentRegistryContainerName={policy.deployment_registry_container}",
+            f"approvedRecordContainerName={policy.approved_record_container}",
             "automationOwner=ninghu",
             f"automationPrincipalId={principal_id}",
         ],
+        deployment_name=SWEDEN_DEPLOYMENT_NAME,
+        deployment_location="swedencentral",
         progress=progress,
     )
+    _lock_approved_validation_policy(progress)
     progress.emit("full infrastructure reconciliation completed")
 
 
@@ -53,6 +63,8 @@ def deploy_analytics_infrastructure() -> None:
             "automationOwner=ninghu",
             f"automationPrincipalId={principal_id}",
         ],
+        deployment_name=ANALYTICS_DEPLOYMENT_NAME,
+        deployment_location="westus2",
         progress=progress,
     )
     progress.emit("ADX infrastructure reconciliation completed")
@@ -89,15 +101,21 @@ def _deploy_template(
     template: Path,
     parameters: list[str],
     *,
+    deployment_name: str,
+    deployment_location: str,
     progress: ProgressReporter | None = None,
 ) -> None:
+    if _DEPLOYMENT_LOCATIONS.get(deployment_name) != deployment_location:
+        raise ContractError("Infrastructure deployment name and location are not reviewed")
     arguments = [
         azure_cli(),
         "deployment",
         "sub",
         "create",
+        "--name",
+        deployment_name,
         "--location",
-        "westus2",
+        deployment_location,
         "--template-file",
         str(template),
         "--parameters",
@@ -122,57 +140,196 @@ def _deploy_template(
         raise ContractError("Infrastructure deployment failed; inspect protected Azure diagnostics")
 
 
-def resolve_latest_terra_version() -> str:
-    return resolve_latest_model_version("gpt-5.6-terra")
-
-
-def resolve_latest_model_version(
-    model_name: str,
-    *,
-    progress: ProgressReporter | None = None,
-) -> str:
-    reporter = progress or ProgressReporter("aiq-infra")
-    with reporter.heartbeat("Azure subscription resolution") as outcome:
-        account = subprocess.run(
-            [azure_cli(), "account", "show", "--output", "json"],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-        if account.returncode != 0:
-            outcome.fail()
-    if account.returncode != 0:
-        raise ContractError("Current Azure subscription could not be resolved")
-    subscription_id = str(json.loads(account.stdout).get("id") or "")
-    if not subscription_id:
-        raise ContractError("Current Azure subscription has no identity")
-    url = (
-        "https://management.azure.com/subscriptions/"
-        + subscription_id
-        + "/providers/Microsoft.CognitiveServices/locations/westus2/models"
-        + "?api-version=2025-06-01"
+def _lock_approved_validation_policy(progress: ProgressReporter) -> None:
+    policy = load_automation_policy()
+    container = policy.approved_record_container
+    account_query = (
+        "[?starts_with(name, '"
+        + policy.storage_account_prefix
+        + "') && kind=='StorageV2'"
+        " && location=='swedencentral'"
+        " && tags.purpose=='agent-insights-quality'"
+        " && tags.environment=='swedencentral'"
+        " && tags.location=='swedencentral'"
+        " && tags.generation=='"
+        + policy.telemetry_resource_set
+        + "' && tags.resourceRole=='"
+        + policy.storage_resource_role
+        + "'].name"
     )
-    with reporter.heartbeat(f"{model_name} model catalog query") as outcome:
-        response = subprocess.run(
-            [azure_cli(), "rest", "--method", "get", "--url", url, "--output", "json"],
+    account = subprocess.run(
+        [
+            azure_cli(),
+            "storage",
+            "account",
+            "list",
+            "--resource-group",
+            "agent-insights-quality-rg",
+            "--query",
+            account_query,
+            "--output",
+            "tsv",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    names = [item for item in account.stdout.splitlines() if item.strip()]
+    if (
+        account.returncode != 0
+        or len(names) != 1
+        or not names[0].startswith(policy.storage_account_prefix)
+    ):
+        raise ContractError(
+            "Approved validation record storage account is missing or ambiguous"
+        )
+    arguments = [
+        "--account-name",
+        names[0],
+        "--container-name",
+        container,
+        "--output",
+        "json",
+    ]
+
+    def read_policy(*, allow_missing: bool = False) -> dict | None:
+        process = subprocess.run(
+            [
+                azure_cli(),
+                "storage",
+                "container",
+                "immutability-policy",
+                "show",
+                *arguments,
+            ],
             capture_output=True,
             text=True,
             timeout=120,
             check=False,
         )
-        if response.returncode != 0:
-            outcome.fail()
-    if response.returncode != 0:
-        raise ContractError("Azure model catalog query failed")
-    versions = []
-    for item in json.loads(response.stdout).get("value", []):
-        match = re.fullmatch(
-            rf"OpenAI\.{re.escape(model_name)}\.(\d{{4}}-\d{{2}}-\d{{2}})",
-            str(item.get("name") or ""),
+        stdout = str(getattr(process, "stdout", "") or "")
+        stderr = str(getattr(process, "stderr", "") or "")
+        error_lines = [
+            line.strip()
+            for line in stderr.splitlines()
+            if line.strip()
+        ]
+        if (
+            allow_missing
+            and process.returncode == 0
+            and stdout == ""
+            and stderr == ""
+        ):
+            return None
+        if (
+            allow_missing
+            and process.returncode != 0
+            and stdout == ""
+            and len(error_lines) in {2, 3}
+            and error_lines[0].startswith("(ResourceNotFound)")
+            and error_lines[1] == "Code: ResourceNotFound"
+            and (
+                len(error_lines) == 2
+                or (
+                    error_lines[2].startswith("Message: ")
+                    and "Not Found" in error_lines[2]
+                )
+            )
+        ):
+            return None
+        if stderr != "":
+            raise ContractError(
+                "Approved validation immutability policy is invalid"
+            )
+        try:
+            value = json.loads(stdout)
+        except json.JSONDecodeError as error:
+            raise ContractError(
+                "Approved validation immutability policy is invalid"
+            ) from error
+        if (
+            process.returncode != 0
+            or not isinstance(value, dict)
+            or value.get("immutabilityPeriodSinceCreationInDays") != 90
+            or value.get("allowProtectedAppendWrites") is not False
+        ):
+            raise ContractError(
+                "Approved validation immutability policy does not match 90-day WORM"
+            )
+        return value
+
+    policy = read_policy(allow_missing=True)
+    if policy is None:
+        with progress.heartbeat(
+            "approved validation record WORM policy creation"
+        ) as outcome:
+            created = subprocess.run(
+                [
+                    azure_cli(),
+                    "storage",
+                    "container",
+                    "immutability-policy",
+                    "create",
+                    *arguments,
+                    "--period",
+                    "90",
+                    "--allow-protected-append-writes",
+                    "false",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+            if created.returncode != 0:
+                outcome.fail()
+        if created.returncode != 0:
+            raise ContractError(
+                "Approved validation immutability policy creation failed"
+            )
+        policy = read_policy()
+        if policy is None:
+            raise ContractError(
+                "Approved validation immutability policy was not created"
+            )
+    if policy.get("state") == "Unlocked":
+        etag = str(policy.get("etag") or "")
+        if not etag:
+            raise ContractError(
+                "Approved validation immutability policy ETag is missing"
+            )
+        with progress.heartbeat(
+            "approved validation record WORM lock"
+        ) as outcome:
+            locked = subprocess.run(
+                [
+                    azure_cli(),
+                    "storage",
+                    "container",
+                    "immutability-policy",
+                    "lock",
+                    *arguments,
+                    "--if-match",
+                    etag,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+            if locked.returncode != 0:
+                outcome.fail()
+        if locked.returncode != 0:
+            raise ContractError(
+                "Approved validation immutability policy lock failed"
+            )
+        policy = read_policy()
+        if policy is None:
+            raise ContractError(
+                "Approved validation immutability policy disappeared after locking"
+            )
+    if policy.get("state") != "Locked":
+        raise ContractError(
+            "Approved validation immutability policy is not locked"
         )
-        if match:
-            versions.append(match.group(1))
-    if not versions:
-        raise ContractError(f"{model_name} is unavailable in West US 2")
-    return max(versions)

@@ -18,36 +18,28 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Use Celsius for this conversation and check Public Demo Location 1."
+                  "text": "Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=20. What is the weather?"
                 }
               ]
             }
           ],
           "conversation": {
-            "id": "conv-weather-issue-004-shared"
+            "id": "conv-issue-004-shared"
           },
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Establishes the Celsius preference for later endpoint requests.",
-        "defect_observed": false
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_current_conditions",
-          "arguments": {
-            "location": "Public Demo Location 1",
-            "unit": "celsius"
-          },
-          "returns": {
-            "condition": "clear",
-            "temperature": 20,
-            "unit": "celsius"
-          }
+        "behavior": "Establishes the Celsius preference for later requests.",
+        "defect_observed": false,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "20",
+            "celsius"
+          ]
         }
-      ]
+      }
     },
     {
       "id": "issue-004-request-2",
@@ -64,13 +56,13 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Now check Public Demo Location 2."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature=68. Now check this location."
                 }
               ]
             }
           ],
           "conversation": {
-            "id": "conv-weather-issue-004-shared"
+            "id": "conv-issue-004-shared"
           },
           "max_output_tokens": 400
         }
@@ -78,22 +70,20 @@
       "expected": {
         "http_status": 200,
         "behavior": "Uses Fahrenheit rather than the retained Celsius preference.",
-        "defect_observed": true
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_current_conditions",
-          "arguments": {
-            "location": "Public Demo Location 2",
-            "unit": "fahrenheit"
-          },
-          "returns": {
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "response_format": "json",
+          "exact_json_fields": {
             "condition": "clear",
             "temperature": 68,
             "unit": "fahrenheit"
-          }
+          },
+          "forbidden_terms": [
+            "celsius"
+          ]
         }
-      ]
+      }
     },
     {
       "id": "issue-004-request-3",
@@ -110,13 +100,13 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "What about Public Demo Location 3?"
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=68. Now check this location."
                 }
               ]
             }
           ],
           "conversation": {
-            "id": "conv-weather-issue-004-shared"
+            "id": "conv-issue-004-shared"
           },
           "max_output_tokens": 400
         }
@@ -124,22 +114,20 @@
       "expected": {
         "http_status": 200,
         "behavior": "Uses Fahrenheit rather than the retained Celsius preference.",
-        "defect_observed": true
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_current_conditions",
-          "arguments": {
-            "location": "Public Demo Location 3",
-            "unit": "fahrenheit"
-          },
-          "returns": {
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "response_format": "json",
+          "exact_json_fields": {
             "condition": "clear",
             "temperature": 68,
             "unit": "fahrenheit"
-          }
+          },
+          "forbidden_terms": [
+            "celsius"
+          ]
         }
-      ]
+      }
     },
     {
       "id": "issue-004-request-4",
@@ -156,13 +144,13 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Check Public Demo Location 4 too."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature=68. Now check this location."
                 }
               ]
             }
           ],
           "conversation": {
-            "id": "conv-weather-issue-004-shared"
+            "id": "conv-issue-004-shared"
           },
           "max_output_tokens": 400
         }
@@ -170,22 +158,20 @@
       "expected": {
         "http_status": 200,
         "behavior": "Uses Fahrenheit rather than the retained Celsius preference.",
-        "defect_observed": true
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_current_conditions",
-          "arguments": {
-            "location": "Public Demo Location 4",
-            "unit": "fahrenheit"
-          },
-          "returns": {
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "response_format": "json",
+          "exact_json_fields": {
             "condition": "clear",
             "temperature": 68,
             "unit": "fahrenheit"
-          }
+          },
+          "forbidden_terms": [
+            "celsius"
+          ]
         }
-      ]
+      }
     },
     {
       "id": "issue-004-request-5",
@@ -202,13 +188,13 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Finally check Public Demo Location 5."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature=68. Now check this location."
                 }
               ]
             }
           ],
           "conversation": {
-            "id": "conv-weather-issue-004-shared"
+            "id": "conv-issue-004-shared"
           },
           "max_output_tokens": 400
         }
@@ -216,24 +202,771 @@
       "expected": {
         "http_status": 200,
         "behavior": "Uses Fahrenheit rather than the retained Celsius preference.",
-        "defect_observed": true
-      },
-      "tool_fixtures": [
-        {
-          "tool": "get_current_conditions",
-          "arguments": {
-            "location": "Public Demo Location 5",
-            "unit": "fahrenheit"
-          },
-          "returns": {
+        "defect_observed": true,
+        "activation_gate": true,
+        "semantic_assertions": {
+          "response_format": "json",
+          "exact_json_fields": {
             "condition": "clear",
             "temperature": 68,
             "unit": "fahrenheit"
-          }
+          },
+          "forbidden_terms": [
+            "celsius"
+          ]
         }
-      ]
+      }
     }
   ],
   "data_class": "synthetic_public_safe",
-  "traffic_source": "endpoint_requests"
+  "traffic_source": "endpoint_requests",
+  "validation_rules": {
+    "schema_version": "1.0.0",
+    "scenarios": [
+      {
+        "id": "issue-004-defect-path",
+        "validation_mode": "model_mediated",
+        "n": 7,
+        "k": 5,
+        "fixtures": [],
+        "attempts": [
+          {
+            "index": 1,
+            "conversation_group": "issue-004-attempt-01",
+            "parameters": {
+              "case_id": "case-01",
+              "source_request_ids": [
+                "issue-004-request-1",
+                "issue-004-request-2"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-004-setup-01-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 01. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=20. What is the weather?"
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "20",
+                      "celsius"
+                    ]
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-004-probe-01-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 01. Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature=68. Now check this location."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "response_format": "json",
+                    "exact_json_fields": {
+                      "condition": "clear",
+                      "temperature": 68,
+                      "unit": "fahrenheit"
+                    },
+                    "forbidden_terms": [
+                      "celsius"
+                    ]
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 2,
+            "conversation_group": "issue-004-attempt-02",
+            "parameters": {
+              "case_id": "case-02",
+              "source_request_ids": [
+                "issue-004-request-1",
+                "issue-004-request-3"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-004-setup-02-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 02. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=20. What is the weather?"
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "20",
+                      "celsius"
+                    ]
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-004-probe-02-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 02. Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=68. Now check this location."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "response_format": "json",
+                    "exact_json_fields": {
+                      "condition": "clear",
+                      "temperature": 68,
+                      "unit": "fahrenheit"
+                    },
+                    "forbidden_terms": [
+                      "celsius"
+                    ]
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 3,
+            "conversation_group": "issue-004-attempt-03",
+            "parameters": {
+              "case_id": "case-03",
+              "source_request_ids": [
+                "issue-004-request-1",
+                "issue-004-request-4"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-004-setup-03-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 03. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=20. What is the weather?"
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "20",
+                      "celsius"
+                    ]
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-004-probe-03-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 03. Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature=68. Now check this location."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "response_format": "json",
+                    "exact_json_fields": {
+                      "condition": "clear",
+                      "temperature": 68,
+                      "unit": "fahrenheit"
+                    },
+                    "forbidden_terms": [
+                      "celsius"
+                    ]
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 4,
+            "conversation_group": "issue-004-attempt-04",
+            "parameters": {
+              "case_id": "case-04",
+              "source_request_ids": [
+                "issue-004-request-1",
+                "issue-004-request-5"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-004-setup-04-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 04. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=20. What is the weather?"
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "20",
+                      "celsius"
+                    ]
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-004-probe-04-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 04. Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature=68. Now check this location."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "response_format": "json",
+                    "exact_json_fields": {
+                      "condition": "clear",
+                      "temperature": 68,
+                      "unit": "fahrenheit"
+                    },
+                    "forbidden_terms": [
+                      "celsius"
+                    ]
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 5,
+            "conversation_group": "issue-004-attempt-05",
+            "parameters": {
+              "case_id": "case-05",
+              "source_request_ids": [
+                "issue-004-request-1",
+                "issue-004-request-2"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-004-setup-05-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 05. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=20. What is the weather?"
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "20",
+                      "celsius"
+                    ]
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-004-probe-05-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 05. Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature=68. Now check this location."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "response_format": "json",
+                    "exact_json_fields": {
+                      "condition": "clear",
+                      "temperature": 68,
+                      "unit": "fahrenheit"
+                    },
+                    "forbidden_terms": [
+                      "celsius"
+                    ]
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 6,
+            "conversation_group": "issue-004-attempt-06",
+            "parameters": {
+              "case_id": "case-06",
+              "source_request_ids": [
+                "issue-004-request-1",
+                "issue-004-request-3"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-004-setup-06-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 06. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=20. What is the weather?"
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "20",
+                      "celsius"
+                    ]
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-004-probe-06-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 06. Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=68. Now check this location."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "response_format": "json",
+                    "exact_json_fields": {
+                      "condition": "clear",
+                      "temperature": 68,
+                      "unit": "fahrenheit"
+                    },
+                    "forbidden_terms": [
+                      "celsius"
+                    ]
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 7,
+            "conversation_group": "issue-004-attempt-07",
+            "parameters": {
+              "case_id": "case-07",
+              "source_request_ids": [
+                "issue-004-request-1",
+                "issue-004-request-4"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-004-setup-07-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 07. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=20. What is the weather?"
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "20",
+                      "celsius"
+                    ]
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-004-probe-07-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 07. Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature=68. Now check this location."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "response_format": "json",
+                    "exact_json_fields": {
+                      "condition": "clear",
+                      "temperature": 68,
+                      "unit": "fahrenheit"
+                    },
+                    "forbidden_terms": [
+                      "celsius"
+                    ]
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "healthy_predicate": null,
+        "defect_predicate": {
+          "kind": "all_observation_steps_pass",
+          "step_ids": [
+            "issue-004-probe-01-01",
+            "issue-004-probe-02-01",
+            "issue-004-probe-03-01",
+            "issue-004-probe-04-01",
+            "issue-004-probe-05-01",
+            "issue-004-probe-06-01",
+            "issue-004-probe-07-01"
+          ],
+          "required_surfaces": [
+            "semantic"
+          ]
+        },
+        "v0_control_predicate": {
+          "kind": "zero_defect_observations"
+        },
+        "execution_digest": "sha256:63c3017b0ceed5b9d69466414a160ac77fda4ee42c75a43a1e456c58bf359518"
+      }
+    ],
+    "execution_digest": "sha256:162cf5219bc13c64b8f8a4ebc64e49f09f6aee1cd29acfc3892c6b5532ecb552"
+  }
 }

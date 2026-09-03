@@ -47,3 +47,9 @@ resource registryPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
     principalType: 'ServicePrincipal'
   }
 }
+
+output roleAssignmentIds array = [
+  appInsightsReader.id
+  modelInferenceUser.id
+  registryPull.id
+]

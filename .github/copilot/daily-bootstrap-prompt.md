@@ -18,8 +18,8 @@ Before qualification, fetch Quality-tagged work items from the privately configu
 query into the durable user-level `~/.aiq-runtime/agent-insights-quality/` root, using the Pacific
 report date. Include active items and items closed on the previous Pacific business date; exclude
 `Removed`. Pass the private snapshot to both the daily runner and finalizer. If the query or durable
-daily deployment registry blob is unavailable, stop without sending traffic or email. The runner
-automatically synchronizes the approved registry into the local runtime root before traffic.
+daily deployment registry blob is unavailable, stop without sending traffic or email. The central coordinator synchronizes the approved registry into the local runtime root before
+opening Agent lanes.
 
 Use only the daily profile. During the scheduled run, never modify catalogs, Agent implementations,
 schemas, infrastructure, configuration, skills, workflows, or documentation. Write only generated
@@ -32,11 +32,23 @@ Application Insights remains read-only.
 This is an official scheduled run. Never pass `--test-run`; that explicit mode is reserved for a
 reviewed email-only rerun and intentionally skips ADX and pull-request publication.
 
+Run `daily-prepare` and `daily-provision` centrally. Use `daily-guide` to create five visible Copilot
+sub sessions for the Weather, Healthcare, Finance, Travel, and Support Agent lanes. Each lane runs
+only its `daily-run-agent` command, with `v0` followed by four issues sequentially. Never run a lane
+through a subprocess, thread pool, hidden worker, or version-level sub session. Keep the coordinator
+responsive with `daily-status`; after all five immutable receipts exist, run `daily-compose`.
+
+Run up to five visible per-Agent assessment sub sessions after the 25-package barrier. Validate their
+outputs and any exact eligible focused rechecks with `daily-validate-assessments`. Keep improvement
+analysis, finalization, ADX, delivery claim, receipt import, generated paths, and one PR centralized
+and ordered.
+
 Finalization attempts ADX publication and creates an email containing the privately configured
 quality-trend dashboard link. Record the returned ADX status. An ADX failure does not block email or
 the pull request: preserve the generated warning, report the failure in the final result and pull
 request description, and never expose the cluster URI, dashboard link, or private receipt.
 
-Use the available email capability exactly once in explicit HTML mode. Never create a draft and never
-retry an ambiguous send. Validate generated paths and report consistency, create an `aiq-daily/`
-generated-only pull request, and enable auto-merge only for a trusted complete PASS or FAIL.
+Run `daily-email-claim` exactly once, then use the available email capability exactly once in explicit
+HTML mode. Never create a draft and never retry an ambiguous send. Import one private receipt; do not
+create a public send attestation. Validate generated paths and report consistency, create one `aiq-daily/`
+generated-only pull request, and enable auto-merge only for a complete numeric report.

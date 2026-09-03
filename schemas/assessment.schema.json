@@ -4,7 +4,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "issue_id", "model", "package_hash", "foundry_version", "evidence_reference", "verdict", "finding_type", "ownership", "ownership_reason", "fields", "card_evaluations", "confidence", "reasoning"],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"const": "2.0.0"},
     "issue_id": {"type": "string", "pattern": "^issue-[0-9]{3}$"},
     "model": {"const": "gpt-5.6-sol"},
     "package_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
@@ -17,9 +17,8 @@
     "fields": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["root_cause", "title", "description", "category", "severity", "proposed_fix", "linked_traces"],
+      "required": ["title", "description", "category", "severity", "proposed_fix", "linked_traces"],
       "properties": {
-        "root_cause": {"type": "boolean"},
         "title": {"type": "boolean"},
         "description": {"type": "boolean"},
         "category": {"type": "boolean"},
@@ -36,19 +35,18 @@
         "required": ["reference", "title", "category", "severity", "verdict", "finding_type", "ownership", "ownership_reason", "fields", "confidence", "reasoning"],
         "properties": {
           "reference": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-          "title": {"type": "string", "minLength": 1, "maxLength": 300},
-          "category": {"type": "string", "minLength": 1, "maxLength": 100},
-          "severity": {"type": "string", "minLength": 1, "maxLength": 50},
-          "verdict": {"enum": ["correct", "partially_useful", "incorrect"]},
-          "finding_type": {"enum": ["MATCHED", "PARTIAL", "MISMATCHED", "NOISE", "DUPLICATE"]},
+          "title": {"type": "string", "maxLength": 300},
+          "category": {"type": "string", "maxLength": 100},
+          "severity": {"type": "string", "maxLength": 50},
+          "verdict": {"enum": ["correct", "partially_useful", "incorrect", "incomplete"]},
+          "finding_type": {"enum": ["MATCHED", "PARTIAL", "MISMATCHED", "NOISE", "DUPLICATE", "INCOMPLETE"]},
           "ownership": {"enum": ["none", "agent", "insight_engine", "test_framework", "infrastructure", "unresolved"]},
           "ownership_reason": {"type": "string", "minLength": 1, "maxLength": 1000},
           "fields": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["root_cause", "title", "description", "category", "severity", "proposed_fix", "linked_traces"],
+            "required": ["title", "description", "category", "severity", "proposed_fix", "linked_traces"],
             "properties": {
-              "root_cause": {"type": "boolean"},
               "title": {"type": "boolean"},
               "description": {"type": "boolean"},
               "category": {"type": "boolean"},
@@ -57,9 +55,41 @@
               "linked_traces": {"type": "boolean"}
             }
           },
+          "field_reasons": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "title": {"type": "string", "minLength": 1, "maxLength": 300},
+              "description": {"type": "string", "minLength": 1, "maxLength": 300},
+              "category": {"type": "string", "minLength": 1, "maxLength": 300},
+              "severity": {"type": "string", "minLength": 1, "maxLength": 300},
+              "proposed_fix": {"type": "string", "minLength": 1, "maxLength": 300},
+              "linked_traces": {"type": "string", "minLength": 1, "maxLength": 300}
+            }
+          },
+          "duplicate_of": {
+            "type": ["string", "null"],
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
           "confidence": {"type": "number", "minimum": 0, "maximum": 1},
           "reasoning": {"type": "string", "minLength": 1, "maxLength": 1000}
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {"finding_type": {"enum": ["PARTIAL", "MISMATCHED"]}},
+              "required": ["finding_type"]
+            },
+            "then": {"required": ["field_reasons"]}
+          },
+          {
+            "if": {
+              "properties": {"finding_type": {"const": "DUPLICATE"}},
+              "required": ["finding_type"]
+            },
+            "then": {"required": ["duplicate_of"]}
+          }
+        ]
       }
     },
     "confidence": {"type": "number", "minimum": 0, "maximum": 1},

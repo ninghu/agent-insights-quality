@@ -1,52 +1,70 @@
-# Quality Bar
-
-## PASS
-
-A complete daily or staging run is `PASS` when its quality score is at least `90/100`.
+# Quality Score
 
 ## Quality score
 
-The reviewed `field_weighted_v1` formula is:
+Every complete Daily or staging run produces one score from `0` to `100`:
 
 ```text
-field_quality = average best attributable card's weighted field score for every expected issue
-clean_card_precision = (observed cards - noise and extra duplicates) / observed cards
-score = 0.85 * field_quality + 0.15 * clean_card_precision
+score = 100 * correct issues / (expected issues + noise cards + duplicate cards)
 ```
 
-- Field weights are root cause 25%; title 10%; description 15%; category 10%; severity 10%; proposed
-  fix 15%; and linked traces 15%.
-- A missing expected issue receives zero field quality.
-- Noise and extra duplicates reduce the clean-card precision component, which contributes 15% of the
-  final score.
-- Daily uses 25 expected issues; full staging uses 36.
-- Ownership does not change the score. It identifies whether remediation belongs to the Agent, Insight
-  Engine, test framework, infrastructure, or remains unresolved.
-- A trace-proven valid Agent finding on `v0` is not Insight noise and does not reduce clean-card
-  precision. It is reported separately as a baseline health failure.
+The score is rounded to one decimal place. Whole-number scores render without a decimal.
 
-The report stores both component scores and the final score to one decimal place when needed.
-Daily reports show the signed score change against the most recent prior daily report with a numeric
-score. Incomplete reports are skipped as comparison baselines, and an incomplete current run shows
-the score change as `N/A`.
-Structural, privacy, provenance, and
-reporting evidence must still be complete and trustworthy before a score can be used.
-See [Insight Result Labels](INSIGHT_RESULTS.md) for Fully Correct, Partially Correct, Incorrect, and
-Noise definitions and field examples.
+An expected issue is **Correct** when at least one attributable Insight passes all four scoring
+fields:
 
-## FAIL
+- title
+- description
+- category
+- linked traces
 
-A complete, trustworthy run is `FAIL` when its quality score is below `90/100`.
+Severity and proposed fix remain assessed and visible for diagnosis, but they do not affect the
+score. There are no field weights or partial points.
 
-## INCOMPLETE
+Linked traces pass when at least one exact-run, exact-version trace independently supports the
+Insight's core conclusion. Extra linked traces are accepted unless they are attributed to the wrong
+run or version, or contradict the conclusion.
 
-A run is `INCOMPLETE` when identity, quota, deployment, endpoint traffic, trace ingestion, Agent
-Insights execution, exact-version attribution, assessment, or report consistency prevents a trusted
-complete result.
+## Result categories
 
-Any baseline assessment with an `inconclusive` verdict or issue assessment with an `INCOMPLETE`
-finding makes the entire run `INCOMPLETE`. The final quality score is `null`; partial field metrics
-must not be presented as a trusted product-quality score.
+- **Correct**: an attributable Insight passes all four scoring fields.
+- **Incorrect**: an attributable Insight exists, but none passes all four scoring fields.
+- **Missing**: no attributable Insight covers the expected issue.
+- **Noise**: an extra false-positive Insight is unrelated to every expected issue.
+- **Duplicate**: an extra Insight repeats an attributable Insight for the same expected issue.
 
-Efficiency metrics are evidence, not bonus points. `PASS` and `FAIL` are determined only by the
-reviewed quality-score formula and threshold.
+`correct + incorrect + missing = expected`. Incorrect and Missing issues already occupy an expected
+issue slot, so they do not expand the denominator. Noise and Duplicate cards are extra output and do
+expand it.
+
+For example:
+
+```text
+20 expected = 17 correct + 2 incorrect + 1 missing
+1 noise + 1 duplicate
+score = 100 * 17 / (20 + 1 + 1) = 77.3
+```
+
+Daily uses 20 expected issues, four per Agent. Full staging uses all 36 issues. A valid Agent finding
+on a healthy baseline is not Insight noise; it identifies an Agent defect. A false-positive baseline
+card is Noise.
+
+The report shows only the numeric score, its same-formula delta, and the raw category counts. There
+is no PASS/FAIL label, threshold, or automated public-preview decision. Humans use the score and
+supporting evidence to decide readiness.
+
+## Complete evidence only
+
+A score is published only when identity, deployment, endpoint traffic, baseline semantics, issue
+activation, natural trace ingestion, Agent Insights execution, exact-version attribution,
+assessment, source integrity, and report consistency are complete.
+
+If any required evidence is incomplete, the qualification fails internally. Private durable
+diagnostics are retained, but no report, email request, ADX row, trend point, generated pull request,
+or promotion receipt is produced.
+
+The living Insight Engine improvement memory remains advisory and score-neutral. It can synthesize
+only `insight_engine`-owned findings and never changes per-card assessment, ownership, score, or
+promotion.
+
+See [Insight Result Labels](INSIGHT_RESULTS.md) for detailed field examples.

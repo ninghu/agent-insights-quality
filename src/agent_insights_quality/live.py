@@ -10,22 +10,37 @@ import urllib.parse
 import urllib.request
 import uuid
 from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
+
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 
 from agent_insights_quality.models import (
     InsightEvidence,
     InsightRunCheckpoint,
     InsightRunEvidence,
     InvocationEvidence,
+    RequestCompletionEvidence,
+    SemanticAssertionEvidence,
+    TraceAssertionEvidence,
+    linked_operations_match_scope,
 )
-from agent_insights_quality.automation_policy import TRAFFIC_UNCERTAINTY_SECONDS
+from agent_insights_quality.automation_policy import (
+    TRACE_ASSERTION_DEADLINE_SECONDS,
+    TRACE_ASSERTION_POLL_SECONDS,
+    TRAFFIC_UNCERTAINTY_SECONDS,
+)
 from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.runtime_state import TrafficLedger
-from agent_insights_quality.util import ContractError, InsightWindowExpiredError
+from agent_insights_quality.util import (
+    ContractError,
+    InsightWindowExpiredError,
+    TraceAssertionActivationError,
+    json_values_equal,
+)
 from agent_insights_quality.azure_cli import azure_cli
 
 try:
@@ -46,12 +61,101 @@ except ImportError:
     _TELEMETRY_TRANSIENT_ERRORS = ()
 
 _TRACE_ID = re.compile(r"^[0-9a-f]{32}$")
+_RESPONSE_REFERENCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,255}$", re.ASCII)
 _FOUNDRY_SCOPE = "https://ai.azure.com/.default"
 _LOGS_SCOPE = "https://api.loganalytics.io/.default"
 _TRANSIENT_HTTP = {408, 424, 429, 500, 502, 503, 504}
 _DEFAULT_REQUEST_TIMEOUT_SECONDS = 300
 _HOSTED_RESPONSE_TIMEOUT_SECONDS = 600
+_HOSTED_ROUTE_ACTIVATION_PROPAGATION_RETRY_DELAYS = (5, 10, 20, 30)
+_HOSTED_ROUTE_ACTIVATION_PROPAGATION_WINDOW_SECONDS = sum(
+    _HOSTED_ROUTE_ACTIVATION_PROPAGATION_RETRY_DELAYS
+)
+_HOSTED_SESSION_PROPAGATION_RETRY_DELAYS = (1, 2, 4, 8)
+_HOSTED_SESSION_PROPAGATION_WINDOW_SECONDS = sum(
+    _HOSTED_SESSION_PROPAGATION_RETRY_DELAYS
+)
+_PROMPT_AGENT_ROUTE_PROPAGATION_RETRY_DELAYS = (1, 2, 4, 8)
+_PROMPT_AGENT_ROUTE_PROPAGATION_WINDOW_SECONDS = sum(
+    _PROMPT_AGENT_ROUTE_PROPAGATION_RETRY_DELAYS
+)
+_HOSTED_RESPONSE_PROPAGATION_RETRY_DELAYS = (1, 2, 4, 8)
+_HOSTED_RESPONSE_PROPAGATION_WINDOW_SECONDS = sum(
+    _HOSTED_RESPONSE_PROPAGATION_RETRY_DELAYS
+)
+_PROMPT_RESPONSE_PROPAGATION_RETRY_DELAYS = (1, 2, 4, 8)
+_TRACE_ASSERTION_PROGRESS_SECONDS = 60
+_TELEMETRY_IDENTITY_STABILIZATION_SECONDS = TRACE_ASSERTION_POLL_SECONDS
+_TELEMETRY_QUERY_RETRY_DELAYS = (1, 2, 4)
+_TRACE_ASSERTION_CORRELATION_DIAGNOSTIC = (
+    "trace_assertion_response_correlation_absent_or_ambiguous"
+)
+_TRACE_ASSERTION_SIGNATURE_CHANGE_DIAGNOSTICS = (
+    "trace_assertion_correlation_mapping_changed",
+    "trace_assertion_assertion_state_changed",
+    "trace_assertion_correlated_row_set_changed",
+)
+_TRACE_ASSERTION_MULTIPLE_CHANGE_DIAGNOSTIC = (
+    "trace_assertion_multiple_signature_components_changed"
+)
+_TRACE_ASSERTION_DIAGNOSTICS = frozenset(
+    (
+        _TRACE_ASSERTION_CORRELATION_DIAGNOSTIC,
+        *_TRACE_ASSERTION_SIGNATURE_CHANGE_DIAGNOSTICS,
+        _TRACE_ASSERTION_MULTIPLE_CHANGE_DIAGNOSTIC,
+    )
+)
+_PERMANENT_LOGS_QUERY_ERROR_CODES = {
+    "badargument",
+    "badargumenterror",
+    "invalidquery",
+    "invalidqueryerror",
+    "querysyntaxerror",
+    "semantic",
+    "semanticerror",
+    "syntax",
+    "syntaxerror",
+}
 _AUTH_PROGRESS = ProgressReporter("aiq-auth")
+
+
+class RemoteOperationError(ContractError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        status: int | None,
+        request_accepted: bool | None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status = status
+        self.request_accepted = request_accepted
+
+
+class TelemetryCorrelationError(ContractError):
+    code = "telemetry_correlation_timeout"
+    request_accepted = True
+
+    def __init__(
+        self,
+        *,
+        matched_reference_count: int,
+        expected_reference_count: int,
+    ) -> None:
+        super().__init__(
+            "Natural telemetry operations did not arrive before the bounded deadline"
+        )
+        self.matched_reference_count = matched_reference_count
+        self.expected_reference_count = expected_reference_count
+        self.missing_reference_count = (
+            expected_reference_count - matched_reference_count
+        )
+
+
+class TelemetryQueryError(ContractError):
+    code = "telemetry_query_failed"
 
 
 class _RuntimeTokenCredential:
@@ -68,6 +172,20 @@ class _RuntimeTokenCredential:
         )
 
 
+class _NoopTrafficLedger:
+    @staticmethod
+    def mark_started(*_args: Any, **_kwargs: Any) -> None:
+        pass
+
+    @staticmethod
+    def mark_completed(*_args: Any, **_kwargs: Any) -> None:
+        pass
+
+    @staticmethod
+    def clean_after(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
 class LiveRuntime:
     """Endpoint-only traffic with read-only telemetry access."""
 
@@ -79,6 +197,7 @@ class LiveRuntime:
         sleep: Callable[[float], None] = time.sleep,
         utcnow: Callable[[], datetime] = lambda: datetime.now(UTC),
         monotonic: Callable[[], float] = time.monotonic,
+        use_traffic_ledger: bool = True,
     ) -> None:
         self._profile = profile
         self._raw_token_provider = token_provider or _azure_cli_token
@@ -87,13 +206,35 @@ class LiveRuntime:
         self._monotonic = monotonic
         self._token_lock = threading.Lock()
         self._token_cache: dict[str, tuple[float, str]] = {}
+        self._rate_limit_feedback = threading.local()
         self._telemetry_query_lock = threading.Lock()
+        self._hosted_route_lock = threading.Lock()
+        self._hosted_routes: dict[str, tuple[str, float]] = {}
+        self._hosted_session_bindings: dict[tuple[str, str], tuple[str, float]] = {}
+        self._used_session_ids: dict[str, set[str]] = {}
+        self._used_response_references: dict[str, set[str]] = {}
         self._logs_client_instance: Any | None = None
         self._progress = ProgressReporter("aiq", monotonic=monotonic)
-        self._traffic_ledger = TrafficLedger(profile.name)
+        self._traffic_ledger = (
+            TrafficLedger(profile.name)
+            if use_traffic_ledger
+            else _NoopTrafficLedger()
+        )
 
     def report_progress(self, message: str) -> None:
         self._progress.emit(message)
+
+    def rate_limit_feedback(self) -> dict[str, int | float | None]:
+        value = getattr(self._rate_limit_feedback, "value", None)
+        return (
+            dict(value)
+            if isinstance(value, dict)
+            else {
+                "remaining_requests": None,
+                "remaining_tokens": None,
+                "retry_after_seconds": None,
+            }
+        )
 
     def _token_provider(self, scope: str) -> str:
         with self._token_lock:
@@ -125,7 +266,7 @@ class LiveRuntime:
         *,
         timespan: Any,
     ) -> Any:
-        for attempt in range(4):
+        for attempt in range(len(_TELEMETRY_QUERY_RETRY_DELAYS) + 1):
             try:
                 with self._telemetry_query_lock:
                     with self._progress.heartbeat("Azure Monitor query"):
@@ -139,16 +280,72 @@ class LiveRuntime:
                     isinstance(error, _TELEMETRY_HTTP_ERRORS)
                     and error.status_code not in _TRANSIENT_HTTP
                 ):
-                    raise
-                if attempt == 3:
-                    raise
-                delay = 2**attempt
+                    raise TelemetryQueryError(
+                        "Azure Monitor rejected the telemetry query"
+                    ) from error
+                if attempt == len(_TELEMETRY_QUERY_RETRY_DELAYS):
+                    raise TelemetryQueryError(
+                        "Azure Monitor telemetry query retries were exhausted"
+                    ) from error
+                delay = _TELEMETRY_QUERY_RETRY_DELAYS[attempt]
                 self.report_progress(
                     f"telemetry query failed transiently; retrying in {delay}s "
-                    f"({attempt + 2}/4)"
+                    f"({attempt + 2}/{len(_TELEMETRY_QUERY_RETRY_DELAYS) + 1})"
                 )
                 self._sleep(delay)
         raise ContractError("Telemetry query retry loop did not execute")
+
+    def _query_logs_result(
+        self,
+        query: str,
+        *,
+        timespan: Any,
+        statuses: Any,
+        purpose: str,
+    ) -> Any:
+        started = self._monotonic()
+        with self._progress.heartbeat(f"{purpose.capitalize()} query stabilization"):
+            for attempt in range(len(_TELEMETRY_QUERY_RETRY_DELAYS) + 1):
+                result = self._query_resource(
+                    self._logs_client(),
+                    query,
+                    timespan=timespan,
+                )
+                if result.status == statuses.SUCCESS:
+                    return result
+                status_class = _logs_query_status_class(result, statuses)
+                if _permanent_logs_query_failure(result, statuses):
+                    raise TelemetryQueryError(
+                        f"Azure Monitor rejected the {purpose} query"
+                    )
+                if attempt == len(_TELEMETRY_QUERY_RETRY_DELAYS):
+                    raise TelemetryQueryError(
+                        f"Azure Monitor {purpose} query retries were exhausted"
+                    )
+                delay = _TELEMETRY_QUERY_RETRY_DELAYS[attempt]
+                elapsed = max(0.0, self._monotonic() - started)
+                self.report_progress(
+                    f"{purpose.capitalize()} query returned {status_class} after "
+                    f"{elapsed:.0f}s; retrying in {delay}s "
+                    f"({attempt + 2}/{len(_TELEMETRY_QUERY_RETRY_DELAYS) + 1})"
+                )
+                self._sleep(delay)
+        raise TelemetryQueryError(f"Azure Monitor {purpose} query did not execute")
+
+    def assert_telemetry_read_access(self) -> None:
+        try:
+            from azure.monitor.query import LogsQueryStatus
+        except ImportError as error:
+            raise ContractError(
+                'Telemetry preflight requires installation with ".[azure]"'
+            ) from error
+        result = self._query_resource(
+            self._logs_client(),
+            "print readiness=1",
+            timespan=timedelta(minutes=1),
+        )
+        if result.status != LogsQueryStatus.SUCCESS:
+            raise ContractError("Read-only telemetry preflight failed")
 
     def reset_monitor(self, agent_name: str, monitor_id: str) -> None:
         del agent_name
@@ -255,44 +452,43 @@ union traces, dependencies, requests
         )
         completed_groups: dict[
             str,
-            list[tuple[int, list[str], bool, int, int]],
+            list[
+                tuple[
+                    int,
+                    list[str],
+                    bool,
+                    int,
+                    int,
+                    int,
+                    int,
+                    tuple[SemanticAssertionEvidence, ...],
+                    bool,
+                ]
+            ],
         ] = {}
-        errors: list[Exception] = []
-        with ThreadPoolExecutor(max_workers=min(5, len(groups))) as pool:
-            futures = {
-                pool.submit(
-                    self._invoke_group,
-                    agent_name,
-                    agent_type,
-                    foundry_version,
-                    fixtures,
-                    seed,
-                ): key
-                for key, fixtures in groups.items()
-            }
-            for future in as_completed(futures):
-                try:
-                    completed_groups[futures[future]] = future.result()
-                except Exception as error:
-                    errors.append(error)
-        if errors:
-            if all(
-                re.search(r"\bHTTP [0-9]{3}\b", str(error))
-                for error in errors
-            ):
-                self._traffic_ledger.mark_completed(
-                    agent_name,
-                    now=self._utcnow().astimezone(UTC),
+        for key, fixtures in groups.items():
+            try:
+                completed = self._invoke_group(
+                agent_name,
+                agent_type,
+                foundry_version,
+                fixtures,
+                seed,
                 )
-            primary = next(
-                (
-                    error
-                    for error in errors
-                    if re.search(r"\bHTTP [0-9]{3}\b", str(error)) is None
-                ),
-                errors[0],
-            )
-            raise primary
+                references = tuple(
+                reference
+                for item in completed
+                for reference in item[1]
+                )
+                self._reserve_response_references(agent_name, references)
+                completed_groups[key] = completed
+            except Exception as error:
+                if re.search(r"\bHTTP [0-9]{3}\b", str(error)):
+                    self._traffic_ledger.mark_completed(
+                        agent_name,
+                        now=self._utcnow().astimezone(UTC),
+                    )
+                raise
         self._traffic_ledger.mark_completed(
             agent_name,
             now=self._utcnow().astimezone(UTC),
@@ -308,11 +504,36 @@ union traces, dependencies, requests
         usable_response_count = 0
         semantic_assertion_count = 0
         semantic_assertions_passed = 0
-        for _, references, usable, assertion_count, assertions_passed in ordered:
+        request_summaries = []
+        for (
+            request_index,
+            references,
+            usable,
+            assertion_count,
+            assertions_passed,
+            direct_terminal_response_count,
+            function_call_count,
+            assertion_results,
+            activation_gate,
+        ) in ordered:
             response_references.extend(references)
             usable_response_count += int(usable)
             semantic_assertion_count += assertion_count
             semantic_assertions_passed += assertions_passed
+            request_summaries.append(
+                RequestCompletionEvidence(
+                    request_index=request_index,
+                    response_count=len(references),
+                    usable_response=usable,
+                    semantic_assertion_count=assertion_count,
+                    semantic_assertions_passed=assertions_passed,
+                    assertion_results=assertion_results,
+                    activation_gate=activation_gate,
+                    direct_terminal_response_count=direct_terminal_response_count,
+                    function_call_count=function_call_count,
+                )
+            )
+        _validate_response_references(tuple(response_references), len(requests))
         completed = self._utcnow().astimezone(UTC)
         return InvocationEvidence(
             operation_ids=(),
@@ -320,12 +541,23 @@ union traces, dependencies, requests
             started_at=started.isoformat(),
             completed_at=completed.isoformat(),
             request_count=len(requests),
-            allow_window_correlation=agent_type != "prompt",
+            allow_window_correlation=False,
             response_count=len(ordered),
             usable_response_count=usable_response_count,
             semantic_assertion_count=semantic_assertion_count,
             semantic_assertions_passed=semantic_assertions_passed,
+            request_summaries=tuple(request_summaries),
         )
+
+    def _reserve_response_references(
+        self,
+        agent_name: str,
+        references: tuple[str, ...],
+    ) -> None:
+        used = self._used_response_references.setdefault(agent_name, set())
+        if used.intersection(references):
+            raise ContractError("Endpoint reused a response identity in one Agent lane")
+        used.update(references)
 
     def _invoke_group(
         self,
@@ -334,19 +566,50 @@ union traces, dependencies, requests
         foundry_version: str,
         fixtures: list[dict[str, Any]],
         seed: int,
-    ) -> list[tuple[int, list[str], bool, int, int]]:
+    ) -> list[
+        tuple[
+            int,
+            list[str],
+            bool,
+            int,
+            int,
+            int,
+            int,
+            tuple[SemanticAssertionEvidence, ...],
+            bool,
+        ]
+    ]:
         if agent_type == "prompt":
-            results: list[tuple[int, list[str], bool, int, int]] = []
+            results: list[
+                tuple[
+                    int,
+                    list[str],
+                    bool,
+                    int,
+                    int,
+                    int,
+                    int,
+                    tuple[SemanticAssertionEvidence, ...],
+                    bool,
+                ]
+            ] = []
             previous_response_id: str | None = None
             for fixture in fixtures:
-                response_ids, usable, assertion_count, assertions_passed = (
-                    self._invoke_prompt(
+                (
+                    response_ids,
+                    usable,
+                    assertion_count,
+                    assertions_passed,
+                    direct_terminal_response_count,
+                    function_call_count,
+                    assertion_results,
+                    activation_gate,
+                ) = self._invoke_prompt(
                     agent_name,
                     foundry_version,
                     fixture,
                     seed + int(fixture["_index"]),
                     previous_response_id,
-                    )
                 )
                 previous_response_id = response_ids[-1]
                 results.append(
@@ -356,10 +619,18 @@ union traces, dependencies, requests
                         usable,
                         assertion_count,
                         assertions_passed,
+                        direct_terminal_response_count,
+                        function_call_count,
+                        assertion_results,
+                        activation_gate,
                     )
                 )
             return results
-        self._activate_hosted_version(agent_name, foundry_version)
+        self._activate_hosted_version(
+            agent_name,
+            foundry_version,
+            refresh_route=True,
+        )
         session_id = self._create_hosted_session(agent_name, foundry_version)
         try:
             results = [
@@ -396,26 +667,36 @@ union traces, dependencies, requests
         agent_name: str,
         session_id: str,
     ) -> None:
-        self._json_request(
-            "DELETE",
-            f"{self._profile.project_endpoint}/agents/"
-            f"{urllib.parse.quote(agent_name, safe='')}/endpoint/sessions/"
-            f"{urllib.parse.quote(session_id, safe='')}",
-            hosted=True,
-            expected={200, 202, 204, 404},
-            retry_statuses=_TRANSIENT_HTTP,
-        )
+        try:
+            self._json_request(
+                "DELETE",
+                f"{self._profile.project_endpoint}/agents/"
+                f"{urllib.parse.quote(agent_name, safe='')}/endpoint/sessions/"
+                f"{urllib.parse.quote(session_id, safe='')}",
+                hosted=True,
+                expected={200, 202, 204, 404},
+                retry_statuses=_TRANSIENT_HTTP,
+            )
+        finally:
+            with self._hosted_route_lock:
+                self._hosted_session_bindings.pop((agent_name, session_id), None)
 
     def _activate_hosted_version(
         self,
         agent_name: str,
         foundry_version: str,
+        *,
+        refresh_route: bool = False,
     ) -> None:
-        response = self._json_request(
-            "PATCH",
-            f"{self._profile.project_endpoint}/agents/"
-            f"{urllib.parse.quote(agent_name, safe='')}",
-            {
+        with self._hosted_route_lock:
+            routed = self._hosted_routes.get(agent_name)
+            if (
+                not refresh_route
+                and routed is not None
+                and routed[0] == foundry_version
+            ):
+                return
+            desired_selector = {
                 "agent_endpoint": {
                     "version_selector": {
                         "version_selection_rules": [
@@ -427,25 +708,75 @@ union traces, dependencies, requests
                         ]
                     }
                 }
-            },
-            hosted=True,
-            expected={200},
-            content_type="application/merge-patch+json",
-            retry_statuses=_TRANSIENT_HTTP,
-            retry_no_response=True,
-        )
-        rules = (
-            response.get("agent_endpoint", {})
-            .get("version_selector", {})
-            .get("version_selection_rules", [])
-        )
-        if not any(
-            str(rule.get("agent_version") or "") == foundry_version
-            and int(rule.get("traffic_percentage") or 0) == 100
-            for rule in rules
-            if isinstance(rule, dict)
-        ):
-            raise ContractError("Hosted endpoint did not confirm exact-version routing")
+            }
+            propagation_retry = 0
+            activation_started = self._monotonic()
+            with self._progress.heartbeat(
+                f"{agent_name}/{foundry_version}: exact Hosted route activation",
+                interval_seconds=5,
+            ):
+                while True:
+                    try:
+                        response = self._json_request(
+                            "PATCH",
+                            f"{self._profile.project_endpoint}/agents/"
+                            f"{urllib.parse.quote(agent_name, safe='')}",
+                            desired_selector,
+                            hosted=True,
+                            expected={200},
+                            content_type="application/merge-patch+json",
+                            retry_statuses=set(),
+                            retry_no_response=False,
+                            retry_unauthorized=False,
+                        )
+                        break
+                    except RemoteOperationError as error:
+                        if (
+                            propagation_retry
+                            == len(
+                                _HOSTED_ROUTE_ACTIVATION_PROPAGATION_RETRY_DELAYS
+                            )
+                            or not _hosted_route_activation_propagation_pending(error)
+                        ):
+                            raise
+                        delay = (
+                            _HOSTED_ROUTE_ACTIVATION_PROPAGATION_RETRY_DELAYS[
+                                propagation_retry
+                            ]
+                        )
+                        activation_age = self._monotonic() - activation_started
+                        if (
+                            activation_age < 0
+                            or activation_age + delay
+                            > _HOSTED_ROUTE_ACTIVATION_PROPAGATION_WINDOW_SECONDS
+                        ):
+                            raise
+                        propagation_retry += 1
+                        self.report_progress(
+                            f"{agent_name}/{foundry_version}: exact Hosted route "
+                            "activation is not yet available; retrying the same "
+                            f"selector in {delay}s ({propagation_retry + 1}/"
+                            f"{len(_HOSTED_ROUTE_ACTIVATION_PROPAGATION_RETRY_DELAYS) + 1})"
+                        )
+                        self._sleep(delay)
+                rules = (
+                    response.get("agent_endpoint", {})
+                    .get("version_selector", {})
+                    .get("version_selection_rules", [])
+                )
+                if not any(
+                    str(rule.get("agent_version") or "") == foundry_version
+                    and int(rule.get("traffic_percentage") or 0) == 100
+                    for rule in rules
+                    if isinstance(rule, dict)
+                ):
+                    raise ContractError(
+                        "Hosted endpoint did not confirm exact-version routing"
+                    )
+                self._hosted_routes[agent_name] = (
+                    foundry_version,
+                    self._monotonic(),
+                )
 
     def _invoke_prompt(
         self,
@@ -454,7 +785,23 @@ union traces, dependencies, requests
         fixture: dict[str, Any],
         seed: int,
         previous_response_id: str | None,
-    ) -> tuple[list[str], bool, int, int]:
+        *,
+        include_seed_metadata: bool = True,
+        validation_intent_reference: str | None = None,
+    ) -> tuple[
+        list[str],
+        bool,
+        int,
+        int,
+        int,
+        int,
+        tuple[SemanticAssertionEvidence, ...],
+        bool,
+    ]:
+        if "text" in fixture["body"]:
+            raise ContractError(
+                "Prompt traffic cannot contain unsupported request-side text formatting"
+            )
         reference = {
             "type": "agent_reference",
             "name": agent_name,
@@ -466,123 +813,176 @@ union traces, dependencies, requests
             body["previous_response_id"] = previous_response_id
         body["store"] = True
         body["agent_reference"] = reference
-        body["metadata"] = {
-            **body.get("metadata", {}),
-            "traffic_seed": str(seed),
-        }
+        if include_seed_metadata:
+            body["metadata"] = {
+                **body.get("metadata", {}),
+                "traffic_seed": str(seed),
+            }
+        if validation_intent_reference is not None:
+            body["metadata"] = {
+                **body.get("metadata", {}),
+                "validation_intent_reference": validation_intent_reference,
+            }
         self._traffic_ledger.mark_started(
             agent_name,
             now=self._utcnow().astimezone(UTC),
             uncertain_seconds=_DEFAULT_REQUEST_TIMEOUT_SECONDS,
         )
-        response = self._json_request(
-            "POST",
-            f"{self._profile.project_endpoint}/openai/v1/responses",
-            body,
-            expected={fixture["expected_status"]},
+        route_retry_deadline = (
+            self._monotonic() + _PROMPT_AGENT_ROUTE_PROPAGATION_WINDOW_SECONDS
         )
-        response_ids: list[str] = []
-        for _ in range(8):
-            response_id = str(response.get("id") or "")
-            if not response_id or response_id in response_ids:
-                raise ContractError("Prompt response identity is missing or repeated")
-            response_ids.append(response_id)
-            calls = [
-                value
-                for value in response.get("output", [])
-                if isinstance(value, dict) and value.get("type") == "function_call"
-            ]
-            if not calls:
-                assertion_count, assertions_passed = _semantic_assertion_result(
-                    response,
-                    fixture,
+        propagation_retry = 0
+        while True:
+            try:
+                response = self._json_request(
+                    "POST",
+                    f"{self._profile.project_endpoint}/openai/v1/responses",
+                    body,
+                    expected={fixture["expected_status"]},
                 )
-                return (
-                    response_ids,
-                    _usable_response(response, fixture["expected_status"]),
-                    assertion_count,
-                    assertions_passed,
-                )
-            outputs = []
-            tool_outputs = fixture.get("tool_outputs", {})
-            for call in calls:
-                name = str(call.get("name") or "")
-                call_id = str(call.get("call_id") or "")
-                configured = tool_outputs.get(name)
-                if not call_id:
-                    raise ContractError("Prompt returned a tool call without an identity")
-                raw_arguments = str(call.get("arguments") or "")
-                try:
-                    arguments = json.loads(raw_arguments)
-                except json.JSONDecodeError as error:
-                    raise ContractError("Prompt emitted invalid tool arguments") from error
-                if not configured:
-                    result = {
-                        "error": {
-                            "code": "unexpected_tool_call",
-                            "tool": name,
-                        }
-                    }
+                break
+            except RemoteOperationError as error:
+                if previous_response_id:
+                    retry_delays = _PROMPT_RESPONSE_PROPAGATION_RETRY_DELAYS
+                    if not _previous_response_propagation_pending(error):
+                        raise
                 else:
-                    matching = next(
-                        (
-                            value
-                            for value in configured
-                            if _arguments_match(arguments, value["arguments"])
-                        ),
-                        configured[0] if len(configured) == 1 else None,
+                    retry_delays = _PROMPT_AGENT_ROUTE_PROPAGATION_RETRY_DELAYS
+                    if not _prompt_agent_route_propagation_pending(
+                        error,
+                        body=body,
+                        agent_name=agent_name,
+                        foundry_version=foundry_version,
+                    ):
+                        raise
+                if propagation_retry == len(retry_delays):
+                    raise
+                delay = retry_delays[propagation_retry]
+                if (
+                    not previous_response_id
+                    and self._monotonic() + delay > route_retry_deadline
+                ):
+                    raise
+                propagation_retry += 1
+                if previous_response_id:
+                    self.report_progress(
+                        f"{agent_name}/{foundry_version}: prior response is not yet "
+                        f"available; retrying chained request in {delay}s"
                     )
-                    if matching is None:
-                        result = {
-                            "error": {
-                                "code": "synthetic_argument_fixture_mismatch",
-                                "tool": name,
-                            }
-                        }
-                    else:
-                        results = matching["results"]
-                        result = results.pop(0) if len(results) > 1 else results[0]
-                outputs.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": call_id,
-                        "output": json.dumps(result, sort_keys=True),
-                    }
-                )
-            self._traffic_ledger.mark_started(
-                agent_name,
-                now=self._utcnow().astimezone(UTC),
-                uncertain_seconds=_DEFAULT_REQUEST_TIMEOUT_SECONDS,
+                else:
+                    self.report_progress(
+                        f"{agent_name}/{foundry_version}: exact Prompt Agent route "
+                        f"is not yet available; retrying first request in {delay}s "
+                        f"({propagation_retry + 1}/{len(retry_delays) + 1})"
+                    )
+                self._sleep(delay)
+        response_id = str(response.get("id") or "")
+        if not response_id:
+            raise RemoteOperationError(
+                "Prompt response identity is missing",
+                code="prompt_response_identity_missing",
+                status=int(response.get("_http_status") or fixture["expected_status"]),
+                request_accepted=True,
             )
-            response = self._json_request(
-                "POST",
-                f"{self._profile.project_endpoint}/openai/v1/responses",
-                {
-                    "input": outputs,
-                    "previous_response_id": response_id,
-                    "store": True,
-                    "agent_reference": reference,
-                },
+        calls = [
+            value
+            for value in response.get("output", [])
+            if isinstance(value, dict) and value.get("type") == "function_call"
+        ]
+        function_call_count = len(calls)
+        if function_call_count:
+            raise RemoteOperationError(
+                "Prompt emitted a function call; pure Prompt traffic requires one "
+                "direct terminal response",
+                code="prompt_function_call",
+                status=int(response.get("_http_status") or fixture["expected_status"]),
+                request_accepted=True,
             )
-        raise ContractError("Prompt exceeded the bounded tool-turn limit")
+        assertion_count, assertions_passed, assertion_results = (
+            _semantic_assertion_result(
+                response,
+                fixture,
+            )
+        )
+        usable = _usable_response(response, fixture["expected_status"])
+        return (
+            [response_id],
+            usable,
+            assertion_count,
+            assertions_passed,
+            int(bool(_response_text(response))),
+            function_call_count,
+            assertion_results,
+            bool(fixture.get("activation_gate", False)),
+        )
 
     def _create_hosted_session(
         self,
         agent_name: str,
         foundry_version: str,
+        *,
+        validation_intent_reference: str | None = None,
     ) -> str:
-        session = self._json_request(
-            "POST",
-            f"{self._profile.project_endpoint}/agents/"
-            f"{urllib.parse.quote(agent_name, safe='')}/endpoint/sessions",
-            {
-                "version_indicator": {
-                    "type": "version_ref",
-                    "agent_version": foundry_version,
-                }
+        body = {
+            "version_indicator": {
+                "type": "version_ref",
+                "agent_version": foundry_version,
             },
-            hosted=True,
-        )
+            **(
+                {
+                    "metadata": {
+                        "validation_intent_reference": validation_intent_reference
+                    }
+                }
+                if validation_intent_reference is not None
+                else {}
+            ),
+        }
+        propagation_retry = 0
+        while True:
+            try:
+                session = self._json_request(
+                    "POST",
+                    f"{self._profile.project_endpoint}/agents/"
+                    f"{urllib.parse.quote(agent_name, safe='')}/endpoint/sessions",
+                    body,
+                    hosted=True,
+                    retry_statuses=set(),
+                    retry_no_response=False,
+                    retry_unauthorized=False,
+                )
+                break
+            except RemoteOperationError as error:
+                if (
+                    propagation_retry
+                    == len(_HOSTED_SESSION_PROPAGATION_RETRY_DELAYS)
+                    or not _hosted_session_route_propagation_pending(error)
+                ):
+                    raise
+                delay = _HOSTED_SESSION_PROPAGATION_RETRY_DELAYS[
+                    propagation_retry
+                ]
+                with self._hosted_route_lock:
+                    routed = self._hosted_routes.get(agent_name)
+                route_age = (
+                    self._monotonic() - routed[1]
+                    if routed is not None and routed[0] == foundry_version
+                    else -1
+                )
+                if (
+                    route_age < 0
+                    or route_age + delay
+                    > _HOSTED_SESSION_PROPAGATION_WINDOW_SECONDS
+                ):
+                    raise
+                propagation_retry += 1
+                self.report_progress(
+                    f"{agent_name}/{foundry_version}: exact route is not yet "
+                    f"available for session creation; retrying in {delay}s "
+                    f"({propagation_retry + 1}/"
+                    f"{len(_HOSTED_SESSION_PROPAGATION_RETRY_DELAYS) + 1})"
+                )
+                self._sleep(delay)
         session_id = str(
             session.get("agent_session_id")
             or session.get("session_id")
@@ -596,7 +996,21 @@ union traces, dependencies, requests
             or indicator.get("type") != "version_ref"
             or str(indicator.get("agent_version") or "") != foundry_version
         ):
-            raise ContractError("Hosted session did not bind to the exact version")
+            raise RemoteOperationError(
+                "Hosted session did not bind to the exact version",
+                code="hosted_session_version_mismatch",
+                status=int(session.get("_http_status") or 200),
+                request_accepted=True,
+            )
+        used_sessions = self._used_session_ids.setdefault(agent_name, set())
+        if session_id in used_sessions:
+            raise ContractError("Hosted endpoint reused a session identity in one Agent lane")
+        used_sessions.add(session_id)
+        with self._hosted_route_lock:
+            self._hosted_session_bindings[(agent_name, session_id)] = (
+                foundry_version,
+                self._monotonic(),
+            )
         return session_id
 
     def _invoke_hosted(
@@ -605,12 +1019,32 @@ union traces, dependencies, requests
         session_id: str,
         fixture: dict[str, Any],
         seed: int,
-    ) -> tuple[list[str], bool, int, int]:
+        *,
+        validation_intent_reference: str | None = None,
+    ) -> tuple[
+        list[str],
+        bool,
+        int,
+        int,
+        int,
+        int,
+        tuple[SemanticAssertionEvidence, ...],
+        bool,
+    ]:
         del seed
         body = {
             "input": fixture["body"]["input"],
             "agent_session_id": session_id,
             "store": False,
+            **(
+                {
+                    "metadata": {
+                        "validation_intent_reference": validation_intent_reference
+                    }
+                }
+                if validation_intent_reference is not None
+                else {}
+            ),
         }
         correlation_id = str(uuid.uuid4())
         self._traffic_ledger.mark_started(
@@ -618,29 +1052,101 @@ union traces, dependencies, requests
             now=self._utcnow().astimezone(UTC),
             uncertain_seconds=_HOSTED_RESPONSE_TIMEOUT_SECONDS,
         )
-        response = self._json_request(
-            "POST",
-            f"{self._profile.project_endpoint}/agents/"
-            f"{urllib.parse.quote(agent_name, safe='')}"
-            "/endpoint/protocols/openai/responses",
-            body,
-            hosted=True,
-            expected={fixture["expected_status"]},
-            correlation_id=correlation_id,
-            timeout_seconds=_HOSTED_RESPONSE_TIMEOUT_SECONDS,
+        with self._hosted_route_lock:
+            binding = self._hosted_session_bindings.get(
+                (agent_name, session_id),
+                None,
+            )
+            routed = self._hosted_routes.get(agent_name)
+        retry_binding = (
+            binding
+            if binding is not None
+            and routed is not None
+            and routed[0] == binding[0]
+            else None
         )
-        request_reference = str(response.get("_request_reference") or "")
-        if not request_reference:
-            raise ContractError("Hosted response omitted its request reference")
-        assertion_count, assertions_passed = _semantic_assertion_result(
-            response,
-            fixture,
+        retry_started_at = self._monotonic()
+        propagation_retry = 0
+        propagation_error: RemoteOperationError | None = None
+        while True:
+            if retry_binding is not None and propagation_error is not None:
+                with self._hosted_route_lock:
+                    routed = self._hosted_routes.get(agent_name)
+                if routed is None or routed[0] != retry_binding[0]:
+                    raise propagation_error
+            try:
+                response = self._json_request(
+                    "POST",
+                    f"{self._profile.project_endpoint}/agents/"
+                    f"{urllib.parse.quote(agent_name, safe='')}"
+                    "/endpoint/protocols/openai/responses",
+                    body,
+                    hosted=True,
+                    expected={fixture["expected_status"]},
+                    correlation_id=correlation_id,
+                    timeout_seconds=_HOSTED_RESPONSE_TIMEOUT_SECONDS,
+                    retry_statuses=set(),
+                    retry_no_response=False,
+                    retry_unauthorized=False,
+                )
+                break
+            except RemoteOperationError as error:
+                if (
+                    retry_binding is None
+                    or not _hosted_session_route_propagation_pending(error)
+                    or propagation_retry
+                    == len(_HOSTED_RESPONSE_PROPAGATION_RETRY_DELAYS)
+                ):
+                    raise
+                with self._hosted_route_lock:
+                    routed = self._hosted_routes.get(agent_name)
+                if routed is None or routed[0] != retry_binding[0]:
+                    raise
+                delay = _HOSTED_RESPONSE_PROPAGATION_RETRY_DELAYS[
+                    propagation_retry
+                ]
+                retry_age = self._monotonic() - retry_started_at
+                if (
+                    retry_age < 0
+                    or retry_age + delay
+                    > _HOSTED_RESPONSE_PROPAGATION_WINDOW_SECONDS
+                ):
+                    raise
+                propagation_retry += 1
+                propagation_error = error
+                self.report_progress(
+                    f"{agent_name}/{retry_binding[0]}: Hosted response route is not yet "
+                    f"available; retrying the same session request in {delay}s "
+                    f"({propagation_retry + 1}/"
+                    f"{len(_HOSTED_RESPONSE_PROPAGATION_RETRY_DELAYS) + 1})"
+                )
+                self._sleep(delay)
+        response_reference = response.get("id")
+        if (
+            not isinstance(response_reference, str)
+            or _RESPONSE_REFERENCE.fullmatch(response_reference) is None
+        ):
+            raise RemoteOperationError(
+                "Hosted response identity is missing or invalid",
+                code="hosted_response_identity_invalid",
+                status=int(response.get("_http_status") or fixture["expected_status"]),
+                request_accepted=True,
+            )
+        assertion_count, assertions_passed, assertion_results = (
+            _semantic_assertion_result(
+                response,
+                fixture,
+            )
         )
         return (
-            [request_reference],
+            [response_reference],
             _usable_response(response, fixture["expected_status"]),
             assertion_count,
             assertions_passed,
+            0,
+            0,
+            assertion_results,
+            bool(fixture.get("activation_gate", False)),
         )
 
     def wait_for_telemetry(
@@ -649,6 +1155,9 @@ union traces, dependencies, requests
         agent_name: str,
         foundry_version: str,
         invocation: InvocationEvidence,
+        allow_shared_operations: bool = False,
+        poll_seconds: int | None = None,
+        maximum_wait_seconds: int | None = None,
     ) -> tuple[str, ...]:
         try:
             from azure.monitor.query import LogsQueryStatus
@@ -659,79 +1168,249 @@ union traces, dependencies, requests
         client = self._logs_client()
         start = datetime.fromisoformat(invocation.started_at)
         traffic_end = datetime.fromisoformat(invocation.completed_at)
-        query_end = traffic_end + timedelta(minutes=15)
-        escaped = ", ".join(
-            f'"{value.replace(chr(34), chr(92) + chr(34))}"'
+        if traffic_end < start:
+            raise ContractError("Telemetry discovery has an invalid invocation window")
+        _validate_response_references(
+            invocation.response_references,
+            invocation.request_count,
+        )
+        references = ", ".join(
+            _kql_string_literal(value)
             for value in invocation.response_references
         )
         query = f"""
 union traces, dependencies, requests
 | where timestamp >= datetime({start.astimezone(UTC).isoformat()})
-| extend response_id = tostring(customDimensions["gen_ai.response.id"])
-| extend request_id = coalesce(
+  and timestamp <= datetime({traffic_end.astimezone(UTC).isoformat()})
+| extend operation_name = tostring(customDimensions["gen_ai.operation.name"])
+| extend response_id=coalesce(
+    tostring(customDimensions["gen_ai.response.id"]),
+    tostring(customDimensions["azure.ai.agentserver.response_id"]),
+    tostring(customDimensions["response_id"]))
+| extend request_id=coalesce(
     tostring(customDimensions["x-ms-client-request-id"]),
     tostring(customDimensions["client_request_id"]),
     tostring(customDimensions["request_id"]))
-| extend agent_version = tostring(customDimensions["gen_ai.agent.version"])
-| extend matched_reference = iff(response_id in ({escaped}), response_id, request_id)
-| where matched_reference in ({escaped}) and agent_version == "{foundry_version}"
-| summarize matched_references=make_set(matched_reference) by operation_Id
-"""
-        deadline = time.monotonic() + 15 * 60
-        next_progress = time.monotonic() + 60
-        window_query = f"""
-union traces, dependencies, requests
-| where timestamp >= datetime({start.astimezone(UTC).isoformat()})
-  and timestamp <= datetime({traffic_end.astimezone(UTC).isoformat()})
-| extend operation_name = tostring(customDimensions["gen_ai.operation.name"])
-| extend observed_agent = tostring(customDimensions["gen_ai.agent.name"])
-| extend agent_version = tostring(customDimensions["gen_ai.agent.version"])
+| extend matched_reference=case(
+    response_id in ({references}), response_id,
+    request_id in ({references}), request_id,
+    "")
 | where operation_name == "invoke_agent"
-  and observed_agent == "{agent_name}"
-  and agent_version == "{foundry_version}"
-| summarize by operation_Id
+  and matched_reference in ({references})
+| summarize
+    matched_references=make_set(matched_reference),
+    first_seen=min(timestamp)
+  by operation_Id
+| order by first_seen asc, operation_Id asc
+| project operation_Id, matched_references
 """
-        while time.monotonic() < deadline:
+        if poll_seconds is None:
+            poll_seconds = TRACE_ASSERTION_POLL_SECONDS
+        if maximum_wait_seconds is None:
+            maximum_wait_seconds = TRACE_ASSERTION_DEADLINE_SECONDS
+        if poll_seconds <= 0 or maximum_wait_seconds <= 0:
+            raise ContractError("Telemetry discovery timing policy is invalid")
+        deadline = self._monotonic() + maximum_wait_seconds
+        next_progress = self._monotonic() + 60
+        matched_operation_count = 0
+        stable_operations: tuple[str, ...] | None = None
+        stable_since: float | None = None
+        while True:
+            result = self._query_resource(
+                client,
+                query,
+                timespan=(start, traffic_end),
+            )
+            if result.status == LogsQueryStatus.SUCCESS and result.tables:
+                operations = _complete_operation_ids(
+                    result.tables,
+                    invocation.response_references,
+                    allow_shared_operations=allow_shared_operations,
+                )
+                matched_operation_count = max(
+                    matched_operation_count,
+                    _matched_reference_count(
+                        result.tables,
+                        invocation.response_references,
+                    ),
+                )
+                now = self._monotonic()
+                if operations is not None:
+                    if operations != stable_operations:
+                        stable_operations = operations
+                        stable_since = now
+                    elif (
+                        stable_since is not None
+                        and now - stable_since
+                        >= _TELEMETRY_IDENTITY_STABILIZATION_SECONDS
+                    ):
+                        return operations
+                else:
+                    stable_operations = None
+                    stable_since = None
+            else:
+                stable_operations = None
+                stable_since = None
+            now = self._monotonic()
+            if now >= deadline:
+                break
+            if now >= next_progress:
+                elapsed = int(
+                    maximum_wait_seconds
+                    - max(deadline - self._monotonic(), 0)
+                )
+                self.report_progress(
+                    f"{agent_name}/{foundry_version}: waiting for telemetry "
+                    f"({elapsed}s)"
+                )
+                next_progress = self._monotonic() + 60
+            self._sleep(min(poll_seconds, deadline - now))
+        raise TelemetryCorrelationError(
+            matched_reference_count=matched_operation_count,
+            expected_reference_count=invocation.request_count,
+        )
+
+    def telemetry_identity_passes(
+        self,
+        *,
+        agent_name: str,
+        foundry_version: str,
+        operation_ids: tuple[str, ...],
+        invocation: InvocationEvidence,
+        poll_seconds: int | None = None,
+        maximum_wait_seconds: int | None = None,
+    ) -> tuple[bool, ...]:
+        try:
+            from azure.monitor.query import LogsQueryStatus
+        except ImportError as error:
+            raise ContractError(
+                'Live telemetry requires installation with ".[azure]"'
+            ) from error
+        _validate_operation_references(
+            operation_ids,
+            invocation.request_count,
+            allow_shared=True,
+        )
+        _validate_response_references(
+            invocation.response_references,
+            invocation.request_count,
+        )
+        start = datetime.fromisoformat(invocation.started_at).astimezone(UTC)
+        traffic_end = datetime.fromisoformat(invocation.completed_at).astimezone(UTC)
+        query_end = traffic_end + timedelta(minutes=15)
+        values = ", ".join(f'"{value}"' for value in operation_ids)
+        references = ", ".join(
+            _kql_string_literal(value)
+            for value in invocation.response_references
+        )
+        query = f"""
+union traces, dependencies, requests
+| where timestamp >= datetime({start.isoformat()})
+  and timestamp < datetime({query_end.isoformat()})
+  and operation_Id in ({values})
+| extend operation_name=tostring(customDimensions["gen_ai.operation.name"])
+| extend observed_agent=tostring(customDimensions["gen_ai.agent.name"])
+| extend agent_version=tostring(customDimensions["gen_ai.agent.version"])
+| extend response_id=coalesce(
+    tostring(customDimensions["gen_ai.response.id"]),
+    tostring(customDimensions["azure.ai.agentserver.response_id"]),
+    tostring(customDimensions["response_id"]))
+| extend request_id=coalesce(
+    tostring(customDimensions["x-ms-client-request-id"]),
+    tostring(customDimensions["client_request_id"]),
+    tostring(customDimensions["request_id"]))
+| extend matched_reference=case(
+    response_id in ({references}), response_id,
+    request_id in ({references}), request_id,
+    "")
+| where operation_name == "invoke_agent"
+  and matched_reference in ({references})
+| summarize
+    agent_names=make_set(observed_agent),
+    agent_versions=make_set(agent_version)
+  by operation_Id, matched_reference
+"""
+        expected = ({agent_name}, {foundry_version})
+        expected_keys = set(
+            zip(
+                operation_ids,
+                invocation.response_references,
+                strict=True,
+            )
+        )
+        if poll_seconds is None:
+            poll_seconds = TRACE_ASSERTION_POLL_SECONDS
+        if maximum_wait_seconds is None:
+            maximum_wait_seconds = TRACE_ASSERTION_DEADLINE_SECONDS
+        if poll_seconds <= 0 or maximum_wait_seconds <= 0:
+            raise ContractError("Telemetry identity timing policy is invalid")
+        deadline = self._monotonic() + maximum_wait_seconds
+        next_progress = self._monotonic() + _TRACE_ASSERTION_PROGRESS_SECONDS
+        client = self._logs_client()
+        exact_since: float | None = None
+        while True:
             result = self._query_resource(
                 client,
                 query,
                 timespan=(start, query_end),
             )
-            if result.status == LogsQueryStatus.SUCCESS and result.tables:
-                complete = _complete_operation_ids(
-                    result.tables,
-                    invocation.response_references,
-                )
-                if complete is not None:
-                    return complete
-            if invocation.allow_window_correlation:
-                window_result = self._query_resource(
-                    client,
-                    window_query,
-                    timespan=(start, query_end),
-                )
-                if window_result.status == LogsQueryStatus.SUCCESS:
-                    operations = tuple(
-                        sorted(
-                            {
-                                str(row[0]).lower()
-                                for table in window_result.tables
-                                for row in table.rows
-                                if _TRACE_ID.fullmatch(str(row[0]).lower())
-                            }
-                        )
+            if result.status != LogsQueryStatus.SUCCESS:
+                raise ContractError("Exact validation telemetry identity query failed")
+            observed: dict[tuple[str, str], tuple[set[str], set[str]]] = {}
+            for table in result.tables:
+                for row in table.rows:
+                    operation_id = str(row[0]).lower()
+                    reference = str(row[1] if len(row) > 1 else "")
+                    key = (operation_id, reference)
+                    if key not in expected_keys:
+                        continue
+                    names, versions = observed.setdefault(
+                        key,
+                        (set(), set()),
                     )
-                    if len(operations) == invocation.request_count:
-                        return operations
-            if time.monotonic() >= next_progress:
-                elapsed = int(15 * 60 - max(deadline - time.monotonic(), 0))
-                self.report_progress(
-                    f"{agent_name}/{foundry_version}: waiting for telemetry "
-                    f"({elapsed}s)"
+                    names.update(
+                        _telemetry_string_set(row[2] if len(row) > 2 else [])
+                    )
+                    versions.update(
+                        _telemetry_string_set(row[3] if len(row) > 3 else [])
+                    )
+            identity_results = tuple(
+                observed.get((operation_id, reference)) == expected
+                for operation_id, reference in zip(
+                    operation_ids,
+                    invocation.response_references,
+                    strict=True,
                 )
-                next_progress = time.monotonic() + 60
-            self._sleep(15)
-        raise ContractError("Natural telemetry did not arrive before the bounded deadline")
+            )
+            if any(
+                names - expected[0] or versions - expected[1]
+                for names, versions in observed.values()
+            ):
+                return identity_results
+            now = self._monotonic()
+            if all(identity_results):
+                if exact_since is None:
+                    exact_since = now
+                elif (
+                    now - exact_since
+                    >= _TELEMETRY_IDENTITY_STABILIZATION_SECONDS
+                ):
+                    return identity_results
+            else:
+                exact_since = None
+            if now >= deadline:
+                if all(identity_results):
+                    return tuple(False for _ in identity_results)
+                return identity_results
+            if now >= next_progress:
+                elapsed = int(
+                    maximum_wait_seconds - max(deadline - now, 0)
+                )
+                self.report_progress(
+                    f"Exact validation telemetry identity is stabilizing ({elapsed}s)"
+                )
+                next_progress = now + _TRACE_ASSERTION_PROGRESS_SECONDS
+            self._sleep(min(poll_seconds, deadline - now))
 
     def start_insights_run(
         self,
@@ -741,6 +1420,7 @@ union traces, dependencies, requests
         foundry_version: str,
         operation_ids: tuple[str, ...],
         lookback_hours: float,
+        start_margin_seconds: int,
         persist: Callable[[InsightRunCheckpoint], None],
     ) -> InsightRunCheckpoint:
         earliest, _ = self._operation_time_bounds(
@@ -748,15 +1428,16 @@ union traces, dependencies, requests
             foundry_version=foundry_version,
             operation_ids=operation_ids,
         )
-        if earliest < self._utcnow().astimezone(UTC) - timedelta(
-            hours=lookback_hours
-        ):
-            raise InsightWindowExpiredError(
-                "Correlated operations expired before Agent Insights started"
-            )
+        start_deadline = (
+            earliest
+            + timedelta(hours=lookback_hours)
+            - timedelta(seconds=start_margin_seconds)
+        )
+        self._remaining_insight_start_seconds(start_deadline)
         checkpoint = self._start_insights_once(
             monitor_id=monitor_id,
             lookback_hours=lookback_hours,
+            start_deadline=start_deadline,
         )
         persist(checkpoint)
         return checkpoint
@@ -769,6 +1450,7 @@ union traces, dependencies, requests
         foundry_version: str,
         operation_ids: tuple[str, ...],
         checkpoint: InsightRunCheckpoint,
+        validate_window: bool = True,
     ) -> InsightRunEvidence:
         run = self._wait_insights_run(
             agent_name,
@@ -791,7 +1473,10 @@ union traces, dependencies, requests
             for value in changed
             if str(value.get("agent_version") or value.get("agentVersion") or "")
             == foundry_version
-            and set(self._linked_ids(value)).intersection(operation_ids)
+            and linked_operations_match_scope(
+                self._linked_ids(value),
+                operation_ids,
+            )
         )
         result = InsightRunEvidence(
             run_reference=_opaque(checkpoint.run_id),
@@ -800,7 +1485,7 @@ union traces, dependencies, requests
             status=str(run.get("status") or ""),
             insights=evidence,
         )
-        if result.status.lower() == "succeeded":
+        if validate_window and result.status.lower() == "succeeded":
             earliest, latest = self._operation_time_bounds(
                 agent_name=agent_name,
                 foundry_version=foundry_version,
@@ -814,13 +1499,22 @@ union traces, dependencies, requests
         *,
         monitor_id: str,
         lookback_hours: float,
+        start_deadline: datetime | None = None,
     ) -> InsightRunCheckpoint:
         before = self._insight_revisions(monitor_id)
+        if start_deadline is not None:
+            self._remaining_insight_start_seconds(start_deadline)
         service_lookback: int | float = (
             int(lookback_hours)
             if float(lookback_hours).is_integer()
             else lookback_hours
         )
+        timeout_seconds: int | float = _DEFAULT_REQUEST_TIMEOUT_SECONDS
+        if start_deadline is not None:
+            timeout_seconds = min(
+                timeout_seconds,
+                self._remaining_insight_start_seconds(start_deadline),
+            )
         run = self._json_request(
             "POST",
             self._insights_url(
@@ -828,6 +1522,8 @@ union traces, dependencies, requests
             ),
             {"lookback_hours": service_lookback},
             expected={200, 201, 202},
+            timeout_seconds=timeout_seconds,
+            request_deadline=start_deadline,
         )
         run_id = str(run.get("id") or "")
         if not run_id:
@@ -836,6 +1532,16 @@ union traces, dependencies, requests
             run_id=run_id,
             before_revisions=before,
         )
+
+    def _remaining_insight_start_seconds(self, deadline: datetime) -> float:
+        remaining = (
+            deadline.astimezone(UTC) - self._utcnow().astimezone(UTC)
+        ).total_seconds()
+        if remaining <= 0:
+            raise InsightWindowExpiredError(
+                "Correlated operations expired into the guarded Agent Insights start margin"
+            )
+        return remaining
 
     def _wait_insights_run(
         self,
@@ -935,7 +1641,7 @@ union traces, dependencies, requests
         agent_name: str,
         foundry_version: str,
         operation_ids: tuple[str, ...],
-        required_operations: tuple[str, ...],
+        required_operations_by_request: tuple[tuple[str, ...], ...],
         window_start: str,
         window_end: str,
     ) -> None:
@@ -949,6 +1655,8 @@ union traces, dependencies, requests
         query = f"""
 union traces, dependencies, requests
 | where operation_Id in ({values})
+| extend agent_version=tostring(customDimensions["gen_ai.agent.version"])
+{f'| where agent_version == "{foundry_version}"' if foundry_version else ''}
 | extend operation_name=tostring(customDimensions["gen_ai.operation.name"])
 | extend observed_agent=tostring(customDimensions["gen_ai.agent.name"])
 | extend agent_version=tostring(customDimensions["gen_ai.agent.version"])
@@ -976,7 +1684,7 @@ union traces, dependencies, requests
                 and _trace_contract_ready(
                     result.tables,
                     operation_ids,
-                    required_operations,
+                    required_operations_by_request,
                 )
             ):
                 return
@@ -987,6 +1695,590 @@ union traces, dependencies, requests
         self,
         operation_ids: tuple[str, ...],
     ) -> dict[str, Any]:
+        return _trace_behavior_summary(self._trace_rows(operation_ids))
+
+    def collect_trace_evidence(
+        self,
+        operation_ids: tuple[str, ...],
+    ) -> dict[str, Any]:
+        _validate_operation_references(operation_ids, len(operation_ids))
+        rows = self._collect_trace_rows(operation_ids)
+        allowed = set(operation_ids)
+        rows_by_operation: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in rows:
+            operation_id = str(row.get("operation_id") or "").lower()
+            if operation_id not in allowed:
+                raise ContractError("Trace collection returned an unexpected operation")
+            rows_by_operation[operation_id].append(row)
+        if set(rows_by_operation) != allowed:
+            raise ContractError("Trace collection is incomplete")
+        operations = [
+            {
+                "operation_reference": _opaque(operation_id),
+                "spans": [
+                    {
+                        "sequence": sequence,
+                        "span_reference": (
+                            _opaque(str(row["span_id"])) if row["span_id"] else ""
+                        ),
+                        "parent_span_reference": (
+                            _opaque(str(row["parent_span_id"]))
+                            if row["parent_span_id"]
+                            else ""
+                        ),
+                        "telemetry_type": row["telemetry_type"],
+                        "operation_name": row["operation_name"],
+                        "timestamp": row["timestamp"],
+                        "duration": row["duration"],
+                        "success": row["success"],
+                        "result_code": row["result_code"],
+                        "tool_name": row["tool_name"],
+                        "tool_call_reference": (
+                            _opaque(str(row["tool_call_id"]))
+                            if row["tool_call_id"]
+                            else ""
+                        ),
+                        "error_type": row["error_type"],
+                        "tool_ok": row["tool_ok"],
+                        "terminal_success": row["terminal_success"],
+                        "terminal_output": row["terminal_output"],
+                        "handled_error": row["handled_error"],
+                        **(
+                            {
+                                "output_messages_present": row[
+                                    "output_messages_present"
+                                ],
+                                "output_messages_nonempty": row[
+                                    "output_messages_nonempty"
+                                ],
+                            }
+                            if _is_invoke_agent_span(row)
+                            else {}
+                        ),
+                    }
+                    for sequence, row in enumerate(
+                        rows_by_operation[operation_id],
+                        start=1,
+                    )
+                ],
+            }
+            for operation_id in operation_ids
+        ]
+        return {
+            "operation_count": len(operations),
+            "span_count": sum(len(item["spans"]) for item in operations),
+            "operations": operations,
+        }
+
+    def canonical_output_messages_state(
+        self,
+        operation_ids: tuple[str, ...],
+    ) -> tuple[tuple[bool, bool], ...]:
+        _validate_operation_references(operation_ids, len(operation_ids))
+        rows = self._collect_trace_rows(operation_ids)
+        states = _canonical_output_messages_state_from_rows(rows, operation_ids)
+        if states is None:
+            raise ContractError("Trace collection is missing an invoke_agent span")
+        return states
+
+    def _collect_trace_rows(
+        self,
+        operation_ids: tuple[str, ...],
+    ) -> list[dict[str, Any]]:
+        try:
+            from azure.monitor.query import LogsQueryStatus
+        except ImportError as error:
+            raise ContractError(
+                'Trace collection requires installation with ".[azure]"'
+            ) from error
+        values = ", ".join(f'"{value}"' for value in operation_ids)
+        query = f"""
+union withsource=telemetry_type traces, dependencies, requests
+| where operation_Id in ({values})
+| extend operation_name=tostring(customDimensions["gen_ai.operation.name"])
+| extend tool_name=coalesce(
+    tostring(customDimensions["gen_ai.tool.name"]),
+    tostring(customDimensions["tool.name"]))
+| extend tool_call_id=coalesce(
+    tostring(customDimensions["gen_ai.tool.call.id"]),
+    tostring(customDimensions["tool.call.id"]))
+| extend error_type=tostring(customDimensions["error.type"])
+| extend tool_ok=tostring(customDimensions["tool.ok"])
+| extend terminal_success=tostring(customDimensions["aiq.terminal_response.success"])
+| extend terminal_output=tostring(customDimensions["aiq.terminal_response.output_present"])
+| extend handled_error=tostring(customDimensions["aiq.tool.error.handled"])
+| extend observed_agent=tostring(customDimensions["gen_ai.agent.name"])
+| extend agent_version=tostring(customDimensions["gen_ai.agent.version"])
+| extend output_messages_present=bag_has_key(
+    customDimensions, "gen_ai.output.messages")
+| extend output_messages_nonempty=output_messages_present
+    and isnotempty(tostring(customDimensions["gen_ai.output.messages"]))
+| project operation_Id, id, operation_ParentId, telemetry_type,
+    operation_name, timestamp, duration, success, resultCode,
+    tool_name, tool_call_id, error_type, tool_ok,
+    terminal_success, terminal_output, handled_error,
+    output_messages_present, output_messages_nonempty
+| order by operation_Id asc, timestamp asc, id asc
+"""
+        result = self._query_logs_result(
+            query,
+            timespan=timedelta(days=90),
+            statuses=LogsQueryStatus,
+            purpose="trace collection",
+        )
+        return [
+            {
+                "operation_id": str(row[0] or ""),
+                "span_id": str(row[1] or ""),
+                "parent_span_id": str(row[2] or ""),
+                "telemetry_type": _canonical_telemetry_source(row[3]),
+                "operation_name": str(row[4] or ""),
+                "timestamp": str(row[5] or ""),
+                "duration": row[6],
+                "success": "" if row[7] is None else str(row[7]),
+                "result_code": "" if row[8] is None else str(row[8]),
+                "tool_name": str(row[9] or ""),
+                "tool_call_id": str(row[10] or ""),
+                "error_type": str(row[11] or ""),
+                "tool_ok": str(row[12] or ""),
+                "terminal_success": str(row[13] or ""),
+                "terminal_output": str(row[14] or ""),
+                "handled_error": str(row[15] or ""),
+                "output_messages_present": _telemetry_boolean(
+                    row[16],
+                    field="output-message presence",
+                ),
+                "output_messages_nonempty": _telemetry_boolean(
+                    row[17],
+                    field="output-message nonempty state",
+                ),
+            }
+            for table in result.tables
+            for row in table.rows
+        ]
+
+    def trace_assertion_evidence(
+        self,
+        *,
+        agent_name: str,
+        foundry_version: str,
+        operation_ids: tuple[str, ...],
+        response_references: tuple[str, ...],
+        window_start: str,
+        window_end: str,
+        traffic_path: Path,
+        stabilization_seconds: int,
+        on_first_pass: Callable[[], None],
+        on_stable: Callable[[dict[str, Any]], None] | None = None,
+        on_stable_output_messages: (
+            Callable[[tuple[tuple[bool, bool], ...]], None] | None
+        ) = None,
+    ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
+        payload = json.loads(traffic_path.read_text(encoding="utf-8"))
+        requests = payload if isinstance(payload, list) else payload.get("requests")
+        if not isinstance(requests, list):
+            raise ContractError("Hosted evidence traffic coverage is inconsistent")
+        return LiveRuntime.trace_assertion_evidence_for_requests(
+            self,
+            agent_name=agent_name,
+            foundry_version=foundry_version,
+            operation_ids=operation_ids,
+            response_references=response_references,
+            window_start=window_start,
+            window_end=window_end,
+            requests=requests,
+            stabilization_seconds=stabilization_seconds,
+            on_first_pass=on_first_pass,
+            on_stable=on_stable,
+            on_stable_output_messages=on_stable_output_messages,
+        )
+
+    def trace_assertion_evidence_for_requests(
+        self,
+        *,
+        agent_name: str,
+        foundry_version: str,
+        operation_ids: tuple[str, ...],
+        response_references: tuple[str, ...],
+        window_start: str,
+        window_end: str,
+        requests: list[dict[str, Any]],
+        stabilization_seconds: int,
+        on_first_pass: Callable[[], None],
+        poll_seconds: int | None = None,
+        maximum_wait_seconds: int | None = None,
+        on_stable: Callable[[dict[str, Any]], None] | None = None,
+        on_stable_output_messages: (
+            Callable[[tuple[tuple[bool, bool], ...]], None] | None
+        ) = None,
+        on_stable_response_anchors: (
+            Callable[[tuple[str, ...]], None] | None
+        ) = None,
+        on_stable_semantic_assertions: (
+            Callable[[tuple[tuple[SemanticAssertionEvidence, ...], ...]], None]
+            | None
+        ) = None,
+        allow_shared_operations: bool = False,
+    ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
+        if poll_seconds is None:
+            poll_seconds = TRACE_ASSERTION_POLL_SECONDS
+        if maximum_wait_seconds is None:
+            maximum_wait_seconds = TRACE_ASSERTION_DEADLINE_SECONDS
+        if (
+            stabilization_seconds <= 0
+            or poll_seconds <= 0
+            or maximum_wait_seconds < stabilization_seconds
+        ):
+            raise ContractError("Hosted evidence timing policy is invalid")
+        if len(requests) != len(response_references):
+            raise ContractError("Hosted evidence traffic coverage is inconsistent")
+        _validate_response_references(response_references, len(requests))
+        _validate_operation_references(
+            operation_ids,
+            len(requests),
+            allow_shared=allow_shared_operations,
+        )
+        fixtures = tuple(_normalize_fixture(item) for item in requests)
+        deadline = self._monotonic() + maximum_wait_seconds
+        next_progress = self._monotonic() + _TRACE_ASSERTION_PROGRESS_SECONDS
+        last_results: tuple[tuple[TraceAssertionEvidence, ...], ...] | None = None
+        stable_signature: tuple[
+            tuple[tuple[str, str], ...],
+            tuple[tuple[tuple[str, bool], ...], ...],
+            tuple[str, ...],
+        ] | None = None
+        stable_since: float | None = None
+        first_mapping_observed = False
+        passing = False
+        correlated: tuple[list[dict[str, Any]], ...] | None = None
+        response_anchors: tuple[str, ...] | None = None
+        output_messages_states: tuple[tuple[bool, bool], ...] | None = None
+        semantic_results: (
+            tuple[tuple[SemanticAssertionEvidence, ...], ...] | None
+        ) = None
+        diagnostic_code: str | None = None
+
+        def publish_stable_results() -> tuple[
+            tuple[TraceAssertionEvidence, ...], ...
+        ]:
+            if correlated is None or last_results is None:
+                raise ContractError("Stable trace evidence is missing assertion results")
+            if on_stable_output_messages is not None:
+                if output_messages_states is None:
+                    raise ContractError(
+                        "Stable trace evidence is missing output-message state"
+                    )
+                on_stable_output_messages(output_messages_states)
+            if on_stable_response_anchors is not None:
+                if response_anchors is None:
+                    raise ContractError(
+                        "Stable trace evidence is missing response-anchor state"
+                    )
+                on_stable_response_anchors(response_anchors)
+            if on_stable_semantic_assertions is not None:
+                if semantic_results is None:
+                    raise ContractError(
+                        "Stable trace evidence is missing semantic assertion state"
+                    )
+                on_stable_semantic_assertions(semantic_results)
+            if on_stable is not None:
+                on_stable(
+                    _trace_behavior_summary(
+                        [
+                            row
+                            for request_rows in correlated
+                            for row in request_rows
+                        ]
+                    )
+                )
+            return last_results
+
+        while True:
+            rows = self._trace_rows(
+                operation_ids,
+                response_references,
+                foundry_version,
+                agent_name,
+                window_start,
+                window_end,
+            )
+            correlation = _correlated_request_rows(
+                rows,
+                response_references,
+                operation_ids,
+                agent_name=agent_name,
+                foundry_version=foundry_version,
+            )
+            correlated = correlation[0] if correlation is not None else None
+            response_anchors = correlation[1] if correlation is not None else None
+            if _request_correlation_impossible(
+                rows,
+                response_references,
+            ):
+                raise _trace_assertion_activation_error(
+                    "Hosted evidence found ambiguous response-to-operation correlation",
+                    code=_TRACE_ASSERTION_CORRELATION_DIAGNOSTIC,
+                    matched_reference_count=_matched_trace_response_reference_count(
+                        rows,
+                        response_references,
+                        operation_ids,
+                        agent_name=agent_name,
+                        foundry_version=foundry_version,
+                    ),
+                    expected_reference_count=len(response_references),
+                )
+            output_messages_states = (
+                _canonical_output_messages_state_from_correlated_rows(correlated)
+                if on_stable_output_messages is not None
+                and correlated is not None
+                else None
+            )
+            semantic_results = (
+                _semantic_assertion_results_from_correlated_rows(
+                    correlated,
+                    response_references,
+                    fixtures,
+                )
+                if on_stable_semantic_assertions is not None
+                and correlated is not None
+                else None
+            )
+            if correlated is not None and (
+                on_stable_output_messages is None
+                or output_messages_states is not None
+            ) and (
+                on_stable_semantic_assertions is None
+                or semantic_results is not None
+            ):
+                if not first_mapping_observed:
+                    first_mapping_observed = True
+                    on_first_pass()
+                last_results = tuple(
+                    _trace_assertion_result(request_rows, fixture)
+                    for request_rows, fixture in zip(
+                        correlated,
+                        fixtures,
+                        strict=True,
+                    )
+                )
+                passing = all(
+                    assertion.passed
+                    for request_results in last_results
+                    for assertion in request_results
+                )
+                signature = _trace_assertion_stability_signature(
+                    rows,
+                    correlated,
+                    response_references,
+                    last_results,
+                )
+                now = self._monotonic()
+                if signature != stable_signature:
+                    if stable_signature is not None:
+                        diagnostic_code = _trace_assertion_signature_change_diagnostic(
+                            stable_signature,
+                            signature,
+                        )
+                    stable_signature = signature
+                    stable_since = now
+                if (
+                    passing
+                    and stable_since is not None
+                    and now - stable_since >= stabilization_seconds
+                ):
+                    return publish_stable_results()
+            else:
+                passing = False
+                stable_signature = None
+                stable_since = None
+                diagnostic_code = (
+                    _TRACE_ASSERTION_CORRELATION_DIAGNOSTIC
+                    if correlated is None
+                    else None
+                )
+            now = self._monotonic()
+            if now >= deadline:
+                break
+            if now >= next_progress:
+                elapsed = int(
+                    maximum_wait_seconds - max(deadline - now, 0)
+                )
+                state = (
+                    "passing"
+                    if passing
+                    else "failing"
+                    if correlated is not None
+                    else "correlation"
+                )
+                self.report_progress(
+                    f"Hosted {state} evidence is stabilizing ({elapsed}s)"
+                )
+                next_progress = now + _TRACE_ASSERTION_PROGRESS_SECONDS
+            self._sleep(min(poll_seconds, deadline - now))
+        if (
+            correlated is not None
+            and last_results is not None
+            and not passing
+            and stable_since is not None
+            and self._monotonic() - stable_since >= stabilization_seconds
+        ):
+            return publish_stable_results()
+        if correlated is not None:
+            raise _trace_assertion_activation_error(
+                "Hosted evidence did not stabilize before the bounded deadline",
+                code=diagnostic_code,
+                matched_reference_count=len(response_references),
+                expected_reference_count=len(response_references),
+            )
+        raise _trace_assertion_activation_error(
+            "Hosted evidence requires exact response-to-operation correlation",
+            code=_TRACE_ASSERTION_CORRELATION_DIAGNOSTIC,
+            matched_reference_count=_matched_trace_response_reference_count(
+                rows,
+                response_references,
+                operation_ids,
+                agent_name=agent_name,
+                foundry_version=foundry_version,
+            ),
+            expected_reference_count=len(response_references),
+        )
+
+    def stable_correlated_evidence_for_requests(
+        self,
+        *,
+        agent_name: str,
+        foundry_version: str,
+        operation_ids: tuple[str, ...],
+        response_references: tuple[str, ...],
+        window_start: str,
+        window_end: str,
+        stabilization_seconds: int,
+        poll_seconds: int | None = None,
+        maximum_wait_seconds: int | None = None,
+        on_first_pass: Callable[[], None] = lambda: None,
+    ) -> tuple[tuple[list[dict[str, Any]], ...], tuple[str, ...]]:
+        if poll_seconds is None:
+            poll_seconds = TRACE_ASSERTION_POLL_SECONDS
+        if maximum_wait_seconds is None:
+            maximum_wait_seconds = TRACE_ASSERTION_DEADLINE_SECONDS
+        if (
+            stabilization_seconds <= 0
+            or poll_seconds <= 0
+            or maximum_wait_seconds < stabilization_seconds
+        ):
+            raise ContractError("Validation evidence timing policy is invalid")
+        if len(response_references) != len(operation_ids):
+            raise ContractError("Validation evidence response coverage is inconsistent")
+        _validate_response_references(response_references, len(operation_ids))
+        _validate_operation_references(
+            operation_ids,
+            len(response_references),
+            allow_shared=True,
+        )
+        deadline = self._monotonic() + maximum_wait_seconds
+        next_progress = self._monotonic() + _TRACE_ASSERTION_PROGRESS_SECONDS
+        stable_signature: tuple[tuple[str, ...], tuple[str, ...]] | None = None
+        stable_since: float | None = None
+        correlated: tuple[list[dict[str, Any]], ...] | None = None
+        anchors: tuple[str, ...] | None = None
+        first_mapping_observed = False
+        rows: list[dict[str, Any]] = []
+        changed = False
+        while True:
+            rows = self._trace_rows(
+                operation_ids,
+                response_references,
+                foundry_version,
+                agent_name,
+                window_start,
+                window_end,
+            )
+            correlation = _correlated_request_rows(
+                rows,
+                response_references,
+                operation_ids,
+                agent_name=agent_name,
+                foundry_version=foundry_version,
+            )
+            correlated = correlation[0] if correlation is not None else None
+            anchors = correlation[1] if correlation is not None else None
+            if _request_correlation_impossible(rows, response_references):
+                raise _trace_assertion_activation_error(
+                    "Validation evidence found ambiguous response correlation",
+                    code=_TRACE_ASSERTION_CORRELATION_DIAGNOSTIC,
+                    matched_reference_count=(
+                        _matched_trace_response_reference_count(
+                            rows,
+                            response_references,
+                            operation_ids,
+                            agent_name=agent_name,
+                            foundry_version=foundry_version,
+                        )
+                    ),
+                    expected_reference_count=len(response_references),
+                )
+            now = self._monotonic()
+            if correlated is not None and anchors is not None:
+                if not first_mapping_observed:
+                    first_mapping_observed = True
+                    on_first_pass()
+                signature = (
+                    anchors,
+                    _trace_rows_signature(
+                        [
+                            row
+                            for request_rows in correlated
+                            for row in request_rows
+                        ]
+                    ),
+                )
+                if signature != stable_signature:
+                    changed = stable_signature is not None
+                    stable_signature = signature
+                    stable_since = now
+                if (
+                    stable_since is not None
+                    and now - stable_since >= stabilization_seconds
+                ):
+                    return correlated, anchors
+            else:
+                stable_signature = None
+                stable_since = None
+            if now >= deadline:
+                break
+            if now >= next_progress:
+                elapsed = int(maximum_wait_seconds - max(deadline - now, 0))
+                self.report_progress(
+                    f"Validation evidence is stabilizing ({elapsed}s)"
+                )
+                next_progress = now + _TRACE_ASSERTION_PROGRESS_SECONDS
+            self._sleep(min(poll_seconds, deadline - now))
+        raise _trace_assertion_activation_error(
+            "Validation evidence did not stabilize before the bounded deadline",
+            code=(
+                "trace_assertion_correlated_row_set_changed"
+                if correlated is not None and changed
+                else _TRACE_ASSERTION_CORRELATION_DIAGNOSTIC
+            ),
+            matched_reference_count=_matched_trace_response_reference_count(
+                rows,
+                response_references,
+                operation_ids,
+                agent_name=agent_name,
+                foundry_version=foundry_version,
+            ),
+            expected_reference_count=len(response_references),
+        )
+
+    def _trace_rows(
+        self,
+        operation_ids: tuple[str, ...],
+        response_references: tuple[str, ...] = (),
+        foundry_version: str | None = None,
+        agent_name: str | None = None,
+        window_start: str | None = None,
+        window_end: str | None = None,
+    ) -> list[dict[str, Any]]:
         try:
             from azure.monitor.query import LogsQueryStatus
         except ImportError as error:
@@ -998,9 +2290,71 @@ union traces, dependencies, requests
         ):
             raise ContractError("Trace behavior evidence has invalid operation identities")
         values = ", ".join(f'"{value}"' for value in operation_ids)
+        references = ", ".join(
+            _kql_string_literal(value) for value in response_references
+        ) or '""'
+        agent_literal = _kql_string_literal(agent_name)
+        version_literal = _kql_string_literal(foundry_version)
+        scoped_operations = ""
+        operation_filter = f"| where operation_Id in ({values})"
+        timespan: timedelta | tuple[datetime, datetime] = timedelta(days=90)
+        if response_references:
+            if not agent_name or not foundry_version or not window_start or not window_end:
+                raise ContractError(
+                    "Trace assertion correlation requires exact Agent and invocation scope"
+                )
+            try:
+                start = datetime.fromisoformat(window_start).astimezone(UTC)
+                traffic_end = datetime.fromisoformat(window_end).astimezone(UTC)
+            except (TypeError, ValueError) as error:
+                raise ContractError(
+                    "Trace assertion correlation has an invalid invocation window"
+                ) from error
+            if traffic_end < start:
+                raise ContractError(
+                    "Trace assertion correlation has an invalid invocation window"
+                )
+            query_end = traffic_end + timedelta(minutes=15)
+            scoped_operations = f"""
+let scoped_trace_operations =
+    union traces, dependencies, requests
+    | where timestamp >= datetime({start.isoformat()})
+      and timestamp < datetime({query_end.isoformat()})
+    | extend response_id=coalesce(
+        tostring(customDimensions["gen_ai.response.id"]),
+        tostring(customDimensions["azure.ai.agentserver.response_id"]),
+        tostring(customDimensions["response_id"]))
+    | extend request_id=coalesce(
+        tostring(customDimensions["x-ms-client-request-id"]),
+        tostring(customDimensions["client_request_id"]),
+        tostring(customDimensions["request_id"]))
+    | extend observed_agent=tostring(customDimensions["gen_ai.agent.name"])
+    | extend agent_version=tostring(customDimensions["gen_ai.agent.version"])
+    | extend matched_reference=case(
+        response_id in ({references}), response_id,
+        request_id in ({references}), request_id,
+        "")
+    | summarize
+        matched_references=make_set_if(
+          matched_reference, matched_reference in ({references})),
+        agent_names=make_set_if(observed_agent, isnotempty(observed_agent)),
+        agent_versions=make_set_if(agent_version, isnotempty(agent_version))
+      by operation_Id
+    | where (
+        operation_Id in ({values})
+        or array_length(matched_references) > 0)
+      and set_has_element(agent_names, {agent_literal})
+      and set_has_element(agent_versions, {version_literal})
+    | project operation_Id;
+"""
+            operation_filter = (
+                "| where operation_Id in (scoped_trace_operations)"
+            )
+            timespan = (start, query_end)
         query = f"""
-union traces, dependencies, requests
-| where operation_Id in ({values})
+{scoped_operations}
+union withsource=telemetry_type traces, dependencies, requests
+{operation_filter}
 | extend operation_name=tostring(customDimensions["gen_ai.operation.name"])
 | extend tool_name=coalesce(
     tostring(customDimensions["gen_ai.tool.name"]),
@@ -1008,37 +2362,90 @@ union traces, dependencies, requests
 | extend tool_call_id=coalesce(
     tostring(customDimensions["gen_ai.tool.call.id"]),
     tostring(customDimensions["tool.call.id"]))
+| extend tool_arguments=coalesce(
+    tostring(customDimensions["aiq.tool.call.arguments"]),
+    tostring(customDimensions["gen_ai.tool.call.arguments"]))
 | extend error_type=tostring(customDimensions["error.type"])
 | extend tool_ok=tostring(customDimensions["tool.ok"])
-| extend tool_result=tostring(customDimensions["gen_ai.tool.call.result"])
+| extend tool_result=coalesce(
+    tostring(customDimensions["aiq.tool.call.result"]),
+    tostring(customDimensions["gen_ai.tool.call.result"]))
+| extend structural_tool=tostring(customDimensions["aiq.tool.call.result"])
 | extend input_messages=tostring(customDimensions["gen_ai.input.messages"])
+| extend output_messages_type=gettype(customDimensions["gen_ai.output.messages"])
 | extend output_messages=tostring(customDimensions["gen_ai.output.messages"])
-| project operation_Id, operation_name, tool_name, tool_call_id, error_type, tool_ok, tool_result,
-    input_messages, output_messages, timestamp
+| extend output_messages_present=bag_has_key(
+    customDimensions, "gen_ai.output.messages")
+| extend output_messages_nonempty=output_messages_present
+    and isnotempty(output_messages)
+| extend terminal_success=tostring(customDimensions["aiq.terminal_response.success"])
+| extend terminal_output=tostring(customDimensions["aiq.terminal_response.output_present"])
+| extend handled_error=tostring(customDimensions["aiq.tool.error.handled"])
+| extend observed_agent=tostring(customDimensions["gen_ai.agent.name"])
+| extend agent_version=tostring(customDimensions["gen_ai.agent.version"])
+| extend response_id=coalesce(
+    tostring(customDimensions["gen_ai.response.id"]),
+    tostring(customDimensions["azure.ai.agentserver.response_id"]),
+    tostring(customDimensions["response_id"]))
+| extend request_id=coalesce(
+    tostring(customDimensions["x-ms-client-request-id"]),
+    tostring(customDimensions["client_request_id"]),
+    tostring(customDimensions["request_id"]))
+| extend matched_reference=case(
+    response_id in ({references}), response_id,
+    request_id in ({references}), request_id,
+    "")
+| project operation_Id, id, operation_ParentId, telemetry_type, operation_name,
+    tool_name, tool_call_id, error_type, tool_ok, tool_result,
+    tool_arguments, structural_tool, input_messages, output_messages, timestamp, duration, name,
+    terminal_success, terminal_output, handled_error, matched_reference,
+    output_messages_present, output_messages_nonempty, observed_agent, agent_version,
+    output_messages_type
 """
-        result = self._query_resource(
-            self._logs_client(),
+        result = self._query_logs_result(
             query,
-            timespan=timedelta(days=90),
+            timespan=timespan,
+            statuses=LogsQueryStatus,
+            purpose="trace behavior evidence",
         )
-        if result.status != LogsQueryStatus.SUCCESS:
-            raise ContractError("Trace behavior evidence query failed")
         rows = [
             {
                 "operation_id": str(row[0]),
-                "operation_name": str(row[1] or ""),
-                "tool_name": str(row[2] or ""),
-                "tool_call_id": str(row[3] or ""),
-                "error_type": str(row[4] or ""),
-                "tool_ok": str(row[5] or ""),
-                "tool_result": str(row[6] or ""),
-                "messages": [str(row[7] or ""), str(row[8] or "")],
-                "timestamp": str(row[9] or ""),
+                "span_id": str(row[1] or ""),
+                "parent_span_id": str(row[2] or ""),
+                "telemetry_type": _canonical_telemetry_source(row[3]),
+                "operation_name": str(row[4] or ""),
+                "tool_name": str(row[5] or ""),
+                "tool_call_id": str(row[6] or ""),
+                "error_type": str(row[7] or ""),
+                "tool_ok": str(row[8] or ""),
+                "tool_result": str(row[9] or ""),
+                "tool_arguments": str(row[10] or ""),
+                "structural_tool": str(row[11] or ""),
+                "messages": [str(row[12] or ""), str(row[13] or "")],
+                "timestamp": str(row[14] or ""),
+                "duration": row[15],
+                "span_name": str(row[16] or ""),
+                "terminal_success": str(row[17] or ""),
+                "terminal_output": str(row[18] or ""),
+                "handled_error": str(row[19] or ""),
+                "matched_reference": str(row[20] or ""),
+                "output_messages_present": _telemetry_boolean(
+                    row[21],
+                    field="output-message presence",
+                ),
+                "output_messages_nonempty": _telemetry_boolean(
+                    row[22],
+                    field="output-message nonempty state",
+                ),
+                "agent_name": str(row[23] or ""),
+                "agent_version": str(row[24] or ""),
+                "output_messages_type": str(row[25] or "").casefold(),
             }
             for table in result.tables
             for row in table.rows
         ]
-        return _trace_behavior_summary(rows)
+        return rows
 
     def replay_manifest(self, manifest: dict[str, Any]) -> dict[str, Any]:
         evidence = []
@@ -1206,7 +2613,9 @@ union traces, dependencies, requests
         content_type: str = "application/json",
         retry_statuses: set[int] | None = None,
         retry_no_response: bool = False,
-        timeout_seconds: int = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        retry_unauthorized: bool = True,
+        timeout_seconds: int | float = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        request_deadline: datetime | None = None,
     ) -> dict[str, Any]:
         data = json.dumps(body).encode("utf-8") if body is not None else None
         headers = {
@@ -1236,6 +2645,7 @@ union traces, dependencies, requests
         credential_refreshed = False
         status = 0
         payload = b""
+        response_headers: Mapping[str, str] = {}
         while attempt < max_attempts:
             request = urllib.request.Request(
                 url,
@@ -1243,17 +2653,25 @@ union traces, dependencies, requests
                 headers=headers,
                 method=method,
             )
+            attempt_timeout = timeout_seconds
+            if request_deadline is not None:
+                attempt_timeout = min(
+                    attempt_timeout,
+                    self._remaining_insight_start_seconds(request_deadline),
+                )
             try:
                 with self._progress.heartbeat(f"remote {method} request"):
                     with urllib.request.urlopen(
                         request,
-                        timeout=timeout_seconds,
+                        timeout=attempt_timeout,
                     ) as response:
                         status = response.status
                         payload = response.read()
+                        response_headers = getattr(response, "headers", {})
             except urllib.error.HTTPError as error:
                 status = error.code
                 payload = error.read()
+                response_headers = getattr(error, "headers", {}) or {}
             except (TimeoutError, urllib.error.URLError) as error:
                 attempt += 1
                 no_response_failures += 1
@@ -1271,10 +2689,13 @@ union traces, dependencies, requests
                     )
                     self._sleep(delay)
                     continue
-                raise ContractError(
-                    "Remote operation failed before a response was received"
+                raise RemoteOperationError(
+                    "Remote operation failed before a response was received",
+                    code="remote_no_response",
+                    status=None,
+                    request_accepted=None,
                 ) from error
-            if status == 401 and not credential_refreshed:
+            if status == 401 and retry_unauthorized and not credential_refreshed:
                 self._invalidate_token(_FOUNDRY_SCOPE)
                 headers["Authorization"] = (
                     "Bearer " + self._token_provider(_FOUNDRY_SCOPE)
@@ -1295,29 +2716,110 @@ union traces, dependencies, requests
                 f"({attempt + 1}/{max_attempts})"
             )
             self._sleep(delay)
+        feedback = _rate_limit_values(response_headers)
+        self._rate_limit_feedback.value = feedback
         allowed = expected or {200, 201, 202}
         if status not in allowed:
-            code, message = _remote_error(payload)
-            raise ContractError(
+            code, _ = _remote_error(payload)
+            safe_code = code or f"http_{status}"
+            self.report_progress(
+                f"remote {method} rejected: status={status}; code={safe_code}"
+            )
+            raise RemoteOperationError(
                 f"Remote operation failed with HTTP {status}"
-                + (
-                    f" ({code or 'remote_error'}: {message})"
-                    if code or message
-                    else ""
-                )
+                + (f" ({safe_code})" if safe_code else ""),
+                code=safe_code,
+                status=status,
+                request_accepted=_http_request_accepted(status),
             )
         if not payload:
             value: Any = {}
         else:
             try:
                 value = json.loads(payload)
-            except json.JSONDecodeError:
-                value = {}
+            except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                raise RemoteOperationError(
+                    "Remote operation returned invalid JSON",
+                    code="invalid_json",
+                    status=status,
+                    request_accepted=True,
+                ) from error
         if not isinstance(value, dict):
-            raise ContractError("Remote operation returned an invalid JSON shape")
+            raise RemoteOperationError(
+                "Remote operation returned an invalid JSON shape",
+                code="invalid_json_shape",
+                status=status,
+                request_accepted=True,
+            )
         value["_http_status"] = status
         value["_request_reference"] = request_reference
+        value["_rate_limit"] = feedback
         return value
+
+
+class TelemetryOnlyRuntime:
+    """Read-only Application Insights client with no endpoint transport."""
+
+    def __init__(
+        self,
+        profile: RuntimeProfile,
+        *,
+        token_provider: Callable[[str], str] | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+        utcnow: Callable[[], datetime] = lambda: datetime.now(UTC),
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._profile = profile
+        self._raw_token_provider = token_provider or _azure_cli_token
+        self._sleep = sleep
+        self._utcnow = utcnow
+        self._monotonic = monotonic
+        self._token_lock = threading.Lock()
+        self._token_cache: dict[str, tuple[float, str]] = {}
+        self._telemetry_query_lock = threading.Lock()
+        self._logs_client_instance: Any | None = None
+        self._progress = ProgressReporter("aiq", monotonic=monotonic)
+
+    report_progress = LiveRuntime.report_progress
+    _token_provider = LiveRuntime._token_provider
+    _logs_client = LiveRuntime._logs_client
+    _query_resource = LiveRuntime._query_resource
+    _query_logs_result = LiveRuntime._query_logs_result
+    assert_telemetry_read_access = LiveRuntime.assert_telemetry_read_access
+    wait_for_telemetry = LiveRuntime.wait_for_telemetry
+    telemetry_identity_passes = LiveRuntime.telemetry_identity_passes
+    trace_assertion_evidence_for_requests = (
+        LiveRuntime.trace_assertion_evidence_for_requests
+    )
+    stable_correlated_evidence_for_requests = (
+        LiveRuntime.stable_correlated_evidence_for_requests
+    )
+    _trace_rows = LiveRuntime._trace_rows
+
+
+def _rate_limit_values(
+    headers: Mapping[str, str],
+) -> dict[str, int | float | None]:
+    def integer(name: str) -> int | None:
+        raw = headers.get(name)
+        try:
+            value = int(raw) if raw is not None else None
+        except ValueError:
+            return None
+        return max(0, value) if value is not None else None
+
+    raw_retry = headers.get("Retry-After")
+    try:
+        retry_after = float(raw_retry) if raw_retry is not None else None
+    except ValueError:
+        retry_after = None
+    if retry_after is not None and retry_after < 0:
+        retry_after = None
+    return {
+        "remaining_requests": integer("x-ratelimit-remaining-requests"),
+        "remaining_tokens": integer("x-ratelimit-remaining-tokens"),
+        "retry_after_seconds": retry_after,
+    }
 
 
 def _azure_cli_token(scope: str) -> str:
@@ -1364,6 +2866,176 @@ def _opaque(value: str) -> str:
     return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _telemetry_boolean(value: Any, *, field: str) -> bool:
+    if not isinstance(value, bool):
+        raise ContractError(f"Trace collection returned invalid {field}")
+    return value
+
+
+def _canonical_telemetry_source(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ContractError("Trace collection returned invalid telemetry source")
+    canonical = {
+        "requests": "requests",
+        "apprequests": "requests",
+        "dependencies": "dependencies",
+        "appdependencies": "dependencies",
+        "traces": "traces",
+        "apptraces": "traces",
+    }.get(value.casefold())
+    if canonical is None:
+        raise ContractError("Trace collection returned invalid telemetry source")
+    return canonical
+
+
+def _logs_query_status_class(result: Any, statuses: Any) -> str:
+    if result.status == getattr(statuses, "PARTIAL", None):
+        return "partial result"
+    if result.status == getattr(statuses, "FAILURE", None):
+        return "failed result"
+    return "non-success result"
+
+
+def _permanent_logs_query_failure(result: Any, statuses: Any) -> bool:
+    if result.status != getattr(statuses, "FAILURE", None):
+        return False
+    code = re.sub(r"[^a-z]", "", str(getattr(result, "code", "") or "").lower())
+    return code in _PERMANENT_LOGS_QUERY_ERROR_CODES
+
+
+def _is_invoke_agent_span(row: Mapping[str, Any]) -> bool:
+    return row.get("operation_name") == "invoke_agent"
+
+
+def _canonical_output_messages_state_from_rows(
+    rows: list[dict[str, Any]],
+    operation_ids: tuple[str, ...],
+) -> tuple[tuple[bool, bool], ...] | None:
+    invoke_by_operation: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        operation_id = str(row.get("operation_id") or "").lower()
+        if operation_id in operation_ids and _is_invoke_agent_span(row):
+            invoke_by_operation[operation_id].append(row)
+    if any(not invoke_by_operation[operation_id] for operation_id in operation_ids):
+        return None
+    return tuple(
+        (
+            any(
+                _telemetry_boolean(
+                    row.get("output_messages_present"),
+                    field="output-message presence",
+                )
+                for row in invoke_by_operation[operation_id]
+            ),
+            any(
+                _telemetry_boolean(
+                    row.get("output_messages_nonempty"),
+                    field="output-message nonempty state",
+                )
+                for row in invoke_by_operation[operation_id]
+            ),
+        )
+        for operation_id in operation_ids
+    )
+
+
+def _canonical_output_messages_state_from_correlated_rows(
+    correlated: tuple[list[dict[str, Any]], ...],
+) -> tuple[tuple[bool, bool], ...] | None:
+    if any(not any(_is_invoke_agent_span(row) for row in rows) for rows in correlated):
+        return None
+    return tuple(
+        (
+            any(
+                _telemetry_boolean(
+                    row.get("output_messages_present"),
+                    field="output-message presence",
+                )
+                for row in rows
+                if _is_invoke_agent_span(row)
+            ),
+            any(
+                _telemetry_boolean(
+                    row.get("output_messages_nonempty"),
+                    field="output-message nonempty state",
+                )
+                for row in rows
+                if _is_invoke_agent_span(row)
+            ),
+        )
+        for rows in correlated
+    )
+
+
+def _semantic_assertion_results_from_correlated_rows(
+    correlated: tuple[list[dict[str, Any]], ...],
+    response_references: tuple[str, ...],
+    fixtures: tuple[dict[str, Any], ...],
+) -> tuple[tuple[SemanticAssertionEvidence, ...], ...] | None:
+    results = []
+    for rows, response_reference, fixture in zip(
+        correlated,
+        response_references,
+        fixtures,
+        strict=True,
+    ):
+        anchors = [
+            row
+            for row in rows
+            if _is_invoke_agent_span(row)
+            and row.get("matched_reference") == response_reference
+        ]
+        if len(anchors) != 1:
+            return None
+        output = _json_trace_value(anchors[0].get("messages", ["", ""])[1])
+        if not isinstance(output, list):
+            return None
+        _, _, assertions = _semantic_assertion_result(
+            _telemetry_output_response(output),
+            fixture,
+        )
+        results.append(assertions)
+    return tuple(results)
+
+
+def _telemetry_output_response(output: list[Any]) -> dict[str, Any]:
+    texts: list[str] = []
+    for item in output:
+        if not isinstance(item, Mapping):
+            continue
+        content = item.get("content")
+        if isinstance(content, str) and content.strip():
+            texts.append(content.strip())
+        values = content if isinstance(content, list) else item.get("parts", [])
+        if not isinstance(values, list):
+            continue
+        for part in values:
+            if not isinstance(part, Mapping):
+                continue
+            text = part.get("text")
+            if not isinstance(text, str):
+                text = part.get("content")
+            if isinstance(text, str) and text.strip():
+                texts.append(text.strip())
+    return {
+        "output": [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": "\n".join(texts)}],
+            }
+        ]
+    }
+
+
+def _canonical_output_messages_expectation_passes(
+    state: tuple[bool, bool],
+    *,
+    expect_present: bool,
+) -> bool:
+    present, nonempty = state
+    return present and nonempty if expect_present else not present
+
+
 def _remote_error(payload: bytes) -> tuple[str, str]:
     try:
         value = json.loads(payload)
@@ -1377,31 +3049,100 @@ def _remote_error(payload: bytes) -> tuple[str, str]:
     return code, message
 
 
+def _http_request_accepted(status: int) -> bool | None:
+    if 400 <= status < 500 and status != 408:
+        return False
+    return None
+
+
+def _previous_response_propagation_pending(
+    error: RemoteOperationError,
+) -> bool:
+    return (
+        error.request_accepted is False
+        and error.status == 404
+        and error.code in {"NotFound", "previous_response_not_found"}
+    )
+
+
+def _prompt_agent_route_propagation_pending(
+    error: RemoteOperationError,
+    *,
+    body: Mapping[str, Any],
+    agent_name: str,
+    foundry_version: str,
+) -> bool:
+    return (
+        bool(agent_name)
+        and bool(foundry_version)
+        and body.get("store") is True
+        and "previous_response_id" not in body
+        and body.get("agent_reference")
+        == {
+            "type": "agent_reference",
+            "name": agent_name,
+            "version": foundry_version,
+        }
+        and error.request_accepted is False
+        and error.status == 404
+        and error.code == "NotFound"
+    )
+
+
+def _hosted_session_route_propagation_pending(
+    error: RemoteOperationError,
+) -> bool:
+    return (
+        error.request_accepted is False
+        and error.status == 404
+        and error.code == "NotFound"
+    )
+
+
+def _hosted_route_activation_propagation_pending(
+    error: RemoteOperationError,
+) -> bool:
+    return (
+        error.request_accepted is False
+        and error.status == 404
+        and error.code == "NotFound"
+    )
+
+
 def _trace_contract_ready(
     tables: list[Any],
     operation_ids: tuple[str, ...],
-    required_operations: tuple[str, ...],
+    required_operations_by_request: tuple[tuple[str, ...], ...],
 ) -> bool:
+    if len(operation_ids) != len(required_operations_by_request):
+        return False
+    required_by_operation = dict(
+        zip(operation_ids, required_operations_by_request, strict=True)
+    )
     seen_ids: set[str] = set()
-    observed_operations: set[str] = set()
+    observed_by_operation: dict[str, set[str]] = defaultdict(set)
     for table in tables:
         for row in table.rows:
             operation_id = str(row[0]).lower()
-            if not _TRACE_ID.fullmatch(operation_id):
+            if (
+                not _TRACE_ID.fullmatch(operation_id)
+                or operation_id not in required_by_operation
+            ):
                 continue
             seen_ids.add(operation_id)
             operations = row[1]
             if isinstance(operations, str):
                 operations = json.loads(operations)
             if isinstance(operations, list):
-                observed_operations.update(
+                observed_by_operation[operation_id].update(
                     str(value) for value in operations if value
                 )
             if int(row[2]) < 1 or int(row[3]) < 1:
                 return False
-    return (
-        seen_ids == set(operation_ids)
-        and not (set(required_operations) - observed_operations)
+    return seen_ids == set(operation_ids) and all(
+        set(required_by_operation[operation_id])
+        <= observed_by_operation[operation_id]
+        for operation_id in operation_ids
     )
 
 
@@ -1413,6 +3154,10 @@ def _trace_behavior_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     error_codes: Counter[str] = Counter()
     recorded_errors: set[tuple[str, str]] = set()
     assistant_response_operations: set[str] = set()
+    explicit_terminal_success_operations: set[str] = set()
+    explicit_terminal_output_operations: set[str] = set()
+    handled_error_rows = 0
+    unhandled_error_rows = 0
     seen_messages: set[tuple[str, str]] = set()
     terminal_snapshots: dict[str, tuple[tuple[str, str], list[Any]]] = {}
 
@@ -1506,6 +3251,15 @@ def _trace_behavior_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
     for row_index, row in enumerate(rows):
         operation_id = row["operation_id"]
+        handled = row.get("handled_error", "").casefold() == "true"
+        if row.get("terminal_success", "").casefold() == "true":
+            explicit_terminal_success_operations.add(operation_id)
+        if row.get("terminal_output", "").casefold() == "true":
+            explicit_terminal_output_operations.add(operation_id)
+        if handled and row.get("error_type"):
+            handled_error_rows += 1
+        elif row.get("error_type"):
+            unhandled_error_rows += 1
         if row["operation_name"] == "execute_tool":
             tool_name = row["tool_name"] or "unknown"
             call_id = row.get("tool_call_id", "")
@@ -1570,6 +3324,12 @@ def _trace_behavior_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         )
         call_counts[canonical] += 1
     call_counts.update(anonymous_calls)
+    terminal_success_operations = (
+        assistant_response_operations | explicit_terminal_success_operations
+    )
+    terminal_output_operations = (
+        assistant_response_operations | explicit_terminal_output_operations
+    )
     return {
         "operation_count": len({row["operation_id"] for row in rows}),
         "tool_call_counts": dict(sorted(call_counts.items())),
@@ -1577,7 +3337,885 @@ def _trace_behavior_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "successful_tool_response_count": len(successful_responses),
         "error_codes": dict(sorted(error_codes.items())),
         "assistant_response_count": len(assistant_response_operations),
+        "explicit_terminal_success_count": len(
+            explicit_terminal_success_operations
+        ),
+        "explicit_terminal_output_count": len(
+            explicit_terminal_output_operations
+        ),
+        "terminal_success_count": len(terminal_success_operations),
+        "terminal_output_count": len(terminal_output_operations),
+        "terminal_response_count": len(
+            terminal_success_operations & terminal_output_operations
+        ),
+        "handled_error_count": handled_error_rows,
+        "unhandled_error_count": unhandled_error_rows,
     }
+
+
+def _correlated_request_rows(
+    rows: list[dict[str, Any]],
+    response_references: tuple[str, ...],
+    operation_ids: tuple[str, ...],
+    *,
+    agent_name: str,
+    foundry_version: str,
+) -> tuple[tuple[list[dict[str, Any]], ...], tuple[str, ...]] | None:
+    if (
+        len(response_references) != len(operation_ids)
+        or len(set(response_references)) != len(response_references)
+        or any(not value for value in response_references)
+    ):
+        return None
+    allowed_operations = set(operation_ids)
+    rows_by_operation: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        operation_id = str(row.get("operation_id") or "").lower()
+        if (
+            operation_id not in allowed_operations
+            or not str(row.get("span_id") or "")
+        ):
+            continue
+        rows_by_operation[operation_id].append(row)
+    if set(rows_by_operation) != allowed_operations:
+        return None
+    bindings: list[tuple[str, str, dict[str, Any], set[str]]] = []
+    for reference, operation_id in zip(
+        response_references,
+        operation_ids,
+        strict=True,
+    ):
+        operation_rows = rows_by_operation[operation_id]
+        candidates = [
+            row
+            for row in operation_rows
+            if str(row.get("matched_reference") or "") == reference
+            and str(row.get("operation_name") or "") == "invoke_agent"
+            and str(row.get("agent_name") or "") == agent_name
+            and str(row.get("agent_version") or "") == foundry_version
+        ]
+        allowed_transport_span_ids: set[str] = set()
+        if len(candidates) == 2:
+            request_candidates = [
+                row
+                for row in candidates
+                if row.get("telemetry_type") == "requests"
+            ]
+            dependency_candidates = [
+                row
+                for row in candidates
+                if row.get("telemetry_type") == "dependencies"
+                and str(row.get("parent_span_id") or "")
+            ]
+            if (
+                len(request_candidates) != 1
+                or len(dependency_candidates) != 1
+            ):
+                return None
+            anchor = dependency_candidates[0]
+            allowed_transport_span_ids.add(
+                str(request_candidates[0].get("span_id") or "")
+            )
+        elif len(candidates) == 1:
+            anchor = candidates[0]
+        else:
+            return None
+        bindings.append(
+            (
+                reference,
+                operation_id,
+                anchor,
+                allowed_transport_span_ids,
+            )
+        )
+    if any(
+        not _valid_span_graph(operation_rows)
+        for operation_id, operation_rows in rows_by_operation.items()
+    ):
+        return None
+    correlated: list[list[dict[str, Any]]] = []
+    anchors: list[str] = []
+    used_span_ids: set[str] = set()
+    for reference, operation_id, anchor, allowed_transport_span_ids in bindings:
+        operation_rows = rows_by_operation[operation_id]
+        anchor_span_id = str(anchor.get("span_id") or "")
+        selected = _rows_for_response_anchor(operation_rows, anchor_span_id)
+        selected_ids = {str(row.get("span_id") or "") for row in selected}
+        if (
+            not selected
+            or anchor_span_id in used_span_ids
+            or used_span_ids.intersection(selected_ids)
+            or any(
+                str(row.get("matched_reference") or "") == reference
+                and str(row.get("span_id") or "")
+                not in selected_ids | allowed_transport_span_ids
+                for row in operation_rows
+            )
+            or any(
+                str(row.get("matched_reference") or "")
+                not in {"", reference}
+                for row in selected
+            )
+        ):
+            return None
+        used_span_ids.update(selected_ids)
+        anchors.append(anchor_span_id)
+        correlated.append(selected)
+    return tuple(correlated), tuple(anchors)
+
+
+def _valid_span_graph(
+    rows: list[dict[str, Any]],
+) -> bool:
+    by_span: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        span_id = str(row.get("span_id") or "")
+        if not span_id or span_id in by_span:
+            return False
+        by_span[span_id] = row
+    for span_id, row in by_span.items():
+        parent = str(row.get("parent_span_id") or "")
+        if parent == span_id:
+            return False
+    for span_id in by_span:
+        seen: set[str] = set()
+        current = span_id
+        while current in by_span:
+            if current in seen:
+                return False
+            seen.add(current)
+            current = str(by_span[current].get("parent_span_id") or "")
+    return True
+
+
+def _rows_for_response_anchor(
+    rows: list[dict[str, Any]],
+    anchor_span_id: str,
+) -> list[dict[str, Any]]:
+    by_span = {str(row["span_id"]): row for row in rows}
+    if anchor_span_id not in by_span:
+        return []
+    children: dict[str, list[str]] = defaultdict(list)
+    for row in rows:
+        parent_span_id = str(row.get("parent_span_id") or "")
+        if parent_span_id:
+            children[parent_span_id].append(str(row["span_id"]))
+    selected: list[dict[str, Any]] = []
+    pending = [anchor_span_id]
+    seen: set[str] = set()
+    while pending:
+        span_id = pending.pop()
+        if span_id in seen:
+            return []
+        seen.add(span_id)
+        selected.append(by_span[span_id])
+        pending.extend(children.get(span_id, []))
+    return selected
+
+
+def _request_correlation_impossible(
+    rows: list[dict[str, Any]],
+    response_references: tuple[str, ...],
+) -> bool:
+    return bool(_ambiguous_response_references(rows, response_references))
+
+
+def _ambiguous_response_references(
+    rows: list[dict[str, Any]],
+    response_references: tuple[str, ...],
+) -> frozenset[str]:
+    expected_references = set(response_references)
+    operations_by_reference: dict[str, set[str]] = defaultdict(set)
+    for row in rows:
+        operation_id = str(row.get("operation_id") or "").lower()
+        reference = str(row.get("matched_reference") or "")
+        if (
+            _TRACE_ID.fullmatch(operation_id) is None
+            or reference not in expected_references
+        ):
+            continue
+        operations_by_reference[reference].add(operation_id)
+    return frozenset(
+        reference
+        for reference, operations in operations_by_reference.items()
+        if len(operations) > 1
+    )
+
+
+def _matched_trace_response_reference_count(
+    rows: list[dict[str, Any]],
+    response_references: tuple[str, ...],
+    operation_ids: tuple[str, ...],
+    *,
+    agent_name: str,
+    foundry_version: str,
+) -> int:
+    if (
+        len(response_references) != len(operation_ids)
+        or len(set(response_references)) != len(response_references)
+        or any(not value for value in response_references)
+    ):
+        return 0
+    ambiguous = _ambiguous_response_references(rows, response_references)
+    candidates: list[frozenset[str]] = []
+    for reference, operation_id in zip(
+        response_references,
+        operation_ids,
+        strict=True,
+    ):
+        if reference in ambiguous:
+            continue
+        correlation = _correlated_request_rows(
+            rows,
+            (reference,),
+            (operation_id,),
+            agent_name=agent_name,
+            foundry_version=foundry_version,
+        )
+        if correlation is not None:
+            candidates.append(
+                frozenset(
+                    str(row.get("span_id") or "")
+                    for row in correlation[0][0]
+                )
+            )
+    return sum(
+        not any(
+            position != other_position and spans.intersection(other_spans)
+            for other_position, other_spans in enumerate(candidates)
+        )
+        for position, spans in enumerate(candidates)
+    )
+
+
+def _trace_rows_signature(rows: list[dict[str, Any]]) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            json.dumps(row, sort_keys=True, ensure_ascii=True, default=str)
+            for row in rows
+        )
+    )
+
+
+def _trace_assertion_stability_signature(
+    rows: list[dict[str, Any]],
+    correlated: tuple[list[dict[str, Any]], ...],
+    response_references: tuple[str, ...],
+    results: tuple[tuple[TraceAssertionEvidence, ...], ...],
+) -> tuple[
+    tuple[tuple[str, str], ...],
+    tuple[tuple[tuple[str, bool], ...], ...],
+    tuple[str, ...],
+]:
+    correlation = tuple(
+        (
+            reference,
+            str(request_rows[0].get("operation_id") or "").lower(),
+        )
+        for reference, request_rows in zip(
+            response_references,
+            correlated,
+            strict=True,
+        )
+    )
+    assertion_results = tuple(
+        tuple((assertion.assertion, assertion.passed) for assertion in request_results)
+        for request_results in results
+    )
+    return correlation, assertion_results, _trace_rows_signature(
+        [row for request_rows in correlated for row in request_rows]
+    )
+
+
+def _trace_assertion_signature_change_diagnostic(
+    previous: tuple[Any, ...],
+    current: tuple[Any, ...],
+) -> str | None:
+    if len(previous) != 3 or len(current) != 3:
+        return None
+    changed = tuple(
+        index
+        for index, (before, after) in enumerate(
+            zip(previous, current, strict=True)
+        )
+        if before != after
+    )
+    if len(changed) > 1:
+        return _TRACE_ASSERTION_MULTIPLE_CHANGE_DIAGNOSTIC
+    if len(changed) == 1:
+        return _TRACE_ASSERTION_SIGNATURE_CHANGE_DIAGNOSTICS[changed[0]]
+    return None
+
+
+def _trace_assertion_activation_error(
+    message: str,
+    *,
+    code: str | None,
+    matched_reference_count: int,
+    expected_reference_count: int,
+) -> TraceAssertionActivationError:
+    error = TraceAssertionActivationError(message)
+    if (
+        code not in _TRACE_ASSERTION_DIAGNOSTICS
+        or not isinstance(matched_reference_count, int)
+        or isinstance(matched_reference_count, bool)
+        or not isinstance(expected_reference_count, int)
+        or isinstance(expected_reference_count, bool)
+        or expected_reference_count < 1
+        or not 0 <= matched_reference_count <= expected_reference_count
+    ):
+        return error
+    error.code = code
+    error.matched_reference_count = matched_reference_count
+    error.expected_reference_count = expected_reference_count
+    error.missing_reference_count = (
+        expected_reference_count - matched_reference_count
+    )
+    return error
+
+
+def _json_trace_value(value: Any) -> Any:
+    parsed = value
+    for _ in range(2):
+        if not isinstance(parsed, str) or not parsed.strip().startswith(("{", "[")):
+            break
+        try:
+            parsed = json.loads(parsed)
+        except json.JSONDecodeError:
+            break
+    return parsed
+
+
+def _kql_string_literal(value: str) -> str:
+    return json.dumps(value, ensure_ascii=True)
+
+
+def _nested_value(value: Any, path: str) -> Any:
+    current = value
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def _result_class(row: dict[str, Any]) -> str:
+    if str(row.get("error_type") or ""):
+        return "error"
+    tool_ok = str(row.get("tool_ok") or "").casefold()
+    result = _json_trace_value(row.get("tool_result"))
+    if tool_ok == "false" or (
+        isinstance(result, dict) and isinstance(result.get("error"), dict)
+    ):
+        return "error"
+    if tool_ok == "true" or result not in (None, ""):
+        return "success"
+    return "unknown"
+
+
+def _tool_rows(
+    rows: list[dict[str, Any]],
+    tool_name: str,
+) -> list[dict[str, Any]]:
+    matching = [
+            row
+            for row in rows
+            if row.get("operation_name") == "execute_tool"
+            and row.get("tool_name") == tool_name
+        ]
+    structural = [row for row in matching if row.get("structural_tool")]
+    return sorted(
+        structural or matching,
+        key=lambda row: (str(row.get("timestamp") or ""), str(row.get("span_name") or "")),
+    )
+
+
+def _terminal_text(rows: list[dict[str, Any]]) -> str:
+    candidates: list[tuple[str, str]] = []
+    for row in rows:
+        messages = row.get("messages")
+        if not isinstance(messages, list) or len(messages) < 2:
+            continue
+        parsed = _json_trace_value(messages[1])
+        if not isinstance(parsed, list) or not parsed:
+            continue
+        message = parsed[-1]
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        parts = message.get("parts")
+        if not isinstance(parts, list):
+            parts = message.get("content")
+        if not isinstance(parts, list):
+            continue
+        text = " ".join(
+            str(part.get("content") or part.get("text") or "").strip()
+            for part in parts
+            if isinstance(part, dict)
+            and part.get("type") in {"text", "output_text"}
+            and str(part.get("content") or part.get("text") or "").strip()
+        )
+        if text:
+            candidates.append((str(row.get("timestamp") or ""), text))
+    return max(candidates, default=("", ""))[1]
+
+
+def _request_text(body: dict[str, Any]) -> str:
+    values: list[str] = []
+    for message in body.get("input", []):
+        if not isinstance(message, dict):
+            continue
+        for content in message.get("content", []):
+            if isinstance(content, dict) and isinstance(content.get("text"), str):
+                values.append(content["text"])
+    return "\n".join(values)
+
+
+def _scope_values(text: str, scope_kind: str) -> list[str]:
+    patterns = {
+        "account": r"\bacct-demo-[a-z]+\b",
+        "trip": r"\btrip-[a-z]+\b",
+    }
+    return re.findall(patterns[scope_kind], text.casefold())
+
+
+def _duration_seconds(value: Any) -> float:
+    if hasattr(value, "total_seconds"):
+        return float(value.total_seconds())
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value) / 1000.0
+    text = str(value or "")
+    match = re.fullmatch(
+        r"(?:(\d+)\.)?(\d{1,2}):(\d{2}):(\d{2}(?:\.\d+)?)",
+        text,
+    )
+    if not match:
+        return 0.0
+    days, hours, minutes, seconds = match.groups()
+    return (
+        float(days or 0) * 86400
+        + float(hours) * 3600
+        + float(minutes) * 60
+        + float(seconds)
+    )
+
+
+def _span_interval(row: dict[str, Any]) -> tuple[datetime, datetime] | None:
+    try:
+        start = datetime.fromisoformat(str(row.get("timestamp") or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return start, start + timedelta(seconds=_duration_seconds(row.get("duration")))
+
+
+_TRACE_ASSERTION_FIELDS = {
+    "tool_call_count": {"name", "kind", "tool_name", "count"},
+    "tool_argument_presence": {
+        "name",
+        "kind",
+        "tool_name",
+        "argument",
+        "present",
+    },
+    "scope_relation": {
+        "name",
+        "kind",
+        "tool_name",
+        "scope_kind",
+        "request_scope",
+        "argument",
+        "result_field",
+        "request_tool_equal",
+        "request_result_equal",
+        "tool_result_equal",
+    },
+    "tool_result_class": {"name", "kind", "tool_name", "result_class"},
+    "retry_sequence": {"name", "kind", "tool_name", "result_sequence"},
+    "terminal_claim_relation": {
+        "name",
+        "kind",
+        "tool_name",
+        "result_class",
+        "result_path",
+        "relation",
+        "required_terms_all",
+        "forbidden_terms",
+    },
+    "payload_multiplicity": {
+        "name",
+        "kind",
+        "source",
+        "tool_name",
+        "path",
+        "minimum",
+        "maximum",
+    },
+    "span_relation": {
+        "name",
+        "kind",
+        "first_tool",
+        "second_tool",
+        "relation",
+    },
+    "operation_sequence": {
+        "name",
+        "kind",
+        "operations",
+    },
+}
+
+
+def _normalize_trace_assertions(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ContractError("Traffic trace assertions must be an array")
+    assertions: list[dict[str, Any]] = []
+    names: set[str] = set()
+    for raw in value:
+        if not isinstance(raw, dict):
+            raise ContractError("Traffic trace assertion must be an object")
+        name = raw.get("name")
+        kind = raw.get("kind")
+        if (
+            not isinstance(name, str)
+            or re.fullmatch(r"[a-z][a-z0-9_]*", name) is None
+            or name in names
+            or kind not in _TRACE_ASSERTION_FIELDS
+            or not set(raw).issubset(_TRACE_ASSERTION_FIELDS[str(kind)])
+        ):
+            raise ContractError("Traffic trace assertion definition is invalid")
+        names.add(name)
+        assertion = dict(raw)
+        tool_name = assertion.get("tool_name")
+        if kind in {
+            "tool_call_count",
+            "tool_argument_presence",
+            "scope_relation",
+            "tool_result_class",
+            "retry_sequence",
+            "terminal_claim_relation",
+        } and (not isinstance(tool_name, str) or not tool_name):
+            raise ContractError("Traffic trace assertion tool name is invalid")
+        if kind == "tool_call_count" and (
+            not isinstance(assertion.get("count"), int)
+            or isinstance(assertion["count"], bool)
+            or assertion["count"] < 0
+        ):
+            raise ContractError("Traffic trace assertion count is invalid")
+        if kind == "tool_argument_presence" and (
+            not isinstance(assertion.get("argument"), str)
+            or not assertion["argument"]
+            or not isinstance(assertion.get("present"), bool)
+        ):
+            raise ContractError("Traffic trace argument assertion is invalid")
+        if kind == "scope_relation":
+            if (
+                assertion.get("scope_kind") not in {"account", "trip"}
+                or assertion.get("request_scope") not in {"first", "last"}
+                or not isinstance(assertion.get("argument"), str)
+                or not assertion["argument"]
+                or not isinstance(assertion.get("request_tool_equal"), bool)
+            ):
+                raise ContractError("Traffic trace scope assertion is invalid")
+            for key in ("request_result_equal", "tool_result_equal"):
+                if key in assertion and not isinstance(assertion[key], bool):
+                    raise ContractError("Traffic trace scope assertion is invalid")
+            if any(
+                key in assertion
+                for key in ("request_result_equal", "tool_result_equal")
+            ) and (
+                not isinstance(assertion.get("result_field"), str)
+                or not assertion["result_field"]
+            ):
+                raise ContractError("Traffic trace result scope is invalid")
+        if kind == "tool_result_class" and assertion.get("result_class") not in {
+            "success",
+            "error",
+        }:
+            raise ContractError("Traffic trace result class is invalid")
+        if kind == "retry_sequence":
+            sequence = assertion.get("result_sequence")
+            if (
+                not isinstance(sequence, list)
+                or not sequence
+                or any(item not in {"success", "error"} for item in sequence)
+            ):
+                raise ContractError("Traffic trace retry sequence is invalid")
+        if kind == "operation_sequence":
+            operations = assertion.get("operations")
+            if (
+                not isinstance(operations, list)
+                or not operations
+                or any(
+                    item not in {"invoke_agent", "execute_tool", "chat"}
+                    for item in operations
+                )
+            ):
+                raise ContractError("Traffic operation sequence is invalid")
+        if kind == "terminal_claim_relation":
+            if assertion.get("result_class") not in {
+                None,
+                "success",
+                "error",
+                "mixed",
+            }:
+                raise ContractError("Traffic terminal result class is invalid")
+            relation = assertion.get("relation")
+            if relation not in {None, "includes_result", "excludes_result"}:
+                raise ContractError("Traffic terminal relation is invalid")
+            if relation and (
+                not isinstance(assertion.get("result_path"), str)
+                or not assertion["result_path"]
+            ):
+                raise ContractError("Traffic terminal result path is invalid")
+            for key in ("required_terms_all", "forbidden_terms"):
+                terms = assertion.get(key, [])
+                if not isinstance(terms, list) or not all(
+                    isinstance(term, str) and term for term in terms
+                ):
+                    raise ContractError("Traffic terminal terms are invalid")
+            if not any(
+                key in assertion
+                for key in (
+                    "result_class",
+                    "relation",
+                    "required_terms_all",
+                    "forbidden_terms",
+                )
+            ):
+                raise ContractError("Traffic terminal relation is empty")
+        if kind == "payload_multiplicity":
+            source = assertion.get("source")
+            if source not in {"input_messages", "tool_result"}:
+                raise ContractError("Traffic payload source is invalid")
+            if source == "tool_result" and (
+                not isinstance(assertion.get("tool_name"), str)
+                or not assertion["tool_name"]
+                or not isinstance(assertion.get("path"), str)
+                or not assertion["path"]
+            ):
+                raise ContractError("Traffic tool payload assertion is invalid")
+            for key in ("minimum", "maximum"):
+                if key in assertion and (
+                    not isinstance(assertion[key], int)
+                    or isinstance(assertion[key], bool)
+                    or assertion[key] < 1
+                ):
+                    raise ContractError("Traffic payload bound is invalid")
+            if "minimum" not in assertion:
+                raise ContractError("Traffic payload minimum is required")
+            if assertion.get("maximum", assertion["minimum"]) < assertion["minimum"]:
+                raise ContractError("Traffic payload bounds are invalid")
+        if kind == "span_relation" and (
+            not isinstance(assertion.get("first_tool"), str)
+            or not assertion["first_tool"]
+            or not isinstance(assertion.get("second_tool"), str)
+            or not assertion["second_tool"]
+            or assertion.get("relation") not in {"overlap", "ordered"}
+        ):
+            raise ContractError("Traffic span relation is invalid")
+        assertions.append(assertion)
+    return assertions
+
+
+def _trace_assertion_names(assertions: list[dict[str, Any]]) -> tuple[str, ...]:
+    return tuple(assertion["name"] for assertion in _normalize_trace_assertions(assertions))
+
+
+def _trace_assertion_result(
+    rows: list[dict[str, Any]],
+    fixture: dict[str, Any],
+) -> tuple[TraceAssertionEvidence, ...]:
+    results: list[TraceAssertionEvidence] = []
+    request_text = _request_text(fixture["body"])
+    for assertion in fixture.get("trace_assertions", []):
+        kind = assertion["kind"]
+        tool_name = str(assertion.get("tool_name") or "")
+        tools = _tool_rows(rows, tool_name) if tool_name else []
+        passed = False
+        if kind == "tool_call_count":
+            passed = len(tools) == assertion["count"]
+        elif kind == "tool_argument_presence":
+            parsed_arguments = [
+                _json_trace_value(row.get("tool_arguments")) for row in tools
+            ]
+            passed = bool(tools) and all(
+                isinstance(arguments, dict)
+                and (
+                    (assertion["argument"] in arguments)
+                    is assertion["present"]
+                )
+                for arguments in parsed_arguments
+            )
+        elif kind == "scope_relation":
+            scopes = _scope_values(request_text, assertion["scope_kind"])
+            selected = (
+                scopes[0]
+                if scopes and assertion["request_scope"] == "first"
+                else scopes[-1] if scopes else None
+            )
+            comparisons: list[bool] = []
+            for row in tools:
+                arguments = _json_trace_value(row.get("tool_arguments"))
+                result = _json_trace_value(row.get("tool_result"))
+                tool_scope = (
+                    _nested_value(arguments, assertion["argument"])
+                    if isinstance(arguments, dict)
+                    else None
+                )
+                result_scope = (
+                    _nested_value(result, assertion["result_field"])
+                    if isinstance(result, dict) and assertion.get("result_field")
+                    else None
+                )
+                checks = [
+                    isinstance(arguments, dict)
+                    and assertion["argument"] in arguments
+                    and bool(tool_scope == selected)
+                    is assertion["request_tool_equal"]
+                ]
+                if "request_result_equal" in assertion:
+                    checks.append(
+                        bool(result_scope == selected)
+                        is assertion["request_result_equal"]
+                    )
+                if "tool_result_equal" in assertion:
+                    checks.append(
+                        bool(tool_scope == result_scope)
+                        is assertion["tool_result_equal"]
+                    )
+                comparisons.append(all(checks))
+            passed = bool(scopes and tools) and all(comparisons)
+        elif kind == "tool_result_class":
+            passed = bool(tools) and all(
+                _result_class(row) == assertion["result_class"] for row in tools
+            )
+        elif kind == "retry_sequence":
+            passed = [
+                _result_class(row) for row in tools
+            ] == assertion["result_sequence"]
+        elif kind == "terminal_claim_relation":
+            text = _terminal_text(rows)
+            folded = text.casefold()
+            classes = {_result_class(row) for row in tools}
+            expected_class = assertion.get("result_class")
+            class_matches = (
+                expected_class is None
+                or (expected_class == "mixed" and {"error", "success"} <= classes)
+                or (expected_class != "mixed" and classes == {expected_class})
+            )
+            relation = assertion.get("relation")
+            relation_matches = True
+            if relation:
+                values = [
+                    _nested_value(
+                        _json_trace_value(row.get("tool_result")),
+                        assertion["result_path"],
+                    )
+                    for row in tools
+                ]
+                rendered = [
+                    str(value).casefold() for value in values if value is not None
+                ]
+                relation_matches = bool(rendered) and (
+                    all(value in folded for value in rendered)
+                    if relation == "includes_result"
+                    else all(value not in folded for value in rendered)
+                )
+            passed = (
+                bool(text)
+                and class_matches
+                and relation_matches
+                and all(
+                    str(term).casefold() in folded
+                    for term in assertion.get("required_terms_all", [])
+                )
+                and all(
+                    str(term).casefold() not in folded
+                    for term in assertion.get("forbidden_terms", [])
+                )
+            )
+        elif kind == "payload_multiplicity":
+            counts: list[int] = []
+            if assertion["source"] == "input_messages":
+                for row in rows:
+                    if row.get("operation_name") != "chat":
+                        continue
+                    messages = row.get("messages")
+                    if not isinstance(messages, list) or not messages:
+                        continue
+                    parsed = _json_trace_value(messages[0])
+                    if not isinstance(parsed, list):
+                        continue
+                    item_counts = Counter(
+                        json.dumps(item, sort_keys=True, ensure_ascii=True)
+                        for item in parsed
+                    )
+                    counts.append(max(item_counts.values(), default=0))
+            else:
+                for row in tools:
+                    value = _nested_value(
+                        _json_trace_value(row.get("tool_result")),
+                        assertion["path"],
+                    )
+                    if isinstance(value, int) and not isinstance(value, bool):
+                        counts.append(value)
+            observed_counts = (
+                [max(counts)]
+                if counts and assertion["source"] == "input_messages"
+                else counts
+            )
+            passed = bool(observed_counts) and all(
+                count >= assertion["minimum"]
+                and (
+                    "maximum" not in assertion
+                    or count <= assertion["maximum"]
+                )
+                for count in observed_counts
+            )
+        elif kind == "span_relation":
+            first = _tool_rows(rows, assertion["first_tool"])
+            second = _tool_rows(rows, assertion["second_tool"])
+            pairs = [
+                (left_interval, right_interval)
+                for left in first
+                for right in second
+                if (left_interval := _span_interval(left)) is not None
+                and (right_interval := _span_interval(right)) is not None
+            ]
+            if assertion["relation"] == "overlap":
+                passed = bool(pairs) and any(
+                    left[0] < right[1] and right[0] < left[1]
+                    for left, right in pairs
+                )
+            else:
+                passed = bool(pairs) and all(
+                    left[1] <= right[0] for left, right in pairs
+                )
+        elif kind == "operation_sequence":
+            observed = [
+                str(row.get("operation_name") or "")
+                for row in sorted(
+                    rows,
+                    key=lambda item: str(item.get("timestamp") or ""),
+                )
+                if row.get("operation_name")
+            ]
+            position = 0
+            for operation in observed:
+                if (
+                    position < len(assertion["operations"])
+                    and operation == assertion["operations"][position]
+                ):
+                    position += 1
+            passed = position == len(assertion["operations"])
+        results.append(
+            TraceAssertionEvidence(
+                assertion=str(assertion["name"]),
+                passed=bool(passed),
+            )
+        )
+    return tuple(results)
 
 
 def _usable_response(response: dict[str, Any], expected_status: int) -> bool:
@@ -1615,40 +4253,182 @@ def _response_text(response: dict[str, Any]) -> str:
     return "\n".join(values)
 
 
+def _semantic_assertion_names(assertions: dict[str, Any]) -> tuple[str, ...]:
+    ordered = (
+        "response_format",
+        "exact_text",
+        "json_schema",
+        "exact_json_fields",
+        "casefold_json_fields",
+        "exact_json",
+        "required_terms_all",
+        "required_terms_any",
+        "forbidden_terms",
+        "required_claims",
+        "forbidden_claims",
+        "question_only",
+        "minimum_term_occurrences",
+        "max_words",
+        "min_words",
+        "max_characters",
+    )
+    return tuple(
+        name
+        for name in ordered
+        if name in assertions
+        and (
+            name == "exact_json"
+            or (
+                assertions[name] is not None
+                and assertions[name] != []
+            )
+        )
+    )
+
+
 def _semantic_assertion_result(
     response: dict[str, Any],
     fixture: dict[str, Any],
-) -> tuple[int, int]:
+) -> tuple[int, int, tuple[SemanticAssertionEvidence, ...]]:
     assertions = fixture.get("semantic_assertions", {})
     if not assertions:
-        return 0, 0
+        return 0, 0, ()
     text = _response_text(response)
     folded = text.casefold()
-    results = []
+    results: list[SemanticAssertionEvidence] = []
+
+    def record(assertion: str, passed: bool) -> None:
+        results.append(
+            SemanticAssertionEvidence(assertion=assertion, passed=bool(passed))
+        )
+
+    parsed_json: Any = None
+    valid_json = False
+    if text:
+        try:
+            parsed_json = json.loads(text)
+            valid_json = True
+        except json.JSONDecodeError:
+            pass
     response_format = assertions.get("response_format")
     if response_format:
-        valid_json = False
-        if text:
-            try:
-                json.loads(text)
-                valid_json = True
-            except json.JSONDecodeError:
-                pass
-        results.append(
+        record(
+            "response_format",
             valid_json if response_format == "json" else bool(text) and not valid_json
+        )
+    exact_text = assertions.get("exact_text")
+    if exact_text is not None:
+        record("exact_text", text == exact_text)
+    json_schema = assertions.get("json_schema")
+    if json_schema:
+        record(
+            "json_schema",
+            valid_json
+            and not list(Draft202012Validator(json_schema).iter_errors(parsed_json)),
+        )
+    exact_json_fields = assertions.get("exact_json_fields")
+    if exact_json_fields is not None:
+        record(
+            "exact_json_fields",
+            isinstance(parsed_json, dict)
+            and all(
+                key in parsed_json
+                and json_values_equal(parsed_json[key], expected)
+                for key, expected in exact_json_fields.items()
+            ),
+        )
+    casefold_json_fields = assertions.get("casefold_json_fields")
+    if casefold_json_fields is not None:
+        record(
+            "casefold_json_fields",
+            isinstance(parsed_json, dict)
+            and all(
+                key in parsed_json
+                and isinstance(parsed_json[key], str)
+                and parsed_json[key].casefold() == expected.casefold()
+                for key, expected in casefold_json_fields.items()
+            ),
+        )
+    if "exact_json" in assertions:
+        record(
+            "exact_json",
+            valid_json
+            and json_values_equal(parsed_json, assertions["exact_json"]),
         )
     required_all = assertions.get("required_terms_all", [])
     if required_all:
-        results.append(all(str(term).casefold() in folded for term in required_all))
+        record(
+            "required_terms_all",
+            all(str(term).casefold() in folded for term in required_all),
+        )
     required_any = assertions.get("required_terms_any", [])
     if required_any:
-        results.append(any(str(term).casefold() in folded for term in required_any))
+        record(
+            "required_terms_any",
+            any(str(term).casefold() in folded for term in required_any),
+        )
     forbidden = assertions.get("forbidden_terms", [])
     if forbidden:
-        results.append(
-            all(str(term).casefold() not in folded for term in forbidden)
+        record(
+            "forbidden_terms",
+            all(str(term).casefold() not in folded for term in forbidden),
         )
-    return len(results), sum(results)
+    required_claims = assertions.get("required_claims", [])
+    if required_claims:
+        record(
+            "required_claims",
+            all(str(claim).casefold() in folded for claim in required_claims),
+        )
+    forbidden_claims = assertions.get("forbidden_claims", [])
+    if forbidden_claims:
+        record(
+            "forbidden_claims",
+            all(str(claim).casefold() not in folded for claim in forbidden_claims),
+        )
+    if assertions.get("question_only") is True:
+        sentences = re.findall(r"[^.!?]+[.!?]", text)
+        record(
+            "question_only",
+            bool(sentences)
+            and text.rstrip().endswith("?")
+            and all(sentence.rstrip().endswith("?") for sentence in sentences),
+        )
+    minimum_occurrences = assertions.get("minimum_term_occurrences")
+    if minimum_occurrences is not None:
+        record(
+            "minimum_term_occurrences",
+            bool(text)
+            and all(
+                len(
+                    re.findall(
+                        rf"(?<!\w){re.escape(str(term).casefold())}(?!\w)",
+                        folded,
+                    )
+                )
+                >= int(minimum)
+                for term, minimum in minimum_occurrences.items()
+            ),
+        )
+    max_words = assertions.get("max_words")
+    if max_words is not None:
+        record(
+            "max_words",
+            bool(text) and len(re.findall(r"\S+", text)) <= int(max_words),
+        )
+    min_words = assertions.get("min_words")
+    if min_words is not None:
+        record(
+            "min_words",
+            bool(text) and len(re.findall(r"\S+", text)) >= int(min_words),
+        )
+    max_characters = assertions.get("max_characters")
+    if max_characters is not None:
+        record("max_characters", bool(text) and len(text) <= int(max_characters))
+    return (
+        len(results),
+        sum(item.passed for item in results),
+        tuple(results),
+    )
 
 
 def _normalize_fixture(value: Any) -> dict[str, Any]:
@@ -1658,28 +4438,8 @@ def _normalize_fixture(value: Any) -> dict[str, Any]:
     body = request.get("body") if isinstance(request, dict) else None
     if not isinstance(body, dict) or "input" not in body:
         raise ContractError("Traffic request must contain a Responses request body")
-    fixtures: dict[str, list[dict[str, Any]]] = {}
-    for item in value.get("tool_fixtures", []):
-        if not isinstance(item, dict) or not item.get("tool"):
-            raise ContractError("Tool fixture is invalid")
-        if "sequence" in item:
-            sequence = item["sequence"]
-            if not isinstance(sequence, list) or not sequence:
-                raise ContractError("Tool fixture return sequence is invalid")
-            results = [
-                value.get("returns") if isinstance(value, dict) and "returns" in value else value
-                for value in sequence
-            ]
-        elif "returns" in item:
-            results = [item["returns"]]
-        else:
-            raise ContractError("Tool fixture has no synthetic result")
-        fixtures.setdefault(str(item["tool"]), []).append(
-            {
-                "arguments": item.get("arguments", {}),
-                "results": results,
-            }
-        )
+    if "tool_fixtures" in value:
+        raise ContractError("Endpoint traffic cannot contain tool fixtures")
     expected = value.get("expected")
     expected_status = (
         int(expected.get("http_status", 200)) if isinstance(expected, dict) else 200
@@ -1689,17 +4449,103 @@ def _normalize_fixture(value: Any) -> dict[str, Any]:
         if isinstance(expected, dict)
         else {}
     )
+    trace_assertions = _normalize_trace_assertions(
+        expected.get("trace_assertions") if isinstance(expected, dict) else None
+    )
     if not isinstance(semantic_assertions, dict) or any(
         key
         not in {
             "response_format",
+            "exact_text",
             "required_terms_all",
             "required_terms_any",
             "forbidden_terms",
+            "max_words",
+            "max_characters",
+            "json_schema",
+            "exact_json_fields",
+            "casefold_json_fields",
+            "exact_json",
+            "required_claims",
+            "forbidden_claims",
+            "question_only",
+            "minimum_term_occurrences",
+            "min_words",
         }
         for key in semantic_assertions
     ):
         raise ContractError("Traffic semantic assertions are invalid")
+    for key in (
+        "required_terms_all",
+        "required_terms_any",
+        "forbidden_terms",
+        "required_claims",
+        "forbidden_claims",
+    ):
+        terms = semantic_assertions.get(key, [])
+        if not isinstance(terms, list) or not all(
+            isinstance(term, str) and term for term in terms
+        ):
+            raise ContractError("Traffic semantic assertion terms are invalid")
+    for key in ("min_words", "max_words", "max_characters"):
+        bound = semantic_assertions.get(key)
+        if bound is not None and (
+            not isinstance(bound, int) or isinstance(bound, bool) or bound < 1
+        ):
+            raise ContractError("Traffic semantic assertion bound is invalid")
+    question_only = semantic_assertions.get("question_only")
+    if question_only is not None and question_only is not True:
+        raise ContractError("Traffic question-only assertion is invalid")
+    minimum_occurrences = semantic_assertions.get("minimum_term_occurrences")
+    if minimum_occurrences is not None and (
+        not isinstance(minimum_occurrences, dict)
+        or not minimum_occurrences
+        or any(
+            not isinstance(term, str)
+            or not term
+            or not isinstance(minimum, int)
+            or isinstance(minimum, bool)
+            or minimum < 2
+            for term, minimum in minimum_occurrences.items()
+        )
+    ):
+        raise ContractError("Traffic term-occurrence assertions are invalid")
+    json_schema = semantic_assertions.get("json_schema")
+    if json_schema is not None:
+        if not isinstance(json_schema, dict) or not json_schema:
+            raise ContractError("Traffic semantic assertion JSON schema is invalid")
+        try:
+            Draft202012Validator.check_schema(json_schema)
+        except SchemaError as error:
+            raise ContractError(
+                "Traffic semantic assertion JSON schema is invalid"
+            ) from error
+    exact_json_fields = semantic_assertions.get("exact_json_fields")
+    if exact_json_fields is not None and (
+        not isinstance(exact_json_fields, dict)
+        or not exact_json_fields
+        or not all(isinstance(key, str) and key for key in exact_json_fields)
+    ):
+        raise ContractError("Traffic exact JSON field assertions are invalid")
+    casefold_json_fields = semantic_assertions.get("casefold_json_fields")
+    if casefold_json_fields is not None and (
+        not isinstance(casefold_json_fields, dict)
+        or not casefold_json_fields
+        or not all(
+            isinstance(key, str)
+            and key
+            and isinstance(expected, str)
+            for key, expected in casefold_json_fields.items()
+        )
+    ):
+        raise ContractError("Traffic casefold JSON field assertions are invalid")
+    activation_gate = (
+        expected.get("activation_gate", False)
+        if isinstance(expected, dict)
+        else False
+    )
+    if not isinstance(activation_gate, bool):
+        raise ContractError("Traffic activation gate must be a boolean")
     conversation = body.get("conversation")
     conversation_key = (
         str(conversation.get("id") or "")
@@ -1711,25 +4557,39 @@ def _normalize_fixture(value: Any) -> dict[str, Any]:
     return {
         "id": str(value.get("id") or ""),
         "body": dict(body),
-        "tool_outputs": fixtures,
         "expected_status": expected_status,
         "semantic_assertions": semantic_assertions,
+        "trace_assertions": trace_assertions,
+        "activation_gate": activation_gate,
         "conversation_key": conversation_key,
     }
+
+
+def _discovered_operation_ids(tables: Any) -> tuple[str, ...]:
+    operation_ids: list[str] = []
+    seen: set[str] = set()
+    for table in tables:
+        for row in table.rows:
+            operation_id = str(row[0]).lower()
+            if _TRACE_ID.fullmatch(operation_id) is None or operation_id in seen:
+                continue
+            seen.add(operation_id)
+            operation_ids.append(operation_id)
+    return tuple(operation_ids)
 
 
 def _complete_operation_ids(
     tables: Any,
     expected_references: tuple[str, ...],
+    *,
+    allow_shared_operations: bool = False,
 ) -> tuple[str, ...] | None:
-    operations: set[str] = set()
-    seen: set[str] = set()
+    operations_by_reference: dict[str, set[str]] = defaultdict(set)
     for table in tables:
         for row in table.rows:
             operation_id = str(row[0]).lower()
             if not _TRACE_ID.fullmatch(operation_id):
                 continue
-            operations.add(operation_id)
             references = row[1] if len(row) > 1 else []
             if isinstance(references, str):
                 try:
@@ -1737,26 +4597,120 @@ def _complete_operation_ids(
                 except json.JSONDecodeError:
                     references = [references]
             if isinstance(references, list):
-                seen.update(str(value) for value in references)
-    if not set(expected_references).issubset(seen):
+                for reference in references:
+                    if str(reference) in expected_references:
+                        operations_by_reference[str(reference)].add(operation_id)
+    ordered: list[str] = []
+    for reference in expected_references:
+        matched = operations_by_reference.get(reference, set())
+        if len(matched) != 1:
+            return None
+        ordered.append(next(iter(matched)))
+    if not allow_shared_operations and len(set(ordered)) != len(ordered):
         return None
-    return tuple(sorted(operations))
+    return tuple(ordered)
 
 
-def _arguments_match(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
-    if set(actual) != set(expected):
-        return False
-    for key, expected_value in expected.items():
-        actual_value = actual[key]
-        if key == "location" and isinstance(actual_value, str) and isinstance(
-            expected_value, str
-        ):
-            normalized_actual = actual_value.casefold().strip()
-            normalized_expected = expected_value.casefold().strip()
-            if normalized_actual == normalized_expected or normalized_actual.startswith(
-                normalized_expected + ","
-            ):
+def _matched_reference_count(
+    tables: Any,
+    expected_references: tuple[str, ...],
+) -> int:
+    expected = set(expected_references)
+    return len(
+        {
+            str(reference)
+            for table in tables
+            for row in table.rows
+            for reference in _telemetry_references(row)
+            if str(reference) in expected
+        }
+    )
+
+
+def _telemetry_references(row: Any) -> list[Any]:
+    references = row[1] if len(row) > 1 else []
+    if isinstance(references, str):
+        try:
+            references = json.loads(references)
+        except json.JSONDecodeError:
+            references = [references]
+    return references if isinstance(references, list) else []
+
+
+def _telemetry_string_set(value: Any) -> set[str]:
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            decoded = [value]
+    else:
+        decoded = value
+    if not isinstance(decoded, list):
+        return set()
+    return {str(item) for item in decoded if str(item)}
+
+
+def _operation_correlation_impossible(
+    tables: Any,
+    expected_references: tuple[str, ...],
+) -> bool:
+    expected = set(expected_references)
+    operations_by_reference: dict[str, set[str]] = defaultdict(set)
+    for table in tables:
+        for row in table.rows:
+            operation_id = str(row[0]).lower()
+            if not _TRACE_ID.fullmatch(operation_id):
                 continue
-        if actual_value != expected_value:
-            return False
-    return True
+            references = row[1] if len(row) > 1 else []
+            if isinstance(references, str):
+                try:
+                    references = json.loads(references)
+                except json.JSONDecodeError:
+                    references = [references]
+            if not isinstance(references, list):
+                continue
+            for value in references:
+                reference = str(value)
+                if reference not in expected:
+                    continue
+                operations_by_reference[reference].add(operation_id)
+    return any(len(values) > 1 for values in operations_by_reference.values())
+
+
+def _validate_response_references(
+    response_references: tuple[str, ...],
+    expected_count: int,
+) -> None:
+    if (
+        expected_count < 1
+        or len(response_references) != expected_count
+        or any(
+            not isinstance(value, str)
+            or _RESPONSE_REFERENCE.fullmatch(value) is None
+            for value in response_references
+        )
+        or len(set(response_references)) != expected_count
+    ):
+        raise ContractError(
+            "Endpoint response references must be nonempty, unique, and well formed"
+        )
+
+
+def _validate_operation_references(
+    operation_ids: tuple[str, ...],
+    expected_count: int,
+    *,
+    allow_shared: bool = False,
+) -> None:
+    if (
+        expected_count < 1
+        or len(operation_ids) != expected_count
+        or any(
+            not isinstance(value, str) or _TRACE_ID.fullmatch(value) is None
+            for value in operation_ids
+        )
+        or (not allow_shared and len(set(operation_ids)) != expected_count)
+    ):
+        raise ContractError(
+            "Trace assertion operations must cover every endpoint request"
+        )

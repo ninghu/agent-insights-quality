@@ -11,10 +11,10 @@ deployment:
 category: reliability_errors
 severity: medium
 expected_behavior:
-  desired: Preserve shared ticket and revision state across all steps.
-  injected: Loses shared state and produces several downstream symptoms.
+  desired: Preserve one shared ticket-state mapping through the propagation transition.
+  injected: Clears that mapping once, causing missing-ticket routing and missing-revision update symptoms.
 injected_defect:
-  single_root: One propagation transition replaces shared state with an empty mapping.
+  single_root: One propagation transition clears the mapping that owns both the ticket identifier and revision.
   activation: all_matching_endpoint_requests
 packaging:
   command: python ../../v0/package.py --issue implementation.yaml --output issue-036.zip

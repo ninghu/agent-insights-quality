@@ -14,7 +14,7 @@ expected_behavior:
   desired: Replace prior itinerary state when the user switches trips.
   injected: Uses the earlier trip after an explicit switch.
 injected_defect:
-  single_root: The plan node preserves the first stored trip instead of parsing the latest turn.
+  single_root: The plan node binds an explicit switch to its source trip instead of its destination.
   activation: all_matching_endpoint_requests
 packaging:
   command: python ../../v0/package.py --issue implementation.yaml --output issue-028.zip

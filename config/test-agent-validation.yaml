@@ -1,0 +1,43 @@
+schema_version: "4.0.0"
+repository: ninghu/agent-insights-quality
+environment_id: swedencentral-g30
+location: swedencentral
+project_name: aiq-staging-swedencentral
+telemetry_resource_set: g30
+test_agent_model:
+  deployment_name: gpt-5.4-mini
+  model_id: gpt-5.4-mini
+  model_version: "2026-03-17"
+canary_agents:
+  prompt: weather-agent
+  hosted: finance-agent
+inventory:
+  agents: 5
+  issues: 36
+  authorities: 41
+limits:
+  provisioning_concurrency: 8
+  telemetry_query_concurrency: 8
+  runtime_attempt_concurrency: 1
+  inner_model_call_limit: 4
+  reserved_capacity_percent: 25
+  minimum_rpm_headroom: 8
+  minimum_tpm_headroom: 8192
+  active_heartbeat_seconds: 60
+  absolute_ttl_hours: 72
+  max_recovery_versions_per_agent: 3
+trace_hydration:
+  poll_seconds: 15
+  stabilization_seconds: 180
+  maximum_wait_seconds: 900
+verification:
+  maximum_active_subsessions: 8
+  authorities_per_assignment: 1
+  response_bound_batch_scope: target
+name_policy:
+  project:
+    maximum_length: 64
+    pattern: "^[a-z][a-z0-9-]*[a-z0-9]$"
+  agent:
+    maximum_length: 63
+    pattern: "^[a-z][a-z0-9-]*[a-z0-9]$"

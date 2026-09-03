@@ -1,0 +1,544 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ninghu/agent-insights-quality/schemas/test-agent-validation-lifecycle.schema.json",
+  "title": "Test Agent Validation local lifecycle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "kind", "snapshot_type", "run_id", "event_sequence",
+    "state", "repository", "pr_number", "commit_sha", "digests", "operator",
+    "substrate", "ownership_nonce", "capacity", "project", "runtime_topology",
+    "deployment", "desired_state_reference", "deployment_assignments",
+    "validation_authority_ids", "reused_authorities",
+    "invocation_authority_ids", "reused_invocations",
+    "invocation_shard_assignments", "verification_authority_assignments",
+    "resources", "event_reference", "evidence_reference",
+    "supersedes", "started_at", "last_activity_at", "absolute_expires_at",
+    "failure", "previous_journal_digest", "journal_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "4.0.0"},
+    "kind": {"const": "test-agent-validation-lifecycle"},
+    "snapshot_type": {"enum": ["active", "event"]},
+    "run_id": {"$ref": "#/$defs/runId"},
+    "event_sequence": {"type": "integer", "minimum": 1},
+    "state": {
+      "enum": ["LOCKED", "PREFLIGHT", "CREATING", "VALIDATING", "READY", "FAILED", "SUPERSEDED"]
+    },
+    "repository": {"$ref": "#/$defs/repository"},
+    "pr_number": {"type": "integer", "minimum": 1},
+    "commit_sha": {"$ref": "#/$defs/gitSha"},
+    "digests": {"$ref": "#/$defs/digests"},
+    "operator": {"$ref": "#/$defs/operator"},
+    "substrate": {"$ref": "#/$defs/substrate"},
+    "ownership_nonce": {"type": "string", "pattern": "^[A-Za-z0-9_-]{8,128}$"},
+    "capacity": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/capacity"}]
+    },
+    "project": {"$ref": "#/$defs/project"},
+    "runtime_topology": {"$ref": "#/$defs/runtimeTopology"},
+    "deployment": {"$ref": "#/$defs/deployment"},
+    "desired_state_reference": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/snapshotReference"}]
+    },
+    "deployment_assignments": {
+      "type": "array", "maxItems": 8, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/shardAssignment"}
+    },
+    "validation_authority_ids": {
+      "type": "array", "maxItems": 41, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/authorityId"}
+    },
+    "reused_authorities": {
+      "type": "array", "maxItems": 41, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/reusedAuthority"}
+    },
+    "invocation_authority_ids": {
+      "type": "array", "maxItems": 41, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/authorityId"}
+    },
+    "reused_invocations": {
+      "type": "array", "maxItems": 41, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/reusedInvocation"}
+    },
+    "invocation_shard_assignments": {
+      "type": "array", "maxItems": 8, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/shardAssignment"}
+    },
+    "verification_authority_assignments": {
+      "type": "array", "maxItems": 41, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/authorityAssignment"}
+    },
+    "resources": {
+      "type": "array", "uniqueItems": true,
+      "items": {"$ref": "#/$defs/resource"}
+    },
+    "event_reference": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/snapshotReference"}]
+    },
+    "evidence_reference": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/snapshotReference"}]
+    },
+    "supersedes": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/hash"}]
+    },
+    "started_at": {"$ref": "#/$defs/timestamp"},
+    "last_activity_at": {"$ref": "#/$defs/timestamp"},
+    "absolute_expires_at": {"$ref": "#/$defs/timestamp"},
+    "failure": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/failure"}]
+    },
+    "previous_journal_digest": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/hash"}]
+    },
+    "journal_digest": {"$ref": "#/$defs/hash"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"snapshot_type": {"const": "active"}},
+        "required": ["snapshot_type"]
+      },
+      "then": {
+        "properties": {"event_reference": {"$ref": "#/$defs/snapshotReference"}}
+      },
+      "else": {
+        "properties": {"event_reference": {"type": "null"}}
+      }
+    },
+    {
+      "if": {
+        "properties": {"state": {"enum": ["READY", "FAILED"]}},
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {"evidence_reference": {"$ref": "#/$defs/snapshotReference"}}
+      }
+    }
+  ],
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "gitSha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "runId": {"type": "string", "pattern": "^validation-[0-9a-f]{12}$"},
+    "repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "reference": {"type": "string", "minLength": 1, "maxLength": 1024},
+    "nullableReference": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/reference"}]
+    },
+    "authorityId": {
+      "oneOf": [
+        {"type": "string", "pattern": "^[a-z][a-z0-9-]+-agent/v0$"},
+        {"type": "string", "pattern": "^issue-[0-9]{3}$"}
+      ]
+    },
+    "digests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "validation_digest", "shared_validation_digest", "verifier_digest",
+        "invocation_contract_digest",
+        "execution_matrix_digest", "runtime_topology_digest",
+        "quota_plan_digest", "evidence_digest"
+      ],
+      "properties": {
+        "validation_digest": {"$ref": "#/$defs/hash"},
+        "shared_validation_digest": {"$ref": "#/$defs/hash"},
+        "verifier_digest": {"$ref": "#/$defs/hash"},
+        "invocation_contract_digest": {"$ref": "#/$defs/hash"},
+        "execution_matrix_digest": {"$ref": "#/$defs/hash"},
+        "runtime_topology_digest": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/hash"}]
+        },
+        "quota_plan_digest": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/hash"}]
+        },
+        "evidence_digest": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/hash"}]
+        }
+      }
+    },
+    "operator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_reference", "operator_reference", "run_reference"],
+      "properties": {
+        "session_reference": {"$ref": "#/$defs/hash"},
+        "operator_reference": {"$ref": "#/$defs/hash"},
+        "run_reference": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "substrate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tenant_id", "subscription_id", "account_name", "account_resource_id",
+        "registry_name", "storage_account_name", "telemetry_resource_id"
+      ],
+      "properties": {
+        "tenant_id": {"$ref": "#/$defs/reference"},
+        "subscription_id": {"$ref": "#/$defs/reference"},
+        "account_name": {"$ref": "#/$defs/reference"},
+        "account_resource_id": {"$ref": "#/$defs/reference"},
+        "registry_name": {"$ref": "#/$defs/reference"},
+        "storage_account_name": {"$ref": "#/$defs/reference"},
+        "telemetry_resource_id": {"$ref": "#/$defs/reference"}
+      }
+    },
+    "capacity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "measured_rpm", "measured_tpm", "measured_at", "reserved_percent",
+        "reserved_rpm", "reserved_tpm", "available_rpm", "available_tpm",
+        "outer_request_envelope", "worst_case_inner_model_calls",
+        "worst_case_inner_tokens", "endpoint_concurrency",
+        "provisioning_concurrency", "telemetry_query_concurrency",
+        "runtime_attempt_concurrency", "inner_model_call_limit", "plan_digest"
+      ],
+      "properties": {
+        "measured_rpm": {"type": "integer", "minimum": 1},
+        "measured_tpm": {"type": "integer", "minimum": 1},
+        "measured_at": {"$ref": "#/$defs/timestamp"},
+        "reserved_percent": {"const": 25},
+        "reserved_rpm": {"type": "integer", "minimum": 8},
+        "reserved_tpm": {"type": "integer", "minimum": 8192},
+        "available_rpm": {"type": "integer", "minimum": 1},
+        "available_tpm": {"type": "integer", "minimum": 1},
+        "outer_request_envelope": {"type": "integer", "minimum": 1},
+        "worst_case_inner_model_calls": {"type": "integer", "minimum": 1, "maximum": 4},
+        "worst_case_inner_tokens": {"type": "integer", "minimum": 1},
+        "endpoint_concurrency": {"type": "integer", "minimum": 1, "maximum": 8},
+        "provisioning_concurrency": {"const": 8},
+        "telemetry_query_concurrency": {"const": 8},
+        "runtime_attempt_concurrency": {"const": 1},
+        "inner_model_call_limit": {"const": 4},
+        "plan_digest": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name", "provider_id", "endpoint_reference",
+        "project_principal_id", "state", "bound_observed_at"
+      ],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}[a-z0-9]$"},
+        "provider_id": {"$ref": "#/$defs/nullableReference"},
+        "endpoint_reference": {"$ref": "#/$defs/nullableReference"},
+        "project_principal_id": {"$ref": "#/$defs/nullableReference"},
+        "state": {"enum": ["unbound", "bound"]},
+        "bound_observed_at": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]
+        }
+      }
+    },
+    "runtimeTopology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "account_reference", "project_reference", "telemetry_resource_set",
+        "test_agent_model", "name_policy", "connection_ids",
+        "runtime_principal_ids", "telemetry_identity_ids", "agents"
+      ],
+      "properties": {
+        "account_reference": {"$ref": "#/$defs/reference"},
+        "project_reference": {"$ref": "#/$defs/nullableReference"},
+        "telemetry_resource_set": {"const": "g30"},
+        "test_agent_model": {
+          "const": {
+            "deployment_name": "gpt-5.4-mini",
+            "model_id": "gpt-5.4-mini",
+            "model_version": "2026-03-17"
+          }
+        },
+        "name_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["project_maximum_length", "agent_maximum_length", "pattern"],
+          "properties": {
+            "project_maximum_length": {"const": 64},
+            "agent_maximum_length": {"const": 63},
+            "pattern": {"const": "^[a-z][a-z0-9-]*[a-z0-9]$"}
+          }
+        },
+        "connection_ids": {
+          "type": "array", "uniqueItems": true,
+          "items": {"$ref": "#/$defs/reference"}
+        },
+        "runtime_principal_ids": {
+          "type": "array", "uniqueItems": true,
+          "items": {"$ref": "#/$defs/reference"}
+        },
+        "telemetry_identity_ids": {
+          "type": "array", "uniqueItems": true,
+          "items": {"$ref": "#/$defs/reference"}
+        },
+        "agents": {
+          "type": "array", "maxItems": 41, "uniqueItems": true,
+          "items": {"$ref": "#/$defs/runtimeAgent"}
+        }
+      }
+    },
+    "runtimeAgent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority_id", "canonical_agent", "logical_version", "runtime_kind",
+        "framework", "runtime_agent_name", "runtime_agent_version",
+        "provider_agent_id", "provider_agent_version_id",
+        "provider_content_digest", "hosted_identity_id", "hosted_blueprint_id",
+        "hosted_deployment_id", "foundry_agent_name", "foundry_agent_version",
+        "runtime_principal_id", "telemetry_identity_id", "connection_ids"
+      ],
+      "properties": {
+        "authority_id": {"$ref": "#/$defs/authorityId"},
+        "canonical_agent": {
+          "enum": [
+            "weather-agent", "healthcare-agent", "finance-agent",
+            "travel-agent", "support-ticket-agent"
+          ]
+        },
+        "logical_version": {
+          "oneOf": [
+            {"const": "v0"},
+            {"type": "string", "pattern": "^issue-[0-9]{3}$"}
+          ]
+        },
+        "runtime_kind": {
+          "enum": ["prompt", "hosted_code", "hosted_custom_container"]
+        },
+        "framework": {
+          "enum": [
+            "foundry_prompt", "microsoft_agent_framework",
+            "langgraph", "custom_responses"
+          ]
+        },
+        "runtime_agent_name": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,61}[a-z0-9]$"},
+        "runtime_agent_version": {"type": "string", "minLength": 1, "maxLength": 128},
+        "provider_agent_id": {"$ref": "#/$defs/reference"},
+        "provider_agent_version_id": {"$ref": "#/$defs/reference"},
+        "provider_content_digest": {"$ref": "#/$defs/hash"},
+        "hosted_identity_id": {"$ref": "#/$defs/nullableReference"},
+        "hosted_blueprint_id": {"$ref": "#/$defs/nullableReference"},
+        "hosted_deployment_id": {"$ref": "#/$defs/nullableReference"},
+        "foundry_agent_name": {"type": "string", "minLength": 1, "maxLength": 63},
+        "foundry_agent_version": {"type": "string", "minLength": 1, "maxLength": 128},
+        "runtime_principal_id": {"$ref": "#/$defs/nullableReference"},
+        "telemetry_identity_id": {"$ref": "#/$defs/reference"},
+        "connection_ids": {
+          "type": "array", "uniqueItems": true,
+          "items": {"$ref": "#/$defs/reference"}
+        }
+      }
+    },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["traffic_started", "phase", "support_images", "recoveries", "failures"],
+      "properties": {
+        "phase": {"enum": ["preparing", "prepared", "complete"]},
+        "traffic_started": {"type": "boolean"},
+        "support_images": {
+          "type": "array", "maxItems": 9, "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["logical_version", "image"],
+            "properties": {
+              "logical_version": {
+                "oneOf": [
+                  {"const": "v0"},
+                  {"type": "string", "pattern": "^issue-0(?:29|3[0-6])$"}
+                ]
+              },
+              "image": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9.-]+\\.azurecr\\.io/agent-insights-quality-support@sha256:[0-9a-f]{64}$"
+              }
+            }
+          }
+        },
+        "recoveries": {
+          "type": "array", "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["authority_id", "canonical_agent", "state", "retry_count", "error_code"],
+            "properties": {
+              "authority_id": {"$ref": "#/$defs/authorityId"},
+              "canonical_agent": {
+                "enum": [
+                  "weather-agent", "healthcare-agent", "finance-agent",
+                  "travel-agent", "support-ticket-agent"
+                ]
+              },
+              "state": {"enum": ["ambiguous", "failed", "ready"]},
+              "retry_count": {"type": "integer", "minimum": 1, "maximum": 3},
+              "error_code": {"type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$"}
+            }
+          }
+        },
+        "failures": {
+          "type": "array", "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["authority_id", "canonical_agent", "stage", "error_code", "request_accepted"],
+            "properties": {
+              "authority_id": {"$ref": "#/$defs/authorityId"},
+              "canonical_agent": {
+                "enum": [
+                  "weather-agent", "healthcare-agent", "finance-agent",
+                  "travel-agent", "support-ticket-agent"
+                ]
+              },
+              "stage": {"enum": ["deployment", "readiness", "contract", "traffic"]},
+              "error_code": {"type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$"},
+              "request_accepted": {"type": ["boolean", "null"]},
+              "matched_reference_count": {"type": "integer", "minimum": 0},
+              "expected_reference_count": {"type": "integer", "minimum": 1},
+              "missing_reference_count": {"type": "integer", "minimum": 0}
+            }
+          }
+        }
+      }
+    },
+    "reusedAuthority": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authority_id", "path", "evidence_digest",
+            "authority_evidence_digest"
+          ],
+          "properties": {
+            "authority_id": {"$ref": "#/$defs/authorityId"},
+            "path": {"type": "string", "minLength": 1, "maxLength": 1024},
+            "evidence_digest": {"$ref": "#/$defs/hash"},
+            "authority_evidence_digest": {"$ref": "#/$defs/hash"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authority_id", "path", "authority_result_digest",
+            "authority_evidence_digest"
+          ],
+          "properties": {
+            "authority_id": {"$ref": "#/$defs/authorityId"},
+            "path": {"type": "string", "minLength": 1, "maxLength": 1024},
+            "authority_result_digest": {"$ref": "#/$defs/hash"},
+            "authority_evidence_digest": {"$ref": "#/$defs/hash"}
+          }
+        }
+      ]
+    },
+    "reusedInvocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority_id", "path", "receipt_digest", "invocation_digest"
+      ],
+      "properties": {
+        "authority_id": {"$ref": "#/$defs/authorityId"},
+        "path": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "receipt_digest": {"$ref": "#/$defs/hash"},
+        "invocation_digest": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "shardAssignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["shard_id", "authority_ids", "quota_plan_digest"],
+      "properties": {
+        "shard_id": {"type": "integer", "minimum": 1, "maximum": 8},
+        "authority_ids": {
+          "type": "array", "minItems": 1, "maxItems": 41, "uniqueItems": true,
+          "items": {"$ref": "#/$defs/authorityId"}
+        },
+        "quota_plan_digest": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "authorityAssignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority_id", "quota_plan_digest", "verifier_commit_sha",
+        "verifier_digest", "assignment_digest"
+      ],
+      "properties": {
+        "authority_id": {"$ref": "#/$defs/authorityId"},
+        "quota_plan_digest": {"$ref": "#/$defs/hash"},
+        "verifier_commit_sha": {"$ref": "#/$defs/gitSha"},
+        "verifier_digest": {"$ref": "#/$defs/hash"},
+        "assignment_digest": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind", "parent_id", "authority_id", "deterministic_name",
+        "intent_reference", "provider_id", "runtime_kind", "discovery_key",
+        "ownership_nonce", "create_intent_at", "create_observed_at",
+        "state", "retention"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "arm_deployment", "project", "connection", "role_assignment",
+            "provider_agent", "provider_agent_version", "hosted_identity",
+            "hosted_blueprint", "runtime_principal", "entra_service_principal",
+            "hosted_deployment", "session", "conversation", "stored_response",
+            "acr_tag", "acr_manifest"
+          ]
+        },
+        "parent_id": {"$ref": "#/$defs/nullableReference"},
+        "authority_id": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/authorityId"}]
+        },
+        "deterministic_name": {"type": "string", "minLength": 1, "maxLength": 256},
+        "intent_reference": {"$ref": "#/$defs/hash"},
+        "provider_id": {"$ref": "#/$defs/reference"},
+        "runtime_kind": {
+          "enum": ["control", "prompt", "hosted_code", "hosted_custom_container"]
+        },
+        "discovery_key": {"$ref": "#/$defs/reference"},
+        "ownership_nonce": {"type": "string", "pattern": "^[A-Za-z0-9_-]{8,128}$"},
+        "create_intent_at": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]
+        },
+        "create_observed_at": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]
+        },
+        "state": {"enum": ["create_intent", "created", "ambiguous_create"]},
+        "retention": {"const": "retained"}
+      }
+    },
+    "snapshotReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "digest"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "digest": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "error_code"],
+      "properties": {
+        "stage": {"type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$"},
+        "error_code": {"type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$"}
+      }
+    }
+  }
+}

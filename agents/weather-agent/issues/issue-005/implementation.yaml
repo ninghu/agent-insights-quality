@@ -9,17 +9,17 @@ deployment:
 category: latency
 severity: low
 expected_behavior:
-  desired: Call a successful weather tool once for one unchanged request.
-  injected: Calls the same successful tool twice with identical arguments.
+  desired: "Complete a fully evidenced request in a single direct terminal response."
+  injected: "Withholds completion on the first turn to ask an unnecessary clarifying question, then completes the answer only on a second turn that adds no material new evidence."
 injected_defect:
-  single_root: Instructions mandate an unnecessary verification call after every success.
-  activation: all_matching_endpoint_requests
+  single_root: "Instructions force an unnecessary clarifying question before completion, deferring the answer to a materially empty follow-up turn."
+  activation: first_turn_of_each_two_turn_sequence
   definition_is_complete: true
 determinism:
   temperature: 0
-  definition_sha256: 18a63a19cd475824bf855591f3980b59fe81b53f2dcbacb47674c914f79ab3cb
+  definition_sha256: 05902c130daf0f68e5440ba021c53a7dd4a03a5f754c368e0eca97a5f556f912
   traffic_file: traffic.json
-  minimum_requests: 5
+  minimum_requests: 10
 artifacts:
   include:
   - definition.json

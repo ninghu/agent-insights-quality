@@ -1,0 +1,260 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ninghu/agent-insights-quality/schemas/test-agent-validation-invocation-receipt.schema.json",
+  "title": "Test Agent Validation per-authority invocation receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "repository",
+    "pr_number",
+    "origin_run_id",
+    "origin_commit_sha",
+    "origin_shard_id",
+    "origin_binding",
+    "authority_id",
+    "source_content_digest",
+    "execution_digest",
+    "invocation_contract_digest",
+    "paired_v0_contract",
+    "environment",
+    "runtime",
+    "paired_v0_runtime",
+    "invocation",
+    "resources",
+    "completed_at",
+    "invocation_digest",
+    "response_binding_digest",
+    "migrated_from",
+    "final_set_claim",
+    "receipt_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "kind": {"const": "test-agent-validation-authority-invocation"},
+    "repository": {"$ref": "#/$defs/repository"},
+    "pr_number": {"type": "integer", "minimum": 1},
+    "origin_run_id": {"$ref": "#/$defs/runId"},
+    "origin_commit_sha": {"$ref": "#/$defs/gitSha"},
+    "origin_shard_id": {"type": "integer", "minimum": 1, "maximum": 10},
+    "origin_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lifecycle_digest",
+        "desired_state_digest",
+        "runtime_topology_digest",
+        "quota_plan_digest"
+      ],
+      "properties": {
+        "lifecycle_digest": {"$ref": "#/$defs/hash"},
+        "desired_state_digest": {"$ref": "#/$defs/hash"},
+        "runtime_topology_digest": {"$ref": "#/$defs/hash"},
+        "quota_plan_digest": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "authority_id": {"$ref": "#/$defs/authorityId"},
+    "source_content_digest": {"$ref": "#/$defs/hash"},
+    "execution_digest": {"$ref": "#/$defs/hash"},
+    "invocation_contract_digest": {"$ref": "#/$defs/hash"},
+    "paired_v0_contract": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authority_id",
+            "source_content_digest",
+            "execution_digest"
+          ],
+          "properties": {
+            "authority_id": {"$ref": "#/$defs/authorityId"},
+            "source_content_digest": {"$ref": "#/$defs/hash"},
+            "execution_digest": {"$ref": "#/$defs/hash"}
+          }
+        }
+      ]
+    },
+    "environment": {"$ref": "#/$defs/environment"},
+    "runtime": {"$ref": "#/$defs/runtime"},
+    "paired_v0_runtime": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/runtime"}]
+    },
+    "invocation": {"$ref": "#/$defs/invocation"},
+    "resources": {
+      "type": "array",
+      "minItems": 2,
+      "items": {"type": "object"}
+    },
+    "completed_at": {"$ref": "#/$defs/timestamp"},
+    "invocation_digest": {"$ref": "#/$defs/hash"},
+    "response_binding_digest": {"$ref": "#/$defs/hash"},
+    "migrated_from": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["schema_version", "kind", "artifact_digest"],
+          "properties": {
+            "schema_version": {"const": "2.0.0"},
+            "kind": {"const": "test-agent-validation-shard-invocations"},
+            "artifact_digest": {"$ref": "#/$defs/hash"}
+          }
+        }
+      ]
+    },
+    "final_set_claim": {
+      "const": "complete-unambiguous-recorded-final-set"
+    },
+    "receipt_digest": {"$ref": "#/$defs/hash"}
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "gitSha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "reference": {"type": "string", "minLength": 1, "maxLength": 2048},
+    "nullableReference": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/reference"}]
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "runId": {
+      "type": "string",
+      "pattern": "^validation-[0-9a-f]{12}$"
+    },
+    "authorityId": {
+      "oneOf": [
+        {"type": "string", "pattern": "^[a-z][a-z0-9-]+-agent/v0$"},
+        {"type": "string", "pattern": "^issue-[0-9]{3}$"}
+      ]
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "environment_id",
+        "location",
+        "project_name",
+        "project_reference",
+        "telemetry_resource_set",
+        "telemetry_resource_reference"
+      ],
+      "properties": {
+        "environment_id": {"const": "swedencentral-g30"},
+        "location": {"const": "swedencentral"},
+        "project_name": {"const": "aiq-staging-swedencentral"},
+        "project_reference": {"$ref": "#/$defs/hash"},
+        "telemetry_resource_set": {"const": "g30"},
+        "telemetry_resource_reference": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority_id",
+        "runtime_kind",
+        "runtime_agent_name",
+        "runtime_agent_version",
+        "provider_agent_id",
+        "provider_agent_version_id",
+        "provider_content_digest",
+        "hosted_identity_id",
+        "hosted_blueprint_id",
+        "hosted_deployment_id",
+        "runtime_principal_id",
+        "telemetry_identity_id",
+        "connection_ids"
+      ],
+      "properties": {
+        "authority_id": {"$ref": "#/$defs/authorityId"},
+        "runtime_kind": {
+          "enum": ["prompt", "hosted_code", "hosted_custom_container"]
+        },
+        "runtime_agent_name": {"$ref": "#/$defs/reference"},
+        "runtime_agent_version": {"$ref": "#/$defs/reference"},
+        "provider_agent_id": {"$ref": "#/$defs/reference"},
+        "provider_agent_version_id": {"$ref": "#/$defs/reference"},
+        "provider_content_digest": {"$ref": "#/$defs/hash"},
+        "hosted_identity_id": {"$ref": "#/$defs/nullableReference"},
+        "hosted_blueprint_id": {"$ref": "#/$defs/nullableReference"},
+        "hosted_deployment_id": {"$ref": "#/$defs/nullableReference"},
+        "runtime_principal_id": {"$ref": "#/$defs/nullableReference"},
+        "telemetry_identity_id": {"$ref": "#/$defs/reference"},
+        "connection_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/reference"}
+        }
+      }
+    },
+    "invocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authority_id", "scenarios"],
+      "properties": {
+        "authority_id": {"$ref": "#/$defs/authorityId"},
+        "scenarios": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/scenario"}
+        }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario_id",
+        "issue_invocations",
+        "v0_invocations"
+      ],
+      "properties": {
+        "scenario_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{2,63}$"
+        },
+        "issue_invocations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/attempt"}
+        },
+        "v0_invocations": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/attempt"}
+        }
+      }
+    },
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "started_at",
+        "completed_at",
+        "response_ids",
+        "usable_results",
+        "session_id"
+      ],
+      "properties": {
+        "started_at": {"$ref": "#/$defs/timestamp"},
+        "completed_at": {"$ref": "#/$defs/timestamp"},
+        "response_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/reference"}
+        },
+        "usable_results": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "boolean"}
+        },
+        "session_id": {"$ref": "#/$defs/nullableReference"}
+      }
+    }
+  }
+}

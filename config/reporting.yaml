@@ -5,15 +5,6 @@ dashboard_url: https://aka.ms/agent-insights/quality
 send_once: true
 retry_ambiguous: false
 quality_score:
-  formula: field_weighted_v1
-  field_quality_weight: 0.85
-  clean_card_precision_weight: 0.15
-  field_weights:
-    root_cause: 0.25
-    title: 0.10
-    description: 0.15
-    category: 0.10
-    severity: 0.10
-    proposed_fix: 0.15
-    linked_traces: 0.15
-  pass_threshold: 90
+  formula: correct_over_expected_plus_noise_v1
+  scoring_fields: [title, description, category, linked_traces]
+  diagnostic_fields: [severity, proposed_fix]

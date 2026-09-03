@@ -9,16 +9,20 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
+from agent_insights_quality.automation_policy import load_automation_policy
 from agent_insights_quality.azure_cli import azure_cli
 from agent_insights_quality.catalogs import agent_model_contract
 from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.util import ROOT, ContractError, read_json, read_yaml
 
 PROFILE_PROJECTS = {
-    "daily": "agent-insights-quality",
-    "staging": "agent-insights-quality-staging",
+    "daily": "aiq-daily-swedencentral",
+    "staging": "aiq-staging-swedencentral",
 }
-REGISTRY_CONTAINER = "deployment-registries"
+ENVIRONMENT_ID = "swedencentral-g30"
+PROFILE_LOCATION = "swedencentral"
+TELEMETRY_RESOURCE_SET = "g30"
+REGISTRY_CONTAINER = load_automation_policy().deployment_registry_container
 _PROGRESS = ProgressReporter("aiq-registry")
 
 
@@ -44,7 +48,7 @@ def sync_registry(profile: Any) -> None:
                 "--container-name",
                 REGISTRY_CONTAINER,
                 "--name",
-                f"{profile.name}.json",
+                f"{profile.environment_id}/{profile.name}.json",
                 "--file",
                 temporary,
                 "--auth-mode",
@@ -79,7 +83,7 @@ def publish_registry(profile: Any) -> None:
             "--container-name",
             REGISTRY_CONTAINER,
             "--name",
-            f"{profile.name}.json",
+            f"{profile.environment_id}/{profile.name}.json",
             "--file",
             str(profile.registry_path),
             "--auth-mode",
@@ -93,6 +97,42 @@ def publish_registry(profile: Any) -> None:
     )
     if process.returncode != 0:
         raise ContractError("Private deployment registry upload failed")
+
+
+def publish_validation_registry(profile: Any, path: Path) -> None:
+    account = str(profile.registry_storage_account_name or "").strip()
+    if (
+        profile.environment_id != ENVIRONMENT_ID
+        or profile.name != "staging"
+        or not account
+        or not path.is_file()
+    ):
+        raise ContractError("Validation registry publication binding is invalid")
+    process = _run_registry_command(
+        [
+            azure_cli(),
+            "storage",
+            "blob",
+            "upload",
+            "--account-name",
+            account,
+            "--container-name",
+            REGISTRY_CONTAINER,
+            "--name",
+            f"{ENVIRONMENT_ID}/test-agent-validation.json",
+            "--file",
+            str(path),
+            "--auth-mode",
+            "login",
+            "--overwrite",
+            "true",
+            "--only-show-errors",
+            "--output",
+            "none",
+        ],
+    )
+    if process.returncode != 0:
+        raise ContractError("Private validation registry upload failed")
 
 
 def _run_registry_command(
@@ -148,6 +188,10 @@ def load_registry(
     if (
         registry["profile"] != profile
         or registry["project_name"] != PROFILE_PROJECTS[profile]
+        or registry["account_name"] != PROFILE_PROJECTS[profile]
+        or registry["environment_id"] != ENVIRONMENT_ID
+        or registry["location"] != PROFILE_LOCATION
+        or registry["telemetry_resource_set"] != TELEMETRY_RESOURCE_SET
     ):
         raise ContractError("Deployment registry belongs to a different profile")
     if registry["catalog_hashes"] != catalog_hashes:

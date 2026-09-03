@@ -22,7 +22,6 @@ from agent_insights_quality.report_summary import (
 from agent_insights_quality.util import (
     ROOT,
     ContractError,
-    atomic_json,
     atomic_text,
     content_hash,
     read_json,
@@ -36,24 +35,9 @@ _PUBLIC_REPORT_BASE_URL = (
 )
 _PUBLIC_ISSUE_CATALOG_URL = _PUBLIC_REPORT_BASE_URL + "ISSUE_CATALOG.md"
 _QUALITY_BAR_URL = _PUBLIC_REPORT_BASE_URL + "docs/QUALITY_BAR.md#quality-score"
-_INSIGHT_RESULTS_URL = _PUBLIC_REPORT_BASE_URL + "docs/INSIGHT_RESULTS.md"
 _OUTLOOK_TEXT_STYLE = (
     "font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:19px;"
 )
-_STATUS_STYLES = {
-    "PASS": {
-        "background": "#e6f4ea",
-        "foreground": "#0b6a0b",
-    },
-    "FAIL": {
-        "background": "#fde7e9",
-        "foreground": "#a4262c",
-    },
-    "INCOMPLETE": {
-        "background": "#fff4ce",
-        "foreground": "#8a5700",
-    },
-}
 _AGENT_TYPES = {
     "weather-agent": "prompt",
     "healthcare-agent": "prompt",
@@ -66,8 +50,8 @@ _AGENT_OWNERS = {
     for item in read_yaml(ROOT / "catalogs" / "AGENT_CATALOG.yaml")["agents"]
 }
 _PROJECT_NAMES = {
-    "daily": "agent-insights-quality",
-    "staging": "agent-insights-quality-staging",
+    "daily": "aiq-daily-swedencentral",
+    "staging": "aiq-staging-swedencentral",
 }
 
 
@@ -157,10 +141,12 @@ def create_request(
     score = _overall_score(report)
     subject_prefix = "[TEST] " if test_run else ""
     subject = (
-        f"{subject_prefix}[Agent Insights Quality] {report['status']} - {score} - "
+        f"{subject_prefix}[Agent Insights Quality] {score} - "
         f"{report['report_date']} - {report['summary']['issues_correct']}/"
         f"{report['summary']['issues_expected']} issues"
     )
+    if report.get("profile") == "daily":
+        subject = f"{subject} - {report['test_region']}"
     body = _render_html(
         report,
         project_link=project_link,
@@ -199,7 +185,9 @@ def import_receipt(
     if receipt["content_digest"] != request["content_digest"]:
         raise ContractError("Email receipt content digest does not match the request")
     _validate_receipt_semantics(receipt, request["content_digest"])
-    atomic_json(output, receipt)
+    from agent_insights_quality.util import immutable_json
+
+    immutable_json(output, receipt)
 
 
 def _validate_receipt_semantics(
@@ -294,10 +282,7 @@ def build_runtime_links(
 
 def _overall_score(report: dict[str, Any]) -> str:
     summary = report["summary"]
-    score = summary.get("quality_score")
-    if score is None:
-        return "N/A"
-    return f"{score:g}/100"
+    return f"{summary['quality_score']:g}/100"
 
 
 def _score_comparison(report: dict[str, Any]) -> str:
@@ -320,7 +305,10 @@ def _data_table(
     headers: tuple[str, ...],
     rows: list[tuple[str, ...]],
     widths: tuple[int, ...],
+    *,
+    raw_cells: set[tuple[int, int]] | None = None,
 ) -> str:
+    raw_cells = raw_cells or set()
     header = "".join(
         f'<th align="left" width="{width}%" style="padding:10px 12px;'
         f'border:1px solid #d6deea;color:#12304a;vertical-align:top;'
@@ -333,11 +321,11 @@ def _data_table(
         + "".join(
             '<td style="padding:11px 12px;border:1px solid #d6deea;'
             f'color:#334155;vertical-align:top;{_OUTLOOK_TEXT_STYLE}">'
-            f"{html.escape(value)}</td>"
-            for value in row
+            f"{value if (row_index, column_index) in raw_cells else html.escape(value)}</td>"
+            for column_index, value in enumerate(row)
         )
         + "</tr>"
-        for row in rows
+        for row_index, row in enumerate(rows)
     )
     return (
         '<table cellpadding="0" cellspacing="0" border="0" width="100%" '
@@ -347,89 +335,29 @@ def _data_table(
 
 
 def _grade_rows(report: dict[str, Any]) -> list[tuple[str, str]]:
-    issues = report.get("issues", [])
-    issue_cards = [
-        card
-        for item in issues
-        for card in item.get("assessment", {}).get("card_evaluations", [])
-    ]
-    correct = sum(card.get("finding_type") == "MATCHED" for card in issue_cards)
-    partial = sum(
-        card.get("finding_type") == "PARTIAL" for card in issue_cards
-    )
-    incorrect = sum(
-        card.get("finding_type") == "MISMATCHED" for card in issue_cards
-    )
-    noise = int(report["summary"]["noise_cards"])
-    missing = sum(item.get("detail") == "MISSING" for item in issues)
-    rows = [
-        ("Overall judgment", report["status"]),
-        ("Expected issue insights", str(report["summary"]["issues_expected"])),
-        ("Observed Insights", str(report["summary"]["observed_cards"])),
-        ("Fully correct Insights", str(correct)),
-        ("Partially Correct Insights", str(partial)),
-        ("Incorrect related Insights", str(incorrect)),
-        ("Noise/duplicate Insights", str(noise)),
-        ("Missing expected issues", str(missing)),
-    ]
-    if report["status"] == "INCOMPLETE":
-        rows.insert(
-            1,
-            (
-                "Run status reason",
-                _incomplete_reason(report["summary"].get("incomplete_reasons", [])),
-            ),
-        )
-    return rows
-
-
-def _insight_results_link() -> str:
-    return (
-        f'<p style="margin:0 0 18px 0;color:#334155;{_OUTLOOK_TEXT_STYLE}">'
-        '<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
-        f'href="{_INSIGHT_RESULTS_URL}">How to read results</a></p>'
-    )
-
-
-def _incomplete_reason(reasons: list[str]) -> str:
-    labels = {
-        "clean_window_not_empty": (
-            "Clean window blocked by pre-existing telemetry inside the required "
-            "short lookback; no Agent traffic was sent."
-        ),
-        "monitor_reset_failed": "Agent Insights monitor reset failed before traffic.",
-        "clean_window_failed": "Clean-window telemetry verification failed.",
-        "invocation_failed": "One or more deployed Agent endpoint invocations failed.",
-        "telemetry_failed": "Natural telemetry did not arrive or correlate completely.",
-        "trace_contract_failed": "Trace-contract verification failed.",
-        "insight_run_failed": "One or more Agent Insights runs failed.",
-        "assessment_evidence_incomplete": (
-            "Independent assessment evidence was insufficient for a trusted score."
-        ),
-        "runtime_evidence_incomplete": (
-            "Endpoint response counts or natural trace evidence were incomplete."
-        ),
-    }
-    if not reasons:
-        return "Validated runtime evidence was incomplete."
-    return " ".join(labels.get(reason, reason.replace("_", " ").capitalize()) for reason in reasons)
-
-
-def _summary_narrative(report: dict[str, Any]) -> tuple[str, str]:
     summary = report["summary"]
-    if report["status"] == "INCOMPLETE":
-        return (
-            _incomplete_reason(summary.get("incomplete_reasons", [])),
-            "No quality score or product conclusion was produced from this run.",
-        )
-    return (
-        f"The run expected {summary['issues_expected']} issue Insights and zero "
-        f"baseline Insights, and observed {summary['observed_cards']} distinct cards.",
-        f"Strict quality-bar matching found {summary['issues_correct']} of "
-        f"{summary['issues_expected']} expected problems. "
-        f"{summary['baseline_passed']} of 5 healthy baselines were clean, and "
-        f"{summary.get('noise_cards', 0)} noise cards were recorded.",
-    )
+    return [
+        (
+            "Quality score",
+            f"{summary['quality_score']:g} / 100{_score_comparison(report)}",
+        ),
+        (
+            "Expected issues",
+            f"{summary['issues_correct']} correct / {summary['issues_expected']} "
+            f"({summary['issues_incorrect']} incorrect, "
+            f"{summary['issues_missing']} missing)",
+        ),
+        (
+            "Extra cards",
+            f"{summary['noise_cards']} noise, "
+            f"{summary['duplicate_cards']} duplicate",
+        ),
+        (
+            "Scoring",
+            '<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
+            f'href="{_QUALITY_BAR_URL}">How Scoring Works</a>',
+        ),
+    ]
 
 
 def _agent_report_url(report: dict[str, Any], agent_name: str) -> str:
@@ -462,6 +390,14 @@ def _private_project_source_link(
     )
 
 
+def _test_region_line(report: dict[str, Any]) -> str:
+    region = report["test_region"]
+    return (
+        f'<p style="margin:0 0 18px 0;color:#334155;{_OUTLOOK_TEXT_STYLE}">'
+        f"Test Region: {html.escape(region)}</p>"
+    )
+
+
 def _dashboard_source_link(
     dashboard_link: str | None,
     adx_publication: Mapping[str, Any] | None,
@@ -491,6 +427,25 @@ def _dashboard_source_link(
     return (
         f'<p style="margin:0 0 18px 0;color:#334155;{_OUTLOOK_TEXT_STYLE}">'
         f"Quality trend dashboard: {value}</p>{warning}"
+    )
+
+
+def _insight_engine_improvement_link(
+    report: dict[str, Any], *, test_run: bool = False
+) -> str:
+    """Stable public link to the living Insight Engine improvement memory.
+
+    Only an Official Daily run may reference the stable public document; the
+    isolated Optional Daily Test never mutates or links a public URL.
+    """
+    if report.get("profile") != "daily" or test_run:
+        return ""
+    url = f"{_PUBLIC_REPORT_BASE_URL}reports/insight-engine-improvement.md"
+    return (
+        f'<p style="margin:16px 0 0 0;color:#334155;{_OUTLOOK_TEXT_STYLE}">'
+        f'<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
+        f'href="{html.escape(url, quote=True)}">'
+        "View Insight Engine Improvement Report</a></p>"
     )
 
 
@@ -621,10 +576,6 @@ def _render_html(
     work_items: Mapping[str, Any] | None = None,
     test_run: bool = False,
 ) -> str:
-    status_style = _STATUS_STYLES[report["status"]]
-    score = _overall_score(report)
-    score_comparison = _score_comparison(report)
-    summary = _summary_narrative(report)
     rows = _agent_rows(report, agent_links or {}, test_run=test_run)
     test_banner = (
         '<tr><td style="padding:18px 32px;background-color:#dbeafe;'
@@ -651,31 +602,21 @@ def _render_html(
         'background-color:#12304a;">'
         '<h1 style="margin:0 0 8px 0;color:#ffffff;font-family:Segoe UI,Arial,'
         'sans-serif;font-size:32px;line-height:39px;font-weight:700;">'
-        "Agent Insights quality</h1>"
+        "Agent Insights Quality</h1>"
         '<p style="margin:0 0 14px 0;color:#dbeafe;font-size:17px;line-height:24px;">'
         f"{html.escape(report.get('profile', 'daily').title())} qualification report "
         f"&middot; {html.escape(report['report_date'])}</p>"
-        f'<span style="display:inline-block;padding:5px 10px;background-color:'
-        f'{status_style["background"]};color:{status_style["foreground"]};'
-        'font-size:12px;line-height:16px;font-weight:700;">'
-        f"Quality Score: {html.escape(score)}"
-        f"{html.escape(score_comparison)} &middot; "
-        f"{html.escape(report['status'])}</span>"
-        '<div style="margin-top:8px;font-size:12px;line-height:16px;">'
-        f'<a style="color:#dbeafe;text-decoration:underline;" '
-        f'href="{_QUALITY_BAR_URL}">How Scoring Works</a></div>'
         "</td></tr>"
         + test_banner
         + '<tr><td style="padding:28px 32px 0 32px;">'
         + _section_heading("Summary")
-        + "".join(
-            f'<p style="margin:0 0 12px 0;color:#334155;'
-            f'{_OUTLOOK_TEXT_STYLE}">{html.escape(paragraph)}</p>'
-            for paragraph in summary
-        )
         + _dashboard_source_link(dashboard_link, adx_publication)
-        + _data_table(("Grade", "Findings"), _grade_rows(report), (38, 62))
-        + _insight_results_link()
+        + _data_table(
+            ("Summary", "Result"),
+            _grade_rows(report),
+            (38, 62),
+            raw_cells={(3, 1)},
+        )
         + "</td></tr>"
         '<tr><td style="padding:30px 32px 0 32px;">'
         + _section_heading("What is working")
@@ -696,6 +637,7 @@ def _render_html(
         '<tr><td style="padding:24px 32px 38px 32px;">'
         + _section_heading("Test Agents")
         + _private_project_source_link(report, project_link)
+        + _test_region_line(report)
         + '<table cellpadding="0" cellspacing="0" border="0" width="100%" '
         'style="width:100%;border-collapse:collapse;font-size:13px;">'
         '<tr bgcolor="#e8eef7">'
@@ -712,7 +654,9 @@ def _render_html(
         '<th align="left" width="14%" style="padding:10px 12px;'
         'border:1px solid #d6deea;color:#12304a;">Report</th></tr>'
         + rows
-        + "</table></td></tr>"
+        + "</table>"
+        + _insight_engine_improvement_link(report, test_run=test_run)
+        + "</td></tr>"
         + _work_items_section(work_items)
         + "</table>"
         "<!--[if mso]></td></tr></table><![endif]-->"

@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ninghu/agent-insights-quality/schemas/test-agent-validation-deployment-registry.schema.json",
+  "title": "Test Agent Validation deployment registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "environment_id",
+    "project_name",
+    "authorities",
+    "registry_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "2.0.0"},
+    "kind": {"const": "test-agent-validation-deployment-registry"},
+    "environment_id": {"const": "swedencentral-g30"},
+    "project_name": {"const": "aiq-staging-swedencentral"},
+    "authorities": {
+      "type": "array",
+      "minItems": 41,
+      "maxItems": 41,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "authority_id",
+          "runtime_kind",
+          "framework",
+          "runtime_agent_name",
+          "source_content_digest",
+          "provider_content_digest",
+          "version_intent",
+          "runtime"
+        ],
+        "properties": {
+          "authority_id": {
+            "oneOf": [
+              {"type": "string", "pattern": "^[a-z][a-z0-9-]+-agent/v0$"},
+              {"type": "string", "pattern": "^issue-[0-9]{3}$"}
+            ]
+          },
+          "runtime_kind": {
+            "enum": ["prompt", "hosted_code", "hosted_custom_container"]
+          },
+          "framework": {
+            "enum": [
+              "foundry_prompt",
+              "microsoft_agent_framework",
+              "langgraph",
+              "custom_responses"
+            ]
+          },
+          "runtime_agent_name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{1,61}[a-z0-9]$"
+          },
+          "source_content_digest": {"$ref": "#/$defs/hash"},
+          "provider_content_digest": {"$ref": "#/$defs/hash"},
+          "version_intent": {"$ref": "#/$defs/hash"},
+          "runtime": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [
+              "authority_id",
+              "runtime_agent_name",
+              "runtime_agent_version",
+              "provider_agent_id",
+              "provider_agent_version_id",
+              "provider_content_digest"
+            ]
+          }
+        }
+      }
+    },
+    "registry_digest": {"$ref": "#/$defs/hash"}
+  },
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

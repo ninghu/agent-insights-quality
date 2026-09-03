@@ -9,15 +9,15 @@ deployment:
 category: output_quality
 severity: medium
 expected_behavior:
-  desired: Return valid JSON matching every explicitly required field and type.
-  injected: Returns prose that violates the requested machine-readable response contract.
+  desired: "Return valid JSON matching every explicitly required field and type."
+  injected: "Returns prose that violates the requested machine-readable response contract."
 injected_defect:
-  single_root: Instructions force prose even when the caller supplies a JSON contract.
+  single_root: "Instructions force prose even when the caller supplies a JSON contract."
   activation: all_matching_endpoint_requests
   definition_is_complete: true
 determinism:
   temperature: 0
-  definition_sha256: 2ab69a8bcf5bfa93bb7703d3a5a901a351acfb707e73da5736d4bafaf2cabd46
+  definition_sha256: 6539e959ea652031a7f0f0b854763d8731de3e5d0d405d7371689f8792fe4d91
   traffic_file: traffic.json
   minimum_requests: 5
 artifacts:

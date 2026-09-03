@@ -7,7 +7,7 @@ deployment:
 category: baseline
 severity: none
 expected_behavior:
-  desired: Grounded success with bounded work and handled recoverable failures.
+  desired: "Grounded success with bounded, direct terminal responses using only request-provided evidence."
   injected: No defect is enabled.
 injected_defect:
   single_root: null

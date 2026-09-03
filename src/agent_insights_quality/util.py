@@ -16,8 +16,16 @@ class ContractError(ValueError):
     """A reviewed repository or runtime contract is invalid."""
 
 
+class SharedRuntimeError(ContractError):
+    """A shared substrate failure invalidates every active Agent lane."""
+
+
 class InsightWindowExpiredError(ContractError):
     """Correlated evidence is outside the requested Agent Insights window."""
+
+
+class TraceAssertionActivationError(ContractError):
+    """Trace assertion evidence cannot become a trusted activation result."""
 
 
 def runtime_root() -> Path:
@@ -43,10 +51,24 @@ def canonical_bytes(value: Any) -> bytes:
     ).encode("ascii")
 
 
+def json_values_equal(actual: Any, expected: Any) -> bool:
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        return set(actual) == set(expected) and all(
+            json_values_equal(actual[key], value)
+            for key, value in expected.items()
+        )
+    if isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            json_values_equal(actual_item, expected_item)
+            for actual_item, expected_item in zip(actual, expected, strict=True)
+        )
+    return bool(actual == expected)
+
+
 def content_hash(value: Any) -> str:
     return "sha256:" + hashlib.sha256(canonical_bytes(value)).hexdigest()
-
-
 def file_hash(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -115,3 +137,11 @@ def immutable_json(path: Path, value: Mapping[str, Any]) -> None:
             raise ContractError(f"{path} is immutable and already has different content")
         return
     atomic_json(path, value)
+
+
+def immutable_text(path: Path, value: str) -> None:
+    if path.exists():
+        if path.read_text(encoding="utf-8") != value:
+            raise ContractError(f"{path} is immutable and already has different content")
+        return
+    atomic_text(path, value)

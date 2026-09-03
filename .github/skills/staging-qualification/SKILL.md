@@ -1,56 +1,57 @@
 ---
 name: staging-qualification
-description: Run full-catalog staging qualification and reviewed promotion to daily.
+description: Run the durable Sweden Central staging qualification for a reviewed candidate.
 license: MIT
 ---
 
-# Staging Qualification
+# Sweden Central Staging Qualification
 
-Use this skill for human-reviewed impact-based qualification before promotion.
+Use `.github/skills/test-agent-validation/SKILL.md` as the executable contract.
 
-1. Sync the latest default branch before changing contracts or infrastructure.
-2. Validate catalogs, generated docs, schemas, tests, Ruff, and Bicep.
-3. Reuse and verify the fixed `g29` telemetry resource set and both Foundry Project connections.
-4. Provision staging, reconcile exactly 41 versions and five monitors, and publish the canonical
-   staging registry to the private Azure Blob container.
-5. Fetch the private Quality-tagged work-item snapshot under the durable user-level runtime root.
-6. Wait for the configured `0.1`-hour clean window for all five Agents.
-7. Determine affected Agents from content digests, mappings, and shared-contract changes:
-   - qualify each affected Agent's `v0` and all assigned issues;
-   - reuse reviewed evidence for unchanged Agents only when digest, mapping, and shared contracts are
-     unchanged;
-   - use full-catalog qualification for shared runtime, telemetry, assessment, scoring, schema,
-     infrastructure, or cross-Agent topology changes.
-8. Require one complete package for every selected baseline and issue.
-9. Assess selected baselines and issues with GPT-5.6 Sol. Equal nonzero request, response, and usable
-   response counts plus a verified trace contract prove the reviewed runtime contract was exercised.
-   Semantic assertions are optional corroboration.
-   Independently verify every baseline card; `v0` is a reviewed healthy contract, not proof that its
-   runtime behavior was healthy.
-10. Before finalization, give every `inconclusive` baseline or `INCOMPLETE` issue with complete runtime
-    evidence one focused GPT-5.6 Sol recheck. Re-read the package-bound reviewed Agent source and
-    configuration, current endpoint evidence, independent trace proof, and the card's exact claim.
-    Never send new traffic for this recheck, never force a conclusive verdict, and retain `INCOMPLETE`
-    when independent evidence remains insufficient.
-11. Finalize with `--work-items <snapshot>` and inspect score, noise, ownership, and every non-matched
-    finding. Any
-   `inconclusive` baseline assessment or `INCOMPLETE` issue assessment makes the whole run
-   `INCOMPLETE` with no numeric quality score. Never commit the snapshot.
-   Open the private `report-preview.html` in a browser for human review. It uses the exact same
-   Outlook-safe HTML renderer and private quality-trend dashboard link as the daily email; never
-   commit the preview, dashboard link, or its private context.
-12. After explicit human review, compose promotion from complete trusted PASS/FAIL evidence for
-    affected Agents and latest valid receipts for unchanged Agents. Verify every exact digest and
-    mapping. Never promote or reuse `INCOMPLETE`.
+Prepare the one durable Sweden Central `g30` `aiq-staging-swedencentral` Project and all 41 unique catalog authorities before traffic.
+Never create or delete the Project during validation.
+The visible Copilot coordinator publishes immutable disjoint deployment assignments and independent
+immutable invocation and verification assignments, releases its global lock, and remains responsive
+while coordinator-created visible Copilot sub-sessions do parallel work. Never use subprocesses,
+`ThreadPoolExecutor`, or another hidden in-process pool. Every non-empty phase independently publishes
+one to eight deterministic, cost-balanced logical shards, at most eight, based on selected
+authorities. Each active
+shard maps 1:1 to one visible sub-session.
 
-Use only reviewed tooling that validates targeted reports and composed receipts. If the current CLI
-cannot produce both, stop targeted execution and use full-catalog qualification; never splice
-evidence or receipts manually.
+Only the coordinator may reconcile all exact versions and atomically publish shared topology and
+registry state. It runs preparation, deployment reconciliation, and composition. It gives each
+deployment or invocation sub-session exactly one assigned shard command. Shard commands accept only
+the immutable shard ID and resolve the hidden active generation and authority assignment.
 
-If a run is incomplete, preserve its artifacts, inspect stage-specific error codes, and resume only
-the failing stage when its private checkpoint proves prior work complete. Routine recovery reuses
-`g29`; never create a telemetry resource for a rerun.
+Per-authority invocation receipts publish atomically and generation-fenced immediately after
+definitive completion. The exact reusable contract includes Agent source/content/execution,
+provider-version, runtime, environment, Project, telemetry resource-set, response/session,
+invoke/evidence windows, complete issue/paired-`v0` provenance, source-artifact
+schema/version/origin/digest, and an unambiguous completed POST outcome. Cross-generation extraction
+is one-time and fenced against stale sub-sessions.
 
-After exact-digest daily provisioning, perform read-only readiness and registry reconciliation; do
-not send daily smoke traffic. Do not promote `INCOMPLETE`, overlap the short clean window, weaken
-an Issue contract to make a run pass, or persist private runtime identifiers.
+Completed current invocations support verify-only recovery with no new endpoint traffic. Verification
+uses at most eight visible sub-sessions; each claims one authority at a time, uses no internal
+concurrency, deploy, invocation, or shared private prompt/CLI state, and immediately persists one
+immutable result before claiming another. Each session repeats the no-ID
+`prepare-test-agent-validation-assessment` and `import-test-agent-validation-assessment` cycle.
+Claims are hidden, worktree-bound, distinct, and bounded by a lease; status reports only aggregate
+slots. Query one batched stable telemetry snapshot for a baseline or two target batches for an issue
+and its paired `v0`; never stabilize attempts independently.
+
+Each new verification package binds the reused receipt digest and current verifier commit/digest.
+Keep `PASS`, `FAIL`, and `INCOMPLETE` separate under baseline `5/5`, deterministic `5/5` plus paired
+`v0` `0/5`, and model-mediated `>=5/7` plus paired `v0` `0/7`. Later failures never discard completed
+authority results. A new generation selects only missing, `INCOMPLETE`, or exact-binding-changed
+authorities and invokes only those without current exact-bound completed receipts. Composition covers
+exactly all 41 authorities. `run-test-agent-validation` is status/next-action guidance only and never
+creates sub-sessions or executes phase work.
+
+Reuse matching stable Agents and their exact server-assigned versions. Content changes create a new
+version under the same stable name; no command floats `latest`. Retain sessions, responses, Agents,
+versions, Hosted topology, images, telemetry, registries, and evidence. Supersede incomplete local
+state without deletion; validation has no cleanup.
+
+Validation remains report-free and requires explicit human review before the immutable approval
+record or Daily promotion. Never mutate the preserved West US 2 resources or lifecycle, send Daily
+smoke traffic, or write private runtime content to Git.

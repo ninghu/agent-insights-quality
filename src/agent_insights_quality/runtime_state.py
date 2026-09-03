@@ -13,6 +13,9 @@ from agent_insights_quality.models import (
     InsightEvidence,
     InsightRunCheckpoint,
     InvocationEvidence,
+    RequestCompletionEvidence,
+    SemanticAssertionEvidence,
+    TraceAssertionEvidence,
     VersionResult,
 )
 from agent_insights_quality.util import ContractError, atomic_json, read_json, runtime_root
@@ -118,12 +121,71 @@ class VersionCheckpointStore:
     def __init__(self, root: Path, run_contract_digest: str) -> None:
         self._root = root
         self._run_contract_digest = run_contract_digest
+        self._recovery_lock = threading.Lock()
 
     def has_progress(self, agent_name: str) -> bool:
         return any(self._root.glob(f"{agent_name}-*.json"))
 
     def has_version_progress(self, agent_name: str, logical_version: str) -> bool:
         return self._path(agent_name, logical_version).exists()
+
+    def has_unresolved_insight_state(self) -> bool:
+        for path in self._root.glob("*.json"):
+            value = read_json(path)
+            try:
+                self._validate_header(
+                    value,
+                    str(value["agent_name"]),
+                    str(value["logical_version"]),
+                    str(value["foundry_version"]),
+                    str(value["content_digest"]),
+                )
+            except KeyError as error:
+                raise ContractError("Version checkpoint identity is invalid") from error
+            if (
+                value.get("insight_start_pending") is True
+                or value.get("insight_drain_pending") is True
+            ):
+                return True
+        return False
+
+    def claim_agent_recovery(self, agent_name: str, maximum: int) -> bool:
+        if (
+            isinstance(maximum, bool)
+            or not isinstance(maximum, int)
+            or maximum < 0
+        ):
+            raise ContractError("Recovery checkpoint maximum is invalid")
+        path = self._recovery_path(agent_name)
+        with self._recovery_lock:
+            value = (
+                read_json(path)
+                if path.exists()
+                else {
+                    "schema_version": "1.0.0",
+                    "run_contract_digest": self._run_contract_digest,
+                    "agent_name": agent_name,
+                    "maximum": maximum,
+                    "claimed": 0,
+                }
+            )
+            claimed = value.get("claimed")
+            if (
+                value.get("schema_version") != "1.0.0"
+                or value.get("run_contract_digest") != self._run_contract_digest
+                or value.get("agent_name") != agent_name
+                or value.get("maximum") != maximum
+                or isinstance(claimed, bool)
+                or not isinstance(claimed, int)
+                or claimed < 0
+                or claimed > maximum
+            ):
+                raise ContractError("Recovery checkpoint is invalid")
+            if claimed == maximum:
+                return False
+            value["claimed"] = claimed + 1
+            atomic_json(path, value)
+            return True
 
     def invocation(
         self,
@@ -153,6 +215,47 @@ class VersionCheckpointStore:
                 usable_response_count=int(payload["usable_response_count"]),
                 semantic_assertion_count=int(payload["semantic_assertion_count"]),
                 semantic_assertions_passed=int(payload["semantic_assertions_passed"]),
+                request_summaries=tuple(
+                    RequestCompletionEvidence(
+                        request_index=int(item["request_index"]),
+                        response_count=int(item["response_count"]),
+                        usable_response=bool(item["usable_response"]),
+                        semantic_assertion_count=int(item["semantic_assertion_count"]),
+                        semantic_assertions_passed=int(
+                            item["semantic_assertions_passed"]
+                        ),
+                        assertion_results=tuple(
+                            SemanticAssertionEvidence(
+                                assertion=str(result["assertion"]),
+                                passed=bool(result["passed"]),
+                            )
+                            for result in item["assertion_results"]
+                        ),
+                        activation_gate=bool(item["activation_gate"]),
+                        direct_terminal_response_count=int(
+                            item["direct_terminal_response_count"]
+                        ),
+                        function_call_count=int(item["function_call_count"]),
+                        trace_assertion_count=int(
+                            item["trace_assertion_count"]
+                        ),
+                        trace_assertions_passed=int(
+                            item["trace_assertions_passed"]
+                        ),
+                        trace_assertion_results=tuple(
+                            TraceAssertionEvidence(
+                                assertion=str(result["assertion"]),
+                                passed=bool(result["passed"]),
+                            )
+                            for result in item["trace_assertion_results"]
+                        ),
+                    )
+                    for item in payload["request_summaries"]
+                ),
+                trace_assertion_count=int(payload["trace_assertion_count"]),
+                trace_assertions_passed=int(
+                    payload["trace_assertions_passed"]
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ContractError("Version checkpoint invocation is invalid") from error
@@ -311,6 +414,22 @@ class VersionCheckpointStore:
         value["insight_start_pending"] = True
         self._write(agent_name, logical_version, value)
 
+    def clear_insight_start_pending(
+        self,
+        agent_name: str,
+        logical_version: str,
+        foundry_version: str,
+        content_digest: str,
+    ) -> None:
+        value = self._load(
+            agent_name,
+            logical_version,
+            foundry_version,
+            content_digest,
+        )
+        value.pop("insight_start_pending", None)
+        self._write(agent_name, logical_version, value)
+
     def save_insight_run(
         self,
         agent_name: str,
@@ -344,6 +463,40 @@ class VersionCheckpointStore:
         )
         value.pop("insight_run", None)
         value.pop("insight_start_pending", None)
+        value.pop("insight_drain_pending", None)
+        self._write(agent_name, logical_version, value)
+
+    def insight_drain_pending(
+        self,
+        agent_name: str,
+        logical_version: str,
+        foundry_version: str,
+        content_digest: str,
+    ) -> bool:
+        return (
+            self._load(
+                agent_name,
+                logical_version,
+                foundry_version,
+                content_digest,
+            ).get("insight_drain_pending")
+            is True
+        )
+
+    def clear_insight_drain_pending(
+        self,
+        agent_name: str,
+        logical_version: str,
+        foundry_version: str,
+        content_digest: str,
+    ) -> None:
+        value = self._load(
+            agent_name,
+            logical_version,
+            foundry_version,
+            content_digest,
+        )
+        value.pop("insight_drain_pending", None)
         self._write(agent_name, logical_version, value)
 
     def result(
@@ -392,7 +545,47 @@ class VersionCheckpointStore:
                 semantic_assertions_passed=int(
                     payload["semantic_assertions_passed"]
                 ),
+                trace_assertion_count=int(payload["trace_assertion_count"]),
+                trace_assertions_passed=int(payload["trace_assertions_passed"]),
                 trace_contract_verified=bool(payload["trace_contract_verified"]),
+                trace_behavior_summary=dict(payload["trace_behavior_summary"]),
+                endpoint_request_summaries=[
+                    RequestCompletionEvidence(
+                        request_index=int(item["request_index"]),
+                        response_count=int(item["response_count"]),
+                        usable_response=bool(item["usable_response"]),
+                        semantic_assertion_count=int(item["semantic_assertion_count"]),
+                        semantic_assertions_passed=int(
+                            item["semantic_assertions_passed"]
+                        ),
+                        assertion_results=tuple(
+                            SemanticAssertionEvidence(
+                                assertion=str(result["assertion"]),
+                                passed=bool(result["passed"]),
+                            )
+                            for result in item["assertion_results"]
+                        ),
+                        activation_gate=bool(item["activation_gate"]),
+                        direct_terminal_response_count=int(
+                            item["direct_terminal_response_count"]
+                        ),
+                        function_call_count=int(item["function_call_count"]),
+                        trace_assertion_count=int(
+                            item["trace_assertion_count"]
+                        ),
+                        trace_assertions_passed=int(
+                            item["trace_assertions_passed"]
+                        ),
+                        trace_assertion_results=tuple(
+                            TraceAssertionEvidence(
+                                assertion=str(result["assertion"]),
+                                passed=bool(result["passed"]),
+                            )
+                            for result in item["trace_assertion_results"]
+                        ),
+                    )
+                    for item in payload["endpoint_request_summaries"]
+                ],
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ContractError("Version checkpoint result is invalid") from error
@@ -412,6 +605,29 @@ class VersionCheckpointStore:
             content_digest,
         )
         value["result"] = asdict(result)
+        self._write(agent_name, logical_version, value)
+
+    def save_rejected_result(
+        self,
+        agent_name: str,
+        logical_version: str,
+        foundry_version: str,
+        content_digest: str,
+        result: VersionResult,
+        *,
+        drain_pending: bool,
+    ) -> None:
+        value = self._load(
+            agent_name,
+            logical_version,
+            foundry_version,
+            content_digest,
+        )
+        value["result"] = asdict(result)
+        if drain_pending:
+            value["insight_drain_pending"] = True
+        else:
+            value.pop("insight_drain_pending", None)
         self._write(agent_name, logical_version, value)
 
     def clear(
@@ -473,6 +689,15 @@ class VersionCheckpointStore:
         ):
             raise ContractError("Version checkpoint identity is invalid")
         return self._root / f"{agent_name}-{logical_version}.json"
+
+    def _recovery_path(self, agent_name: str) -> Path:
+        if (
+            not agent_name.endswith("-agent")
+            or "/" in agent_name
+            or "\\" in agent_name
+        ):
+            raise ContractError("Recovery checkpoint identity is invalid")
+        return self._root / "recovery" / f"{agent_name}.json"
 
     def _validate_header(
         self,

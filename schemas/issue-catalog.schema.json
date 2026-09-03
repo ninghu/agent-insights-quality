@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "selection", "issues"],
+  "required": ["schema_version", "selection", "source_delta_contracts", "issues"],
   "properties": {
     "schema_version": {"const": "1.0.0"},
     "selection": {
@@ -10,9 +10,38 @@
       "additionalProperties": false,
       "required": ["issues_per_agent_daily", "weekdays", "full_run_on_change"],
       "properties": {
-        "issues_per_agent_daily": {"const": 5},
+        "issues_per_agent_daily": {"const": 4},
         "weekdays": {"const": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]},
         "full_run_on_change": {"const": true}
+      }
+    },
+    "source_delta_contracts": {
+      "type": "object",
+      "minProperties": 36,
+      "maxProperties": 36,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^issue-[0-9]{3}$": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["authority"],
+          "properties": {
+            "authority": {"enum": ["prompt_definition", "hosted_source"]},
+            "changed_paths": {
+              "const": ["definition.instructions", "metadata.logical_version"]
+            },
+            "changed_files": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1}
+            }
+          },
+          "oneOf": [
+            {"required": ["changed_paths"]},
+            {"required": ["changed_files"]}
+          ]
+        }
       }
     },
     "issues": {
@@ -22,7 +51,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "title", "agent", "category", "severity", "implementation", "root_cause", "expected_fix", "trace_contract"],
+        "required": ["id", "title", "agent", "category", "severity", "implementation", "validation_mode", "root_cause", "expected_fix", "trace_contract"],
         "properties": {
           "id": {"type": "string", "pattern": "^issue-[0-9]{3}$"},
           "title": {"type": "string", "minLength": 5, "maxLength": 120},
@@ -30,6 +59,7 @@
           "category": {"enum": ["tool_call_failures", "latency", "cost_tokens", "reliability_errors", "hallucinations", "output_quality", "context_memory", "safety_guardrails"]},
           "severity": {"enum": ["high", "medium", "low"]},
           "implementation": {"type": "string", "pattern": "^agents/[a-z-]+/issues/issue-[0-9]{3}$"},
+          "validation_mode": {"enum": ["deterministic", "model_mediated"]},
           "root_cause": {"type": "string", "minLength": 20},
           "expected_fix": {"type": "string", "minLength": 20},
           "trace_contract": {

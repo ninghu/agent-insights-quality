@@ -4,8 +4,8 @@ from agent_insights_quality.automation_policy import load_automation_policy
 from agent_insights_quality.util import ROOT, read_yaml
 
 
-def test_qualification_profiles_forbid_debug_traffic() -> None:
+def test_qualification_profiles_forbid_debug_traffic_and_preflight_wait() -> None:
     policy = read_yaml(ROOT / "config" / "automation.yaml")
     assert policy["qualification_profiles_allow_debug_traffic"] is False
-    assert policy["clean_window_preflight_required"] is True
+    assert policy["clean_window_preflight_required"] is False
     assert load_automation_policy().insight_lookback_hours == 0.1

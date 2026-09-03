@@ -10,7 +10,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 
-def configure_observability(service_name: str) -> None:
+def configure_observability(service_name: str, service_version: str) -> None:
     connection_string = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING")
     collector = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
     if not connection_string and not collector:
@@ -25,6 +25,15 @@ def configure_observability(service_name: str) -> None:
     if isinstance(current, TracerProvider):
         current.add_span_processor(processor)
         return
-    provider = TracerProvider(resource=Resource.create({"service.name": service_name}))
+    provider = TracerProvider(
+        resource=Resource.create(
+            {
+                "service.name": service_name,
+                "service.version": service_version,
+                "gen_ai.agent.name": service_name,
+                "gen_ai.agent.version": service_version,
+            }
+        )
+    )
     provider.add_span_processor(processor)
     trace.set_tracer_provider(provider)

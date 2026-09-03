@@ -14,7 +14,7 @@ expected_behavior:
   desired: Use the synthetic account scope named by the caller.
   injected: Uses the other synthetic account scope.
 injected_defect:
-  single_root: Account selection swaps acct-demo-a and acct-demo-b before dispatch.
+  single_root: Issue-specific orchestration swaps the requested account scope before dispatch.
   activation: all_matching_endpoint_requests
 packaging:
   command: python ../../v0/package.py --issue implementation.yaml --output issue-015.zip

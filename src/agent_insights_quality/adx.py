@@ -20,7 +20,12 @@ from agent_insights_quality.report_summary import (
     improvement_rows,
     working_capabilities,
 )
-from agent_insights_quality.reporting import REQUIRED_FIELDS, validate_report
+from agent_insights_quality.reporting import (
+    REQUIRED_FIELDS,
+    issue_primary_card,
+    validate_report,
+)
+from agent_insights_quality.selection import DAILY_ISSUE_COUNT
 from agent_insights_quality.util import (
     ROOT,
     ContractError,
@@ -35,7 +40,7 @@ from agent_insights_quality.util import (
 ADX_DATABASE = "AgentInsightsQuality"
 _PROGRESS = ProgressReporter("aiq-adx")
 ADX_TABLE = "DailyQualityPublications"
-PAYLOAD_VERSION = "2.0.0"
+PAYLOAD_VERSION = "3.0.0"
 _ADX_API_VERSION = "2025-02-14"
 _RUN_ID = re.compile(r"aiq-[0-9]{8}(?:-r[0-9]{2,})?", re.ASCII)
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}", re.ASCII)
@@ -422,7 +427,7 @@ def build_publication_payload(
         fields = [
             passed
             for item in agent_issues
-            for passed in item["assessment"]["fields"].values()
+            for passed in (issue_primary_card(item) or {}).get("fields", {}).values()
         ]
         agents.append(
             {
@@ -446,22 +451,23 @@ def build_publication_payload(
                 ],
                 "issues_expected": len(agent_issues),
                 "issues_correct": sum(
-                    item["result"] == "PASS" for item in agent_issues
+                    item["outcome"] == "correct" for item in agent_issues
                 ),
-                "issues_partial": sum(
-                    item["detail"] == "PARTIAL" for item in agent_issues
+                "issues_incorrect": sum(
+                    item["outcome"] == "incorrect" for item in agent_issues
                 ),
-                "issues_failed": sum(
-                    item["result"] == "FAIL" for item in agent_issues
-                ),
-                "issues_incomplete": sum(
-                    item["result"] == "INCOMPLETE" for item in agent_issues
+                "issues_missing": sum(
+                    item["outcome"] == "missing" for item in agent_issues
                 ),
                 "noise_cards": sum(
                     card.get("evaluation") == "noise" for card in baseline_cards
                 )
                 + sum(
-                    card.get("finding_type") in {"NOISE", "DUPLICATE"}
+                    card.get("finding_type") == "NOISE"
+                    for card in issue_cards
+                ),
+                "duplicate_cards": sum(
+                    card.get("finding_type") == "DUPLICATE"
                     for card in issue_cards
                 ),
                 "fields_passed": sum(passed is True for passed in fields),
@@ -495,7 +501,7 @@ def build_publication_payload(
                 agent=agent,
                 issue_id=None,
                 issue_title="Healthy baseline",
-                result="BASELINE",
+                outcome="BASELINE",
                 card=card,
                 card_index=index,
             )
@@ -505,7 +511,7 @@ def build_publication_payload(
     for item in issues:
         context = issue_by_id[item["issue_id"]]
         agent_context = agent_by_name[item["agent"]]
-        fields = item["assessment"]["fields"]
+        fields = (issue_primary_card(item) or {}).get("fields", {})
         card_evaluations = item["assessment"].get("card_evaluations", [])
         issue_metrics.append(
             {
@@ -521,7 +527,7 @@ def build_publication_payload(
                 "expected_fix": context["expected_fix"],
                 "status": item["status"],
                 "error_code": item.get("error_code"),
-                "result": item["result"],
+                "outcome": item["outcome"],
                 "detail": item["detail"],
                 "verdict": item["assessment"]["verdict"],
                 "ownership": item["assessment"]["ownership"],
@@ -551,7 +557,7 @@ def build_publication_payload(
                 agent=item["agent"],
                 issue_id=item["issue_id"],
                 issue_title=context["title"],
-                result=item["result"],
+                outcome=item["outcome"],
                 card=card,
                 card_index=index,
             )
@@ -562,12 +568,14 @@ def build_publication_payload(
             "agent": item["agent"],
             "issue_id": item["issue_id"],
             "issue_title": issue_by_id[item["issue_id"]]["title"],
-            "result": item["result"],
+            "outcome": item["outcome"],
             "field": field,
             "passed": passed,
         }
         for item in issues
-        for field, passed in sorted(item["assessment"]["fields"].items())
+        for field, passed in sorted(
+            (issue_primary_card(item) or {}).get("fields", {}).items()
+        )
     ]
     highlights = [
         {
@@ -597,22 +605,15 @@ def build_publication_payload(
     return {
         "schema_version": PAYLOAD_VERSION,
         "run": {
-            "status": report["status"],
             "report_url": report_url,
             "baseline_passed": summary["baseline_passed"],
             "issues_correct": summary["issues_correct"],
+            "issues_incorrect": summary["issues_incorrect"],
+            "issues_missing": summary["issues_missing"],
             "issues_expected": summary["issues_expected"],
-            "issues_partial": summary["issues_partial"],
-            "quality_failures": summary["quality_failures"],
-            "incomplete": summary["incomplete"],
-            "incomplete_reasons": summary.get("incomplete_reasons", []),
             "noise_cards": summary["noise_cards"],
-            "unverified_cards": summary["unverified_cards"],
-            "observed_cards": summary["observed_cards"],
-            "field_quality_score": summary["field_quality_score"],
-            "clean_card_precision": summary["clean_card_precision"],
+            "duplicate_cards": summary["duplicate_cards"],
             "quality_score": summary["quality_score"],
-            "quality_threshold": summary["quality_threshold"],
             "quality_score_formula": summary["quality_score_formula"],
         },
         "agents": agents,
@@ -766,7 +767,7 @@ def _card_metric(
     agent: str,
     issue_id: str | None,
     issue_title: str,
-    result: str,
+    outcome: str,
     card: dict[str, Any],
     card_index: int,
 ) -> dict[str, Any]:
@@ -779,7 +780,7 @@ def _card_metric(
         "agent": agent,
         "issue_id": issue_id or "",
         "issue_title": issue_title,
-        "result": result,
+        "outcome": outcome,
         "card_index": card_index,
         "title": card["title"],
         "category": card["category"],
@@ -822,12 +823,13 @@ def _validate_daily_source(report: dict[str, Any]) -> None:
     summary = report["summary"]
     if (
         report["profile"] != "daily"
-        or len(report["issues"]) != 25
-        or summary["issues_expected"] != 25
-        or len({item["issue_id"] for item in report["issues"]}) != 25
+        or len(report["issues"]) != DAILY_ISSUE_COUNT
+        or summary["issues_expected"] != DAILY_ISSUE_COUNT
+        or len({item["issue_id"] for item in report["issues"]})
+        != DAILY_ISSUE_COUNT
     ):
         raise AdxError(
-            "ADX publication requires one valid 25-issue daily report",
+            "ADX publication requires one valid 20-issue daily report",
             code="invalid_report",
         )
     baseline_agents = {item["agent"] for item in report["baseline"]}
@@ -846,25 +848,13 @@ def _validate_daily_source(report: dict[str, Any]) -> None:
             code="invalid_report",
         )
     score = summary["quality_score"]
-    threshold = summary["quality_threshold"]
-    valid_status = (
-        report["status"] == "INCOMPLETE"
-        and summary["incomplete"] is True
-        and score is None
-    ) or (
-        report["status"] == "PASS"
-        and summary["incomplete"] is False
-        and score is not None
-        and score >= threshold
-    ) or (
-        report["status"] == "FAIL"
-        and summary["incomplete"] is False
-        and score is not None
-        and score < threshold
-    )
-    if not valid_status:
+    if (
+        isinstance(score, bool)
+        or not isinstance(score, (int, float))
+        or not 0 <= score <= 100
+    ):
         raise AdxError(
-            "Daily report status and score are inconsistent",
+            "Daily report score is invalid",
             code="invalid_report",
         )
 
@@ -1020,7 +1010,7 @@ def _publication_command(
             code="invalid_report",
         )
     encoded = base64.b64encode(canonical_bytes(payload)).decode("ascii")
-    tag = f"aiq-v2-run:{run_id}"
+    tag = f"aiq-v3-run:{run_id}"
     return (
         f".set-or-append {ADX_TABLE} "
         f"with (tags='[\"{tag}\"]', ingestIfNotExists='[\"{tag}\"]') <|\n"

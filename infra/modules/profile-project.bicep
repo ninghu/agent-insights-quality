@@ -7,6 +7,8 @@ param automationOwner string
 param automationPrincipalId string
 @allowed(['daily', 'staging'])
 param profile string
+param environment string
+param telemetryGeneration string
 param monitoringReaderRoleId string
 param modelInferenceRoleId string
 param acrPullRoleId string
@@ -36,6 +38,9 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
     agentInsightsQualityQualification: 'true'
     automationOwner: automationOwner
     profile: profile
+    environment: environment
+    location: location
+    generation: telemetryGeneration
   }
   properties: {}
 }
@@ -107,6 +112,9 @@ resource insightsConnection 'Microsoft.CognitiveServices/accounts/projects/conne
       ResourceId: applicationInsights.id
       purpose: 'agent-insights-quality'
       profile: profile
+      environment: environment
+      location: location
+      generation: telemetryGeneration
     }
   }
   dependsOn: [
@@ -114,3 +122,15 @@ resource insightsConnection 'Microsoft.CognitiveServices/accounts/projects/conne
     registryConnection
   ]
 }
+
+output projectId string = project.id
+output projectPrincipalId string = project.identity.principalId
+output connectionIds array = [
+  registryConnection.id
+  insightsConnection.id
+]
+output roleAssignmentIds array = [
+  automationInsightsReader.id
+  automationProjectManager.id
+  ...projectRbac.outputs.roleAssignmentIds
+]

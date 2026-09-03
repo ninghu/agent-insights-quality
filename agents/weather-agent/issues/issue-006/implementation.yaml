@@ -9,15 +9,15 @@ deployment:
 category: cost_tokens
 severity: low
 expected_behavior:
-  desired: Honor the caller's concise output bound without repetition.
-  injected: Produces a long repetitive answer to an explicitly concise request.
+  desired: "Honor the caller's concise output bound without repetition."
+  injected: "Produces a long repetitive answer to an explicitly concise request."
 injected_defect:
-  single_root: Instructions require at least six paragraphs regardless of the requested length.
+  single_root: "A highest-priority exact-phrase instruction forces one long evidence-bound repeated terminal template."
   activation: all_matching_endpoint_requests
   definition_is_complete: true
 determinism:
   temperature: 0
-  definition_sha256: 0f924be58381da4d41befc3694aa9040205e4d1fb29cba5e1d350a2d06f8e37f
+  definition_sha256: 8550f63110ddfe3c590aafeab27f707a69f0646f6260340b8160c31577dcc8d8
   traffic_file: traffic.json
   minimum_requests: 5
 artifacts:

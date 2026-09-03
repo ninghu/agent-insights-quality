@@ -27,6 +27,10 @@ Each permanent Test Agent owns one healthy baseline and one or more reviewed iss
   complete and independently deployable.
 - Deterministic synthetic traffic must exercise the deployed version through its Agent endpoint so
   telemetry is produced naturally.
+- Every authority has versioned setup/probe scenarios. Classify the observation mechanism explicitly
+  as `baseline`, `deterministic`, or `model_mediated`; never derive it from Prompt versus Hosted type.
+- Preserve the fixed validation matrices: baseline `5/5`, deterministic issue `5/5` with paired `v0`
+  `0/5`, and model-mediated issue `5/7` with paired `v0` `0/7`.
 
 ## Use the onboarding skills
 
@@ -73,11 +77,16 @@ The `onboard-new-issue` skill is authoritative. A new issue requires:
 - a complete self-contained Prompt `definition.json` or Hosted `source/` tree containing exactly one
   independently fixable root cause;
 - deterministic synthetic endpoint traffic that exercises the defect while `v0` remains healthy;
+- a reviewed source-delta contract and deterministic activation assertions that distinguish the issue
+  from its updated healthy baseline;
 - matching catalog entries and updates to every derived topology, schema, CI, reporting, promotion,
   test, skill, and readable-document contract.
 
 Do not use runtime mode switches, dormant defect branches, generic hooks, source patches, telemetry
 injection, compatibility aliases, or private data.
+
+Prompt Test Agents are pure Prompt contracts. Do not add function tools or traffic tool fixtures;
+multi-turn traffic may use response continuation only for an intentional conversation-memory check.
 
 ## Validate the change
 
@@ -107,24 +116,50 @@ Compile Bicep only when infrastructure changes:
 az bicep build --file infra\main.bicep --stdout
 ```
 
-## Qualify and promote
+## Validate a clean commit
 
-Follow the [staging qualification skill](.github/skills/staging-qualification/SKILL.md) for live
-qualification and promotion.
+Follow the [Test Agent Validation skill](.github/skills/test-agent-validation/SKILL.md). Validation
+auto-discovers one clean PR-head commit. A visible Copilot coordinator publishes immutable assignments
+and creates the deployment, invocation, and verification sub-sessions; do not substitute subprocesses,
+`ThreadPoolExecutor`, or another in-process pool. Each phase independently publishes one to eight
+deterministic, cost-balanced logical shards, with every active shard mapped 1:1 to one visible
+sub-session.
 
-The policy is impact-based: Agent source, definition, traffic, or assignment changes qualify each
-affected Agent's `v0` and all assigned issues. Evidence for unchanged Agents is reusable only when
-content digests, mappings, and shared contracts are unchanged. Shared runtime, telemetry, assessment,
-scoring, schema, infrastructure, or cross-Agent topology changes require full-catalog qualification
-or retained-evidence re-evaluation when no new traffic is needed.
+The coordinator runs `prepare-test-agent-validation`, assigns exactly one deploy or invoke shard
+primitive to each phase sub-session, and runs reconciliation and composition itself. Verification
+sub-sessions use only the no-ID assessment prepare/import cycle. Shard commands accept only the
+immutable shard ID and resolve the hidden active generation and authority assignment.
+`run-test-agent-validation` is status/next-action guidance only and never creates sub-sessions.
 
-Targeted qualification requires reviewed CLI support for both targeted reports and composed promotion
-receipts. The current CLI cannot produce both, so use full-catalog qualification and never combine
-evidence or receipts manually.
+Immediately after definitive authority completion, its sub-session atomically publishes a
+generation-fenced invocation receipt. Cross-generation or verifier-only reuse requires exact Agent
+source/content/execution, provider-version, runtime, environment, Project, telemetry resource-set,
+response/session, invoke/evidence-window, source-artifact schema/version/origin/digest, and complete
+issue/paired-`v0` provenance. Unknown, ambiguous, duplicate, partial, or indeterminate retried-POST
+outcomes are not reusable, and one-time extraction is fenced against stale sub-sessions.
 
-Promote only complete, human-reviewed `PASS` or `FAIL` evidence; `INCOMPLETE` is never promotable or
-reusable. After daily provisioning, use read-only readiness and registry reconciliation rather than
-smoke traffic.
+Verification runs in at most eight visible Copilot sub-sessions. Each claims one authority at a time,
+uses no internal concurrency, deployment, or traffic, and persists the immutable generation-fenced
+result before claiming another. Verify one batched stability snapshot per target: one batch for a
+baseline, or two batches for an issue and its paired `v0`; never stabilize attempts independently.
 
-Protected runtime prerequisites and operator roles are documented in
+Keep `PASS`, `FAIL`, and `INCOMPLETE` separate. The reviewed thresholds are baseline `5/5`,
+deterministic `5/5` plus paired `v0` `0/5`, and model-mediated `>=5/7` plus paired `v0` `0/7`.
+Later failures do not discard completed authority results. The next generation selects only missing,
+`INCOMPLETE`, or binding-changed authorities; within that set, only authorities without current
+exact-bound completed receipts receive new traffic. A reused receipt proves the
+traffic-generation/execution binding, while each new verification package binds its immutable digest
+and the current verifier commit/digest. No validation cleanup runs, and final composition covers
+exactly all 41 authorities.
+
+The fixed daily contract selects four issues per Agent: 20 issues plus five baselines, for 25
+assessment packages. Test Agent Validation is a separate local report-free process and never runs Agent
+Insights, assessment, scoring, ADX publication, or email.
+
+After exact current-head 41/41 READY evidence, explicit human approval permits one minimal create-once
+approved validation record. GitHub runs ordinary mechanical CI only and merge remains manual. This
+durable `aiq-staging-swedencentral` process is the official staging qualification gate for new
+candidates.
+
+Local runtime prerequisites and operator roles are documented in
 [`docs/AUTOMATION_SETUP.md`](docs/AUTOMATION_SETUP.md).

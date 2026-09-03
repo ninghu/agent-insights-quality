@@ -20,11 +20,13 @@ from agent_insights_quality.adx import (
     resolve_quality_analytics,
     resolve_report_catalogs,
 )
-from agent_insights_quality.catalogs import load_catalogs
+from agent_insights_quality.catalogs import load_catalogs, source_integrity_digest
 from agent_insights_quality.report_summary import (
     improvement_rows,
     working_capabilities,
 )
+from agent_insights_quality.reporting import _summary_metrics, issue_primary_card
+from agent_insights_quality.scoring import issue_outcome
 from agent_insights_quality.util import ROOT, content_hash, read_json
 
 
@@ -37,14 +39,14 @@ class _FakeAdxClient:
     def query(self, database: str, query: str) -> list[dict[str, str]]:
         assert database == "AgentInsightsQuality"
         assert "DailyQualityPublications" in query
-        assert "PayloadVersion == '2.0.0'" in query
+        assert "PayloadVersion == '3.0.0'" in query
         return list(self.rows)
 
     def manage(self, database: str, command: str) -> None:
         assert database == "AgentInsightsQuality"
         self.commands.append(command)
-        assert "PayloadVersion='2.0.0'" in command
-        assert "aiq-v2-run:" in command
+        assert "PayloadVersion='3.0.0'" in command
+        assert "aiq-v3-run:" in command
         assert command.index("Payload=parse_json") < command.index(
             "PayloadVersion="
         )
@@ -58,9 +60,48 @@ class _FakeAdxClient:
 
 def _report() -> dict:
     report = deepcopy(read_json(_report_path()))
+    report["schema_version"] = "3.0.0"
+    report.pop("status", None)
+    report["test_region"] = "WestUS2"
     agents, issues = load_catalogs(require_paths=False)
     report["catalog_hashes"]["agents"] = content_hash(agents)
     report["catalog_hashes"]["issues"] = content_hash(issues)
+    report["source_integrity"] = {
+        "verified": True,
+        "contract_digest": source_integrity_digest(agents, issues),
+    }
+    issue_by_id = {item["id"]: item for item in issues["issues"]}
+    selected: list[dict] = []
+    for agent in agents["agents"]:
+        selected.extend(
+            [
+                item
+                for item in report["issues"]
+                if item["agent"] == agent["name"]
+            ][:4]
+        )
+    report["issues"] = selected
+    for item in report["issues"]:
+        item["title"] = issue_by_id[item["issue_id"]]["title"]
+        assessment = item["assessment"]
+        assessment["fields"].pop("root_cause", None)
+        assessment.setdefault("reasoning", assessment["ownership_reason"])
+        for card in assessment["card_evaluations"]:
+            card["fields"].pop("root_cause", None)
+            if card["finding_type"] in {"PARTIAL", "MISMATCHED"}:
+                card["field_reasons"] = {
+                    field: (
+                        f"The synthetic historical fixture marks {field} "
+                        "incorrect for this card."
+                    )
+                    for field, passed in card["fields"].items()
+                    if passed is False
+                }
+        item["observed_count"] = len(assessment["card_evaluations"])
+        item.pop("result", None)
+        item["outcome"] = issue_outcome(assessment["card_evaluations"])
+        item.pop("shadow_v2_primary", None)
+    report["summary"] = _summary_metrics(report["baseline"], report["issues"])
     return report
 
 
@@ -90,11 +131,18 @@ def test_publication_payload_contains_public_safe_explanations() -> None:
     assert payload["schema_version"] == PAYLOAD_VERSION
     assert len(payload["agents"]) == 5
     assert len(payload["baselines"]) == 5
-    assert len(payload["issues"]) == 25
-    assert len(payload["cards"]) == 36
-    assert len(payload["fields"]) == 175
-    assert len(payload["highlights"]) == 8
-    assert payload["run"]["quality_score_formula"] == "field_weighted_v1"
+    assert len(payload["issues"]) == 20
+    assert len(payload["cards"]) == sum(
+        len(item["assessment"]["card_evaluations"])
+        for item in [*report["baseline"], *report["issues"]]
+    )
+    assert len(payload["fields"]) == sum(
+        len((issue_primary_card(item) or {}).get("fields", {}))
+        for item in report["issues"]
+    )
+    assert payload["run"]["quality_score_formula"] == (
+        "correct_over_expected_plus_noise_v1"
+    )
     assert payload["run"]["report_url"].endswith(
         "/reports/daily/2026/08/26/report.md"
     )
@@ -105,7 +153,7 @@ def test_publication_payload_contains_public_safe_explanations() -> None:
     assert issue["expected_fix"]
     assert issue["ownership_reason"]
     assert issue["issue_url"].endswith(f"#{issue['issue_id']}")
-    assert issue["fields_expected"] == 7
+    assert issue["fields_expected"] in {0, 6}
     card = payload["cards"][0]
     assert card["reasoning"]
     assert card["ownership_reason"]
@@ -141,11 +189,11 @@ def test_publication_payload_contains_public_safe_explanations() -> None:
         "description",
         "linked_traces",
         "proposed_fix",
-        "root_cause",
         "severity",
         "title",
     }
     rendered = json.dumps(payload, sort_keys=True)
+    assert "coverage_quality_precision_v2" not in rendered
     for excluded_key in (
         "catalog_hashes",
         "delivery",
@@ -427,6 +475,7 @@ def test_quality_analytics_resource_is_resolved_by_tags(monkeypatch) -> None:
 
 def test_adx_infrastructure_uses_existing_production_resource_group() -> None:
     main = (ROOT / "infra" / "main.bicep").read_text(encoding="utf-8")
+    analytics = (ROOT / "infra" / "analytics.bicep").read_text(encoding="utf-8")
     module = (
         ROOT / "infra" / "modules" / "quality-analytics.bicep"
     ).read_text(encoding="utf-8")
@@ -434,8 +483,9 @@ def test_adx_infrastructure_uses_existing_production_resource_group() -> None:
         encoding="utf-8"
     )
     assert "agent-insights-quality-rg" in main
-    assert "Standard_E2ads_v5" in main
-    assert "@minValue(2)" in main
+    assert "quality-analytics.bicep" not in main
+    assert "Standard_E2ads_v5" in analytics
+    assert "@minValue(2)" in analytics
     assert "tier: 'Standard'" in module
     assert "enableAutoStop: false" in module
     assert "softDeletePeriod: 'P730D'" in module
@@ -450,4 +500,4 @@ def test_adx_infrastructure_uses_existing_production_resource_group() -> None:
         "AIQDailyHighlights",
     ):
         assert function in schema
-    assert "where PayloadVersion == '2.0.0'" in schema
+    assert "where PayloadVersion == '3.0.0'" in schema

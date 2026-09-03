@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import time
 import copy
 import functools
@@ -19,13 +20,27 @@ import zipfile
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from agent_insights_quality.catalogs import catalog_hashes, agent_model_contract
+from agent_insights_quality.catalogs import (
+    agent_model_contract,
+    catalog_hashes,
+    load_catalogs,
+    source_integrity_digest,
+)
 from agent_insights_quality.azure_cli import azure_cli
-from agent_insights_quality.live import _azure_cli_token
+from agent_insights_quality.live import (
+    _azure_cli_token,
+    _normalize_fixture,
+    _semantic_assertion_names,
+    _trace_assertion_names,
+)
 from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.registry import load_registry, publish_registry
-from agent_insights_quality.reporting import validate_staging_report
+from agent_insights_quality.reporting import (
+    _baseline_runtime_evidence_complete,
+    _runtime_evidence_complete,
+    validate_staging_report,
+)
 from agent_insights_quality.run_manifest import validate_manifest
 from agent_insights_quality.util import (
     ROOT,
@@ -33,6 +48,7 @@ from agent_insights_quality.util import (
     atomic_json,
     content_hash,
     file_hash,
+    read_json,
     runtime_root,
 )
 from jsonschema import Draft202012Validator
@@ -45,6 +61,9 @@ def _is_package_file(path: Path) -> bool:
         and path.suffix.casefold() not in {".pyc", ".pyo"}
     )
 
+_AGENT_CREATE_PROPAGATION_SECONDS = 10 * 60
+_AGENT_CREATE_MAX_BACKOFF_SECONDS = 30
+
 
 class RemoteHttpError(ContractError):
     def __init__(self, status: int, code: str, message: str, route: str) -> None:
@@ -53,6 +72,8 @@ class RemoteHttpError(ContractError):
             + (f" ({code}: {message})" if code else "")
         )
         self.status = status
+        self.code = code
+        self.route = route
 
     @property
     def transient(self) -> bool:
@@ -80,6 +101,7 @@ def provision_profile(
     )
     progress(f"{profile.name}: waiting for Foundry Project data plane")
     client.wait_project()
+    test_region = profile.resolve_test_region()
     progress(f"{profile.name}: checking reusable registry")
     reusable = _reusable_registry(
         client,
@@ -87,6 +109,7 @@ def provision_profile(
         agents,
         issues,
         approved_digests,
+        test_region,
     )
     if reusable is not None:
         progress(f"{profile.name}: existing 41-version registry is reusable")
@@ -149,9 +172,14 @@ def provision_profile(
     ):
         raise ContractError("Profile monitor inventory is not exact")
     registry = {
-        "schema_version": "1.0.0",
+        "schema_version": "3.0.0",
         "profile": profile.name,
+        "environment_id": profile.environment_id,
+        "location": profile.location,
+        "telemetry_resource_set": profile.telemetry_resource_set,
+        "account_name": profile.account_name,
         "project_name": profile.project_name,
+        "test_region": test_region,
         "test_agent_model": model_contract,
         "catalog_hashes": catalog_hashes(agents, issues),
         "agents": registry_agents,
@@ -169,6 +197,7 @@ def _reusable_registry(
     agents: dict[str, Any],
     issues: dict[str, Any],
     approved_digests: dict[str, str] | None,
+    test_region: str,
 ) -> dict[str, Any] | None:
     if not profile.registry_path.exists():
         return None
@@ -179,6 +208,8 @@ def _reusable_registry(
             catalog_hashes=catalog_hashes(agents, issues),
         )
     except ContractError:
+        return None
+    if registry["test_region"] != test_region:
         return None
     expected_monitors = {
         name: value["monitor_id"]
@@ -262,6 +293,13 @@ def validate_promotion_receipt(
         raise ContractError("Staging promotion receipt Test Agent model is stale")
     if value["artifact_manifest_hash"] != expected_hashes["artifacts"]:
         raise ContractError("Staging promotion receipt artifact manifest is stale")
+    current_agents, current_issues = load_catalogs()
+    expected_integrity = source_integrity_digest(
+        current_agents,
+        current_issues,
+    )
+    if value["source_integrity_digest"] != expected_integrity:
+        raise ContractError("Staging promotion receipt source integrity is stale")
     digests = value["version_content_digests"]
     if value["deployment_manifest_hash"] != content_hash(digests):
         raise ContractError("Staging promotion receipt deployment manifest is invalid")
@@ -278,6 +316,7 @@ def create_promotion_receipt(
 ) -> dict[str, Any]:
     validate_staging_report(report, issue_catalog)
     validate_manifest(manifest)
+    _validate_manifest_traffic_evidence(manifest, issue_catalog)
     if manifest["profile"] != "staging":
         raise ContractError("Daily promotion requires a staging run manifest")
     if human_reviewed is not True:
@@ -289,8 +328,58 @@ def create_promotion_receipt(
     if (
         manifest["catalog_hashes"] != registry["catalog_hashes"]
         or report["manifest_reference"] != manifest["manifest_hash"]
+        or report.get("source_integrity") != manifest["source_integrity"]
+        or manifest["source_integrity"].get("verified") is not True
     ):
         raise ContractError("Staging report, manifest, and registry are not bound")
+    report_baselines = {item["agent"]: item for item in report["baseline"]}
+    report_issues = {item["issue_id"]: item for item in report["issues"]}
+    for agent in manifest["agents"]:
+        baseline_complete = _baseline_runtime_evidence_complete(
+            agent,
+            agent["baseline"],
+        )
+        report_baseline = report_baselines.get(agent["name"])
+        if (
+            agent["baseline"]["status"] not in {"passed", "not_at_bar"}
+            or
+            not baseline_complete
+            or report_baseline is None
+            or report_baseline.get("foundry_version")
+            != agent["baseline"]["foundry_version"]
+            or report_baseline.get("status") != agent["baseline"]["status"]
+            or report_baseline.get("runtime_evidence_complete") is not True
+        ):
+            raise ContractError(
+                "Staging baseline runtime evidence is incomplete"
+            )
+        for issue in agent["issues"]:
+            runtime_complete = _runtime_evidence_complete(
+                issue,
+                require_activation=agent["type"] == "prompt",
+            )
+            report_issue = report_issues.get(issue["issue_id"])
+            if (
+                issue["status"] not in {"observed", "not_at_bar"}
+                or
+                not runtime_complete
+                or report_issue is None
+                or report_issue.get("foundry_version")
+                != issue["foundry_version"]
+                or report_issue.get("status") != issue["status"]
+                or report_issue.get("evidence_reference")
+                != issue["evidence_reference"]
+                or report_issue.get("runtime_evidence_complete") is not True
+            ):
+                raise ContractError(
+                    "Staging issue runtime or activation evidence is incomplete"
+                )
+    current_agents, current_issues = load_catalogs()
+    if (
+        manifest["source_integrity"]["contract_digest"]
+        != source_integrity_digest(current_agents, current_issues)
+    ):
+        raise ContractError("Staging source integrity evidence is stale")
     manifest_versions = {
         f"{agent['name']}/{value['logical_version']}": value["foundry_version"]
         for agent in manifest["agents"]
@@ -311,19 +400,90 @@ def create_promotion_receipt(
     if len(digests) != 41:
         raise ContractError("Staging registry does not contain all 41 exact versions")
     return {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "profile": "staging",
         "qualified": True,
         "human_reviewed": True,
-        "qualification_status": report["status"],
         "quality_score": report["summary"]["quality_score"],
+        "quality_score_formula": report["summary"]["quality_score_formula"],
         "test_agent_model": registry["test_agent_model"],
         "catalog_hashes": registry["catalog_hashes"],
         "artifact_manifest_hash": registry["catalog_hashes"]["artifacts"],
         "version_content_digests": digests,
         "deployment_manifest_hash": content_hash(digests),
+        "qualification_manifest_hash": manifest["manifest_hash"],
+        "source_integrity_digest": manifest["source_integrity"][
+            "contract_digest"
+        ],
         "report_reference": content_hash(report),
     }
+
+
+def _validate_manifest_traffic_evidence(
+    manifest: dict[str, Any],
+    issue_catalog: dict[str, Any],
+) -> None:
+    issue_by_id = {
+        issue["id"]: issue for issue in issue_catalog["issues"]
+    }
+    for agent in manifest["agents"]:
+        for issue in agent["issues"]:
+            issue_id = issue["issue_id"]
+            contract = issue_by_id.get(issue_id)
+            if contract is None or contract["agent"] != agent["name"]:
+                raise ContractError(
+                    "Manifest issue traffic is not in the reviewed catalog"
+                )
+            traffic = read_json(
+                ROOT / contract["implementation"] / "traffic.json"
+            )
+            requests = traffic.get("requests")
+            summaries = issue["endpoint_request_summaries"]
+            if not isinstance(requests, list) or len(requests) != len(summaries):
+                raise ContractError(
+                    f"{issue_id} manifest traffic coverage is inconsistent"
+                )
+            for raw, summary in zip(requests, summaries, strict=True):
+                expected = _normalize_fixture(raw)
+                assertion_names = _semantic_assertion_names(
+                    expected["semantic_assertions"]
+                )
+                observed_names = tuple(
+                    result["assertion"]
+                    for result in summary["assertion_results"]
+                )
+                trace_assertion_names = _trace_assertion_names(
+                    expected["trace_assertions"]
+                )
+                observed_trace_names = tuple(
+                    result["assertion"]
+                    for result in summary["trace_assertion_results"]
+                )
+                if (
+                    summary["activation_gate"] != expected["activation_gate"]
+                    or summary["semantic_assertion_count"]
+                    != len(assertion_names)
+                    or observed_names != assertion_names
+                    or summary["semantic_assertions_passed"]
+                    != len(assertion_names)
+                    or any(
+                        result["passed"] is not True
+                        for result in summary["assertion_results"]
+                    )
+                    or summary["trace_assertion_count"]
+                    != len(trace_assertion_names)
+                    or observed_trace_names != trace_assertion_names
+                    or summary["trace_assertions_passed"]
+                    != len(trace_assertion_names)
+                    or any(
+                        result["passed"] is not True
+                        for result in summary["trace_assertion_results"]
+                    )
+                ):
+                    raise ContractError(
+                        f"{issue_id} manifest assertion or activation evidence "
+                        "does not match authoritative traffic"
+                    )
 
 
 def build_artifact(
@@ -331,6 +491,7 @@ def build_artifact(
     issue: dict[str, Any] | None,
     *,
     support_images: Mapping[str, str] | None = None,
+    hosted_environment_variables: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     logical_version = issue["id"] if issue else "v0"
     root = ROOT / (
@@ -365,6 +526,9 @@ def build_artifact(
         )
         host = _read_yaml(baseline_root / "host.yaml")
         definition = _hosted_definition(host, profile_endpoint=None)
+        definition["environment_variables"].update(
+            hosted_environment_variables or {}
+        )
         return {
             "kind": "hosted_code",
             "definition": definition,
@@ -381,6 +545,9 @@ def build_artifact(
         raise ContractError(f"Digest-pinned Support image for {logical_version} is required")
     container = _read_yaml(ROOT / agent["baseline_path"] / "container.yaml")
     definition = _container_definition(container)
+    definition["environment_variables"].update(
+        hosted_environment_variables or {}
+    )
     definition["container_configuration"]["image"] = image
     return {
         "kind": "hosted_custom_container",
@@ -394,6 +561,8 @@ def _build_support_images(
     agent: dict[str, Any],
     *,
     progress: ProgressReporter | None = None,
+    record_resource: Callable[[dict[str, Any]], None] | None = None,
+    reusable_images: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     reporter = progress or ProgressReporter("aiq-provision")
     report = reporter.emit
@@ -414,25 +583,80 @@ def _build_support_images(
         raise ContractError("Current Azure user cannot sign in to the owned registry")
     root = ROOT / "agents" / agent["name"]
     versions = ["v0", *agent["issue_ids"]]
+    reusable = dict(reusable_images or {})
+    if not set(reusable).issubset(versions) or any(
+        not re.fullmatch(
+            rf"{re.escape(registry)}\.azurecr\.io/"
+            r"agent-insights-quality-support@sha256:[0-9a-f]{64}",
+            image,
+        )
+        for image in reusable.values()
+    ):
+        raise ContractError("Reusable Support image bindings are invalid")
     tags = {
         logical: _support_image_tag(root, logical)
         for logical in versions
     }
     existing = {
-        logical: _existing_acr_image(registry, tag, progress=reporter)
+        logical: reusable.get(logical)
+        or _existing_acr_image(registry, tag, progress=reporter)
         for logical, tag in tags.items()
     }
     if all(existing.values()):
-        report(f"{profile.name}/support-ticket-agent: all images found in cache")
+        report(f"{profile.name}/support-ticket-agent: all images resolved exactly")
         return {logical: str(existing[logical]) for logical in versions}
-    private_root = runtime_root()
-    private_root.mkdir(parents=True, exist_ok=True)
-    report(f"{profile.name}/support-ticket-agent: preparing Python wheelhouse")
-    with tempfile.TemporaryDirectory(
-        prefix="aiq-wheelhouse-",
-        dir=private_root,
-    ) as temporary:
-        wheelhouse = Path(temporary)
+    wheelhouse = _support_wheelhouse(root, reporter)
+    report(f"{profile.name}/support-ticket-agent: wheelhouse ready")
+    handler = functools.partial(
+        _QuietHttpHandler,
+        directory=wheelhouse,
+    )
+    server = http.server.ThreadingHTTPServer(("0.0.0.0", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        return {
+            logical: str(existing[logical])
+            if existing[logical]
+            else _build_and_push_support_image(
+                registry=registry,
+                root=root,
+                logical_version=logical,
+                wheelhouse_port=server.server_port,
+                progress=reporter,
+                record_resource=record_resource,
+            )
+            for logical in versions
+        }
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=30)
+
+
+def _support_wheelhouse(
+    root: Path,
+    reporter: ProgressReporter,
+) -> Path:
+    requirements = root / "v0" / "requirements.txt"
+    requirements_digest = file_hash(requirements)
+    cache_root = (
+        runtime_root()
+        / "test-agent-validation"
+        / "cache"
+        / "support-wheelhouse"
+    )
+    cache_root.mkdir(parents=True, exist_ok=True)
+    target = cache_root / requirements_digest.removeprefix("sha256:")
+    if target.exists():
+        _validate_support_wheelhouse(target, requirements_digest)
+        reporter.emit("support-ticket-agent: wheelhouse found in cache")
+        return target
+    reporter.emit("support-ticket-agent: preparing Python wheelhouse")
+    temporary = Path(
+        tempfile.mkdtemp(prefix="building-", dir=cache_root)
+    )
+    try:
         with reporter.heartbeat(
             "support-ticket-agent: wheelhouse download"
         ) as outcome:
@@ -443,9 +667,9 @@ def _build_support_images(
                     "pip",
                     "download",
                     "-r",
-                    str(root / "v0" / "requirements.txt"),
+                    str(requirements),
                     "--dest",
-                    str(wheelhouse),
+                    str(temporary),
                     "--platform",
                     "manylinux2014_x86_64",
                     "--python-version",
@@ -466,32 +690,65 @@ def _build_support_images(
             if download.returncode != 0:
                 outcome.fail()
         if download.returncode != 0:
-            raise ContractError("Support image wheelhouse preparation failed")
-        report(f"{profile.name}/support-ticket-agent: wheelhouse ready")
-        handler = functools.partial(
-            _QuietHttpHandler,
-            directory=wheelhouse,
+            raise ContractError(
+                "Support image wheelhouse preparation failed"
+            )
+        files = {
+            path.name: file_hash(path)
+            for path in sorted(temporary.iterdir())
+            if path.is_file()
+        }
+        if not files:
+            raise ContractError(
+                "Support image wheelhouse is empty"
+            )
+        atomic_json(
+            temporary / "receipt.json",
+            {
+                "schema_version": "1.0.0",
+                "requirements_digest": requirements_digest,
+                "files": files,
+            },
         )
-        server = http.server.ThreadingHTTPServer(("0.0.0.0", 0), handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            return {
-                logical: str(existing[logical])
-                if existing[logical]
-                else _build_and_push_support_image(
-                    registry=registry,
-                    root=root,
-                    logical_version=logical,
-                    wheelhouse_port=server.server_port,
-                    progress=reporter,
-                )
-                for logical in versions
-            }
-        finally:
-            server.shutdown()
-            server.server_close()
-            thread.join(timeout=30)
+        os.replace(temporary, target)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+    _validate_support_wheelhouse(target, requirements_digest)
+    return target
+
+
+def _validate_support_wheelhouse(
+    path: Path,
+    requirements_digest: str,
+) -> None:
+    receipt_path = path / "receipt.json"
+    if not receipt_path.is_file():
+        raise ContractError(
+            "Support image wheelhouse cache receipt is missing"
+        )
+    receipt = read_json(receipt_path)
+    files = receipt.get("files")
+    if (
+        set(receipt) != {
+            "schema_version",
+            "requirements_digest",
+            "files",
+        }
+        or receipt.get("schema_version") != "1.0.0"
+        or receipt.get("requirements_digest") != requirements_digest
+        or not isinstance(files, dict)
+        or not files
+        or files
+        != {
+            item.name: file_hash(item)
+            for item in sorted(path.iterdir())
+            if item.is_file() and item.name != "receipt.json"
+        }
+    ):
+        raise ContractError(
+            "Support image wheelhouse cache does not match requirements"
+        )
 
 
 def _build_and_push_support_image(
@@ -501,15 +758,12 @@ def _build_and_push_support_image(
     logical_version: str,
     wheelhouse_port: int,
     progress: ProgressReporter | None = None,
+    record_resource: Callable[[dict[str, Any]], None] | None = None,
 ) -> str:
     reporter = progress or ProgressReporter("aiq-provision")
     report = reporter.emit
-    issue_path = (
-        "v0/implementation.yaml"
-        if logical_version == "v0"
-        else f"issues/{logical_version}/implementation.yaml"
-    )
-    tag = _support_image_tag(root, logical_version)
+    manifest = _support_build_context_manifest(root, logical_version)
+    tag = _support_image_tag(root, logical_version, manifest=manifest)
     local_tag = f"aiq-support-{tag}:local"
     remote_tag = (
         f"{registry}.azurecr.io/agent-insights-quality-support:{tag}"
@@ -523,28 +777,12 @@ def _build_and_push_support_image(
         "--no-index --trusted-host host.docker.internal "
         f"--find-links=http://host.docker.internal:{wheelhouse_port} --pre"
     )
-    source_root = (
-        root / "v0" / "source"
-        if logical_version == "v0"
-        else root / "issues" / logical_version / "source"
-    )
     with tempfile.TemporaryDirectory(
         prefix="support-build-",
         dir=runtime_root(),
     ) as temporary:
         context = Path(temporary)
-        shutil.copytree(
-            root / "v0",
-            context / "v0",
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
-        )
-        shutil.rmtree(context / "v0" / "source")
-        shutil.copytree(
-            source_root,
-            context / "v0" / "source",
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
-        )
-        shutil.copyfile(root / issue_path, context / "v0" / "implementation.yaml")
+        _materialize_support_build_context(manifest, context)
         with reporter.heartbeat(
             f"support-ticket-agent/{logical_version}: image build"
         ) as outcome:
@@ -573,6 +811,34 @@ def _build_and_push_support_image(
     if build.returncode != 0:
         raise ContractError(f"Support image build failed for {logical_version}")
     report(f"support-ticket-agent/{logical_version}: image built; pushing")
+    authority_id = (
+        "support-ticket-agent/v0"
+        if logical_version == "v0"
+        else logical_version
+    )
+    tag_resource = {
+        "kind": "acr_tag",
+        "intent_reference": remote_tag,
+        "deterministic_name": f"agent-insights-quality-support:{tag}",
+        "authority_id": authority_id,
+        "parent_id": None,
+    }
+    manifest_resource = {
+        "kind": "acr_manifest",
+        "intent_reference": content_hash(
+            {
+                "kind": "acr_manifest",
+                "repository": "agent-insights-quality-support",
+                "tag": tag,
+            }
+        ),
+        "deterministic_name": "agent-insights-quality-support",
+        "authority_id": authority_id,
+        "parent_id": None,
+    }
+    if record_resource is not None:
+        record_resource({**tag_resource, "state": "create_intent"})
+        record_resource({**manifest_resource, "state": "create_intent"})
     try:
         subprocess.run(
             ["docker", "tag", local_tag, remote_tag],
@@ -595,6 +861,21 @@ def _build_and_push_support_image(
                     outcome.fail()
             match = re.search(r"digest:\s*(sha256:[0-9a-f]{64})", push.stdout)
             if push.returncode == 0 and match:
+                if record_resource is not None:
+                    record_resource(
+                        {
+                            **tag_resource,
+                            "state": "created",
+                            "provider_id": remote_tag,
+                        }
+                    )
+                    record_resource(
+                        {
+                            **manifest_resource,
+                            "state": "created",
+                            "provider_id": match.group(1),
+                        }
+                    )
                 report(f"support-ticket-agent/{logical_version}: image published")
                 return (
                     f"{registry}.azurecr.io/agent-insights-quality-support@"
@@ -602,6 +883,22 @@ def _build_and_push_support_image(
                 )
             recovered = _existing_acr_image(registry, tag, progress=reporter)
             if recovered:
+                if record_resource is not None:
+                    digest = recovered.rsplit("@", 1)[-1]
+                    record_resource(
+                        {
+                            **tag_resource,
+                            "state": "created",
+                            "provider_id": remote_tag,
+                        }
+                    )
+                    record_resource(
+                        {
+                            **manifest_resource,
+                            "state": "created",
+                            "provider_id": digest,
+                        }
+                    )
                 report(
                     f"support-ticket-agent/{logical_version}: published image recovered"
                 )
@@ -613,6 +910,15 @@ def _build_and_push_support_image(
                 )
                 time.sleep(30 * (attempt + 1))
         raise ContractError(f"Support image push failed for {logical_version}")
+    except (ContractError, OSError, subprocess.SubprocessError) as error:
+        if record_resource is not None:
+            record_resource({**tag_resource, "state": "ambiguous_create"})
+            record_resource({**manifest_resource, "state": "ambiguous_create"})
+        if isinstance(error, ContractError):
+            raise
+        raise ContractError(
+            f"Support image publication failed for {logical_version}"
+        ) from error
     finally:
         try:
             with reporter.heartbeat(
@@ -633,24 +939,165 @@ def _build_and_push_support_image(
             )
 
 
-def _support_image_tag(root: Path, logical_version: str) -> str:
-    relevant = {
-        path.relative_to(root).as_posix(): file_hash(path)
-        for path in sorted((root / "v0").rglob("*"))
+def _support_build_context_manifest(
+    root: Path,
+    logical_version: str,
+) -> dict[str, Path]:
+    baseline = root / "v0"
+    implementation = (
+        baseline / "implementation.yaml"
+        if logical_version == "v0"
+        else root / "issues" / logical_version / "implementation.yaml"
+    )
+    source = (
+        baseline / "source"
+        if logical_version == "v0"
+        else root / "issues" / logical_version / "source"
+    )
+    if not implementation.is_file() or not source.is_dir():
+        raise ContractError(
+            f"Support build authority for {logical_version} is incomplete"
+        )
+    manifest = {
+        f"v0/{path.relative_to(baseline).as_posix()}": path
+        for path in sorted(baseline.rglob("*"))
         if _is_package_file(path)
+        and path != baseline / "implementation.yaml"
+        and (
+            logical_version == "v0"
+            or (baseline / "source") not in path.parents
+        )
+    }
+    source_files = [path for path in sorted(source.rglob("*")) if _is_package_file(path)]
+    if not source_files:
+        raise ContractError(f"Support source authority for {logical_version} is empty")
+    manifest.update(
+        {
+            f"v0/source/{path.relative_to(source).as_posix()}": path
+            for path in source_files
+        }
+    )
+    manifest["v0/implementation.yaml"] = implementation
+    return dict(sorted(manifest.items()))
+
+
+def _support_build_context_digest(
+    root: Path,
+    logical_version: str,
+) -> str:
+    return _support_build_context_manifest_digest(
+        _support_build_context_manifest(root, logical_version)
+    )
+
+
+def _support_build_context_digest_at_commit(
+    root: Path,
+    logical_version: str,
+    commit_sha: str,
+) -> str | None:
+    if not re.fullmatch(r"[0-9a-f]{40}", commit_sha):
+        raise ContractError("Support image migration commit is invalid")
+    try:
+        relative_root = root.resolve().relative_to(ROOT.resolve()).as_posix()
+    except ValueError as error:
+        raise ContractError("Support build authority escapes the repository") from error
+    positive_paths = [f"{relative_root}/v0"]
+    if logical_version != "v0":
+        positive_paths.extend(
+            [
+                f"{relative_root}/issues/{logical_version}/source",
+                f"{relative_root}/issues/{logical_version}/implementation.yaml",
+            ]
+        )
+    listed = subprocess.run(
+        [
+            "git",
+            "ls-tree",
+            "-r",
+            "--name-only",
+            "-z",
+            commit_sha,
+            "--",
+            *positive_paths,
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        timeout=120,
+        check=False,
+    )
+    if listed.returncode != 0:
+        raise ContractError("Support image migration commit could not be read")
+    retained_paths = {
+        item.decode("utf-8")
+        for item in listed.stdout.split(b"\0")
+        if item
     }
     if logical_version != "v0":
-        implementation = root / "issues" / logical_version / "implementation.yaml"
-        relevant[implementation.relative_to(root).as_posix()] = file_hash(implementation)
-        issue_source = root / "issues" / logical_version / "source"
-        relevant.update(
-            {
-                path.relative_to(root).as_posix(): file_hash(path)
-                for path in sorted(issue_source.rglob("*"))
-                if _is_package_file(path)
-            }
+        baseline_source = f"{relative_root}/v0/source/"
+        retained_paths = {
+            path
+            for path in retained_paths
+            if not path.startswith(baseline_source)
+            and path != f"{relative_root}/v0/implementation.yaml"
+        }
+    manifest = _support_build_context_manifest(root, logical_version)
+    current_paths = {
+        source.resolve().relative_to(ROOT.resolve()).as_posix()
+        for source in manifest.values()
+    }
+    if retained_paths != current_paths:
+        return None
+    paths = [*positive_paths]
+    if logical_version != "v0":
+        paths.extend(
+            [
+                f":(exclude){relative_root}/v0/source",
+                f":(exclude){relative_root}/v0/implementation.yaml",
+            ]
         )
-    return content_hash(relevant).split(":")[1][:16]
+    compared = subprocess.run(
+        ["git", "diff", "--quiet", commit_sha, "--", *paths],
+        cwd=ROOT,
+        capture_output=True,
+        timeout=120,
+        check=False,
+    )
+    if compared.returncode == 1:
+        return None
+    if compared.returncode != 0:
+        raise ContractError("Support image migration commit could not be compared")
+    return _support_build_context_manifest_digest(manifest)
+
+
+def _support_build_context_manifest_digest(
+    manifest: Mapping[str, Path],
+) -> str:
+    return content_hash(
+        {
+            relative_path: file_hash(source)
+            for relative_path, source in sorted(manifest.items())
+        }
+    )
+
+
+def _materialize_support_build_context(
+    manifest: Mapping[str, Path],
+    destination: Path,
+) -> None:
+    for relative_path, source in sorted(manifest.items()):
+        target = destination / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
+
+def _support_image_tag(
+    root: Path,
+    logical_version: str,
+    *,
+    manifest: Mapping[str, Path] | None = None,
+) -> str:
+    effective = manifest or _support_build_context_manifest(root, logical_version)
+    return _support_build_context_manifest_digest(effective).removeprefix("sha256:")
 
 
 def _existing_acr_image(
@@ -789,6 +1236,7 @@ class FoundryProvisioner:
         self._profile = profile
         self._token_provider = token_provider
         self._progress = progress or ProgressReporter("aiq-provision")
+        self._project_ready_at: float | None = None
 
     def report_progress(self, message: str) -> None:
         self._progress.emit(message)
@@ -809,6 +1257,7 @@ class FoundryProvisioner:
                     raise
                 response = {"_status": error.status}
             if response["_status"] == 200:
+                self._project_ready_at = time.monotonic()
                 self.report_progress(
                     f"{self._profile.name}: Foundry Project data plane ready"
                 )
@@ -821,6 +1270,116 @@ class FoundryProvisioner:
             time.sleep(10)
         raise ContractError("Foundry Project data plane was not ready within 15 minutes")
 
+    def version_details(
+        self,
+        name: str,
+        version: str,
+        *,
+        hosted: bool,
+        exact_listing_confirmed_at: float | None = None,
+        logical_version: str | None = None,
+    ) -> dict[str, Any]:
+        if not name or not version:
+            raise ContractError("Foundry Agent version identity is required")
+        if exact_listing_confirmed_at is not None and not logical_version:
+            raise ContractError(
+                "Foundry Agent version readiness identity is required"
+            )
+        not_found_attempt = 0
+        while True:
+            try:
+                return self._request(
+                    "GET",
+                    f"/agents/{urllib.parse.quote(name, safe='')}/versions/"
+                    f"{urllib.parse.quote(version, safe='')}",
+                    hosted=hosted,
+                )
+            except RemoteHttpError as error:
+                if not self._version_read_not_found_is_transient(
+                    error,
+                    name=name,
+                    version=version,
+                    exact_listing_confirmed_at=exact_listing_confirmed_at,
+                ):
+                    raise
+                assert exact_listing_confirmed_at is not None
+                elapsed = time.monotonic() - exact_listing_confirmed_at
+                remaining = _AGENT_CREATE_PROPAGATION_SECONDS - elapsed
+                if remaining <= 0:
+                    raise
+                delay = min(
+                    5 * (2**min(not_found_attempt, 3)),
+                    _AGENT_CREATE_MAX_BACKOFF_SECONDS,
+                    remaining,
+                )
+                not_found_attempt += 1
+                self.report_progress(
+                    f"{self._profile.name}/{name}/{logical_version}: "
+                    "exact version readiness propagation pending "
+                    f"at {elapsed:.0f}s; retrying in {delay:.0f}s"
+                )
+                time.sleep(delay)
+
+    def delete_agent(self, name: str, *, hosted: bool) -> None:
+        self._request(
+            "DELETE",
+            f"/agents/{urllib.parse.quote(name, safe='')}",
+            hosted=hosted,
+            expected={200, 202, 204, 404},
+        )
+
+    def version_exists(self, name: str, version: str, *, hosted: bool) -> bool:
+        response = self._request(
+            "GET",
+            f"/agents/{urllib.parse.quote(name, safe='')}/versions/"
+            f"{urllib.parse.quote(version, safe='')}",
+            hosted=hosted,
+            expected={200, 404},
+            include_payload=False,
+        )
+        return response["_status"] == 200
+
+    def agent_exists(self, name: str, *, hosted: bool) -> bool:
+        return self._agent_exists(name, hosted=hosted)
+
+    def delete_session(self, agent_name: str, session_id: str) -> None:
+        self._request(
+            "DELETE",
+            f"/agents/{urllib.parse.quote(agent_name, safe='')}/endpoint/"
+            f"sessions/{urllib.parse.quote(session_id, safe='')}",
+            hosted=True,
+            expected={200, 202, 204, 404},
+        )
+
+    def session_exists(self, agent_name: str, session_id: str) -> bool:
+        response = self._request(
+            "GET",
+            f"/agents/{urllib.parse.quote(agent_name, safe='')}/endpoint/"
+            f"sessions/{urllib.parse.quote(session_id, safe='')}",
+            hosted=True,
+            expected={200, 404},
+            include_payload=False,
+        )
+        return response["_status"] == 200
+
+    def delete_response(self, response_id: str) -> None:
+        self._request(
+            "DELETE",
+            f"/openai/v1/responses/{urllib.parse.quote(response_id, safe='')}",
+            hosted=False,
+            expected={200, 202, 204, 404},
+        )
+
+    def response_exists(self, response_id: str) -> bool:
+        response = self._request(
+            "GET",
+            f"/openai/v1/responses/{urllib.parse.quote(response_id, safe='')}",
+            hosted=False,
+            expected={200, 404},
+            include_payload=False,
+        )
+        return response["_status"] == 200
+
     def ensure_version(
         self,
         *,
@@ -828,14 +1387,60 @@ class FoundryProvisioner:
         logical_version: str,
         artifact: dict[str, Any],
     ) -> str:
-        existing = self._find_version(
-            agent["name"],
-            logical_version,
-            artifact["content_digest"],
-            hosted=agent["type"] != "prompt",
+        version, _ = self._ensure_version(
+            agent=agent,
+            logical_version=logical_version,
+            artifact=artifact,
+        )
+        return version
+
+    def ensure_version_for_readiness(
+        self,
+        *,
+        agent: dict[str, Any],
+        logical_version: str,
+        artifact: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
+        return self._ensure_version(
+            agent=agent,
+            logical_version=logical_version,
+            artifact=artifact,
+        )
+
+    def create_version_for_readiness(
+        self,
+        *,
+        agent: dict[str, Any],
+        logical_version: str,
+        artifact: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
+        return self._ensure_version(
+            agent=agent,
+            logical_version=logical_version,
+            artifact=artifact,
+            reuse_existing=False,
+        )
+
+    def _ensure_version(
+        self,
+        *,
+        agent: dict[str, Any],
+        logical_version: str,
+        artifact: dict[str, Any],
+        reuse_existing: bool = True,
+    ) -> tuple[str, dict[str, Any]]:
+        existing = (
+            self._find_version(
+                agent["name"],
+                logical_version,
+                artifact["content_digest"],
+                hosted=agent["type"] != "prompt",
+            )
+            if reuse_existing
+            else None
         )
         if existing:
-            self._wait_active(
+            details = self._wait_active(
                 agent["name"],
                 existing,
                 hosted=agent["type"] != "prompt",
@@ -844,8 +1449,9 @@ class FoundryProvisioner:
                     "aiq_logical_version": logical_version,
                     "aiq_content_digest": artifact["content_digest"],
                 },
+                not_found_confirmed_at=None,
             )
-            return existing
+            return existing, details
         create_agent = not self._agent_exists(
             agent["name"],
             hosted=agent["type"] != "prompt",
@@ -860,7 +1466,9 @@ class FoundryProvisioner:
             project_endpoint=self._profile.project_endpoint,
         )
         version = ""
-        for attempt in range(3):
+        transient_attempt = 0
+        propagation_attempt = 0
+        while True:
             try:
                 if artifact["kind"] == "hosted_code":
                     version = self._create_source_version(
@@ -891,11 +1499,52 @@ class FoundryProvisioner:
                     version = _version_from_response(response)
                 break
             except RemoteHttpError as error:
-                if not error.transient or attempt == 2:
+                if not reuse_existing:
                     raise
+                if self._agent_create_not_found_is_transient(
+                    error,
+                    create_agent=create_agent,
+                ):
+                    assert self._project_ready_at is not None
+                    elapsed = time.monotonic() - self._project_ready_at
+                    remaining = (
+                        _AGENT_CREATE_PROPAGATION_SECONDS - elapsed
+                    )
+                    if remaining <= 0:
+                        raise
+                    delay = min(
+                        5 * (2**min(propagation_attempt, 3)),
+                        _AGENT_CREATE_MAX_BACKOFF_SECONDS,
+                        remaining,
+                    )
+                    propagation_attempt += 1
+                    self.report_progress(
+                        f"{self._profile.name}/{agent['name']}/"
+                        f"{logical_version}: Agent-create propagation pending "
+                        f"at {elapsed:.0f}s; retrying in {delay:.0f}s"
+                    )
+                    time.sleep(delay)
+                    recovered = self._find_version(
+                        agent["name"],
+                        logical_version,
+                        artifact["content_digest"],
+                        hosted=agent["type"] != "prompt",
+                    )
+                    if recovered:
+                        version = recovered
+                        break
+                    create_agent = not self._agent_exists(
+                        agent["name"],
+                        hosted=agent["type"] != "prompt",
+                    )
+                    continue
+                if not error.transient or transient_attempt == 2:
+                    raise
+                transient_attempt += 1
                 self.report_progress(
                     f"{self._profile.name}/{agent['name']}/{logical_version}: "
-                    f"transient create failure; recovering ({attempt + 2}/3)"
+                    "transient create failure; recovering "
+                    f"({transient_attempt + 1}/3)"
                 )
                 time.sleep(5)
                 recovered = self._find_version(
@@ -907,28 +1556,51 @@ class FoundryProvisioner:
                 if recovered:
                     version = recovered
                     break
-                time.sleep(60 * (attempt + 1))
+                time.sleep(60 * transient_attempt)
                 create_agent = not self._agent_exists(
                     agent["name"],
                     hosted=agent["type"] != "prompt",
                 )
-        recovered = self._recover_exact_version(
-            agent["name"],
-            logical_version,
-            artifact["content_digest"],
-            hosted=agent["type"] != "prompt",
-        )
-        if recovered:
-            version = recovered
+        created_version_confirmed_at = time.monotonic()
+        if reuse_existing:
+            recovered = self._recover_exact_version(
+                agent["name"],
+                logical_version,
+                artifact["content_digest"],
+                hosted=agent["type"] != "prompt",
+            )
+            created_version_confirmed_at = (
+                time.monotonic() if recovered is not None else None
+            )
+            if recovered:
+                version = recovered
         if not version:
             raise ContractError("Foundry version creation returned no version")
-        self._wait_active(
+        details = self._wait_active(
             agent["name"],
             version,
             hosted=agent["type"] != "prompt",
             expected_metadata=metadata,
+            not_found_confirmed_at=created_version_confirmed_at,
         )
-        return version
+        return version, details
+
+    def _agent_create_not_found_is_transient(
+        self,
+        error: RemoteHttpError,
+        *,
+        create_agent: bool,
+    ) -> bool:
+        ready_at = self._project_ready_at
+        return (
+            create_agent
+            and ready_at is not None
+            and error.status == 404
+            and error.code.casefold() == "notfound"
+            and error.route == "POST /agents"
+            and time.monotonic() - ready_at
+            < _AGENT_CREATE_PROPAGATION_SECONDS
+        )
 
     def _recover_exact_version(
         self,
@@ -1042,32 +1714,13 @@ class FoundryProvisioner:
         active = [
             item for item in matches if str(item.get("status") or "").lower() == "active"
         ]
-        if not active and all(
-            str(item.get("status") or "").lower()
-            in {"failed", "canceled", "deleted"}
-            for item in matches
-        ):
-            for terminal in matches:
-                self._delete_owned_version(
-                    name,
-                    str(terminal.get("version") or ""),
-                    hosted=hosted,
-                )
+        if not active:
             return None
-        candidates_to_keep = active or matches
-        candidates_to_keep.sort(
-            key=lambda item: int(str(item.get("version") or "0"))
-        )
-        keep = candidates_to_keep[-1]
-        for duplicate in matches:
-            if duplicate is keep:
-                continue
-            self._delete_owned_version(
-                name,
-                str(duplicate.get("version") or ""),
-                hosted=hosted,
+        if len(active) != 1:
+            raise ContractError(
+                "Foundry Agent has ambiguous active versions for one content digest"
             )
-        return str(keep.get("version") or "")
+        return str(active[0].get("version") or "")
 
     def _delete_owned_version(
         self,
@@ -1134,16 +1787,22 @@ class FoundryProvisioner:
         *,
         hosted: bool,
         expected_metadata: dict[str, str],
-    ) -> None:
+        not_found_confirmed_at: float | None = None,
+    ) -> dict[str, Any]:
         deadline = time.monotonic() + 30 * 60
         next_progress = time.monotonic() + 60
         while time.monotonic() < deadline:
             try:
-                response = self._request(
-                    "GET",
-                    f"/agents/{urllib.parse.quote(name, safe='')}/versions/"
-                    f"{urllib.parse.quote(version, safe='')}",
+                response = self.version_details(
+                    name,
+                    version,
                     hosted=hosted,
+                    exact_listing_confirmed_at=not_found_confirmed_at,
+                    logical_version=(
+                        expected_metadata["aiq_logical_version"]
+                        if not_found_confirmed_at is not None
+                        else None
+                    ),
                 )
             except RemoteHttpError as error:
                 if not error.transient:
@@ -1163,7 +1822,7 @@ class FoundryProvisioner:
                     for key, value in expected_metadata.items()
                 ):
                     raise ContractError("Active version metadata does not match its artifact")
-                return
+                return response
             if status in {"failed", "canceled", "deleted"}:
                 code = ""
                 if isinstance(response.get("error"), dict):
@@ -1182,6 +1841,28 @@ class FoundryProvisioner:
                 next_progress = time.monotonic() + 60
             time.sleep(5)
         raise ContractError("Foundry version did not activate before the deadline")
+
+    def _version_read_not_found_is_transient(
+        self,
+        error: RemoteHttpError,
+        *,
+        name: str,
+        version: str,
+        exact_listing_confirmed_at: float | None,
+    ) -> bool:
+        expected_route = (
+            "GET /agents/"
+            f"{urllib.parse.quote(name, safe='')}/versions/"
+            f"{urllib.parse.quote(version, safe='')}"
+        )
+        return (
+            exact_listing_confirmed_at is not None
+            and error.status == 404
+            and error.code.casefold() == "notfound"
+            and error.route == expected_route
+            and time.monotonic() - exact_listing_confirmed_at
+            < _AGENT_CREATE_PROPAGATION_SECONDS
+        )
 
     def _request(
         self,
@@ -1208,11 +1889,11 @@ class FoundryProvisioner:
         status = 0
         payload = b""
         for attempt in range(attempts):
+            url = self._profile.project_endpoint + path
+            if not path.startswith("/openai/v1/"):
+                url += ("&" if "?" in path else "?") + "api-version=v1"
             request = urllib.request.Request(
-                self._profile.project_endpoint
-                + path
-                + ("&" if "?" in path else "?")
-                + "api-version=v1",
+                url,
                 data=body,
                 headers=headers,
                 method=method,
@@ -1241,6 +1922,14 @@ class FoundryProvisioner:
             time.sleep(2**attempt)
         if status not in (expected or {200, 201, 202}):
             code, message = _remote_error(payload)
+            safe_code = (
+                code
+                if re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", code)
+                else "unavailable"
+            )
+            self.report_progress(
+                f"Foundry {method} rejected: status={status}; code={safe_code}"
+            )
             raise RemoteHttpError(
                 status,
                 code,
@@ -1318,19 +2007,13 @@ def _sha256(value: bytes) -> str:
 
 def _version_from_response(value: dict[str, Any]) -> str:
     direct = str(value.get("version") or "")
-    if direct:
-        return direct
     versions = value.get("versions")
-    if isinstance(versions, dict):
-        latest = versions.get("latest")
-        if isinstance(latest, dict) and latest.get("version"):
-            return str(latest["version"])
-        candidates = versions.get("value") or versions.get("data") or []
-        if isinstance(candidates, list) and candidates:
-            first = candidates[0]
-            if isinstance(first, dict) and first.get("version"):
-                return str(first["version"])
-    return ""
+    latest = versions.get("latest") if isinstance(versions, dict) else None
+    nested = str(latest.get("version") or "") if isinstance(latest, dict) else ""
+    version = direct or nested
+    if not version:
+        raise ContractError("Foundry create response omitted its assigned version")
+    return version
 
 
 def _remote_error(payload: bytes) -> tuple[str, str]:

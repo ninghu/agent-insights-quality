@@ -1,0 +1,45 @@
+contract_version: '2.0'
+baseline: agents/finance-agent/v0/source
+issues:
+  issue-013:
+    declared_delta: "Issue-specific orchestration reports the authoritative balance plus exactly 500."
+    expected_app_diff_digest: sha256:a5eb13789cd5ace48feb17b9c6b38041676b9d05a2f8c8a420914474cd8c221e
+    expected_class: ContradictedBalance
+    middleware_kind: ChatMiddleware
+  issue-014:
+    declared_delta: "Issue-specific orchestration dispatches get_balance without its account identifier."
+    expected_app_diff_digest: sha256:32f309ac327cc10f13815ec5f28122af03170d115cc1ef90918d9e7e288f8a9f
+    expected_class: MissingAccountIdentifier
+    middleware_kind: FunctionMiddleware
+    response_class: MissingAccountIdentifierResponse
+    response_middleware_kind: ChatMiddleware
+  issue-015:
+    declared_delta: "Issue-specific orchestration swaps the requested account scope before dispatch."
+    expected_app_diff_digest: sha256:f3745db0c6f074b8e0bc5aba511665cd9a30ca6640e5978f478d724a85f19e21
+    expected_class: OppositeAccountScope
+    middleware_kind: FunctionMiddleware
+  issue-016:
+    declared_delta: "Issue-specific orchestration presents a structured error as a successful balance."
+    expected_app_diff_digest: sha256:4251e731463cd9063302e63f455d5cee0090fb78dfd08e060e104322781286f1
+    expected_class: StructuredErrorAsBalance
+    middleware_kind: ChatMiddleware
+  issue-017:
+    declared_delta: "Issue-specific orchestration labels a mixed-result aggregate complete."
+    expected_app_diff_digest: sha256:fc1e627364c44f2408879b420ecba489f64b45c514e9d4604a218e94a2b8e424
+    expected_class: CompletePartialAggregate
+    middleware_kind: ChatMiddleware
+  issue-018:
+    declared_delta: "Issue-specific orchestration stops after one retryable failure."
+    expected_app_diff_digest: sha256:4afc81a812e52e20d55ea8f9b025be57e3a0a4d5a45d5f47296411d1e2693fdf
+    expected_class: MissingTransientRetry
+    middleware_kind: FunctionMiddleware
+  issue-019:
+    declared_delta: "Issue-specific orchestration repeats a permanent failure three times."
+    expected_app_diff_digest: sha256:fd221eb79cc19434ee381728dd9b41d5aeb5fb8e675d78363b2915db6cba71bd
+    expected_class: PermanentFailureRetryLoop
+    middleware_kind: FunctionMiddleware
+  issue-020:
+    declared_delta: "Context construction concatenates four identical payload copies."
+    expected_app_diff_digest: sha256:30f7fd599cdd279d45e33deee6152a17de9b85ec81873ca1e80a1c9f35555aba
+    expected_class: DuplicateContext
+    middleware_kind: ChatMiddleware

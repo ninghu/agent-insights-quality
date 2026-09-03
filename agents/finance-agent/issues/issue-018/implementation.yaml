@@ -14,7 +14,7 @@ expected_behavior:
   desired: Retry one transient lookup failure once.
   injected: Stops after the first retryable failure.
 injected_defect:
-  single_root: The transient retry bound is set to zero.
+  single_root: Issue-specific orchestration stops after one retryable failure.
   activation: all_matching_endpoint_requests
 packaging:
   command: python ../../v0/package.py --issue implementation.yaml --output issue-018.zip

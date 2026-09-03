@@ -1,0 +1,361 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ninghu/agent-insights-quality/schemas/test-agent-validation-rules.schema.json",
+  "title": "Test Agent Validation executable rules",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "scenarios", "execution_digest"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {"$ref": "#/$defs/scenario"}
+    },
+    "execution_digest": {"$ref": "#/$defs/hash"}
+  },
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "validation_mode",
+        "n",
+        "k",
+        "fixtures",
+        "attempts",
+        "healthy_predicate",
+        "defect_predicate",
+        "v0_control_predicate",
+        "execution_digest"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{2,63}$"
+        },
+        "validation_mode": {
+          "enum": ["baseline", "deterministic", "model_mediated"]
+        },
+        "n": {"enum": [5, 7]},
+        "k": {"const": 5},
+        "fixtures": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/fixture"}
+        },
+        "attempts": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 7,
+          "items": {"$ref": "#/$defs/attempt"}
+        },
+        "healthy_predicate": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind"],
+              "properties": {
+                "kind": {"const": "all_probe_assertions_pass"}
+              }
+            }
+          ]
+        },
+        "defect_predicate": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind"],
+              "properties": {"kind": {"const": "never"}}
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "step_ids", "required_surfaces"],
+              "properties": {
+                "kind": {"const": "all_observation_steps_pass"},
+                "step_ids": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {"type": "string", "minLength": 1}
+                },
+                "required_surfaces": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 2,
+                  "uniqueItems": true,
+                  "items": {"enum": ["semantic", "trace"]}
+                }
+              }
+            }
+          ]
+        },
+        "v0_control_predicate": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind"],
+              "properties": {
+                "kind": {"const": "zero_defect_observations"}
+              }
+            }
+          ]
+        },
+        "execution_digest": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "request_scope", "value"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{2,63}$"},
+        "kind": {"enum": ["tool_result", "request_context"]},
+        "request_scope": {"enum": ["attempt", "step"]},
+        "value": {}
+      }
+    },
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "index",
+        "conversation_group",
+        "parameters",
+        "setup_steps",
+        "probe_steps"
+      ],
+      "properties": {
+        "index": {"type": "integer", "minimum": 1, "maximum": 7},
+        "conversation_group": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{2,127}$"
+        },
+        "parameters": {
+          "type": "object",
+          "minProperties": 1
+        },
+        "setup_steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/step"}
+        },
+        "probe_steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/step"}
+        }
+      }
+    },
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "request", "expected"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{2,127}$"
+        },
+        "request": {"$ref": "#/$defs/request"},
+        "expected": {"$ref": "#/$defs/expected"}
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "path", "headers", "body"],
+      "properties": {
+        "method": {"const": "POST"},
+        "path": {"const": "/responses"},
+        "headers": {
+          "const": {"content-type": "application/json"}
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["input", "conversation"],
+          "properties": {
+            "input": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["role", "content"],
+                "properties": {
+                  "role": {"const": "user"},
+                  "content": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["type", "text"],
+                      "properties": {
+                        "type": {"const": "input_text"},
+                        "text": {"type": "string", "minLength": 1}
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "conversation": {
+              "const": {"id": "$validation_conversation"}
+            },
+            "max_output_tokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4096
+            }
+          }
+        }
+      }
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "http_status",
+        "semantic_assertions",
+        "trace_assertions",
+        "identity_assertions"
+      ],
+      "properties": {
+        "http_status": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599
+        },
+        "semantic_assertions": {"$ref": "#/$defs/semanticAssertions"},
+        "trace_assertions": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/traceAssertion"}
+        },
+        "identity_assertions": {
+          "const": {
+            "agent_name": "$runtime_agent_name",
+            "agent_version": "$runtime_agent_version"
+          }
+        }
+      }
+    },
+    "semanticAssertions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "response_format": {"enum": ["json", "non_json"]},
+        "exact_text": {"type": "string", "minLength": 1},
+        "json_schema": {"type": "object", "minProperties": 1},
+        "exact_json_fields": {"type": "object", "minProperties": 1},
+        "casefold_json_fields": {"type": "object", "minProperties": 1},
+        "exact_json": {"type": "object", "minProperties": 1},
+        "required_terms_all": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "required_terms_any": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "forbidden_terms": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "required_claims": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "forbidden_claims": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "question_only": {"const": true},
+        "minimum_term_occurrences": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {"type": "integer", "minimum": 2}
+        },
+        "max_words": {"type": "integer", "minimum": 1},
+        "min_words": {"type": "integer", "minimum": 1},
+        "max_characters": {"type": "integer", "minimum": 1}
+      }
+    },
+    "traceAssertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "kind"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "kind": {
+          "enum": [
+            "tool_call_count",
+            "tool_argument_presence",
+            "scope_relation",
+            "tool_result_class",
+            "retry_sequence",
+            "terminal_claim_relation",
+            "payload_multiplicity",
+            "span_relation",
+            "operation_sequence"
+          ]
+        },
+        "tool_name": {"type": "string", "minLength": 1},
+        "count": {"type": "integer", "minimum": 0},
+        "argument": {"type": "string", "minLength": 1},
+        "present": {"type": "boolean"},
+        "scope_kind": {"enum": ["account", "trip"]},
+        "request_scope": {"enum": ["first", "last"]},
+        "result_field": {"type": "string", "minLength": 1},
+        "request_tool_equal": {"type": "boolean"},
+        "request_result_equal": {"type": "boolean"},
+        "tool_result_equal": {"type": "boolean"},
+        "result_class": {"enum": ["success", "error", "mixed"]},
+        "result_sequence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"enum": ["success", "error"]}
+        },
+        "result_path": {"type": "string", "minLength": 1},
+        "relation": {"enum": ["includes_result", "excludes_result", "overlap", "ordered"]},
+        "required_terms_all": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "forbidden_terms": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "source": {"enum": ["input_messages", "tool_result"]},
+        "path": {"type": "string", "minLength": 1},
+        "minimum": {"type": "integer", "minimum": 1},
+        "maximum": {"type": "integer", "minimum": 1},
+        "first_tool": {"type": "string", "minLength": 1},
+        "second_tool": {"type": "string", "minLength": 1},
+        "operations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"enum": ["invoke_agent", "execute_tool", "chat"]}
+        }
+      }
+    }
+  }
+}

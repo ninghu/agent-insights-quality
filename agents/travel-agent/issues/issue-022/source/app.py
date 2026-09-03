@@ -16,10 +16,22 @@ from openai import AsyncOpenAI
 from typing_extensions import Annotated
 
 from .observability import configure_observability
+from .runtime_identity import require_foundry_runtime_identity
+from .options import (
+    MAX_RESPONSE_OPTIONS,
+    bounded_inventory_options,
+    describe_inventory,
+    describe_itineraries,
+    first_option_per_itinerary,
+    parse_trip,
+    requested_inventory_kind,
+    requested_trips,
+)
 
 
-configure_observability("travel-agent")
-tracer = trace.get_tracer("travel-agent")
+RUNTIME_IDENTITY = require_foundry_runtime_identity()
+configure_observability(RUNTIME_IDENTITY.name, RUNTIME_IDENTITY.version)
+tracer = trace.get_tracer(RUNTIME_IDENTITY.name, RUNTIME_IDENTITY.version)
 credential = DefaultAzureCredential()
 
 
@@ -42,29 +54,15 @@ def latest_text(state: TravelState) -> str:
     return content if isinstance(content, str) else str(content)
 
 
-def requested_trips(text: str) -> list[str]:
-    lowered = text.lower()
-    return [
-        trip
-        for trip in ("trip-alpha", "trip-beta", "trip-gamma")
-        if trip in lowered
-    ]
-
-
-def parse_trip(text: str) -> str:
-    trips = requested_trips(text)
-    return trips[0] if trips else "trip-alpha"
-
-
 async def failed_search(name: str) -> None:
-    with tracer.start_as_current_span(f"travel.tool.{name}") as span:
+    with RUNTIME_IDENTITY.start_span(tracer, f"travel.tool.{name}") as span:
         span.set_attribute("gen_ai.operation.name", "execute_tool")
         span.set_attribute("gen_ai.tool.name", name)
         span.set_attribute("tool.ok", False)
 
 
 async def search_flights(trip: str, include_details: bool = False) -> list[dict]:
-    with tracer.start_as_current_span("travel.tool.search_flights") as span:
+    with RUNTIME_IDENTITY.start_span(tracer, "travel.tool.search_flights") as span:
         span.set_attribute("gen_ai.operation.name", "execute_tool")
         span.set_attribute("gen_ai.tool.name", "search_flights")
         span.set_attribute("tool.ok", True)
@@ -76,9 +74,16 @@ async def search_flights(trip: str, include_details: bool = False) -> list[dict]
             ),
         )
         await asyncio.sleep(0.01)
-        count = 80 if include_details else 1
+        count = 80 if include_details else 2
         result = [
-            {"id": f"flight-demo-{index}", "trip": trip, "price": 200 + index}
+            {
+                "id": f"flight-demo-{index}",
+                "kind": "flight",
+                "trip": trip,
+                "carrier": "Contoso Air",
+                "departure": "09:00",
+                "price": 200 + index,
+            }
             for index in range(count)
         ]
         span.set_attribute(
@@ -89,7 +94,7 @@ async def search_flights(trip: str, include_details: bool = False) -> list[dict]
 
 
 async def search_hotels(trip: str, include_details: bool = False) -> list[dict]:
-    with tracer.start_as_current_span("travel.tool.search_hotels") as span:
+    with RUNTIME_IDENTITY.start_span(tracer, "travel.tool.search_hotels") as span:
         span.set_attribute("gen_ai.operation.name", "execute_tool")
         span.set_attribute("gen_ai.tool.name", "search_hotels")
         span.set_attribute("tool.ok", True)
@@ -101,9 +106,16 @@ async def search_hotels(trip: str, include_details: bool = False) -> list[dict]:
             ),
         )
         await asyncio.sleep(0.01)
-        count = 80 if include_details else 1
+        count = 80 if include_details else 2
         result = [
-            {"id": f"hotel-demo-{index}", "trip": trip, "price": 120 + index}
+            {
+                "id": f"hotel-demo-{index}",
+                "kind": "hotel",
+                "trip": trip,
+                "property": "Fabrikam Stay",
+                "rating": 4.5,
+                "price": 120 + index,
+            }
             for index in range(count)
         ]
         span.set_attribute(
@@ -135,6 +147,17 @@ def build_graph():
             await failed_search("search_hotels")
             return {"inventory": flights, "errors": ["hotel_search_unavailable"]}
         include_details = False
+        trips = requested_trips(text)
+        if len(trips) >= 2 and "compare" in text:
+            search_operation = (
+                search_hotels
+                if requested_inventory_kind(text) == "hotel"
+                else search_flights
+            )
+            branches = await asyncio.gather(
+                *(search_operation(item, include_details) for item in trips)
+            )
+            return {"inventory": first_option_per_itinerary(branches)}
         wants_flight = "flight" in text or "compare" in text
         wants_hotel = "hotel" in text or "compare" in text
         if wants_flight and wants_hotel:
@@ -158,16 +181,29 @@ def build_graph():
 
     async def respond(state: TravelState) -> TravelState:
         answer = None
+        inventory = state.get("inventory", [])
+        itinerary_details = describe_itineraries(inventory)
+        option_limit = (
+            1 if "one " in latest_text(state).lower() else MAX_RESPONSE_OPTIONS
+        )
+        response_options = bounded_inventory_options(inventory, option_limit)
+        option_details = describe_inventory(response_options)
+        shown = len(response_options)
         if answer is None and state.get("errors"):
             answer = (
-                f"Partial result: {len(state.get('inventory', []))} synthetic options found; "
-                f"{', '.join(state['errors'])}."
+                f"Partial result: {itinerary_details}; {option_details}. "
+                f"{', '.join(state['errors'])}. "
+                f"Showing {shown} of {len(inventory)} synthetic options."
             )
         elif answer is None:
-            status = "booked" if state.get("booked") else "not booked"
+            status = (
+                "Booking completed"
+                if state.get("booked")
+                else "Booking not completed"
+            )
             answer = (
-                f"{len(state.get('inventory', []))} synthetic options found; "
-                f"{status} for {state['trip']}."
+                f"{itinerary_details}; {option_details}. {status}. "
+                f"Showing {shown} of {len(inventory)} synthetic options."
             )
         grounded = await model_answer(
             "Return one concise sentence preserving these exact synthetic facts: " + answer
@@ -195,7 +231,7 @@ async def model_answer(prompt: str) -> str:
         base_url=os.environ["FOUNDRY_PROJECT_ENDPOINT"].rstrip("/") + "/openai/v1",
         api_key=token_provider,
     )
-    with tracer.start_as_current_span("travel.model.respond") as span:
+    with RUNTIME_IDENTITY.start_span(tracer, "travel.model.respond") as span:
         span.set_attribute("gen_ai.operation.name", "chat")
         span.set_attribute("gen_ai.request.model", model)
         result = await client.responses.create(

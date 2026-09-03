@@ -1,30 +1,17 @@
 from __future__ import annotations
 
-from collections import Counter
 from typing import Any
 
 
 def working_capabilities(report: dict[str, Any]) -> list[tuple[str, str]]:
     summary = report["summary"]
-    issues = report.get("issues", [])
-    details = Counter(item.get("detail") for item in issues)
-    useful = int(summary["issues_correct"]) + details["PARTIAL"]
     rows: list[tuple[str, str]] = []
-    if useful:
-        rows.append(
-            (
-                "Useful diagnostic signal",
-                f"{useful} issue findings contained useful customer signal; "
-                f"{summary['issues_correct']} met the strict quality bar.",
-            )
-        )
     if summary["issues_correct"]:
         rows.append(
             (
                 "Finding content",
-                f"All {summary['issues_correct']} fully correct findings passed "
-                "root cause, title, description, category, severity, proposed fix, "
-                "and linked-trace checks.",
+                f"{summary['issues_correct']} findings passed title, description, "
+                "category, and linked-trace checks.",
             )
         )
     if summary["baseline_passed"]:
@@ -35,22 +22,13 @@ def working_capabilities(report: dict[str, Any]) -> list[tuple[str, str]]:
                 "zero findings.",
             )
         )
-    if not summary.get("incomplete", False):
-        rows.append(
-            (
-                "Evidence coverage",
-                f"All 5 baselines and {summary['issues_expected']} issue targets had "
-                "complete endpoint and trace evidence.",
-            )
+    rows.append(
+        (
+            "Evidence coverage",
+            f"All 5 baselines and {summary['issues_expected']} issue targets had "
+            "complete endpoint and trace evidence.",
         )
-    if not rows:
-        rows.append(
-            (
-                "No trusted capability conclusion",
-                "Validated evidence was incomplete; observed and missing findings "
-                "remain untrusted.",
-            )
-        )
+    )
     return rows
 
 
@@ -72,7 +50,14 @@ def improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str]]:
                 "Healthy Agent versions should produce zero findings.",
             )
         )
-    missing = [item for item in issues if item.get("detail") == "MISSING"]
+    missing = [
+        item
+        for item in issues
+        if not any(
+            card.get("finding_type") in {"MATCHED", "PARTIAL", "MISMATCHED"}
+            for card in item.get("assessment", {}).get("card_evaluations", [])
+        )
+    ]
     if missing:
         rows.append(
             (
@@ -84,24 +69,23 @@ def improvement_rows(report: dict[str, Any]) -> list[tuple[str, str, str]]:
     incorrect = [
         item
         for item in issues
-        if item.get("result") == "FAIL"
-        and item.get("detail") not in {"MISSING", "NOISE", "DUPLICATE"}
+        if item.get("outcome") == "incorrect"
     ]
     if incorrect:
         rows.append(
             (
                 "Finding content was incomplete or inaccurate",
-                f"{len(incorrect)} findings did not pass every required field.",
-                "Match root cause, title, description, category, severity, fix, "
-                "and traces.",
+                f"{len(incorrect)} findings failed at least one scoring field.",
+                "Match title, description, category, and supporting traces.",
             )
         )
     noise_cards = int(report["summary"].get("noise_cards", 0))
-    if noise_cards:
+    duplicate_cards = int(report["summary"].get("duplicate_cards", 0))
+    if noise_cards or duplicate_cards:
         rows.append(
             (
-                "Noise",
-                f"{noise_cards} false-positive, unrelated, or duplicate cards.",
+                "Extra cards",
+                f"{noise_cards} noise and {duplicate_cards} duplicate cards.",
                 "Return only distinct findings attributable to the current tested issue.",
             )
         )

@@ -9,6 +9,8 @@ from agent_insights_quality.models import (
     InsightEvidence,
     InsightRunCheckpoint,
     InvocationEvidence,
+    RequestCompletionEvidence,
+    TraceAssertionEvidence,
     VersionResult,
 )
 from agent_insights_quality.runtime_state import (
@@ -66,6 +68,26 @@ def test_version_checkpoint_round_trips_private_stages(tmp_path: Path) -> None:
         allow_window_correlation=False,
         response_count=1,
         usable_response_count=1,
+        trace_assertion_count=1,
+        trace_assertions_passed=1,
+        request_summaries=(
+            RequestCompletionEvidence(
+                request_index=0,
+                response_count=1,
+                usable_response=True,
+                semantic_assertion_count=0,
+                semantic_assertions_passed=0,
+                assertion_results=(),
+                activation_gate=True,
+                direct_terminal_response_count=0,
+                function_call_count=0,
+                trace_assertion_count=1,
+                trace_assertions_passed=1,
+                trace_assertion_results=(
+                    TraceAssertionEvidence("one_tool_call", True),
+                ),
+            ),
+        ),
     )
     insight = InsightEvidence(
         reference="sha256:" + "b" * 64,
@@ -92,25 +114,47 @@ def test_version_checkpoint_round_trips_private_stages(tmp_path: Path) -> None:
         endpoint_request_count=1,
         endpoint_response_count=1,
         endpoint_usable_response_count=1,
+        trace_assertion_count=1,
+        trace_assertions_passed=1,
         trace_contract_verified=True,
+        endpoint_request_summaries=list(invocation.request_summaries),
     )
     store.save_invocation(*args, invocation)
     store.save_operation_ids(*args, ("c" * 32,))
     store.save_trace_verified(*args)
     store.mark_insight_start_pending(*args)
     assert store.insight_start_pending(*args) is True
+    assert store.has_unresolved_insight_state() is True
+    store.clear_insight_start_pending(*args)
+    assert store.insight_start_pending(*args) is False
+    store.mark_insight_start_pending(*args)
     checkpoint = InsightRunCheckpoint(
         "private-run-id",
         {"private-card-id": ("2026-08-27T18:01:00+00:00", 1)},
     )
     store.save_insight_run(*args, checkpoint)
     assert store.insight_start_pending(*args) is False
+    assert store.has_unresolved_insight_state() is False
     store.save_result(*args, result)
     assert store.invocation(*args) == invocation
     assert store.operation_ids(*args) == ("c" * 32,)
     assert store.trace_verified(*args) is True
     assert store.insight_run(*args) == checkpoint
     assert store.result(*args) == result
+    store.save_rejected_result(*args, result, drain_pending=True)
+    assert store.insight_drain_pending(*args) is True
+    assert store.has_unresolved_insight_state() is True
+    store.clear_insight_drain_pending(*args)
+    assert store.insight_drain_pending(*args) is False
+    assert store.has_unresolved_insight_state() is False
+    assert store.claim_agent_recovery("weather-agent", 2) is True
+    assert store.claim_agent_recovery("weather-agent", 2) is True
+    assert store.claim_agent_recovery("weather-agent", 2) is False
+    resumed_store = VersionCheckpointStore(
+        tmp_path / "stages",
+        "sha256:" + "d" * 64,
+    )
+    assert resumed_store.claim_agent_recovery("weather-agent", 2) is False
     different_contract = VersionCheckpointStore(
         tmp_path / "stages",
         "sha256:" + "e" * 64,

@@ -31,27 +31,48 @@ from agent_insights_quality.catalogs import (
     load_catalogs,
     agent_model_contract,
 )
+from agent_insights_quality.daily_coordinator import (
+    assert_daily_finalization_inputs,
+    assert_daily_receipt_import,
+    claim_daily_email,
+    complete_daily_publication,
+    compose_daily,
+    daily_guide,
+    daily_status,
+    fail_daily,
+    prepare_daily,
+    provision_daily,
+    record_daily_email_receipt,
+    record_daily_finalization,
+    record_daily_improvement_input,
+    run_daily_agent,
+    validate_daily_assessment_outputs,
+)
 from agent_insights_quality.email import (
     build_runtime_links,
     create_request,
     import_receipt,
     resolve_recipient,
-    validate_published_receipt,
     write_private_report_preview,
 )
 from agent_insights_quality.generated_paths import validate_generated_paths
 from agent_insights_quality.live import LiveRuntime
+from agent_insights_quality.improvement_memory import (
+    build_normalized_summary,
+    validate_analysis_against_summary,
+    validate_published_improvement,
+    write_improvement_memory,
+    write_improvement_preview,
+)
 from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.provisioning import (
     create_promotion_receipt,
     provision_profile,
-    validate_promotion_receipt,
 )
 from agent_insights_quality.registry import load_registry, sync_registry
 from agent_insights_quality.reporting import (
     apply_score_comparison,
     apply_staging_score_comparison,
-    build_operational_failure_report,
     build_report,
     score_comparison,
     update_trend,
@@ -83,6 +104,7 @@ from agent_insights_quality.util import (
     ROOT,
     ContractError,
     atomic_json,
+    atomic_text,
     content_hash,
     file_hash,
     immutable_json,
@@ -90,6 +112,22 @@ from agent_insights_quality.util import (
     runtime_root,
 )
 from agent_insights_quality.validation import validate_repository
+from agent_insights_quality.validation_approved import (
+    approve_test_agent_validation,
+    fetch_approved_record_for_checkout,
+)
+from agent_insights_quality.validation_blob import AzureValidationBlobStore
+from agent_insights_quality.validation_credentials import local_azure_operator
+from agent_insights_quality.validation_coordinator import (
+    compose_test_agent_validation,
+    deploy_test_agent_validation_shard,
+    import_test_agent_validation_assessment,
+    invoke_test_agent_validation_shard,
+    prepare_test_agent_validation,
+    prepare_test_agent_validation_assessment,
+    reconcile_test_agent_validation_deployment,
+    run_test_agent_validation,
+)
 from agent_insights_quality.work_items import (
     fetch_quality_work_items,
     load_quality_work_items,
@@ -113,14 +151,65 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard.add_argument("--output", type=Path)
     provision = commands.add_parser("provision")
     provision.add_argument("--profile", choices=("daily", "staging"), required=True)
-    for name in ("run-daily", "run-full"):
+    for name in ("run-full",):
         run = commands.add_parser(name)
         run.add_argument("--report-date", required=True, type=date.fromisoformat)
         run.add_argument("--rerun", type=int, default=0)
         run.add_argument("--state-root", type=Path, default=runtime_root())
         run.add_argument("--work-items", type=Path, required=True)
-        if name == "run-daily":
-            run.add_argument("--test-run", action="store_true")
+    daily_prepare = commands.add_parser("daily-prepare")
+    daily_prepare.add_argument("--report-date", required=True, type=date.fromisoformat)
+    daily_prepare.add_argument("--rerun", type=int, default=0)
+    daily_prepare.add_argument("--work-items", type=Path, required=True)
+    daily_prepare.add_argument("--test-run", action="store_true")
+    commands.add_parser("daily-provision")
+    daily_agent = commands.add_parser("daily-run-agent")
+    daily_agent.add_argument(
+        "--agent",
+        choices=(
+            "weather-agent",
+            "healthcare-agent",
+            "finance-agent",
+            "travel-agent",
+            "support-ticket-agent",
+        ),
+        required=True,
+    )
+    commands.add_parser("daily-compose")
+    commands.add_parser("daily-status")
+    commands.add_parser("daily-guide")
+    daily_assessments = commands.add_parser("daily-validate-assessments")
+    daily_assessments.add_argument(
+        "--assessment",
+        type=Path,
+        action="append",
+        required=True,
+    )
+    daily_assessments.add_argument(
+        "--baseline-assessment",
+        type=Path,
+        action="append",
+        required=True,
+    )
+    daily_assessments.add_argument(
+        "--recheck-assessment",
+        type=Path,
+        action="append",
+        default=[],
+    )
+    daily_assessments.add_argument(
+        "--recheck-baseline-assessment",
+        type=Path,
+        action="append",
+        default=[],
+    )
+    commands.add_parser("daily-email-claim")
+    daily_fail = commands.add_parser("daily-fail")
+    daily_fail.add_argument("--reason-code", required=True)
+    daily_fail.add_argument("--confirm", action="store_true")
+    daily_publication = commands.add_parser("daily-complete-publication")
+    daily_publication.add_argument("--pr-number", type=int, required=True)
+    daily_publication.add_argument("--path", action="append", required=True)
     finalize = commands.add_parser("finalize")
     finalize.add_argument("--manifest", type=Path, required=True)
     finalize.add_argument("--assessment", type=Path, action="append", required=True)
@@ -132,6 +221,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     finalize.add_argument("--output-root", type=Path, default=ROOT / "reports")
     finalize.add_argument("--work-items", type=Path, required=True)
+    finalize.add_argument("--improvement-analysis", type=Path)
+    finalize.add_argument(
+        "--prepare-improvement-input",
+        action="store_true",
+    )
     work_items = commands.add_parser("fetch-quality-work-items")
     work_items.add_argument("--query-url", required=True)
     work_items.add_argument("--report-date", required=True, type=date.fromisoformat)
@@ -146,13 +240,34 @@ def build_parser() -> argparse.ArgumentParser:
     paths.add_argument("--path", action="append", default=[])
     published = commands.add_parser("validate-published-report")
     published.add_argument("--report", type=Path, required=True)
-    published.add_argument("--receipt", type=Path, required=True)
     published.add_argument("--report-relative-path", required=True)
     published.add_argument("--report-markdown", type=Path, required=True)
     published.add_argument("--latest-json", type=Path, required=True)
     published.add_argument("--latest-markdown", type=Path, required=True)
     published.add_argument("--trend", type=Path, required=True)
     published.add_argument("--base-trend", type=Path, required=True)
+    published.add_argument("--improvement-json", type=Path, required=True)
+    published.add_argument("--improvement-markdown", type=Path, required=True)
+    published.add_argument(
+        "--base-improvement-json",
+        type=Path,
+        required=True,
+    )
+    published.add_argument(
+        "--base-improvement-markdown",
+        type=Path,
+        required=True,
+    )
+    published.add_argument(
+        "--improvement-snapshot-json",
+        type=Path,
+        required=True,
+    )
+    published.add_argument(
+        "--improvement-snapshot-markdown",
+        type=Path,
+        required=True,
+    )
     published.add_argument(
         "--agent-report",
         type=Path,
@@ -169,6 +284,21 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup.add_argument("--plan", type=Path, required=True)
     cleanup.add_argument("--receipt", type=Path)
     cleanup.add_argument("--human-reviewed", action="store_true")
+    commands.add_parser("run-test-agent-validation")
+    commands.add_parser("prepare-test-agent-validation")
+    deploy_validation = commands.add_parser(
+        "deploy-test-agent-validation-shard"
+    )
+    deploy_validation.add_argument("--shard-id", type=int, required=True)
+    commands.add_parser("reconcile-test-agent-validation-deployment")
+    invoke_validation = commands.add_parser(
+        "invoke-test-agent-validation-shard"
+    )
+    invoke_validation.add_argument("--shard-id", type=int, required=True)
+    commands.add_parser("prepare-test-agent-validation-assessment")
+    commands.add_parser("import-test-agent-validation-assessment")
+    commands.add_parser("compose-test-agent-validation")
+    commands.add_parser("approve-test-agent-validation")
     return parser
 
 
@@ -184,6 +314,87 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def _dispatch(args: argparse.Namespace) -> str | None:
+    if args.command == "run-test-agent-validation":
+        return json.dumps(run_test_agent_validation(), sort_keys=True)
+    if args.command == "prepare-test-agent-validation":
+        return json.dumps(prepare_test_agent_validation(), sort_keys=True)
+    if args.command == "deploy-test-agent-validation-shard":
+        return json.dumps(
+            deploy_test_agent_validation_shard(shard_id=args.shard_id),
+            sort_keys=True,
+        )
+    if args.command == "reconcile-test-agent-validation-deployment":
+        return json.dumps(
+            reconcile_test_agent_validation_deployment(),
+            sort_keys=True,
+        )
+    if args.command == "invoke-test-agent-validation-shard":
+        return json.dumps(
+            invoke_test_agent_validation_shard(shard_id=args.shard_id),
+            sort_keys=True,
+        )
+    if args.command == "prepare-test-agent-validation-assessment":
+        return json.dumps(
+            prepare_test_agent_validation_assessment(),
+            sort_keys=True,
+        )
+    if args.command == "import-test-agent-validation-assessment":
+        return json.dumps(
+            import_test_agent_validation_assessment(),
+            sort_keys=True,
+        )
+    if args.command == "compose-test-agent-validation":
+        return json.dumps(compose_test_agent_validation(), sort_keys=True)
+    if args.command == "approve-test-agent-validation":
+        return json.dumps(approve_test_agent_validation(), sort_keys=True)
+    if args.command == "daily-prepare":
+        return json.dumps(
+            prepare_daily(
+                report_date=args.report_date,
+                work_items_path=args.work_items,
+                rerun=args.rerun,
+                test_run=args.test_run,
+            ),
+            sort_keys=True,
+        )
+    if args.command == "daily-provision":
+        return json.dumps(provision_daily(), sort_keys=True)
+    if args.command == "daily-run-agent":
+        return json.dumps(run_daily_agent(args.agent), sort_keys=True)
+    if args.command == "daily-compose":
+        return json.dumps(compose_daily(), sort_keys=True)
+    if args.command == "daily-status":
+        return json.dumps(daily_status(), sort_keys=True)
+    if args.command == "daily-guide":
+        return json.dumps(daily_guide(), sort_keys=True)
+    if args.command == "daily-validate-assessments":
+        return json.dumps(
+            validate_daily_assessment_outputs(
+                assessments=args.assessment,
+                baseline_assessments=args.baseline_assessment,
+                recheck_assessments=args.recheck_assessment,
+                recheck_baseline_assessments=args.recheck_baseline_assessment,
+            ),
+            sort_keys=True,
+        )
+    if args.command == "daily-email-claim":
+        return json.dumps(claim_daily_email(), sort_keys=True)
+    if args.command == "daily-fail":
+        return json.dumps(
+            fail_daily(
+                reason_code=args.reason_code,
+                confirmed=args.confirm,
+            ),
+            sort_keys=True,
+        )
+    if args.command == "daily-complete-publication":
+        return json.dumps(
+            complete_daily_publication(
+                pr_number=args.pr_number,
+                generated_paths=args.path,
+            ),
+            sort_keys=True,
+        )
     if args.command == "validate":
         validate_repository()
         return catalog_summary()
@@ -249,20 +460,21 @@ def _dispatch(args: argparse.Namespace) -> str | None:
     if args.command == "render-adx-dashboard":
         return str(render_dashboard(args.output))
     if args.command == "provision":
+        if args.profile == "daily":
+            raise ContractError(
+                "Daily provisioning requires daily-prepare then daily-provision "
+                "under the lifecycle quiescence lock"
+            )
         profile = RuntimeProfile.from_env(args.profile)
         approved_digests = None
         if args.profile == "daily":
-            receipt = str(
-                os.environ.get("AIQ_STAGING_PROMOTION_RECEIPT") or ""
-            ).strip()
-            if not receipt:
-                raise ContractError(
-                    "Daily provisioning requires a human-reviewed staging promotion receipt"
-                )
-            approved_digests = validate_promotion_receipt(
-                Path(receipt),
-                hashes,
-                agent_model_contract(agents),
+            operator = local_azure_operator()
+            fetch_approved_record_for_checkout(
+                AzureValidationBlobStore(
+                    profile.registry_storage_account_name,
+                    credential=operator.credential,
+                ),
+                expected_repository="ninghu/agent-insights-quality",
             )
         provision_profile(
             profile=profile,
@@ -271,9 +483,9 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             approved_digests=approved_digests,
         )
         return f"{args.profile} profile provisioned."
-    if args.command in {"run-daily", "run-full"}:
+    if args.command == "run-full":
         policy = load_automation_policy()
-        profile_name = "daily" if args.command == "run-daily" else "staging"
+        profile_name = "staging"
         test_run = bool(getattr(args, "test_run", False))
         if test_run and args.rerun <= 0:
             raise ContractError("Test runs require a nonzero --rerun identity")
@@ -302,12 +514,17 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         profile = RuntimeProfile.from_env(profile_name)
         profile.assert_insights_connection()
         profile.assert_test_agent_model(agent_model_contract(agents))
+        test_region = profile.resolve_test_region()
         sync_registry(profile)
         registry = load_registry(
             profile.registry_path,
             profile=profile_name,
             catalog_hashes=hashes,
         )
+        if registry["test_region"] != test_region:
+            raise ContractError(
+                "Live Foundry Project region does not match the deployment registry"
+            )
         runtime = LiveRuntime(profile)
         seed = int(hashes["issues"].split(":")[1][:16], 16)
         run_contract_digest = _run_contract_digest(
@@ -321,6 +538,8 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             work_items=work_items,
             policy=policy,
             seed=seed,
+            test_region=test_region,
+            test_region_registry=registry["test_region"],
         )
         checkpoint_store = VersionCheckpointStore(
             state / "stage-checkpoints",
@@ -346,12 +565,17 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                     clean_window_max_wait_seconds=(
                         policy.clean_window_max_wait_seconds
                     ),
+                    trace_assertion_stabilization_seconds=(
+                        policy.trace_assertion_stabilization_seconds
+                    ),
+                    insight_start_margin_seconds=policy.insight_start_margin_seconds,
                     max_recovery_versions=policy.max_recovery_versions,
                     agent_start_stagger_seconds=(
                         policy.agent_start_stagger_seconds
                     ),
                     checkpoint_store=checkpoint_store,
                 )
+                _assert_insight_state_resolved(checkpoint_store)
                 manifest = build_manifest(
                     report_date=args.report_date,
                     profile=profile_name,
@@ -359,7 +583,11 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                     delivery_mode=delivery_mode,
                     insight_lookback_hours=policy.insight_lookback_hours,
                     telemetry_resource_set=policy.telemetry_resource_set,
+                    test_region=test_region,
+                    test_region_registry=registry["test_region"],
                     catalog_hashes=hashes,
+                    agent_catalog=agents,
+                    issue_catalog=issues,
                     selected=selected,
                     registry=registry,
                     results=results,
@@ -381,73 +609,17 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                     "Qualification evidence was checkpointed; resume the same run "
                     "before finalization"
                 ) from error
-            failure = build_operational_failure_report(
-                report_date=args.report_date,
-                run_id=run_id(args.report_date, args.rerun),
-                profile=profile_name,
-                selected=selected,
-                issues=issues,
-                failure_code=type(error).__name__,
-                catalog_hashes=hashes,
+            atomic_json(
+                state / "qualification-failure.json",
+                {
+                    "schema_version": "1.0.0",
+                    "run_id": run_id(args.report_date, args.rerun),
+                    "profile": profile_name,
+                    "failure_code": type(error).__name__,
+                },
             )
-            failure_root = (
-                state / "final-report"
-                if test_run
-                else ROOT
-                / "reports"
-                / "daily"
-                / f"{args.report_date:%Y}"
-                / f"{args.report_date:%m}"
-                / f"{args.report_date:%d}"
-                if profile_name == "daily"
-                else state
-            )
-            write_report(failure, failure_root)
-            handoff_written = False
-            try:
-                recipient = resolve_recipient(test_run=test_run)
-                adx_publication = (
-                    {"status": "skipped_test", "error_code": None}
-                    if test_run
-                    else
-                    publish_daily_report_best_effort(
-                        failure,
-                        source_path=failure_root / "report.json",
-                        catalogs=(agents, issues),
-                    )
-                    if profile_name == "daily"
-                    else None
-                )
-                dashboard_link = (
-                    resolve_dashboard_link()
-                    if profile_name == "daily" and not test_run
-                    else None
-                )
-                request = create_request(
-                    failure,
-                    recipient,
-                    dashboard_link=dashboard_link,
-                    adx_publication=adx_publication,
-                    work_items=work_items,
-                    test_run=test_run,
-                )
-                failure["delivery"]["content_digest"] = request["content_digest"]
-                write_report(failure, failure_root)
-                atomic_json(state / "email-send-request.json", request)
-                write_private_report_preview(
-                    request,
-                    state / "report-preview.html",
-                )
-                handoff_written = True
-            except ContractError:
-                pass
             raise ContractError(
-                "Qualification failed closed; an INCOMPLETE report was written"
-                + (
-                    " with its email request"
-                    if handoff_written
-                    else ", but the email request could not be rendered"
-                )
+                "Qualification failed before a complete score; no report was produced"
             ) from error
         return json.dumps(
             {
@@ -460,6 +632,12 @@ def _dispatch(args: argparse.Namespace) -> str | None:
     if args.command == "finalize":
         manifest = read_json(args.manifest)
         validate_manifest(manifest)
+        daily_active = assert_daily_finalization_inputs(
+            manifest_path=args.manifest,
+            assessments=args.assessment,
+            baseline_assessments=args.baseline_assessment,
+            prepare_improvement_input=args.prepare_improvement_input,
+        )
         test_run = manifest["delivery_mode"] == TEST_EMAIL_ONLY_DELIVERY
         work_items = load_quality_work_items(
             args.work_items,
@@ -487,10 +665,12 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             args.assessment,
             issue_ids,
             args.manifest.parent / "assessment-packages",
+            manifest,
         )
         baseline_assessments = load_baseline_assessments(
             args.baseline_assessment,
             args.manifest.parent / "assessment-packages",
+            manifest,
         )
         report = build_report(
             manifest,
@@ -498,6 +678,54 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             assessments,
             baseline_assessments,
         )
+        improvement_analysis = None
+        if manifest["profile"] == "daily":
+            living_state_path = (
+                args.output_root / "insight-engine-improvement.json"
+            )
+            previous_improvement_state = (
+                read_json(living_state_path)
+                if not test_run and living_state_path.exists()
+                else None
+            )
+            normalized_summary = (
+                build_normalized_summary(report, previous_improvement_state)
+                if previous_improvement_state is not None
+                else build_normalized_summary(report)
+            )
+            analysis_input = (
+                args.manifest.parent / "insight-engine-improvement-input.json"
+            )
+            atomic_json(analysis_input, normalized_summary)
+            if args.prepare_improvement_input:
+                if args.improvement_analysis is not None:
+                    raise ContractError(
+                        "Improvement input preparation does not accept analysis output"
+                    )
+                if daily_active is not None:
+                    record_daily_improvement_input(daily_active, analysis_input)
+                return json.dumps(
+                    {"improvement_analysis_input": str(analysis_input)},
+                    sort_keys=True,
+                )
+            if args.improvement_analysis is None:
+                raise ContractError(
+                    "Daily finalization requires a schema-valid GPT-5.6 Sol "
+                    "Insight Engine improvement analysis; normalized input was "
+                    f"written to {analysis_input}"
+                )
+            improvement_analysis = read_json(args.improvement_analysis)
+            validate_analysis_against_summary(
+                improvement_analysis,
+                normalized_summary,
+            )
+        elif (
+            args.improvement_analysis is not None
+            or args.prepare_improvement_input
+        ):
+            raise ContractError(
+                "Insight Engine improvement analysis applies only to Daily"
+            )
         if manifest["profile"] == "daily":
             apply_score_comparison(report, args.output_root / "trend.json")
         else:
@@ -517,16 +745,37 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             / manifest["report_date"].replace("-", os.sep)
             / manifest["run_id"]
         )
-        write_report(report, output)
+        official_daily = manifest["profile"] == "daily" and not test_run
+        if not official_daily:
+            write_report(
+                report,
+                output,
+                include_improvement_link=not test_run,
+            )
+        if improvement_analysis is not None:
+            if test_run:
+                write_improvement_preview(
+                    report=report,
+                    analysis=improvement_analysis,
+                    output=(
+                        args.manifest.parent
+                        / "insight-engine-improvement-preview"
+                    ),
+                )
         recipient = resolve_recipient(test_run=test_run)
         runtime_profile = RuntimeProfile.from_env(manifest["profile"])
+        official_report_candidate = (
+            args.manifest.parent / "official-report-candidate.json"
+        )
+        if official_daily:
+            atomic_json(official_report_candidate, report)
         adx_publication = (
             {"status": "skipped_test", "error_code": None}
             if test_run
             else
             publish_daily_report_best_effort(
                 report,
-                source_path=output / "report.json",
+                source_path=official_report_candidate,
                 catalogs=(agents, issues),
             )
             if manifest["profile"] == "daily"
@@ -552,22 +801,50 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             test_run=test_run,
         )
         report["delivery"]["content_digest"] = request["content_digest"]
-        write_report(report, output)
+        if official_daily:
+            atomic_json(
+                official_report_candidate,
+                report,
+            )
+            write_improvement_memory(
+                report=report,
+                analysis=improvement_analysis,
+                reports_root=args.output_root,
+                living_state_path=living_state_path,
+                report_output=output,
+            )
+        else:
+            write_report(
+                report,
+                output,
+                include_improvement_link=not test_run,
+            )
         private_request = args.manifest.parent / "email-send-request.json"
-        atomic_json(private_request, request)
+        immutable_json(private_request, request)
         private_preview = args.manifest.parent / "report-preview.html"
         write_private_report_preview(request, private_preview)
         if manifest["profile"] == "daily" and not test_run:
             atomic_json(args.output_root / "latest.json", report)
-            (args.output_root / "latest.md").write_text(
+            atomic_text(
+                args.output_root / "latest.md",
                 (output / "report.md").read_text(encoding="utf-8"),
-                encoding="utf-8",
-                newline="\n",
             )
             update_trend(report, args.output_root / "trend.json")
+        if daily_active is not None:
+            record_daily_finalization(
+                daily_active,
+                report_path=output / "report.json",
+                email_request_path=private_request,
+                improvement_analysis_path=args.improvement_analysis,
+                adx_publication_status=(
+                    adx_publication["status"]
+                    if adx_publication is not None
+                    else "not_applicable"
+                ),
+            )
         return json.dumps(
             {
-                "status": report["status"],
+                "quality_score": report["summary"]["quality_score"],
                 "report": str(output / "report.json"),
                 "email_request": str(private_request),
                 "report_preview": str(private_preview),
@@ -594,7 +871,10 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             sort_keys=True,
         )
     if args.command == "email-receipt-import":
+        daily_active = assert_daily_receipt_import(args.request, args.output)
         import_receipt(read_json(args.request), args.receipt, args.output)
+        if daily_active is not None:
+            record_daily_email_receipt(daily_active, args.output)
         return "Email receipt imported."
     if args.command == "replay-run":
         manifest = read_json(args.manifest)
@@ -620,10 +900,6 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             hashes["issues"],
         )
         validate_published_report(report, issues, expected_selection)
-        validate_published_receipt(
-            args.receipt,
-            report["delivery"]["content_digest"],
-        )
         expected_path = (
             "reports/daily/"
             + report["report_date"].replace("-", "/")
@@ -648,6 +924,21 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         }
         if actual_agent_reports != expected_agent_reports:
             raise ContractError("Published per-Agent reports are inconsistent")
+        validate_published_improvement(
+            report=report,
+            living_state=read_json(args.improvement_json),
+            living_markdown=args.improvement_markdown.read_text(
+                encoding="utf-8"
+            ),
+            snapshot=read_json(args.improvement_snapshot_json),
+            snapshot_markdown=args.improvement_snapshot_markdown.read_text(
+                encoding="utf-8"
+            ),
+            previous_state=read_json(args.base_improvement_json),
+            previous_markdown=args.base_improvement_markdown.read_text(
+                encoding="utf-8"
+            ),
+        )
         trend = read_json(args.trend)
         base_trend = read_json(args.base_trend)
         matching_days = [
@@ -658,10 +949,13 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         ]
         expected_day = {
             "report_date": report["report_date"],
-            "status": report["status"],
             "baseline_passed": report["summary"]["baseline_passed"],
             "issues_correct": report["summary"]["issues_correct"],
+            "issues_incorrect": report["summary"]["issues_incorrect"],
+            "issues_missing": report["summary"]["issues_missing"],
             "issues_expected": report["summary"]["issues_expected"],
+            "noise_cards": report["summary"]["noise_cards"],
+            "duplicate_cards": report["summary"]["duplicate_cards"],
             "quality_score": report["summary"]["quality_score"],
         }
         if matching_days != [expected_day]:
@@ -685,8 +979,6 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         atomic_json(args.output, receipt)
         return "Staging promotion receipt created."
     raise AssertionError("unreachable")
-
-
 def _run_contract_digest(
     *,
     profile_name: str,
@@ -699,6 +991,8 @@ def _run_contract_digest(
     work_items: dict[str, Any],
     policy: Any,
     seed: int,
+    test_region: str,
+    test_region_registry: str,
 ) -> str:
     runtime_files = {
         path.relative_to(ROOT).as_posix(): file_hash(path)
@@ -707,9 +1001,13 @@ def _run_contract_digest(
     runtime_files["config/automation.yaml"] = file_hash(
         ROOT / "config" / "automation.yaml"
     )
-    runtime_files["schemas/run-manifest.schema.json"] = file_hash(
-        ROOT / "schemas" / "run-manifest.schema.json"
-    )
+    for relative in (
+        "schemas/run-manifest.schema.json",
+        "schemas/prompt-traffic.schema.json",
+        "schemas/assessment-package.schema.json",
+        "src/agent_insights_quality/prompts/assessment.md",
+    ):
+        runtime_files[relative] = file_hash(ROOT / relative)
     return content_hash(
         {
             "schema_version": "1.0.0",
@@ -722,12 +1020,25 @@ def _run_contract_digest(
             "registry_hash": content_hash(registry),
             "work_items_hash": content_hash(work_items),
             "lookback_hours": policy.insight_lookback_hours,
+            "max_parallel_agents": policy.max_parallel_agents,
             "agent_start_stagger_seconds": policy.agent_start_stagger_seconds,
             "telemetry_resource_set": policy.telemetry_resource_set,
             "seed": seed,
+            "test_region": test_region,
+            "test_region_registry": test_region_registry,
             "runtime_files": runtime_files,
         }
     )
+
+
+def _assert_insight_state_resolved(
+    checkpoint_store: VersionCheckpointStore,
+) -> None:
+    if checkpoint_store.has_unresolved_insight_state():
+        raise ContractError(
+            "Qualification has unresolved Agent Insights state; resume before "
+            "creating the immutable manifest"
+        )
 
 
 def _rehydrate_with_retries(

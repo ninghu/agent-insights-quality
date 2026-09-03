@@ -7,6 +7,9 @@ from typing import Any
 from agent_insights_quality.util import ContractError
 
 EPOCH_MONDAY = date(2026, 1, 5)
+DAILY_ISSUES_PER_AGENT = 4
+DAILY_ISSUE_COUNT = 20
+STAGING_ISSUE_COUNT = 36
 
 
 def _business_days_since_epoch(value: date) -> int:
@@ -40,9 +43,15 @@ def select_daily(
 ) -> dict[str, list[str]]:
     day_index = _business_days_since_epoch(report_date)
     count = int(issues["selection"]["issues_per_agent_daily"])
+    if count != DAILY_ISSUES_PER_AGENT:
+        raise ContractError("Daily issue selection count is not the reviewed value")
     selected: dict[str, list[str]] = {}
     for agent in agents["agents"]:
         ordered = _permutation(agent["name"], list(agent["issue_ids"]), issue_hash)
+        if len(ordered) < count:
+            raise ContractError(
+                f"{agent['name']} has fewer issues than the daily selection count"
+            )
         start = (day_index * count) % len(ordered)
         selected[agent["name"]] = [
             ordered[(start + offset) % len(ordered)] for offset in range(count)

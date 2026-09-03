@@ -8,7 +8,12 @@ from agent_insights_quality.util import ContractError
 _ALLOWED = (
     re.compile(r"^reports/latest\.(json|md)$"),
     re.compile(r"^reports/trend\.json$"),
-    re.compile(r"^reports/daily/[0-9]{4}/[0-9]{2}/[0-9]{2}/(report\.(json|md)|email-receipt\.json)$"),
+    re.compile(r"^reports/insight-engine-improvement\.(json|md)$"),
+    re.compile(r"^reports/daily/[0-9]{4}/[0-9]{2}/[0-9]{2}/report\.(json|md)$"),
+    re.compile(
+        r"^reports/daily/[0-9]{4}/[0-9]{2}/[0-9]{2}/"
+        r"insight-engine-improvement\.(json|md)$"
+    ),
     re.compile(
         r"^reports/daily/[0-9]{4}/[0-9]{2}/[0-9]{2}/agents/"
         r"(weather-agent|healthcare-agent|finance-agent|travel-agent|support-ticket-agent)\.md$"

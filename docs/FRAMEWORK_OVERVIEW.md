@@ -2,7 +2,19 @@
 
 ## 60-second explanation
 
-This framework continuously measures whether Agent Insights detects known Agent defects accurately, completely, and without noise. Five real deployed test Agents exercise Prompt, Microsoft Agent Framework, LangGraph, and custom AgentServer patterns. Every issue is a reviewed single-root defect with deterministic synthetic traffic and an expected Insight contract. The framework invokes deployed endpoints, waits for natural telemetry, verifies trace provenance, runs Agent Insights, and then uses GPT-5.6 Sol to evaluate each generated Insight card and assign ownership. Complete runs receive a field-weighted quality score; operationally incomplete runs never become product failures. Staging validates all 36 issues before a reviewed Agent set is promoted once to daily. Weekday daily runs reuse the deployed versions and test five issues per Agent without redeploying. Authorized operators share the same deployed environment through Entra-authenticated registry blobs that synchronize into a private local runtime cache before traffic.
+This framework continuously measures whether Agent Insights detects known Agent defects accurately, completely, and without noise. Five real deployed test Agents exercise Prompt, Microsoft Agent Framework, LangGraph, and custom AgentServer patterns. Every issue is a reviewed single-root defect with fixed synthetic endpoint traffic and an expected Insight contract. Local Test Agent Validation reconciles five baselines and all 36 issues as 41 stable, independently versioned endpoints in the durable `aiq-staging-swedencentral` Project, proves issue-versus-v0 discrimination from read-only Sweden `g30` telemetry, and cleans only run-scoped resources. After explicit human approval, one minimal immutable record binds the exact validated commit. Weekday Official Daily promotes exact approved digests into `aiq-daily-swedencentral` without smoke traffic, runs Agent Insights for four issues per Agent plus five baselines, and uses GPT-5.6 Sol to assess cards and assign ownership. Validation never runs monitors, Agent Insights, assessment, scoring, reporting, ADX, or email.
+
+Weather and Healthcare are pure Prompt controls: they use request-provided synthetic evidence, never
+declare function tools or fixtures, and permit response continuation only for intentional memory
+turns. Baseline decisions require deterministic semantic coverage, full-request proof, and terminal
+output evidence; a card-linked intermediate operation cannot override contradictory full-request
+evidence.
+
+Daily uses one central private lifecycle and five visible Copilot Agent-lane sub sessions. Agent
+lanes are the only parallel qualification unit; each runs its baseline and four selected issues
+sequentially and emits one immutable receipt. Composition, assessment-output validation, focused
+rechecks, improvement analysis, finalization, ADX, email claim/receipt, generated paths, and one PR
+remain centralized and ordered.
 
 ## High-level flow
 
@@ -12,7 +24,7 @@ flowchart LR
     B[Run synthetic traffic<br/>against deployed Agents]
     C[Collect telemetry<br/>and generate Agent Insights]
     D[Evaluate every Insight<br/>quality and ownership]
-    E[Publish score, reports, and ADX trend<br/>PASS, FAIL, or INCOMPLETE]
+    E[Publish one numeric score<br/>only from complete evidence]
 
     A --> B --> C --> D --> E
 ```
