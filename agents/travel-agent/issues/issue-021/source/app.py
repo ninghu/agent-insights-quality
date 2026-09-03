@@ -208,10 +208,10 @@ def build_graph():
                 f"{itinerary_details}; {option_details}. {status}. "
                 f"Showing {shown} of {len(inventory)} synthetic options."
             )
-        grounded = await model_answer(
-            "Return one concise sentence preserving these exact synthetic facts: " + answer
+        await review_answer(
+            "Review this deterministic synthetic travel response for concision: " + answer
         )
-        return {"messages": [AIMessage(content=grounded)]}
+        return {"messages": [AIMessage(content=answer)]}
 
     builder = StateGraph(TravelState)
     builder.add_node("plan", plan)
@@ -228,7 +228,7 @@ def build_graph():
     return builder.compile(checkpointer=InMemorySaver())
 
 
-async def model_answer(prompt: str) -> str:
+async def review_answer(prompt: str) -> None:
     model = os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-5.4-mini")
     client = AsyncOpenAI(
         base_url=os.environ["FOUNDRY_PROJECT_ENDPOINT"].rstrip("/") + "/openai/v1",
@@ -237,13 +237,12 @@ async def model_answer(prompt: str) -> str:
     with RUNTIME_IDENTITY.start_span(tracer, "travel.model.respond") as span:
         span.set_attribute("gen_ai.operation.name", "chat")
         span.set_attribute("gen_ai.request.model", model)
-        result = await client.responses.create(
+        await client.responses.create(
             model=model,
             input=prompt,
             max_output_tokens=200,
             store=False,
         )
-        return result.output_text
 
 
 def main() -> None:

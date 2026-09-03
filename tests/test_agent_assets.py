@@ -10,7 +10,7 @@ import zipfile
 from pathlib import Path
 
 import yaml
-from agent_insights_quality.util import ROOT, content_hash
+from agent_insights_quality.util import ROOT, content_hash, file_hash
 
 
 def _is_source_file(path: Path) -> bool:
@@ -38,6 +38,12 @@ def _normalized_source_diff(baseline: str, issue: str) -> str:
             re.sub(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@", "@@", line)
         )
     return "\n".join(normalized)
+
+
+def _source_tree_digest(files: dict[str, Path]) -> str:
+    return content_hash(
+        {name: file_hash(path) for name, path in sorted(files.items())}
+    )
 
 
 def _load_travel_options():
@@ -860,7 +866,7 @@ def test_travel_issue_sources_match_reviewed_deltas() -> None:
             encoding="utf-8"
         )
     )
-    assert manifest["contract_version"] == "1.0"
+    assert manifest["contract_version"] == "2.0"
     assert manifest["baseline"] == "agents/travel-agent/v0/source"
     issues = manifest["issues"]
     assert set(issues) == {
@@ -880,6 +886,7 @@ def test_travel_issue_sources_match_reviewed_deltas() -> None:
         if _is_source_file(path)
     }
     baseline_app = baseline_files["app.py"].read_text(encoding="utf-8")
+    assert _source_tree_digest(baseline_files) == manifest["baseline_source_digest"]
     for issue_id, reviewed in issues.items():
         issue_root = root / "issues" / issue_id
         implementation = yaml.safe_load(
@@ -895,6 +902,9 @@ def test_travel_issue_sources_match_reviewed_deltas() -> None:
             if _is_source_file(path)
         }
         assert set(issue_files) == set(baseline_files)
+        assert _source_tree_digest(issue_files) == reviewed[
+            "expected_source_digest"
+        ]
         for relative_path, baseline_path in baseline_files.items():
             if relative_path == "app.py":
                 actual_diff = _normalized_source_diff(

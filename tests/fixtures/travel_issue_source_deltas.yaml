@@ -1,8 +1,10 @@
-contract_version: '1.0'
+contract_version: '2.0'
 baseline: agents/travel-agent/v0/source
+baseline_source_digest: sha256:439a53bba64c71bc68f384a54259483f7572ac451bcf143118a5a1030716cf1c
 issues:
   issue-021:
     declared_delta: The failed-search branch inserts an invented inventory item.
+    expected_source_digest: sha256:1ac1dd4c067ad4a13264985883bede8907eab966cc918df276deba8dc3eb6c4f
     expected_app_diff: |-
       @@
                trip = state["trip"]
@@ -19,6 +21,7 @@ issues:
                inventory = state.get("inventory", [])
   issue-022:
     declared_delta: The flight route invokes search_hotels.
+    expected_source_digest: sha256:dbf650287092cd18ecf5762f251ae94cbf78282d97ad95e951ccfe72d4f4af89
     expected_app_diff: |-
       @@
                trip = state["trip"]
@@ -27,6 +30,7 @@ issues:
                if "temporary flight search" in text:
   issue-023:
     declared_delta: The search graph node is bypassed logically and returns no evidence.
+    expected_source_digest: sha256:01e1d4b235b4879b73d9aa8263be567994e826e823983c704d321ec106f00848
     expected_app_diff: |-
       @@
                trip = state["trip"]
@@ -34,6 +38,7 @@ issues:
                if "temporary flight search" in text:
   issue-024:
     declared_delta: Both search tools enable expanded details and return 80 items each.
+    expected_source_digest: sha256:a4c35383cca4924648eb64a9e008d4a8c605bda1057f4033fa804344a7c9d44f
     expected_app_diff: |-
       @@
                    return {"inventory": flights, "errors": ["hotel_search_unavailable"]}
@@ -42,6 +47,7 @@ issues:
                trips = requested_trips(text)
   issue-025:
     declared_delta: The search node sets booked before downstream safety checks.
+    expected_source_digest: sha256:000e858d434dd1eb893038a0ac1f4041d60329633b2ae3475e2789f9c2e5b0c9
     expected_app_diff: |-
       @@
                    inventory = await search_flights(trip, include_details)
@@ -54,6 +60,7 @@ issues:
                return {"booked": bool(state.get("validated") and state.get("confirmed"))}
   issue-026:
     declared_delta: Comparison assembly truncates the combined inventory to one item.
+    expected_source_digest: sha256:14636b959e39c1493c0a4b8640dfb0a0998f12a312457ef3c09a46ea48057892
     expected_app_diff: |-
       @@
                    )
@@ -67,6 +74,7 @@ issues:
                wants_flight = "flight" in text or "compare" in text
   issue-027:
     declared_delta: The graph search node awaits flight before starting hotel.
+    expected_source_digest: sha256:2cb524debcd069890249b3b73baf611ac4a85dca703b3595b722036b06a77259
     expected_app_diff: |-
       @@
                trip = state["trip"]
@@ -77,6 +85,7 @@ issues:
                if "temporary flight search" in text:
   issue-028:
     declared_delta: The plan node binds an explicit switch to its source trip instead of its destination.
+    expected_source_digest: sha256:8078ce9cfc6c9c0b1b1a8b1a16489af6f2cc2c6589b73cd20abdc0e0c6d788de
     expected_app_diff: |-
       @@
                text = latest_text(state)
