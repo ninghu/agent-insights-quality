@@ -47,7 +47,7 @@ issues:
                    inventory = await search_flights(trip, include_details)
       -        return {"inventory": inventory}
       +        return {"inventory": inventory, "booked": True}
-       
+
       @@
            async def book(state: TravelState) -> TravelState:
       +        return {}
