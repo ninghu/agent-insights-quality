@@ -18,7 +18,7 @@
     "lifecycle_digest"
   ],
   "properties": {
-    "schema_version": {"const": "2.0.0"},
+    "schema_version": {"const": "3.0.0"},
     "kind": {"const": "daily-qualification-lifecycle"},
     "snapshot_type": {"enum": ["event", "active"]},
     "state": {
@@ -101,16 +101,18 @@
           "required": [
             "checkout_commit_sha",
             "approved_commit_sha",
-            "tree_sha",
+            "approved_pr_number",
             "validation_digest",
+            "evidence_digest",
             "approved_record_digest",
             "binding_digest"
           ],
           "properties": {
             "checkout_commit_sha": {"$ref": "#/$defs/gitSha"},
             "approved_commit_sha": {"$ref": "#/$defs/gitSha"},
-            "tree_sha": {"$ref": "#/$defs/gitSha"},
+            "approved_pr_number": {"type": "integer", "minimum": 1},
             "validation_digest": {"$ref": "#/$defs/hash"},
+            "evidence_digest": {"$ref": "#/$defs/hash"},
             "approved_record_digest": {"$ref": "#/$defs/hash"},
             "binding_digest": {"$ref": "#/$defs/hash"}
           }

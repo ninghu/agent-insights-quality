@@ -234,11 +234,12 @@ both legacy promotion receipts and approved validation records. Under the Daily 
 prove no run/provision/publication is active, pause the scheduler, switch the active source atomically,
 and remain new-only on failure.
 
-Daily checks out the record's exact commit and recomputes catalogs, Agent source, and the validation
-contract before provisioning. Then perform only read-only readiness and registry reconciliation; do
-not send smoke traffic. For this migration only, after readiness succeeds, the Daily owner may run
-the explicitly requested isolated `--test-run --rerun N` email-only Daily Test. It is external,
-non-gating, and writes no ADX, official report/trend, or pull request.
+Daily reads only the reviewed Sweden g30 WORM container. It first tries the exact checkout commit
+record, then deterministically selects an immutable record for the exact repository and current
+validation digest. The lifecycle records the checkout commit for execution audit separately from
+the approved commit, pull request, evidence, and record digests used as validation provenance.
+Repository-only coordinator, schema, and test changes do not require another staging validation.
+Then perform only read-only readiness and registry reconciliation; do not send smoke traffic.
 
 The old West US 2 resources remain unchanged after cutover; retirement requires a separate reviewed
 authorization. That old environment is never a staging fallback.
@@ -305,11 +306,12 @@ contract. A deployed issue version contains only its reviewed defect and no dorm
 other issues, so source-aware proposed fixes see the exact defective implementation.
 
 Official staging qualification uses the five coordinator primitives and always composes the full
-41-authority matrix for one exact commit in the durable `aiq-staging-swedencentral` Project. Daily derives the
-exact-head approved-record Blob path and reads that immutable authority directly; it never trusts an
-operator-supplied local record file. Daily rejects a missing record, invalid WORM metadata, commit
-drift, or validation-digest drift. After provisioning, verify the registry and endpoints read-only.
-Do not send Daily smoke traffic.
+41-authority matrix for one exact commit in the durable `aiq-staging-swedencentral` Project. Daily
+reads only the reviewed Sweden g30 WORM Blob container; it tries the exact checkout commit first,
+then deterministically selects an immutable approval for the exact repository and current validation
+digest. It never trusts an operator-supplied local record file and rejects missing, malformed, or
+conflicting candidates and validation-digest drift. After provisioning, verify the registry and
+endpoints read-only. Do not send Daily smoke traffic.
 
 Provisioning writes each profile registry locally and uploads
 `swedencentral-g30/daily.json` or `swedencentral-g30/staging.json` to the private Azure
@@ -328,8 +330,9 @@ python -m agent_insights_quality daily-guide
 ```
 
 `daily-prepare` opens one private lifecycle/quiescence claim and binds the Pacific business date,
-immutable work-item snapshot digest and closed-business date, exact clean-commit approved staging
-record, deterministic selections, reviewed limits, and a hidden system-generated execution identity.
+immutable work-item snapshot digest and closed-business date, checkout commit for execution audit,
+approved commit, pull request, evidence, and record digests for validation provenance, deterministic
+selections, reviewed limits, and a hidden system-generated execution identity.
 `daily-provision` performs new-only reconciliation, then freezes the exact Daily registry, Project
 topology, promoted content/version mappings, and live region proof. No other Daily run may provision,
 send traffic, compose, finalize, publish, or claim delivery until that lifecycle completes.

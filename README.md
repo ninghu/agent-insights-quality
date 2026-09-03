@@ -172,7 +172,7 @@ python -m agent_insights_quality fetch-quality-work-items `
   --query-url <private-query-url> `
   --report-date <Pacific YYYY-MM-DD> `
   --output $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
-# Daily binds the current clean commit's immutable approved record from Blob.
+# Daily binds an immutable approval with the current fixed-authority validation digest.
 python -m agent_insights_quality daily-prepare --report-date <Pacific YYYY-MM-DD> `
   --work-items $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
 python -m agent_insights_quality daily-provision
