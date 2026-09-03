@@ -14,6 +14,10 @@ from agent_insights_quality.email import (
     validate_published_receipt,
     write_private_report_preview,
 )
+from agent_insights_quality.github_preview import (
+    bind_preview_publication,
+    preview_links,
+)
 from agent_insights_quality.util import ContractError
 
 _DASHBOARD_LINK = "https://aka.ms/agent-insights/quality"
@@ -230,6 +234,33 @@ def test_email_requires_reviewed_domain_and_one_success(
     assert "Open quality trend dashboard" not in test_request["html"]
     assert "Not published" in test_request["html"]
     assert "View Insight Engine Improvement Report" not in test_request["html"]
+    preview_run_report = deepcopy(report)
+    preview_run_report["run_id"] = "aiq-20260824-r01"
+    links = preview_links(preview_run_report["run_id"])
+    preview_request = create_request(
+        preview_run_report,
+        "synthetic-user@microsoft.com",
+        project_link=_PROJECT_LINK,
+        adx_publication={"status": "skipped_test", "error_code": None},
+        test_run=True,
+        preview_links=links,
+    )
+    assert links["report_url"] in preview_request["html"]
+    assert all(url in preview_request["html"] for url in links["agent_urls"].values())
+    assert "Not published" not in preview_request["html"]
+    assert "View Insight Engine Improvement Report" not in preview_request["html"]
+    publication = {
+        "schema_version": "1.0.0",
+        "kind": "daily-email-test-preview-publication",
+        **links,
+        "created_at": "2026-08-24T16:00:00+00:00",
+        "commit_sha": "1" * 40,
+        "content_digest": "sha256:" + "2" * 64,
+        "manifest_digest": "sha256:" + "3" * 64,
+    }
+    bound_request = bind_preview_publication(preview_request, publication)
+    assert bound_request["preview"] == publication
+    assert bound_request["content_digest"] == preview_request["content_digest"]
     with pytest.raises(ContractError, match="dashboard publication to be skipped"):
         create_request(
             report,

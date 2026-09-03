@@ -18,7 +18,7 @@
     "lifecycle_digest"
   ],
   "properties": {
-    "schema_version": {"const": "3.0.0"},
+    "schema_version": {"const": "4.0.0"},
     "kind": {"const": "daily-qualification-lifecycle"},
     "snapshot_type": {"enum": ["event", "active"]},
     "state": {
@@ -69,6 +69,7 @@
         "public_run_id",
         "report_date",
         "delivery_mode",
+        "publish_preview",
         "work_items",
         "approval",
         "catalog_hashes",
@@ -85,6 +86,7 @@
         },
         "report_date": {"type": "string", "format": "date"},
         "delivery_mode": {"enum": ["official", "test_email_only"]},
+        "publish_preview": {"type": "boolean"},
         "work_items": {
           "type": "object",
           "additionalProperties": false,
@@ -214,6 +216,7 @@
         "final_report",
         "adx_publication_status",
         "email_request",
+        "preview_publication",
         "send_claim",
         "email_receipt",
         "publication",
@@ -254,6 +257,7 @@
           ]
         },
         "email_request": {"$ref": "#/$defs/nullableReference"},
+        "preview_publication": {"$ref": "#/$defs/nullableReference"},
         "send_claim": {"$ref": "#/$defs/nullableReference"},
         "email_receipt": {"$ref": "#/$defs/nullableReference"},
         "publication": {"$ref": "#/$defs/nullableReference"},

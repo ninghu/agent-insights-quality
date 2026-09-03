@@ -16,8 +16,14 @@ from agent_insights_quality.daily_lifecycle import (
     DailyRecord,
     daily_runtime_root,
 )
+from agent_insights_quality.github_preview import preview_links
 from agent_insights_quality.models import AgentResult, VersionResult
-from agent_insights_quality.util import ContractError, atomic_json, content_hash
+from agent_insights_quality.util import (
+    ContractError,
+    atomic_json,
+    content_hash,
+    file_hash,
+)
 from tests.test_daily_lifecycle import HASH, _approval_binding, _initial
 
 
@@ -101,6 +107,84 @@ def test_daily_prepare_binds_pacific_date_snapshot_and_approved_record(
     assert active.value["bindings"]["approval"]["approved_commit_sha"] == "2" * 40
     assert active.value["bindings"]["approval"]["approved_pr_number"] == 65
     assert active.value["bindings"]["approval"]["evidence_digest"] == HASH
+    assert status["publish_preview"] is False
+
+
+def test_daily_prepare_gates_preview_to_nonzero_email_test() -> None:
+    with pytest.raises(ContractError, match="requires --test-run"):
+        coordinator.prepare_daily(
+            report_date=date(2026, 9, 1),
+            work_items_path=Path("unused.json"),
+            publish_preview=True,
+            now=lambda: datetime(2026, 9, 1, 15, tzinfo=UTC),
+        )
+    with pytest.raises(ContractError, match="nonzero --rerun"):
+        coordinator.prepare_daily(
+            report_date=date(2026, 9, 1),
+            work_items_path=Path("unused.json"),
+            test_run=True,
+            publish_preview=True,
+            now=lambda: datetime(2026, 9, 1, 15, tzinfo=UTC),
+        )
+
+
+def test_daily_finalization_binds_preview_and_whole_email_request(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    run_id = "aiq-20260901-r01"
+    run_root = daily_runtime_root(tmp_path) / "executions" / "synthetic"
+    report_path = run_root / "final-report" / "report.json"
+    improvement_path = run_root / "improvement.json"
+    preview_path = run_root / "github-preview-publication.json"
+    request_path = run_root / "email-send-request.json"
+    links = preview_links(run_id)
+    publication = {
+        "schema_version": "1.0.0",
+        "kind": "daily-email-test-preview-publication",
+        **links,
+        "created_at": "2026-09-01T16:00:00+00:00",
+        "commit_sha": "1" * 40,
+        "content_digest": "sha256:" + "2" * 64,
+        "manifest_digest": "sha256:" + "3" * 64,
+    }
+    atomic_json(report_path, {"synthetic": True})
+    atomic_json(improvement_path, {"synthetic": True})
+    atomic_json(preview_path, publication)
+    atomic_json(
+        request_path,
+        {
+            "content_digest": "sha256:" + "4" * 64,
+            "preview": publication,
+        },
+    )
+    active = SimpleNamespace(
+        value={
+            "bindings": {
+                "publish_preview": True,
+                "public_run_id": run_id,
+            }
+        }
+    )
+    updates = []
+    monkeypatch.setattr(
+        coordinator,
+        "_transition_exact",
+        lambda *_args, **_kwargs: updates.append(_args[3]),
+    )
+
+    coordinator.record_daily_finalization(
+        active,
+        report_path=report_path,
+        email_request_path=request_path,
+        improvement_analysis_path=improvement_path,
+        adx_publication_status="skipped_test",
+        preview_publication_path=preview_path,
+        base=tmp_path,
+    )
+
+    assert updates[0]["preview_publication"]["digest"] == file_hash(preview_path)
+    assert updates[0]["email_request"]["digest"] == file_hash(request_path)
 
 
 def test_daily_status_safely_requires_unreadable_format_supersession(

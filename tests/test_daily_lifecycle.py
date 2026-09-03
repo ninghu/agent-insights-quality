@@ -52,7 +52,7 @@ def _initial(report_date: date = date(2026, 8, 31)) -> dict:
     selection = select_daily(report_date, agents, issues, hashes["issues"])
     moment = datetime(2026, 8, 31, 15, tzinfo=UTC).isoformat()
     return {
-        "schema_version": "3.0.0",
+        "schema_version": "4.0.0",
         "kind": "daily-qualification-lifecycle",
         "snapshot_type": "event",
         "state": "LOCKED",
@@ -68,6 +68,7 @@ def _initial(report_date: date = date(2026, 8, 31)) -> dict:
             "public_run_id": f"aiq-{report_date:%Y%m%d}",
             "report_date": report_date.isoformat(),
             "delivery_mode": "official",
+            "publish_preview": False,
             "work_items": {
                 "path": "work-items/snapshot.json",
                 "content_digest": HASH,
@@ -89,6 +90,7 @@ def _initial(report_date: date = date(2026, 8, 31)) -> dict:
             "final_report": None,
             "adx_publication_status": None,
             "email_request": None,
+            "preview_publication": None,
             "send_claim": None,
             "email_receipt": None,
             "publication": None,
@@ -152,7 +154,7 @@ def test_unreadable_daily_lifecycle_is_archived_once_and_tombstoned(
     assert archives[0].name == (
         f"{active.value['superseded_format_digest'].removeprefix('sha256:')}.json"
     )
-    assert active.value["schema_version"] == "3.0.0"
+    assert active.value["schema_version"] == "4.0.0"
     assert active.value["state"] == "LOCKED"
     assert repeated.digest == active.digest
     assert archives[0].is_file()

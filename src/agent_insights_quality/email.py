@@ -13,6 +13,10 @@ from uuid import UUID
 from jsonschema import Draft202012Validator
 
 from agent_insights_quality.azure_cli import azure_cli
+from agent_insights_quality.github_preview import (
+    AGENT_NAMES as PREVIEW_AGENT_NAMES,
+    preview_links as expected_preview_links,
+)
 from agent_insights_quality.profiles import RESOURCE_GROUP, RuntimeProfile
 from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.report_summary import (
@@ -119,8 +123,14 @@ def create_request(
     adx_publication: Mapping[str, Any] | None = None,
     work_items: Mapping[str, Any] | None = None,
     test_run: bool = False,
+    preview_links: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     recipient = _validated_recipient(recipient)
+    resolved_preview_links = _validated_preview_links(
+        report,
+        test_run=test_run,
+        value=preview_links,
+    )
     if report.get("profile") == "daily" and test_run:
         if dashboard_link is not None or adx_publication != {
             "status": "skipped_test",
@@ -155,6 +165,7 @@ def create_request(
         adx_publication=adx_publication,
         work_items=work_items,
         test_run=test_run,
+        preview_links=resolved_preview_links,
     )
     digest = content_hash(
         {"recipient": recipient.lower(), "subject": subject, "html": body}
@@ -454,6 +465,7 @@ def _agent_rows(
     agent_links: Mapping[str, str],
     *,
     test_run: bool = False,
+    preview_links: Mapping[str, Any] | None = None,
 ) -> str:
     rows = []
     for baseline in sorted(
@@ -471,11 +483,17 @@ def _agent_rows(
             if agent_link
             else '<span style="color:#64748b;">Not available</span>'
         )
+        preview_url = (
+            preview_links["agent_urls"][name] if preview_links is not None else None
+        )
         report_link_html = (
-            '<span style="color:#64748b;">Not published</span>'
-            if test_run
-            else
             '<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
+            f'href="{html.escape(preview_url, quote=True)}">'
+            "View report</a>"
+            if preview_url is not None
+            else '<span style="color:#64748b;">Not published</span>'
+            if test_run
+            else '<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
             f'href="{html.escape(_agent_report_url(report, name), quote=True)}">'
             "View report</a>"
         )
@@ -575,8 +593,14 @@ def _render_html(
     adx_publication: Mapping[str, Any] | None = None,
     work_items: Mapping[str, Any] | None = None,
     test_run: bool = False,
+    preview_links: Mapping[str, Any] | None = None,
 ) -> str:
-    rows = _agent_rows(report, agent_links or {}, test_run=test_run)
+    rows = _agent_rows(
+        report,
+        agent_links or {},
+        test_run=test_run,
+        preview_links=preview_links,
+    )
     test_banner = (
         '<tr><td style="padding:18px 32px;background-color:#dbeafe;'
         f'color:#12304a;font-weight:700;{_OUTLOOK_TEXT_STYLE}">'
@@ -611,6 +635,7 @@ def _render_html(
         + '<tr><td style="padding:28px 32px 0 32px;">'
         + _section_heading("Summary")
         + _dashboard_source_link(dashboard_link, adx_publication)
+        + _preview_report_link(preview_links)
         + _data_table(
             ("Summary", "Result"),
             _grade_rows(report),
@@ -672,3 +697,33 @@ def _render_html(
     if headings != expected_headings:
         raise ContractError("Email contains an unexpected section layout")
     return body
+
+
+def _validated_preview_links(
+    report: Mapping[str, Any],
+    *,
+    test_run: bool,
+    value: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if report.get("profile") != "daily" or not test_run:
+        raise ContractError("GitHub preview links are valid only for a Daily test run")
+    expected = expected_preview_links(str(report.get("run_id") or ""))
+    if dict(value) != expected or set(value.get("agent_urls", {})) != set(
+        PREVIEW_AGENT_NAMES
+    ):
+        raise ContractError("GitHub preview links do not match the Daily test run")
+    return expected
+
+
+def _preview_report_link(value: Mapping[str, Any] | None) -> str:
+    if value is None:
+        return ""
+    return (
+        '<p style="margin:0 0 18px 0;color:#334155;'
+        f'{_OUTLOOK_TEXT_STYLE}">'
+        '<a style="color:#0067b8;text-decoration:underline;font-weight:600;" '
+        f'href="{html.escape(str(value["report_url"]), quote=True)}">'
+        "View permanent test report preview</a></p>"
+    )

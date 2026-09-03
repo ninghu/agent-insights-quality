@@ -243,6 +243,8 @@ validation. Then perform only read-only readiness and registry reconciliation; d
 traffic. For this migration only, after readiness succeeds, the Daily owner may run the explicitly
 requested isolated `--test-run --rerun N` email-only Daily Test. It is external, non-gating, and
 writes no ADX, official report/trend, or pull request.
+GitHub preview publication is a separate reviewed opt-in through `--publish-preview`; it is invalid
+outside a nonzero email-only rerun.
 
 The old West US 2 resources remain unchanged after cutover; retirement requires a separate reviewed
 authorization. That old environment is never a staging fallback.
@@ -479,6 +481,17 @@ and records `not_evaluated` without advancing absence. The complete Daily report
 JSON/Markdown, and full immutable dated analysis snapshot are staged and validated before
 retry-safe publication; latest views and trend then join the same generated-only pull request.
 Optional email-only tests write only a private improvement preview.
+
+An email-only test publishes no GitHub report by default. When `daily-prepare` also receives
+`--publish-preview`, finalization first writes and validates the private sanitized report set, then
+uses `gh api` Git Data operations to append `<public-run-id>/` to the dedicated orphan
+`aiq-email-test-preview` branch. The branch contains only one manifest, `report.json`, `report.md`,
+and exactly five per-Agent Markdown files per run. It is never based on `main`, never creates a pull
+request, and never modifies or deletes an existing run directory. Before updating the ref, the
+publisher validates the complete existing branch against the managed schema and regenerates every
+Markdown file from its public report; unmanaged paths, private links, or divergent content fail
+closed. Email links use the permanent branch plus unique run directory, while catalog links continue
+to target `main` and the private improvement preview remains unlinked.
 
 The lifecycle enforces this downstream order: assessment validation, focused recheck replacement,
 improvement input, one improvement-analysis session, finalization, ADX attempt, immutable email

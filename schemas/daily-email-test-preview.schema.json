@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "repository",
+    "branch",
+    "run_id",
+    "created_at",
+    "format",
+    "content_digest",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "kind": {"const": "daily-email-test-preview"},
+    "repository": {"const": "ninghu/agent-insights-quality"},
+    "branch": {"const": "aiq-email-test-preview"},
+    "run_id": {
+      "type": "string",
+      "pattern": "^aiq-[0-9]{8}-r(?:0[1-9]|[1-9][0-9]+)$"
+    },
+    "created_at": {"type": "string", "format": "date-time"},
+    "format": {"const": "daily-report-v3-markdown-v1"},
+    "content_digest": {"$ref": "#/$defs/hash"},
+    "artifacts": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "content_digest"],
+        "properties": {
+          "path": {
+            "enum": [
+              "report.json",
+              "report.md",
+              "agents/weather-agent.md",
+              "agents/healthcare-agent.md",
+              "agents/finance-agent.md",
+              "agents/travel-agent.md",
+              "agents/support-ticket-agent.md"
+            ]
+          },
+          "content_digest": {"$ref": "#/$defs/hash"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}
