@@ -140,7 +140,7 @@ def prepare_daily(
     moment = moment_value.astimezone(UTC).isoformat()
     delivery_mode = TEST_EMAIL_ONLY_DELIVERY if test_run else OFFICIAL_DELIVERY
     initial = {
-        "schema_version": "3.0.0",
+        "schema_version": "4.0.0",
         "kind": "daily-qualification-lifecycle",
         "snapshot_type": "event",
         "state": "LOCKED",
@@ -1191,7 +1191,7 @@ def _daily_contract_digest(
         runtime_files[relative] = file_hash(ROOT / relative)
     return content_hash(
         {
-            "schema_version": "3.0.0",
+            "schema_version": "4.0.0",
             "repository": bindings["repository"],
             "approval": bindings["approval"],
             "public_run_id": bindings["public_run_id"],

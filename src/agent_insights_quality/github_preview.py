@@ -511,28 +511,8 @@ def _validate_branch(files: Mapping[str, bytes]) -> dict[str, dict[str, Any]]:
         ):
             raise ContractError("GitHub preview manifest is not canonical")
         _validate_manifest(manifest, run_id, run_files)
-        report = _json_object(run_files["report.json"], "report.json")
-        validate_report(report)
-        if report.get("profile") != "daily" or report.get("run_id") != run_id:
-            raise ContractError("GitHub preview report binding is invalid")
-        generated = {
-            "report.json": _json_bytes(report),
-            "report.md": render_markdown(
-                report,
-                include_improvement_link=False,
-            ).encode("utf-8"),
-            **{
-                f"agents/{agent_name}.md": render_agent_markdown(
-                    report,
-                    agent_name,
-                ).encode("utf-8")
-                for agent_name in AGENT_NAMES
-            },
-        }
-        if any(run_files[path] != content for path, content in generated.items()):
-            raise ContractError("GitHub preview branch contains divergent generated output")
-        for relative, content in generated.items():
-            _validate_public_text(content, relative)
+        for relative in expected_paths - {".aiq-preview.json"}:
+            _validate_public_text(run_files[relative], relative)
         manifests[run_id] = manifest
     return manifests
 
@@ -553,6 +533,7 @@ def _build_manifest(
         "branch": PREVIEW_BRANCH,
         "run_id": run_id,
         "created_at": created_at.isoformat(),
+        "format": "daily-report-v3-markdown-v1",
         "content_digest": content_hash({"artifacts": entries}),
         "artifacts": entries,
     }
@@ -712,13 +693,3 @@ def _json_bytes(value: Mapping[str, Any]) -> bytes:
     return (
         json.dumps(value, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
     ).encode("ascii")
-
-
-def _json_object(content: bytes, label: str) -> dict[str, Any]:
-    try:
-        value = json.loads(content)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ContractError(f"GitHub preview {label} is invalid JSON") from error
-    if not isinstance(value, dict):
-        raise ContractError(f"GitHub preview {label} must contain an object")
-    return value

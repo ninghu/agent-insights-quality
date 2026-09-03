@@ -52,7 +52,7 @@ def _initial(report_date: date = date(2026, 8, 31)) -> dict:
     selection = select_daily(report_date, agents, issues, hashes["issues"])
     moment = datetime(2026, 8, 31, 15, tzinfo=UTC).isoformat()
     return {
-        "schema_version": "3.0.0",
+        "schema_version": "4.0.0",
         "kind": "daily-qualification-lifecycle",
         "snapshot_type": "event",
         "state": "LOCKED",
@@ -154,7 +154,7 @@ def test_unreadable_daily_lifecycle_is_archived_once_and_tombstoned(
     assert archives[0].name == (
         f"{active.value['superseded_format_digest'].removeprefix('sha256:')}.json"
     )
-    assert active.value["schema_version"] == "3.0.0"
+    assert active.value["schema_version"] == "4.0.0"
     assert active.value["state"] == "LOCKED"
     assert repeated.digest == active.digest
     assert archives[0].is_file()

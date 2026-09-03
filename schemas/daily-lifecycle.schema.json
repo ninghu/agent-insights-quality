@@ -18,7 +18,7 @@
     "lifecycle_digest"
   ],
   "properties": {
-    "schema_version": {"const": "3.0.0"},
+    "schema_version": {"const": "4.0.0"},
     "kind": {"const": "daily-qualification-lifecycle"},
     "snapshot_type": {"enum": ["event", "active"]},
     "state": {

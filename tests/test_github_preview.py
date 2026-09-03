@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from agent_insights_quality import github_preview
 from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.github_preview import (
     AGENT_NAMES,
@@ -225,6 +226,41 @@ def test_preview_appends_without_modifying_existing_run(tmp_path: Path) -> None:
     assert any(path.startswith(f"{second_run}/") for path in final_files)
     assert api.created_trees[-1][0] is not None
     assert api.created_commits[-1][0] == COMMIT_ONE
+
+
+def test_preview_append_does_not_rerender_historical_runs(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    first_run = "aiq-20260903-r08"
+    second_run = "aiq-20260903-r09"
+    api = MemoryGitHubApi()
+    first_source = tmp_path / "first"
+    second_source = tmp_path / "second"
+    _write_preview_source(first_source, first_run)
+    _write_preview_source(second_source, second_run)
+    publish_daily_email_test_preview(first_source, run_id=first_run, api=api)
+    original_validate = github_preview.validate_report
+    original_report = github_preview.render_markdown
+    original_agent = github_preview.render_agent_markdown
+
+    def validate(report: dict) -> None:
+        assert report["run_id"] == second_run
+        original_validate(report)
+
+    def report_markdown(report: dict, **kwargs) -> str:
+        assert report["run_id"] == second_run
+        return original_report(report, **kwargs)
+
+    def agent_markdown(report: dict, agent_name: str) -> str:
+        assert report["run_id"] == second_run
+        return original_agent(report, agent_name)
+
+    monkeypatch.setattr(github_preview, "validate_report", validate)
+    monkeypatch.setattr(github_preview, "render_markdown", report_markdown)
+    monkeypatch.setattr(github_preview, "render_agent_markdown", agent_markdown)
+
+    publish_daily_email_test_preview(second_source, run_id=second_run, api=api)
 
 
 @pytest.mark.parametrize(
