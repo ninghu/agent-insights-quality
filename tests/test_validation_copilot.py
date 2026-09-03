@@ -704,7 +704,7 @@ def test_incomplete_endpoint_integrity_controls_fresh_invocation() -> None:
     )
 
 
-def test_terminal_trace_gap_reuses_receipt_but_endpoint_gap_forces_traffic(
+def test_terminal_trace_gap_is_copilot_evaluable_but_endpoint_gap_forces_traffic(
     tmp_path,
 ) -> None:
     package, pointer, prepared, plan, context = _package(
@@ -726,21 +726,21 @@ def test_terminal_trace_gap_reuses_receipt_but_endpoint_gap_forces_traffic(
     evaluation["scenarios"][0]["issue_attempts"][0]["observation"] = False
     first_step = package["targets"][0]["attempts"][0]["steps"][0]
     first_step["trace_rows"][0]["output_messages_nonempty"] = False
-    telemetry_incomplete = authority_evidence_from_evaluation(
+    telemetry_complete = authority_evidence_from_evaluation(
         package=package,
         evaluation=evaluation,
         authority=context["authority"],
         runtime=context["runtime"],
         validated_commit_sha=HEAD,
     )
-    assert telemetry_incomplete["evidence_complete"] is False
-    assert telemetry_incomplete["scenarios"][0]["issue_attempts"][0][
+    assert telemetry_complete["evidence_complete"] is True
+    assert telemetry_complete["scenarios"][0]["issue_attempts"][0][
         "setup_steps"
     ][0]["endpoint_pass"] is True
     assert not incomplete_result_requires_fresh_invocation(
         {
             "outcome": "INCOMPLETE",
-            "authority_evidence": telemetry_incomplete,
+            "authority_evidence": telemetry_complete,
         }
     )
 

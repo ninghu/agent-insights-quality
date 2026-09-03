@@ -1012,11 +1012,9 @@ def _evaluated_attempts(
                 package_step["response_id"]
                 and package_step["usable_response"] is True
             )
-            terminal_output_present = _terminal_output_present(package_step)
             identity_pass = package_step["identity_pass"] is True
             evaluation_complete = (
-                terminal_output_present
-                and step_assessment["evidence_sufficient"] is True
+                step_assessment["evidence_sufficient"] is True
                 and all(
                     item["evidence_sufficient"] is True
                     for item in [
@@ -1110,11 +1108,6 @@ def _evaluated_attempts(
                     if complete
                     else "endpoint_response_incomplete"
                     if any(not item["endpoint_pass"] for item in steps)
-                    else "terminal_output_evidence_incomplete"
-                    if any(
-                        not _terminal_output_present(item)
-                        for item in package_attempt["steps"]
-                    )
                     else "telemetry_identity_mismatch"
                     if any(not item["identity_pass"] for item in steps)
                     else assessed["error_code"]
@@ -1123,21 +1116,6 @@ def _evaluated_attempts(
             }
         )
     return results
-
-
-def _terminal_output_present(step: Mapping[str, Any]) -> bool:
-    anchors = [
-        row
-        for row in step["trace_rows"]
-        if row.get("span_id") == step["invoke_agent_anchor_span_id"]
-        and row.get("operation_name") == "invoke_agent"
-        and row.get("matched_reference") == step["response_id"]
-    ]
-    return (
-        len(anchors) == 1
-        and anchors[0].get("output_messages_present") is True
-        and anchors[0].get("output_messages_nonempty") is True
-    )
 
 
 def _runtime_payload(runtime: Mapping[str, Any]) -> dict[str, Any]:
