@@ -13,6 +13,7 @@ from agent_insights_quality.catalogs import (
     agent_model_contract,
 )
 from agent_insights_quality.registry import (
+    DEPLOYMENT_REGISTRY_SCHEMA_VERSION,
     REGISTRY_CONTAINER,
     _run_registry_command,
     load_registry,
@@ -25,7 +26,7 @@ from agent_insights_quality.util import ContractError
 def _registry(profile: str) -> dict:
     agents, issues = load_catalogs()
     return {
-        "schema_version": "2.0.0",
+        "schema_version": DEPLOYMENT_REGISTRY_SCHEMA_VERSION,
         "profile": profile,
         "environment_id": "swedencentral-g30",
         "location": "swedencentral",
@@ -73,6 +74,21 @@ def test_registry_is_profile_isolated(tmp_path: Path) -> None:
     )
     path.write_text(json.dumps(invalid), encoding="utf-8")
     with pytest.raises(ContractError, match="inventory"):
+        load_registry(
+            path,
+            profile="daily",
+            catalog_hashes=catalog_hashes(agents, issues),
+        )
+
+
+def test_registry_rejects_superseded_schema(tmp_path: Path) -> None:
+    agents, issues = load_catalogs()
+    registry = _registry("daily")
+    registry["schema_version"] = "2.0.0"
+    path = tmp_path / "registry.json"
+    path.write_text(json.dumps(registry), encoding="utf-8")
+
+    with pytest.raises(ContractError, match="'3.0.0' was expected"):
         load_registry(
             path,
             profile="daily",

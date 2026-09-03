@@ -22,6 +22,7 @@ PROFILE_PROJECTS = {
 ENVIRONMENT_ID = "swedencentral-g30"
 PROFILE_LOCATION = "swedencentral"
 TELEMETRY_RESOURCE_SET = "g30"
+DEPLOYMENT_REGISTRY_SCHEMA_VERSION = "3.0.0"
 REGISTRY_CONTAINER = load_automation_policy().deployment_registry_container
 _PROGRESS = ProgressReporter("aiq-registry")
 

@@ -4,7 +4,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "profile", "environment_id", "location", "telemetry_resource_set", "account_name", "project_name", "test_region", "test_agent_model", "catalog_hashes", "agents"],
   "properties": {
-    "schema_version": {"const": "2.0.0"},
+    "schema_version": {"const": "3.0.0"},
     "profile": {"enum": ["daily", "staging"]},
     "environment_id": {"const": "swedencentral-g30"},
     "location": {"const": "swedencentral"},

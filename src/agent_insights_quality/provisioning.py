@@ -35,7 +35,11 @@ from agent_insights_quality.live import (
 )
 from agent_insights_quality.progress import ProgressReporter
 from agent_insights_quality.profiles import RuntimeProfile
-from agent_insights_quality.registry import load_registry, publish_registry
+from agent_insights_quality.registry import (
+    DEPLOYMENT_REGISTRY_SCHEMA_VERSION,
+    load_registry,
+    publish_registry,
+)
 from agent_insights_quality.reporting import (
     _baseline_runtime_evidence_complete,
     _runtime_evidence_complete,
@@ -172,7 +176,7 @@ def provision_profile(
     ):
         raise ContractError("Profile monitor inventory is not exact")
     registry = {
-        "schema_version": "3.0.0",
+        "schema_version": DEPLOYMENT_REGISTRY_SCHEMA_VERSION,
         "profile": profile.name,
         "environment_id": profile.environment_id,
         "location": profile.location,
