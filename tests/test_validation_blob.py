@@ -12,6 +12,7 @@ from agent_insights_quality.validation_blob import (
     APPROVED_RECORD_CONTAINER,
     RESOURCE_GROUP,
     AzureValidationBlobStore,
+    _normalize_azure_etag,
     approved_record_blob_prefix,
 )
 
@@ -407,6 +408,109 @@ def test_approved_record_listing_is_repository_scoped_and_version_bound() -> Non
 
 
 @pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ('"0xABCDEF"', "0xabcdef"),
+        ("'0xABCDEF'", "0xabcdef"),
+        ("0xABCDEF", "0xabcdef"),
+        ('W/"0xABCDEF"', "0xabcdef"),
+        ("w/'0xABCDEF'", "0xabcdef"),
+        (' \tW/"0xABCDEF"\r\n', "0xabcdef"),
+    ],
+)
+def test_azure_etag_normalization(value, expected) -> None:
+    assert _normalize_azure_etag(value) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        "",
+        " \t\r\n",
+        "W/",
+        "w/''",
+        '"unterminated',
+        "'mismatched\"",
+        'W/ "spaced"',
+        '"internal space"',
+        'W/W/"repeated"',
+    ],
+)
+def test_azure_etag_normalization_rejects_empty_or_malformed_values(
+    value,
+) -> None:
+    assert _normalize_azure_etag(value) is None
+
+
+def _approved_record_listing_store(
+    *,
+    listed_etag: object,
+    read_etag: object,
+    listed_version_id: str = "version",
+    read_version_id: str = "version",
+) -> AzureValidationBlobStore:
+    repository = "ninghu/agent-insights-quality"
+    name = f"{approved_record_blob_prefix(repository)}{'b' * 40}/record.json"
+    content = canonical_bytes({"name": name})
+
+    def get_blob_client(container, requested_name, version_id=None):
+        assert container == APPROVED_RECORD_CONTAINER
+        assert requested_name == name
+        assert version_id == listed_version_id
+        return SimpleNamespace(
+            download_blob=lambda: SimpleNamespace(readall=lambda: content),
+            get_blob_properties=lambda: SimpleNamespace(
+                etag=read_etag,
+                version_id=read_version_id,
+            ),
+        )
+
+    store = object.__new__(AzureValidationBlobStore)
+    store._service = SimpleNamespace(
+        get_container_client=lambda container: (
+            SimpleNamespace(
+                list_blobs=lambda **_kwargs: [
+                    SimpleNamespace(
+                        name=name,
+                        etag=listed_etag,
+                        version_id=listed_version_id,
+                    )
+                ]
+            )
+            if container == APPROVED_RECORD_CONTAINER
+            else pytest.fail(container)
+        ),
+        get_blob_client=get_blob_client,
+    )
+    return store
+
+
+def test_approved_record_listing_compares_normalized_etags() -> None:
+    store = _approved_record_listing_store(
+        listed_etag=' \tW/"0xABCDEF"\r\n',
+        read_etag="'0xabcdef'",
+    )
+
+    records = store.list_approved_records("ninghu/agent-insights-quality")
+
+    assert len(records) == 1
+    assert records[0].etag == "'0xabcdef'"
+    assert records[0].version_id == "version"
+
+
+def test_approved_record_listing_still_rejects_version_mismatch() -> None:
+    store = _approved_record_listing_store(
+        listed_etag='W/"0xABCDEF"',
+        read_etag="0xabcdef",
+        read_version_id="different-version",
+    )
+
+    with pytest.raises(ContractError, match="metadata changed during read"):
+        store.list_approved_records("ninghu/agent-insights-quality")
+
+
+@pytest.mark.parametrize(
     "listed",
     [
         SimpleNamespace(
@@ -435,6 +539,15 @@ def test_approved_record_listing_is_repository_scoped_and_version_bound() -> Non
             ),
             etag="etag",
             version_id=None,
+        ),
+        SimpleNamespace(
+            name=(
+                "approved-validation-records/ninghu/agent-insights-quality/"
+                + ("b" * 40)
+                + "/record.json"
+            ),
+            etag='W/"unterminated',
+            version_id="version",
         ),
     ],
 )
