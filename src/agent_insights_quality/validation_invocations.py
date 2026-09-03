@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -86,6 +87,8 @@ def load_invocation_receipt(
     if runtime_root not in path.parents:
         raise ContractError("Invocation receipt path escapes the runtime root")
     value = read_json(path)
+    if path.read_bytes() != _canonical_document_bytes(value):
+        raise ContractError("Invocation receipt bytes are not canonical")
     validate_invocation_receipt(value)
     if (
         value["authority_id"] != reference.get("authority_id")
@@ -239,17 +242,30 @@ def select_reusable_invocation_receipts(
         runtime_root
         / "invocation-receipts"
         / str(prepared["repository"]).replace("/", "--")
-        / str(prepared["pr_number"])
     )
     if receipt_root.is_dir():
         for path in receipt_root.rglob("*.json"):
             try:
-                value = read_json(path)
-                validate_invocation_receipt(value)
+                raw = read_json(path)
+                value = load_invocation_receipt(
+                    _receipt_reference(
+                        raw,
+                        path=path,
+                        root=runtime_root,
+                    ),
+                    root=runtime_root,
+                )
+                if path.resolve() != _receipt_path(
+                    runtime_root,
+                    value,
+                ).resolve():
+                    raise ContractError(
+                        "Invocation receipt path provenance is invalid"
+                    )
                 completed = datetime.fromisoformat(
                     str(value["completed_at"]).replace("Z", "+00:00")
                 ).astimezone(UTC)
-            except (ContractError, OSError, ValueError):
+            except (ContractError, KeyError, OSError, ValueError):
                 continue
             candidates.setdefault(value["authority_id"], []).append(
                 (completed.isoformat(), path, value)
@@ -262,6 +278,7 @@ def select_reusable_invocation_receipts(
     forced = forced_authority_ids or set()
     selected: list[str] = []
     reused: list[dict[str, str]] = []
+    reused_values: list[dict[str, Any]] = []
     for authority_id in authority_ids:
         authority = by_id[authority_id]
         matching = [
@@ -292,6 +309,8 @@ def select_reusable_invocation_receipts(
             continue
         _, path, value = latest[-1]
         reused.append(_receipt_reference(value, path=path, root=runtime_root))
+        reused_values.append(value)
+    assert_invocation_receipt_set_isolated(reused_values)
     return selected, reused
 
 
@@ -1154,7 +1173,11 @@ def _receipt_is_reusable(
         return False
     return bool(
         value["repository"] == prepared["repository"]
-        and value["pr_number"] == prepared["pr_number"]
+        and _stored_authority_invocation_contract_digest(value)
+        == authority_invocation_contract_digest(
+            authority,
+            paired_v0_authority,
+        )
         and value["environment"] == expected_environment
         and value["runtime"]["provider_content_digest"]
         == runtime["provider_content_digest"]
@@ -1184,6 +1207,57 @@ def _receipt_is_reusable(
                 == runtime_mapping_digest(paired_v0_runtime)
             )
         )
+    )
+
+
+def authority_invocation_contract_digest(
+    authority: AuthoritySpec,
+    paired_v0_authority: AuthoritySpec,
+) -> str:
+    return content_hash(
+        {
+            "contract_version": "1.0.0",
+            "authority_id": authority.authority_id,
+            "authority_kind": authority.authority_kind,
+            "canonical_agent": authority.canonical_agent,
+            "runtime_kind": authority.runtime_kind,
+            "source_content_digest": authority.source_content_digest,
+            "execution_digest": authority.execution_digest,
+            "paired_v0_contract": (
+                None
+                if authority.authority_kind == "baseline"
+                else {
+                    "authority_id": paired_v0_authority.authority_id,
+                    "source_content_digest": (
+                        paired_v0_authority.source_content_digest
+                    ),
+                    "execution_digest": paired_v0_authority.execution_digest,
+                }
+            ),
+        }
+    )
+
+
+def _stored_authority_invocation_contract_digest(
+    value: Mapping[str, Any],
+) -> str:
+    paired = value["paired_v0_contract"]
+    canonical_agent = (
+        str(value["authority_id"]).removesuffix("/v0")
+        if paired is None
+        else str(paired["authority_id"]).removesuffix("/v0")
+    )
+    return content_hash(
+        {
+            "contract_version": "1.0.0",
+            "authority_id": value["authority_id"],
+            "authority_kind": "baseline" if paired is None else "issue",
+            "canonical_agent": canonical_agent,
+            "runtime_kind": value["runtime"]["runtime_kind"],
+            "source_content_digest": value["source_content_digest"],
+            "execution_digest": value["execution_digest"],
+            "paired_v0_contract": paired,
+        }
     )
 
 
@@ -1333,6 +1407,12 @@ def _receipt_path(root: Path, value: Mapping[str, Any]) -> Path:
         / str(value["authority_id"]).replace("/", "--")
         / f"{str(value['receipt_digest']).removeprefix('sha256:')}.json"
     )
+
+
+def _canonical_document_bytes(value: Mapping[str, Any]) -> bytes:
+    return (
+        json.dumps(value, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+    ).encode("ascii")
 
 
 def _receipt_reference(

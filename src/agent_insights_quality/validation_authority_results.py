@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
@@ -23,6 +24,7 @@ from agent_insights_quality.validation_evidence import (
     validate_authority_evidence,
 )
 from agent_insights_quality.validation_invocations import (
+    assert_invocation_receipt_set_isolated,
     load_bound_invocation_receipt,
     load_invocation_receipt,
 )
@@ -143,9 +145,19 @@ def load_authority_verification_result(
     if runtime_root not in path.parents:
         raise ContractError("Authority verification result path escapes runtime root")
     value = read_json(path)
+    if path.read_bytes() != _canonical_document_bytes(value):
+        raise ContractError(
+            "Authority verification result bytes are not canonical"
+        )
     validate_authority_verification_result(value)
     evaluation = value.get("copilot_evaluation")
     if isinstance(evaluation, Mapping):
+        from agent_insights_quality.validation_copilot import (
+            EVALUATION_SCHEMA,
+            _validate_evaluation_coverage,
+            validate_private_package,
+        )
+
         package_path = (
             runtime_root
             / "copilot-authority-evaluations"
@@ -165,6 +177,33 @@ def load_authority_verification_result(
             raise ContractError(
                 "Authority result Copilot evaluation artifact is unavailable"
             ) from error
+        evaluation_errors = list(
+            Draft202012Validator(
+                read_json(EVALUATION_SCHEMA),
+                format_checker=FormatChecker(),
+            ).iter_errors(imported)
+        )
+        if evaluation_errors:
+            raise ContractError(
+                "Authority result Copilot evaluation artifact is invalid"
+            )
+        if (
+            package_path.read_bytes() != _canonical_document_bytes(package)
+            or import_path.read_bytes() != _canonical_document_bytes(imported)
+        ):
+            raise ContractError(
+                "Authority result Copilot evaluation artifact bytes are not canonical"
+            )
+        try:
+            validate_private_package(
+                package,
+                require_current_prompt=False,
+            )
+            _validate_evaluation_coverage(imported, package)
+        except ContractError as error:
+            raise ContractError(
+                "Authority result Copilot evaluation artifact is invalid"
+            ) from error
         if (
             package.get("package_hash") != evaluation["package_hash"]
             or digest_without_field(package, "package_hash")
@@ -173,6 +212,14 @@ def load_authority_verification_result(
             or content_hash(imported) != evaluation["evaluation_digest"]
             or imported.get("package_hash") != evaluation["package_hash"]
             or imported.get("model") != evaluation["model"]
+            or package.get("repository") != value["repository"]
+            or package.get("pr_number") != value["pr_number"]
+            or package.get("origin_run_id") != value["origin_run_id"]
+            or package.get("origin_commit_sha") != value["origin_commit_sha"]
+            or package.get("authority_id") != value["authority_id"]
+            or package.get("authority_contract") != value["authority_contract"]
+            or package.get("invocation_receipt", {}).get("reference")
+            != value["invocation_receipt"]
         ):
             raise ContractError(
                 "Authority result Copilot evaluation reference changed"
@@ -218,7 +265,6 @@ def load_bound_authority_verification_result(
     expected_contract = _authority_contract(authority, runtime)
     if (
         value["repository"] != prepared["repository"]
-        or value["pr_number"] != prepared["pr_number"]
         or value["authority_id"] != authority.authority_id
         or value["authority_contract"] != expected_contract
         or binding["environment_id"] != plan["environment_id"]
@@ -321,7 +367,6 @@ def reusable_authority_verification_results(
         / "authority-verifications"
         / owner
         / name
-        / str(prepared["pr_number"])
     )
     runtime_by_id = {
         item["authority_id"]: item for item in runtime_topology["agents"]
@@ -332,19 +377,29 @@ def reusable_authority_verification_results(
         for item in authorities
         if item.authority_kind == "baseline"
     }
-    candidates: dict[str, list[tuple[str, Path, dict[str, Any]]]] = {}
+    candidates: dict[
+        str,
+        list[tuple[str, Path, dict[str, Any], dict[str, Any]]],
+    ] = {}
     if result_root.is_dir():
         for path in result_root.rglob("*.json"):
             try:
                 value = read_json(path)
                 validate_authority_verification_result(value)
+                if path.resolve() != _current_result_path(
+                    runtime_root,
+                    value,
+                ).resolve():
+                    raise ContractError(
+                        "Authority verification result path provenance is invalid"
+                    )
                 authority = authority_by_id[value["authority_id"]]
                 reference = _result_reference(
                     value,
                     path=path,
                     root=runtime_root,
                 )
-                load_bound_authority_verification_result(
+                bound = load_bound_authority_verification_result(
                     reference,
                     authority=authority,
                     paired_v0_authority=paired[authority.canonical_agent],
@@ -363,7 +418,25 @@ def reusable_authority_verification_results(
             except (ContractError, KeyError, OSError, ValueError):
                 continue
             candidates.setdefault(authority.authority_id, []).append(
-                (completed, path, value)
+                (
+                    completed,
+                    path,
+                    value,
+                    load_bound_invocation_receipt(
+                        bound["invocation_receipt"],
+                        authority=authority,
+                        paired_v0_authority=paired[
+                            authority.canonical_agent
+                        ],
+                        runtime=runtime_by_id[authority.authority_id],
+                        paired_v0_runtime=runtime_by_id[
+                            paired[authority.canonical_agent].authority_id
+                        ],
+                        prepared=prepared,
+                        plan=plan,
+                        root=runtime_root,
+                    ),
+                )
             )
     selected: dict[str, dict[str, str] | None] = {}
     for authority in authorities:
@@ -376,7 +449,7 @@ def reusable_authority_verification_results(
         if len(digests) != 1:
             selected[authority.authority_id] = None
             continue
-        _, path, value = latest[-1]
+        _, path, value, _ = latest[-1]
         selected[authority.authority_id] = (
             _result_reference(value, path=path, root=runtime_root)
             if value["outcome"] == "PASS"
@@ -387,6 +460,17 @@ def reusable_authority_verification_results(
             )
             else None
         )
+    assert_invocation_receipt_set_isolated(
+        [
+            matching[-1][3]
+            for authority_id, reference in selected.items()
+            if reference is not None
+            for matching in [
+                sorted(candidates[authority_id])
+            ]
+            if isinstance(matching[-1][3].get("invocation"), Mapping)
+        ]
+    )
     return selected
 
 
@@ -646,6 +730,12 @@ def _authority_contract(
         "validation_mode": authority.validation_mode,
         "provider_content_digest": runtime["provider_content_digest"],
     }
+
+
+def _canonical_document_bytes(value: Mapping[str, Any]) -> bytes:
+    return (
+        json.dumps(value, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+    ).encode("ascii")
 
 
 def _current_result_path(root: Path, value: Mapping[str, Any]) -> Path:

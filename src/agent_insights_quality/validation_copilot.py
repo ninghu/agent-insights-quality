@@ -155,7 +155,11 @@ def write_private_package(
     }
 
 
-def validate_private_package(package: Mapping[str, Any]) -> None:
+def validate_private_package(
+    package: Mapping[str, Any],
+    *,
+    require_current_prompt: bool = True,
+) -> None:
     required = {
         "schema_version",
         "kind",
@@ -179,8 +183,11 @@ def validate_private_package(package: Mapping[str, Any]) -> None:
         or package.get("schema_version") != "1.0.0"
         or package.get("kind") != _PACKAGE_KIND
         or package.get("model") != COPILOT_MODEL
-        or package.get("prompt_digest")
-        != content_hash(EVALUATION_PROMPT.read_text(encoding="utf-8"))
+        or (
+            require_current_prompt
+            and package.get("prompt_digest")
+            != content_hash(EVALUATION_PROMPT.read_text(encoding="utf-8"))
+        )
         or package.get("package_hash")
         != digest_without_field(package, "package_hash")
     ):

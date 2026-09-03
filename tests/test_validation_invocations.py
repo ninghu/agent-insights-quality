@@ -574,7 +574,7 @@ def test_all_current_receipts_select_zero_invoke_and_41_verify(
     tmp_path: Path,
 ) -> None:
     prepared, plan, authorities, runtimes = _context()
-    for authority in authorities:
+    for index, authority in enumerate(authorities):
         _write_receipt(
             root=tmp_path,
             prepared=prepared,
@@ -582,6 +582,7 @@ def test_all_current_receipts_select_zero_invoke_and_41_verify(
             authority=authority,
             authorities=authorities,
             runtimes=runtimes,
+            qualifier=f"authority-{index}",
         )
 
     verify_ids = [item.authority_id for item in authorities]
@@ -618,6 +619,7 @@ def test_reused_invocation_sends_no_traffic_and_binds_current_verifier(
         runtimes=runtimes,
     )
     current = copy.deepcopy(prepared)
+    current["pr_number"] = 74
     current["commit_sha"] = NEXT_HEAD
     current["digests"]["shared_validation_digest"] = content_hash(
         {"verifier": NEXT_HEAD}
@@ -627,6 +629,9 @@ def test_reused_invocation_sends_no_traffic_and_binds_current_verifier(
     current_plan["shared_validation_digest"] = current["digests"][
         "shared_validation_digest"
     ]
+    current_plan["invocation_contract_digest"] = content_hash(
+        {"global-contract": "pr74"}
+    )
     invoked, reused = select_reusable_invocation_receipts(
         authorities=authorities,
         authority_ids=[issue.authority_id],
@@ -640,6 +645,10 @@ def test_reused_invocation_sends_no_traffic_and_binds_current_verifier(
     assert load_invocation_receipt(reference, root=tmp_path)[
         "origin_commit_sha"
     ] == HEAD
+    assert load_invocation_receipt(reference, root=tmp_path)["pr_number"] == 999
+    assert load_invocation_receipt(reference, root=tmp_path)[
+        "invocation_contract_digest"
+    ] == plan["invocation_contract_digest"]
 
 def test_verifier_consumes_only_lifecycle_selected_receipt(
     monkeypatch,
@@ -699,6 +708,8 @@ def test_verifier_consumes_only_lifecycle_selected_receipt(
         "environment",
         "location",
         "telemetry",
+        "project",
+        "repository",
     ],
 )
 def test_reuse_rejects_every_stale_contract_mismatch(
@@ -776,6 +787,10 @@ def test_reuse_rejects_every_stale_contract_mismatch(
         current_plan["location"] = "changed-location"
     elif mismatch == "telemetry":
         current["substrate"]["telemetry_resource_id"] = "/changed/telemetry"
+    elif mismatch == "project":
+        current["project"]["name"] = "changed-project"
+    elif mismatch == "repository":
+        current["repository"] = "other/repository"
 
     selected, reused = select_reusable_invocation_receipts(
         authorities=current_authorities,
@@ -785,6 +800,40 @@ def test_reuse_rejects_every_stale_contract_mismatch(
         plan=current_plan,
         root=tmp_path,
     )
+    assert selected == [issue.authority_id]
+    assert reused == []
+
+
+def test_cross_pr_receipt_ambiguity_fails_closed(tmp_path: Path) -> None:
+    prepared, plan, authorities, runtimes = _context()
+    issue = next(
+        item for item in authorities if item.authority_id == "issue-020"
+    )
+    for pr_number, qualifier in ((65, "pr65"), (66, "pr66")):
+        historical = copy.deepcopy(prepared)
+        historical["pr_number"] = pr_number
+        historical["run_id"] = f"validation-{pr_number:012d}"
+        _write_receipt(
+            root=tmp_path,
+            prepared=historical,
+            plan=plan,
+            authority=issue,
+            authorities=authorities,
+            runtimes=runtimes,
+            qualifier=qualifier,
+        )
+    current = copy.deepcopy(prepared)
+    current["pr_number"] = 74
+
+    selected, reused = select_reusable_invocation_receipts(
+        authorities=authorities,
+        authority_ids=[issue.authority_id],
+        runtime_topology=current["runtime_topology"],
+        prepared=current,
+        plan=plan,
+        root=tmp_path,
+    )
+
     assert selected == [issue.authority_id]
     assert reused == []
 

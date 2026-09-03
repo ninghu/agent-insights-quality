@@ -624,6 +624,7 @@ def test_cross_generation_pass_reuse_ignores_global_verifier_state(
         lambda *_args, **_kwargs: invocation,
     )
     changed = deepcopy(prepared)
+    changed["pr_number"] = 74
     changed["run_id"] = "validation-000000000002"
     changed["commit_sha"] = "c" * 40
     for field, digit in (
@@ -648,6 +649,8 @@ def test_cross_generation_pass_reuse_ignores_global_verifier_state(
         root=tmp_path,
     )
     assert reused["outcome"] == "PASS"
+    assert reused["pr_number"] == prepared["pr_number"]
+    assert reused["pr_number"] != changed["pr_number"]
     assert reused["binding"]["verifier_digest"] == "sha256:" + ("1" * 64)
     assert reused["binding"]["verifier_commit_sha"] == HEAD
 
@@ -663,6 +666,73 @@ def test_cross_generation_pass_reuse_ignores_global_verifier_state(
             require_current_generation=True,
             root=tmp_path,
         )
+
+
+def test_cross_pr_pass_result_reuses_authority_specific_receipt_contract(
+    tmp_path,
+) -> None:
+    from tests.test_validation_invocations import _context, _write_receipt
+
+    evidence = _evidence()
+    historical, plan, authorities, runtimes = _context()
+    historical["pr_number"] = 65
+    historical["commit_sha"] = HEAD
+    historical["runtime_topology"]["account_reference"] = HASH
+    spec = authorities[0]
+    receipt = _write_receipt(
+        root=tmp_path,
+        prepared=historical,
+        plan=plan,
+        authority=spec,
+        authorities=authorities,
+        runtimes=runtimes,
+    )
+    result_reference = write_authority_verification_result(
+        prepared=historical,
+        plan=plan,
+        authority=spec,
+        runtime={
+            **historical["runtime_topology"]["agents"][0],
+        },
+        invocation_reference=receipt,
+        authority_evidence=evidence["authorities"][0],
+        outcome="PASS",
+        started_at=datetime(2026, 9, 1, 12, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 9, 1, 12, 1, tzinfo=UTC),
+        query_stage=None,
+        error_code=None,
+        query_diagnostics=None,
+        fence=lambda: None,
+        root=tmp_path,
+    )
+    current = deepcopy(historical)
+    current["pr_number"] = 74
+    current["run_id"] = "validation-000000000074"
+    current["commit_sha"] = "7" * 40
+    current_plan = deepcopy(plan)
+    current_plan["invocation_contract_digest"] = content_hash(
+        {"global-contract": "pr74"}
+    )
+
+    reusable = reusable_authority_verification_results(
+        authorities=[spec],
+        runtime_topology={
+            "agents": [historical["runtime_topology"]["agents"][0]]
+        },
+        prepared=current,
+        plan=current_plan,
+        root=tmp_path,
+    )
+
+    assert reusable == {spec.authority_id: result_reference}
+    result = load_authority_verification_result(
+        result_reference,
+        root=tmp_path,
+    )
+    assert result["pr_number"] == 65
+    assert result["invocation_receipt"]["receipt_digest"] == receipt[
+        "receipt_digest"
+    ]
 
 
 def test_prior_nonpass_result_detects_repeated_receipt(
@@ -905,29 +975,20 @@ def test_definitive_fail_result_is_reusable_without_revalidation(
 def test_authority_result_binds_immutable_copilot_evaluation(
     tmp_path,
 ) -> None:
+    from tests.test_validation_copilot import _evaluation, _package
+
     evidence = _evidence()
     spec = authority_specs(*load_catalogs())[0]
     authority = evidence["authorities"][0]
-    runtime = _result_runtime(spec, authority, index=1)
-    prepared = _result_prepared(evidence, verifier_digit="1")
-    invocation = _result_invocation(spec.authority_id, digit="2")
-    package = {
-        "prompt_digest": HASH,
-        "package_hash": "",
-    }
-    package["package_hash"] = digest_without_field(package, "package_hash")
-    evaluation = {
-        "model": "gpt-5.6-sol",
-        "package_hash": package["package_hash"],
-    }
-    evaluation_digest = content_hash(evaluation)
     artifact_root = tmp_path / "copilot-authority-evaluations"
-    atomic_json(
-        artifact_root
-        / "packages"
-        / f"{package['package_hash'].removeprefix('sha256:')}.json",
-        package,
+    package, _, prepared, plan, context = _package(
+        artifact_root,
+        spec.authority_id,
     )
+    runtime = context["runtime"]
+    invocation = context["reference"]
+    evaluation = _evaluation(package)
+    evaluation_digest = content_hash(evaluation)
     import_path = (
         artifact_root
         / "imports"
@@ -936,7 +997,7 @@ def test_authority_result_binds_immutable_copilot_evaluation(
     atomic_json(import_path, evaluation)
     reference = write_authority_verification_result(
         prepared=prepared,
-        plan=_result_plan(),
+        plan=plan,
         authority=spec,
         runtime=runtime,
         invocation_reference=invocation,
@@ -951,7 +1012,7 @@ def test_authority_result_binds_immutable_copilot_evaluation(
         copilot_evaluation={
             "model": "gpt-5.6-sol",
             "package_hash": package["package_hash"],
-            "prompt_digest": HASH,
+            "prompt_digest": package["prompt_digest"],
             "evaluation_digest": evaluation_digest,
         },
         root=tmp_path,
@@ -962,11 +1023,14 @@ def test_authority_result_binds_immutable_copilot_evaluation(
 
     evaluation["unexpected"] = "changed"
     atomic_json(import_path, evaluation)
-    with pytest.raises(ContractError, match="evaluation reference changed"):
+    with pytest.raises(ContractError, match="evaluation artifact is invalid"):
         load_authority_verification_result(reference, root=tmp_path)
 
 
-@pytest.mark.parametrize("changed_binding", ["authority", "runtime", "receipt"])
+@pytest.mark.parametrize(
+    "changed_binding",
+    ["authority", "runtime", "provider", "receipt"],
+)
 def test_authority_local_change_reselects_only_that_authority(
     monkeypatch,
     tmp_path,
@@ -1032,6 +1096,10 @@ def test_authority_local_change_reselects_only_that_authority(
     }
     if changed_binding == "runtime":
         runtime_topology["agents"][1]["runtime_agent_version"] = "changed"
+    elif changed_binding == "provider":
+        runtime_topology["agents"][1]["provider_content_digest"] = content_hash(
+            {"changed": "provider"}
+        )
 
     reusable = reusable_authority_verification_results(
         authorities=current_specs,
@@ -1043,6 +1111,230 @@ def test_authority_local_change_reselects_only_that_authority(
 
     assert reusable[selected_specs[0].authority_id] is not None
     assert changed_id not in reusable
+
+
+@pytest.mark.parametrize(
+    "mismatch",
+    ["repository", "environment", "location", "project", "telemetry"],
+)
+def test_cross_pr_result_reuse_rejects_global_binding_mismatch(
+    monkeypatch,
+    tmp_path,
+    mismatch,
+) -> None:
+    evidence = _evidence()
+    spec = authority_specs(*load_catalogs())[0]
+    authority = evidence["authorities"][0]
+    runtime = _result_runtime(spec, authority, index=1)
+    historical = _result_prepared(evidence, verifier_digit="1")
+    historical["pr_number"] = 65
+    invocation = _result_invocation(spec.authority_id, digit="2")
+    write_authority_verification_result(
+        prepared=historical,
+        plan=_result_plan(),
+        authority=spec,
+        runtime=runtime,
+        invocation_reference=invocation,
+        authority_evidence=authority,
+        outcome="PASS",
+        started_at=datetime(2026, 9, 1, 12, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 9, 1, 12, 1, tzinfo=UTC),
+        query_stage=None,
+        error_code=None,
+        query_diagnostics=None,
+        fence=lambda: None,
+        root=tmp_path,
+    )
+    monkeypatch.setattr(
+        authority_results,
+        "load_bound_invocation_receipt",
+        lambda *_args, **_kwargs: invocation,
+    )
+    current = deepcopy(historical)
+    current["pr_number"] = 74
+    current_plan = _result_plan()
+    if mismatch == "repository":
+        current["repository"] = "other/repository"
+    elif mismatch == "environment":
+        current_plan["environment_id"] = "other-environment"
+    elif mismatch == "location":
+        current_plan["location"] = "other-location"
+    elif mismatch == "project":
+        current["project"]["name"] = "other-project"
+    elif mismatch == "telemetry":
+        current["runtime_topology"]["telemetry_resource_set"] = "g31"
+
+    reusable = reusable_authority_verification_results(
+        authorities=[spec],
+        runtime_topology={"agents": [runtime]},
+        prepared=current,
+        plan=current_plan,
+        root=tmp_path,
+    )
+
+    assert spec.authority_id not in reusable
+
+
+def test_pr65_pass_results_reuse_31_exact_authorities_into_pr74(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    evidence = _evidence()
+    specs = authority_specs(*load_catalogs())
+    prepared = _result_prepared(evidence, verifier_digit="1")
+    prepared["pr_number"] = 65
+    runtimes = {
+        spec.authority_id: _result_runtime(
+            spec,
+            evidence["authorities"][index],
+            index=index + 1,
+        )
+        for index, spec in enumerate(specs)
+    }
+    invocations = {
+        spec.authority_id: _result_invocation(
+            spec.authority_id,
+            digit=f"{(index % 9) + 1}",
+        )
+        for index, spec in enumerate(specs)
+    }
+    for index, spec in enumerate(specs):
+        write_authority_verification_result(
+            prepared=prepared,
+            plan=_result_plan(),
+            authority=spec,
+            runtime=runtimes[spec.authority_id],
+            invocation_reference=invocations[spec.authority_id],
+            authority_evidence=evidence["authorities"][index],
+            outcome="PASS",
+            started_at=datetime(2026, 9, 1, 12, index, tzinfo=UTC),
+            completed_at=datetime(2026, 9, 1, 12, index, 1, tzinfo=UTC),
+            query_stage=None,
+            error_code=None,
+            query_diagnostics=None,
+            fence=lambda: None,
+            root=tmp_path,
+        )
+    monkeypatch.setattr(
+        authority_results,
+        "load_bound_invocation_receipt",
+        lambda reference, **_kwargs: invocations[reference["authority_id"]],
+    )
+    monkeypatch.setattr(
+        authority_results,
+        "load_invocation_receipt",
+        lambda reference, **_kwargs: {
+            **invocations[reference["authority_id"]],
+            "invocation": {
+                "scenarios": [],
+            },
+        },
+    )
+    changed_ids = {
+        "travel-agent/v0",
+        *(f"issue-{number:03d}" for number in range(21, 29)),
+        "issue-016",
+    }
+    current_specs = [
+        replace(
+            spec,
+            **(
+                {
+                    "execution_digest": content_hash(
+                        {"pr74": spec.authority_id}
+                    )
+                }
+                if spec.authority_id == "issue-016"
+                else {
+                    "source_content_digest": content_hash(
+                        {"pr74": spec.authority_id}
+                    )
+                }
+                if spec.authority_id in changed_ids
+                else {}
+            ),
+        )
+        for spec in specs
+    ]
+    current_runtimes = deepcopy(runtimes)
+    for spec in current_specs:
+        if spec.authority_id in changed_ids - {"issue-016"}:
+            current_runtimes[spec.authority_id][
+                "provider_content_digest"
+            ] = spec.source_content_digest
+    current = deepcopy(prepared)
+    current["pr_number"] = 74
+    current["run_id"] = "validation-000000000074"
+    current["commit_sha"] = "7" * 40
+
+    reusable = reusable_authority_verification_results(
+        authorities=current_specs,
+        runtime_topology={"agents": list(current_runtimes.values())},
+        prepared=current,
+        plan=_result_plan(),
+        root=tmp_path,
+    )
+
+    assert {
+        authority_id
+        for authority_id, reference in reusable.items()
+        if reference is not None
+    } == {spec.authority_id for spec in specs} - changed_ids
+    assert len(
+        [reference for reference in reusable.values() if reference is not None]
+    ) == 31
+    assert not changed_ids.intersection(reusable)
+
+
+def test_cross_pr_result_ambiguity_fails_closed(monkeypatch, tmp_path) -> None:
+    evidence = _evidence()
+    spec = authority_specs(*load_catalogs())[0]
+    authority = evidence["authorities"][0]
+    runtime = _result_runtime(spec, authority, index=1)
+    invocations = {}
+    for pr_number, digit in ((65, "2"), (66, "3")):
+        prepared = _result_prepared(evidence, verifier_digit="1")
+        prepared["pr_number"] = pr_number
+        prepared["run_id"] = f"validation-{pr_number:012d}"
+        invocation = _result_invocation(spec.authority_id, digit=digit)
+        invocations[digit] = invocation
+        write_authority_verification_result(
+            prepared=prepared,
+            plan=_result_plan(),
+            authority=spec,
+            runtime=runtime,
+            invocation_reference=invocation,
+            authority_evidence=authority,
+            outcome="PASS",
+            started_at=datetime(2026, 9, 1, 12, 0, tzinfo=UTC),
+            completed_at=datetime(2026, 9, 1, 12, 1, tzinfo=UTC),
+            query_stage=None,
+            error_code=None,
+            query_diagnostics=None,
+            fence=lambda: None,
+            root=tmp_path,
+        )
+    monkeypatch.setattr(
+        authority_results,
+        "load_bound_invocation_receipt",
+        lambda reference, **_kwargs: next(
+            value
+            for value in invocations.values()
+            if value["receipt_digest"] == reference["receipt_digest"]
+        ),
+    )
+
+    current = _result_prepared(evidence, verifier_digit="1")
+    current["pr_number"] = 74
+    reusable = reusable_authority_verification_results(
+        authorities=[spec],
+        runtime_topology={"agents": [runtime]},
+        prepared=current,
+        plan=_result_plan(),
+        root=tmp_path,
+    )
+
+    assert reusable[spec.authority_id] is None
 
 
 def _result_prepared(evidence: dict, *, verifier_digit: str) -> dict:
