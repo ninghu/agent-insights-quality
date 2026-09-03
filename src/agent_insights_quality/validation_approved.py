@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from jsonschema import Draft202012Validator, FormatChecker
 
@@ -32,7 +33,11 @@ from agent_insights_quality.validation_lifecycle import (
     validation_runtime_root,
 )
 from agent_insights_quality.validation_local import (
+    _git_sha,
+    _run_json,
+    _run_json_array,
     current_clean_commit,
+    current_tree_sha,
     discover_github_user,
     discover_local_git_context,
 )
@@ -41,6 +46,8 @@ from agent_insights_quality.validation_manifest import current_validation_digest
 APPROVED_RECORD_SCHEMA = (
     ROOT / "schemas" / "test-agent-validation-approved-record.schema.json"
 )
+
+
 def approve_test_agent_validation(
     *,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -234,22 +241,308 @@ def fetch_approved_record_for_checkout(
     *,
     expected_repository: str,
 ) -> dict[str, Any]:
-    commit_sha = current_clean_commit()
+    checkout_commit_sha = current_clean_commit()
     store.assert_approved_record_contract(APPROVED_RECORD_CONTAINER)
-    record = store.read(
-        APPROVED_RECORD_CONTAINER,
-        approved_record_blob_name(expected_repository, commit_sha),
+    exact_name = approved_record_blob_name(
+        expected_repository,
+        checkout_commit_sha,
     )
+    exact = store.read_optional(
+        APPROVED_RECORD_CONTAINER,
+        exact_name,
+    )
+    if exact is not None:
+        approved = _validate_authoritative_approved_record(
+            exact,
+            expected_repository=expected_repository,
+            expected_commit_sha=checkout_commit_sha,
+            expected_name=exact_name,
+        )
+        tree_sha = current_tree_sha(checkout_commit_sha)
+        return _stamp_approval_binding(
+            checkout_commit_sha=checkout_commit_sha,
+            approved_record=approved,
+            tree_sha=tree_sha,
+        )
+
+    source = _resolve_merged_approval_source(
+        expected_repository,
+        checkout_commit_sha,
+    )
+    approved_name = approved_record_blob_name(
+        expected_repository,
+        source["approved_commit_sha"],
+    )
+    approved_blob = store.read(
+        APPROVED_RECORD_CONTAINER,
+        approved_name,
+    )
+    approved = _validate_authoritative_approved_record(
+        approved_blob,
+        expected_repository=expected_repository,
+        expected_commit_sha=source["approved_commit_sha"],
+        expected_name=approved_name,
+        expected_pr_number=source["approved_pr_number"],
+    )
+    return _stamp_approval_binding(
+        checkout_commit_sha=checkout_commit_sha,
+        approved_record=approved,
+        tree_sha=source["tree_sha"],
+    )
+
+
+def validate_approval_binding(
+    value: Mapping[str, Any],
+    *,
+    expected_checkout_commit_sha: str,
+    expected_validation_digest: str,
+) -> dict[str, Any]:
+    required = {
+        "checkout_commit_sha",
+        "approved_commit_sha",
+        "tree_sha",
+        "validation_digest",
+        "approved_record_digest",
+        "binding_digest",
+    }
+    if set(value) != required:
+        raise ContractError("Daily approval binding fields are invalid")
     if (
-        not record.etag
-        or not record.version_id
+        any(
+            not isinstance(value[field], str) or not _git_sha(value[field])
+            for field in (
+                "checkout_commit_sha",
+                "approved_commit_sha",
+                "tree_sha",
+            )
+        )
+        or value["checkout_commit_sha"] != expected_checkout_commit_sha
+        or value["validation_digest"] != expected_validation_digest
+        or not _content_digest(value["approved_record_digest"])
+        or not _content_digest(value["binding_digest"])
+    ):
+        raise ContractError("Daily approval binding is invalid")
+    expected_digest = content_hash(
+        {key: item for key, item in value.items() if key != "binding_digest"}
+    )
+    if value["binding_digest"] != expected_digest:
+        raise ContractError("Daily approval binding digest is stale")
+    return dict(value)
+
+
+def _validate_authoritative_approved_record(
+    record: BlobRecord,
+    *,
+    expected_repository: str,
+    expected_commit_sha: str,
+    expected_name: str,
+    expected_pr_number: int | None = None,
+) -> dict[str, Any]:
+    if (
+        record.container != APPROVED_RECORD_CONTAINER
+        or record.name != expected_name
+        or not isinstance(record.etag, str)
+        or not record.etag.strip()
+        or not isinstance(record.version_id, str)
+        or not record.version_id.strip()
         or record.content != canonical_bytes(record.value)
     ):
         raise ContractError("Authoritative approved record Blob metadata is invalid")
-    return validate_approved_record_for_checkout(
+    value = validate_approved_record_for_checkout(
         record.value,
         expected_repository=expected_repository,
-        expected_commit_sha=commit_sha,
+        expected_commit_sha=expected_commit_sha,
+    )
+    if expected_pr_number is not None and value["pr_number"] != expected_pr_number:
+        raise ContractError("Approved validation record does not match the merged pull request")
+    return value
+
+
+def _stamp_approval_binding(
+    *,
+    checkout_commit_sha: str,
+    approved_record: Mapping[str, Any],
+    tree_sha: str,
+) -> dict[str, Any]:
+    value = {
+        "checkout_commit_sha": checkout_commit_sha,
+        "approved_commit_sha": approved_record["commit_sha"],
+        "tree_sha": tree_sha,
+        "validation_digest": approved_record["validation_digest"],
+        "approved_record_digest": approved_record["record_digest"],
+        "binding_digest": "",
+    }
+    value["binding_digest"] = content_hash(
+        {key: item for key, item in value.items() if key != "binding_digest"}
+    )
+    return validate_approval_binding(
+        value,
+        expected_checkout_commit_sha=checkout_commit_sha,
+        expected_validation_digest=str(approved_record["validation_digest"]),
+    )
+
+
+def _resolve_merged_approval_source(
+    repository: str,
+    checkout_commit_sha: str,
+) -> dict[str, Any]:
+    repository_value = _github_object(
+        f"repos/{repository}",
+        "GitHub repository",
+    )
+    default_branch = repository_value.get("default_branch")
+    if (
+        repository_value.get("full_name") != repository
+        or not isinstance(default_branch, str)
+        or not default_branch
+        or default_branch.strip() != default_branch
+    ):
+        raise ContractError("GitHub default branch response is invalid")
+    branch_value = _github_object(
+        f"repos/{repository}/branches/{quote(default_branch, safe='')}",
+        "GitHub default branch",
+    )
+    branch_commit = branch_value.get("commit")
+    default_head_sha = (
+        branch_commit.get("sha") if isinstance(branch_commit, Mapping) else None
+    )
+    if branch_value.get("name") != default_branch or default_head_sha != (
+        checkout_commit_sha
+    ):
+        raise ContractError("Current clean commit is not the GitHub default branch head")
+
+    pulls = _associated_pulls(repository, checkout_commit_sha)
+    merged_pulls = [
+        pull
+        for pull in pulls
+        if isinstance(pull.get("merged_at"), str) and pull["merged_at"].strip()
+    ]
+    if len(merged_pulls) != 1:
+        raise ContractError(
+            "GitHub must associate exactly one merged pull request with "
+            "the default branch head"
+        )
+    pull = merged_pulls[0]
+    number = pull.get("number")
+    head = pull.get("head")
+    base = pull.get("base")
+    head_sha = head.get("sha") if isinstance(head, Mapping) else None
+    base_repository = base.get("repo") if isinstance(base, Mapping) else None
+    base_full_name = (
+        base_repository.get("full_name")
+        if isinstance(base_repository, Mapping)
+        else None
+    )
+    if (
+        not isinstance(number, int)
+        or isinstance(number, bool)
+        or number < 1
+        or pull.get("state") != "closed"
+        or not isinstance(pull.get("merged_at"), str)
+        or not pull["merged_at"].strip()
+        or pull.get("merge_commit_sha") != checkout_commit_sha
+        or not isinstance(head_sha, str)
+        or not _git_sha(head_sha)
+        or base_full_name != repository
+    ):
+        raise ContractError("GitHub merged pull request response is invalid")
+
+    checkout_tree_sha = _github_tree_sha(repository, checkout_commit_sha)
+    approved_tree_sha = _github_tree_sha(repository, head_sha)
+    if checkout_tree_sha != approved_tree_sha:
+        raise ContractError(
+            "Merged checkout tree does not match the approved pull request head tree"
+        )
+    return {
+        "approved_pr_number": number,
+        "approved_commit_sha": head_sha,
+        "tree_sha": checkout_tree_sha,
+    }
+
+
+def _associated_pulls(
+    repository: str,
+    commit_sha: str,
+) -> list[dict[str, Any]]:
+    pulls: list[dict[str, Any]] = []
+    seen_numbers: set[int] = set()
+    page = 1
+    while True:
+        values = _github_array(
+            (
+                f"repos/{repository}/commits/{commit_sha}/pulls"
+                f"?per_page=100&page={page}"
+            ),
+            "GitHub associated pull requests",
+        )
+        for pull in values:
+            number = pull.get("number")
+            merged_at = pull.get("merged_at")
+            if (
+                not isinstance(number, int)
+                or isinstance(number, bool)
+                or number < 1
+                or number in seen_numbers
+                or (
+                    merged_at is not None
+                    and (
+                        not isinstance(merged_at, str)
+                        or not merged_at.strip()
+                    )
+                )
+            ):
+                raise ContractError("GitHub associated pull request response is invalid")
+            seen_numbers.add(number)
+        pulls.extend(values)
+        if len(values) < 100:
+            return pulls
+        page += 1
+
+
+def _github_tree_sha(repository: str, commit_sha: str) -> str:
+    value = _github_object(
+        f"repos/{repository}/git/commits/{commit_sha}",
+        "GitHub commit",
+    )
+    tree = value.get("tree")
+    tree_sha = tree.get("sha") if isinstance(tree, Mapping) else None
+    if (
+        value.get("sha") != commit_sha
+        or not isinstance(tree_sha, str)
+        or not _git_sha(tree_sha)
+    ):
+        raise ContractError("GitHub commit tree response is invalid")
+    return tree_sha
+
+
+def _github_object(path: str, label: str) -> dict[str, Any]:
+    return _run_json(_github_arguments(path), label)
+
+
+def _github_array(path: str, label: str) -> list[dict[str, Any]]:
+    return _run_json_array(_github_arguments(path), label)
+
+
+def _github_arguments(path: str) -> list[str]:
+    return [
+        "gh",
+        "api",
+        "--method",
+        "GET",
+        path,
+        "--header",
+        "Accept: application/vnd.github+json",
+        "--header",
+        "X-GitHub-Api-Version: 2022-11-28",
+    ]
+
+
+def _content_digest(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 71
+        and value.startswith("sha256:")
+        and all(character in "0123456789abcdef" for character in value[7:])
     )
 
 

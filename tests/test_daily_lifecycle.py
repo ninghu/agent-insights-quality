@@ -15,9 +15,28 @@ from agent_insights_quality.daily_lifecycle import (
     daily_runtime_root,
 )
 from agent_insights_quality.selection import select_daily
-from agent_insights_quality.util import ContractError
+from agent_insights_quality.util import ContractError, content_hash
 
 HASH = "sha256:" + ("a" * 64)
+
+
+def _approval_binding(
+    *,
+    checkout_commit_sha: str = "1" * 40,
+    approved_commit_sha: str = "1" * 40,
+) -> dict:
+    value = {
+        "checkout_commit_sha": checkout_commit_sha,
+        "approved_commit_sha": approved_commit_sha,
+        "tree_sha": "2" * 40,
+        "validation_digest": HASH,
+        "approved_record_digest": HASH,
+        "binding_digest": "",
+    }
+    value["binding_digest"] = content_hash(
+        {key: item for key, item in value.items() if key != "binding_digest"}
+    )
+    return value
 
 
 def _initial(report_date: date = date(2026, 8, 31)) -> dict:
@@ -26,7 +45,7 @@ def _initial(report_date: date = date(2026, 8, 31)) -> dict:
     selection = select_daily(report_date, agents, issues, hashes["issues"])
     moment = datetime(2026, 8, 31, 15, tzinfo=UTC).isoformat()
     return {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "kind": "daily-qualification-lifecycle",
         "snapshot_type": "event",
         "state": "LOCKED",
@@ -38,7 +57,6 @@ def _initial(report_date: date = date(2026, 8, 31)) -> dict:
         "event_reference": None,
         "bindings": {
             "repository": "ninghu/agent-insights-quality",
-            "commit_sha": "1" * 40,
             "public_run_id": f"aiq-{report_date:%Y%m%d}",
             "report_date": report_date.isoformat(),
             "delivery_mode": "official",
@@ -47,10 +65,7 @@ def _initial(report_date: date = date(2026, 8, 31)) -> dict:
                 "content_digest": HASH,
                 "closed_business_date": (report_date - timedelta(days=1)).isoformat(),
             },
-            "approved_record": {
-                "validation_digest": HASH,
-                "record_digest": HASH,
-            },
+            "approval": _approval_binding(),
             "catalog_hashes": hashes,
             "selection": selection,
             "policy": _policy_binding(load_automation_policy()),
@@ -116,3 +131,17 @@ def test_daily_lifecycle_rejects_noncanonical_transition(tmp_path: Path) -> None
         lifecycle = DailyLifecycle(lock=lock, base=tmp_path)
         with pytest.raises(ContractError, match="cannot transition"):
             lifecycle.transition(active, next_state="FINALIZED")
+
+
+def test_daily_lifecycle_rejects_stale_approval_binding(tmp_path: Path) -> None:
+    value = _initial()
+    value["bindings"]["approval"]["approved_record_digest"] = (
+        "sha256:" + ("b" * 64)
+    )
+    value["lifecycle_digest"] = content_hash(
+        {key: item for key, item in value.items() if key != "lifecycle_digest"}
+    )
+    lock = DailyLock(daily_runtime_root(tmp_path) / "coordinator.lock")
+
+    with lock, pytest.raises(ContractError, match="approval binding digest is stale"):
+        DailyLifecycle(lock=lock, base=tmp_path).begin(value)

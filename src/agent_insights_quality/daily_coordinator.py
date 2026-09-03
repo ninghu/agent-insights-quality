@@ -70,10 +70,11 @@ from agent_insights_quality.util import (
 )
 from agent_insights_quality.validation_approved import (
     fetch_approved_record_for_checkout,
+    validate_approval_binding,
 )
 from agent_insights_quality.validation_blob import AzureValidationBlobStore
 from agent_insights_quality.validation_credentials import local_azure_operator
-from agent_insights_quality.validation_local import current_clean_commit
+from agent_insights_quality.validation_local import current_clean_commit, current_tree_sha
 from agent_insights_quality.validation_manifest import current_validation_digest
 from agent_insights_quality.work_items import load_quality_work_items
 
@@ -118,22 +119,21 @@ def prepare_daily(
     policy = load_automation_policy()
     profile = (profile_factory or RuntimeProfile.from_env)("daily")
     approved_loader = approved_record_loader or _fetch_approved_record
-    approved = approved_loader(profile)
-    commit_sha = current_clean_commit()
+    approval = approved_loader(profile)
+    checkout_commit_sha = current_clean_commit()
     validation_digest = current_validation_digest(agents, issues)
-    if (
-        approved["commit_sha"] != commit_sha
-        or approved["repository"] != REPOSITORY
-        or approved["validation_digest"] != validation_digest
-    ):
-        raise ContractError("Daily approved record does not match the exact clean checkout")
+    approval = validate_approval_binding(
+        approval,
+        expected_checkout_commit_sha=checkout_commit_sha,
+        expected_validation_digest=validation_digest,
+    )
     resolved_work_items = work_items_path.resolve()
     if private_root != resolved_work_items and private_root not in resolved_work_items.parents:
         raise ContractError("Daily work-item snapshot must stay in the private runtime root")
     moment = moment_value.astimezone(UTC).isoformat()
     delivery_mode = TEST_EMAIL_ONLY_DELIVERY if test_run else OFFICIAL_DELIVERY
     initial = {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "kind": "daily-qualification-lifecycle",
         "snapshot_type": "event",
         "state": "LOCKED",
@@ -145,7 +145,6 @@ def prepare_daily(
         "event_reference": None,
         "bindings": {
             "repository": REPOSITORY,
-            "commit_sha": commit_sha,
             "public_run_id": run_id(report_date, rerun),
             "report_date": report_date.isoformat(),
             "delivery_mode": delivery_mode,
@@ -154,10 +153,7 @@ def prepare_daily(
                 "content_digest": content_hash(work_items),
                 "closed_business_date": work_items["closed_business_date"],
             },
-            "approved_record": {
-                "validation_digest": validation_digest,
-                "record_digest": approved["record_digest"],
-            },
+            "approval": approval,
             "catalog_hashes": hashes,
             "selection": selected,
             "policy": _policy_binding(policy),
@@ -1080,9 +1076,7 @@ def _daily_fence(
     if (
         current.value["state"] not in allowed_states
         or current.value["execution_id"] != expected.value["execution_id"]
-        or current_bindings["commit_sha"] != expected_bindings["commit_sha"]
-        or current_bindings["approved_record"]
-        != expected_bindings["approved_record"]
+        or current_bindings["approval"] != expected_bindings["approval"]
         or current_bindings["run_contract_digest"]
         != expected_bindings["run_contract_digest"]
     ):
@@ -1146,14 +1140,13 @@ def _daily_contract_digest(
         runtime_files[relative] = file_hash(ROOT / relative)
     return content_hash(
         {
-            "schema_version": "1.0.0",
+            "schema_version": "2.0.0",
             "repository": bindings["repository"],
-            "commit_sha": bindings["commit_sha"],
+            "approval": bindings["approval"],
             "public_run_id": bindings["public_run_id"],
             "report_date": bindings["report_date"],
             "delivery_mode": bindings["delivery_mode"],
             "work_items_digest": bindings["work_items"]["content_digest"],
-            "approved_record": bindings["approved_record"],
             "catalog_hashes": bindings["catalog_hashes"],
             "selection": bindings["selection"],
             "policy": bindings["policy"],
@@ -1186,11 +1179,14 @@ def _read_active(base: Path, *, allowed_states: set[str]) -> DailyRecord:
 def _assert_checkout_binding(active: DailyRecord) -> None:
     agents, issues = load_catalogs()
     bindings = active.value["bindings"]
+    approval = bindings["approval"]
+    commit_sha = current_clean_commit()
     if (
-        current_clean_commit() != bindings["commit_sha"]
+        commit_sha != approval["checkout_commit_sha"]
+        or current_tree_sha(commit_sha) != approval["tree_sha"]
         or catalog_hashes(agents, issues) != bindings["catalog_hashes"]
         or current_validation_digest(agents, issues)
-        != bindings["approved_record"]["validation_digest"]
+        != approval["validation_digest"]
     ):
         raise ContractError("Stale Daily worker is fenced from the active lifecycle")
 

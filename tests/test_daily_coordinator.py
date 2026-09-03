@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,11 +13,12 @@ from agent_insights_quality.daily_lifecycle import (
     AGENT_ORDER,
     DailyLifecycle,
     DailyLock,
+    DailyRecord,
     daily_runtime_root,
 )
 from agent_insights_quality.models import AgentResult, VersionResult
 from agent_insights_quality.util import ContractError, atomic_json, content_hash
-from tests.test_daily_lifecycle import HASH, _initial
+from tests.test_daily_lifecycle import HASH, _approval_binding, _initial
 
 
 def _prepared(tmp_path: Path, registry: dict):
@@ -71,12 +73,9 @@ def test_daily_prepare_binds_pacific_date_snapshot_and_approved_record(
     )
     monkeypatch.setattr(coordinator, "current_clean_commit", lambda: "1" * 40)
     monkeypatch.setattr(coordinator, "current_validation_digest", lambda *_args: HASH)
-    approved = {
-        "repository": "ninghu/agent-insights-quality",
-        "commit_sha": "1" * 40,
-        "validation_digest": HASH,
-        "record_digest": "sha256:" + ("b" * 64),
-    }
+    approval = _approval_binding(
+        approved_commit_sha="2" * 40,
+    )
 
     status = coordinator.prepare_daily(
         report_date=date(2026, 9, 1),
@@ -84,7 +83,7 @@ def test_daily_prepare_binds_pacific_date_snapshot_and_approved_record(
         base=private_root,
         now=lambda: datetime(2026, 9, 2, 4, tzinfo=UTC),
         profile_factory=lambda _name: SimpleNamespace(),
-        approved_record_loader=lambda _profile: approved,
+        approved_record_loader=lambda _profile: approval,
     )
 
     assert status["state"] == "LOCKED"
@@ -94,9 +93,9 @@ def test_daily_prepare_binds_pacific_date_snapshot_and_approved_record(
     assert active.value["bindings"]["work_items"]["content_digest"].startswith(
         "sha256:"
     )
-    assert active.value["bindings"]["approved_record"]["record_digest"] == (
-        "sha256:" + ("b" * 64)
-    )
+    assert active.value["bindings"]["approval"] == approval
+    assert active.value["bindings"]["approval"]["checkout_commit_sha"] == "1" * 40
+    assert active.value["bindings"]["approval"]["approved_commit_sha"] == "2" * 40
 
 
 def test_daily_prepare_rejects_non_pacific_business_date(tmp_path: Path) -> None:
@@ -245,3 +244,41 @@ def test_daily_capacity_enforces_configured_parallel_limit(tmp_path: Path) -> No
     finally:
         for lock in locks:
             lock.release()
+
+
+def test_daily_worker_rejects_stale_source_approval_binding(tmp_path: Path) -> None:
+    active = _prepared(tmp_path, {"test_region": "SwedenCentral"})
+    stale_value = deepcopy(active.value)
+    stale_value["bindings"]["approval"] = _approval_binding(
+        approved_commit_sha="3" * 40,
+    )
+    stale = DailyRecord(active.path, stale_value, active.digest)
+
+    with pytest.raises(ContractError, match="Stale Daily worker"):
+        coordinator._daily_fence(
+            stale,
+            tmp_path,
+            allowed_states={"PREPARED"},
+        )
+
+
+def test_daily_run_contract_binds_checkout_and_source_approval() -> None:
+    registry = {"test_region": "SwedenCentral", "synthetic": True}
+    exact_bindings = _initial()["bindings"]
+    merged_bindings = deepcopy(exact_bindings)
+    merged_bindings["approval"] = _approval_binding(
+        approved_commit_sha="3" * 40,
+    )
+
+    exact_digest = coordinator._daily_contract_digest(
+        bindings=exact_bindings,
+        registry=registry,
+        test_region="SwedenCentral",
+    )
+    merged_digest = coordinator._daily_contract_digest(
+        bindings=merged_bindings,
+        registry=registry,
+        test_region="SwedenCentral",
+    )
+
+    assert exact_digest != merged_digest
