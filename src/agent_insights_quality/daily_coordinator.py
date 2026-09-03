@@ -143,6 +143,7 @@ def prepare_daily(
         "last_activity_at": moment,
         "previous_lifecycle_digest": None,
         "event_reference": None,
+        "superseded_format_digest": None,
         "bindings": {
             "repository": REPOSITORY,
             "public_run_id": run_id(report_date, rerun),
@@ -250,6 +251,9 @@ def _provision_daily_locked(
         bindings=bindings,
         registry=registry,
         test_region=test_region,
+        superseded_format_digest=active.value.get(
+            "superseded_format_digest"
+        ),
     )
     active = lifecycle.transition(
         active,
@@ -945,7 +949,13 @@ def fail_daily(
 
 def daily_status(*, base: Path | None = None) -> dict[str, Any]:
     private_root = (base or runtime_root()).resolve()
-    active = _read_optional(private_root)
+    try:
+        active = _read_optional(private_root)
+    except (ContractError, OSError, ValueError):
+        return {
+            "state": "FORMAT_REQUIRES_SUPERSESSION",
+            "next": "daily-prepare",
+        }
     if active is None:
         return {"state": "NOT_PREPARED", "next": "daily-prepare"}
     return _status(active, private_root)
@@ -1123,6 +1133,7 @@ def _daily_contract_digest(
     bindings: Mapping[str, Any],
     registry: Mapping[str, Any],
     test_region: str,
+    superseded_format_digest: str | None = None,
 ) -> str:
     runtime_files = {
         path.relative_to(ROOT).as_posix(): file_hash(path)
@@ -1152,6 +1163,7 @@ def _daily_contract_digest(
             "policy": bindings["policy"],
             "registry_digest": content_hash(registry),
             "test_region": test_region,
+            "superseded_format_digest": superseded_format_digest,
             "runtime_files": runtime_files,
         }
     )

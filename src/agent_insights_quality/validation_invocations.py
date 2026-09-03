@@ -580,14 +580,12 @@ def recover_supplemental_legacy_invocations(
         return
     marker = read_json(marker_path)
     _validate_migration_marker(marker)
-    archive_path, archive_digest, source = _locate_legacy_source_archive(
-        root=runtime_root,
-        source_marker=marker,
-        plan=plan,
-    )
-    source_ids = list(source.get("validation_authority_ids") or [])
     marker_imported = list(marker["imported_authority_ids"])
     marker_incomplete = list(marker["incomplete_authority_ids"])
+    source_ids = _current_plan_authority_ids(
+        plan=plan,
+        authorities=authorities,
+    )
     _validate_migration_authority_coverage(
         source_ids=source_ids,
         imported=marker_imported,
@@ -595,6 +593,12 @@ def recover_supplemental_legacy_invocations(
         message="Supplemental invocation migration authority coverage changed",
     )
     if not marker_incomplete:
+        _validate_completed_migration_receipts(
+            root=runtime_root,
+            marker=marker,
+            plan=plan,
+            authorities=authorities,
+        )
         yield {
             "source_run_id": marker["source_run_id"],
             "imported_authority_ids": marker_imported,
@@ -606,19 +610,18 @@ def recover_supplemental_legacy_invocations(
         / "migrations"
         / f"{_SUPPLEMENTAL_MIGRATION_NAME}.json"
     )
+    supplemental: dict[str, Any] | None = None
+    supplemental_imported: list[str] = []
+    supplemental_incomplete: list[str] = []
+    combined_imported: list[str] = []
     if supplemental_path.is_file():
         supplemental = read_json(supplemental_path)
         _validate_supplemental_migration_marker(
             supplemental,
             source_marker=marker,
-            source_archive_digest=archive_digest,
         )
-        supplemental_imported = list(
-            supplemental["imported_authority_ids"]
-        )
-        supplemental_incomplete = list(
-            supplemental["incomplete_authority_ids"]
-        )
+        supplemental_imported = list(supplemental["imported_authority_ids"])
+        supplemental_incomplete = list(supplemental["incomplete_authority_ids"])
         _validate_migration_authority_coverage(
             source_ids=marker_incomplete,
             imported=supplemental_imported,
@@ -627,13 +630,50 @@ def recover_supplemental_legacy_invocations(
                 "Supplemental invocation completion authority coverage changed"
             ),
         )
+        completed = set(marker_imported).union(supplemental_imported)
+        combined_imported = [item for item in source_ids if item in completed]
+        _validate_migration_authority_coverage(
+            source_ids=source_ids,
+            imported=combined_imported,
+            incomplete=supplemental_incomplete,
+            message=(
+                "Supplemental invocation combined authority coverage changed"
+            ),
+        )
+        if not supplemental_incomplete:
+            _validate_completed_migration_receipts(
+                root=runtime_root,
+                marker=marker,
+                plan=plan,
+                authorities=authorities,
+            )
+            yield {
+                "source_run_id": supplemental["source_run_id"],
+                "imported_authority_ids": combined_imported,
+                "incomplete_authority_ids": [],
+            }
+            return
+    archive_path, archive_digest, source = _locate_legacy_source_archive(
+        root=runtime_root,
+        source_marker=marker,
+        plan=plan,
+    )
+    archived_source_ids = list(source.get("validation_authority_ids") or [])
+    _validate_migration_authority_coverage(
+        source_ids=archived_source_ids,
+        imported=marker_imported,
+        incomplete=marker_incomplete,
+        message="Supplemental invocation migration authority coverage changed",
+    )
+    if supplemental is not None:
+        _validate_supplemental_migration_marker(
+            supplemental,
+            source_marker=marker,
+            source_archive_digest=archive_digest,
+        )
         yield {
             "source_run_id": supplemental["source_run_id"],
-            "imported_authority_ids": [
-                item
-                for item in source_ids
-                if item in set(marker_imported).union(supplemental_imported)
-            ],
+            "imported_authority_ids": combined_imported,
             "incomplete_authority_ids": supplemental_incomplete,
         }
         return
@@ -676,7 +716,7 @@ def recover_supplemental_legacy_invocations(
             "source_run_id": result["source_run_id"],
             "imported_authority_ids": [
                 item
-                for item in source_ids
+                for item in archived_source_ids
                 if item in set(marker_imported).union(supplemental_imported)
             ],
             "incomplete_authority_ids": supplemental_incomplete,
@@ -794,15 +834,27 @@ def _write_supplemental_migration_marker(
 
 
 def _validate_migration_marker(value: Mapping[str, Any]) -> None:
+    imported = value.get("imported_authority_ids")
+    incomplete = value.get("incomplete_authority_ids")
     if (
         value.get("schema_version") != "1.0.0"
         or value.get("kind") != _MIGRATION_NAME
         or value.get("migration_digest")
         != _digest_without(value, "migration_digest")
-        or not isinstance(value.get("imported_authority_ids"), list)
-        or not isinstance(value.get("incomplete_authority_ids"), list)
-        or not isinstance(value.get("source_run_id"), str)
-        or not isinstance(value.get("source_lifecycle_digest"), str)
+        or re.fullmatch(
+            r"validation-[0-9a-f]{12}",
+            str(value.get("source_run_id") or ""),
+        )
+        is None
+        or re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            str(value.get("source_lifecycle_digest") or ""),
+        )
+        is None
+        or not isinstance(imported, list)
+        or not all(isinstance(item, str) and item for item in imported)
+        or not isinstance(incomplete, list)
+        or not all(isinstance(item, str) and item for item in incomplete)
     ):
         raise ContractError("Invocation migration marker is invalid")
 
@@ -811,8 +863,10 @@ def _validate_supplemental_migration_marker(
     value: Mapping[str, Any],
     *,
     source_marker: Mapping[str, Any],
-    source_archive_digest: str,
+    source_archive_digest: str | None = None,
 ) -> None:
+    imported = value.get("imported_authority_ids")
+    incomplete = value.get("incomplete_authority_ids")
     if (
         value.get("schema_version") != "1.0.0"
         or value.get("kind") != _SUPPLEMENTAL_MIGRATION_NAME
@@ -821,9 +875,21 @@ def _validate_supplemental_migration_marker(
         != source_marker["source_lifecycle_digest"]
         or value.get("source_marker_digest")
         != source_marker["migration_digest"]
-        or value.get("source_archive_digest") != source_archive_digest
+        or re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            str(value.get("source_archive_digest") or ""),
+        )
+        is None
+        or (
+            source_archive_digest is not None
+            and value.get("source_archive_digest") != source_archive_digest
+        )
         or value.get("migration_digest")
         != _digest_without(value, "migration_digest")
+        or not isinstance(imported, list)
+        or not all(isinstance(item, str) and item for item in imported)
+        or not isinstance(incomplete, list)
+        or not all(isinstance(item, str) and item for item in incomplete)
     ):
         raise ContractError(
             "Supplemental invocation migration marker is invalid"
@@ -845,6 +911,112 @@ def _validate_migration_authority_coverage(
         or set(imported).union(incomplete) != set(source_ids)
     ):
         raise ContractError(message)
+
+
+def _current_plan_authority_ids(
+    *,
+    plan: Mapping[str, Any],
+    authorities: Sequence[AuthoritySpec],
+) -> list[str]:
+    source_ids = [item.authority_id for item in authorities]
+    plan_authorities = plan.get("authorities")
+    if (
+        len(source_ids) != 41
+        or len(source_ids) != len(set(source_ids))
+        or not isinstance(plan.get("repository"), str)
+        or not plan["repository"]
+        or not isinstance(plan.get("pr_number"), int)
+        or isinstance(plan["pr_number"], bool)
+        or plan["pr_number"] < 1
+        or not isinstance(plan_authorities, list)
+        or len(plan_authorities) != 41
+    ):
+        raise ContractError(
+            "Supplemental invocation migration current plan binding changed"
+        )
+    for expected, actual in zip(authorities, plan_authorities, strict=True):
+        if (
+            not isinstance(actual, Mapping)
+            or actual.get("authority_id") != expected.authority_id
+            or actual.get("source_content_digest")
+            != expected.source_content_digest
+            or actual.get("execution_digest") != expected.execution_digest
+        ):
+            raise ContractError(
+                "Supplemental invocation migration current plan binding changed"
+            )
+    return source_ids
+
+
+def _validate_completed_migration_receipts(
+    *,
+    root: Path,
+    marker: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    authorities: Sequence[AuthoritySpec],
+) -> None:
+    repository_root = (
+        root
+        / "invocation-receipts"
+        / str(plan["repository"]).replace("/", "--")
+    )
+    paths = sorted(
+        repository_root.glob(
+            f"*/{marker['source_run_id']}/*/*.json"
+        )
+    )
+    if len(paths) != len(authorities):
+        raise ContractError(
+            "Completed invocation migration receipt binding changed"
+        )
+    authority_by_id = {item.authority_id: item for item in authorities}
+    receipts: list[dict[str, Any]] = []
+    source_pr_numbers: set[int] = set()
+    for path in paths:
+        try:
+            value = read_json(path)
+            authority = authority_by_id.get(str(value.get("authority_id") or ""))
+            if authority is None:
+                raise ContractError(
+                    "Completed invocation migration receipt authority changed"
+                )
+            validate_invocation_receipt(value)
+        except (ContractError, OSError, ValueError) as error:
+            raise ContractError(
+                "Completed invocation migration receipt binding changed"
+            ) from error
+        migrated_from = value.get("migrated_from")
+        expected_path = (
+            repository_root
+            / str(value["pr_number"])
+            / str(marker["source_run_id"])
+            / authority.authority_id.replace("/", "--")
+            / f"{value['receipt_digest'].removeprefix('sha256:')}.json"
+        )
+        if (
+            path.resolve() != expected_path.resolve()
+            or value["repository"] != plan["repository"]
+            or value["origin_run_id"] != marker["source_run_id"]
+            or value["origin_binding"]["lifecycle_digest"]
+            != marker["source_lifecycle_digest"]
+            or not isinstance(migrated_from, Mapping)
+            or migrated_from.get("schema_version") != "2.0.0"
+            or migrated_from.get("kind")
+            != "test-agent-validation-shard-invocations"
+        ):
+            raise ContractError(
+                "Completed invocation migration receipt binding changed"
+            )
+        receipts.append(value)
+        source_pr_numbers.add(int(value["pr_number"]))
+    if (
+        len(source_pr_numbers) != 1
+        or {item["authority_id"] for item in receipts} != set(authority_by_id)
+    ):
+        raise ContractError(
+            "Completed invocation migration receipt authority coverage changed"
+        )
+    assert_invocation_receipt_set_isolated(receipts)
 
 
 def _invocation_receipt(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -15,7 +16,12 @@ from agent_insights_quality.daily_lifecycle import (
     daily_runtime_root,
 )
 from agent_insights_quality.selection import select_daily
-from agent_insights_quality.util import ContractError, content_hash
+from agent_insights_quality.util import (
+    ContractError,
+    atomic_json,
+    content_hash,
+    file_hash,
+)
 
 HASH = "sha256:" + ("a" * 64)
 
@@ -55,6 +61,7 @@ def _initial(report_date: date = date(2026, 8, 31)) -> dict:
         "last_activity_at": moment,
         "previous_lifecycle_digest": None,
         "event_reference": None,
+        "superseded_format_digest": None,
         "bindings": {
             "repository": "ninghu/agent-insights-quality",
             "public_run_id": f"aiq-{report_date:%Y%m%d}",
@@ -122,6 +129,58 @@ def test_daily_lifecycle_is_quiescent_and_content_addressed(tmp_path: Path) -> N
         conflicting = _initial(date(2026, 9, 1))
         with pytest.raises(ContractError, match="Another Daily lifecycle"):
             lifecycle.begin(conflicting)
+
+
+def test_unreadable_daily_lifecycle_is_archived_once_and_tombstoned(
+    tmp_path: Path,
+) -> None:
+    lock = DailyLock(daily_runtime_root(tmp_path) / "coordinator.lock")
+    lifecycle = DailyLifecycle(lock=lock, base=tmp_path)
+    lifecycle.active_path.parent.mkdir(parents=True)
+    prior = b'{"schema_version":"1.0.0","state":"FAILED"}\r\n'
+    lifecycle.active_path.write_bytes(prior)
+
+    with lock:
+        active = lifecycle.begin(_initial())
+        repeated = lifecycle.begin(_initial())
+
+    archives = list((lifecycle.root / "superseded-formats").glob("*.json"))
+    assert len(archives) == 1
+    assert archives[0].read_bytes() == prior
+    assert file_hash(archives[0]) == active.value["superseded_format_digest"]
+    assert archives[0].name == (
+        f"{active.value['superseded_format_digest'].removeprefix('sha256:')}.json"
+    )
+    assert active.value["schema_version"] == "2.0.0"
+    assert active.value["state"] == "LOCKED"
+    assert repeated.digest == active.digest
+    assert archives[0].is_file()
+    assert not list((lifecycle.root / "superseded-formats").glob(".*.tmp"))
+
+
+def test_valid_current_lifecycle_without_tombstone_field_still_blocks(
+    tmp_path: Path,
+) -> None:
+    active = _prepared(tmp_path)
+    legacy_current = copy.deepcopy(active.value)
+    legacy_current.pop("superseded_format_digest")
+    legacy_current["lifecycle_digest"] = content_hash(
+        {
+            key: item
+            for key, item in legacy_current.items()
+            if key != "lifecycle_digest"
+        }
+    )
+    atomic_json(active.path, legacy_current)
+    next_run = _initial(date(2026, 9, 1))
+    next_run["execution_id"] = "2" * 32
+
+    lock = DailyLock(daily_runtime_root(tmp_path) / "coordinator.lock")
+    with lock:
+        lifecycle = DailyLifecycle(lock=lock, base=tmp_path)
+        assert lifecycle.read_active().value["state"] == "PREPARED"
+        with pytest.raises(ContractError, match="Another Daily lifecycle"):
+            lifecycle.begin(next_run)
 
 
 def test_daily_lifecycle_rejects_noncanonical_transition(tmp_path: Path) -> None:
