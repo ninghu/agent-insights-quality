@@ -31,6 +31,7 @@ from agent_insights_quality.live import (
 )
 from agent_insights_quality.run_manifest import _result_payload, build_manifest
 from agent_insights_quality.reporting import _summary_metrics
+from agent_insights_quality.registry import DEPLOYMENT_REGISTRY_SCHEMA_VERSION
 from agent_insights_quality.util import ROOT, ContractError, content_hash, read_json
 
 
@@ -289,7 +290,7 @@ def test_daily_promotion_requires_reviewed_staging_digest(tmp_path: Path) -> Non
         for index, logical in enumerate(["v0", *agent["issue_ids"]])
     }
     receipt = {
-        "schema_version": "3.0.0",
+        "schema_version": DEPLOYMENT_REGISTRY_SCHEMA_VERSION,
         "profile": "staging",
         "qualified": True,
         "human_reviewed": True,
@@ -318,7 +319,7 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
     hashes = catalog_hashes(agents, issues)
     model = agent_model_contract(agents)
     registry = {
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "profile": "staging",
         "project_name": "agent-insights-quality-staging",
         "test_region": "WestUS2",
