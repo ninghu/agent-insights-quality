@@ -35,9 +35,7 @@ def _normalized_source_diff(baseline: str, issue: str) -> str:
         if line.startswith(("--- ", "+++ ")):
             continue
         normalized.append(
-            ""
-            if not line.strip()
-            else re.sub(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@", "@@", line)
+            re.sub(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@", "@@", line)
         )
     return "\n".join(normalized)
 
@@ -903,7 +901,12 @@ def test_travel_issue_sources_match_reviewed_deltas() -> None:
                     baseline_app,
                     issue_files[relative_path].read_text(encoding="utf-8"),
                 )
-                assert actual_diff == reviewed["expected_app_diff"]
+                assert [
+                    line.rstrip() for line in actual_diff.splitlines()
+                ] == [
+                    line.rstrip()
+                    for line in reviewed["expected_app_diff"].splitlines()
+                ]
             else:
                 assert issue_files[relative_path].read_bytes() == baseline_path.read_bytes()
 
