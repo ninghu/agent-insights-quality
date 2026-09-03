@@ -218,6 +218,7 @@ def _write_receipt(
     authorities: list,
     runtimes: dict[str, DeployedRuntime],
     qualifier: str = "one",
+    migrated_from: dict[str, str] | None = None,
 ) -> dict[str, str]:
     invocation = _invocation(authority, qualifier=qualifier)
     return write_invocation_receipt(
@@ -244,6 +245,7 @@ def _write_receipt(
         resources=_resources(invocation, authority, runtimes),
         fence=lambda: None,
         root=root,
+        migrated_from=migrated_from,
     )
 
 
@@ -1159,27 +1161,30 @@ def test_completed_original_migration_replays_without_legacy_active(
     tmp_path: Path,
 ) -> None:
     prepared, plan, authorities, runtimes = _context()
-    temporary_archive, source, _ = _write_complete_legacy_generation(
-        tmp_path,
-        prepared=prepared,
-        authorities=authorities,
-        runtimes=runtimes,
-    )
-    archive_digest = file_hash(temporary_archive)
-    archive_path = (
-        tmp_path
-        / "lifecycle"
-        / "superseded-formats"
-        / f"{archive_digest.removeprefix('sha256:')}.json"
-    )
-    archive_path.parent.mkdir(parents=True)
-    temporary_archive.replace(archive_path)
     authority_ids = [item.authority_id for item in authorities]
+    assert len(authority_ids) == 41
+    for authority in authorities:
+        _write_receipt(
+            root=tmp_path,
+            prepared=prepared,
+            plan=plan,
+            authority=authority,
+            authorities=authorities,
+            runtimes=runtimes,
+            qualifier=f"complete-{authority.authority_id}",
+            migrated_from={
+                "schema_version": "2.0.0",
+                "kind": "test-agent-validation-shard-invocations",
+                "artifact_digest": content_hash(
+                    {"authority_id": authority.authority_id}
+                ),
+            },
+        )
     marker = {
         "schema_version": "1.0.0",
         "kind": "shard-invocations-v2-to-authority-receipts-v1",
         "source_run_id": RUN_ID,
-        "source_lifecycle_digest": source["journal_digest"],
+        "source_lifecycle_digest": prepared["journal_digest"],
         "imported_authority_ids": authority_ids,
         "incomplete_authority_ids": [],
         "migration_digest": "",
@@ -1195,18 +1200,6 @@ def test_completed_original_migration_replays_without_legacy_active(
         marker,
     )
     active_path = tmp_path / "lifecycle" / "active.json"
-    current_active = {
-        "schema_version": "3.0.0",
-        "kind": "test-agent-validation-lifecycle",
-        "repository": prepared["repository"],
-        "pr_number": prepared["pr_number"],
-        "journal_digest": "",
-    }
-    current_active["journal_digest"] = _digest_without(
-        current_active,
-        "journal_digest",
-    )
-    atomic_json(active_path, current_active)
 
     with recover_supplemental_legacy_invocations(
         active_path=active_path,
@@ -1219,6 +1212,190 @@ def test_completed_original_migration_replays_without_legacy_active(
             "imported_authority_ids": authority_ids,
             "incomplete_authority_ids": [],
         }
+
+
+def test_completed_migration_rejects_cross_pr_receipt_binding(
+    tmp_path: Path,
+) -> None:
+    prepared, plan, authorities, runtimes = _context()
+    authority_ids = [item.authority_id for item in authorities]
+    for authority in authorities:
+        _write_receipt(
+            root=tmp_path,
+            prepared=prepared,
+            plan=plan,
+            authority=authority,
+            authorities=authorities,
+            runtimes=runtimes,
+            qualifier=f"cross-pr-{authority.authority_id}",
+            migrated_from={
+                "schema_version": "2.0.0",
+                "kind": "test-agent-validation-shard-invocations",
+                "artifact_digest": content_hash(
+                    {"authority_id": authority.authority_id}
+                ),
+            },
+        )
+    marker = {
+        "schema_version": "1.0.0",
+        "kind": "shard-invocations-v2-to-authority-receipts-v1",
+        "source_run_id": RUN_ID,
+        "source_lifecycle_digest": prepared["journal_digest"],
+        "imported_authority_ids": authority_ids,
+        "incomplete_authority_ids": [],
+        "migration_digest": "",
+    }
+    marker["migration_digest"] = _digest_without(
+        marker,
+        "migration_digest",
+    )
+    atomic_json(
+        tmp_path
+        / "migrations"
+        / "shard-invocations-v2-to-authority-receipts-v1.json",
+        marker,
+    )
+    cross_pr_plan = copy.deepcopy(plan)
+    cross_pr_plan["pr_number"] += 1
+
+    with pytest.raises(
+        ContractError,
+        match="Completed invocation migration receipt binding changed",
+    ):
+        with recover_supplemental_legacy_invocations(
+            active_path=tmp_path / "lifecycle" / "active.json",
+            plan=cross_pr_plan,
+            authorities=authorities,
+            root=tmp_path,
+        ):
+            pass
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("source_run_id", ""),
+        ("source_lifecycle_digest", "sha256:not-a-digest"),
+    ],
+)
+def test_completed_migration_rejects_malformed_source_identity(
+    tmp_path: Path,
+    field: str,
+    value: str,
+) -> None:
+    _, plan, authorities, _ = _context()
+    marker = {
+        "schema_version": "1.0.0",
+        "kind": "shard-invocations-v2-to-authority-receipts-v1",
+        "source_run_id": RUN_ID,
+        "source_lifecycle_digest": content_hash({"legacy": "source"}),
+        "imported_authority_ids": [
+            item.authority_id for item in authorities
+        ],
+        "incomplete_authority_ids": [],
+        "migration_digest": "",
+    }
+    marker[field] = value
+    marker["migration_digest"] = _digest_without(
+        marker,
+        "migration_digest",
+    )
+    atomic_json(
+        tmp_path
+        / "migrations"
+        / "shard-invocations-v2-to-authority-receipts-v1.json",
+        marker,
+    )
+
+    with pytest.raises(ContractError, match="migration marker is invalid"):
+        with recover_supplemental_legacy_invocations(
+            active_path=tmp_path / "lifecycle" / "active.json",
+            plan=plan,
+            authorities=authorities,
+            root=tmp_path,
+        ):
+            pass
+
+
+@pytest.mark.parametrize("mutation", ["missing", "duplicate", "cross-authority"])
+def test_completed_migration_requires_exact_current_authority_coverage(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    _, plan, authorities, _ = _context()
+    authority_ids = [item.authority_id for item in authorities]
+    if mutation == "missing":
+        imported = authority_ids[:-1]
+    elif mutation == "duplicate":
+        imported = [*authority_ids[:-1], authority_ids[0]]
+    else:
+        imported = [*authority_ids[:-1], "other-agent/issue-999"]
+    marker = {
+        "schema_version": "1.0.0",
+        "kind": "shard-invocations-v2-to-authority-receipts-v1",
+        "source_run_id": RUN_ID,
+        "source_lifecycle_digest": content_hash({"legacy": "source"}),
+        "imported_authority_ids": imported,
+        "incomplete_authority_ids": [],
+        "migration_digest": "",
+    }
+    marker["migration_digest"] = _digest_without(
+        marker,
+        "migration_digest",
+    )
+    atomic_json(
+        tmp_path
+        / "migrations"
+        / "shard-invocations-v2-to-authority-receipts-v1.json",
+        marker,
+    )
+
+    with pytest.raises(
+        ContractError,
+        match="Supplemental invocation migration authority coverage changed",
+    ):
+        with recover_supplemental_legacy_invocations(
+            active_path=tmp_path / "lifecycle" / "active.json",
+            plan=plan,
+            authorities=authorities,
+            root=tmp_path,
+        ):
+            pass
+
+
+def test_incomplete_migration_still_requires_exact_source_archive(
+    tmp_path: Path,
+) -> None:
+    _, plan, authorities, _ = _context()
+    authority_ids = [item.authority_id for item in authorities]
+    marker = {
+        "schema_version": "1.0.0",
+        "kind": "shard-invocations-v2-to-authority-receipts-v1",
+        "source_run_id": RUN_ID,
+        "source_lifecycle_digest": content_hash({"legacy": "source"}),
+        "imported_authority_ids": authority_ids[:-1],
+        "incomplete_authority_ids": authority_ids[-1:],
+        "migration_digest": "",
+    }
+    marker["migration_digest"] = _digest_without(
+        marker,
+        "migration_digest",
+    )
+    atomic_json(
+        tmp_path
+        / "migrations"
+        / "shard-invocations-v2-to-authority-receipts-v1.json",
+        marker,
+    )
+
+    with pytest.raises(ContractError, match="exactly one source archive"):
+        with recover_supplemental_legacy_invocations(
+            active_path=tmp_path / "lifecycle" / "active.json",
+            plan=plan,
+            authorities=authorities,
+            root=tmp_path,
+        ):
+            pass
 
 
 def test_first_supplemental_extraction_rejects_non_v2_active(

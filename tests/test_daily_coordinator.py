@@ -98,6 +98,21 @@ def test_daily_prepare_binds_pacific_date_snapshot_and_approved_record(
     assert active.value["bindings"]["approval"]["approved_commit_sha"] == "2" * 40
 
 
+def test_daily_status_safely_requires_unreadable_format_supersession(
+    tmp_path: Path,
+) -> None:
+    active_path = daily_runtime_root(tmp_path) / "active.json"
+    active_path.parent.mkdir(parents=True)
+    active_path.write_bytes(
+        b'{"schema_version":"1.0.0","private_path":"do-not-expose"}\n'
+    )
+
+    assert coordinator.daily_status(base=tmp_path) == {
+        "state": "FORMAT_REQUIRES_SUPERSESSION",
+        "next": "daily-prepare",
+    }
+
+
 def test_daily_prepare_rejects_non_pacific_business_date(tmp_path: Path) -> None:
     with pytest.raises(ContractError, match="Pacific business date"):
         coordinator.prepare_daily(
@@ -280,5 +295,12 @@ def test_daily_run_contract_binds_checkout_and_source_approval() -> None:
         registry=registry,
         test_region="SwedenCentral",
     )
+    superseded_digest = coordinator._daily_contract_digest(
+        bindings=exact_bindings,
+        registry=registry,
+        test_region="SwedenCentral",
+        superseded_format_digest=HASH,
+    )
 
     assert exact_digest != merged_digest
+    assert exact_digest != superseded_digest

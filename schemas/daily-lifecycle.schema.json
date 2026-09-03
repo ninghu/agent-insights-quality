@@ -55,6 +55,12 @@
         {"type": "null"}
       ]
     },
+    "superseded_format_digest": {
+      "oneOf": [
+        {"$ref": "#/$defs/hash"},
+        {"type": "null"}
+      ]
+    },
     "bindings": {
       "type": "object",
       "additionalProperties": false,

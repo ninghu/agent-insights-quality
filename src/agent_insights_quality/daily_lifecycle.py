@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import copy
 import os
+import shutil
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -15,6 +17,7 @@ from agent_insights_quality.util import (
     ContractError,
     atomic_json,
     content_hash,
+    file_hash,
     immutable_json,
     read_json,
     runtime_root,
@@ -132,7 +135,13 @@ class DailyLifecycle:
 
     def begin(self, value: Mapping[str, Any]) -> DailyRecord:
         self._assert_locked()
-        current = self.read_optional()
+        superseded_format_digest: str | None = None
+        try:
+            current = self.read_optional()
+        except (ContractError, OSError, ValueError):
+            superseded_format_digest = file_hash(self.active_path)
+            self._archive_superseded_format(superseded_format_digest)
+            current = None
         if current is not None:
             if current.value["bindings"] == value["bindings"]:
                 return current
@@ -144,7 +153,13 @@ class DailyLifecycle:
             raise ContractError(
                 "New Daily lifecycle must begin at the LOCKED event"
             )
-        event = self._stamp(value, snapshot_type="event", event_reference=None)
+        if value.get("superseded_format_digest") is not None:
+            raise ContractError(
+                "New Daily lifecycle cannot supply a format supersession digest"
+            )
+        initial = copy.deepcopy(dict(value))
+        initial["superseded_format_digest"] = superseded_format_digest
+        event = self._stamp(initial, snapshot_type="event", event_reference=None)
         event_record = self._write_event(event)
         active = self._stamp(
             event,
@@ -153,6 +168,40 @@ class DailyLifecycle:
         )
         atomic_json(self.active_path, active)
         return self._read(self.active_path)
+
+    def _archive_superseded_format(self, digest: str) -> None:
+        archive = (
+            self.root
+            / "superseded-formats"
+            / f"{digest.removeprefix('sha256:')}.json"
+        )
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        if archive.exists():
+            if file_hash(archive) != digest:
+                raise ContractError("Superseded Daily lifecycle archive digest changed")
+            return
+        with self.active_path.open("rb") as source:
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{archive.name}.",
+                dir=archive.parent,
+            )
+            temporary = Path(temporary_name)
+            try:
+                with os.fdopen(descriptor, "wb") as target:
+                    shutil.copyfileobj(source, target)
+                    target.flush()
+                    os.fsync(target.fileno())
+                if file_hash(temporary) != digest:
+                    raise ContractError(
+                        "Superseded Daily lifecycle archive is not byte exact"
+                    )
+                os.replace(temporary, archive)
+                if file_hash(archive) != digest:
+                    raise ContractError(
+                        "Superseded Daily lifecycle archive is not byte exact"
+                    )
+            finally:
+                temporary.unlink(missing_ok=True)
 
     def transition(
         self,
@@ -186,6 +235,12 @@ class DailyLifecycle:
         for field in ("execution_id", "started_at"):
             if value[field] != current.value[field]:
                 raise ContractError(f"Daily lifecycle {field} is immutable")
+        if value.get("superseded_format_digest") != current.value.get(
+            "superseded_format_digest"
+        ):
+            raise ContractError(
+                "Daily lifecycle superseded_format_digest is immutable"
+            )
         for field in (
             "repository",
             "public_run_id",
