@@ -207,12 +207,13 @@ def prepare_test_agent_validation() -> dict[str, Any]:
                 plan=plan,
                 authorities=authorities,
             ) as migration:
-                incomplete_current_invocations = (
-                    _incomplete_current_invocations(
-                        journal=journal,
-                        plan=plan,
-                        authorities=authorities,
-                    )
+                (
+                    incomplete_current_invocations,
+                    endpoint_bad_current_invocations,
+                ) = _current_invocation_requirements(
+                    journal=journal,
+                    plan=plan,
+                    authorities=authorities,
                 )
                 active, superseded_authority_ids = journal.begin_run(
                     initial,
@@ -296,6 +297,9 @@ def prepare_test_agent_validation() -> dict[str, Any]:
                     supplemental=supplemental,
                     incomplete_current_invocations=(
                         incomplete_current_invocations
+                    ),
+                    endpoint_bad_current_invocations=(
+                        endpoint_bad_current_invocations
                     ),
                 ),
             ],
@@ -1808,8 +1812,11 @@ def _forced_invocation_authority_ids(
     migration: Mapping[str, Any],
     supplemental: Mapping[str, Any],
     incomplete_current_invocations: list[str],
+    endpoint_bad_current_invocations: list[str],
 ) -> list[str]:
-    available = set(supplemental["imported_authority_ids"])
+    available = set(supplemental["imported_authority_ids"]) - set(
+        endpoint_bad_current_invocations
+    )
     return list(
         dict.fromkeys(
             [
@@ -1932,18 +1939,18 @@ def _invocation_receipts_for_verification(
     )
 
 
-def _incomplete_current_invocations(
+def _current_invocation_requirements(
     *,
     journal: LifecycleJournal,
     plan: Mapping[str, Any],
     authorities: list[Any],
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     try:
         active = journal.read_active().value
     except (ContractError, OSError):
-        return []
+        return [], []
     if active["state"] != "VALIDATING":
-        return []
+        return [], []
     authority_ids = list(active["invocation_authority_ids"])
     completed: set[str] = set()
     if authority_ids:
@@ -1962,12 +1969,13 @@ def _incomplete_current_invocations(
                 == active["run_id"]
             }
         except (ContractError, OSError, ValueError):
-            return authority_ids
+            return authority_ids, []
     forced = {
         authority_id
         for authority_id in authority_ids
         if authority_id not in completed
     }
+    endpoint_bad: set[str] = set()
     result_references = current_authority_verification_results(
         prepared=active,
         authority_ids=active["validation_authority_ids"],
@@ -1987,10 +1995,16 @@ def _incomplete_current_invocations(
             ),
         ):
             forced.add(authority_id)
-    return [
+            endpoint_bad.add(authority_id)
+    ordered_forced = [
         authority.authority_id
         for authority in authorities
         if authority.authority_id in forced
+    ]
+    return ordered_forced, [
+        authority_id
+        for authority_id in ordered_forced
+        if authority_id in endpoint_bad
     ]
 
 

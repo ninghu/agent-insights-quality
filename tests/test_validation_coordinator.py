@@ -12,9 +12,9 @@ from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.util import ContractError
 from agent_insights_quality.validation_coordinator import (
     _assignments,
+    _current_invocation_requirements,
     _desired_state,
     _forced_invocation_authority_ids,
-    _incomplete_current_invocations,
     _merge_authority_result_selection,
     _runner,
     _support_image_reuse_candidates,
@@ -90,6 +90,7 @@ def test_complete_migrated_receipts_force_zero_invoke_shards() -> None:
             "incomplete_authority_ids": [],
         },
         incomplete_current_invocations=authority_ids,
+        endpoint_bad_current_invocations=[],
     )
     assert forced == []
     assert _assignments(
@@ -103,11 +104,13 @@ def test_complete_migrated_receipts_force_zero_invoke_shards() -> None:
     assert 1 <= len(verify) <= 8
 
 
-def test_incomplete_result_forces_traffic_only_for_unusable_endpoint(
+def _requirements_for_endpoint_pass(
     monkeypatch,
-) -> None:
+    *,
+    endpoint_pass: bool,
+) -> tuple[str, list[str], list[str]]:
     active = _active_validation()
-    authority_id = active["validation_authority_ids"][0]
+    authority_id = "issue-001"
     active["invocation_authority_ids"] = []
     journal = SimpleNamespace(
         read_active=lambda: SimpleNamespace(value=active)
@@ -117,7 +120,6 @@ def test_incomplete_result_forces_traffic_only_for_unusable_endpoint(
         "current_authority_verification_results",
         lambda **_kwargs: {authority_id: {"authority_id": authority_id}},
     )
-    endpoint_pass = True
     monkeypatch.setattr(
         validation_coordinator,
         "load_authority_verification_result",
@@ -141,20 +143,58 @@ def test_incomplete_result_forces_traffic_only_for_unusable_endpoint(
         },
     )
 
-    assert (
-        _incomplete_current_invocations(
-            journal=journal,
-            plan={},
-            authorities=authority_specs(*load_catalogs()),
-        )
-        == []
-    )
-    endpoint_pass = False
-    assert _incomplete_current_invocations(
+    incomplete, endpoint_bad = _current_invocation_requirements(
         journal=journal,
         plan={},
         authorities=authority_specs(*load_catalogs()),
-    ) == [authority_id]
+    )
+    return authority_id, incomplete, endpoint_bad
+
+
+def test_endpoint_bad_incomplete_overrides_supplemental_receipt(
+    monkeypatch,
+) -> None:
+    authority_id, incomplete, endpoint_bad = (
+        _requirements_for_endpoint_pass(
+            monkeypatch,
+            endpoint_pass=False,
+        )
+    )
+    forced = _forced_invocation_authority_ids(
+        migration={"incomplete_authority_ids": []},
+        supplemental={
+            "imported_authority_ids": [authority_id],
+            "incomplete_authority_ids": [],
+        },
+        incomplete_current_invocations=incomplete,
+        endpoint_bad_current_invocations=endpoint_bad,
+    )
+
+    assert incomplete == endpoint_bad == [authority_id]
+    assert forced == [authority_id]
+
+
+def test_telemetry_only_incomplete_remains_verify_only(
+    monkeypatch,
+) -> None:
+    authority_id, incomplete, endpoint_bad = (
+        _requirements_for_endpoint_pass(
+            monkeypatch,
+            endpoint_pass=True,
+        )
+    )
+    forced = _forced_invocation_authority_ids(
+        migration={"incomplete_authority_ids": []},
+        supplemental={
+            "imported_authority_ids": [authority_id],
+            "incomplete_authority_ids": [],
+        },
+        incomplete_current_invocations=incomplete,
+        endpoint_bad_current_invocations=endpoint_bad,
+    )
+
+    assert incomplete == endpoint_bad == []
+    assert forced == []
 
 
 def _active_validation() -> dict:
