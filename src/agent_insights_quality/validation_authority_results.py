@@ -401,7 +401,7 @@ def has_prior_nonpass_result_for_invocation(
         candidate["artifact_digest"] != result["artifact_digest"]
         and candidate["binding"]["invocation_receipt_digest"]
         == result["binding"]["invocation_receipt_digest"]
-        for candidate in _prior_nonpass_results(
+        for candidate, _ in _prior_nonpass_results(
             repository=str(result["repository"]),
             pr_number=int(result["pr_number"]),
             authority_id=str(result["authority_id"]),
@@ -427,18 +427,19 @@ def paired_trace_gap_history_digest(
         prior_run_ids=prior_run_ids,
         root=root,
     )
-    for index, candidate in enumerate(candidates):
+    for index, (candidate, receipt) in enumerate(candidates):
         if (
             candidate["outcome"] != "INCOMPLETE"
             or candidate["binding"]["invocation_receipt_digest"]
             != invocation_receipt_digest
+            or receipt["origin_run_id"] != candidate["origin_run_id"]
         ):
             continue
         older = next(
             (
-                item
+                item[0]
                 for item in candidates[index + 1 :]
-                if item["binding"]["invocation_receipt_digest"]
+                if item[0]["binding"]["invocation_receipt_digest"]
                 != invocation_receipt_digest
             ),
             None,
@@ -461,7 +462,7 @@ def _prior_nonpass_results(
     authority_id: str,
     prior_run_ids: Sequence[str],
     root: Path | None,
-) -> list[dict[str, Any]]:
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     runtime_root = (root or validation_runtime_root()).resolve()
     results = []
     for run_id in dict.fromkeys(prior_run_ids):
@@ -495,11 +496,10 @@ def _prior_nonpass_results(
             and receipt["repository"] == repository
             and receipt["pr_number"] == pr_number
             and receipt["authority_id"] == authority_id
-            and receipt["origin_run_id"] == run_id
             and receipt["receipt_digest"]
             == candidate["binding"]["invocation_receipt_digest"]
         ):
-            results.append(candidate)
+            results.append((candidate, receipt))
     return results
 
 
