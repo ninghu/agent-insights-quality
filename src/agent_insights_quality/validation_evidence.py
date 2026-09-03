@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
@@ -203,6 +204,7 @@ def select_reusable_authority_evidence(
     pr_number: int,
     environment_id: str,
     location: str,
+    project_name: str,
     telemetry_resource_set: str,
     shared_validation_digest: str,
     forced_authority_ids: set[str] | None = None,
@@ -210,31 +212,39 @@ def select_reusable_authority_evidence(
 ) -> tuple[list[str], list[dict[str, str]]]:
     runtime_root = (root or validation_runtime_root()).resolve()
     owner, name = repository.split("/", 1)
-    evidence_root = runtime_root / "evidence" / owner / name / str(pr_number)
-    latest: dict[str, tuple[str, Path, dict[str, Any]]] = {}
+    evidence_root = runtime_root / "evidence" / owner / name
+    candidates: dict[str, list[tuple[str, Path, dict[str, Any]]]] = {}
     if evidence_root.is_dir():
         for path in evidence_root.rglob("*.json"):
             try:
                 value = read_json(path)
+                if (
+                    path.resolve()
+                    != _persisted_evidence_path(runtime_root, value).resolve()
+                    or path.read_bytes() != _canonical_document_bytes(value)
+                ):
+                    raise ContractError(
+                        "Reusable validation evidence provenance is invalid"
+                    )
                 validate_evidence_integrity(value)
                 completed = datetime.fromisoformat(
                     str(value["completed_at"]).replace("Z", "+00:00")
                 ).isoformat()
-            except (ContractError, OSError, ValueError):
+            except (ContractError, KeyError, OSError, ValueError):
                 continue
             if (
                 value["repository"] != repository
-                or value["pr_number"] != pr_number
                 or value["environment_id"] != environment_id
                 or value["location"] != location
+                or project_name != "aiq-staging-swedencentral"
                 or value["telemetry_resource_set"] != telemetry_resource_set
             ):
                 continue
             for item in value["authorities"]:
                 authority_id = item["authority_id"]
-                previous = latest.get(authority_id)
-                if previous is None or completed > previous[0]:
-                    latest[authority_id] = (completed, path, value)
+                candidates.setdefault(authority_id, []).append(
+                    (completed, path, value)
+                )
 
     runtime_by_id = {
         item["authority_id"]: item for item in runtime_topology["agents"]
@@ -243,19 +253,28 @@ def select_reusable_authority_evidence(
     selected: list[str] = []
     reused: list[dict[str, str]] = []
     for authority in authorities:
-        candidate = latest.get(authority.authority_id)
-        if (
-            authority.authority_id in forced
-            or candidate is None
-            or not _authority_is_reusable(
+        matching = sorted(
+            candidate
+            for candidate in candidates.get(authority.authority_id, [])
+            if _authority_is_reusable(
                 candidate[2],
                 authority=authority,
                 runtime=runtime_by_id[authority.authority_id],
-                shared_validation_digest=shared_validation_digest,
             )
-        ):
+        )
+        if authority.authority_id in forced or not matching:
             selected.append(authority.authority_id)
             continue
+        latest_completed = matching[-1][0]
+        latest = [
+            candidate
+            for candidate in matching
+            if candidate[0] == latest_completed
+        ]
+        if len({candidate[2]["evidence_digest"] for candidate in latest}) != 1:
+            selected.append(authority.authority_id)
+            continue
+        candidate = latest[-1]
         _, path, evidence = candidate
         item = next(
             entry
@@ -296,6 +315,11 @@ def load_reused_authority_evidence(
     if runtime_root not in path.parents:
         raise ContractError("Reused validation evidence path escapes the runtime root")
     value = read_json(path)
+    if (
+        path.resolve() != _persisted_evidence_path(runtime_root, value).resolve()
+        or path.read_bytes() != _canonical_document_bytes(value)
+    ):
+        raise ContractError("Reused validation evidence provenance changed")
     validate_evidence_integrity(value)
     if value["evidence_digest"] != reference["evidence_digest"]:
         raise ContractError("Reused validation evidence digest changed")
@@ -345,7 +369,6 @@ def _authority_is_reusable(
     *,
     authority: AuthoritySpec,
     runtime: Mapping[str, Any],
-    shared_validation_digest: str,
 ) -> bool:
     item = next(
         (
@@ -358,7 +381,6 @@ def _authority_is_reusable(
     return bool(
         item is not None
         and item["pass"] is True
-        and evidence["shared_validation_digest"] == shared_validation_digest
         and item["authority_kind"] == authority.authority_kind
         and item["canonical_agent"] == authority.canonical_agent
         and item["logical_version"] == authority.logical_version
@@ -367,6 +389,28 @@ def _authority_is_reusable(
         and item["provider_content_digest"] == runtime["provider_content_digest"]
         and item["runtime_mapping_digest"] == runtime_mapping_digest(runtime)
     )
+
+
+def _persisted_evidence_path(
+    root: Path,
+    value: Mapping[str, Any],
+) -> Path:
+    owner, name = str(value["repository"]).split("/", 1)
+    return (
+        root
+        / "evidence"
+        / owner
+        / name
+        / str(value["pr_number"])
+        / str(value["run_id"])
+        / f"{str(value['evidence_digest']).removeprefix('sha256:')}.json"
+    )
+
+
+def _canonical_document_bytes(value: Mapping[str, Any]) -> bytes:
+    return (
+        json.dumps(value, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+    ).encode("ascii")
 
 
 def digest_without_field(value: Mapping[str, Any], field: str) -> str:

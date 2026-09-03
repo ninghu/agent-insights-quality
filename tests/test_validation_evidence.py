@@ -422,6 +422,7 @@ def test_exact_pass_evidence_is_reused_and_mapping_drift_is_selected(
     tmp_path,
 ) -> None:
     value = _evidence()
+    value["pr_number"] = 65
     runtime_agents = []
     for index, authority in enumerate(value["authorities"], start=1):
         runtime = {
@@ -463,9 +464,10 @@ def test_exact_pass_evidence_is_reused_and_mapping_drift_is_selected(
         authorities=specs,
         runtime_topology={"agents": runtime_agents},
         repository=value["repository"],
-        pr_number=value["pr_number"],
+        pr_number=74,
         environment_id=value["environment_id"],
         location=value["location"],
+        project_name="aiq-staging-swedencentral",
         telemetry_resource_set=value["telemetry_resource_set"],
         shared_validation_digest=value["shared_validation_digest"],
         root=tmp_path,
@@ -473,20 +475,76 @@ def test_exact_pass_evidence_is_reused_and_mapping_drift_is_selected(
     assert selected == []
     assert len(reused) == 41
 
-    runtime_agents[0]["runtime_agent_version"] = "changed"
+    changed_ids = {
+        "travel-agent/v0",
+        *(f"issue-{number:03d}" for number in range(21, 29)),
+        "issue-016",
+    }
+    current_specs = [
+        replace(
+            spec,
+            **(
+                {
+                    "execution_digest": content_hash(
+                        {"pr74": spec.authority_id}
+                    )
+                }
+                if spec.authority_id == "issue-016"
+                else {
+                    "source_content_digest": content_hash(
+                        {"pr74": spec.authority_id}
+                    )
+                }
+                if spec.authority_id in changed_ids
+                else {}
+            ),
+        )
+        for spec in specs
+    ]
+    current_runtime = deepcopy(runtime_agents)
+    for spec, runtime in zip(current_specs, current_runtime, strict=True):
+        if spec.authority_id in changed_ids - {"issue-016"}:
+            runtime["provider_content_digest"] = spec.source_content_digest
     selected, reused = select_reusable_authority_evidence(
-        authorities=specs,
-        runtime_topology={"agents": runtime_agents},
+        authorities=current_specs,
+        runtime_topology={"agents": current_runtime},
         repository=value["repository"],
-        pr_number=value["pr_number"],
+        pr_number=74,
         environment_id=value["environment_id"],
         location=value["location"],
+        project_name="aiq-staging-swedencentral",
         telemetry_resource_set=value["telemetry_resource_set"],
         shared_validation_digest=value["shared_validation_digest"],
         root=tmp_path,
     )
-    assert selected == [specs[0].authority_id]
-    assert len(reused) == 40
+    assert set(selected) == changed_ids
+    assert len(reused) == 31
+
+    ambiguous = deepcopy(value)
+    ambiguous["pr_number"] = 66
+    ambiguous["run_id"] = "validation-000000000066"
+    ambiguous = stamp_evidence_digests(ambiguous)
+    persist_evidence(
+        ambiguous,
+        repository=ambiguous["repository"],
+        pr_number=ambiguous["pr_number"],
+        run_id=ambiguous["run_id"],
+        root=tmp_path / "evidence",
+    )
+    selected, reused = select_reusable_authority_evidence(
+        authorities=current_specs,
+        runtime_topology={"agents": current_runtime},
+        repository=value["repository"],
+        pr_number=74,
+        environment_id=value["environment_id"],
+        location=value["location"],
+        project_name="aiq-staging-swedencentral",
+        telemetry_resource_set=value["telemetry_resource_set"],
+        shared_validation_digest=value["shared_validation_digest"],
+        root=tmp_path,
+    )
+    assert {item.authority_id for item in current_specs} == set(selected)
+    assert reused == []
 
 
 def test_late_query_failure_preserves_prior_authority_result(tmp_path) -> None:

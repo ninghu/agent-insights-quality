@@ -654,6 +654,7 @@ def reconcile_test_agent_validation_deployment() -> dict[str, Any]:
             pr_number=controller.active.value["pr_number"],
             environment_id=contexts["policy"].environment_id,
             location=contexts["policy"].location,
+            project_name=controller.active.value["project"]["name"],
             telemetry_resource_set=contexts["policy"].telemetry_resource_set,
             shared_validation_digest=desired["shared_validation_digest"],
             forced_authority_ids=set(
