@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
+from agent_insights_quality.baseline_policy import baseline_terminal_decision
 from agent_insights_quality.models import (
     AgentResult,
     InsightRunCheckpoint,
@@ -51,6 +52,10 @@ class _VersionStageError(Exception):
             suffix = "_timeout"
         self.code = code + suffix
         super().__init__(self.code)
+
+
+class _BaselineEvidenceIncomplete(ContractError):
+    """Baseline endpoint execution is complete but trace evidence is partial."""
 
 
 class _RecoveryBudget:
@@ -320,6 +325,7 @@ def execute_agent(
     max_recovery_versions: int = 3,
     checkpoint_store: VersionCheckpointStore | None = None,
     start_delay_seconds: int = 0,
+    accepted_baseline: VersionResult | None = None,
 ) -> AgentResult:
     agent_by_name = {item["name"]: item for item in agents["agents"]}
     issue_by_id = {item["id"]: item for item in issues["issues"]}
@@ -347,6 +353,7 @@ def execute_agent(
         ),
         checkpoint_store,
         start_delay_seconds,
+        accepted_baseline,
     )
 
 
@@ -365,11 +372,18 @@ def _execute_agent(
     recovery_budget: _RecoveryBudget,
     checkpoint_store: VersionCheckpointStore | None,
     start_delay_seconds: int,
+    accepted_baseline: VersionResult | None,
 ) -> AgentResult:
     name = agent["name"]
     start_stagger = _StartStagger(start_delay_seconds)
     monitor_id = registry["agents"][name]["monitor_id"]
-    baseline: VersionResult | None = None
+    baseline = accepted_baseline
+    if baseline is not None and (
+        baseline.logical_version != "v0"
+        or baseline.status != "passed"
+        or baseline.error_code is not None
+    ):
+        raise ContractError("Accepted Daily baseline recovery is invalid")
     resuming = checkpoint_store is not None and checkpoint_store.has_progress(name)
     if not resuming:
         try:
@@ -421,6 +435,75 @@ def _execute_agent(
                 if checkpoint_store is not None and baseline_had_progress
                 else None
             )
+            if (
+                baseline_cached is not None
+                and baseline_cached.error_code == "baseline_evidence_incomplete"
+            ):
+                baseline_checkpoint_args = (
+                    name,
+                    "v0",
+                    version_entry(registry, name, "v0")["foundry_version"],
+                    version_entry(registry, name, "v0")["content_digest"],
+                )
+                baseline_invocation = checkpoint_store.invocation(
+                    *baseline_checkpoint_args
+                )
+                if (
+                    not _baseline_recovery_is_safe(
+                        baseline_cached,
+                        baseline_invocation,
+                    )
+                    or checkpoint_store.insight_start_pending(
+                        *baseline_checkpoint_args
+                    )
+                    or checkpoint_store.insight_drain_pending(
+                        *baseline_checkpoint_args
+                    )
+                ):
+                    baseline = replace(
+                        baseline_cached,
+                        error_code="baseline_recovery_blocked",
+                    )
+                    return AgentResult(
+                        name,
+                        baseline,
+                        _skipped_baseline_results(issue_items, registry, name),
+                    )
+                if not recovery_budget.claim():
+                    baseline = replace(
+                        baseline_cached,
+                        error_code="baseline_recovery_exhausted",
+                    )
+                    return AgentResult(
+                        name,
+                        baseline,
+                        _skipped_baseline_results(issue_items, registry, name),
+                    )
+                try:
+                    runtime.wait_for_clean_window(
+                        name,
+                        lookback_hours,
+                        poll_seconds=clean_window_poll_seconds,
+                        ingestion_margin_seconds=clean_window_ingestion_margin_seconds,
+                        max_wait_seconds=clean_window_max_wait_seconds,
+                    )
+                    runtime.reset_monitor(name, monitor_id)
+                    checkpoint_store.archive_version_for_recovery(
+                        *baseline_checkpoint_args,
+                    )
+                except Exception:
+                    baseline = replace(
+                        baseline_cached,
+                        error_code="baseline_recovery_prepare_failed",
+                    )
+                    return AgentResult(
+                        name,
+                        baseline,
+                        _skipped_baseline_results(issue_items, registry, name),
+                    )
+                baseline_had_progress = False
+                baseline_cached = None
+                resuming = False
             if resuming and not baseline_had_progress:
                 runtime.wait_for_clean_window(
                     name,
@@ -475,16 +558,7 @@ def _execute_agent(
             runtime,
             f"{name}/v0: incomplete ({baseline.error_code})",
         )
-        skipped = [
-            VersionResult(
-                logical_version=item["id"],
-                foundry_version=version_entry(registry, name, item["id"])[
-                    "foundry_version"
-                ],
-                status="skipped_baseline",
-            )
-            for item in issue_items
-        ]
+        skipped = _skipped_baseline_results(issue_items, registry, name)
         return AgentResult(name, baseline, skipped)
 
     results = []
@@ -607,6 +681,23 @@ def _execute_agent(
                 or checkpoint_store.insight_start_pending(*checkpoint_args)
             )
     return AgentResult(name, baseline, results)
+
+
+def _skipped_baseline_results(
+    issue_items: list[dict[str, Any]],
+    registry: dict[str, Any],
+    agent_name: str,
+) -> list[VersionResult]:
+    return [
+        VersionResult(
+            logical_version=item["id"],
+            foundry_version=version_entry(registry, agent_name, item["id"])[
+                "foundry_version"
+            ],
+            status="skipped_baseline",
+        )
+        for item in issue_items
+    ]
 
 
 def _execute_version_with_recovery(
@@ -978,28 +1069,40 @@ def _validate_baseline_trace_evidence(
 ) -> None:
     request_count = invocation.request_count
     terminal_mode = agent["baseline_contract"]["terminal_response"]
-    terminal_complete = (
-        int(trace_evidence.get("terminal_response_count") or 0) == request_count
-        and int(trace_evidence.get("terminal_output_count") or 0) == request_count
+    strict_evidence = (
+        invocation.response_count
+        == invocation.usable_response_count
+        == request_count
+        and invocation.semantic_assertions_passed
+        == invocation.semantic_assertion_count
+        and invocation.trace_assertions_passed == invocation.trace_assertion_count
+        and all(
+            item.response_count == 1
+            and item.usable_response
+            and item.semantic_assertions_passed == item.semantic_assertion_count
+            and item.trace_assertions_passed == item.trace_assertion_count
+            and all(
+                assertion.passed and assertion.evidence_sufficient
+                for assertion in item.assertion_results
+            )
+            and all(
+                assertion.passed and assertion.evidence_sufficient
+                for assertion in item.trace_assertion_results
+            )
+            for item in invocation.request_summaries
+        )
     )
-    if terminal_mode == "explicit_span_attributes":
-        terminal_complete = terminal_complete and (
-            int(trace_evidence.get("explicit_terminal_success_count") or 0)
-            == request_count
-            and int(trace_evidence.get("explicit_terminal_output_count") or 0)
-            == request_count
+    decision = baseline_terminal_decision(
+        request_count=request_count,
+        terminal_mode=terminal_mode,
+        trace_evidence=trace_evidence,
+        strict_evidence=strict_evidence,
+    )
+    if decision.status == "incomplete":
+        raise _BaselineEvidenceIncomplete(
+            f"{agent['name']} baseline terminal evidence is incomplete"
         )
-    else:
-        terminal_complete = terminal_complete and (
-            int(trace_evidence.get("assistant_response_count") or 0)
-            == request_count
-        )
-    if not terminal_complete:
-        raise ContractError(
-            f"{agent['name']} baseline lacks one successful terminal output "
-            "signal per request"
-        )
-    if int(trace_evidence.get("unhandled_error_count") or 0) != 0:
+    if decision.status == "failed":
         raise ContractError(
             f"{agent['name']} baseline contains an unhandled error signal"
         )
@@ -1043,6 +1146,58 @@ def _activation_failure_result(
         trace_behavior_summary=trace_evidence,
         issue_trace_gap_acceptance=issue_trace_gap_acceptance,
         endpoint_request_summaries=list(invocation.request_summaries),
+    )
+
+
+def _baseline_recovery_is_safe(
+    result: VersionResult,
+    invocation: InvocationEvidence | None,
+) -> bool:
+    return (
+        result.status == "inconclusive"
+        and result.error_code == "baseline_evidence_incomplete"
+        and _baseline_evidence_is_strict(result, invocation)
+    )
+
+
+def _baseline_evidence_is_strict(
+    result: VersionResult,
+    invocation: InvocationEvidence | None,
+) -> bool:
+    summaries = result.endpoint_request_summaries
+    return (
+        invocation is not None
+        and result.endpoint_request_count > 0
+        and result.endpoint_request_count
+        == result.endpoint_response_count
+        == result.endpoint_usable_response_count
+        == len(result.operation_ids)
+        == len(summaries)
+        == invocation.request_count
+        == invocation.response_count
+        == invocation.usable_response_count
+        == len(invocation.response_references)
+        and len(set(invocation.response_references))
+        == len(invocation.response_references)
+        and all(invocation.response_references)
+        and all(
+            item.response_count == 1
+            and item.usable_response
+            and item.semantic_assertions_passed == item.semantic_assertion_count
+            and item.trace_assertions_passed == item.trace_assertion_count
+            and all(
+                assertion.passed and assertion.evidence_sufficient
+                for assertion in item.assertion_results
+            )
+            and all(
+                assertion.passed and assertion.evidence_sufficient
+                for assertion in item.trace_assertion_results
+            )
+            for item in summaries
+        )
+        and result.trace_contract_verified
+        and result.trace_assertions_passed == result.trace_assertion_count
+        and int(result.trace_behavior_summary.get("unhandled_error_count") or 0) == 0
     )
 
 
@@ -1330,6 +1485,23 @@ def _execute_version(
                     invocation=invocation,
                     trace_evidence=trace_evidence,
                 )
+        except _BaselineEvidenceIncomplete:
+            result = _activation_failure_result(
+                logical_version=logical_version,
+                foundry_version=foundry_version,
+                operation_ids=operation_ids,
+                invocation=invocation,
+                trace_evidence=trace_evidence,
+                error_code="baseline_evidence_incomplete",
+            )
+            if checkpoint_store is not None:
+                checkpoint_store.save_rejected_result(
+                    *checkpoint_args,
+                    result,
+                    drain_pending=False,
+                )
+                checkpoint_store.preserve_version_attempt(*checkpoint_args)
+            return result
         except Exception as error:
             if expected is None:
                 raise _VersionStageError("baseline_evidence_failed", error) from error
@@ -1421,6 +1593,35 @@ def _execute_version(
                     invocation=invocation,
                     trace_evidence=trace_evidence,
                 )
+            except _BaselineEvidenceIncomplete:
+                result = _activation_failure_result(
+                    logical_version=logical_version,
+                    foundry_version=foundry_version,
+                    operation_ids=operation_ids,
+                    invocation=invocation,
+                    trace_evidence=trace_evidence,
+                    error_code="baseline_evidence_incomplete",
+                )
+                _save_and_drain_rejected_insight_run(
+                    runtime=runtime,
+                    agent_name=agent["name"],
+                    monitor_id=monitor_id,
+                    foundry_version=foundry_version,
+                    operation_ids=operation_ids,
+                    checkpoint=insight_checkpoint,
+                    checkpoint_store=checkpoint_store,
+                    checkpoint_args=checkpoint_args,
+                    result=result,
+                    reason="had incomplete baseline terminal evidence",
+                )
+                if (
+                    checkpoint_store is not None
+                    and not checkpoint_store.insight_drain_pending(
+                        *checkpoint_args
+                    )
+                ):
+                    checkpoint_store.preserve_version_attempt(*checkpoint_args)
+                return result
             except Exception as error:
                 stage_error = _VersionStageError("baseline_evidence_failed", error)
                 if _recoverable(stage_error):

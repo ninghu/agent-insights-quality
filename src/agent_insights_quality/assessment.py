@@ -5,6 +5,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
+from agent_insights_quality.baseline_policy import baseline_terminal_decision
 from agent_insights_quality.models import (
     RequestCompletionEvidence,
     SemanticAssertionEvidence,
@@ -626,23 +627,38 @@ def _baseline_behavior_summary(
             contract["request_count"]
         )
     terminal_mode = contract["terminal_response"]
-    terminal_complete = (
+    strict_terminal_evidence = (
         proof_complete
-        and int(trace_proof.get("terminal_response_count") or 0) == request_count
-        and int(trace_proof.get("terminal_output_count") or 0) == request_count
-        and int(trace_proof.get("unhandled_error_count") or 0) == 0
+        and semantic_complete
+        and _endpoint_evidence_complete(endpoint)
+        and all(
+            item.get("semantic_assertions_passed")
+            == item.get("semantic_assertion_count")
+            and item.get("trace_assertions_passed")
+            == item.get("trace_assertion_count")
+            and all(
+                result.get("passed") is True
+                and result.get("evidence_sufficient") is True
+                for result in item.get("assertion_results", [])
+            )
+            and all(
+                result.get("passed") is True
+                and result.get("evidence_sufficient") is True
+                for result in item.get("trace_assertion_results", [])
+            )
+            for item in summaries
+        )
     )
-    if terminal_mode == "explicit_span_attributes":
-        terminal_complete = terminal_complete and (
-            int(trace_proof.get("explicit_terminal_success_count") or 0)
-            == request_count
-            and int(trace_proof.get("explicit_terminal_output_count") or 0)
-            == request_count
-        )
-    else:
-        terminal_complete = terminal_complete and (
-            int(trace_proof.get("assistant_response_count") or 0) == request_count
-        )
+    terminal_decision = baseline_terminal_decision(
+        request_count=request_count,
+        terminal_mode=terminal_mode,
+        trace_evidence=trace_proof,
+        strict_evidence=strict_terminal_evidence,
+    )
+    terminal_complete = terminal_decision.status in {
+        "complete",
+        "accepted_unknown",
+    }
     direct_prompt_complete: bool | None = None
     if terminal_mode == "direct_prompt":
         direct_prompt_complete = (

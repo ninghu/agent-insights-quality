@@ -251,6 +251,10 @@ Test uses the same admission contract and remains non-publishing. GitHub preview
 separate reviewed opt-in through `--publish-preview`; it is invalid outside a nonzero email-only
 rerun.
 
+Daily and staging registries remain isolated: no process may read both as an admission source.
+Daily run-scoped lifecycle and evidence bind only the exact Daily registry selected during
+provisioning.
+
 The old West US 2 resources remain unchanged after cutover; retirement requires a separate reviewed
 authorization. That old environment is never a staging fallback.
 
@@ -373,6 +377,36 @@ stable within the bounded post-invoke deadline.
 Each lane prints flushed progress lines for its Agent/version and for endpoint,
 telemetry, trace, and Agent Insights stages. Long telemetry waits, Insight runs, and remote retries
 emit periodic heartbeats without exposing URLs, payloads, or private identifiers.
+
+Incomplete baseline evidence never creates a lane completion receipt. When endpoint delivery is
+proven complete and the gap is limited to missing or ambiguous trace evidence, `daily-guide` keeps
+the whole Agent lane pending and exposes the same `daily-run-agent --agent <name>` command. A resume
+claims one of at most three per-Agent recoveries, archives the incomplete checkpoint immutably,
+waits for a clean window, sends one fresh baseline set, and continues the four issues only after the
+baseline is healthy. Ambiguous endpoint delivery and exhausted recovery are fail-closed and require
+`daily-fail`; definitive unhealthy baseline evidence remains non-recoverable.
+
+A baseline with exactly one terminal-success/output unknown may proceed without recovery only when
+request, response, usable-response, and exact identity evidence are complete, every reviewed semantic
+and trace assertion passes, the trace contract is verified, and no contradiction or unhandled error
+exists. The raw terminal counts remain unchanged so the missing attempt stays unknown rather than
+being reclassified as successful. Two or more terminal unknowns remain incomplete.
+
+For a legacy active lane that already wrote a completion receipt with only an incomplete baseline
+and four untouched `skipped_baseline` issues, a human may reopen it centrally:
+
+```powershell
+python -m agent_insights_quality daily-reopen-incomplete-lane `
+  --agent <name> --confirm
+python -m agent_insights_quality daily-run-agent --agent <name>
+```
+
+Reopen accepts only the reviewed single-terminal-unknown policy. It preserves the original receipt,
+writes an immutable run-fenced supplemental event, verifies unchanged Agent/traffic catalog and exact
+Daily registry bindings, and binds both the original execution commit and current framework verifier
+commit. The resume reuses the accepted baseline evidence, sends zero baseline requests, and runs only
+the four previously untouched issues. Composition follows the one valid superseding receipt and
+rejects missing, conflicting, or orphaned ancestry.
 
 Each lane holds an Agent-specific OS lock, resumes only its exact digest-bound checkpoints, and may
 claim at most three transient incomplete recoveries across all resumes. Exact fresh session, response,

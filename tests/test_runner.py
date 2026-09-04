@@ -24,6 +24,7 @@ from agent_insights_quality.models import (
 from agent_insights_quality.runner import (
     _RecoveryBudget,
     _StartStagger,
+    _baseline_recovery_is_safe,
     _execute_version,
     _execute_version_with_recovery,
     _required_trace_operations,
@@ -2185,6 +2186,220 @@ def test_unhandled_baseline_error_fails_terminal_evidence() -> None:
                 "unhandled_error_count": 1,
             },
         )
+
+
+def test_single_baseline_terminal_unknown_is_accepted_without_recovery(
+    tmp_path: Path,
+) -> None:
+    agents, issues = load_catalogs()
+    finance = next(
+        item for item in agents["agents"] if item["name"] == "finance-agent"
+    )
+    selected = {"finance-agent": finance["issue_ids"][:1]}
+    hashes = catalog_hashes(agents, issues)
+    store = VersionCheckpointStore(tmp_path / "stages", "sha256:" + "d" * 64)
+
+    class SingleUnknownBaselineRuntime(FakeRuntime):
+        def trace_behavior_evidence(
+            self,
+            operation_ids: tuple[str, ...],
+        ) -> dict:
+            evidence = super().trace_behavior_evidence(operation_ids)
+            if len(operation_ids) == 10:
+                evidence.update(
+                    {
+                        "terminal_response_count": 9,
+                        "terminal_success_count": 9,
+                        "terminal_output_count": 9,
+                        "explicit_terminal_success_count": 9,
+                        "explicit_terminal_output_count": 9,
+                    }
+                )
+            return evidence
+
+    runtime = SingleUnknownBaselineRuntime()
+    result = execute_agent(
+        agent_name="finance-agent",
+        agents=agents,
+        issues=issues,
+        selected=selected,
+        registry=_registry(agents, hashes),
+        runtime=runtime,
+        seed=1,
+        checkpoint_store=store,
+    )
+
+    assert result.baseline.status == "passed"
+    assert result.baseline.trace_behavior_summary["terminal_response_count"] == 9
+    assert result.issues[0].status == "observed"
+    assert store.agent_recovery_count("finance-agent", 3) == 0
+    assert runtime.invoked.count("v0") == 1
+
+
+def test_incomplete_baseline_terminal_evidence_recovers_on_resume(
+    tmp_path: Path,
+) -> None:
+    agents, issues = load_catalogs()
+    finance = next(
+        item for item in agents["agents"] if item["name"] == "finance-agent"
+    )
+    selected = {"finance-agent": finance["issue_ids"][:4]}
+    hashes = catalog_hashes(agents, issues)
+    store = VersionCheckpointStore(tmp_path / "stages", "sha256:" + "d" * 64)
+
+    class RecoveringBaselineRuntime(FakeRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.baseline_trace_attempts = 0
+
+        def trace_behavior_evidence(
+            self,
+            operation_ids: tuple[str, ...],
+        ) -> dict:
+            evidence = super().trace_behavior_evidence(operation_ids)
+            if len(operation_ids) == 10:
+                self.baseline_trace_attempts += 1
+                if self.baseline_trace_attempts == 1:
+                    evidence.update(
+                        {
+                            "terminal_response_count": 8,
+                            "terminal_success_count": 8,
+                            "terminal_output_count": 8,
+                            "explicit_terminal_success_count": 8,
+                            "explicit_terminal_output_count": 8,
+                        }
+                    )
+            return evidence
+
+    runtime = RecoveringBaselineRuntime()
+    kwargs = {
+        "agent_name": "finance-agent",
+        "agents": agents,
+        "issues": issues,
+        "selected": selected,
+        "registry": _registry(agents, hashes),
+        "runtime": runtime,
+        "seed": 1,
+        "checkpoint_store": store,
+    }
+
+    incomplete = execute_agent(**kwargs)
+    recovered = execute_agent(**kwargs)
+
+    assert incomplete.baseline.error_code == "baseline_evidence_incomplete"
+    assert all(item.status == "skipped_baseline" for item in incomplete.issues)
+    assert recovered.baseline.status == "passed"
+    assert all(item.status == "observed" for item in recovered.issues)
+    assert store.agent_recovery_count("finance-agent", 3) == 1
+    assert runtime.invoked.count("v0") == 2
+    assert all(runtime.invoked.count(issue_id) == 1 for issue_id in selected["finance-agent"])
+    assert len(list((tmp_path / "stages" / "recovery-history").rglob("*.json"))) == 1
+
+
+def test_ambiguous_baseline_delivery_is_not_recovery_safe() -> None:
+    result = VersionResult(
+        logical_version="v0",
+        foundry_version="v0",
+        status="inconclusive",
+        operation_ids=["1" * 32],
+        error_code="baseline_evidence_incomplete",
+        endpoint_request_count=2,
+        endpoint_response_count=1,
+        endpoint_usable_response_count=1,
+        trace_contract_verified=True,
+        trace_behavior_summary={"unhandled_error_count": 0},
+    )
+
+    assert _baseline_recovery_is_safe(result, None) is False
+
+
+def test_definitive_unhealthy_baseline_is_not_recovered(tmp_path: Path) -> None:
+    agents, issues = load_catalogs()
+    finance = next(
+        item for item in agents["agents"] if item["name"] == "finance-agent"
+    )
+    selected = {"finance-agent": finance["issue_ids"][:1]}
+    hashes = catalog_hashes(agents, issues)
+    store = VersionCheckpointStore(tmp_path / "stages", "sha256:" + "d" * 64)
+
+    class UnhealthyBaselineRuntime(FakeRuntime):
+        def trace_behavior_evidence(
+            self,
+            operation_ids: tuple[str, ...],
+        ) -> dict:
+            evidence = super().trace_behavior_evidence(operation_ids)
+            if len(operation_ids) == 10:
+                evidence["unhandled_error_count"] = 1
+            return evidence
+
+    runtime = UnhealthyBaselineRuntime()
+    kwargs = {
+        "agent_name": "finance-agent",
+        "agents": agents,
+        "issues": issues,
+        "selected": selected,
+        "registry": _registry(agents, hashes),
+        "runtime": runtime,
+        "seed": 1,
+        "checkpoint_store": store,
+    }
+
+    first = execute_agent(**kwargs)
+    resumed = execute_agent(**kwargs)
+
+    assert first.baseline.error_code == "baseline_evidence_failed"
+    assert resumed.baseline == first.baseline
+    assert runtime.invoked.count("v0") == 1
+    assert store.agent_recovery_count("finance-agent", 3) == 0
+
+
+def test_incomplete_baseline_exhausts_bounded_recovery(tmp_path: Path) -> None:
+    agents, issues = load_catalogs()
+    finance = next(
+        item for item in agents["agents"] if item["name"] == "finance-agent"
+    )
+    selected = {"finance-agent": finance["issue_ids"][:1]}
+    hashes = catalog_hashes(agents, issues)
+    store = VersionCheckpointStore(tmp_path / "stages", "sha256:" + "d" * 64)
+
+    class IncompleteBaselineRuntime(FakeRuntime):
+        def trace_behavior_evidence(
+            self,
+            operation_ids: tuple[str, ...],
+        ) -> dict:
+            evidence = super().trace_behavior_evidence(operation_ids)
+            if len(operation_ids) == 10:
+                evidence.update(
+                    {
+                        "terminal_response_count": 8,
+                        "terminal_success_count": 8,
+                        "terminal_output_count": 8,
+                        "explicit_terminal_success_count": 8,
+                        "explicit_terminal_output_count": 8,
+                    }
+                )
+            return evidence
+
+    runtime = IncompleteBaselineRuntime()
+    kwargs = {
+        "agent_name": "finance-agent",
+        "agents": agents,
+        "issues": issues,
+        "selected": selected,
+        "registry": _registry(agents, hashes),
+        "runtime": runtime,
+        "seed": 1,
+        "checkpoint_store": store,
+    }
+
+    attempts = [execute_agent(**kwargs) for _ in range(5)]
+
+    assert attempts[-1].baseline.error_code == "baseline_recovery_exhausted"
+    assert all(
+        item.status == "skipped_baseline" for item in attempts[-1].issues
+    )
+    assert store.agent_recovery_count("finance-agent", 3) == 3
+    assert runtime.invoked.count("v0") == 4
 
 
 def test_issue_failure_does_not_stop_later_versions() -> None:

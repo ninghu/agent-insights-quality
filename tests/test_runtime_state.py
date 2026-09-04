@@ -170,3 +170,36 @@ def test_profile_run_lock_rejects_overlap(tmp_path: Path) -> None:
                 pass
     with profile_run_lock("daily", "aiq-20260827-r01", tmp_path):
         pass
+
+
+def test_recoverable_version_checkpoint_is_archived_before_fresh_attempt(
+    tmp_path: Path,
+) -> None:
+    store = VersionCheckpointStore(
+        tmp_path / "stages",
+        "sha256:" + "d" * 64,
+    )
+    args = (
+        "finance-agent",
+        "v0",
+        "17",
+        "sha256:" + "a" * 64,
+    )
+    result = VersionResult(
+        logical_version="v0",
+        foundry_version="17",
+        status="inconclusive",
+        error_code="baseline_evidence_incomplete",
+    )
+    store.save_rejected_result(*args, result, drain_pending=False)
+
+    preserved = store.preserve_version_attempt(*args)
+    assert store.result(*args) == result
+
+    digest = store.archive_version_for_recovery(*args)
+
+    assert digest == preserved
+    assert digest.startswith("sha256:")
+    assert store.result(*args) is None
+    archives = list((tmp_path / "stages" / "recovery-history").rglob("*.json"))
+    assert len(archives) == 1

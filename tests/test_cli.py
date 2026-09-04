@@ -52,8 +52,22 @@ def test_daily_prepare_parser_exposes_explicit_preview_opt_in() -> None:
 
 
 def test_daily_prepare_help_states_staging_is_advisory() -> None:
-    help_text = cli.build_parser().format_help()
+    help_text = " ".join(cli.build_parser().format_help().split())
     assert "staging is advisory" in help_text
+
+
+def test_daily_lane_reopen_requires_explicit_agent_and_confirmation() -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "daily-reopen-incomplete-lane",
+            "--agent",
+            "finance-agent",
+            "--confirm",
+        ]
+    )
+
+    assert args.agent == "finance-agent"
+    assert args.confirm is True
 
 
 @pytest.mark.parametrize("publish_preview", [False, True])

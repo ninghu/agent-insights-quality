@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "execution_id",
+    "run_contract_digest",
+    "agent_name",
+    "issue_ids",
+    "supersedes_receipt_digest",
+    "reopen_event_digest",
+    "result",
+    "receipt_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "kind": {"const": "daily-agent-lane-recovery-receipt"},
+    "execution_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "run_contract_digest": {"$ref": "#/$defs/hash"},
+    "agent_name": {"$ref": "#/$defs/agent"},
+    "issue_ids": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^issue-[0-9]{3}$"}
+    },
+    "supersedes_receipt_digest": {"$ref": "#/$defs/hash"},
+    "reopen_event_digest": {"$ref": "#/$defs/hash"},
+    "result": {"type": "object"},
+    "receipt_digest": {"$ref": "#/$defs/hash"}
+  },
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "agent": {
+      "enum": [
+        "weather-agent",
+        "healthcare-agent",
+        "finance-agent",
+        "travel-agent",
+        "support-ticket-agent"
+      ]
+    }
+  }
+}

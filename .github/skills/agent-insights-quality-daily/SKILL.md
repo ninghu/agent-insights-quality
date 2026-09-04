@@ -33,14 +33,26 @@ license: MIT
    produces exactly 20 issue packages plus five baseline packages. If the run is unrecoverable, use
    `daily-fail --reason-code <public_safe_code> --confirm` centrally; this writes a private immutable
    failure receipt and releases the quiescence claim without deleting any evidence or provider state.
+   An incomplete baseline never creates a completion receipt. `daily-guide` keeps that whole Agent
+   lane pending; rerun its same command to claim one of at most three recoveries, archive the prior
+   checkpoint, wait for a clean window, and send only a fresh baseline set before continuing issues.
+   Ambiguous endpoint delivery, definitive unhealthy evidence, or exhausted recovery fails closed.
+   A legacy lane that already finalized this exact single-unknown shape may be salvaged only through
+   the central human-confirmed `daily-reopen-incomplete-lane --agent <name> --confirm` command. It
+   requires unchanged Agent, traffic, provider, registry, and runtime bindings, preserves the old
+   receipt, and resumes only the four untouched issues with no baseline traffic.
 7. Start up to five visible Copilot assessment sub sessions, one per Agent and its five packages.
    Assess each baseline and four issues with GPT-5.6 Sol using the repository assessment prompt. Use
    independent `endpoint_evidence`; never assign `insight_engine` unless
    endpoint behavior and trace contract are both proven. Equal nonzero request, response, and usable
    response counts plus a verified trace contract prove endpoint execution. Require every reviewed
    baseline semantic assertion, each designated issue activation assertion, and one terminal success
-   plus output signal per baseline request. Pure Prompt requests must each have one direct terminal
-   response and no function calls.
+   plus output signal per baseline request. A baseline may retain at most one terminal-success/output
+   attempt as unknown and still proceed only when endpoint and identity evidence are complete, every
+   semantic and trace assertion passes, the trace contract is verified, and there is no contradiction
+   or unhandled error. The unknown remains unknown, never successful. Lower evidence is incomplete
+   and uses bounded lane recovery. Pure Prompt requests must each have one direct terminal response
+   and no function calls.
    For deterministic issue activation, the first mature whole-target batch may be accepted with
    `3/5` or `4/5` complete observations plus at most two audited trace-only unknown attempts when
    endpoint and exact identity evidence are complete, all reviewed semantic evidence is sufficient,

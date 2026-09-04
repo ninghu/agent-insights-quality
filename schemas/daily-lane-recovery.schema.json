@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "execution_id",
+    "run_contract_digest",
+    "agent_name",
+    "status",
+    "reason_code",
+    "recoveries_claimed",
+    "maximum_recoveries",
+    "remaining_recoveries",
+    "state_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "kind": {"const": "daily-lane-recovery"},
+    "execution_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "run_contract_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "agent_name": {
+      "enum": [
+        "weather-agent",
+        "healthcare-agent",
+        "finance-agent",
+        "travel-agent",
+        "support-ticket-agent"
+      ]
+    },
+    "status": {
+      "enum": [
+        "recovery_pending",
+        "recovery_blocked",
+        "recovery_exhausted"
+      ]
+    },
+    "reason_code": {
+      "enum": [
+        "baseline_evidence_incomplete",
+        "baseline_recovery_prepare_failed",
+        "baseline_recovery_blocked",
+        "baseline_recovery_exhausted"
+      ]
+    },
+    "recoveries_claimed": {"type": "integer", "minimum": 0, "maximum": 3},
+    "maximum_recoveries": {"const": 3},
+    "remaining_recoveries": {"type": "integer", "minimum": 0, "maximum": 3},
+    "state_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

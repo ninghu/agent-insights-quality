@@ -21,12 +21,20 @@ from agent_insights_quality.daily_lifecycle import (
     daily_runtime_root,
 )
 from agent_insights_quality.github_preview import preview_links
-from agent_insights_quality.models import AgentResult, VersionResult
+from agent_insights_quality.models import (
+    AgentResult,
+    InvocationEvidence,
+    RequestCompletionEvidence,
+    SemanticAssertionEvidence,
+    TraceAssertionEvidence,
+    VersionResult,
+)
 from agent_insights_quality.util import (
     ContractError,
     atomic_json,
     content_hash,
     file_hash,
+    immutable_json,
 )
 from tests.test_daily_lifecycle import HASH, _initial
 
@@ -255,7 +263,11 @@ def test_daily_agent_lane_is_resumable_and_writes_one_receipt(
     hashes = catalog_hashes(agents, issues)
     calls = []
 
-    monkeypatch.setattr(coordinator, "_assert_checkout_binding", lambda _active: None)
+    monkeypatch.setattr(
+        coordinator,
+        "_assert_checkout_binding",
+        lambda *_args, **_kwargs: None,
+    )
     monkeypatch.setattr(coordinator, "load_catalogs", lambda: (agents, issues))
     monkeypatch.setattr(coordinator, "catalog_hashes", lambda *_args: hashes)
     monkeypatch.setattr(coordinator, "load_registry", lambda *_args, **_kwargs: registry)
@@ -302,6 +314,404 @@ def test_daily_agent_lane_is_resumable_and_writes_one_receipt(
     assert calls[0]["agent_name"] == "weather-agent"
     assert calls[0]["start_delay_seconds"] == 0
     assert coordinator.daily_status(base=tmp_path)["state"] == "TRAFFIC"
+
+
+def test_incomplete_baseline_keeps_lane_pending_with_resume_command(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    registry = {"test_region": "SwedenCentral", "synthetic": True}
+    active = _prepared(tmp_path, registry)
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    issue_ids = active.value["bindings"]["selection"]["finance-agent"]
+    profile = SimpleNamespace(
+        registry_path=tmp_path / "registry.json",
+        assert_insights_connection=lambda: None,
+        assert_test_agent_model=lambda _model: None,
+    )
+    monkeypatch.setattr(
+        coordinator,
+        "_assert_checkout_binding",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(coordinator, "load_catalogs", lambda: (agents, issues))
+    monkeypatch.setattr(coordinator, "catalog_hashes", lambda *_args: hashes)
+    monkeypatch.setattr(coordinator, "load_registry", lambda *_args, **_kwargs: registry)
+    monkeypatch.setattr(
+        coordinator,
+        "execute_agent",
+        lambda **_kwargs: AgentResult(
+            "finance-agent",
+            VersionResult(
+                "v0",
+                "v0",
+                "inconclusive",
+                error_code="baseline_evidence_incomplete",
+            ),
+            [
+                VersionResult(issue_id, issue_id, "skipped_baseline")
+                for issue_id in issue_ids
+            ],
+        ),
+    )
+
+    result = coordinator.run_daily_agent(
+        "finance-agent",
+        base=tmp_path,
+        profile_factory=lambda _name: profile,
+        runtime_factory=lambda _profile: object(),
+    )
+    guide = coordinator.daily_guide(base=tmp_path)
+    finance = next(
+        item for item in guide["agent_lanes"] if item["agent"] == "finance-agent"
+    )
+
+    assert result["status"] == "recovery_pending"
+    assert result["remaining_recoveries"] == 3
+    assert "finance-agent" in guide["pending_agent_lanes"]
+    assert finance["command"].endswith("--agent finance-agent")
+    assert finance["recovery"]["status"] == "recovery_pending"
+    assert finance["recovery"]["remaining_recoveries"] == 3
+    assert not coordinator._lane_receipt_path(
+        active,
+        tmp_path,
+        "finance-agent",
+    ).exists()
+
+
+def test_exhausted_baseline_recovery_requires_daily_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    registry = {"test_region": "SwedenCentral", "synthetic": True}
+    active = _prepared(tmp_path, registry)
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    issue_ids = active.value["bindings"]["selection"]["finance-agent"]
+    store = coordinator._checkpoint_store(active, tmp_path)
+    for _ in range(3):
+        assert store.claim_agent_recovery("finance-agent", 3)
+    profile = SimpleNamespace(
+        registry_path=tmp_path / "registry.json",
+        assert_insights_connection=lambda: None,
+        assert_test_agent_model=lambda _model: None,
+    )
+    monkeypatch.setattr(
+        coordinator,
+        "_assert_checkout_binding",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(coordinator, "load_catalogs", lambda: (agents, issues))
+    monkeypatch.setattr(coordinator, "catalog_hashes", lambda *_args: hashes)
+    monkeypatch.setattr(coordinator, "load_registry", lambda *_args, **_kwargs: registry)
+    monkeypatch.setattr(
+        coordinator,
+        "execute_agent",
+        lambda **_kwargs: AgentResult(
+            "finance-agent",
+            VersionResult(
+                "v0",
+                "v0",
+                "inconclusive",
+                error_code="baseline_evidence_incomplete",
+            ),
+            [
+                VersionResult(issue_id, issue_id, "skipped_baseline")
+                for issue_id in issue_ids
+            ],
+        ),
+    )
+
+    result = coordinator.run_daily_agent(
+        "finance-agent",
+        base=tmp_path,
+        profile_factory=lambda _name: profile,
+        runtime_factory=lambda _profile: object(),
+    )
+    guide = coordinator.daily_guide(base=tmp_path)
+
+    assert result["status"] == "recovery_exhausted"
+    assert result["remaining_recoveries"] == 0
+    assert "daily-fail" in guide["next"]
+    assert "finance-agent" in guide["pending_agent_lanes"]
+
+
+def _reopen_finance_fixture(
+    tmp_path: Path,
+    active: DailyRecord,
+    registry: dict,
+    *,
+    issue_traffic: bool = False,
+    unhandled_errors: int = 0,
+) -> tuple[dict, VersionResult]:
+    summaries = [
+        RequestCompletionEvidence(
+            request_index=index,
+            response_count=1,
+            usable_response=True,
+            semantic_assertion_count=1,
+            semantic_assertions_passed=1,
+            assertion_results=(
+                SemanticAssertionEvidence("reviewed_semantic", True, True),
+            ),
+            activation_gate=True,
+            direct_terminal_response_count=0,
+            function_call_count=0,
+            trace_assertion_count=int(index < 3),
+            trace_assertions_passed=int(index < 3),
+            trace_assertion_results=(
+                (TraceAssertionEvidence("reviewed_trace", True, True),)
+                if index < 3
+                else ()
+            ),
+        )
+        for index in range(10)
+    ]
+    operation_ids = [f"{index + 1:032x}" for index in range(10)]
+    baseline = VersionResult(
+        logical_version="v0",
+        foundry_version="v0",
+        status="inconclusive",
+        operation_ids=operation_ids,
+        error_code="baseline_evidence_failed",
+        endpoint_request_count=10,
+        endpoint_response_count=10,
+        endpoint_usable_response_count=10,
+        semantic_assertion_count=10,
+        semantic_assertions_passed=10,
+        trace_assertion_count=3,
+        trace_assertions_passed=3,
+        trace_contract_verified=True,
+        trace_behavior_summary={
+            "operation_count": 10,
+            "terminal_response_count": 9,
+            "terminal_success_count": 9,
+            "terminal_output_count": 9,
+            "explicit_terminal_success_count": 9,
+            "explicit_terminal_output_count": 9,
+            "unhandled_error_count": unhandled_errors,
+        },
+        endpoint_request_summaries=summaries,
+    )
+    issue_ids = active.value["bindings"]["selection"]["finance-agent"]
+    issues = [
+        VersionResult(
+            issue_id,
+            issue_id,
+            "skipped_baseline",
+            operation_ids=["f" * 32] if issue_traffic and index == 0 else [],
+        )
+        for index, issue_id in enumerate(issue_ids)
+    ]
+    receipt = coordinator._stamp_lane_receipt(
+        active,
+        "finance-agent",
+        AgentResult("finance-agent", baseline, issues),
+    )
+    immutable_json(
+        coordinator._lane_receipt_path(active, tmp_path, "finance-agent"),
+        receipt,
+    )
+    store = coordinator._checkpoint_store(active, tmp_path)
+    checkpoint_args = (
+        "finance-agent",
+        "v0",
+        registry["agents"]["finance-agent"]["versions"]["v0"]["foundry_version"],
+        registry["agents"]["finance-agent"]["versions"]["v0"]["content_digest"],
+    )
+    store.save_invocation(
+        *checkpoint_args,
+        InvocationEvidence(
+            operation_ids=tuple(operation_ids),
+            response_references=tuple(f"response-{index}" for index in range(10)),
+            started_at="2026-09-03T18:00:00+00:00",
+            completed_at="2026-09-03T18:01:00+00:00",
+            request_count=10,
+            allow_window_correlation=False,
+            response_count=10,
+            usable_response_count=10,
+            semantic_assertion_count=10,
+            semantic_assertions_passed=10,
+            trace_assertion_count=3,
+            trace_assertions_passed=3,
+            request_summaries=tuple(summaries),
+        ),
+    )
+    store.save_operation_ids(*checkpoint_args, tuple(operation_ids))
+    store.save_trace_verified(*checkpoint_args)
+    store.save_rejected_result(
+        *checkpoint_args,
+        baseline,
+        drain_pending=False,
+    )
+    return receipt, baseline
+
+
+def test_reopen_single_unknown_baseline_resumes_only_untouched_issues(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    registry = {
+        "profile": "daily",
+        "test_region": "SwedenCentral",
+        "catalog_hashes": hashes,
+        "agents": {
+            agent["name"]: {
+                "monitor_id": f"monitor-{agent['name']}",
+                "versions": {
+                    logical: {
+                        "foundry_version": logical,
+                        "content_digest": HASH,
+                    }
+                    for logical in ["v0", *agent["issue_ids"]]
+                },
+            }
+            for agent in agents["agents"]
+        },
+    }
+    active = _prepared(tmp_path, registry)
+    original, _ = _reopen_finance_fixture(tmp_path, active, registry)
+    profile = SimpleNamespace(
+        registry_path=tmp_path / "registry.json",
+        assert_insights_connection=lambda: None,
+        assert_test_agent_model=lambda _model: None,
+    )
+    monkeypatch.setattr(coordinator, "current_clean_commit", lambda: "2" * 40)
+    monkeypatch.setattr(coordinator, "load_catalogs", lambda: (agents, issues))
+    monkeypatch.setattr(coordinator, "catalog_hashes", lambda *_args: hashes)
+    monkeypatch.setattr(
+        coordinator.RuntimeProfile,
+        "from_env",
+        lambda *_args: profile,
+    )
+    monkeypatch.setattr(coordinator, "load_registry", lambda *_args, **_kwargs: registry)
+
+    reopened = coordinator.reopen_incomplete_daily_lane(
+        "finance-agent",
+        confirmed=True,
+        base=tmp_path,
+    )
+    captured = {}
+
+    def execute(**kwargs):
+        captured.update(kwargs)
+        baseline = kwargs["accepted_baseline"]
+        issue_ids = active.value["bindings"]["selection"]["finance-agent"]
+        return AgentResult(
+            "finance-agent",
+            baseline,
+            [
+                VersionResult(
+                    issue_id,
+                    issue_id,
+                    "observed",
+                    operation_ids=[f"{index + 20:032x}"],
+                )
+                for index, issue_id in enumerate(issue_ids)
+            ],
+        )
+
+    monkeypatch.setattr(coordinator, "execute_agent", execute)
+    completed = coordinator.run_daily_agent(
+        "finance-agent",
+        base=tmp_path,
+        profile_factory=lambda _name: profile,
+        runtime_factory=lambda _profile: object(),
+    )
+    path, effective = coordinator._effective_lane_receipt(
+        active,
+        tmp_path,
+        "finance-agent",
+    )
+
+    assert reopened["status"] == "reopened"
+    assert captured["accepted_baseline"].status == "passed"
+    assert captured["accepted_baseline"].operation_ids == [
+        f"{index + 1:032x}" for index in range(10)
+    ]
+    assert completed["status"] == "complete"
+    assert path.name == "recovery-completion-receipt.json"
+    assert effective["supersedes_receipt_digest"] == original["receipt_digest"]
+    assert effective["result"]["baseline"]["trace_behavior_summary"][
+        "terminal_response_count"
+    ] == 9
+    assert all(
+        item["status"] == "observed" for item in effective["result"]["issues"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("issue_traffic", "unhandled_errors", "catalog_mismatch", "message"),
+    [
+        (True, 0, False, "untouched incomplete-baseline lane"),
+        (False, 1, False, "baseline evidence is not exact"),
+        (False, 0, True, "Agent or traffic content changed"),
+    ],
+)
+def test_reopen_rejects_changed_content_issue_traffic_or_definitive_failure(
+    monkeypatch,
+    tmp_path: Path,
+    issue_traffic: bool,
+    unhandled_errors: int,
+    catalog_mismatch: bool,
+    message: str,
+) -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+    registry = {
+        "profile": "daily",
+        "test_region": "SwedenCentral",
+        "catalog_hashes": hashes,
+        "agents": {
+            agent["name"]: {
+                "monitor_id": f"monitor-{agent['name']}",
+                "versions": {
+                    logical: {
+                        "foundry_version": logical,
+                        "content_digest": HASH,
+                    }
+                    for logical in ["v0", *agent["issue_ids"]]
+                },
+            }
+            for agent in agents["agents"]
+        },
+    }
+    active = _prepared(tmp_path, registry)
+    _reopen_finance_fixture(
+        tmp_path,
+        active,
+        registry,
+        issue_traffic=issue_traffic,
+        unhandled_errors=unhandled_errors,
+    )
+    profile = SimpleNamespace(registry_path=tmp_path / "registry.json")
+    monkeypatch.setattr(coordinator, "current_clean_commit", lambda: "2" * 40)
+    monkeypatch.setattr(coordinator, "load_catalogs", lambda: (agents, issues))
+    monkeypatch.setattr(
+        coordinator,
+        "catalog_hashes",
+        lambda *_args: (
+            {**hashes, "artifacts": "sha256:" + "b" * 64}
+            if catalog_mismatch
+            else hashes
+        ),
+    )
+    monkeypatch.setattr(
+        coordinator.RuntimeProfile,
+        "from_env",
+        lambda *_args: profile,
+    )
+    monkeypatch.setattr(coordinator, "load_registry", lambda *_args, **_kwargs: registry)
+
+    with pytest.raises(ContractError, match=message):
+        coordinator.reopen_incomplete_daily_lane(
+            "finance-agent",
+            confirmed=True,
+            base=tmp_path,
+        )
 
 
 def test_daily_lane_receipt_rejects_reused_operation_identity(tmp_path: Path) -> None:

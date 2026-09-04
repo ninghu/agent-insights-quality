@@ -18,7 +18,14 @@ from agent_insights_quality.models import (
     TraceAssertionEvidence,
     VersionResult,
 )
-from agent_insights_quality.util import ContractError, atomic_json, read_json, runtime_root
+from agent_insights_quality.util import (
+    ContractError,
+    atomic_json,
+    content_hash,
+    immutable_json,
+    read_json,
+    runtime_root,
+)
 
 
 class ActiveQualificationError(ContractError):
@@ -186,6 +193,85 @@ class VersionCheckpointStore:
             value["claimed"] = claimed + 1
             atomic_json(path, value)
             return True
+
+    def agent_recovery_count(self, agent_name: str, maximum: int) -> int:
+        path = self._recovery_path(agent_name)
+        if not path.exists():
+            return 0
+        value = read_json(path)
+        claimed = value.get("claimed")
+        if (
+            value.get("schema_version") != "1.0.0"
+            or value.get("run_contract_digest") != self._run_contract_digest
+            or value.get("agent_name") != agent_name
+            or value.get("maximum") != maximum
+            or isinstance(claimed, bool)
+            or not isinstance(claimed, int)
+            or claimed < 0
+            or claimed > maximum
+        ):
+            raise ContractError("Recovery checkpoint is invalid")
+        return claimed
+
+    def archive_version_for_recovery(
+        self,
+        agent_name: str,
+        logical_version: str,
+        foundry_version: str,
+        content_digest: str,
+    ) -> str:
+        digest = self.preserve_version_attempt(
+            agent_name,
+            logical_version,
+            foundry_version,
+            content_digest,
+        )
+        self._path(agent_name, logical_version).unlink()
+        return digest
+
+    def preserve_version_attempt(
+        self,
+        agent_name: str,
+        logical_version: str,
+        foundry_version: str,
+        content_digest: str,
+    ) -> str:
+        path = self._path(agent_name, logical_version)
+        if not path.is_file():
+            raise ContractError("Recoverable version checkpoint is missing")
+        value = read_json(path)
+        self._validate_header(
+            value,
+            agent_name,
+            logical_version,
+            foundry_version,
+            content_digest,
+        )
+        if (
+            value.get("insight_start_pending") is True
+            or value.get("insight_drain_pending") is True
+        ):
+            raise ContractError(
+                "Recoverable version has an ambiguous Agent Insights operation"
+            )
+        result = value.get("result")
+        if (
+            not isinstance(result, dict)
+            or result.get("status") != "inconclusive"
+            or result.get("error_code")
+            not in {"baseline_evidence_incomplete", "baseline_evidence_failed"}
+        ):
+            raise ContractError("Version checkpoint is not recoverable")
+        digest = content_hash(value)
+        archive = (
+            self._root
+            / "recovery-history"
+            / agent_name
+            / logical_version
+            / f"{digest.removeprefix('sha256:')}.json"
+        )
+        immutable_json(archive, value)
+        return digest
 
     def invocation(
         self,

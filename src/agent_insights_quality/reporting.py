@@ -8,6 +8,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
+from agent_insights_quality.baseline_policy import baseline_terminal_decision
 from agent_insights_quality.scoring import (
     ASSESSMENT_FIELDS,
     ATTRIBUTABLE_FINDING_TYPES,
@@ -190,6 +191,36 @@ def _baseline_runtime_evidence_complete(
         if isinstance(item, dict) and item.get("activation_gate") is True
     ]
     terminal_mode = agent["baseline_contract"]["terminal_response"]
+    strict_terminal_evidence = (
+        _runtime_evidence_complete(value)
+        and isinstance(trace, dict)
+        and isinstance(summaries, list)
+        and bool(observations)
+        and all(
+            int(item.get("semantic_assertion_count") or 0) >= 1
+            and item.get("semantic_assertions_passed")
+            == item.get("semantic_assertion_count")
+            and item.get("trace_assertions_passed")
+            == item.get("trace_assertion_count")
+            and all(
+                result.get("passed") is True
+                and result.get("evidence_sufficient") is True
+                for result in item.get("assertion_results", [])
+            )
+            and all(
+                result.get("passed") is True
+                and result.get("evidence_sufficient") is True
+                for result in item.get("trace_assertion_results", [])
+            )
+            for item in observations
+        )
+    )
+    terminal_decision = baseline_terminal_decision(
+        request_count=int(request_count or 0),
+        terminal_mode=terminal_mode,
+        trace_evidence=trace if isinstance(trace, dict) else {},
+        strict_evidence=strict_terminal_evidence,
+    )
     if (
         not _runtime_evidence_complete(value)
         or sum(
@@ -206,20 +237,8 @@ def _baseline_runtime_evidence_complete(
             != item.get("semantic_assertion_count")
             for item in observations
         )
-        or int(trace.get("terminal_response_count") or 0) != request_count
-        or int(trace.get("terminal_output_count") or 0) != request_count
-        or int(trace.get("unhandled_error_count") or 0) != 0
+        or terminal_decision.status not in {"complete", "accepted_unknown"}
     ):
-        return False
-    if terminal_mode == "explicit_span_attributes":
-        if (
-            int(trace.get("explicit_terminal_success_count") or 0)
-            != request_count
-            or int(trace.get("explicit_terminal_output_count") or 0)
-            != request_count
-        ):
-            return False
-    elif int(trace.get("assistant_response_count") or 0) != request_count:
         return False
     if agent["baseline_contract"]["semantic_assertions"] == "required_per_request":
         if len(observations) != agent["baseline_contract"]["request_count"]:

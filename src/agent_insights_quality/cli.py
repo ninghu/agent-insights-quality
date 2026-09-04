@@ -42,6 +42,7 @@ from agent_insights_quality.daily_coordinator import (
     fail_daily,
     prepare_daily,
     provision_daily,
+    reopen_incomplete_daily_lane,
     record_daily_email_receipt,
     record_daily_finalization,
     record_daily_improvement_input,
@@ -218,6 +219,19 @@ def build_parser() -> argparse.ArgumentParser:
     daily_fail = commands.add_parser("daily-fail")
     daily_fail.add_argument("--reason-code", required=True)
     daily_fail.add_argument("--confirm", action="store_true")
+    daily_reopen = commands.add_parser("daily-reopen-incomplete-lane")
+    daily_reopen.add_argument(
+        "--agent",
+        choices=(
+            "weather-agent",
+            "healthcare-agent",
+            "finance-agent",
+            "travel-agent",
+            "support-ticket-agent",
+        ),
+        required=True,
+    )
+    daily_reopen.add_argument("--confirm", action="store_true")
     daily_publication = commands.add_parser("daily-complete-publication")
     daily_publication.add_argument("--pr-number", type=int, required=True)
     daily_publication.add_argument("--path", action="append", required=True)
@@ -395,6 +409,14 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         return json.dumps(
             fail_daily(
                 reason_code=args.reason_code,
+                confirmed=args.confirm,
+            ),
+            sort_keys=True,
+        )
+    if args.command == "daily-reopen-incomplete-lane":
+        return json.dumps(
+            reopen_incomplete_daily_lane(
+                args.agent,
                 confirmed=args.confirm,
             ),
             sort_keys=True,
